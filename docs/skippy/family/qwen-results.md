@@ -2151,7 +2151,7 @@ replace recompute for repeated prefixes.
 
 | Layer | Current support | Evidence | Gap |
 | --- | --- | --- | --- |
-| Native llama.cpp patch ABI | Full sequence state export/import and recurrent-only state export/import are present. | `.deps/llama.cpp/src/skippy.cpp` implements `skippy_export_full_state`, `skippy_import_full_state`, `skippy_export_recurrent_state`, and `skippy_import_recurrent_state`. | Need payload size and exactness measurements on Qwen3.6 stages. |
+| Native llama.cpp patch ABI | Full sequence state export/import and recurrent-only state export/import are present. | `.deps/llama.cpp/src/skippy/state.cpp` implements `skippy_export_full_state`, `skippy_import_full_state`, `skippy_export_recurrent_state`, and `skippy_import_recurrent_state`. | Need payload size and exactness measurements on Qwen3.6 stages. |
 | Rust FFI/runtime | `StageSession` exposes `export_full_state`, `import_full_state`, `export_recurrent_state`, and `import_recurrent_state`. | `crates/skippy-runtime/src/lib.rs` wraps the native ABI. | `RuntimeState` currently exposes full-state import/export, but not recurrent-only helpers. |
 | Binary stage control | `StateImport` / `StateExport` can carry full-state payloads when `state_flags::FULL_STATE` is set. | `crates/skippy-server/src/binary_transport.rs` dispatches full-state import/export through `RuntimeState`. | This is a control-path primitive, not a cache store or prefix lookup policy. |
 | Speculative rollback | In-session checkpoints preserve recurrent state while attention KV is restored by trimming. | `StageSession::checkpoint` documents the recurrent checkpoint plus KV trim behavior. | Useful for speculation rollback, but not reusable across sessions or repeated-prefix cache hits. |

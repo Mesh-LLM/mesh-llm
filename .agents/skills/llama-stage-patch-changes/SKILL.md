@@ -18,7 +18,11 @@ Use this skill when changing the Skippy staged-runtime ABI carried in
   patch queue from commits.
 - Keep mesh orchestration, protocol compatibility, lifecycle, model management,
   and API status behavior in Rust.
-- Prefer one ABI capability per patch.
+- Keep one functional boundary per patch. Patch numbers must be unique and
+  contiguous.
+- Do not add a terminal source-reorganization patch. A deliberate layout or
+  ownership change must be represented in the recreated patches that own the
+  affected capabilities.
 
 ## Native Source Layout
 
@@ -28,9 +32,8 @@ Use this skill when changing the Skippy staged-runtime ABI carried in
   declarations in narrowly named `src/skippy/*.h` headers.
 - Use `snake_case` capability names. Keep exported symbols prefixed with
   `skippy_` and avoid generic `helpers`, `utils`, or expanded `common` modules.
-- Do not add a separable responsibility to `src/skippy.cpp`. Extract or extend
-  the owning capability module, and keep new implementation files below 1,000
-  lines.
+- `src/skippy.cpp` is retired. Extend the owning capability module and keep new
+  implementation files below 1,000 lines.
 - Make every public header independently compilable as both C11 and C++17.
   Update explicit CMake source lists and installation rules with new modules.
 - Do not preserve retired source include paths unless the task explicitly asks
@@ -48,8 +51,8 @@ For llama-side editing, work in `.deps/llama.cpp` or another llama.cpp
 checkout where commits can be named and inspected. Base the branch on the
 pinned upstream, then carry the stage ABI patch commits on top.
 
-After editing and committing in that checkout, emit the new mail-format patch
-after the current queue. Do not delete or rewrite unrelated queue entries:
+For an ordinary capability change, emit one focused mail-format patch after
+the current queue. Do not rewrite unrelated entries:
 
 ```bash
 repo_root="$(pwd)"
@@ -61,6 +64,26 @@ git -C .deps/llama.cpp format-patch -1 \
   --start-number "$next_number" \
   --output-directory "$repo_root/third_party/llama.cpp/patches" HEAD
 ```
+
+For a deliberate queue-boundary or source-layout change, rebuild the affected
+series from the pinned upstream instead. Create capability-owned commits in
+their intended order, place declarations and implementation in their final
+modules from the first patch that introduces them, and format the complete
+replacement series with contiguous numbering. Before replacing the durable
+queue, verify both of these invariants:
+
+```bash
+# The reconstructed commit series has exactly the intended final tree.
+git diff --exit-code <authoritative-final-commit> <reconstructed-series-head>
+
+# No patch defers the structural change to the end of the series.
+git log --reverse --oneline <pinned-upstream>..<reconstructed-series-head>
+```
+
+Move the old queue to an explicit temporary backup, generate the replacement
+into a fresh `third_party/llama.cpp/patches` directory, and retain the backup
+until clean application and native compilation pass. Never keep both series or
+duplicate patch numbers in the durable directory.
 
 ## Validation
 

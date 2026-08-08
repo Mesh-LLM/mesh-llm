@@ -153,6 +153,16 @@ libraries. The only durable llama.cpp patch queue is
 - If you need to update upstream llama.cpp, use `scripts/prepare-llama.sh`,
   `scripts/build-llama.sh`, `scripts/update-llama-pin.sh`, and
   `scripts/summarize-llama-upstream.sh`.
+- Keep the queue ordered by functional ownership, with unique contiguous patch
+  numbers. A source-layout change must be folded into the patches that own the
+  affected capabilities; do not append a terminal "split", "move", or
+  "cleanup" patch that reorganizes code introduced by earlier patches.
+- Ordinary capability changes may append one focused patch. When deliberately
+  changing queue boundaries, recreate the affected series from the pinned
+  upstream and prove that the rebuilt series produces the intended final tree.
+  Once a capability has an owning module, every patch in the recreated series
+  must edit that module directly rather than introducing code in an obsolete
+  monolith and moving it later.
 
 ### Skippy Native Source Layout
 
@@ -166,10 +176,10 @@ implementation file.
 - Keep capability implementations in `src/skippy/<capability>.cpp`. Private
   C++ declarations belong beside them in narrowly named headers under
   `src/skippy/`; they are not part of the installed ABI.
-- Put new behavior in its owning module. Do not add a separable responsibility
-  back to `src/skippy.cpp`; that file is reserved for the remaining runtime,
-  session, execution, and activation orchestration while those boundaries are
-  extracted further.
+- Put new behavior in its owning module. `src/skippy.cpp` is retired; do not
+  recreate it. Runtime lifecycle, sessions, activation framing, execution,
+  verification, sampling, state, tokenization, and model packaging each belong
+  to their existing capability-owned source files.
 - Use `snake_case` filenames and preserve the `skippy_` prefix for exported C
   symbols. Avoid generic `helpers`, `utils`, or expanded `common` buckets.
 - Keep new implementation files below 1,000 lines. If a capability approaches
