@@ -1,0 +1,101 @@
+From 0d38693e1a96088e20cd967b9de71aace1ce1774 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 9 Aug 2026 09:40:13 +1000
+Subject: [PATCH 13/13] Pass generic chat template kwargs through Skippy
+
+---
+ common/stage-chat.cpp         | 10 ++++++++++
+ include/skippy/common.h       |  2 +-
+ include/skippy/tokenization.h |  1 +
+ tests/test-chat.cpp           | 22 ++++++++++++++++++++++
+ 4 files changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
+index 16ce255af..26e638c22 100644
+--- a/common/stage-chat.cpp
++++ b/common/stage-chat.cpp
+@@ -234,6 +234,7 @@ enum skippy_status skippy_apply_chat_template_json(
+         bool enable_thinking,
+         bool parallel_tool_calls,
+         const char * reasoning_format_name,
++        const char * chat_template_kwargs_json,
+         char * output_text,
+         size_t output_text_capacity,
+         size_t * out_text_bytes,
+@@ -292,6 +293,15 @@ enum skippy_status skippy_apply_chat_template_json(
+         if (reasoning_format_name != nullptr && reasoning_format_name[0] != '\0') {
+             inputs.reasoning_format = common_reasoning_format_from_name(reasoning_format_name);
+         }
++        json chat_template_kwargs = skippy_common_parse_json_or_null(chat_template_kwargs_json);
++        if (!chat_template_kwargs.is_null()) {
++            if (!chat_template_kwargs.is_object()) {
++                throw std::runtime_error("chat_template_kwargs must be a JSON object");
++            }
++            for (const auto & [key, value] : chat_template_kwargs.items()) {
++                inputs.chat_template_kwargs[key] = value.dump();
++            }
++        }
+ 
+         common_chat_templates_ptr tmpls = common_chat_templates_init(native_model, "");
+         common_chat_params params = common_chat_templates_apply(tmpls.get(), inputs);
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 1aecf7e67..5d5828461 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -25,7 +25,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 35
++#define SKIPPY_ABI_VERSION_PATCH 36
+ 
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+diff --git a/include/skippy/tokenization.h b/include/skippy/tokenization.h
+index 2a00c384d..d6961e378 100644
+--- a/include/skippy/tokenization.h
++++ b/include/skippy/tokenization.h
+@@ -56,6 +56,7 @@ LLAMA_API enum skippy_status skippy_apply_chat_template_json(
+         bool enable_thinking,
+         bool parallel_tool_calls,
+         const char * reasoning_format,
++        const char * chat_template_kwargs,
+         char * output_text,
+         size_t output_text_capacity,
+         size_t * out_text_bytes,
+diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
+index 991102421..6703301ef 100644
+--- a/tests/test-chat.cpp
++++ b/tests/test-chat.cpp
+@@ -6643,6 +6643,28 @@ static void test_template_generation_prompt() {
+         check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
+         check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
+     }
++
++    {
++        // The Inkling template consumes the generic reasoning_effort kwarg;
++        // verify the llama.cpp renderer distinguishes disabled, high, and max.
++        auto tmpls = read_templates("models/templates/Inkling.jinja");
++        auto render_effort = [&](const char * effort) {
++            common_chat_templates_inputs inputs;
++            inputs.messages              = { message_user };
++            inputs.add_generation_prompt = true;
++            inputs.chat_template_kwargs["reasoning_effort"] = effort;
++            return common_chat_templates_apply(tmpls.get(), inputs).prompt;
++        };
++        const auto off  = render_effort("none");
++        const auto high = render_effort("high");
++        const auto max  = render_effort("max");
++        assert_contains(off, "Thinking effort level: 0");
++        assert_contains(high, "Thinking effort level: 0.9");
++        assert_contains(max, "Thinking effort level: 0.99");
++        if (off == high || high == max || off == max) {
++            throw std::runtime_error("reasoning effort modes must render distinct prompts");
++        }
++    }
+ }
+ 
+ // Test the developer role to system workaround with a simple mock template
+-- 
+2.54.0 (Apple Git-157)
+

@@ -124,10 +124,10 @@ fn normalize_chat_reasoning_template_options(
     if let Some(effort) = optional_string_field(object, "reasoning_effort")? {
         enable_thinking = Some(match effort {
             "none" => false,
-            "minimal" | "low" | "medium" | "high" | "xhigh" => true,
+            "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => true,
             _ => {
                 return Err(OpenAiError::invalid_request(
-                    "reasoning_effort must be one of none, minimal, low, medium, high, xhigh",
+                    "reasoning_effort must be one of none, minimal, low, medium, high, xhigh, max",
                 ));
             }
         });
@@ -167,12 +167,12 @@ fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, Open
     let enabled = optional_bool_field(object, "enabled")?;
     let effort = optional_string_field(object, "effort")?;
     let effort_is_valid = match effort {
-        Some("none" | "minimal" | "low" | "medium" | "high" | "xhigh") | None => true,
+        Some("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | None => true,
         Some(_) => false,
     };
     if !effort_is_valid {
         return Err(OpenAiError::invalid_request(
-            "reasoning.effort must be one of none, minimal, low, medium, high, xhigh",
+            "reasoning.effort must be one of none, minimal, low, medium, high, xhigh, max",
         ));
     }
     let max_tokens = optional_u32_field(object, "max_tokens")?;
@@ -1329,6 +1329,21 @@ mod tests {
             json!(false)
         );
         assert_eq!(body["reasoning_effort"], json!("none"));
+    }
+
+    #[test]
+    fn normalize_chat_reasoning_effort_max_is_preserved() {
+        let mut body = json!({
+            "model": "direct-model",
+            "messages": [{"role": "user", "content": "What is 2+2?"}],
+            "reasoning_effort": "max"
+        });
+
+        normalize_openai_compat_request("/v1/chat/completions", &mut body)
+            .expect("chat request should normalize");
+
+        assert_eq!(body["reasoning_effort"], json!("max"));
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], json!(true));
     }
 
     #[test]
