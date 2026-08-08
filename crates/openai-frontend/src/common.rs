@@ -147,11 +147,13 @@ pub enum ReasoningEffort {
     Medium,
     High,
     Xhigh,
+    Max,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReasoningTemplateOptions {
     pub enable_thinking: Option<bool>,
+    pub chat_template_kwargs: BTreeMap<String, Value>,
 }
 
 pub const THINKING_BOOLEAN_ALIASES: &[&str] = &[
@@ -174,6 +176,11 @@ pub fn normalize_reasoning_template_options(
     let mut options = ReasoningTemplateOptions::default();
 
     if let Some(reasoning) = reasoning {
+        if let Some(effort) = reasoning.effort {
+            options
+                .chat_template_kwargs
+                .insert("reasoning_effort".to_string(), Value::from(effort.as_str()));
+        }
         if reasoning.enabled == Some(false)
             || matches!(reasoning.effort, Some(ReasoningEffort::None))
             || reasoning.max_tokens == Some(0)
@@ -188,6 +195,9 @@ pub fn normalize_reasoning_template_options(
     }
 
     if let Some(effort) = reasoning_effort {
+        options
+            .chat_template_kwargs
+            .insert("reasoning_effort".to_string(), Value::from(effort.as_str()));
         options.enable_thinking = Some(!matches!(effort, ReasoningEffort::None));
     }
 
@@ -204,6 +214,11 @@ pub fn normalize_reasoning_template_options(
         let object = value.as_object().ok_or_else(|| {
             OpenAiError::invalid_request("chat_template_kwargs must be an object")
         })?;
+        for (field, value) in object {
+            options
+                .chat_template_kwargs
+                .insert(field.clone(), value.clone());
+        }
         for field in THINKING_BOOLEAN_ALIASES {
             if let Some(value) = object.get(*field) {
                 let enabled = value.as_bool().ok_or_else(|| {
@@ -217,6 +232,20 @@ pub fn normalize_reasoning_template_options(
     }
 
     Ok(options)
+}
+
+impl ReasoningEffort {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
 }
 
 fn optional_u32_extra(
@@ -379,6 +408,28 @@ mod tests {
         let options = normalize_reasoning_template_options(None, None, &extra).unwrap();
 
         assert_eq!(options.enable_thinking, Some(false));
+    }
+
+    #[test]
+    fn normalize_reasoning_effort_preserves_template_kwarg_and_explicit_kwargs_win() {
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            "chat_template_kwargs".to_string(),
+            json!({"reasoning_effort": "custom", "temperature": 0.2}),
+        );
+
+        let options =
+            normalize_reasoning_template_options(None, Some(ReasoningEffort::Max), &extra).unwrap();
+
+        assert_eq!(options.enable_thinking, Some(true));
+        assert_eq!(
+            options.chat_template_kwargs.get("reasoning_effort"),
+            Some(&json!("custom"))
+        );
+        assert_eq!(
+            options.chat_template_kwargs.get("temperature"),
+            Some(&json!(0.2))
+        );
     }
 
     #[test]
