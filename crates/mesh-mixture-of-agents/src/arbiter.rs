@@ -1,38 +1,22 @@
-//! Deterministic arbitration of worker outputs.
+//! Deterministic arbitration of worker **answers**.
 //!
 //! The arbiter uses code, not models, to decide the outcome.
 //! Models are only called (via the reducer) when there's genuine ambiguity.
 //!
+//! This arbiter handles the text path only. Tool-bearing turns take the
+//! asymmetric actor path in [`crate::tool_turn`], where the best tool-caller
+//! acts and references only advise — so no tool proposal ever reaches here.
+//! Any tool-shaped text on the text path was demoted to `Uncertainty` by
+//! `enforce_tool_call_contract` (tools disabled ⇒ empty allow-list).
+//!
 //! Decision priority:
-//! 1. Unanimous tool proposal → emit tool call
-//! 2. High-confidence tool proposal with no dissent → emit tool call
-//! 3. Unanimous answers → pick highest confidence
-//! 4. Conflicting outputs → escalate to reducer
-//! 5. All uncertainty → escalate to reducer
+//! 1. Agreeing answers (content cluster, majority) → pick highest confidence
+//! 2. Diverging answers → escalate to reducer (synthesis)
+//! 3. All uncertainty → escalate to reducer
 
 use crate::normalize::{OutputKind, WorkerOutput};
 use crate::worker::WorkerRole;
 use serde_json::Value;
-
-/// Pick the best tool proposal: prefer proposals that have arguments,
-/// then by confidence.  A proposal without arguments (e.g. from a fast
-/// worker that only got tool names in the system prompt) should lose to
-/// one that has actual arguments.
-fn best_tool_proposal<'a>(proposals: &[&'a WorkerOutput]) -> &'a WorkerOutput {
-    proposals
-        .iter()
-        .copied()
-        .max_by(|a, b| {
-            let a_has_args = a.tool_arguments.is_some()
-                && a.tool_arguments.as_ref() != Some(&Value::Object(Default::default()));
-            let b_has_args = b.tool_arguments.is_some()
-                && b.tool_arguments.as_ref() != Some(&Value::Object(Default::default()));
-            a_has_args
-                .cmp(&b_has_args)
-                .then(a.confidence.total_cmp(&b.confidence))
-        })
-        .unwrap()
-}
 
 /// What the arbiter decided.
 #[derive(Debug)]
@@ -46,7 +30,7 @@ pub enum Decision {
 }
 
 /// Arbitrate worker outputs into a single decision.
-pub fn arbitrate(outputs: &[WorkerOutput], has_tools: bool) -> Decision {
+pub fn arbitrate(outputs: &[WorkerOutput]) -> Decision {
     if outputs.is_empty() {
         return Decision::NeedsReducer {
             reason: "no worker outputs".into(),
@@ -54,13 +38,9 @@ pub fn arbitrate(outputs: &[WorkerOutput], has_tools: bool) -> Decision {
     }
 
     if outputs.len() == 1 {
-        return single_output_decision(&outputs[0], has_tools);
+        return single_output_decision(&outputs[0]);
     }
 
-    let tool_proposals: Vec<&WorkerOutput> = outputs
-        .iter()
-        .filter(|o| o.kind == OutputKind::ToolProposal)
-        .collect();
     let answers: Vec<&WorkerOutput> = outputs.iter().filter(|o| is_usable_answer(o)).collect();
     let critiques: Vec<&WorkerOutput> = outputs
         .iter()
@@ -78,79 +58,12 @@ pub fn arbitrate(outputs: &[WorkerOutput], has_tools: bool) -> Decision {
         };
     }
 
-    // ── Tool call arbitration ────────────────────────────────────
-
-    if has_tools && !tool_proposals.is_empty() {
-        // Check if any critique opposes the tool call
-        let has_tool_dissent = critiques.iter().any(|c| {
-            c.payload.to_lowercase().contains("don't")
-                || c.payload.to_lowercase().contains("should not")
-                || c.payload.to_lowercase().contains("no tool")
-        });
-
-        if has_tool_dissent {
-            return Decision::NeedsReducer {
-                reason: "tool proposal with dissenting critique".into(),
-            };
-        }
-
-        // All tool proposals agree on the same tool?
-        let tool_names: Vec<&str> = tool_proposals
-            .iter()
-            .filter_map(|o| o.tool_name.as_deref())
-            .collect();
-
-        if !tool_names.is_empty() {
-            // If some workers propose tools and others answer directly, conflict
-            if !answers.is_empty() {
-                return Decision::NeedsReducer {
-                    reason: "some workers propose tools, others answer directly".into(),
-                };
-            }
-
-            let first = tool_names[0];
-            let unanimous = tool_names.iter().all(|n| *n == first);
-
-            if unanimous {
-                let best = best_tool_proposal(&tool_proposals);
-                return Decision::ToolCall {
-                    name: first.to_string(),
-                    arguments: best
-                        .tool_arguments
-                        .clone()
-                        .unwrap_or(Value::Object(Default::default())),
-                };
-            }
-
-            // Different tools proposed — check if one is clearly dominant
-            let max_conf = best_tool_proposal(&tool_proposals);
-            let others_low = tool_proposals
-                .iter()
-                .filter(|o| o.tool_name != max_conf.tool_name)
-                .all(|o| o.confidence < 0.5);
-
-            if max_conf.confidence > 0.7 && others_low {
-                return Decision::ToolCall {
-                    name: max_conf.tool_name.clone().unwrap_or_default(),
-                    arguments: max_conf
-                        .tool_arguments
-                        .clone()
-                        .unwrap_or(Value::Object(Default::default())),
-                };
-            }
-
-            return Decision::NeedsReducer {
-                reason: format!("conflicting tool proposals: {}", tool_names.join(" vs ")),
-            };
-        }
-
-        // Tool proposals without extractable names — single high-confidence?
-        if tool_proposals.len() == 1 && tool_proposals[0].confidence > 0.6 {
-            return Decision::NeedsReducer {
-                reason: "tool proposal without parseable tool name".into(),
-            };
-        }
-    }
+    // Tool turns never reach here — a fresh tool request takes the asymmetric
+    // actor path in `tool_turn`, where the best tool-caller acts and references
+    // only advise. This arbiter is purely an answer/critique/uncertainty
+    // arbiter: any tool-shaped output on the text path was demoted by
+    // `enforce_tool_call_contract` (tools disabled ⇒ empty allow-list), so it
+    // is treated as ordinary text below.
 
     // ── Answer arbitration ───────────────────────────────────────
 
@@ -165,6 +78,26 @@ pub fn arbitrate(outputs: &[WorkerOutput], has_tools: bool) -> Decision {
         if best.confidence < 0.5 && !critiques.is_empty() {
             return Decision::NeedsReducer {
                 reason: "low confidence answer with critique".into(),
+            };
+        }
+
+        // Diverging answers are synthesized, not picked.
+        //
+        // Returning `best.payload` verbatim was close to arbitrary: models
+        // rarely emit our `kind:/confidence:` envelope, so `normalize`
+        // defaults them all to `confidence: 0.5` and `max_by` just returns
+        // the first maximum — i.e. whichever worker happened to finish
+        // first. That discarded every other worker's contribution while
+        // still paying to run them.
+        //
+        // This is the pattern Together's MoA is built on and benchmarks
+        // well with: fan out, then have an aggregator read all responses
+        // and write one. We only take that path when the answers actually
+        // disagree — when they agree, the existing consensus/early-exit
+        // paths are cheaper and already correct.
+        if answers.len() >= 2 && largest_agreeing_cluster(&answers).is_none() {
+            return Decision::NeedsReducer {
+                reason: format!("{} workers answered with no agreement", answers.len()),
             };
         }
 
@@ -208,7 +141,6 @@ pub fn try_early_decision(
     outputs: &[WorkerOutput],
     total_workers: usize,
     total_finished: usize,
-    has_tools: bool,
     strong_gate: StrongGate,
 ) -> Option<Decision> {
     if outputs.is_empty() {
@@ -231,7 +163,7 @@ pub fn try_early_decision(
     // If we have 1 successful output and no more workers are coming,
     // return it immediately — no point waiting.
     if outputs.len() == 1 && remaining == 0 {
-        return Some(single_output_decision(&outputs[0], has_tools));
+        return Some(single_output_decision(&outputs[0]));
     }
 
     // ── Single output with others still pending ─────────────────────
@@ -246,9 +178,7 @@ pub fn try_early_decision(
         }
         // Tier gate: a small-tier sole-survivor *answer* must not
         // finalize while the strong worker is still running. The
-        // fan-out loop bounds this wait via `strong_patience`. Tool
-        // proposals are exempt — they are schema-verified and holding
-        // them would slow agent loops.
+        // fan-out loop bounds this wait via `strong_patience`.
         if strong_pending
             && outputs[0].role != WorkerRole::Strong
             && outputs[0].kind == OutputKind::Answer
@@ -259,23 +189,22 @@ pub fn try_early_decision(
         tracing::info!(
             "moa: early exit — sole survivor, {failed_count}/{total_workers} workers failed",
         );
-        return Some(single_output_decision(&outputs[0], has_tools));
+        return Some(single_output_decision(&outputs[0]));
     }
 
-    // ── 2+ outputs: check for consensus ─────────────────────────────
+    // ── 2+ outputs: check for answer consensus ──────────────────────
+    //
+    // Tool turns never reach here (they take the asymmetric actor path), so
+    // this is purely answer-consensus detection.
 
     let answers: Vec<&WorkerOutput> = outputs.iter().filter(|o| is_usable_answer(o)).collect();
-    let tool_proposals: Vec<&WorkerOutput> = outputs
-        .iter()
-        .filter(|o| o.kind == OutputKind::ToolProposal)
-        .collect();
 
     // Workers agree on an answer — but agreement means the *content*
     // overlaps, not just that they all produced an Answer-kind output.
     // Two workers saying "Paris" and "Berlin" must not be treated as
     // consensus. Find the largest cluster of content-similar answers
     // and only early-exit if it's ≥2 workers AND a majority of answers.
-    let agreeing_cluster = if answers.len() >= 2 && tool_proposals.is_empty() {
+    let agreeing_cluster = if answers.len() >= 2 {
         largest_agreeing_cluster(&answers)
     } else {
         None
@@ -291,48 +220,6 @@ pub fn try_early_decision(
         {
             return Some(decision);
         }
-    }
-
-    // All agree on the same tool call
-    if has_tools && tool_proposals.len() >= 2 && answers.is_empty() {
-        let tool_names: Vec<&str> = tool_proposals
-            .iter()
-            .filter_map(|o| o.tool_name.as_deref())
-            .collect();
-        if !tool_names.is_empty() {
-            let first = tool_names[0];
-            let unanimous = tool_names.iter().all(|n| *n == first);
-            if unanimous {
-                let best = best_tool_proposal(&tool_proposals);
-                tracing::info!(
-                    "moa: early exit — {} workers agree on tool '{}', {} still pending",
-                    tool_proposals.len(),
-                    first,
-                    remaining,
-                );
-                return Some(Decision::ToolCall {
-                    name: first.to_string(),
-                    arguments: best
-                        .tool_arguments
-                        .clone()
-                        .unwrap_or(serde_json::Value::Object(Default::default())),
-                });
-            }
-        }
-    }
-
-    // Conflict detected early — some say tool, some say answer.
-    // Escalate to reducer now, don't wait for more conflicting opinions.
-    if !tool_proposals.is_empty() && !answers.is_empty() {
-        tracing::info!(
-            "moa: early escalation — {} tool proposals vs {} answers, {} still pending",
-            tool_proposals.len(),
-            answers.len(),
-            remaining,
-        );
-        return Some(Decision::NeedsReducer {
-            reason: "some workers propose tools, others answer directly".into(),
-        });
     }
 
     // Not enough signal yet — keep waiting
@@ -552,27 +439,23 @@ fn largest_agreeing_cluster<'a>(answers: &[&'a WorkerOutput]) -> Option<(usize, 
     best
 }
 
-fn single_output_decision(output: &WorkerOutput, has_tools: bool) -> Decision {
+fn single_output_decision(output: &WorkerOutput) -> Decision {
     if output.kind == OutputKind::Answer && !is_usable_answer(output) {
+        // Two distinct unusable shapes reach here, and the reason string is
+        // surfaced to the reducer as context, so keep them apart.
         return Decision::NeedsReducer {
-            reason: "single worker returned silent reply sentinel".into(),
+            reason: if output.truncated {
+                "single worker answer truncated at token limit".into()
+            } else {
+                "single worker returned silent reply sentinel".to_string()
+            },
         };
     }
 
+    // Tool turns take the asymmetric actor path, so this text-path arbiter
+    // never sees an executable ToolProposal (tool-shaped text is demoted to
+    // Uncertainty by `enforce_tool_call_contract` when tools are disabled).
     match output.kind {
-        OutputKind::ToolProposal if has_tools => {
-            if let Some(ref name) = output.tool_name {
-                Decision::ToolCall {
-                    name: name.clone(),
-                    arguments: output
-                        .tool_arguments
-                        .clone()
-                        .unwrap_or(Value::Object(Default::default())),
-                }
-            } else {
-                Decision::Answer(output.payload.clone())
-            }
-        }
         OutputKind::Uncertainty => Decision::NeedsReducer {
             reason: "single worker uncertain".into(),
         },
@@ -580,8 +463,19 @@ fn single_output_decision(output: &WorkerOutput, has_tools: bool) -> Decision {
     }
 }
 
+/// Is this output an answer we can return to the caller verbatim?
+///
+/// Excludes truncated answers. A response the backend cut off at the token
+/// limit is a half-finished sentence: it must not win the confidence pick,
+/// must not anchor consensus, and must not be shipped as-is.
+///
+/// Truncated answers are *not* dropped from the turn, though — they stay in
+/// `outputs` and so are still packed into the reducer's context by
+/// `pack_for_reducer_selected`, which labels them as incomplete. Partial text
+/// is usable material for synthesis; it just can't be the final answer.
 fn is_usable_answer(output: &WorkerOutput) -> bool {
     output.kind == OutputKind::Answer
+        && !output.truncated
         && !crate::normalize::is_silent_reply_sentinel(&output.payload)
 }
 
@@ -599,21 +493,13 @@ mod tests {
             model: "test".to_string(),
             role: WorkerRole::Generalist,
             elapsed_ms: 0,
+            truncated: false,
         }
     }
 
-    fn make_tool_output(confidence: f32, tool: &str, args: Value) -> WorkerOutput {
-        WorkerOutput {
-            kind: OutputKind::ToolProposal,
-            confidence,
-            tool_name: Some(tool.to_string()),
-            tool_arguments: Some(args),
-            payload: "propose tool".to_string(),
-            model: "test".to_string(),
-            role: WorkerRole::Generalist,
-            elapsed_ms: 0,
-        }
-    }
+    // Tool arbitration is intentionally absent here: tool turns take the
+    // asymmetric actor path in `tool_turn`, so this arbiter only ever sees
+    // answers / critiques / uncertainty. See the module docs.
 
     #[test]
     fn unanimous_answer_picks_highest_confidence() {
@@ -621,45 +507,9 @@ mod tests {
             make_output(OutputKind::Answer, 0.7, "Paris"),
             make_output(OutputKind::Answer, 0.9, "Paris is the capital"),
         ];
-        match arbitrate(&outputs, false) {
+        match arbitrate(&outputs) {
             Decision::Answer(text) => assert!(text.contains("Paris")),
             other => panic!("expected Answer, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn unanimous_tool_proposal() {
-        let outputs = vec![
-            make_tool_output(0.8, "read_file", serde_json::json!({"path": "a.rs"})),
-            make_tool_output(0.7, "read_file", serde_json::json!({"path": "a.rs"})),
-        ];
-        match arbitrate(&outputs, true) {
-            Decision::ToolCall { name, .. } => assert_eq!(name, "read_file"),
-            other => panic!("expected ToolCall, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn conflicting_tools_needs_reducer() {
-        let outputs = vec![
-            make_tool_output(0.6, "read_file", serde_json::json!({})),
-            make_tool_output(0.6, "web_search", serde_json::json!({})),
-        ];
-        match arbitrate(&outputs, true) {
-            Decision::NeedsReducer { reason } => assert!(reason.contains("conflicting")),
-            other => panic!("expected NeedsReducer, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn tool_vs_answer_needs_reducer() {
-        let outputs = vec![
-            make_tool_output(0.7, "read_file", serde_json::json!({})),
-            make_output(OutputKind::Answer, 0.8, "I can answer that directly"),
-        ];
-        match arbitrate(&outputs, true) {
-            Decision::NeedsReducer { reason } => assert!(reason.contains("some workers")),
-            other => panic!("expected NeedsReducer, got {other:?}"),
         }
     }
 
@@ -668,8 +518,7 @@ mod tests {
     #[test]
     fn early_decision_none_with_one_of_three() {
         let outputs = vec![make_output(OutputKind::Answer, 0.9, "Paris")];
-        // 1 of 3 — too early to decide
-        assert!(try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off).is_none());
+        assert!(try_early_decision(&outputs, 3, outputs.len(), StrongGate::Off).is_none());
     }
 
     #[test]
@@ -678,48 +527,19 @@ mod tests {
             make_output(OutputKind::Answer, 0.8, "Paris"),
             make_output(OutputKind::Answer, 0.9, "Paris is the capital"),
         ];
-        // 2 of 3 agree — early exit
-        match try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off) {
+        match try_early_decision(&outputs, 3, outputs.len(), StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => panic!("expected early Answer, got {other:?}"),
         }
     }
 
     #[test]
-    fn early_decision_tool_consensus() {
-        let outputs = vec![
-            make_tool_output(0.8, "read_file", serde_json::json!({"path": "a.rs"})),
-            make_tool_output(0.7, "read_file", serde_json::json!({"path": "a.rs"})),
-        ];
-        match try_early_decision(&outputs, 3, outputs.len(), true, StrongGate::Off) {
-            Some(Decision::ToolCall { name, .. }) => assert_eq!(name, "read_file"),
-            other => panic!("expected early ToolCall, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn early_decision_conflict_escalates() {
-        let outputs = vec![
-            make_tool_output(0.7, "read_file", serde_json::json!({})),
-            make_output(OutputKind::Answer, 0.8, "I know the answer"),
-        ];
-        match try_early_decision(&outputs, 3, outputs.len(), true, StrongGate::Off) {
-            Some(Decision::NeedsReducer { .. }) => {}
-            other => panic!("expected early NeedsReducer, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn early_decision_requires_content_agreement() {
-        // Two high-confidence answers that disagree on the answer noun.
-        // The old code wrongly early-exited on the highest-confidence
-        // one. The new subset rule sees `{paris}` and `{berlin}` as
-        // distinct leftovers, so neither side is a subset of the other.
         let outputs = vec![
             make_output(OutputKind::Answer, 0.9, "The capital of France is Paris"),
             make_output(OutputKind::Answer, 0.8, "The capital of France is Berlin"),
         ];
-        let res = try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off);
+        let res = try_early_decision(&outputs, 3, outputs.len(), StrongGate::Off);
         assert!(
             res.is_none(),
             "disagreeing answers should not trigger early-exit, got {res:?}"
@@ -728,15 +548,11 @@ mod tests {
 
     #[test]
     fn early_decision_agrees_on_terse_vs_verbose() {
-        // The most common real-world agreement pattern: one worker is
-        // terse, another is verbose, both correct. Terse content tokens
-        // ⊆ verbose content tokens → cluster.
         let outputs = vec![
             make_output(OutputKind::Answer, 0.7, "Paris"),
             make_output(OutputKind::Answer, 0.9, "Paris is the capital of France"),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off) {
-            // Representative picks the most complete (most tokens) member.
+        match try_early_decision(&outputs, 3, outputs.len(), StrongGate::Off) {
             Some(Decision::Answer(text)) => {
                 let lower = text.to_lowercase();
                 assert!(lower.contains("paris"), "expected Paris, got {text:?}");
@@ -751,14 +567,12 @@ mod tests {
 
     #[test]
     fn early_decision_majority_cluster_wins() {
-        // Two agreeing answers + one outlier. Cluster of 2 is a majority
-        // of 3 finished answers → early-exit fires.
         let outputs = vec![
             make_output(OutputKind::Answer, 0.9, "Paris"),
             make_output(OutputKind::Answer, 0.8, "Paris is the capital"),
             make_output(OutputKind::Answer, 0.6, "I think it's Lyon"),
         ];
-        match try_early_decision(&outputs, 4, outputs.len(), false, StrongGate::Off) {
+        match try_early_decision(&outputs, 4, outputs.len(), StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(
                 text.to_lowercase().contains("paris"),
                 "should pick from the agreeing cluster, got {text:?}"
@@ -769,16 +583,12 @@ mod tests {
 
     #[test]
     fn early_decision_disagreement_with_shared_scaffolding_still_blocks() {
-        // High token overlap from shared scaffolding ("the capital of
-        // France is X") used to false-positive a similarity check.
-        // With subset containment, each answer has a distinct leftover
-        // (paris, berlin, madrid) so no cluster forms.
         let outputs = vec![
             make_output(OutputKind::Answer, 0.9, "The capital of France is Paris"),
             make_output(OutputKind::Answer, 0.9, "The capital of France is Berlin"),
             make_output(OutputKind::Answer, 0.5, "The capital of France is Madrid"),
         ];
-        let res = try_early_decision(&outputs, 4, outputs.len(), false, StrongGate::Off);
+        let res = try_early_decision(&outputs, 4, outputs.len(), StrongGate::Off);
         assert!(
             res.is_none(),
             "three disagreeing answers should not early-exit, got {res:?}"
@@ -787,14 +597,11 @@ mod tests {
 
     #[test]
     fn early_decision_negation_blocks_agreement() {
-        // The negation guard keeps "not" / "dont" etc. as content tokens,
-        // so an answer with negation is not a subset of the affirmative
-        // version even when all other tokens match.
         let outputs = vec![
             make_output(OutputKind::Answer, 0.9, "You should use grep"),
             make_output(OutputKind::Answer, 0.8, "You should not use grep"),
         ];
-        let res = try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off);
+        let res = try_early_decision(&outputs, 3, outputs.len(), StrongGate::Off);
         assert!(
             res.is_none(),
             "affirmative vs negated answer should not cluster, got {res:?}"
@@ -803,13 +610,11 @@ mod tests {
 
     #[test]
     fn early_decision_dont_blocks_agreement() {
-        // Same idea with a contraction. After punctuation stripping
-        // "don't" → "dont", which is in NEGATION_TOKENS.
         let outputs = vec![
             make_output(OutputKind::Answer, 0.9, "Do that"),
             make_output(OutputKind::Answer, 0.8, "Don't do that"),
         ];
-        let res = try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off);
+        let res = try_early_decision(&outputs, 3, outputs.len(), StrongGate::Off);
         assert!(
             res.is_none(),
             "affirmative vs negated should not cluster, got {res:?}"
@@ -818,12 +623,11 @@ mod tests {
 
     #[test]
     fn early_decision_numeric_answers_cluster() {
-        // Numeric answers survive the length filter and cluster cleanly.
         let outputs = vec![
             make_output(OutputKind::Answer, 0.9, "42"),
             make_output(OutputKind::Answer, 0.8, "The answer is 42"),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off) {
+        match try_early_decision(&outputs, 3, outputs.len(), StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(text.contains("42")),
             other => panic!("expected numeric agreement, got {other:?}"),
         }
@@ -831,10 +635,8 @@ mod tests {
 
     #[test]
     fn early_decision_single_survivor() {
-        // 1 success out of 3, other 2 failed — should return the single answer
         let outputs = vec![make_output(OutputKind::Answer, 0.8, "Paris")];
-        // total_workers=3, total_finished=3 (1 success + 2 failures), remaining=0
-        match try_early_decision(&outputs, 3, 3, false, StrongGate::Off) {
+        match try_early_decision(&outputs, 3, 3, StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => panic!("expected early Answer for sole survivor, got {other:?}"),
         }
@@ -846,8 +648,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.3, "maybe Paris"),
             make_output(OutputKind::Answer, 0.4, "could be Paris"),
         ];
-        // Both answers but low confidence — should wait for more
-        assert!(try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off).is_none());
+        assert!(try_early_decision(&outputs, 3, outputs.len(), StrongGate::Off).is_none());
     }
 
     #[test]
@@ -856,7 +657,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.99, "NO_REPLY"),
             make_output(OutputKind::Answer, 0.6, "I can help with that."),
         ];
-        match arbitrate(&outputs, false) {
+        match arbitrate(&outputs) {
             Decision::Answer(text) => assert_eq!(text, "I can help with that."),
             other => panic!("expected usable answer, got {other:?}"),
         }
@@ -865,7 +666,7 @@ mod tests {
     #[test]
     fn no_reply_sentinel_for_single_output_needs_reducer() {
         let outputs = vec![make_output(OutputKind::Answer, 0.99, "NO_REPLY")];
-        match arbitrate(&outputs, false) {
+        match arbitrate(&outputs) {
             Decision::NeedsReducer { reason } => {
                 assert!(reason.contains("silent reply sentinel"));
             }
@@ -879,7 +680,7 @@ mod tests {
             make_output(OutputKind::Uncertainty, 0.2, "not sure"),
             make_output(OutputKind::Uncertainty, 0.3, "hard to say"),
         ];
-        match arbitrate(&outputs, false) {
+        match arbitrate(&outputs) {
             Decision::NeedsReducer { reason } => assert!(reason.contains("uncertain")),
             other => panic!("expected NeedsReducer, got {other:?}"),
         }
@@ -887,10 +688,8 @@ mod tests {
 
     #[test]
     fn early_decision_sole_survivor_majority_failed() {
-        // 1 success, 3 failures, 1 still pending — majority failed, return sole survivor
         let outputs = vec![make_output(OutputKind::Answer, 0.8, "Paris")];
-        // total_workers=5, total_finished=4 (1 success + 3 failures), remaining=1
-        match try_early_decision(&outputs, 5, 4, false, StrongGate::Off) {
+        match try_early_decision(&outputs, 5, 4, StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => {
                 panic!("expected early Answer for sole survivor (majority failed), got {other:?}")
@@ -900,66 +699,96 @@ mod tests {
 
     #[test]
     fn early_decision_sole_survivor_minority_failed_waits() {
-        // 1 success, 1 failure, 3 still pending — minority failed, wait for more
         let outputs = vec![make_output(OutputKind::Answer, 0.8, "Paris")];
-        // total_workers=5, total_finished=2 (1 success + 1 failure), remaining=3
-        assert!(try_early_decision(&outputs, 5, 2, false, StrongGate::Off).is_none());
+        assert!(try_early_decision(&outputs, 5, 2, StrongGate::Off).is_none());
+    }
+
+    // ── Truncation ───────────────────────────────────────────────────
+    //
+    // 39/140 recorded responses came back `finish_reason == "length"`, and 24
+    // of those carry partial text. Such an answer parses as normal prose at
+    // the default 0.5 confidence, so before truncation was tracked it could
+    // win the pick and be returned verbatim as a half-finished sentence.
+
+    #[test]
+    fn truncated_answer_is_not_returned_verbatim() {
+        let mut cut_off = make_output(
+            OutputKind::Answer,
+            0.9,
+            "**Island Magic: My Unforgettable Journey Through the Heart of",
+        );
+        cut_off.truncated = true;
+        let complete = make_output(OutputKind::Answer, 0.5, "Hawaii is worth visiting.");
+
+        match arbitrate(&[cut_off, complete]) {
+            Decision::Answer(text) => assert_eq!(
+                text, "Hawaii is worth visiting.",
+                "a truncated answer must not win even with higher confidence"
+            ),
+            other => panic!("expected the complete answer, got {other:?}"),
+        }
     }
 
     #[test]
-    fn best_tool_proposal_prefers_arguments() {
-        let without_args = WorkerOutput {
-            kind: OutputKind::ToolProposal,
-            confidence: 0.9,
-            tool_name: Some("read_file".into()),
-            tool_arguments: None,
-            payload: "calling read_file".into(),
-            model: "fast-model".into(),
-            role: crate::worker::WorkerRole::Fast,
-            elapsed_ms: 100,
-        };
-        let with_args = WorkerOutput {
-            kind: OutputKind::ToolProposal,
-            confidence: 0.6,
-            tool_name: Some("read_file".into()),
-            tool_arguments: Some(serde_json::json!({"path": "/tmp/test.txt"})),
-            payload: "calling read_file".into(),
-            model: "strong-model".into(),
-            role: crate::worker::WorkerRole::Strong,
-            elapsed_ms: 3000,
-        };
-        let proposals = vec![&without_args, &with_args];
-        let best = best_tool_proposal(&proposals);
-        assert_eq!(best.model, "strong-model");
-        assert!(best.tool_arguments.is_some());
+    fn sole_truncated_answer_goes_to_synthesis() {
+        let mut cut_off = make_output(OutputKind::Answer, 0.9, "The first step is to");
+        cut_off.truncated = true;
+
+        match arbitrate(&[cut_off]) {
+            Decision::NeedsReducer { reason } => assert!(
+                reason.contains("truncated"),
+                "reason should name truncation so the reducer gets useful context; got {reason:?}"
+            ),
+            other => panic!("expected NeedsReducer, got {other:?}"),
+        }
     }
 
     #[test]
-    fn best_tool_proposal_falls_back_to_confidence() {
-        let a = WorkerOutput {
-            kind: OutputKind::ToolProposal,
-            confidence: 0.6,
-            tool_name: Some("read_file".into()),
-            tool_arguments: Some(serde_json::json!({"path": "/a.txt"})),
-            payload: "calling read_file".into(),
-            model: "model-a".into(),
-            role: crate::worker::WorkerRole::Specialist,
-            elapsed_ms: 2000,
-        };
-        let b = WorkerOutput {
-            kind: OutputKind::ToolProposal,
-            confidence: 0.9,
-            tool_name: Some("read_file".into()),
-            tool_arguments: Some(serde_json::json!({"path": "/b.txt"})),
-            payload: "calling read_file".into(),
-            model: "model-b".into(),
-            role: crate::worker::WorkerRole::Strong,
-            elapsed_ms: 3000,
-        };
-        let proposals = vec![&a, &b];
-        let best = best_tool_proposal(&proposals);
-        // Both have args, so confidence wins
-        assert_eq!(best.model, "model-b");
+    fn truncated_answers_do_not_anchor_consensus() {
+        let mut a = make_output(OutputKind::Answer, 0.9, "The capital of Japan is");
+        a.truncated = true;
+        let mut b = make_output(OutputKind::Answer, 0.9, "The capital of Japan is");
+        b.truncated = true;
+
+        assert!(
+            matches!(
+                try_early_decision(&[a, b], 4, 2, StrongGate::Off),
+                None | Some(Decision::NeedsReducer { .. })
+            ),
+            "truncated agreement must not short-circuit the turn"
+        );
+    }
+
+    // ── Synthesis on disagreement ────────────────────────────────────
+
+    #[test]
+    fn diverging_answers_go_to_synthesis_rather_than_an_arbitrary_pick() {
+        let a = make_output(OutputKind::Answer, 0.5, "Use ripgrep for this search task");
+        let b = make_output(OutputKind::Answer, 0.5, "Postgres indexes are B-trees");
+        let c = make_output(
+            OutputKind::Answer,
+            0.5,
+            "Kubernetes schedules pods on nodes",
+        );
+
+        match arbitrate(&[a, b, c]) {
+            Decision::NeedsReducer { reason } => assert!(
+                reason.contains("no agreement"),
+                "reason should explain the escalation; got {reason:?}"
+            ),
+            other => panic!("three unrelated answers should be synthesized, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agreeing_answers_still_short_circuit_without_the_reducer() {
+        let a = make_output(OutputKind::Answer, 0.5, "The capital of Japan is Tokyo");
+        let b = make_output(OutputKind::Answer, 0.5, "The capital of Japan is Tokyo");
+
+        assert!(
+            matches!(arbitrate(&[a, b]), Decision::Answer(_)),
+            "agreeing answers must not be sent to the reducer"
+        );
     }
 
     // ── Tier gate (StrongGate) ───────────────────────────────────────
@@ -982,8 +811,6 @@ mod tests {
 
     #[test]
     fn gate_holds_small_tier_consensus_while_strong_pending() {
-        // Two small-tier workers agree — without the gate this would
-        // early-exit. With the strong worker still running, hold.
         let outputs = vec![
             make_role_output(OutputKind::Answer, 0.8, "Paris", WorkerRole::Fast),
             make_role_output(
@@ -994,20 +821,17 @@ mod tests {
             ),
         ];
         assert!(
-            try_early_decision(&outputs, 3, outputs.len(), false, GATE_PENDING).is_none(),
+            try_early_decision(&outputs, 3, outputs.len(), GATE_PENDING).is_none(),
             "small-tier consensus must be held while the strong worker is pending"
         );
-        // Same outputs, gate off → previous behavior (early exit).
         assert!(
-            try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off).is_some(),
+            try_early_decision(&outputs, 3, outputs.len(), StrongGate::Off).is_some(),
             "gate off must preserve pre-gate early-exit behavior"
         );
     }
 
     #[test]
     fn gate_passes_consensus_that_includes_strong_worker() {
-        // Strong worker has answered and agrees — that's agreement WITH
-        // the strong model. Ship it even though another worker is pending.
         let outputs = vec![
             make_role_output(OutputKind::Answer, 0.8, "Paris", WorkerRole::Fast),
             make_role_output(
@@ -1020,7 +844,7 @@ mod tests {
         let gate = StrongGate::Active {
             strong_pending: false,
         };
-        match try_early_decision(&outputs, 3, outputs.len(), false, gate) {
+        match try_early_decision(&outputs, 3, outputs.len(), gate) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => panic!("expected early Answer with strong agreement, got {other:?}"),
         }
@@ -1028,43 +852,21 @@ mod tests {
 
     #[test]
     fn gate_holds_small_tier_sole_survivor_answer() {
-        // Majority failed, sole survivor is a small-tier Answer, strong
-        // still pending → hold (the fan-out patience timer bounds this).
         let outputs = vec![make_role_output(
             OutputKind::Answer,
             0.9,
             "Tokyo",
             WorkerRole::Fast,
         )];
-        // 3 dispatched, 2 finished (1 ok + 1 failed) → majority_failed
         assert!(
-            try_early_decision(&outputs, 3, 2, false, GATE_PENDING).is_none(),
+            try_early_decision(&outputs, 3, 2, GATE_PENDING).is_none(),
             "small-tier sole-survivor answer must be held while strong is pending"
         );
-        // Gate off → pre-gate behavior: sole survivor ships.
-        assert!(try_early_decision(&outputs, 3, 2, false, StrongGate::Off).is_some());
-    }
-
-    #[test]
-    fn gate_does_not_hold_tool_proposals() {
-        // Tool proposals are schema-verified and exempt from the gate —
-        // agent loops must stay snappy.
-        let outputs = vec![WorkerOutput {
-            role: WorkerRole::Fast,
-            ..make_tool_output(0.9, "read_file", serde_json::json!({"path": "x"}))
-        }];
-        // Majority failed → sole-survivor path, but it's a ToolProposal.
-        match try_early_decision(&outputs, 3, 2, true, GATE_PENDING) {
-            Some(Decision::ToolCall { name, .. }) => assert_eq!(name, "read_file"),
-            other => panic!("tool proposals must not be gated, got {other:?}"),
-        }
+        assert!(try_early_decision(&outputs, 3, 2, StrongGate::Off).is_some());
     }
 
     #[test]
     fn strong_dissent_wins_over_small_consensus() {
-        // Two small workers agree on "Sydney"; the strong worker landed
-        // with a different answer ("Canberra"). Gate no longer pending.
-        // The strong worker's answer must win, not the small consensus.
         let outputs = vec![
             make_role_output(OutputKind::Answer, 0.9, "Sydney", WorkerRole::Fast),
             make_role_output(OutputKind::Answer, 0.9, "Sydney", WorkerRole::Specialist),
@@ -1073,7 +875,7 @@ mod tests {
         let gate = StrongGate::Active {
             strong_pending: false,
         };
-        match try_early_decision(&outputs, 3, outputs.len(), false, gate) {
+        match try_early_decision(&outputs, 3, outputs.len(), gate) {
             Some(Decision::Answer(text)) => assert!(
                 text.contains("Canberra"),
                 "strong dissent must win over small consensus, got {text:?}"
@@ -1084,8 +886,6 @@ mod tests {
 
     #[test]
     fn gate_releases_when_strong_finished() {
-        // Strong worker finished (failed or succeeded without usable
-        // answer) — gate no longer pending, consensus ships.
         let outputs = vec![
             make_role_output(OutputKind::Answer, 0.8, "Paris", WorkerRole::Fast),
             make_role_output(
@@ -1099,7 +899,7 @@ mod tests {
             strong_pending: false,
         };
         assert!(
-            try_early_decision(&outputs, 4, outputs.len(), false, gate).is_some(),
+            try_early_decision(&outputs, 4, outputs.len(), gate).is_some(),
             "consensus must ship once the strong worker has finished"
         );
     }

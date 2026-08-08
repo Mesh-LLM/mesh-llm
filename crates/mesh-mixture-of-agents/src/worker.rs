@@ -130,6 +130,56 @@ pub fn has_quality_gap<'a>(workers: impl IntoIterator<Item = (&'a str, WorkerRol
 ///
 /// Mirrors `pick_model_classified`'s sizing heuristic in the main
 /// router so MoA picks the same "strong" model as `auto` would.
+/// Public size-tier classifier for out-of-crate callers (the host uses it to
+/// break ties when ranking actor candidates by capability).
+///
+/// True when the model name advertises a single-digit billion-parameter count
+/// (1B–9B) — the "small tier". Multi-digit sizes (31B, 70B) and names that
+/// encode no size (MiniMax-M2.5) are big-tier. Same heuristic MoA uses
+/// internally for role assignment, exposed so the host doesn't re-implement it.
+pub fn model_name_is_small_tier(name: &str) -> bool {
+    is_single_digit_b_name(name)
+}
+
+/// Canonical base of a model name, mirroring the host's dedup logic: lowercase,
+/// drop an `@branch` segment (keeping any `:quant` tag), strip common
+/// prefixes/suffixes, keep only alphanumerics. Two aliases of the same model
+/// map to the same base.
+pub fn canonical_base_name(name: &str) -> String {
+    let lower = name.to_lowercase();
+    let no_branch = match lower.find('@') {
+        Some(at) => {
+            let after = &lower[at + 1..];
+            let rest = after.find(':').map(|c| &after[c..]).unwrap_or("");
+            format!("{}{}", &lower[..at], rest)
+        }
+        None => lower,
+    };
+    no_branch
+        .replace("-gguf", "")
+        .replace("unsloth/", "")
+        .replace("meshllm/", "")
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect()
+}
+
+/// A pool is homogeneous when every member shares one canonical base — i.e. it
+/// is the same model, possibly as repeated instances or quant variants.
+///
+/// Refinement is most valuable exactly here: identical/near-identical members
+/// produce correlated drafts, and the cross-peer round is what pulls them apart
+/// (measured: same-model 32B ×2 wins 48/2 with refinement vs 35/10 without,
+/// while a diverse strong pool is ~unchanged). See
+/// `evals/moa-openrouter/RESULTS.md`.
+pub fn pool_is_homogeneous(models: &[crate::backend::ModelEntry]) -> bool {
+    let mut bases = models.iter().map(|m| canonical_base_name(&m.name));
+    match bases.next() {
+        Some(first) => bases.all(|b| b == first),
+        None => false,
+    }
+}
+
 pub(crate) fn is_single_digit_b_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     for i in 0..bytes.len() {
@@ -230,6 +280,45 @@ pub fn extract_thinking(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::ModelEntry;
+
+    fn entries(names: &[&str]) -> Vec<ModelEntry> {
+        names
+            .iter()
+            .map(|n| ModelEntry {
+                name: (*n).to_string(),
+                backend_index: 0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn homogeneous_pool_detects_repeated_instances() {
+        assert!(pool_is_homogeneous(&entries(&["Qwen3-32B", "Qwen3-32B"])));
+    }
+
+    #[test]
+    fn homogeneous_pool_matches_aliases_of_one_model() {
+        // Same base once prefixes/-gguf/@branch are normalised away.
+        assert!(pool_is_homogeneous(&entries(&[
+            "Qwen3-8B",
+            "unsloth/Qwen3-8B",
+            "Qwen3-8B@main",
+        ])));
+    }
+
+    #[test]
+    fn different_models_are_not_homogeneous() {
+        assert!(!pool_is_homogeneous(&entries(&[
+            "Qwen3-8B",
+            "Llama-3.1-8B"
+        ])));
+    }
+
+    #[test]
+    fn empty_pool_is_not_homogeneous() {
+        assert!(!pool_is_homogeneous(&[]));
+    }
 
     #[test]
     fn truncate_chars_shorter_than_limit_is_passthrough() {

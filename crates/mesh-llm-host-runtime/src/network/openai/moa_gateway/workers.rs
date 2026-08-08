@@ -1,4 +1,4 @@
-use super::context_selection;
+use super::pool::{assemble_worker_pool, compute_actor_candidates};
 use crate::inference::election;
 use crate::mesh;
 use mesh_mixture_of_agents as moa;
@@ -14,7 +14,36 @@ use mesh_mixture_of_agents as moa;
 /// [`extract_enable_thinking_override`]. When no preference is
 /// expressed, MoA picks for them: off (always `Some(false)`).
 pub(super) fn effective_enable_thinking_for_moa(body: &serde_json::Value) -> Option<bool> {
-    extract_enable_thinking_override(body).or(Some(false))
+    // Always off. Not a default — a policy.
+    //
+    // Reasoning is actively harmful inside MoA fan-out, and recorded traces
+    // from 9 open-weight models make the failure mode concrete
+    // (`evals/moa-openrouter/`):
+    //
+    // * Workers run on a short budget (the fast worker gets 256 tokens).
+    //   With thinking on, qwen3-32b spent 408 reasoning tokens against a
+    //   384-token cap and returned `finish_reason=length` with
+    //   `content: null` — 1620 characters of reasoning and no answer. The
+    //   worker contributed nothing but still cost a full inference.
+    // * Across a recorded corpus, 15/140 responses came back truncated at
+    //   the limit, concentrated in exactly the reasoning-capable models.
+    // * The reducer synthesizes from worker answers; reasoning prose is bad
+    //   candidate input regardless of budget.
+    //
+    // The previous shape honoured a caller's `reasoning_effort` /
+    // `enable_thinking` override. That escape hatch only let callers ask for
+    // the broken configuration, so it is gone: MoA decides this, not the
+    // caller. Callers who want a reasoning model's thinking output should
+    // address that model directly instead of going through `model=mesh`.
+    //
+    // We still parse the caller's preference so an ignored override is
+    // visible in logs rather than silently dropped.
+    if extract_enable_thinking_override(body) == Some(true) {
+        tracing::info!(
+            "moa: caller asked for reasoning, ignoring — MoA workers always run with thinking off"
+        );
+    }
+    Some(false)
 }
 
 /// Pull the caller's "disable / enable thinking" preference out of an
@@ -103,56 +132,31 @@ pub async fn build_moa_config(
     required_tokens: Option<u32>,
 ) -> Option<moa::GatewayConfig> {
     let http = reqwest::Client::new();
-    let mut backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
-    let mut models: Vec<moa::ModelEntry> = Vec::new();
-    let mut local_count = 0usize;
-
-    // Full mesh-wide model list (local + every peer's advertised
-    // routable models).
-    let all_models: Vec<String> = node
-        .models_being_served()
-        .await
-        .into_iter()
-        .filter(|n| n != moa::VIRTUAL_MODEL_NAME)
-        .collect();
-
-    // Group aliases by canonical base. The old shape sorted by name
-    // length, took the *first* alias per base, and dropped the rest —
-    // which silently dropped the model from the worker pool whenever the
-    // shortest-named peer was unreachable (regression flagged by PR #566
-    // review). Now we keep every alias per base and try them in order so
-    // a longer-named reachable alias can still resolve when the shortest
-    // one is offline.
-    let groups = group_aliases_by_canonical_base(all_models, targets);
-    for aliases in groups {
-        resolve_one_worker_from_aliases(
-            node,
-            targets,
-            &http,
-            &aliases,
-            required_tokens,
-            &mut backends,
-            &mut models,
-            &mut local_count,
-        )
-        .await;
-    }
+    let (backends, models) = assemble_worker_pool(node, targets, required_tokens, &http).await;
 
     if models.len() < 2 {
         tracing::warn!(
-            "MoA: only {} model(s) reachable, need ≥2 (models={:?})",
+            "MoA: only {} qualified model(s) after admission, need ≥2 (models={:?})",
             models.len(),
             models.iter().map(|m| &m.name).collect::<Vec<_>>()
         );
         return None;
     }
 
+    // Actor priority for the asymmetric tool path: best tool-caller first.
+    // The actor is the one model that actually emits the tool call, so it must
+    // be the best available tool-caller — a judgement the engine crate cannot
+    // make because it can't see gossiped capabilities.
+    let actor_candidates = compute_actor_candidates(node, &models).await;
+
+    // Public meshes are a pathological availability case, not a trust case:
+    // unknown peers, wider latency spread, more churn. Wait less for perfect.
+    let patience = patience_profile(node.public_mesh);
+
     tracing::info!(
         required_tokens = ?required_tokens,
-        "MoA config: {} workers ({} local, {} remote): {:?}",
+        "MoA config: {} workers (admitted): {:?}",
         models.len(),
-        local_count,
-        models.len() - local_count,
         models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
     );
 
@@ -194,7 +198,9 @@ pub async fn build_moa_config(
         // With the relaxed eligibility added in this change, the timer
         // is the dominant chat path, so a tighter default is the right
         // default.
-        first_answer_grace: std::time::Duration::from_secs(3),
+        //
+        // Tightened further on a public mesh — see `patience_profile`.
+        first_answer_grace: patience.first_answer_grace,
         // Tier-gate patience: how long small-tier-only answers/consensus
         // are held when a big-tier strong worker (e.g. MiniMax) is still
         // running. 20s covers the strong worker's typical first-token
@@ -203,219 +209,65 @@ pub async fn build_moa_config(
         // decision rules revert to ungated behavior. Same-tier pools are
         // unaffected, so "many small models lift each other" keeps its
         // current latency profile.
-        strong_patience: std::time::Duration::from_secs(20),
+        strong_patience: patience.strong_patience,
         // Defaults to leaving each model's thinking behavior alone.
         // `try_handle_moa` overrides this from the inbound request body
         // when the caller has expressed a preference
         // (`reasoning_effort: "none"`, `enable_thinking: false`, etc.).
         enable_thinking: None,
+        // Actor priority for tool turns / synthesis: best tool-caller first.
+        // Computed below from gossiped `tool_use`, model size, and peer health.
+        actor_candidates,
+        // Gate advisory references on actor strength: they help a weak actor
+        // and cost a strong one (evals/moa-openrouter/RESULTS.md).
+        reference_policy: moa::ReferencePolicy::Auto,
+        refinement_policy: Default::default(),
     })
 }
 
-/// Try each alias in `aliases` until one resolves to a backend, then stop.
+/// How long a turn waits for better answers before shipping what it has.
+struct PatienceProfile {
+    first_answer_grace: std::time::Duration,
+    strong_patience: std::time::Duration,
+}
+
+/// Timing profile for the turn, tightened on a public mesh.
 ///
-/// Aliases are pre-sorted by `group_aliases_by_canonical_base` so the most
-/// preferred (locally-served first, then shortest) is tried first. Falls
-/// back to longer aliases when the preferred one's peer is unreachable.
-#[allow(clippy::too_many_arguments)]
-async fn resolve_one_worker_from_aliases(
-    node: &mesh::Node,
-    targets: Option<&election::ModelTargets>,
-    http: &reqwest::Client,
-    aliases: &[String],
-    required_tokens: Option<u32>,
-    backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
-    models: &mut Vec<moa::ModelEntry>,
-    local_count: &mut usize,
-) {
-    let resolution = WorkerBackendResolution {
-        node,
-        targets,
-        http,
-        required_tokens,
-    };
-    for name in aliases {
-        if add_worker_backend(&resolution, name, backends, models, local_count).await {
-            return;
+/// A public mesh is a pathological *availability* case (unknown peers, wider
+/// latency spread, more churn), not a trust case. Both knobs here are
+/// "how long do we hold a usable answer hoping for a better one" — exactly the
+/// wait that hurts most when the tail is long. The hard bounds are unchanged;
+/// only the optional waiting shrinks, so quality paths still run when peers are
+/// prompt.
+fn patience_profile(public_mesh: bool) -> PatienceProfile {
+    if public_mesh {
+        PatienceProfile {
+            // Ship a good answer sooner rather than wait out a long tail.
+            first_answer_grace: std::time::Duration::from_millis(1500),
+            // Still give a strong peer a real chance, but don't hold a usable
+            // small-tier answer for 20s against an unknown remote worker.
+            strong_patience: std::time::Duration::from_secs(8),
+        }
+    } else {
+        PatienceProfile {
+            // Widened 3s -> 10s: at 3s a fast small worker landed inside the
+            // window while a larger peer was still generating, so grace armed
+            // and (before the finalize fix) shipped the small answer, skipping
+            // synthesis on ~every turn. 10s lets a normal committee complete
+            // and synthesize; grace still bounds a genuinely stuck tail. Paired
+            // with grace-finalizes-on-tool-turns-only, so even if it does fire
+            // on an answer turn it synthesizes what arrived rather than shipping
+            // one worker. See `evals/moa-openrouter/RESULTS.md`.
+            first_answer_grace: std::time::Duration::from_secs(10),
+            strong_patience: std::time::Duration::from_secs(20),
         }
     }
-}
-
-/// Group all advertised model names by their canonical base so each
-/// canonical model contributes exactly one worker, but the resolver gets
-/// to pick the alias that actually has a reachable backend.
-///
-/// The earlier shape committed to a single alias per base *before* trying
-/// to resolve a backend. Two failure modes:
-///
-///   1. The chosen alias is advertised only by a peer that drops between
-///      gossip refresh and orchestration — `hosts_for_model` returns
-///      empty, the worker is dropped, and longer-form aliases for the
-///      same canonical model from still-reachable peers are rejected as
-///      duplicates.
-///   2. The local node advertises a longer convention
-///      (e.g. `unsloth/Qwen3-8B-GGUF:Q4_K_M`) while a peer advertises a
-///      shorter variant (e.g. `Qwen3-8B-Q4_K_M`). The shortest-name rule
-///      picks the peer alias, `add_worker_backend` looks for a local port
-///      under that specific string, finds nothing, and forces a
-///      QUIC-tunnel backend even though the model is right here.
-///
-/// Both failure modes are fixed by grouping first and resolving second.
-/// Within each group the aliases are ordered so the most likely
-/// optimization wins first try: locally-served name (skippy-port fast
-/// path) before remote names, then shortest first as a tiebreaker.
-fn group_aliases_by_canonical_base(
-    names: Vec<String>,
-    targets: Option<&election::ModelTargets>,
-) -> Vec<Vec<String>> {
-    let mut by_base: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
-    for name in names {
-        by_base
-            .entry(canonical_base_name(&name))
-            .or_default()
-            .push(name);
-    }
-    // Deterministic group order so the worker list is stable across
-    // builds even though HashMap iteration is not. Sort group entries
-    // (locally-served first, then shortest), then sort groups by their
-    // first ("best") alias.
-    let mut groups: Vec<Vec<String>> = by_base
-        .into_values()
-        .map(|mut aliases| {
-            aliases.sort_by(|a, b| {
-                let la = is_locally_served(a, targets);
-                let lb = is_locally_served(b, targets);
-                lb.cmp(&la) // local (true) before remote (false)
-                    .then_with(|| a.len().cmp(&b.len()))
-                    .then_with(|| a.cmp(b))
-            });
-            aliases
-        })
-        .collect();
-    groups.sort_by(|a, b| a[0].cmp(&b[0]));
-    groups
-}
-
-/// Does the local routing table have a backend port for this exact name?
-fn is_locally_served(name: &str, targets: Option<&election::ModelTargets>) -> bool {
-    targets
-        .and_then(|t| {
-            t.targets.get(name).map(|tv| {
-                tv.iter()
-                    .any(|t| matches!(t, election::InferenceTarget::Local(_)))
-            })
-        })
-        .unwrap_or(false)
-}
-
-/// Resolve `name` to a backend (local skippy port if available, else first
-/// remote host) and append it to `backends`/`models`. Returns true if a
-/// backend was added.
-struct WorkerBackendResolution<'a> {
-    node: &'a mesh::Node,
-    targets: Option<&'a election::ModelTargets>,
-    http: &'a reqwest::Client,
-    required_tokens: Option<u32>,
-}
-
-async fn add_worker_backend(
-    resolution: &WorkerBackendResolution<'_>,
-    name: &str,
-    backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
-    models: &mut Vec<moa::ModelEntry>,
-    local_count: &mut usize,
-) -> bool {
-    // Prefer local skippy port when this node serves the model.
-    let local_port = resolution.targets.and_then(|t| {
-        t.targets.get(name).and_then(|tv| {
-            tv.iter().find_map(|t| match t {
-                election::InferenceTarget::Local(p) => Some(*p),
-                _ => None,
-            })
-        })
-    });
-    if let Some(port) = local_port {
-        let context_length = resolution.node.local_model_context_length(name).await;
-        if context_selection::context_can_satisfy(resolution.required_tokens, context_length) {
-            let backend_idx = backends.len();
-            backends.push(std::sync::Arc::new(LocalModelBackend {
-                port,
-                http: resolution.http.clone(),
-            }));
-            models.push(moa::ModelEntry {
-                name: name.to_string(),
-                backend_index: backend_idx,
-            });
-            *local_count += 1;
-            return true;
-        } else {
-            tracing::info!(
-                "MoA: skipping local worker {name}; context {:?} cannot fit {:?} required tokens",
-                context_length,
-                resolution.required_tokens
-            );
-        }
-    }
-
-    // Otherwise find a remote host. hosts_for_model returns peers in
-    // hash-preferred order; prefer hosts with enough advertised context.
-    let remote_hosts = resolution.node.hosts_for_model(name).await;
-    if let Some(peer_id) = context_selection::select_remote_host(
-        resolution.node,
-        name,
-        resolution.required_tokens,
-        remote_hosts,
-    )
-    .await
-    {
-        let backend_idx = backends.len();
-        backends.push(std::sync::Arc::new(RemoteModelBackend {
-            node: resolution.node.clone(),
-            peer_id,
-        }));
-        models.push(moa::ModelEntry {
-            name: name.to_string(),
-            backend_index: backend_idx,
-        });
-        return true;
-    }
-    false
-}
-
-/// Canonical name used for cross-peer dedup. Different peers advertise the
-/// same model under different conventions (`unsloth/Qwen3-8B-GGUF:Q4_K_M`
-/// vs `Qwen3-8B-Q4_K_M`); normalize before comparing.
-///
-/// Strategy: strip the publisher prefix, the `-gguf` suffix, any `@branch`
-/// suffix, then keep only `[a-z0-9]` characters so `:` vs `-` separators
-/// don't matter.
-fn canonical_base_name(name: &str) -> String {
-    let lower = name.to_lowercase();
-    // Drop an `@branch` segment if present, keeping anything after the
-    // next `:` so quant tags survive (e.g. `repo@main:q4_k_m` → `repo:q4_k_m`).
-    let no_branch = match lower.find('@') {
-        Some(at) => {
-            let after = &lower[at + 1..];
-            let rest = after.find(':').map(|c| &after[c..]).unwrap_or("");
-            format!("{}{}", &lower[..at], rest)
-        }
-        None => lower,
-    };
-    let stripped = no_branch
-        .replace("-gguf", "")
-        .replace("unsloth/", "")
-        .replace("meshllm/", "");
-    stripped
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect()
 }
 
 /// Backend that calls a local model directly on its skippy HTTP port.
-struct LocalModelBackend {
-    port: u16,
-    http: reqwest::Client,
+pub(super) struct LocalModelBackend {
+    pub(super) port: u16,
+    pub(super) http: reqwest::Client,
 }
 
 #[async_trait::async_trait]
@@ -468,9 +320,9 @@ impl moa::ModelBackend for LocalModelBackend {
 }
 
 /// Backend that calls a remote model over the QUIC tunnel.
-struct RemoteModelBackend {
-    node: mesh::Node,
-    peer_id: iroh::EndpointId,
+pub(super) struct RemoteModelBackend {
+    pub(super) node: mesh::Node,
+    pub(super) peer_id: iroh::EndpointId,
 }
 
 #[async_trait::async_trait]
@@ -554,110 +406,6 @@ fn parse_quic_http_response(response: &[u8]) -> Result<serde_json::Value, String
 mod tests {
     use super::*;
 
-    #[test]
-    fn canonical_base_dedupes_unsloth_and_gguf_variants() {
-        assert_eq!(
-            canonical_base_name("unsloth/Qwen3-8B-GGUF:Q4_K_M"),
-            canonical_base_name("Qwen3-8B-Q4_K_M")
-        );
-        assert_eq!(
-            canonical_base_name("unsloth/Qwen3-8B-GGUF@main:Q4_K_M"),
-            canonical_base_name("Qwen3-8B-Q4_K_M")
-        );
-    }
-
-    #[test]
-    fn canonical_base_keeps_distinct_models_distinct() {
-        assert_ne!(
-            canonical_base_name("unsloth/Qwen3-8B-GGUF:Q4_K_M"),
-            canonical_base_name("unsloth/Qwen3-32B-GGUF:Q4_K_M")
-        );
-        assert_ne!(
-            canonical_base_name("unsloth/Qwen3-32B-GGUF:Q4_K_M"),
-            canonical_base_name("unsloth/MiniMax-M2.5-GGUF:Q4_K_M")
-        );
-    }
-    fn make_targets(local_names: &[&str]) -> election::ModelTargets {
-        let mut t = election::ModelTargets::default();
-        for (i, name) in local_names.iter().enumerate() {
-            t.targets.insert(
-                (*name).to_string(),
-                vec![election::InferenceTarget::Local(50000 + i as u16)],
-            );
-        }
-        t
-    }
-
-    #[test]
-    fn group_aliases_keeps_all_aliases_per_canonical_base() {
-        // Regression for PR #566 review (item #10): the dedup-then-resolve
-        // shape committed to a single alias per base before checking
-        // backend reachability. Now every alias is retained so the
-        // resolver can fall back if the preferred alias is unreachable.
-        let groups = group_aliases_by_canonical_base(
-            vec![
-                "Qwen3-8B-Q4_K_M".to_string(),
-                "unsloth/Qwen3-8B-GGUF:Q4_K_M".to_string(),
-            ],
-            None,
-        );
-        assert_eq!(groups.len(), 1, "both names share a canonical base");
-        assert_eq!(groups[0].len(), 2, "both aliases retained");
-    }
-
-    #[test]
-    fn group_aliases_prefers_locally_served_alias_even_when_longer() {
-        // Without a targets table, length-order wins and the shorter peer
-        // alias would be tried first — forcing an unnecessary QUIC hop
-        // when the model is right here under a different alias.
-        // With targets, the local-served alias must come first.
-        let local = "unsloth/Qwen3-8B-GGUF:Q4_K_M";
-        let peer = "Qwen3-8B-Q4_K_M";
-        let targets = make_targets(&[local]);
-        let groups = group_aliases_by_canonical_base(
-            vec![peer.to_string(), local.to_string()],
-            Some(&targets),
-        );
-        assert_eq!(groups.len(), 1);
-        assert_eq!(
-            groups[0].first().map(String::as_str),
-            Some(local),
-            "locally-served alias must win even though it's longer"
-        );
-    }
-
-    #[test]
-    fn group_aliases_falls_back_to_shortest_when_no_local() {
-        // No targets table at all (pure --client --auto node) — shortest
-        // alias should win, but the longer alias is still in the group so
-        // it can be tried if the shortest one is unreachable.
-        let groups = group_aliases_by_canonical_base(
-            vec![
-                "unsloth/Qwen3-8B-GGUF:Q4_K_M".to_string(),
-                "Qwen3-8B-Q4_K_M".to_string(),
-            ],
-            None,
-        );
-        assert_eq!(groups.len(), 1);
-        assert_eq!(
-            groups[0].first().map(String::as_str),
-            Some("Qwen3-8B-Q4_K_M")
-        );
-        assert_eq!(groups[0].len(), 2, "longer alias kept as fallback");
-    }
-
-    #[test]
-    fn group_aliases_distinct_models_stay_in_separate_groups() {
-        let groups = group_aliases_by_canonical_base(
-            vec![
-                "unsloth/Qwen3-8B-GGUF:Q4_K_M".to_string(),
-                "unsloth/Qwen3-32B-GGUF:Q4_K_M".to_string(),
-                "unsloth/MiniMax-M2.5-GGUF:Q4_K_M".to_string(),
-            ],
-            None,
-        );
-        assert_eq!(groups.len(), 3);
-    }
     // ── extract_enable_thinking_override ────────────────────────────────
     //
     // Mirrors the shapes that `openai_frontend::common::normalize_reasoning_template_options`
@@ -758,14 +506,30 @@ mod tests {
     }
 
     #[test]
-    fn effective_lets_caller_explicitly_enable_thinking() {
-        // Escape hatch: a caller who really wants reasoning on MoA can
-        // ask for it via any of the recognised knobs.
-        let body = serde_json::json!({
-            "reasoning_effort": "low",
-            "model": "mesh",
-        });
-        assert_eq!(effective_enable_thinking_for_moa(&body), Some(true));
+    fn effective_ignores_caller_request_to_enable_thinking() {
+        // There is deliberately no escape hatch. Thinking-on is a broken
+        // configuration for MoA fan-out: recorded traces show reasoning
+        // models spending their entire worker budget inside `<think>` and
+        // returning `finish_reason=length` with null content, contributing
+        // nothing while still costing a full inference.
+        //
+        // The override is parsed (and logged) but never honoured, so a
+        // caller asking for reasoning gets a working turn instead of a pool
+        // of empty workers. Reasoning output should be requested from a
+        // model directly, not through `model=mesh`.
+        for body in [
+            serde_json::json!({"reasoning_effort": "low", "model": "mesh"}),
+            serde_json::json!({"reasoning_effort": "high", "model": "mesh"}),
+            serde_json::json!({"enable_thinking": true, "model": "mesh"}),
+            serde_json::json!({"reasoning": {"enabled": true}, "model": "mesh"}),
+            serde_json::json!({"chat_template_kwargs": {"enable_thinking": true}}),
+        ] {
+            assert_eq!(
+                effective_enable_thinking_for_moa(&body),
+                Some(false),
+                "MoA must force thinking off regardless of caller knobs: {body}"
+            );
+        }
     }
 
     #[test]
@@ -780,5 +544,47 @@ mod tests {
             "tools": [{"type": "function", "function": {"name": "x"}}],
         });
         assert_eq!(effective_enable_thinking_for_moa(&body), Some(false));
+    }
+
+    /// Public meshes are a pathological availability case: unknown peers,
+    /// wider latency spread, more churn. Both patience knobs are "hold a
+    /// usable answer hoping for a better one", which is exactly the wait that
+    /// hurts when the tail is long — so they shrink, and only they.
+    #[test]
+    fn public_mesh_waits_less_for_a_better_answer() {
+        let public = patience_profile(true);
+        let private = patience_profile(false);
+        assert!(
+            public.first_answer_grace < private.first_answer_grace,
+            "public mesh must ship a good answer sooner"
+        );
+        assert!(
+            public.strong_patience < private.strong_patience,
+            "public mesh must not hold a usable answer as long for a slow strong peer"
+        );
+    }
+
+    /// Shrinking patience must not disable the quality paths entirely — a
+    /// prompt strong peer should still get a chance to land.
+    #[test]
+    fn public_mesh_still_gives_strong_peers_a_chance() {
+        let public = patience_profile(true);
+        assert!(!public.first_answer_grace.is_zero());
+        assert!(public.strong_patience >= std::time::Duration::from_secs(5));
+    }
+
+    /// Private-mesh timings are the tuned defaults and must not drift silently.
+    /// Grace is 10s (widened from 3s): at 3s a fast worker landed inside the
+    /// window while a larger peer was still generating, so grace armed and the
+    /// committee never synthesized — measured 80/80 early-exit at capable
+    /// scale. See `evals/moa-openrouter/RESULTS.md`.
+    #[test]
+    fn private_mesh_keeps_the_tuned_defaults() {
+        let private = patience_profile(false);
+        assert_eq!(
+            private.first_answer_grace,
+            std::time::Duration::from_secs(10)
+        );
+        assert_eq!(private.strong_patience, std::time::Duration::from_secs(20));
     }
 }

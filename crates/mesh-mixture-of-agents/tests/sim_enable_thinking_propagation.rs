@@ -102,6 +102,9 @@ fn build_config(
         first_answer_grace: Duration::ZERO,
         strong_patience: Duration::ZERO,
         enable_thinking,
+        actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     }
 }
 

@@ -67,7 +67,24 @@ const MOA_PREAMBLE: &str = "\
 [Multiple models are analyzing this request in parallel. \
 Respond with your best answer or tool call. Be direct.]";
 
+/// Text-turn preamble.
+///
+/// The tool-turn wording ("your best answer **or tool call**. Be direct.") is
+/// wrong on a text turn twice over: there is no tool to call, and "be direct"
+/// pushes workers toward stubs. Since these drafts are the *input* to the
+/// refinement round, brevity here compounds — measured end-to-end, MoA answers
+/// ran ~3.3k chars against a ~4.1k-char solo baseline and lost on judged
+/// quality. The study that showed the gain gave workers no such instruction.
+const MOA_PREAMBLE_TEXT: &str = "\
+[Multiple models are answering this request in parallel; the best parts of each \
+will be combined. Give your most accurate and complete answer.]";
+
 fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bool) -> String {
+    let preamble = if include_tool_guidance {
+        MOA_PREAMBLE
+    } else {
+        MOA_PREAMBLE_TEXT
+    };
     match session.system_prompt() {
         Some(sp) => {
             let prompt = if include_tool_guidance {
@@ -75,9 +92,9 @@ fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bo
             } else {
                 strip_tool_guidance_sections(&sp)
             };
-            format!("{MOA_PREAMBLE}\n\n{prompt}")
+            format!("{preamble}\n\n{prompt}")
         }
-        None => MOA_PREAMBLE.to_string(),
+        None => preamble.to_string(),
     }
 }
 
@@ -263,30 +280,280 @@ pub fn pack_for_reducer_selected(
 ) -> (Vec<Value>, Option<Value>) {
     let user_text = session.last_user_text();
 
-    let mut system_parts = vec![
-        augmented_system_prompt_for_mode(session, has_tools),
-        String::new(),
-        format!("Multiple models analyzed this request and disagreed. Reason: {reason}"),
-        "Review their outputs below and produce ONE final response — either a direct answer \
-         or a tool call. Be concise."
-            .to_string(),
-    ];
+    // Synthesis framing adapted from Together's MoA aggregator prompt: tell the
+    // model to synthesize (not relay) and warn that inputs may be wrong — the
+    // second clause stops it averaging in confidently-wrong inputs. We add
+    // per-worker attribution and per-payload length bounds (below), which
+    // Together omits.
+    // The reducer is the synthesizer, not one of the parallel answerers. Giving
+    // it the *worker* preamble ("multiple models are answering in parallel;
+    // give your most complete answer") on top of the synthesis instruction is
+    // contradictory framing: it tells the model to both draft and aggregate. A
+    // 32B reconciles it; an 8B reducer does not. So the reducer gets the
+    // agent's own system prompt (tool guidance only when this is a tool turn)
+    // plus the synthesis instruction — matching the harness configuration that
+    // measured 12W/2L on a 6x8B pool.
+    let mut system_parts: Vec<String> = Vec::new();
+    if let Some(sp) = session.system_prompt() {
+        system_parts.push(sp);
+        system_parts.push(String::new());
+    }
+    if has_tools {
+        system_parts.push(format!(
+            "Multiple models analyzed this request. Reason for synthesis: {reason}"
+        ));
+    }
+    system_parts.push(synthesis_instruction(has_tools));
 
     // Worker outputs
     system_parts.push(String::new());
     system_parts.push("## Worker outputs".to_string());
+    let payload_budget = reducer_payload_budget(has_tools);
     for (i, output) in outputs.iter().enumerate() {
-        system_parts.push(format!("\n[Worker {} — {}]:", i + 1, output.model,));
-        let payload = if output.payload.len() > 500 {
-            format!("{}...", crate::worker::truncate_chars(&output.payload, 497))
+        // Anonymous on text turns, matching the measured configuration and
+        // Hermes, which anonymizes reference outputs "to prevent aggregator
+        // bias" — a named model invites deference to the name rather than the
+        // content. Tool turns keep attribution: the reducer is arbitrating
+        // between proposals and provenance is genuinely useful there, and it
+        // is what the tool-path tests pin.
+        if has_tools {
+            system_parts.push(format!("\n[Worker {} — {}]:", i + 1, output.model));
+        } else {
+            system_parts.push(format!("\n[Response {}]:", i + 1));
+        }
+        let payload = if output.payload.len() > payload_budget {
+            format!(
+                "{}...",
+                crate::worker::truncate_chars(&output.payload, payload_budget - 3)
+            )
         } else {
             output.payload.clone()
         };
         system_parts.push(payload);
+        // Truncated inputs are labelled so the reducer treats them as partial
+        // material rather than copying a dangling sentence as a finished
+        // answer. `is_usable_answer` already bars them from winning verbatim;
+        // this is what lets them still contribute here.
+        if output.truncated {
+            system_parts
+                .push("  → NOTE: cut off at the token limit — incomplete, do not copy".to_string());
+        }
         if let Some(ref tool) = output.tool_name {
             system_parts.push(format!("  → Proposed tool: {tool}"));
             if let Some(ref args) = output.tool_arguments {
                 system_parts.push(format!("  → Arguments: {args}"));
+            }
+        }
+    }
+
+    let tools = selected_tools(session, has_tools, selected_tool_names);
+
+    (
+        vec![
+            json!({"role": "system", "content": system_parts.join("\n")}),
+            json!({"role": "user", "content": user_text}),
+        ],
+        tools,
+    )
+}
+
+/// Advisor framing for [`pack_for_reference`]. Deliberately does NOT ask for a
+/// tool call: references hold no schemas, so requesting one yields tool-shaped
+/// prose that can pull the actor off its own (better) choice.
+const REFERENCE_PREAMBLE: &str = "\
+You are advising another model that will decide and act on this request. \
+You do not have tools and must not emit a tool call. Give a short, direct \
+analysis: what the request is really asking, and what you would do. Be concise.";
+
+/// Pack context for a **reference** (advisor), Hermes-style: only the
+/// conversation's user/assistant text.
+///
+/// Three things are withheld on purpose:
+/// * the agent's system prompt — an advisor told "you are a coding agent, run
+///   the tests" role-plays the actor instead of advising it;
+/// * the tool-call transcript — it anchors every advisor on the trajectory
+///   already taken, collapsing the error-independence aggregation depends on;
+/// * any instruction to emit a tool call (see [`REFERENCE_PREAMBLE`]).
+///
+/// The view is uniform across advisors (no per-role trimming) and is a stable
+/// function of the history, so it caches across iterations.
+pub fn pack_for_reference(session: &Session, max_messages: usize) -> PackedContext {
+    let mut messages = vec![json!({"role": "system", "content": REFERENCE_PREAMBLE})];
+
+    // User/assistant prose only: no system turn, no tool_calls, no tool results.
+    let history: Vec<Value> = session
+        .messages()
+        .iter()
+        .filter(|m| {
+            let role = m.get("role").and_then(Value::as_str).unwrap_or("");
+            let is_prose = matches!(role, "user" | "assistant");
+            let carries_tool_call = m.get("tool_calls").is_some();
+            let has_text = m
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.trim().is_empty());
+            is_prose && !carries_tool_call && has_text
+        })
+        .cloned()
+        .collect();
+
+    let start = history.len().saturating_sub(max_messages);
+    messages.extend_from_slice(&history[start..]);
+
+    // Guarantee the current request is present even if it was filtered above.
+    let user_text = session.last_user_text();
+    let last_is_current = messages
+        .last()
+        .and_then(|m| m.get("content").and_then(Value::as_str))
+        == Some(user_text.as_str());
+    if !last_is_current && !user_text.is_empty() {
+        messages.push(json!({"role": "user", "content": user_text}));
+    }
+
+    PackedContext {
+        messages,
+        max_tokens: 600, // Hermes caps advisors; the slowest advisor sets turn latency.
+        tools: None,
+    }
+}
+
+/// How much of each peer draft a refiner may see.
+const REFINEMENT_DRAFT_BUDGET: usize = 4000;
+
+/// What the reducer is asked to do with the worker outputs.
+///
+/// Text turns use the wording the committee study measured
+/// (`evals/moa-openrouter/RESULTS.md`), which asks for a *well-structured*
+/// synthesis. The previous text wording framed the turn as reconciling a
+/// disagreement and ended with "Be concise" — measured end-to-end through
+/// `handle_turn`, that produced ~2.0k-char answers against a ~4.1k-char solo
+/// baseline and lost to it on judged quality. Terseness is not the goal on a
+/// reasoning turn; accuracy and completeness are.
+///
+/// Tool turns keep the tight framing: the output there is an action, and the
+/// reducer must be free to emit a tool call rather than prose.
+fn synthesis_instruction(has_tools: bool) -> String {
+    if has_tools {
+        "You have been provided with their responses below. Synthesize them into ONE \
+         final response — either a direct answer or a tool call. Critically evaluate \
+         what they say: some of it may be biased or incorrect, and agreement between \
+         workers is not proof of correctness. Do not simply copy the longest or most \
+         confident response; produce the most accurate reply to the request. Be concise."
+            .to_string()
+    } else {
+        "You have been given a user request and several candidate responses from other \
+         models. Synthesize them into one high-quality response. Critically evaluate them — \
+         some may be biased or incorrect, and agreement is not proof of correctness. Do not \
+         merely copy the longest or most confident; produce the most accurate, \
+         well-structured reply. Be direct."
+            .to_string()
+    }
+}
+
+/// How much of each worker payload the reducer may see.
+///
+/// Tool turns keep the tight bound: the reducer is choosing an action, the
+/// signal is the proposal itself, and long prose crowds out the tool schemas.
+///
+/// Text turns need far more. Measured refined answers average ~3.8k chars
+/// (`evals/moa-openrouter/RESULTS.md`), so a 500-char bound would hand the
+/// reducer ~13% of each answer and discard exactly the content refinement just
+/// produced — the measured gain could not survive it. Together's aggregator
+/// passes references unbounded; we keep a bound so a pathological worker can't
+/// blow the context, just a realistic one.
+fn reducer_payload_budget(has_tools: bool) -> usize {
+    if has_tools { 500 } else { 4000 }
+}
+
+/// Pack context for a worker in the cross-peer refinement round.
+///
+/// The worker sees every round-1 draft (its own included, anonymized) and
+/// rewrites its answer. Anonymizing keeps the worker from deferring to a name
+/// it recognizes, and the framing asks for an improved answer rather than a
+/// critique — the reducer still does the final synthesis.
+pub fn pack_for_refinement(session: &Session, drafts: &[String]) -> PackedContext {
+    // Wording deliberately matches the eval that measured the +0.250 gain
+    // (`evals/moa-openrouter/RESULTS.md`), which in turn matches Together's
+    // `advanced-moa.py` — it reuses the aggregator prompt for refinement
+    // layers. A refinement-specific wording may well read better, but this is
+    // the configuration with evidence behind it; changing it should be a
+    // measured change, not an assumed improvement.
+    let mut system = String::from(
+        "You have been given a user request and several candidate responses from \
+         other models. Synthesize them into one high-quality response. Critically \
+         evaluate them — some may be biased or incorrect, and agreement is not proof \
+         of correctness. Do not merely copy the longest or most confident; produce \
+         the most accurate, well-structured reply. Be direct.\n\nCandidate responses:",
+    );
+    for (i, d) in drafts.iter().enumerate() {
+        // Same reasoning as `reducer_payload_budget`: measured drafts average
+        // ~3.8k chars, so a tight bound would hand each refiner a fraction of
+        // what its peers actually said — the input the round exists to use.
+        let bounded = if d.len() > REFINEMENT_DRAFT_BUDGET {
+            format!(
+                "{}...",
+                crate::worker::truncate_chars(d, REFINEMENT_DRAFT_BUDGET - 3)
+            )
+        } else {
+            d.clone()
+        };
+        system.push_str(&format!("\n[Response {}]:\n{bounded}\n", i + 1));
+    }
+
+    PackedContext {
+        messages: vec![
+            json!({"role": "system", "content": system}),
+            json!({"role": "user", "content": session.last_user_text()}),
+        ],
+        max_tokens: 1024,
+        tools: None,
+    }
+}
+
+/// Pack context for the actor in the asymmetric tool path: "here is advice, now
+/// you act" (not the reducer's "you disagreed, reconcile"). Advice is prose,
+/// per-model length-bounded and truncation-labelled; `has_tools` /
+/// `selected_tool_names` attach the real tools the advisors never saw.
+pub fn pack_for_actor(
+    session: &Session,
+    references: &[WorkerOutput],
+    has_tools: bool,
+    selected_tool_names: &[String],
+) -> (Vec<Value>, Option<Value>) {
+    let user_text = session.last_user_text();
+
+    let mut system_parts = vec![
+        augmented_system_prompt_for_mode(session, has_tools),
+        String::new(),
+        "Other models were asked to advise on this request. They did not have \
+         access to tools; you do. Use their advice as input, but you decide the \
+         action. Critically evaluate what they say — some of it may be biased or \
+         incorrect, and agreement between them is not proof of correctness. \
+         Respond with the single best action: a direct answer, or the appropriate \
+         tool call. Be concise."
+            .to_string(),
+    ];
+
+    if references.is_empty() {
+        // No advice in time (slow/absent peers): actor proceeds alone.
+        system_parts.push(String::new());
+        system_parts
+            .push("(No advice from other models arrived in time — proceed on your own.)".into());
+    } else {
+        system_parts.push(String::new());
+        system_parts.push("## Advice from other models".to_string());
+        for (i, r) in references.iter().enumerate() {
+            system_parts.push(format!("\n[Advisor {} — {}]:", i + 1, r.model));
+            let payload = if r.payload.len() > 500 {
+                format!("{}...", crate::worker::truncate_chars(&r.payload, 497))
+            } else {
+                r.payload.clone()
+            };
+            system_parts.push(payload);
+            if r.truncated {
+                system_parts.push(
+                    "  → NOTE: cut off at the token limit — incomplete, treat as partial".into(),
+                );
             }
         }
     }
@@ -793,6 +1060,165 @@ mod tests {
         s
     }
 
+    /// The reducer must actually see the answers it is synthesizing.
+    ///
+    /// Measured refined answers average ~3.8k chars. The old flat 500-char
+    /// bound handed the reducer ~13% of each one, discarding exactly the
+    /// content the refinement round produces — the measured gain could not
+    /// have survived it. Tool turns keep the tight bound (the signal is the
+    /// proposal, and prose crowds out schemas).
+    #[test]
+    fn text_reducer_sees_realistic_answer_lengths() {
+        let long_answer = "x".repeat(3800);
+        let outputs = vec![
+            WorkerOutput {
+                kind: OutputKind::Answer,
+                confidence: 0.5,
+                tool_name: None,
+                tool_arguments: None,
+                payload: long_answer.clone(),
+                model: "a".into(),
+                role: WorkerRole::Generalist,
+                elapsed_ms: 0,
+                truncated: false,
+            },
+            WorkerOutput {
+                kind: OutputKind::Answer,
+                confidence: 0.5,
+                tool_name: None,
+                tool_arguments: None,
+                payload: long_answer,
+                model: "b".into(),
+                role: WorkerRole::Generalist,
+                elapsed_ms: 0,
+                truncated: false,
+            },
+        ];
+        let session = session_with(&[json!({"role": "user", "content": "explain"})], None);
+
+        let (messages, _) =
+            pack_for_reducer_selected(&session, &outputs, "no agreement", false, &[]);
+        let sys = system_text(&messages);
+        // Each 3800-char answer must survive largely intact (2 answers).
+        assert!(
+            sys.len() > 7000,
+            "text reducer truncated the answers it must synthesize: {} chars",
+            sys.len()
+        );
+    }
+
+    /// Tool turns keep the tight payload bound.
+    #[test]
+    fn tool_reducer_keeps_the_tight_payload_bound() {
+        let outputs = vec![WorkerOutput {
+            kind: OutputKind::Answer,
+            confidence: 0.5,
+            tool_name: None,
+            tool_arguments: None,
+            payload: "x".repeat(3800),
+            model: "a".into(),
+            role: WorkerRole::Generalist,
+            elapsed_ms: 0,
+            truncated: false,
+        }];
+        let session = session_with(&[json!({"role": "user", "content": "read a file"})], None);
+
+        let (messages, _) = pack_for_reducer_selected(&session, &outputs, "conflict", true, &[]);
+        let sys = system_text(&messages);
+        assert!(
+            !sys.contains(&"x".repeat(1000)),
+            "tool reducer must keep payloads tight so schemas aren't crowded out"
+        );
+    }
+
+    /// Refiners must see what their peers actually said, for the same reason.
+    #[test]
+    fn refiners_see_realistic_peer_draft_lengths() {
+        let session = session_with(&[json!({"role": "user", "content": "explain"})], None);
+        let drafts = vec!["y".repeat(3800), "z".repeat(3800)];
+
+        let packed = pack_for_refinement(&session, &drafts);
+        let sys = system_text(&packed.messages);
+        assert!(
+            sys.len() > 7000,
+            "refiners were handed a fraction of their peers' drafts: {} chars",
+            sys.len()
+        );
+    }
+
+    /// Advisors must not be told to emit a tool call. Asking a schema-less
+    /// model for one yields tool-shaped prose, which measurably pulled the
+    /// actor off its own better choice.
+    #[test]
+    fn reference_packing_never_requests_a_tool_call() {
+        let s = session_with(&[json!({"role": "user", "content": "list src"})], None);
+        let packed = pack_for_reference(&s, 6);
+        let sys = system_text(&packed.messages).to_lowercase();
+        assert!(sys.contains("must not emit a tool call"));
+        assert!(packed.tools.is_none(), "advisors never receive schemas");
+    }
+
+    /// The agent's system prompt is withheld: an advisor handed "you are a
+    /// coding agent, run the tests" role-plays the actor instead of advising.
+    #[test]
+    fn reference_packing_strips_the_agent_system_prompt() {
+        let s = session_with(
+            &[
+                json!({"role": "system", "content": "You are a coding agent. SECRET_MARKER."}),
+                json!({"role": "user", "content": "what is failing?"}),
+            ],
+            None,
+        );
+        let packed = pack_for_reference(&s, 6);
+        let all = serde_json::to_string(&packed.messages).unwrap();
+        assert!(
+            !all.contains("SECRET_MARKER"),
+            "agent system prompt must not reach advisors: {all}"
+        );
+    }
+
+    /// The tool transcript is withheld so advisors stay independent of the
+    /// trajectory already taken — error independence is what makes
+    /// aggregation worth anything.
+    #[test]
+    fn reference_packing_strips_the_tool_transcript() {
+        let s = session_with(
+            &[
+                json!({"role": "user", "content": "find the bug"}),
+                json!({"role": "assistant", "content": Value::Null,
+                       "tool_calls": [{"id": "1", "type": "function",
+                           "function": {"name": "list_dir", "arguments": "{\"path\":\"TRAJECTORY\"}"}}]}),
+                json!({"role": "tool", "tool_call_id": "1", "content": "TOOL_RESULT_MARKER"}),
+                json!({"role": "user", "content": "and now?"}),
+            ],
+            None,
+        );
+        let packed = pack_for_reference(&s, 6);
+        let all = serde_json::to_string(&packed.messages).unwrap();
+        assert!(!all.contains("TOOL_RESULT_MARKER"), "tool results leaked");
+        assert!(!all.contains("TRAJECTORY"), "prior tool_calls leaked");
+        assert!(all.contains("and now?"), "current request must survive");
+    }
+
+    /// Uniform view regardless of role: every advisor sees the same prose,
+    /// so the packing is a stable function of history (and caches).
+    #[test]
+    fn reference_packing_keeps_user_assistant_prose() {
+        let s = session_with(
+            &[
+                json!({"role": "user", "content": "first question"}),
+                json!({"role": "assistant", "content": "first answer"}),
+                json!({"role": "user", "content": "second question"}),
+            ],
+            None,
+        );
+        let packed = pack_for_reference(&s, 6);
+        let all = serde_json::to_string(&packed.messages).unwrap();
+        assert!(all.contains("first question"));
+        assert!(all.contains("first answer"));
+        assert!(all.contains("second question"));
+    }
+
     /// Helper: extract the system message content from a packed message vec.
     fn system_text(messages: &[Value]) -> String {
         messages
@@ -1266,6 +1692,7 @@ keep this";
             model: model.to_string(),
             role: WorkerRole::Strong,
             elapsed_ms: 0,
+            truncated: false,
         }
     }
 
@@ -1324,17 +1751,18 @@ keep this";
     #[test]
     fn reducer_truncates_long_worker_payloads() {
         let s = session_with(&[user_msg("go")], None);
-        let big = "x".repeat(2000);
+        // Above the text-turn budget: realistic answers (~3.8k chars) must pass
+        // through intact — see `text_reducer_sees_realistic_answer_lengths` —
+        // but a pathological payload still gets bounded.
+        let big = "x".repeat(9000);
         let outputs = vec![worker_out("alpha", &big)];
 
         let (messages, _tools) = pack_for_reducer(&s, &outputs, "conflict", false);
         let sys = system_text(&messages);
 
-        // Long payloads must be truncated (cap is ~500 chars + ellipsis).
-        // The full 2000-char string must NOT appear verbatim.
         assert!(
             !sys.contains(&big),
-            "reducer must truncate long worker payloads to keep context bounded",
+            "reducer must bound pathological worker payloads to keep context sane",
         );
         assert!(
             sys.contains("..."),

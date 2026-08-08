@@ -115,6 +115,9 @@ fn four_workers_two_fast_consensus() -> moa::GatewayConfig {
         first_answer_grace: Duration::ZERO,
         strong_patience: Duration::ZERO,
         enable_thinking: None,
+        actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     }
 }
 
@@ -136,11 +139,13 @@ async fn early_exit_summaries_account_for_aborted_workers() {
 
     let result = moa::handle_turn(&config, &body).await;
 
-    // Sanity: this should be the early-exit path.
+    // Answer turns always synthesize now, so consensus among the fast workers
+    // still aborts the slow tail but the turn is Fanout, not EarlyExit. The
+    // contract under test is worker *accounting*, which is unchanged.
     assert_eq!(
         result.turn_kind,
-        moa::TurnKind::EarlyExit,
-        "two fast agreeing workers should produce TurnKind::EarlyExit; got {:?}",
+        moa::TurnKind::Fanout,
+        "answer turns synthesize after aborting the slow tail; got {:?}",
         result.turn_kind
     );
 

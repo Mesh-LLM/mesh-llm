@@ -643,6 +643,43 @@ fn read_tensor_infos(
     Ok(tensors)
 }
 
+/// Sum the element counts of every tensor in a GGUF file → total stored
+/// parameter count. Reads only the header and tensor-info table (dimensions),
+/// never tensor data.
+///
+/// This is the authoritative model size: the exact number of stored weights,
+/// independent of the file name. Name parsing (`NNb` in the model id) is a
+/// brittle fallback — aliases and fine-tunes need not encode a size, names can
+/// carry unrelated digits, and an unparseable name must read as *unknown*, not
+/// as a guessed tier. Returns `None` on any parse failure (→ unknown).
+pub fn scan_gguf_total_parameters(path: &Path) -> Option<u64> {
+    let GgufHeader {
+        file: mut f,
+        n_tensors,
+        n_kv,
+    } = open_gguf_header(path)?;
+
+    skip_all_kv_pairs(&mut f, n_kv)?;
+
+    let mut total: u64 = 0;
+    for _ in 0..n_tensors {
+        let _name = read_gguf_string(&mut f).ok()?;
+        let n_dims = read_u32(&mut f).ok()?;
+        if n_dims > MAX_GGUF_TENSOR_DIMS {
+            return None;
+        }
+        let mut elements: u64 = 1;
+        for _ in 0..n_dims {
+            let dim = read_u64(&mut f).ok()?;
+            elements = elements.checked_mul(dim)?;
+        }
+        let _ggml_type = read_u32(&mut f).ok()?;
+        let _offset = read_u64(&mut f).ok()?;
+        total = total.checked_add(elements)?;
+    }
+    Some(total)
+}
+
 /// Scan GGUF tensor names and return whether any tensor matches the predicate.
 /// Reads only the header and tensor-info table, never tensor data.
 pub fn scan_gguf_tensor_names_any(

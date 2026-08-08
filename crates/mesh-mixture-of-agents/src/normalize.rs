@@ -31,6 +31,21 @@ pub struct WorkerOutput {
     pub model: String,
     pub role: WorkerRole,
     pub elapsed_ms: u64,
+    /// The backend stopped this response at the token limit
+    /// (`finish_reason == "length"`) rather than letting the model finish.
+    ///
+    /// Recorded traces show this is not rare: 15 of 140 responses from
+    /// open-weight models came back `length` (see
+    /// `evals/moa-openrouter/corpus.jsonl`). Two shapes matter:
+    ///
+    /// * empty content — already surfaces as a worker error, and
+    /// * **partial text** — a half-finished sentence that previously
+    ///   entered arbitration as a normal answer at the default 0.5
+    ///   confidence, making it eligible to win the pick outright.
+    ///
+    /// Truncated answers are excluded from consensus and never returned
+    /// verbatim; they are still handed to synthesis as partial material.
+    pub truncated: bool,
 }
 
 /// Normalize raw worker text into a structured output.
@@ -210,6 +225,7 @@ fn try_json_parse(
         model: model.to_string(),
         role,
         elapsed_ms,
+        truncated: false,
     })
 }
 
@@ -331,6 +347,7 @@ fn try_kv_parse(raw: &str, model: &str, role: WorkerRole, elapsed_ms: u64) -> Op
         model: model.to_string(),
         role,
         elapsed_ms,
+        truncated: false,
     })
 }
 
@@ -349,6 +366,7 @@ fn heuristic_classify(raw: &str, model: &str, role: WorkerRole, elapsed_ms: u64)
             model: model.to_string(),
             role,
             elapsed_ms,
+            truncated: false,
         };
     }
 
@@ -363,6 +381,7 @@ fn heuristic_classify(raw: &str, model: &str, role: WorkerRole, elapsed_ms: u64)
             model: model.to_string(),
             role,
             elapsed_ms,
+            truncated: false,
         };
     }
 
@@ -376,6 +395,7 @@ fn heuristic_classify(raw: &str, model: &str, role: WorkerRole, elapsed_ms: u64)
         model: model.to_string(),
         role,
         elapsed_ms,
+        truncated: false,
     }
 }
 

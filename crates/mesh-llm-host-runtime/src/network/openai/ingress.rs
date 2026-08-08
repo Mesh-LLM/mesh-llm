@@ -743,6 +743,14 @@ enum MoaInterceptResult {
     /// Not an MoA request — caller should continue with normal routing,
     /// reusing the returned stream.
     NotMoa(tokio::net::TcpStream),
+    /// MoA could not form a committee but degraded `model=mesh` to a real
+    /// single model (already rewritten on the request). Caller routes it
+    /// normally, but must use this model rather than the stale
+    /// `decision.effective_model` (still "mesh").
+    Degraded {
+        stream: tokio::net::TcpStream,
+        model: Option<String>,
+    },
 }
 
 /// Dispatch to the MoA gateway when `model == "mesh"`. Self-gates on the
@@ -756,14 +764,15 @@ async fn try_handle_moa_intercept(
     if decision.effective_model.as_deref() != Some(moa::VIRTUAL_MODEL_NAME) {
         return MoaInterceptResult::NotMoa(tcp_stream);
     }
-    // `try_handle_moa` self-gates on the model name and consumes the
-    // stream when it accepts. The outer gate above guarantees the gate
-    // matches, so the inner call always returns `None` here — the stream
-    // is gone, either with the MoA response, a 503, or a 400. Discard
-    // the return value explicitly. The previous shape kept an
-    // `if let Some(_) = … { tracing::error!(...) }` branch that could
-    // never fire and made the control flow confusing to read.
-    let _ = crate::network::openai::moa_gateway::try_handle_moa(
+    // `try_handle_moa` self-gates on the model name. It consumes the stream and
+    // returns `None` when it owns the response (a MoA turn, a 400, or — no
+    // model at all — a 503). But when it cannot form a committee yet still has
+    // a model to serve, it degrades: it rewrites `model=mesh` to a real model
+    // (on `request`) and hands the stream *back* as `Some`, so a lone node
+    // answers as an ordinary single-model request instead of erroring. In that
+    // case the pre-computed `decision.effective_model` is stale ("mesh"), so we
+    // carry the degraded model name out for the caller to route on.
+    match crate::network::openai::moa_gateway::try_handle_moa(
         ctx.route.node,
         tcp_stream,
         request,
@@ -771,9 +780,18 @@ async fn try_handle_moa_intercept(
         Some(ctx.route.targets),
         decision.required_tokens,
     )
-    .await;
-    proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
-    MoaInterceptResult::Handled
+    .await
+    {
+        Some(stream) => MoaInterceptResult::Degraded {
+            stream,
+            model: request.model_name.clone(),
+        },
+        None => {
+            proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids)
+                .await;
+            MoaInterceptResult::Handled
+        }
+    }
 }
 
 async fn handle_buffered_api_request(
@@ -817,14 +835,25 @@ async fn handle_buffered_api_request(
         }
     };
 
+    // Effective model for downstream routing. Normally the pre-computed
+    // decision, but a degraded MoA turn overrides it with the single model it
+    // fell back to (the decision still says "mesh").
+    let mut routing_model = decision.effective_model.clone();
     let tcp_stream = match try_handle_moa_intercept(tcp_stream, &mut request, &ctx, &decision).await
     {
         MoaInterceptResult::Handled => return,
         MoaInterceptResult::NotMoa(stream) => stream,
+        MoaInterceptResult::Degraded { stream, model } => {
+            routing_model = model;
+            stream
+        }
     };
 
     let mut tcp_stream = tcp_stream;
-    if try_pipeline_route(&mut tcp_stream, &mut request, &ctx.route, &decision).await {
+    // A degraded turn is a plain single-model request; skip the pipeline
+    // classifier (computed against "mesh") and route it directly.
+    let degraded = routing_model != decision.effective_model;
+    if !degraded && try_pipeline_route(&mut tcp_stream, &mut request, &ctx.route, &decision).await {
         proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
         return;
     }
@@ -833,7 +862,7 @@ async fn handle_buffered_api_request(
         tcp_stream,
         &mut request,
         &ctx.route,
-        decision.effective_model.as_deref(),
+        routing_model.as_deref(),
         decision.required_tokens,
     )
     .await;
