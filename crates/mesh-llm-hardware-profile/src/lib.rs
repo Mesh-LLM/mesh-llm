@@ -304,22 +304,71 @@ fn detect_cuda_profile(gpus: &[HostGpuProfile]) -> Option<HostCudaProfile> {
         toolkit_majors.insert(major);
     }
     if toolkit_majors.is_empty() {
-        toolkit_majors.extend(cuda_majors_from_nvidia_smi());
+        toolkit_majors.extend(installed_cuda_toolkit_majors());
     }
+    // `nvidia-smi` reports the newest CUDA the driver supports, which is often
+    // ahead of the installed toolkit. Keep it separate so it is only used as an
+    // upper bound during runtime selection.
+    let driver_max_major = env_u32("MESH_LLM_CUDA_DRIVER_MAX_MAJOR")
+        .or_else(|| cuda_majors_from_nvidia_smi().into_iter().next_back());
     let mut gpu_arches = env_string_set("MESH_LLM_CUDA_GPU_ARCHES");
     gpu_arches.extend(gpus.iter().filter_map(|gpu| gpu.cuda_sm.clone()));
     let has_cuda_label = gpus.iter().any(|gpu| {
         let label = gpu.display_name.to_ascii_lowercase();
         label.contains("nvidia") || label.contains("cuda")
     });
-    if toolkit_majors.is_empty() && gpu_arches.is_empty() && !has_cuda_label {
+    if toolkit_majors.is_empty()
+        && driver_max_major.is_none()
+        && gpu_arches.is_empty()
+        && !has_cuda_label
+    {
         return None;
     }
     Some(HostCudaProfile {
         toolkit_majors,
+        driver_max_major,
         driver_version: std::env::var("MESH_LLM_CUDA_DRIVER_VERSION").ok(),
         gpu_arches,
     })
+}
+
+/// CUDA toolkit majors with runtime libraries actually present on this host.
+///
+/// Linux native runtimes link against `libcudart.so.<major>` without bundling
+/// it, so this is the set that can really be loaded. Windows runtimes ship
+/// their own copies and do not depend on this.
+fn installed_cuda_toolkit_majors() -> BTreeSet<u32> {
+    let mut majors = BTreeSet::new();
+    if let Some(output) = command_output("ldconfig", &["-p"]) {
+        majors.extend(cuda_majors_from_soname_listing(&output));
+    }
+    for base in ["/usr/local/cuda", "/usr/local"] {
+        let Ok(entries) = std::fs::read_dir(base) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(rest) = name.strip_prefix("cuda-")
+                && let Some(major) = leading_major_version(rest)
+            {
+                majors.insert(major);
+            }
+        }
+    }
+    majors
+}
+
+/// Extract CUDA majors from `libcudart.so.<major>` sonames in a listing.
+fn cuda_majors_from_soname_listing(output: &str) -> BTreeSet<u32> {
+    let mut majors = BTreeSet::new();
+    for token in output.split_whitespace() {
+        if let Some(rest) = token.strip_prefix("libcudart.so.")
+            && let Some(major) = leading_major_version(rest)
+        {
+            majors.insert(major);
+        }
+    }
+    majors
 }
 
 fn detect_rocm_profile(gpus: &[HostGpuProfile]) -> Option<HostRocmProfile> {

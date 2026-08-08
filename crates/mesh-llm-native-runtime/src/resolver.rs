@@ -1,6 +1,6 @@
 use crate::{
-    HostRuntimeProfile, NativeRuntimeArtifact, NativeRuntimeBackendKind, NativeRuntimeCache,
-    NativeRuntimeReleaseManifest,
+    HostCudaProfile, HostRuntimeProfile, NativeRuntimeArtifact, NativeRuntimeBackendKind,
+    NativeRuntimeCache, NativeRuntimeReleaseManifest,
 };
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,8 @@ pub enum CandidateRejection {
     TargetTripleMismatch { expected: String, actual: String },
     BackendNotSupported { backend: NativeRuntimeBackendKind },
     CudaProfileMissing,
-    CudaToolkitMajorMismatch { required: u32 },
+    CudaToolkitMajorMismatch { required: u32, installed: Vec<u32> },
+    CudaToolkitMajorAboveDriver { required: u32, driver_max: u32 },
     CudaGpuArchUnsupported { supported: Vec<String> },
     RocmProfileMissing,
     RocmGpuArchUnsupported { supported: Vec<String> },
@@ -403,11 +404,7 @@ fn evaluate_cuda_requirements(
         reasons.push(CandidateRejection::CudaProfileMissing);
         return;
     };
-    if !cuda.toolkit_majors.contains(&requirements.toolkit_major) {
-        reasons.push(CandidateRejection::CudaToolkitMajorMismatch {
-            required: requirements.toolkit_major,
-        });
-    }
+    evaluate_cuda_toolkit_major(artifact, requirements.toolkit_major, cuda, reasons);
     if !requirements.gpu_arches.is_empty()
         && requirements
             .gpu_arches
@@ -418,6 +415,57 @@ fn evaluate_cuda_requirements(
             supported: requirements.gpu_arches.clone(),
         });
     }
+}
+
+/// A CUDA runtime can only load if the CUDA runtime libraries it links against
+/// are present. Runtimes that ship their own copies (Windows) are self
+/// contained; runtimes that do not (Linux) need a matching toolkit major
+/// installed on the host.
+///
+/// `nvidia-smi` reports the highest CUDA major the *driver* supports, which is
+/// routinely newer than the installed toolkit. Treat it as an upper bound only,
+/// so a CUDA 13 driver with a CUDA 12 toolkit still selects the cuda12 runtime.
+fn evaluate_cuda_toolkit_major(
+    artifact: &NativeRuntimeArtifact,
+    required: u32,
+    cuda: &HostCudaProfile,
+    reasons: &mut Vec<CandidateRejection>,
+) {
+    if let Some(driver_max) = cuda.driver_max_major
+        && required > driver_max
+    {
+        reasons.push(CandidateRejection::CudaToolkitMajorAboveDriver {
+            required,
+            driver_max,
+        });
+        return;
+    }
+
+    if artifact_bundles_cuda_runtime(artifact) {
+        return;
+    }
+
+    // No installed-toolkit evidence at all: fall back to the driver bound
+    // rather than rejecting every CUDA runtime on the host.
+    if cuda.toolkit_majors.is_empty() {
+        return;
+    }
+
+    if !cuda.toolkit_majors.contains(&required) {
+        reasons.push(CandidateRejection::CudaToolkitMajorMismatch {
+            required,
+            installed: cuda.toolkit_majors.iter().copied().collect(),
+        });
+    }
+}
+
+/// True when the artifact ships its own CUDA runtime libraries and therefore
+/// does not depend on a host toolkit.
+fn artifact_bundles_cuda_runtime(artifact: &NativeRuntimeArtifact) -> bool {
+    artifact.libraries.iter().any(|library| {
+        let name = library.rsplit('/').next().unwrap_or(library).to_lowercase();
+        name.starts_with("cudart") || name.starts_with("libcudart")
+    })
 }
 
 fn evaluate_rocm_requirements(
@@ -542,6 +590,7 @@ mod tests {
             gpus: Vec::new(),
             cuda: Some(HostCudaProfile {
                 toolkit_majors: BTreeSet::from([12]),
+                driver_max_major: Some(12),
                 driver_version: None,
                 gpu_arches: BTreeSet::from(["sm_90".to_string()]),
             }),
@@ -633,6 +682,88 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// A CUDA 13 driver with only a CUDA 12 toolkit installed must still select
+    /// the cuda12 runtime. Linux runtimes do not bundle `libcudart`, so
+    /// selecting cuda13 here fails at load with
+    /// `libcudart.so.13: cannot open shared object file`.
+    #[test]
+    fn newer_driver_with_older_toolkit_selects_installed_toolkit_runtime() {
+        let mut host = profile();
+        let cuda = host.cuda.as_mut().unwrap();
+        cuda.toolkit_majors = BTreeSet::from([12]);
+        cuda.driver_max_major = Some(13);
+
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![
+                cuda_runtime("meshllm-runtime-linux-x86_64-cuda12", 12, &["sm_90"]),
+                cuda_runtime("meshllm-runtime-linux-x86_64-cuda13", 13, &["sm_90"]),
+            ],
+        };
+
+        let selected =
+            select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
+                .unwrap();
+
+        assert_eq!(selected.artifact.id, "meshllm-runtime-linux-x86_64-cuda12");
+    }
+
+    /// Runtimes that ship their own CUDA libraries (Windows) do not depend on a
+    /// host toolkit, so a newer driver must not reject them. Regression test for
+    /// the silent Vulkan fallback in #1127.
+    #[test]
+    fn self_contained_cuda_runtime_is_accepted_on_newer_driver() {
+        let mut host = profile();
+        let cuda = host.cuda.as_mut().unwrap();
+        cuda.toolkit_majors = BTreeSet::new();
+        cuda.driver_max_major = Some(13);
+
+        let mut bundled = cuda_runtime("meshllm-runtime-windows-x86_64-cuda12", 12, &["sm_90"]);
+        bundled.libraries.push("lib/cudart64_12.dll".to_string());
+
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![bundled],
+        };
+
+        let selected =
+            select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
+                .unwrap();
+
+        assert_eq!(
+            selected.artifact.id,
+            "meshllm-runtime-windows-x86_64-cuda12"
+        );
+    }
+
+    /// With no installed-toolkit evidence at all, fall back to the driver bound
+    /// rather than rejecting every CUDA runtime.
+    #[test]
+    fn missing_toolkit_evidence_falls_back_to_driver_bound() {
+        let mut host = profile();
+        let cuda = host.cuda.as_mut().unwrap();
+        cuda.toolkit_majors = BTreeSet::new();
+        cuda.driver_max_major = Some(12);
+
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![cuda_runtime(
+                "meshllm-runtime-linux-x86_64-cuda12",
+                12,
+                &["sm_90"],
+            )],
+        };
+
+        let selected =
+            select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
+                .unwrap();
+
+        assert_eq!(selected.artifact.id, "meshllm-runtime-linux-x86_64-cuda12");
     }
 
     #[test]
