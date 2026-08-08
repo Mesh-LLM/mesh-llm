@@ -12,7 +12,10 @@ mesh-llm node. Full reference: `docs/AGENTS.md`.
 
 ## Mental model
 
-- Every node serves an OpenAI-compatible API at `http://<host>:9337/v1`.
+- Use `http://<host>:9337/v1` only for loopback hosts (`localhost`, `127.0.0.1`,
+  or `::1`). For non-loopback traffic, use `https://<host>:9337/v1`, an SSH
+  tunnel that terminates at a loopback endpoint, or trusted private-network
+  isolation; never send cleartext HTTP to an untrusted remote host.
 - `GET /v1/models` lists everything reachable (local + mesh peers); requests
   route by the `model` field.
 - Special model ids: `auto` lets the mesh pick; `mesh` engages the
@@ -42,7 +45,9 @@ mesh-llm pi        [--model <id>] [--host <h>]    # writes ~/.pi/agent/models.js
 
 ## Manual config (any OpenAI client)
 
-Base URL `http://<host>:9337/v1`, any non-empty API key:
+For a loopback node use `http://127.0.0.1:9337/v1`; for a remote node use
+`https://<host>:9337/v1`, an SSH tunnel, or trusted private-network isolation.
+Keep the `/v1` path and use any non-empty API key:
 
 ```bash
 export GOOSE_PROVIDER=openai GOOSE_MODEL="<id-from-v1-models>"
