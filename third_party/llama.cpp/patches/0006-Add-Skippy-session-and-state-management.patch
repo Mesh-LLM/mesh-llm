@@ -1,4 +1,4 @@
-From 5e59575987eba24daa48825e91bbe6e9836c548e Mon Sep 17 00:00:00 2001
+From 14b676779dafa57bd7e50125b14e152d6b2bedd1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
 Subject: [PATCH 06/11] Add Skippy session and state management
@@ -8,11 +8,11 @@ Subject: [PATCH 06/11] Add Skippy session and state management
  include/skippy/state.h                        | 129 +++
  src/skippy-verify-checkpoint.h                |  24 +
  src/skippy/session.cpp                        | 437 +++++++++
- src/skippy/state.cpp                          | 853 ++++++++++++++++++
+ src/skippy/state.cpp                          | 854 ++++++++++++++++++
  tests/test-skippy-kv-cells-contiguous.cpp     |  20 +
  tests/test-skippy-kv-page-export.cpp          | 259 ++++++
  ...st-skippy-verify-checkpoint-retirement.cpp |  26 +
- 8 files changed, 1792 insertions(+)
+ 8 files changed, 1793 insertions(+)
  create mode 100644 include/skippy/signals.h
  create mode 100644 include/skippy/state.h
  create mode 100644 src/skippy-verify-checkpoint.h
@@ -682,10 +682,10 @@ index 000000000..1c9bfcfaa
 +} // extern "C"
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..46470f78e
+index 000000000..80376f961
 --- /dev/null
 +++ b/src/skippy/state.cpp
-@@ -0,0 +1,853 @@
+@@ -0,0 +1,854 @@
 +#include "skippy/state.h"
 +#include "skippy/errors.h"
 +#include "skippy/runtime_support.h"
@@ -702,6 +702,7 @@ index 000000000..46470f78e
 +#include <algorithm>
 +#include <cstdint>
 +#include <cstring>
++#include <limits>
 +#include <vector>
 +
 +extern "C" {
