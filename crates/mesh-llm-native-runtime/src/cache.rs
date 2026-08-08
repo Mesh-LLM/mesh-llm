@@ -149,16 +149,51 @@ impl NativeRuntimeCache {
         for version_entry in fs::read_dir(&self.root)
             .with_context(|| format!("read native runtime cache {}", self.root.display()))?
         {
-            let version_entry = version_entry?;
-            if !version_entry.file_type()?.is_dir() {
+            let Ok(version_entry) = version_entry else {
                 continue;
-            }
-            for runtime_entry in fs::read_dir(version_entry.path())? {
-                let runtime_entry = runtime_entry?;
-                if !runtime_entry.file_type()?.is_dir() {
+            };
+            let version_path = version_entry.path();
+            let version_is_dir = match version_entry.file_type() {
+                Ok(file_type) => file_type.is_dir(),
+                Err(error) => {
+                    scan.skipped.push(SkippedNativeRuntime {
+                        path: version_path,
+                        reason: format!("read cache version metadata: {error}"),
+                    });
                     continue;
                 }
+            };
+            if !version_is_dir {
+                continue;
+            }
+            let runtime_entries = match fs::read_dir(&version_path) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    scan.skipped.push(SkippedNativeRuntime {
+                        path: version_path,
+                        reason: format!("read native runtime cache version: {error}"),
+                    });
+                    continue;
+                }
+            };
+            for runtime_entry in runtime_entries {
+                let Ok(runtime_entry) = runtime_entry else {
+                    continue;
+                };
                 let runtime_dir = runtime_entry.path();
+                let runtime_is_dir = match runtime_entry.file_type() {
+                    Ok(file_type) => file_type.is_dir(),
+                    Err(error) => {
+                        scan.skipped.push(SkippedNativeRuntime {
+                            path: runtime_dir,
+                            reason: format!("read native runtime entry metadata: {error}"),
+                        });
+                        continue;
+                    }
+                };
+                if !runtime_is_dir {
+                    continue;
+                }
                 let manifest_path = runtime_dir.join(NATIVE_RUNTIME_MANIFEST_FILE);
                 match fs::metadata(&manifest_path) {
                     Ok(metadata) if metadata.is_file() => {}
