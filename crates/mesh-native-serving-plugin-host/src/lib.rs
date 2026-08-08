@@ -5,6 +5,7 @@ mod plugin_dispatch;
 mod test_support;
 
 use std::{
+    collections::HashMap,
     ffi::{c_char, c_void},
     path::{Path, PathBuf},
     ptr::NonNull,
@@ -125,6 +126,7 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
             definition: Arc::clone(&self.definition),
             instance: Some(instance),
             proposal_token_buffer: Mutex::new(vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS]),
+            committed_generated_tokens: Mutex::new(HashMap::new()),
         };
         let driver = Arc::new(PluginDriver::spawn(active)?);
         let lifecycle: Arc<dyn GenerationLifecycleIngress> = Arc::new(NativeLifecycleIngress {
@@ -270,6 +272,7 @@ struct ActivePlugin {
     definition: Arc<LoadedDefinition>,
     instance: Option<NonNull<c_void>>,
     proposal_token_buffer: Mutex<Vec<i32>>,
+    committed_generated_tokens: Mutex<HashMap<(u64, u64), usize>>,
 }
 
 // SAFETY: activation succeeds only for plugins implementing the ABI's
@@ -306,19 +309,81 @@ impl ActivePlugin {
             prompt_token_ids: abi::TokenSlice::from_tokens(&start.prompt_token_ids),
         };
         let status = unsafe { (self.definition.api().begin_generation)(self.instance()?, &event) };
-        self.call_status("begin generation", status)
+        self.call_status("begin generation", status)?;
+        self.committed_generated_tokens
+            .lock()
+            .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?
+            .insert((start.request_id, start.session_id), 0);
+        Ok(())
     }
 
     fn committed(&self, commit: &GenerationCommit) -> Result<()> {
+        self.commit_tokens(
+            commit.request_id,
+            commit.session_id,
+            commit.generated_token_count,
+            &commit.token_ids,
+        )
+    }
+
+    fn commit_tokens(
+        &self,
+        request_id: u64,
+        session_id: u64,
+        generated_token_count: usize,
+        token_ids: &[i32],
+    ) -> Result<()> {
+        if token_ids.is_empty() {
+            return Ok(());
+        }
+        let mut committed_generated_tokens = self
+            .committed_generated_tokens
+            .lock()
+            .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?;
+        self.commit_tokens_locked(
+            &mut committed_generated_tokens,
+            request_id,
+            session_id,
+            generated_token_count,
+            token_ids,
+        )
+    }
+
+    fn commit_tokens_locked(
+        &self,
+        committed_generated_tokens: &mut HashMap<(u64, u64), usize>,
+        request_id: u64,
+        session_id: u64,
+        generated_token_count: usize,
+        token_ids: &[i32],
+    ) -> Result<()> {
+        if token_ids.is_empty() {
+            return Ok(());
+        }
+        let key = (request_id, session_id);
+        let prior_generated_token_count = committed_generated_tokens
+            .get(&key)
+            .copied()
+            .unwrap_or_else(|| generated_token_count.saturating_sub(token_ids.len()));
+        let expected_generated_token_count = prior_generated_token_count
+            .checked_add(token_ids.len())
+            .context("native serving plugin generated-token count overflow")?;
+        if generated_token_count != expected_generated_token_count {
+            bail!(
+                "native serving plugin commit does not extend the tracked generated-token prefix"
+            );
+        }
         let event = abi::GenerationCommit {
             struct_size: size_of::<abi::GenerationCommit>(),
-            request_id: commit.request_id,
-            session_id: commit.session_id,
-            generated_token_count: u64::try_from(commit.generated_token_count)?,
-            token_ids: abi::TokenSlice::from_tokens(&commit.token_ids),
+            request_id,
+            session_id,
+            generated_token_count: u64::try_from(generated_token_count)?,
+            token_ids: abi::TokenSlice::from_tokens(token_ids),
         };
         let status = unsafe { (self.definition.api().commit_generation)(self.instance()?, &event) };
-        self.call_status("commit generation", status)
+        self.call_status("commit generation", status)?;
+        committed_generated_tokens.insert(key, generated_token_count);
+        Ok(())
     }
 
     fn abort(&self, abort: &GenerationAbort) -> Result<()> {
@@ -328,10 +393,21 @@ impl ActivePlugin {
             session_id: abort.session_id,
         };
         let status = unsafe { (self.definition.api().abort_generation)(self.instance()?, &event) };
-        self.call_status("abort generation", status)
+        let result = self.call_status("abort generation", status);
+        self.committed_generated_tokens
+            .lock()
+            .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?
+            .remove(&(abort.request_id, abort.session_id));
+        result
     }
 
     fn finish(&self, receipt: &GenerationReceipt) -> Result<()> {
+        let key = (receipt.request_id, receipt.session_id);
+        self.commit_final_suffix(
+            receipt.request_id,
+            receipt.session_id,
+            &receipt.generated_token_ids,
+        )?;
         let request_to_first_token_us = receipt.request_to_first_token_us.unwrap_or_default();
         let event = abi::GenerationFinish {
             struct_size: size_of::<abi::GenerationFinish>(),
@@ -351,10 +427,56 @@ impl ActivePlugin {
             ),
         };
         let status = unsafe { (self.definition.api().finish_generation)(self.instance()?, &event) };
-        self.call_status("finish generation", status)
+        let result = self.call_status("finish generation", status);
+        self.committed_generated_tokens
+            .lock()
+            .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?
+            .remove(&key);
+        result
+    }
+
+    fn commit_final_suffix(
+        &self,
+        request_id: u64,
+        session_id: u64,
+        generated_token_ids: &[i32],
+    ) -> Result<()> {
+        let mut committed_generated_tokens = self
+            .committed_generated_tokens
+            .lock()
+            .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?;
+        let key = (request_id, session_id);
+        let committed = committed_generated_tokens
+            .get(&key)
+            .copied()
+            .unwrap_or_default();
+        if committed > generated_token_ids.len() {
+            bail!("native serving plugin committed beyond the final generation receipt");
+        }
+        if committed < generated_token_ids.len() {
+            self.commit_tokens_locked(
+                &mut committed_generated_tokens,
+                request_id,
+                session_id,
+                generated_token_ids.len(),
+                &generated_token_ids[committed..],
+            )?;
+        }
+        Ok(())
     }
 
     fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+        if !query.pending_token_ids.is_empty() {
+            let generated_token_count = query
+                .committed_token_count
+                .saturating_sub(query.prompt_token_count);
+            self.commit_tokens(
+                query.request_id,
+                query.session_id,
+                generated_token_count,
+                &query.pending_token_ids,
+            )?;
+        }
         let event = abi::ProposalQuery {
             struct_size: size_of::<abi::ProposalQuery>(),
             request_id: query.request_id,
@@ -446,6 +568,11 @@ impl ActivePlugin {
     }
 
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
+        self.commit_proposal_tokens(
+            receipt.request_id,
+            receipt.session_id,
+            &receipt.committed_tokens,
+        )?;
         let event = abi::ProposalOutcome {
             struct_size: size_of::<abi::ProposalOutcome>(),
             decision_id: abi::ByteSlice::from_bytes(receipt.decision_id.as_bytes()),
@@ -467,6 +594,32 @@ impl ActivePlugin {
         };
         let status = unsafe { (self.definition.api().report_proposal)(self.instance()?, &event) };
         self.call_status("report proposal", status)
+    }
+
+    fn commit_proposal_tokens(
+        &self,
+        request_id: u64,
+        session_id: u64,
+        committed_tokens: &[i32],
+    ) -> Result<()> {
+        let mut committed_generated_tokens = self
+            .committed_generated_tokens
+            .lock()
+            .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?;
+        let key = (request_id, session_id);
+        let generated_token_count = committed_generated_tokens
+            .get(&key)
+            .copied()
+            .unwrap_or_default()
+            .checked_add(committed_tokens.len())
+            .context("native serving plugin generated-token count overflow")?;
+        self.commit_tokens_locked(
+            &mut committed_generated_tokens,
+            request_id,
+            session_id,
+            generated_token_count,
+            committed_tokens,
+        )
     }
 
     fn discard(&self, decision_id: &[u8], reason: LinearProposalDiscardReason) -> Result<()> {
