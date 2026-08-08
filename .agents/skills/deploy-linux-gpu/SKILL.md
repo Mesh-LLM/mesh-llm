@@ -101,19 +101,30 @@ tmux server is killed/reaped. On managed GPU images that ship **supervisor**
 (common on Vast.ai), use supervisor — it restarts on crash and persists.
 
 ```bash
-cat > /etc/supervisor/conf.d/mesh-llm.conf <<'EOF'
+# Run this as the user who installed mesh-llm, so HOME, the model cache, and
+# the persistent node identity all resolve under that user's account.
+install_user="$(id -un)"
+install_home="$(getent passwd "$install_user" | cut -d: -f6)"
+if ! test -n "$install_home" || ! test -x "$install_home/.local/bin/mesh-llm"; then
+  echo "mesh-llm binary is missing from $install_home/.local/bin" >&2
+  exit 1
+fi
+
+sudo tee /etc/supervisor/conf.d/mesh-llm.conf >/dev/null <<EOF
 [program:mesh-llm]
-command=/root/.local/bin/mesh-llm serve --model unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL --auto
+command=$install_home/.local/bin/mesh-llm serve --model unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL --auto
+directory=$install_home
+user=$install_user
 autostart=true
 autorestart=true
 startsecs=10
 stopwaitsecs=30
 stdout_logfile=/var/log/mesh-llm.log
 stderr_logfile=/var/log/mesh-llm.log
-environment=HOME="/root"
+environment=HOME="$install_home"
 EOF
-supervisorctl reread && supervisorctl update && supervisorctl start mesh-llm
-supervisorctl status mesh-llm
+sudo supervisorctl reread && sudo supervisorctl update && sudo supervisorctl start mesh-llm
+sudo supervisorctl status mesh-llm
 ```
 
 If there is no supervisor, the installer can set up a `systemd --user` service
@@ -161,11 +172,13 @@ local model specifically, pass its exact id from `/v1/models` instead of `auto`.
 ## Stop / clean up
 
 ```bash
-supervisorctl stop mesh-llm      # if under supervisor
-# or, for a tracked foreground/background run:
+# Tracked foreground/background run:
 mesh-llm stop
-# emergency only:
-pkill -9 -f mesh-llm
+# For a Supervisor-managed instance, stop Supervisor before any emergency kill:
+sudo supervisorctl stop mesh-llm
+# Emergency only if it remains alive: verify this is the intended instance/PID.
+sudo supervisorctl status mesh-llm
+kill -9 <mesh-llm-pid>
 ```
 
 A clean stop removes the instance runtime dir under `~/.mesh-llm/runtime/`.

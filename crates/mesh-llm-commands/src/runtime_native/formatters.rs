@@ -357,8 +357,33 @@ fn format_rejection(reason: &CandidateRejection) -> String {
         CandidateRejection::CudaProfileMissing => {
             "CUDA runtime requires CUDA, but no CUDA profile was detected".to_string()
         }
-        CandidateRejection::CudaToolkitMajorMismatch { required } => {
-            format!("CUDA toolkit mismatch: runtime requires CUDA {required}")
+        CandidateRejection::CudaToolkitMajorMismatch {
+            required,
+            installed,
+        } => {
+            let installed = installed
+                .iter()
+                .map(|major| major.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "CUDA toolkit mismatch: runtime requires CUDA {required}, host has CUDA {installed} installed"
+            )
+        }
+        CandidateRejection::CudaToolkitMajorAboveDriver {
+            required,
+            driver_max,
+        } => {
+            format!(
+                "CUDA driver too old: runtime requires CUDA {required}, driver supports up to CUDA {driver_max}"
+            )
+        }
+        CandidateRejection::CudaToolkitNotDetected { required } => {
+            format!(
+                "no CUDA toolkit detected: runtime requires CUDA {required} libraries \
+                 (libcudart, libcublas, libcublasLt) on the loader path; \
+                 set MESH_LLM_CUDA_TOOLKIT_MAJORS if the toolkit is installed elsewhere"
+            )
         }
         CandidateRejection::CudaGpuArchUnsupported { supported } => {
             format!(

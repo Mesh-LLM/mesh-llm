@@ -295,14 +295,56 @@ impl LinearProposalReceipt {
     }
 }
 
+/// Per-request result from an in-process linear proposal source.
+///
+/// The telemetry travels with the corresponding request result so a shared
+/// source cannot accidentally attribute timings from one decode to another.
+pub struct LinearProposalSourceResponse {
+    proposal: Option<LinearProposal>,
+    telemetry: Option<LinearProposalSourceTelemetry>,
+}
+
+impl LinearProposalSourceResponse {
+    /// Creates a result without source-specific timing data.
+    #[must_use]
+    pub fn new(proposal: Option<LinearProposal>) -> Self {
+        Self {
+            proposal,
+            telemetry: None,
+        }
+    }
+
+    /// Creates a result with telemetry for this exact proposal request.
+    #[must_use]
+    pub fn with_telemetry(
+        proposal: Option<LinearProposal>,
+        telemetry: LinearProposalSourceTelemetry,
+    ) -> Self {
+        Self {
+            proposal,
+            telemetry: Some(telemetry),
+        }
+    }
+
+    fn into_parts(
+        self,
+    ) -> (
+        Option<LinearProposal>,
+        Option<LinearProposalSourceTelemetry>,
+    ) {
+        (self.proposal, self.telemetry)
+    }
+}
+
 /// In-process, source-neutral width-one proposal boundary.
 ///
 /// Implementations must honor `query.deadline`. Skippy independently rejects a
 /// proposal that arrives after it and calls `discard` so the source can resolve
 /// any pending decision without treating it as verified.
 pub trait LinearProposalIngress: Send + Sync {
-    /// Returns an optional bounded proposal for the committed query state.
-    fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>>;
+    /// Returns an optional bounded proposal and telemetry for this exact
+    /// committed query state.
+    fn propose(&self, query: LinearProposalQuery) -> Result<LinearProposalSourceResponse>;
 
     /// Receives the target-authoritative outcome for a verified proposal.
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()>;
@@ -314,6 +356,71 @@ pub trait LinearProposalIngress: Send + Sync {
         _reason: LinearProposalDiscardReason,
     ) -> Result<()> {
         Ok(())
+    }
+}
+
+/// Bounded source-side outcome for one proposal query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LinearProposalSourceOutcome {
+    /// The source returned before the configured deadline.
+    Ready,
+    /// The source deliberately returned no proposal before the deadline.
+    Abstained,
+    /// The host stopped waiting at the configured wall-clock deadline.
+    HostDeadlineExceeded,
+    /// The host queue was at capacity, so the source was never submitted.
+    QueueFull,
+    /// The worker established that the deadline had elapsed before dispatch.
+    DeadlineExceededBeforeDispatch,
+    /// A plugin callback exhausted the deadline without producing a candidate.
+    DeadlineExceededInPlugin,
+    /// A plugin callback returned a candidate after the deadline.
+    CandidateReturnedTooLate,
+    /// A plugin callback failed and was treated as a fail-open abstention.
+    SourceError,
+}
+
+impl LinearProposalSourceOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Abstained => "abstained",
+            Self::HostDeadlineExceeded => "host_deadline_exceeded",
+            Self::QueueFull => "queue_full",
+            Self::DeadlineExceededBeforeDispatch => "deadline_exceeded_before_dispatch",
+            Self::DeadlineExceededInPlugin => "deadline_exceeded_in_plugin",
+            Self::CandidateReturnedTooLate => "candidate_returned_too_late",
+            Self::SourceError => "source_error",
+        }
+    }
+}
+
+/// Privacy-safe source timing for one proposal query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinearProposalSourceTelemetry {
+    /// Time from source submission until the worker began dispatch.
+    pub queue_wait_us: u64,
+    /// Time spent crossing the source's callback boundary.
+    pub callback_elapsed_us: u64,
+    /// Bounded completion or abstention outcome.
+    pub outcome: LinearProposalSourceOutcome,
+}
+
+impl LinearProposalSourceTelemetry {
+    pub(crate) fn insert_telemetry_attrs(self, attrs: &mut BTreeMap<String, serde_json::Value>) {
+        attrs.insert(
+            "llama_stage.linear_proposal.source_queue_wait_us".to_string(),
+            json!(self.queue_wait_us),
+        );
+        attrs.insert(
+            "llama_stage.linear_proposal.source_callback_us".to_string(),
+            json!(self.callback_elapsed_us),
+        );
+        attrs.insert(
+            "llama_stage.linear_proposal.source_outcome".to_string(),
+            json!(self.outcome.as_str()),
+        );
     }
 }
 
@@ -369,15 +476,19 @@ pub(crate) struct QueriedLinearProposal {
     pub(crate) proposal: LinearProposal,
     pub(crate) proposal_elapsed_us: u64,
     pub(crate) operation_started: Instant,
+    pub(crate) source_telemetry: Option<LinearProposalSourceTelemetry>,
 }
 
 pub(crate) enum LinearProposalQueryOutcome {
     /// No proposal command was submitted, so any pending token delta remains
     /// owned by the caller.
     Skipped,
-    NoProposal,
+    NoProposal {
+        source_telemetry: Option<LinearProposalSourceTelemetry>,
+    },
     DeadlineExceeded {
         proposal_elapsed_us: u64,
+        source_telemetry: Option<LinearProposalSourceTelemetry>,
     },
     Ready(QueriedLinearProposal),
 }
@@ -419,7 +530,7 @@ pub(crate) fn query_linear_proposal(
         .checked_add(config.deadline())
         .ok_or_else(|| OpenAiError::backend("linear proposal deadline overflow"))?;
     let proposal_started = Instant::now();
-    let proposal = config
+    let response = config
         .source()
         .propose(
             LinearProposalQuery::new(
@@ -435,8 +546,9 @@ pub(crate) fn query_linear_proposal(
         )
         .map_err(openai_backend_error)?;
     let proposal_elapsed_us = elapsed_us(proposal_started);
+    let (proposal, source_telemetry) = response.into_parts();
     let Some(proposal) = proposal else {
-        return Ok(LinearProposalQueryOutcome::NoProposal);
+        return Ok(LinearProposalQueryOutcome::NoProposal { source_telemetry });
     };
     if Instant::now() > deadline {
         config
@@ -448,6 +560,7 @@ pub(crate) fn query_linear_proposal(
             .map_err(openai_backend_error)?;
         return Ok(LinearProposalQueryOutcome::DeadlineExceeded {
             proposal_elapsed_us,
+            source_telemetry,
         });
     }
     if proposal.token_ids.is_empty() || proposal.token_ids.len() > max_proposal_tokens {
@@ -458,7 +571,7 @@ pub(crate) fn query_linear_proposal(
                 LinearProposalDiscardReason::InvalidTokenCount,
             )
             .map_err(openai_backend_error)?;
-        return Ok(LinearProposalQueryOutcome::NoProposal);
+        return Ok(LinearProposalQueryOutcome::NoProposal { source_telemetry });
     }
     if proposal.token_ids.iter().any(|token| *token < 0) {
         config
@@ -468,12 +581,13 @@ pub(crate) fn query_linear_proposal(
                 LinearProposalDiscardReason::InvalidTokenId,
             )
             .map_err(openai_backend_error)?;
-        return Ok(LinearProposalQueryOutcome::NoProposal);
+        return Ok(LinearProposalQueryOutcome::NoProposal { source_telemetry });
     }
     Ok(LinearProposalQueryOutcome::Ready(QueriedLinearProposal {
         proposal,
         proposal_elapsed_us,
         operation_started,
+        source_telemetry,
     }))
 }
 
@@ -576,7 +690,7 @@ mod tests {
     }
 
     impl LinearProposalIngress for FakeIngress {
-        fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+        fn propose(&self, query: LinearProposalQuery) -> Result<LinearProposalSourceResponse> {
             self.pending_token_batches
                 .lock()
                 .unwrap()
@@ -590,7 +704,9 @@ mod tests {
                 max_proposal_tokens: query.max_proposal_tokens,
             });
             thread::sleep(*self.delay.lock().unwrap());
-            Ok(self.proposal.lock().unwrap().take())
+            Ok(LinearProposalSourceResponse::new(
+                self.proposal.lock().unwrap().take(),
+            ))
         }
 
         fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
@@ -818,7 +934,7 @@ mod tests {
 
         assert!(matches!(
             query_linear_proposal(&config, params).unwrap(),
-            LinearProposalQueryOutcome::NoProposal
+            LinearProposalQueryOutcome::NoProposal { .. }
         ));
         assert_eq!(
             source.pending_token_batches.lock().unwrap().as_slice(),
@@ -870,7 +986,7 @@ mod tests {
                 .unwrap();
         assert!(matches!(
             query_linear_proposal(&invalid_config, query_params(1, 2, 1, 0, 1, 5, 4)).unwrap(),
-            LinearProposalQueryOutcome::NoProposal
+            LinearProposalQueryOutcome::NoProposal { .. }
         ));
         assert_eq!(
             invalid_source.discards.lock().unwrap().as_slice(),
@@ -887,6 +1003,7 @@ mod tests {
                 .unwrap();
         let LinearProposalQueryOutcome::DeadlineExceeded {
             proposal_elapsed_us,
+            ..
         } = query_linear_proposal(&late_config, query_params(1, 2, 1, 0, 1, 5, 4)).unwrap()
         else {
             panic!("late proposal should produce deadline telemetry");
@@ -910,7 +1027,7 @@ mod tests {
         assert!(matches!(
             query_linear_proposal(&invalid_token_config, query_params(1, 2, 1, 0, 1, 5, 4),)
                 .unwrap(),
-            LinearProposalQueryOutcome::NoProposal
+            LinearProposalQueryOutcome::NoProposal { .. }
         ));
         assert_eq!(
             invalid_token_source.discards.lock().unwrap().as_slice(),
@@ -969,7 +1086,7 @@ mod tests {
 
         assert!(matches!(
             query_linear_proposal(&config, query_params(1, 2, 1, 0, 1, 64, 7)).unwrap(),
-            LinearProposalQueryOutcome::NoProposal
+            LinearProposalQueryOutcome::NoProposal { .. }
         ));
         assert_eq!(source.queries.lock().unwrap()[0].max_proposal_tokens, 7);
     }
@@ -1004,6 +1121,12 @@ mod tests {
         let mut attrs = BTreeMap::new();
 
         receipt.insert_telemetry_attrs(&mut attrs);
+        LinearProposalSourceTelemetry {
+            queue_wait_us: 7,
+            callback_elapsed_us: 11,
+            outcome: LinearProposalSourceOutcome::DeadlineExceededBeforeDispatch,
+        }
+        .insert_telemetry_attrs(&mut attrs);
         let encoded = serde_json::to_string(&attrs).unwrap();
 
         assert!(!encoded.contains(secret));
@@ -1011,5 +1134,9 @@ mod tests {
         assert!(!encoded.contains("67890"));
         assert!(!attrs.keys().any(|key| key.contains("decision_id")));
         assert!(!attrs.keys().any(|key| key.contains("error")));
+        assert_eq!(
+            attrs["llama_stage.linear_proposal.source_outcome"],
+            json!("deadline_exceeded_before_dispatch")
+        );
     }
 }

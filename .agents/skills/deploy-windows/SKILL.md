@@ -117,7 +117,7 @@ filing split/runtime issues from a Windows box.
 mesh-llm --version
 curl.exe -s http://localhost:9337/v1/models
 curl.exe -s http://localhost:3131/api/status
-curl.exe -s http://localhost:9337/v1/chat/completions -H "Content-Type: application/json" -d '{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16}'
+curl.exe -s http://localhost:9337/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"auto","messages":[{"role":"user","content":"hi"}],"max_tokens":16}'
 ```
 
 Use `curl.exe` explicitly — bare `curl` in PowerShell aliases to
@@ -129,8 +129,8 @@ poll `/v1/models` before concluding failure.
 - Runtime/instance state: `%USERPROFILE%\.mesh-llm\runtime\<pid>\` — embedded
   native logs at `logs\skippy-native.log`.
 - Config: `%USERPROFILE%\.mesh-llm\config.toml`; identity: `.mesh-llm\key`.
-- Stop: `mesh-llm stop` (preferred). Emergency:
-  `Stop-Process -Name mesh-llm -Force`.
+- Stop: `mesh-llm stop` (preferred). Emergency: use the PID for the specific
+  instance being validated: `Stop-Process -Id <mesh-llm-pid> -Force`.
 
 ## Troubleshooting
 

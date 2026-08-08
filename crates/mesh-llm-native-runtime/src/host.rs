@@ -30,8 +30,16 @@ pub struct HostGpuProfile {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HostCudaProfile {
+    /// CUDA toolkit majors whose runtime libraries are actually installed on
+    /// this host (for example `libcudart.so.12`). A runtime that does not ship
+    /// its own CUDA libraries can only load if its major appears here.
     #[serde(default)]
     pub toolkit_majors: BTreeSet<u32>,
+    /// Highest CUDA major the installed driver supports, as reported by
+    /// `nvidia-smi`. This is an upper bound, not evidence that a matching
+    /// toolkit is installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_max_major: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub driver_version: Option<String>,
     #[serde(default)]
