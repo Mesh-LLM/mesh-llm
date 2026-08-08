@@ -1,4 +1,4 @@
-From e64c3caa1674a4e198ee00d1a2623d42f95e9345 Mon Sep 17 00:00:00 2001
+From cc14f191db4f3c91d70a0c0ab01ec5a01f2d84df Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
 Subject: [PATCH 10/12] Add Skippy sampling and speculative decoding
