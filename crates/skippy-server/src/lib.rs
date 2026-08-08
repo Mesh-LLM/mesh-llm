@@ -31,6 +31,7 @@ pub use frontend::{
     EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget,
     EmbeddedReasoningEnabled, EmbeddedReasoningFormat, LinearProposal, LinearProposalDiscardReason,
     LinearProposalDisposition, LinearProposalIngress, LinearProposalQuery, LinearProposalReceipt,
+    LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
     OpaqueProposalDecisionId, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
     OpenAiGuardrailsTarget, SpeculativeDecodeConfig, VerifyWindowConfig, embedded_openai_backend,

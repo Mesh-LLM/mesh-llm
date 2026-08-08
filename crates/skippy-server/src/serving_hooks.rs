@@ -84,8 +84,8 @@ mod tests {
 
     use crate::frontend::{
         GenerationAbort, GenerationCommit, GenerationReceipt, GenerationReceiptSink,
-        GenerationStart, LinearProposal, LinearProposalIngress, LinearProposalQuery,
-        LinearProposalReceipt,
+        GenerationStart, LinearProposalIngress, LinearProposalQuery, LinearProposalReceipt,
+        LinearProposalSourceResponse,
     };
 
     use super::*;
@@ -110,8 +110,8 @@ mod tests {
     struct ProposalIngress;
 
     impl LinearProposalIngress for ProposalIngress {
-        fn propose(&self, _query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
-            Ok(None)
+        fn propose(&self, _query: LinearProposalQuery) -> Result<LinearProposalSourceResponse> {
+            Ok(LinearProposalSourceResponse::new(None))
         }
 
         fn report(&self, _receipt: &LinearProposalReceipt) -> Result<()> {
