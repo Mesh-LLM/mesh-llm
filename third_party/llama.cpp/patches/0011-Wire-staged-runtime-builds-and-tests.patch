@@ -1,4 +1,4 @@
-From d9904e492f169426ae8ebeeb0b85f73d0725808e Mon Sep 17 00:00:00 2001
+From dffb6ffb160125ec59b659adf357eba94f9c248f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
 Subject: [PATCH 11/11] Wire staged runtime builds and tests
