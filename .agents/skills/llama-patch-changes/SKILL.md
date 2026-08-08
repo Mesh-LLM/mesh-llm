@@ -21,7 +21,11 @@ that prepare or consume patched llama.cpp.
   been regenerated and committed.
 - Do not add llama-stage ABI/static in-process patches unless the task
   explicitly asks for that integration pass.
-- Prefer small, reviewable llama commits with one capability per patch.
+- Prefer small, reviewable llama commits with one functional boundary per
+  patch. Keep patch numbers unique and contiguous.
+- Do not append a terminal patch whose only purpose is to split, move, or clean
+  up code introduced by earlier patches. Recreate the affected patches so they
+  use the intended ownership boundaries from the outset.
 
 ## Local Flow
 
@@ -35,19 +39,22 @@ For actual llama-side editing, prefer a normal llama.cpp checkout or branch
 where commits can be named and inspected. Base the branch on upstream
 `ggml-org/llama.cpp` `master`, then carry the Mesh-LLM patch commits on top.
 
-After editing and committing in that llama checkout, regenerate the patch queue
-from its upstream merge base:
+For a deliberate queue rewrite, reconstruct capability-owned commits from the
+pinned upstream, verify the reconstructed head is tree-identical to the
+authoritative final checkout, then regenerate the patch queue:
 
 ```bash
-rm -rf /path/to/mesh-llm/third_party/llama.cpp/patches
+mv /path/to/mesh-llm/third_party/llama.cpp/patches /tmp/mesh-llm-patches-backup
 mkdir -p /path/to/mesh-llm/third_party/llama.cpp/patches
 git format-patch \
+  --start-number 1 \
   --output-directory /path/to/mesh-llm/third_party/llama.cpp/patches \
-  "$(git merge-base HEAD upstream/master)..HEAD"
+  "$(cat /path/to/mesh-llm/third_party/llama.cpp/upstream.txt)..HEAD"
 ```
 
-If the llama checkout uses `origin` for upstream instead of `upstream`, replace
-`upstream/master` with `origin/master`.
+Keep the temporary backup until clean patch application and the required native
+build pass. Ordinary focused changes may append a patch without rebuilding
+unrelated functional boundaries.
 
 ## Validation
 
