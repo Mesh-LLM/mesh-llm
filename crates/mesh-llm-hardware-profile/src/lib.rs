@@ -5,6 +5,7 @@ use mesh_llm_native_runtime::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -462,10 +463,11 @@ fn record_cuda_soname_path(
 }
 
 fn valid_cuda_library_target(path: &Path) -> bool {
-    let Ok(bytes) = fs::read(path) else {
+    let Ok(mut file) = fs::File::open(path) else {
         return false;
     };
-    if bytes.len() < 20 || &bytes[..4] != b"\x7fELF" {
+    let mut bytes = [0_u8; 20];
+    if file.read_exact(&mut bytes).is_err() || &bytes[..4] != b"\x7fELF" {
         return false;
     }
     let machine = match bytes[5] {
