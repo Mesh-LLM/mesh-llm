@@ -142,7 +142,7 @@ describe('CONFIGURATION_DEFAULTS', () => {
 
   it('uses current speculation values and includes incoming draft tuning controls', () => {
     expectChoice('speculation-mode', 'mode', 'auto', 'segmented')
-    expect(choiceValues('speculation-mode')).toEqual(['auto', 'disabled', 'draft', 'ngram'])
+    expect(choiceValues('speculation-mode')).toEqual(['auto', 'disabled', 'draft'])
     expectChoice('incompatible-pairing-behavior', 'pairing_fault', 'warn_disable', 'toggle')
     expect(choiceValues('incompatible-pairing-behavior')).toEqual(['warn_disable', 'fail_closed'])
 
