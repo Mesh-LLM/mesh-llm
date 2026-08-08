@@ -8,6 +8,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = pathlib.Path(__file__).parents[1] / "windows-native-runtime-deps.py"
@@ -85,6 +86,38 @@ class WindowsNativeRuntimeDepsTests(unittest.TestCase):
             self.assertEqual(
                 {path.name for path in copied},
                 {"libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"},
+            )
+            DEPS.verify_dependencies(lib_dir)
+
+    def test_compiler_runtime_wins_over_vulkan_sdk_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            lib_dir = root / "artifact" / "lib"
+            compiler_dir = root / "mingw" / "bin"
+            sdk_dir = root / "vulkan" / "Bin"
+            lib_dir.mkdir(parents=True)
+            compiler_dir.mkdir(parents=True)
+            sdk_dir.mkdir(parents=True)
+            write_pe(lib_dir / "ggml-vulkan.dll", ["libstdc++-6.dll"])
+            write_pe(compiler_dir / "libstdc++-6.dll", ["KERNEL32.dll"])
+            write_pe(sdk_dir / "libstdc++-6.dll", ["missing-sdk-runtime.dll"])
+
+            with mock.patch.object(
+                DEPS.shutil, "which", return_value=str(compiler_dir / "g++.exe")
+            ), mock.patch.dict(
+                DEPS.os.environ,
+                {
+                    "PATH": str(sdk_dir),
+                    "VULKAN_SDK": str(root / "vulkan"),
+                },
+                clear=False,
+            ):
+                copied = DEPS.collect_dependencies(lib_dir, [])
+
+            self.assertEqual([path.name for path in copied], ["libstdc++-6.dll"])
+            self.assertEqual(
+                (lib_dir / "libstdc++-6.dll").read_bytes(),
+                (compiler_dir / "libstdc++-6.dll").read_bytes(),
             )
             DEPS.verify_dependencies(lib_dir)
 

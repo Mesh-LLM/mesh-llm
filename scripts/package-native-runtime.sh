@@ -458,6 +458,16 @@ if [[ "$runtime_os" == "windows" ]]; then
     for library in "${runtime_libraries[@]}"; do
         dependency_args+=(--search-dir "$(dirname "$library")")
     done
+    # The Vulkan SDK can contain an older MinGW runtime. Let the dependency
+    # resolver discover the compiler runtime before searching SDK directories.
+    # This also keeps CPU packages self-contained when their DLLs use MinGW.
+    if [[ "$BACKEND" == "cpu" || "$BACKEND" == "vulkan" ]]; then
+        mingw_compiler="${MINGW_CXX:-${CXX:-g++}}"
+        mingw_compiler_path="$(command -v "$mingw_compiler" || true)"
+        if [[ -n "$mingw_compiler_path" ]]; then
+            dependency_args+=(--search-dir "$(dirname "$mingw_compiler_path")")
+        fi
+    fi
     for dependency_root in CUDA_PATH ROCM_PATH VULKAN_SDK; do
         dependency_dir="${!dependency_root:-}"
         if [[ -n "$dependency_dir" ]]; then
