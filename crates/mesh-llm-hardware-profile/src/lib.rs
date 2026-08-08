@@ -4,6 +4,8 @@ use mesh_llm_native_runtime::{
     NativeRuntimeBackendKind,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod rocm;
@@ -345,16 +347,17 @@ fn detect_cuda_profile(gpus: &[HostGpuProfile]) -> Option<HostCudaProfile> {
 fn installed_cuda_toolkit_majors() -> BTreeSet<u32> {
     let mut evidence: BTreeMap<u32, CudaLibraryEvidence> = BTreeMap::new();
     if let Some(output) = command_output("ldconfig", &["-p"]) {
-        for token in output.split_whitespace() {
-            record_cuda_soname(&mut evidence, token);
+        for line in output.lines() {
+            record_cuda_ldconfig_line(&mut evidence, line);
         }
     }
     for dir in loader_search_dirs() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+        let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
-            record_cuda_soname(&mut evidence, &entry.file_name().to_string_lossy());
+            let path = entry.path();
+            record_cuda_soname_path(&mut evidence, &entry.file_name().to_string_lossy(), &path);
         }
     }
     evidence
@@ -364,19 +367,49 @@ fn installed_cuda_toolkit_majors() -> BTreeSet<u32> {
         .collect()
 }
 
-/// Directories the loader searches ahead of its cache.
-fn loader_search_dirs() -> Vec<String> {
-    let Ok(value) = std::env::var("LD_LIBRARY_PATH") else {
-        return Vec::new();
-    };
-    value
-        .split(':')
-        .filter(|entry| !entry.is_empty())
-        .map(str::to_string)
-        .collect()
+/// Directories the loader searches ahead of its cache, plus common CUDA roots.
+fn loader_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(value) = std::env::var_os("LD_LIBRARY_PATH") {
+        dirs.extend(std::env::split_paths(&value));
+    }
+    for variable in ["CUDA_HOME", "CUDA_PATH", "CUDA_ROOT", "CONDA_PREFIX"] {
+        if let Some(root) = std::env::var_os(variable).filter(|value| !value.is_empty()) {
+            append_cuda_root_dirs(&mut dirs, Path::new(&root));
+        }
+    }
+    append_cuda_roots_under(&mut dirs, Path::new("/usr/local"));
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
-/// Per-major record of which CUDA runtime libraries were found.
+fn append_cuda_root_dirs(dirs: &mut Vec<PathBuf>, root: &Path) {
+    dirs.push(root.to_path_buf());
+    for suffix in [
+        "lib64",
+        "lib",
+        "targets/x86_64-linux/lib",
+        "targets/aarch64-linux/lib",
+    ] {
+        dirs.push(root.join(suffix));
+    }
+}
+
+fn append_cuda_roots_under(dirs: &mut Vec<PathBuf>, parent: &Path) {
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        if path.is_dir() && (name == "cuda" || name.to_string_lossy().starts_with("cuda-")) {
+            append_cuda_root_dirs(dirs, &path);
+        }
+    }
+}
+
+/// Per-major record of which valid, current-architecture CUDA libraries were found.
 #[derive(Default)]
 struct CudaLibraryEvidence {
     cudart: bool,
@@ -391,7 +424,21 @@ impl CudaLibraryEvidence {
     }
 }
 
-fn record_cuda_soname(evidence: &mut BTreeMap<u32, CudaLibraryEvidence>, token: &str) {
+fn record_cuda_ldconfig_line(evidence: &mut BTreeMap<u32, CudaLibraryEvidence>, line: &str) {
+    let Some((library, target)) = line.rsplit_once("=>") else {
+        return;
+    };
+    let Some(name) = library.split_whitespace().next() else {
+        return;
+    };
+    record_cuda_soname_path(evidence, name, Path::new(target.trim()));
+}
+
+fn record_cuda_soname_path(
+    evidence: &mut BTreeMap<u32, CudaLibraryEvidence>,
+    token: &str,
+    path: &Path,
+) {
     let name = token.rsplit('/').next().unwrap_or(token);
     // `libcublasLt.so.` is checked first so it is not shadowed by `libcublas`.
     for prefix in ["libcudart.so.", "libcublasLt.so.", "libcublas.so."] {
@@ -401,6 +448,9 @@ fn record_cuda_soname(evidence: &mut BTreeMap<u32, CudaLibraryEvidence>, token: 
         let Some(major) = leading_major_version(rest) else {
             continue;
         };
+        if !valid_cuda_library_target(path) {
+            return;
+        }
         let found = evidence.entry(major).or_default();
         match prefix {
             "libcudart.so." => found.cudart = true,
@@ -408,6 +458,68 @@ fn record_cuda_soname(evidence: &mut BTreeMap<u32, CudaLibraryEvidence>, token: 
             _ => found.cublas = true,
         }
         return;
+    }
+}
+
+fn valid_cuda_library_target(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    if bytes.len() < 20 || &bytes[..4] != b"\x7fELF" {
+        return false;
+    }
+    let machine = match bytes[5] {
+        1 => u16::from_le_bytes([bytes[18], bytes[19]]),
+        2 => u16::from_be_bytes([bytes[18], bytes[19]]),
+        _ => return false,
+    };
+    let identity = (bytes[4], machine);
+    match current_elf_identity() {
+        Some(expected) => identity == expected,
+        None => true,
+    }
+}
+
+fn current_elf_identity() -> Option<(u8, u16)> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        Some((2, 62))
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        Some((2, 183))
+    }
+    #[cfg(target_arch = "x86")]
+    {
+        Some((1, 3))
+    }
+    #[cfg(target_arch = "arm")]
+    {
+        Some((1, 40))
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        Some((2, 243))
+    }
+    #[cfg(target_arch = "powerpc64")]
+    {
+        Some((2, 21))
+    }
+    #[cfg(target_arch = "s390x")]
+    {
+        Some((2, 22))
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "x86",
+        target_arch = "arm",
+        target_arch = "riscv64",
+        target_arch = "powerpc64",
+        target_arch = "s390x"
+    )))]
+    {
+        None
     }
 }
 
@@ -725,6 +837,54 @@ mod tests {
                 None => unsafe { std::env::remove_var(self.key) },
             }
         }
+    }
+
+    fn write_minimal_elf(path: &Path, class: u8, machine: u16) {
+        let mut bytes = vec![0; 20];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4] = class;
+        bytes[5] = 1;
+        bytes[18..20].copy_from_slice(&machine.to_le_bytes());
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn cuda_library_probe_includes_custom_roots_and_rejects_invalid_targets() {
+        let Some((class, machine)) = current_elf_identity() else {
+            return;
+        };
+        let root = std::env::temp_dir().join(format!("mesh-llm-cuda-probe-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        for name in ["libcudart.so.12", "libcublas.so.12", "libcublasLt.so.12"] {
+            write_minimal_elf(&root.join(name), class, machine);
+        }
+        for name in ["libcudart.so.13", "libcublas.so.13", "libcublasLt.so.13"] {
+            write_minimal_elf(&root.join(name), class, machine.wrapping_add(1));
+        }
+
+        let mut evidence = BTreeMap::new();
+        for name in ["libcudart.so.12", "libcublas.so.12", "libcublasLt.so.12"] {
+            record_cuda_soname_path(&mut evidence, name, &root.join(name));
+        }
+        record_cuda_soname_path(&mut evidence, "libcudart.so.12", &root.join("missing.so"));
+        for name in ["libcudart.so.13", "libcublas.so.13", "libcublasLt.so.13"] {
+            record_cuda_soname_path(&mut evidence, name, &root.join(name));
+        }
+
+        assert_eq!(
+            evidence
+                .into_iter()
+                .filter(|(_, evidence)| evidence.is_complete())
+                .map(|(major, _)| major)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([12])
+        );
+        let mut custom_root_dirs = Vec::new();
+        append_cuda_root_dirs(&mut custom_root_dirs, Path::new("/opt/cuda-12"));
+        assert!(custom_root_dirs.contains(&PathBuf::from("/opt/cuda-12/lib64")));
+        assert!(custom_root_dirs.contains(&PathBuf::from("/opt/cuda-12/lib")));
+        let _ = fs::remove_dir_all(root);
     }
 
     fn profile(label: &str) -> HostGpuProfile {
