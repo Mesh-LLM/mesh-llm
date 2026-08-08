@@ -47,6 +47,13 @@ use crate::{
     sse::{done_event, json_event},
 };
 
+const AGENT_SESSION_HEADER_ENV: &str = "MESH_AGENT_SESSION_HEADER";
+
+fn configured_agent_session_header() -> Option<HeaderName> {
+    let value = std::env::var(AGENT_SESSION_HEADER_ENV).ok()?;
+    HeaderName::from_bytes(value.as_bytes()).ok()
+}
+
 #[derive(Clone)]
 struct FrontendState {
     backend: SharedBackend,
@@ -92,7 +99,7 @@ impl Default for OpenAiFrontendConfig {
         Self {
             max_request_body_bytes: Self::DEFAULT_MAX_REQUEST_BODY_BYTES,
             backend_timeout: Some(Self::DEFAULT_BACKEND_TIMEOUT),
-            agent_session_header: None,
+            agent_session_header: configured_agent_session_header(),
         }
     }
 }
