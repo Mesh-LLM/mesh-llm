@@ -63,26 +63,51 @@ impl StageOpenAiBackend {
                     .saturating_add(state.decoded_tokens),
                 remaining_new_tokens,
                 runtime_max_proposal_tokens: state.linear_proposal_max_tokens,
+                pending_token_ids: state
+                    .pending_linear_proposal_tokens
+                    .clone()
+                    .into_boxed_slice(),
             },
-        )? {
-            LinearProposalQueryOutcome::NoProposal => None,
-            LinearProposalQueryOutcome::DeadlineExceeded {
-                proposal_elapsed_us,
-            } => {
-                let mut attrs = BTreeMap::new();
-                attrs.insert(
-                    "llama_stage.linear_proposal.discard_reason".to_string(),
-                    json!("deadline_exceeded"),
-                );
-                attrs.insert(
-                    "llama_stage.linear_proposal.proposal_us".to_string(),
-                    json!(proposal_elapsed_us),
-                );
-                self.telemetry
-                    .emit("stage.openai_linear_proposal_late", attrs);
-                None
+        ) {
+            Ok(LinearProposalQueryOutcome::Skipped) => {
+                return Ok(LinearProposalProgress::NotUsed);
             }
-            LinearProposalQueryOutcome::Ready(queried) => Some(queried),
+            Ok(outcome) => {
+                state.pending_linear_proposal_tokens.clear();
+                match outcome {
+                    LinearProposalQueryOutcome::Skipped => unreachable!("handled above"),
+                    LinearProposalQueryOutcome::NoProposal => None,
+                    LinearProposalQueryOutcome::DeadlineExceeded {
+                        proposal_elapsed_us,
+                    } => {
+                        let mut attrs = BTreeMap::new();
+                        attrs.insert(
+                            "llama_stage.linear_proposal.discard_reason".to_string(),
+                            json!("deadline_exceeded"),
+                        );
+                        attrs.insert(
+                            "llama_stage.linear_proposal.proposal_us".to_string(),
+                            json!(proposal_elapsed_us),
+                        );
+                        self.telemetry
+                            .emit("stage.openai_linear_proposal_late", attrs);
+                        None
+                    }
+                    LinearProposalQueryOutcome::Ready(queried) => Some(queried),
+                }
+            }
+            Err(error) => {
+                state.linear_context_tokens = None;
+                state.linear_proposal_max_tokens = 0;
+                self.telemetry.emit(
+                    "stage.openai_linear_proposal_disabled",
+                    BTreeMap::from([(
+                        "llama_stage.linear_proposal.error".to_string(),
+                        json!(error.to_string()),
+                    )]),
+                );
+                return Ok(LinearProposalProgress::NotUsed);
+            }
         };
         if request
             .cancellation
@@ -97,6 +122,8 @@ impl StageOpenAiBackend {
         let receipt = execute_linear_proposal_with_terminal_discard(config, &decision_id, || {
             self.execute_local_linear_proposal(
                 LinearProposalExecutionParams {
+                    request_id: request.ids.request_id,
+                    request_session_id: request.ids.session_id,
                     session_id,
                     current: state.current,
                     base_position,

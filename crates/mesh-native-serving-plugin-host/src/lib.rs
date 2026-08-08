@@ -1,6 +1,7 @@
 //! Loads one native serving plugin and adapts its stable ABI to Skippy hooks.
 
 use std::{
+    collections::HashMap,
     ffi::{c_char, c_void},
     path::{Path, PathBuf},
     ptr::NonNull,
@@ -125,6 +126,7 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
             definition: Arc::clone(&self.definition),
             instance: Some(instance),
             proposal_token_buffer: vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS],
+            committed_generated_tokens: HashMap::new(),
         };
         let driver = Arc::new(PluginDriver::spawn(active)?);
         let lifecycle: Arc<dyn GenerationLifecycleIngress> = Arc::new(NativeLifecycleIngress {
@@ -270,6 +272,7 @@ struct ActivePlugin {
     definition: Arc<LoadedDefinition>,
     instance: Option<NonNull<c_void>>,
     proposal_token_buffer: Vec<i32>,
+    committed_generated_tokens: HashMap<(u64, u64), usize>,
 }
 
 // SAFETY: activation succeeds only for plugins implementing the ABI's
@@ -296,7 +299,7 @@ impl ActivePlugin {
         ))
     }
 
-    fn begin(&self, start: &GenerationStart) -> Result<()> {
+    fn begin(&mut self, start: &GenerationStart) -> Result<()> {
         let agent_session_id = start.agent_session_id.as_deref().unwrap_or_default();
         let event = abi::GenerationStart {
             struct_size: size_of::<abi::GenerationStart>(),
@@ -306,32 +309,79 @@ impl ActivePlugin {
             prompt_token_ids: abi::TokenSlice::from_tokens(&start.prompt_token_ids),
         };
         let status = unsafe { (self.definition.api().begin_generation)(self.instance()?, &event) };
-        self.call_status("begin generation", status)
+        self.call_status("begin generation", status)?;
+        self.committed_generated_tokens
+            .insert((start.request_id, start.session_id), 0);
+        Ok(())
     }
 
-    fn committed(&self, commit: &GenerationCommit) -> Result<()> {
+    fn committed(&mut self, commit: &GenerationCommit) -> Result<()> {
+        self.commit_tokens(
+            commit.request_id,
+            commit.session_id,
+            commit.generated_token_count,
+            &commit.token_ids,
+        )
+    }
+
+    fn commit_tokens(
+        &mut self,
+        request_id: u64,
+        session_id: u64,
+        generated_token_count: usize,
+        token_ids: &[i32],
+    ) -> Result<()> {
+        if token_ids.is_empty() {
+            return Ok(());
+        }
+        let key = (request_id, session_id);
+        let prior_generated_token_count = self
+            .committed_generated_tokens
+            .get(&key)
+            .copied()
+            .unwrap_or_else(|| generated_token_count.saturating_sub(token_ids.len()));
+        let expected_generated_token_count = prior_generated_token_count
+            .checked_add(token_ids.len())
+            .context("native serving plugin generated-token count overflow")?;
+        if generated_token_count != expected_generated_token_count {
+            bail!(
+                "native serving plugin commit does not extend the tracked generated-token prefix"
+            );
+        }
         let event = abi::GenerationCommit {
             struct_size: size_of::<abi::GenerationCommit>(),
-            request_id: commit.request_id,
-            session_id: commit.session_id,
-            generated_token_count: u64::try_from(commit.generated_token_count)?,
-            token_ids: abi::TokenSlice::from_tokens(&commit.token_ids),
+            request_id,
+            session_id,
+            generated_token_count: u64::try_from(generated_token_count)?,
+            token_ids: abi::TokenSlice::from_tokens(token_ids),
         };
         let status = unsafe { (self.definition.api().commit_generation)(self.instance()?, &event) };
-        self.call_status("commit generation", status)
+        self.call_status("commit generation", status)?;
+        self.committed_generated_tokens
+            .insert(key, generated_token_count);
+        Ok(())
     }
 
-    fn abort(&self, abort: &GenerationAbort) -> Result<()> {
+    fn abort(&mut self, abort: &GenerationAbort) -> Result<()> {
         let event = abi::GenerationAbort {
             struct_size: size_of::<abi::GenerationAbort>(),
             request_id: abort.request_id,
             session_id: abort.session_id,
         };
         let status = unsafe { (self.definition.api().abort_generation)(self.instance()?, &event) };
-        self.call_status("abort generation", status)
+        let result = self.call_status("abort generation", status);
+        self.committed_generated_tokens
+            .remove(&(abort.request_id, abort.session_id));
+        result
     }
 
-    fn finish(&self, receipt: &GenerationReceipt) -> Result<()> {
+    fn finish(&mut self, receipt: &GenerationReceipt) -> Result<()> {
+        let key = (receipt.request_id, receipt.session_id);
+        self.commit_final_suffix(
+            receipt.request_id,
+            receipt.session_id,
+            &receipt.generated_token_ids,
+        )?;
         let request_to_first_token_us = receipt.request_to_first_token_us.unwrap_or_default();
         let event = abi::GenerationFinish {
             struct_size: size_of::<abi::GenerationFinish>(),
@@ -351,10 +401,49 @@ impl ActivePlugin {
             ),
         };
         let status = unsafe { (self.definition.api().finish_generation)(self.instance()?, &event) };
-        self.call_status("finish generation", status)
+        let result = self.call_status("finish generation", status);
+        self.committed_generated_tokens.remove(&key);
+        result
+    }
+
+    fn commit_final_suffix(
+        &mut self,
+        request_id: u64,
+        session_id: u64,
+        generated_token_ids: &[i32],
+    ) -> Result<()> {
+        let key = (request_id, session_id);
+        let committed = self
+            .committed_generated_tokens
+            .get(&key)
+            .copied()
+            .unwrap_or_default();
+        if committed > generated_token_ids.len() {
+            bail!("native serving plugin committed beyond the final generation receipt");
+        }
+        if committed < generated_token_ids.len() {
+            self.commit_tokens(
+                request_id,
+                session_id,
+                generated_token_ids.len(),
+                &generated_token_ids[committed..],
+            )?;
+        }
+        Ok(())
     }
 
     fn propose(&mut self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+        if !query.pending_token_ids.is_empty() {
+            let generated_token_count = query
+                .committed_token_count
+                .saturating_sub(query.prompt_token_count);
+            self.commit_tokens(
+                query.request_id,
+                query.session_id,
+                generated_token_count,
+                &query.pending_token_ids,
+            )?;
+        }
         let event = abi::ProposalQuery {
             struct_size: size_of::<abi::ProposalQuery>(),
             request_id: query.request_id,
@@ -445,7 +534,12 @@ impl ActivePlugin {
         Ok(None)
     }
 
-    fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
+    fn report(&mut self, receipt: &LinearProposalReceipt) -> Result<()> {
+        self.commit_proposal_tokens(
+            receipt.request_id,
+            receipt.session_id,
+            &receipt.committed_tokens,
+        )?;
         let event = abi::ProposalOutcome {
             struct_size: size_of::<abi::ProposalOutcome>(),
             decision_id: abi::ByteSlice::from_bytes(receipt.decision_id.as_bytes()),
@@ -467,6 +561,23 @@ impl ActivePlugin {
         };
         let status = unsafe { (self.definition.api().report_proposal)(self.instance()?, &event) };
         self.call_status("report proposal", status)
+    }
+
+    fn commit_proposal_tokens(
+        &mut self,
+        request_id: u64,
+        session_id: u64,
+        committed_tokens: &[i32],
+    ) -> Result<()> {
+        let key = (request_id, session_id);
+        let generated_token_count = self
+            .committed_generated_tokens
+            .get(&key)
+            .copied()
+            .unwrap_or_default()
+            .checked_add(committed_tokens.len())
+            .context("native serving plugin generated-token count overflow")?;
+        self.commit_tokens(key.0, key.1, generated_token_count, committed_tokens)
     }
 
     fn discard(&self, decision_id: &[u8], reason: LinearProposalDiscardReason) -> Result<()> {
@@ -628,7 +739,9 @@ impl PluginDriver {
         let (reply, response) = sync_channel(1);
         match self.sender.try_send(PluginCommand::Proposal(query, reply)) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => return Ok(None),
+            Err(TrySendError::Full(_)) => {
+                bail!("native serving plugin command queue is full before proposal handoff")
+            }
             Err(TrySendError::Disconnected(_)) => {
                 bail!("native serving plugin worker stopped")
             }
@@ -821,7 +934,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static FAKE_NAME: &[u8] = b"test-serving-plugin";
-    static CANCEL_COUNT: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn tokenizer_inventory_view_borrows_host_owned_bytes_for_activation() {
@@ -851,10 +963,19 @@ mod tests {
 
     struct FakeState {
         start_delay: Duration,
+        commit_delay: Duration,
         begin_fails: bool,
         events: Arc<Mutex<Vec<&'static str>>>,
         abort_count: Arc<AtomicUsize>,
+        cancel_count: Arc<AtomicUsize>,
     }
+
+    type FakeActiveWithCounters = (
+        ActivePlugin,
+        Arc<Mutex<Vec<&'static str>>>,
+        Arc<AtomicUsize>,
+        Arc<AtomicUsize>,
+    );
 
     unsafe extern "C" fn fake_activate(
         _context: *const abi::ActivationContext,
@@ -889,6 +1010,7 @@ mod tests {
     ) -> abi::PluginStatus {
         let state = unsafe { &*instance.cast::<FakeState>() };
         state.events.lock().unwrap().push("commit");
+        thread::sleep(state.commit_delay);
         abi::PluginStatus::OK
     }
 
@@ -902,9 +1024,11 @@ mod tests {
     }
 
     unsafe extern "C" fn fake_finish(
-        _instance: abi::PluginInstance,
+        instance: abi::PluginInstance,
         _event: *const abi::GenerationFinish,
     ) -> abi::PluginStatus {
+        let state = unsafe { &*instance.cast::<FakeState>() };
+        state.events.lock().unwrap().push("finish");
         abi::PluginStatus::OK
     }
 
@@ -929,16 +1053,19 @@ mod tests {
     }
 
     unsafe extern "C" fn fake_cancel_proposal(
-        _instance: abi::PluginInstance,
+        instance: abi::PluginInstance,
         _operation: abi::ProposalOperation,
     ) {
-        CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
+        let state = unsafe { &*instance.cast::<FakeState>() };
+        state.cancel_count.fetch_add(1, Ordering::SeqCst);
     }
 
     unsafe extern "C" fn fake_report_proposal(
-        _instance: abi::PluginInstance,
+        instance: abi::PluginInstance,
         _event: *const abi::ProposalOutcome,
     ) -> abi::PluginStatus {
+        let state = unsafe { &*instance.cast::<FakeState>() };
+        state.events.lock().unwrap().push("report");
         abi::PluginStatus::OK
     }
 
@@ -977,10 +1104,6 @@ mod tests {
         }
     }
 
-    fn fake_active(start_delay: Duration) -> ActivePlugin {
-        fake_active_with_events(start_delay).0
-    }
-
     fn fake_active_with_events(
         start_delay: Duration,
     ) -> (ActivePlugin, Arc<Mutex<Vec<&'static str>>>) {
@@ -1006,6 +1129,28 @@ mod tests {
         Arc<Mutex<Vec<&'static str>>>,
         Arc<AtomicUsize>,
     ) {
+        fake_active_with_delays(start_delay, Duration::ZERO, begin_fails)
+    }
+
+    fn fake_active_with_delays(
+        start_delay: Duration,
+        commit_delay: Duration,
+        begin_fails: bool,
+    ) -> (
+        ActivePlugin,
+        Arc<Mutex<Vec<&'static str>>>,
+        Arc<AtomicUsize>,
+    ) {
+        let (active, events, abort_count, _) =
+            fake_active_with_counters(start_delay, commit_delay, begin_fails);
+        (active, events, abort_count)
+    }
+
+    fn fake_active_with_counters(
+        start_delay: Duration,
+        commit_delay: Duration,
+        begin_fails: bool,
+    ) -> FakeActiveWithCounters {
         let table = Box::leak(Box::new(fake_table()));
         let definition = Arc::new(LoadedDefinition {
             _library: None,
@@ -1014,20 +1159,25 @@ mod tests {
         });
         let events = Arc::new(Mutex::new(Vec::new()));
         let abort_count = Arc::new(AtomicUsize::new(0));
+        let cancel_count = Arc::new(AtomicUsize::new(0));
         let state = Box::new(FakeState {
             start_delay,
+            commit_delay,
             begin_fails,
             events: Arc::clone(&events),
             abort_count: Arc::clone(&abort_count),
+            cancel_count: Arc::clone(&cancel_count),
         });
         (
             ActivePlugin {
                 definition,
                 instance: NonNull::new(Box::into_raw(state).cast::<c_void>()),
                 proposal_token_buffer: vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS],
+                committed_generated_tokens: HashMap::new(),
             },
             events,
             abort_count,
+            cancel_count,
         )
     }
 
@@ -1085,8 +1235,9 @@ mod tests {
 
     #[test]
     fn blocking_plugin_cannot_extend_the_decode_deadline() {
-        CANCEL_COUNT.store(0, Ordering::SeqCst);
-        let driver = PluginDriver::spawn(fake_active(Duration::from_millis(250))).unwrap();
+        let (active, _, _, cancel_count) =
+            fake_active_with_counters(Duration::from_millis(250), Duration::ZERO, false);
+        let driver = PluginDriver::spawn(active).unwrap();
         let started = Instant::now();
         let result = driver
             .propose(LinearProposalQuery::new(
@@ -1107,7 +1258,39 @@ mod tests {
             "decode waited {elapsed:?} for a blocking plugin"
         );
         drop(driver);
-        assert_eq!(CANCEL_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(cancel_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn blocking_commit_cannot_extend_the_decode_deadline() {
+        let (active, _, _) =
+            fake_active_with_delays(Duration::ZERO, Duration::from_millis(250), false);
+        let driver = Arc::new(PluginDriver::spawn(active).unwrap());
+        let ingress = NativeLifecycleIngress {
+            driver: Arc::clone(&driver),
+        };
+        ingress
+            .try_submit(GenerationLifecycleObservation::Started(GenerationStart {
+                request_id: 1,
+                session_id: 2,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([3]),
+            }))
+            .unwrap();
+        let started = Instant::now();
+        let result = driver
+            .propose(
+                LinearProposalQuery::new(1, 2, 1, 2, 1, 8, started + Duration::from_millis(5))
+                    .with_pending_token_ids(vec![4].into_boxed_slice()),
+            )
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(result.is_none());
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "decode waited {elapsed:?} for a blocking commit"
+        );
     }
 
     #[test]
@@ -1148,6 +1331,122 @@ mod tests {
             .unwrap();
 
         assert_eq!(*events.lock().unwrap(), ["begin", "commit", "proposal"]);
+    }
+
+    #[test]
+    fn proposal_applies_pending_tokens_before_lookup() {
+        let (active, events) = fake_active_with_events(Duration::ZERO);
+        let mut active = active;
+        active
+            .begin(&GenerationStart {
+                request_id: 1,
+                session_id: 2,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([3]),
+            })
+            .unwrap();
+        let result = active
+            .propose(
+                LinearProposalQuery::new(
+                    1,
+                    2,
+                    1,
+                    3,
+                    2,
+                    8,
+                    Instant::now() + Duration::from_millis(100),
+                )
+                .with_pending_token_ids(vec![4, 5].into_boxed_slice()),
+            )
+            .unwrap();
+
+        assert!(result.is_none());
+        assert_eq!(*events.lock().unwrap(), ["begin", "commit", "proposal"]);
+    }
+
+    #[test]
+    fn proposal_report_commits_verified_tokens_before_outcome() {
+        let (active, events) = fake_active_with_events(Duration::ZERO);
+        let mut active = active;
+        active
+            .begin(&GenerationStart {
+                request_id: 1,
+                session_id: 2,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([3]),
+            })
+            .unwrap();
+        active.commit_proposal_tokens(1, 2, &[4, 5]).unwrap();
+        let status = unsafe {
+            (active.definition.api().report_proposal)(active.instance().unwrap(), std::ptr::null())
+        };
+        assert_eq!(status, abi::PluginStatus::OK);
+        active.commit_final_suffix(1, 2, &[4, 5]).unwrap();
+
+        assert_eq!(*events.lock().unwrap(), ["begin", "commit", "report"]);
+    }
+
+    #[test]
+    fn finish_commits_the_remaining_generated_suffix() {
+        let (active, events) = fake_active_with_events(Duration::ZERO);
+        let mut active = active;
+        active
+            .begin(&GenerationStart {
+                request_id: 1,
+                session_id: 2,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([3]),
+            })
+            .unwrap();
+        active
+            .committed(&GenerationCommit {
+                request_id: 1,
+                session_id: 2,
+                generated_token_count: 1,
+                token_ids: vec![4].into_boxed_slice(),
+            })
+            .unwrap();
+        active.commit_final_suffix(1, 2, &[4, 5, 6]).unwrap();
+        let status = unsafe {
+            (active.definition.api().finish_generation)(
+                active.instance().unwrap(),
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(status, abi::PluginStatus::OK);
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["begin", "commit", "commit", "finish"]
+        );
+    }
+
+    #[test]
+    fn saturated_plugin_queue_rejects_proposal_handoff() {
+        let (sender, _receiver) = sync_channel(0);
+        let driver = PluginDriver {
+            sender,
+            fatal_error: Arc::new(Mutex::new(None)),
+            lifecycle_delivery_failures: Arc::new(AtomicU64::new(0)),
+            worker: Mutex::new(None),
+        };
+
+        let error = driver
+            .propose(
+                LinearProposalQuery::new(
+                    1,
+                    2,
+                    1,
+                    2,
+                    1,
+                    8,
+                    Instant::now() + Duration::from_millis(100),
+                )
+                .with_pending_token_ids(vec![4].into_boxed_slice()),
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("before proposal handoff"));
     }
 
     #[test]

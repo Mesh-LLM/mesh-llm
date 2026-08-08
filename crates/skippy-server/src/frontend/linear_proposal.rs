@@ -69,12 +69,11 @@ impl LinearProposal {
 
 /// Bounded, target-authoritative state supplied to a proposal source.
 ///
-/// The proposal path deliberately does not pass a full context buffer. A
-/// lifecycle observer receives canonical committed token deltas separately;
-/// the request path carries only O(1) identity and position data so a source
-/// can honor its absolute deadline without copying or hashing an arbitrarily
-/// large prompt.
-#[derive(Clone, Copy, Debug)]
+/// The proposal path deliberately does not pass a full context buffer. The
+/// bounded canonical token delta since the previous proposal boundary travels
+/// with this query, so a source can update its state synchronously without a
+/// separate lifecycle event or copying or hashing an arbitrarily large prompt.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct LinearProposalQuery {
     /// OpenAI request identity.
@@ -88,13 +87,19 @@ pub struct LinearProposalQuery {
     /// that may already have been committed during prefill.
     pub prompt_token_count: usize,
     /// Total canonical tokens committed at this query boundary, including the
-    /// prompt and every target token previously delivered to the lifecycle
-    /// observer.
+    /// prompt and every target token previously delivered to the proposal
+    /// source.
     pub committed_token_count: usize,
     /// Number of target tokens already generated.
     pub decode_step: usize,
     /// Maximum proposal width Skippy will accept for this query.
     pub max_proposal_tokens: usize,
+    /// Canonical target tokens emitted since the previous proposal boundary.
+    ///
+    /// Proposal sources apply this delta before producing the proposal. Keeping
+    /// the delta on the synchronous query avoids a separate lifecycle event on
+    /// the local-generation hot path.
+    pub pending_token_ids: Box<[i32]>,
     /// Advisory deadline the synchronous source must honor.
     pub deadline: Instant,
 }
@@ -118,8 +123,15 @@ impl LinearProposalQuery {
             committed_token_count,
             decode_step,
             max_proposal_tokens,
+            pending_token_ids: Vec::new().into_boxed_slice(),
             deadline,
         }
+    }
+
+    #[must_use]
+    pub fn with_pending_token_ids(mut self, pending_token_ids: Box<[i32]>) -> Self {
+        self.pending_token_ids = pending_token_ids;
+        self
     }
 }
 
@@ -159,6 +171,10 @@ pub enum LinearProposalDisposition {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct LinearProposalReceipt {
+    /// OpenAI request identity for the proposal's generation.
+    pub request_id: u64,
+    /// OpenAI session identity for the proposal's generation.
+    pub session_id: u64,
     /// Source identity copied from the proposal.
     pub decision_id: OpaqueProposalDecisionId,
     /// Target-authoritative verification outcome.
@@ -356,12 +372,17 @@ pub(crate) struct QueriedLinearProposal {
 }
 
 pub(crate) enum LinearProposalQueryOutcome {
+    /// No proposal command was submitted, so any pending token delta remains
+    /// owned by the caller.
+    Skipped,
     NoProposal,
-    DeadlineExceeded { proposal_elapsed_us: u64 },
+    DeadlineExceeded {
+        proposal_elapsed_us: u64,
+    },
     Ready(QueriedLinearProposal),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct LinearProposalQueryParams {
     pub(crate) request_id: u64,
     pub(crate) session_id: u64,
@@ -370,6 +391,7 @@ pub(crate) struct LinearProposalQueryParams {
     pub(crate) committed_token_count: usize,
     pub(crate) remaining_new_tokens: usize,
     pub(crate) runtime_max_proposal_tokens: usize,
+    pub(crate) pending_token_ids: Box<[i32]>,
 }
 
 pub(crate) fn query_linear_proposal(
@@ -390,7 +412,7 @@ pub(crate) fn query_linear_proposal(
         .min(params.runtime_max_proposal_tokens)
         .min(config.max_proposal_tokens());
     if max_proposal_tokens == 0 {
-        return Ok(LinearProposalQueryOutcome::NoProposal);
+        return Ok(LinearProposalQueryOutcome::Skipped);
     }
     let operation_started = Instant::now();
     let deadline = operation_started
@@ -399,15 +421,18 @@ pub(crate) fn query_linear_proposal(
     let proposal_started = Instant::now();
     let proposal = config
         .source()
-        .propose(LinearProposalQuery::new(
-            params.request_id,
-            params.session_id,
-            params.prompt_token_count,
-            params.committed_token_count,
-            params.decode_step,
-            max_proposal_tokens,
-            deadline,
-        ))
+        .propose(
+            LinearProposalQuery::new(
+                params.request_id,
+                params.session_id,
+                params.prompt_token_count,
+                params.committed_token_count,
+                params.decode_step,
+                max_proposal_tokens,
+                deadline,
+            )
+            .with_pending_token_ids(params.pending_token_ids),
+        )
         .map_err(openai_backend_error)?;
     let proposal_elapsed_us = elapsed_us(proposal_started);
     let Some(proposal) = proposal else {
@@ -534,6 +559,7 @@ mod tests {
             committed_token_count,
             remaining_new_tokens,
             runtime_max_proposal_tokens,
+            pending_token_ids: Vec::new().into_boxed_slice(),
         }
     }
 
@@ -544,12 +570,17 @@ mod tests {
         discard_fails: Mutex<bool>,
         report_fails: Mutex<bool>,
         queries: Mutex<Vec<RecordedQuery>>,
+        pending_token_batches: Mutex<Vec<Box<[i32]>>>,
         receipts: Mutex<Vec<LinearProposalReceipt>>,
         discards: Mutex<Vec<(OpaqueProposalDecisionId, LinearProposalDiscardReason)>>,
     }
 
     impl LinearProposalIngress for FakeIngress {
         fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+            self.pending_token_batches
+                .lock()
+                .unwrap()
+                .push(query.pending_token_ids.clone());
             self.queries.lock().unwrap().push(RecordedQuery {
                 request_id: query.request_id,
                 session_id: query.session_id,
@@ -673,6 +704,8 @@ mod tests {
         let config =
             LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
         let receipt = LinearProposalReceipt {
+            request_id: 1,
+            session_id: 2,
             decision_id: OpaqueProposalDecisionId::new(vec![90]).unwrap(),
             disposition: LinearProposalDisposition::FullAccept,
             proposal_token_count: 1,
@@ -776,6 +809,39 @@ mod tests {
     }
 
     #[test]
+    fn query_forwards_pending_tokens_to_the_proposal_source() {
+        let source = Arc::new(FakeIngress::default());
+        let config =
+            LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
+        let mut params = query_params(7, 8, 2, 1, 3, 5, 4);
+        params.pending_token_ids = vec![31, 32].into_boxed_slice();
+
+        assert!(matches!(
+            query_linear_proposal(&config, params).unwrap(),
+            LinearProposalQueryOutcome::NoProposal
+        ));
+        assert_eq!(
+            source.pending_token_batches.lock().unwrap().as_slice(),
+            &[vec![31, 32].into_boxed_slice()]
+        );
+    }
+
+    #[test]
+    fn query_does_not_accept_pending_tokens_without_proposal_capacity() {
+        let source = Arc::new(FakeIngress::default());
+        let config =
+            LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
+        let mut params = query_params(7, 8, 2, 1, 3, 1, 4);
+        params.pending_token_ids = vec![31].into_boxed_slice();
+
+        assert!(matches!(
+            query_linear_proposal(&config, params).unwrap(),
+            LinearProposalQueryOutcome::Skipped
+        ));
+        assert!(source.pending_token_batches.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn query_rejects_an_inconsistent_prompt_decode_boundary_before_ingress() {
         let source = Arc::new(FakeIngress::default());
         let config =
@@ -860,6 +926,8 @@ mod tests {
         let source = FakeIngress::default();
         let id = OpaqueProposalDecisionId::new(vec![7, 8, 9]).unwrap();
         let receipt = LinearProposalReceipt {
+            request_id: 1,
+            session_id: 2,
             decision_id: id.clone(),
             disposition: LinearProposalDisposition::FirstMismatch,
             proposal_token_count: 4,
@@ -910,6 +978,8 @@ mod tests {
     fn receipt_telemetry_excludes_source_ids_tokens_and_error_text() {
         let secret = "private-decision-/Users/nick/prompt.txt";
         let receipt = LinearProposalReceipt {
+            request_id: 1,
+            session_id: 2,
             decision_id: OpaqueProposalDecisionId::new(secret.as_bytes().to_vec()).unwrap(),
             disposition: LinearProposalDisposition::FullAccept,
             proposal_token_count: 1,

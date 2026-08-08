@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::time::Duration;
 
 use anyhow::Result;
 use openai_frontend::{OpenAiError, OpenAiResult};
@@ -11,7 +11,6 @@ use crate::runtime_state::RuntimeState;
 
 const TOKEN_ID_DIGEST_DOMAIN: &[u8] = b"skippy-generation-token-ids-v1\0";
 const GENERATION_RECEIPT_QUEUE_CAPACITY: usize = 1_024;
-const GENERATION_RECEIPT_ORDERED_DELIVERY_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Why a successful local generation stopped.
 #[non_exhaustive]
@@ -116,7 +115,8 @@ pub struct GenerationCommit {
 pub trait GenerationReceiptSink: Send + Sync {
     fn begin(&self, start: &GenerationStart) -> Result<()>;
 
-    /// Observes canonical target tokens submitted before the next proposal lookup.
+    /// Optionally observes canonical target-token deltas for integrations that
+    /// need lifecycle notifications outside the local proposal hot path.
     fn committed(&self, commit: &GenerationCommit) -> Result<()>;
 
     fn abort(&self, abort: &GenerationAbort) -> Result<()>;
@@ -162,66 +162,29 @@ impl GenerationLifecycleObservation {
 pub trait GenerationLifecycleIngress: Send + Sync {
     fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()>;
 
-    /// Submits an observation and waits until it has been delivered. Direct
-    /// ingresses can use their ordered submission path; queued adapters
-    /// override this to avoid dropping a commit when their queue is full.
-    fn submit_ordered(&self, observation: GenerationLifecycleObservation) -> Result<()> {
-        self.try_submit(observation)?;
-        self.flush()
-    }
-
-    /// Waits until all observations submitted before this call have been
-    /// delivered. Direct ingresses are already ordered at submission time;
-    /// queued adapters override this to provide an explicit boundary.
-    fn flush(&self) -> Result<()> {
-        Ok(())
-    }
-
     /// Asynchronous delivery failures observed after a successful submission.
     fn delivery_failures(&self) -> u64 {
         0
     }
 }
 
-enum QueuedGenerationLifecycleMessage {
-    Observation(GenerationLifecycleObservation),
-    Barrier(SyncSender<Result<()>>),
-}
-
 struct QueuedGenerationReceiptSink {
-    sender: SyncSender<QueuedGenerationLifecycleMessage>,
+    sender: SyncSender<GenerationLifecycleObservation>,
     delivery_failures: Arc<AtomicU64>,
 }
 
 impl QueuedGenerationReceiptSink {
     fn new(sink: Arc<dyn GenerationReceiptSink>) -> Self {
         let (sender, receiver) =
-            sync_channel::<QueuedGenerationLifecycleMessage>(GENERATION_RECEIPT_QUEUE_CAPACITY);
+            sync_channel::<GenerationLifecycleObservation>(GENERATION_RECEIPT_QUEUE_CAPACITY);
         let delivery_failures = Arc::new(AtomicU64::new(0));
         let worker_delivery_failures = Arc::clone(&delivery_failures);
         std::thread::Builder::new()
             .name("skippy-generation-receipts".into())
             .spawn(move || {
-                let mut failures_since_barrier = 0u64;
-                while let Ok(message) = receiver.recv() {
-                    match message {
-                        QueuedGenerationLifecycleMessage::Observation(observation) => {
-                            if observation.deliver_to(sink.as_ref()).is_err() {
-                                worker_delivery_failures.fetch_add(1, Ordering::Relaxed);
-                                failures_since_barrier = failures_since_barrier.saturating_add(1);
-                            }
-                        }
-                        QueuedGenerationLifecycleMessage::Barrier(completion) => {
-                            let result = if failures_since_barrier == 0 {
-                                Ok(())
-                            } else {
-                                failures_since_barrier = 0;
-                                Err(anyhow::anyhow!(
-                                    "generation lifecycle observation delivery failed"
-                                ))
-                            };
-                            let _ = completion.send(result);
-                        }
+                while let Ok(observation) = receiver.recv() {
+                    if observation.deliver_to(sink.as_ref()).is_err() {
+                        worker_delivery_failures.fetch_add(1, Ordering::Relaxed);
                     }
                 }
             })
@@ -236,7 +199,7 @@ impl QueuedGenerationReceiptSink {
 impl GenerationLifecycleIngress for QueuedGenerationReceiptSink {
     fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()> {
         self.sender
-            .try_send(QueuedGenerationLifecycleMessage::Observation(observation))
+            .try_send(observation)
             .map_err(|error| match error {
                 TrySendError::Full(_) => anyhow::anyhow!("generation lifecycle queue is full"),
                 TrySendError::Disconnected(_) => {
@@ -247,63 +210,6 @@ impl GenerationLifecycleIngress for QueuedGenerationReceiptSink {
 
     fn delivery_failures(&self) -> u64 {
         self.delivery_failures.load(Ordering::Relaxed)
-    }
-
-    fn flush(&self) -> Result<()> {
-        self.flush_until(Instant::now() + GENERATION_RECEIPT_ORDERED_DELIVERY_TIMEOUT)
-    }
-
-    fn submit_ordered(&self, observation: GenerationLifecycleObservation) -> Result<()> {
-        let deadline = Instant::now() + GENERATION_RECEIPT_ORDERED_DELIVERY_TIMEOUT;
-        self.send_until(
-            QueuedGenerationLifecycleMessage::Observation(observation),
-            deadline,
-        )?;
-        self.flush_until(deadline)
-    }
-}
-
-impl QueuedGenerationReceiptSink {
-    fn send_until(
-        &self,
-        mut message: QueuedGenerationLifecycleMessage,
-        deadline: Instant,
-    ) -> Result<()> {
-        loop {
-            match self.sender.try_send(message) {
-                Ok(()) => return Ok(()),
-                Err(TrySendError::Disconnected(_)) => {
-                    return Err(anyhow::anyhow!(
-                        "generation lifecycle delivery worker is unavailable"
-                    ));
-                }
-                Err(TrySendError::Full(returned_message)) => {
-                    if Instant::now() >= deadline {
-                        return Err(anyhow::anyhow!("generation lifecycle delivery timed out"));
-                    }
-                    message = returned_message;
-                    std::thread::yield_now();
-                }
-            }
-        }
-    }
-
-    fn flush_until(&self, deadline: Instant) -> Result<()> {
-        let (completion, completed) = sync_channel(0);
-        self.send_until(
-            QueuedGenerationLifecycleMessage::Barrier(completion),
-            deadline,
-        )?;
-        let timeout = deadline.saturating_duration_since(Instant::now());
-        match completed.recv_timeout(timeout) {
-            Ok(result) => result,
-            Err(RecvTimeoutError::Timeout) => {
-                Err(anyhow::anyhow!("generation lifecycle delivery timed out"))
-            }
-            Err(RecvTimeoutError::Disconnected) => Err(anyhow::anyhow!(
-                "generation lifecycle delivery worker is unavailable"
-            )),
-        }
     }
 }
 
@@ -377,17 +283,6 @@ impl GenerationReceiptConfig {
 
     pub(crate) fn committed(&self, commit: GenerationCommit) {
         self.enqueue(GenerationLifecycleObservation::Committed(commit));
-    }
-
-    /// Commits a token and waits until the lifecycle ingress has delivered it.
-    /// Local generation uses this before the next proposal lookup so consumers
-    /// cannot observe a stale canonical position.
-    pub(crate) fn committed_before_proposal(&self, commit: GenerationCommit) -> Result<()> {
-        self.ingress
-            .submit_ordered(GenerationLifecycleObservation::Committed(commit))
-            .inspect_err(|_| {
-                self.submission_failures.fetch_add(1, Ordering::Relaxed);
-            })
     }
 
     pub(crate) fn abort(&self, abort: GenerationAbort) {
@@ -630,7 +525,6 @@ fn duration_us(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-    use std::sync::atomic::AtomicBool;
     use std::thread;
 
     use super::*;
@@ -658,8 +552,6 @@ mod tests {
     struct RecordingSink {
         receipts: Mutex<Vec<GenerationReceipt>>,
         error: Option<&'static str>,
-        fail_commits: AtomicBool,
-        commit_delay: Duration,
     }
 
     #[derive(Default)]
@@ -682,14 +574,7 @@ mod tests {
         }
 
         fn committed(&self, _commit: &GenerationCommit) -> Result<()> {
-            if !self.commit_delay.is_zero() {
-                thread::sleep(self.commit_delay);
-            }
-            if self.fail_commits.load(Ordering::Relaxed) {
-                Err(anyhow::anyhow!("commit failed"))
-            } else {
-                Ok(())
-            }
+            Ok(())
         }
 
         fn abort(&self, _abort: &GenerationAbort) -> Result<()> {
@@ -711,44 +596,6 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         panic!("timed out waiting for {expected} generation receipts");
-    }
-
-    fn test_commit() -> GenerationCommit {
-        GenerationCommit {
-            request_id: 1,
-            session_id: 2,
-            generated_token_count: 1,
-            token_ids: vec![3].into_boxed_slice(),
-        }
-    }
-
-    #[test]
-    fn queued_barrier_reports_delivery_failure_and_resets_interval() {
-        let sink = Arc::new(RecordingSink::default());
-        sink.fail_commits.store(true, Ordering::Relaxed);
-        let config = GenerationReceiptConfig::new(sink.clone());
-
-        assert!(config.committed_before_proposal(test_commit()).is_err());
-        assert_eq!(config.delivery_failures(), 2);
-
-        sink.fail_commits.store(false, Ordering::Relaxed);
-        assert!(config.committed_before_proposal(test_commit()).is_ok());
-        assert_eq!(config.delivery_failures(), 2);
-    }
-
-    #[test]
-    fn queued_ordered_delivery_times_out_when_sink_stalls() {
-        let sink = Arc::new(RecordingSink {
-            commit_delay: GENERATION_RECEIPT_ORDERED_DELIVERY_TIMEOUT.saturating_mul(4),
-            ..Default::default()
-        });
-        let config = GenerationReceiptConfig::new(sink);
-        let started = Instant::now();
-
-        let error = config.committed_before_proposal(test_commit()).unwrap_err();
-
-        assert!(error.to_string().contains("timed out"));
-        assert!(started.elapsed() < GENERATION_RECEIPT_ORDERED_DELIVERY_TIMEOUT.saturating_mul(2));
     }
 
     #[test]
@@ -978,7 +825,6 @@ mod tests {
         let failing_sink = Arc::new(RecordingSink {
             receipts: Mutex::new(Vec::new()),
             error: Some("sink failed"),
-            ..Default::default()
         });
         let failing_config = GenerationReceiptConfig::new(failing_sink);
         let mut observation = test_observation(0);

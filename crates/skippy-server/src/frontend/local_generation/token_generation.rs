@@ -7,9 +7,7 @@ use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TokenControl;
-use crate::frontend::generation_receipt::{
-    GenerationCommit, GenerationStart, complete_generation_before_cleanup,
-};
+use crate::frontend::generation_receipt::{GenerationStart, complete_generation_before_cleanup};
 use crate::frontend::linear_proposal::greedy_linear_proposal_admitted;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
@@ -30,27 +28,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
-
-pub(super) fn commit_local_generation_token(
-    config: Option<&crate::frontend::GenerationReceiptConfig>,
-    request_id: u64,
-    session_id: u64,
-    generated_token_count: &mut usize,
-    token_id: i32,
-) -> OpenAiResult<()> {
-    let Some(config) = config else {
-        return Ok(());
-    };
-    *generated_token_count = generated_token_count.saturating_add(1);
-    config
-        .committed_before_proposal(GenerationCommit {
-            request_id,
-            session_id,
-            generated_token_count: *generated_token_count,
-            token_ids: vec![token_id].into_boxed_slice(),
-        })
-        .map_err(openai_backend_error)
-}
 
 struct PromptPrefillResult {
     prompt_prefill_sample: Option<i32>,
@@ -83,6 +60,7 @@ pub(super) struct DecodeState {
     pub(super) generation_hooks_active: bool,
     pub(super) linear_proposal_max_tokens: usize,
     pub(super) linear_context_tokens: Option<Vec<i32>>,
+    pub(super) pending_linear_proposal_tokens: Vec<i32>,
     pub(super) emit_token_debug: bool,
     pub(super) native_mtp_options: NativeMtpDecodeOptions,
     pub(super) native_mtp: NativeMtpVerifier,
@@ -132,20 +110,12 @@ impl StageOpenAiBackend {
         let mut receipt_cancelled = false;
         let mut receipt_model_generation_elapsed = None;
         let mut cache_stats = GenerationCacheStats::default();
-        let mut lifecycle_committed_token_count = 0usize;
         let mut emit_token = |token_id| {
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
                 observation.record_token(token_id, request.ids.request_started_at.elapsed());
             }
-            commit_local_generation_token(
-                self.generation_receipt.as_ref(),
-                receipt_request_id,
-                receipt_session_id,
-                &mut lifecycle_committed_token_count,
-                token_id,
-            )?;
             let control = on_token(token_id)?;
             if control == TokenControl::Stop
                 && let Some(observation) = receipt_observation.as_ref()
@@ -778,6 +748,7 @@ impl StageOpenAiBackend {
             .last()
             .expect("checked non-empty prompt");
         let mut stopped = false;
+        let mut pending_linear_proposal_tokens = Vec::new();
         if let Some(predicted) = prompt_prefill_sample {
             if request
                 .cancellation
@@ -787,6 +758,7 @@ impl StageOpenAiBackend {
             }
             current = predicted;
             decoded_tokens += 1;
+            pending_linear_proposal_tokens.push(current);
             stopped = emit_token(current)? == TokenControl::Stop;
         }
         let hook_request = request.hook_request.take();
@@ -816,6 +788,9 @@ impl StageOpenAiBackend {
             }
             tokens
         });
+        if linear_proposal_max_tokens == 0 {
+            pending_linear_proposal_tokens.clear();
+        }
         Ok(DecodeState {
             decoded_tokens,
             current,
@@ -832,6 +807,7 @@ impl StageOpenAiBackend {
             generation_hooks_active,
             linear_proposal_max_tokens,
             linear_context_tokens,
+            pending_linear_proposal_tokens,
             emit_token_debug: self.telemetry.is_debug_enabled(),
             native_mtp_options: NativeMtpDecodeOptions::from_config(request.speculative),
             native_mtp: NativeMtpVerifier::default(),
@@ -865,9 +841,11 @@ impl StageOpenAiBackend {
                 LinearProposalProgress::Stop => break,
                 LinearProposalProgress::NotUsed => {}
             }
-            if self.decode_one_token(request, session_id, &mut state, emit_token)?
-                == TokenControl::Stop
-            {
+            let control = self.decode_one_token(request, session_id, &mut state, emit_token)?;
+            if state.linear_proposal_max_tokens > 0 {
+                state.pending_linear_proposal_tokens.push(state.current);
+            }
+            if control == TokenControl::Stop {
                 break;
             }
         }
