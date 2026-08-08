@@ -20,6 +20,8 @@ Use this skill when changing the Skippy staged-runtime ABI carried in
   and API status behavior in Rust.
 - Keep one functional boundary per patch. Patch numbers must be unique and
   contiguous.
+- Keep public ABI declarations separate from independently reviewable model
+  lifecycle, loading, and package implementation changes.
 - Do not add a terminal source-reorganization patch. A deliberate layout or
   ownership change must be represented in the recreated patches that own the
   affected capabilities.
@@ -56,11 +58,12 @@ the current queue. Do not rewrite unrelated entries:
 
 ```bash
 repo_root="$(pwd)"
+llama_checkout="${LLAMA_CHECKOUT:-$repo_root/.deps/llama.cpp}"
 last_patch="$(find third_party/llama.cpp/patches -maxdepth 1 -type f -name '*.patch' | sort | tail -n 1)"
 last_number="${last_patch##*/}"
 last_number="${last_number%%-*}"
 next_number=$((10#$last_number + 1))
-git -C .deps/llama.cpp format-patch -1 \
+git -C "$llama_checkout" format-patch -1 \
   --start-number "$next_number" \
   --output-directory "$repo_root/third_party/llama.cpp/patches" HEAD
 ```
@@ -91,6 +94,7 @@ Validate patch application in a clean checkout:
 
 ```bash
 tmp_root="$(mktemp -d /tmp/mesh-llama.XXXXXX)"
+trap 'rm -rf -- "$tmp_root"' EXIT
 LLAMA_WORKDIR="$tmp_root/llama.cpp" scripts/prepare-llama.sh pinned
 LLAMA_WORKDIR="$tmp_root/llama.cpp" \
   MESH_LLM_LLAMA_BUILD_ROOT="$tmp_root/build" \

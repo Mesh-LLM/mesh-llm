@@ -1,7 +1,7 @@
 From 9e25d95fe9318084d2948640d8b11f8b9af1b0d5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 03/11] Add GLM-DSA backend execution support
+Subject: [PATCH 03/12] Add GLM-DSA backend execution support
 
 ---
  ggml/include/ggml.h                       |    77 +-

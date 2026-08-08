@@ -1,15 +1,15 @@
-From 06afb601d2c01d0c1586fd01aded1ea7671e5a29 Mon Sep 17 00:00:00 2001
+From 74bc330612fc4e00fbc8749eeea06ea8ec381214 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 08/11] Add Skippy staged execution paths
+Subject: [PATCH 09/12] Add Skippy staged execution paths
 
 ---
  include/skippy/execution.h      | 193 ++++++++++
- src/skippy/execution-batch.cpp  | 366 +++++++++++++++++++
+ src/skippy/execution-batch.cpp  | 329 +++++++++++++++++
  src/skippy/execution-single.cpp | 613 ++++++++++++++++++++++++++++++++
  src/skippy/execution_internal.h |  18 +
- src/skippy/verification.cpp     | 239 +++++++++++++
- 5 files changed, 1429 insertions(+)
+ src/skippy/verification.cpp     | 242 +++++++++++++
+ 5 files changed, 1395 insertions(+)
  create mode 100644 include/skippy/execution.h
  create mode 100644 src/skippy/execution-batch.cpp
  create mode 100644 src/skippy/execution-single.cpp
@@ -217,69 +217,32 @@ index 000000000..6a82de10b
 +#endif // SKIPPY_EXECUTION_H
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..fe1b00608
+index 000000000..a8694dbed
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
-@@ -0,0 +1,366 @@
+@@ -0,0 +1,329 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/activation_scopes.h"
 +#include "skippy/errors.h"
-+#include "skippy/environment.h"
++#include "skippy/execution_internal.h"
 +#include "skippy/glm_dsa.h"
 +#include "skippy/graph_filter_scope.h"
-+#include "skippy-verify-checkpoint.h"
-+#include "skippy/devices.h"
-+
-+#include <mutex>
-+#include "gguf.h"
-+#include "llama-arch.h"
-+#include "llama-context.h"
-+#include "llama-ext.h"
-+#include "llama-graph.h"
-+#include "llama-kv-cache.h"
-+#include "llama-kv-cache-iswa.h"
-+#include "llama-kv-cache-dsa.h"
-+#include "llama-memory-hybrid.h"
-+#include "llama-memory-hybrid-iswa.h"
-+#include "llama-memory-recurrent.h"
-+#include "llama-model.h"
-+#include "llama-model-loader.h"
-+#include "../vendor/nlohmann/json.hpp"
-+
-+#include <algorithm>
-+#include <cerrno>
-+#include <cctype>
-+#include <cmath>
-+#include <cstddef>
-+#include <cstdint>
-+#include <cstdlib>
-+#include <cstring>
-+#include <exception>
-+#include <fstream>
-+#include <cstdio>
-+#include <limits>
-+#include <regex>
-+#include <set>
-+#include <string>
-+#include <thread>
-+#include <unordered_set>
-+#include <utility>
-+#include <vector>
-+
-+#if defined(__APPLE__) && defined(__MACH__)
-+#include <sys/sysctl.h>
-+#elif defined(__linux__)
-+#include <unistd.h>
-+#endif
-+
-+using json = nlohmann::ordered_json;
-+
-+#include "skippy/execution_internal.h"
-+#include "skippy/sampling_internal.h"
-+#include "skippy/speculative_internal.h"
 +#include "skippy/runtime_support.h"
 +#include "skippy/runtime_types.h"
++#include "skippy/sampling_internal.h"
++
++#include "llama-context.h"
++#include "llama-graph.h"
++#include "llama-model.h"
++
++#include <algorithm>
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <limits>
++#include <string>
++#include <vector>
 +
 +
 +extern "C" {
@@ -1232,10 +1195,10 @@ index 000000000..3614168eb
 +        skippy_error ** out_error);
 diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
 new file mode 100644
-index 000000000..44a28f484
+index 000000000..b140efbb0
 --- /dev/null
 +++ b/src/skippy/verification.cpp
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,242 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/activation_scopes.h"
@@ -1436,7 +1399,10 @@ index 000000000..44a28f484
 +            return SKIPPY_STATUS_RUNTIME_ERROR;
 +        }
 +        session->token_history.resize(history_size_before_verification);
-+        const bool stop_after_first_mismatch = session->grammar_sampler != nullptr;
++        // Any stateful sampler (grammar, penalties, or RNG) must not absorb
++        // tokens from a rejected suffix.
++        const bool stop_after_first_mismatch =
++                session->grammar_sampler != nullptr || session->sampling_chain != nullptr;
 +        bool proposal_mismatched = false;
 +        for (size_t i = 0; i < token_count; ++i) {
 +            skippy_record_tokens(session, &token_ids[i], 1);
