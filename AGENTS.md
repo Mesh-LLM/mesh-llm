@@ -163,6 +163,10 @@ libraries. The only durable llama.cpp patch queue is
   Once a capability has an owning module, every patch in the recreated series
   must edit that module directly rather than introducing code in an obsolete
   monolith and moving it later.
+- Treat the public Skippy ABI surface and model lifecycle/loading as distinct
+  patch boundaries. Public declarations may precede their implementation, but
+  a patch should not combine ABI definition with independently reviewable model
+  loading or package behavior.
 
 ### Skippy Native Source Layout
 

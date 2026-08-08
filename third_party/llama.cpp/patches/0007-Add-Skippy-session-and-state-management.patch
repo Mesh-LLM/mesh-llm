@@ -1,18 +1,20 @@
-From 14b676779dafa57bd7e50125b14e152d6b2bedd1 Mon Sep 17 00:00:00 2001
+From e557e6440eeede5c2de7f7dfd5848e53f40b53cc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 06/11] Add Skippy session and state management
+Subject: [PATCH 07/12] Add Skippy session and state management
 
 ---
  include/skippy/signals.h                      |  44 +
  include/skippy/state.h                        | 129 +++
  src/skippy-verify-checkpoint.h                |  24 +
- src/skippy/session.cpp                        | 437 +++++++++
- src/skippy/state.cpp                          | 854 ++++++++++++++++++
+ src/skippy/runtime_support.h                  |   3 +
+ src/skippy/runtime_types.h                    |   3 +-
+ src/skippy/session.cpp                        | 452 +++++++++
+ src/skippy/state.cpp                          | 868 ++++++++++++++++++
  tests/test-skippy-kv-cells-contiguous.cpp     |  20 +
  tests/test-skippy-kv-page-export.cpp          | 259 ++++++
  ...st-skippy-verify-checkpoint-retirement.cpp |  26 +
- 8 files changed, 1793 insertions(+)
+ 10 files changed, 1827 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/signals.h
  create mode 100644 include/skippy/state.h
  create mode 100644 src/skippy-verify-checkpoint.h
@@ -237,12 +239,58 @@ index 000000000..8793000c1
 +    checkpoints.erase(it);
 +    return true;
 +}
+diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
+index da305e80c..29c88b137 100644
+--- a/src/skippy/runtime_support.h
++++ b/src/skippy/runtime_support.h
+@@ -7,6 +7,7 @@
+ #include <cstdint>
+ 
+ struct llama_model;
++struct skippy_model;
+ struct skippy_session;
+ 
+ void skippy_disable_chat_grammar_after_exception(
+@@ -18,6 +19,8 @@ enum skippy_status skippy_require_usable_session(
+         const skippy_session * session,
+         skippy_error ** out_error);
+ int32_t skippy_stage_layer_count(const llama_model * model);
++int32_t skippy_claim_execution_lane(skippy_model * model);
++void skippy_release_execution_lane(skippy_model * model, int32_t seq_id);
+ bool skippy_memory_needs_verify_checkpoint(llama_memory_t memory);
+ void skippy_mtp_clear_session_state(skippy_session * session);
+ void skippy_clear_chat_sampling(skippy_session * session);
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index c20c52e71..c1ce9298a 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -7,6 +7,7 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
++#include <mutex>
+ #include <string>
+ #include <vector>
+ 
+@@ -85,6 +86,7 @@ struct skippy_model {
+     skippy_glm_dsa_op_timing glm_dsa_timing = {};
+     bool executable = true;
+     uint32_t lane_count = 1;
++    std::mutex lane_mutex;
+     std::vector<bool> lane_in_use;
+     std::vector<std::vector<llama_token>> lane_resident_prefix_tokens;
+ };
+@@ -130,4 +132,3 @@ struct skippy_session {
+     bool reset_required = false;
+     std::vector<skippy_verify_checkpoint> verify_checkpoints;
+ };
+-
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..1c9bfcfaa
+index 000000000..184ccdba0
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,452 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -335,6 +383,31 @@ index 000000000..1c9bfcfaa
 +    return llama_model_n_layer(model);
 +}
 +
++int32_t skippy_claim_execution_lane(skippy_model * model) {
++    if (model == nullptr) {
++        return -1;
++    }
++    std::lock_guard<std::mutex> lock(model->lane_mutex);
++    for (uint32_t i = 0; i < model->lane_in_use.size(); ++i) {
++        if (!model->lane_in_use[i]) {
++            model->lane_in_use[i] = true;
++            return static_cast<int32_t>(i);
++        }
++    }
++    return -1;
++}
++
++void skippy_release_execution_lane(skippy_model * model, int32_t seq_id) {
++    if (model == nullptr || seq_id < 0) {
++        return;
++    }
++    std::lock_guard<std::mutex> lock(model->lane_mutex);
++    const size_t lane = static_cast<size_t>(seq_id);
++    if (lane < model->lane_in_use.size()) {
++        model->lane_in_use[lane] = false;
++    }
++}
++
 +
 +extern "C" {
 +enum skippy_status skippy_session_create(
@@ -347,14 +420,7 @@ index 000000000..1c9bfcfaa
 +    }
 +    *out_session = nullptr;
 +
-+    int32_t seq_id = -1;
-+    for (uint32_t i = 0; i < model->lane_in_use.size(); ++i) {
-+        if (!model->lane_in_use[i]) {
-+            model->lane_in_use[i] = true;
-+            seq_id = static_cast<int32_t>(i);
-+            break;
-+        }
-+    }
++    const int32_t seq_id = skippy_claim_execution_lane(model);
 +    if (seq_id < 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "no skippy execution lane is available");
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
@@ -589,11 +655,8 @@ index 000000000..1c9bfcfaa
 +                }
 +            }
 +        }
-+        if (!session->borrowed_sequence && session->stage_model != nullptr && session->seq_id >= 0) {
-+            const size_t lane = static_cast<size_t>(session->seq_id);
-+            if (lane < session->stage_model->lane_in_use.size()) {
-+                session->stage_model->lane_in_use[lane] = false;
-+            }
++        if (!session->borrowed_sequence) {
++            skippy_release_execution_lane(session->stage_model, session->seq_id);
 +        }
 +        skippy_mtp_clear_session_state(session);
 +        delete session;
@@ -682,10 +745,10 @@ index 000000000..1c9bfcfaa
 +} // extern "C"
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..80376f961
+index 000000000..2bfd88523
 --- /dev/null
 +++ b/src/skippy/state.cpp
-@@ -0,0 +1,854 @@
+@@ -0,0 +1,868 @@
 +#include "skippy/state.h"
 +#include "skippy/errors.h"
 +#include "skippy/runtime_support.h"
@@ -743,6 +806,17 @@ index 000000000..80376f961
 +    }
 +    skippy_mtp_clear_session_state(session);
 +    session->verify_checkpoints.clear();
++}
++
++static enum skippy_status skippy_validate_imported_cell_count(
++        skippy_session * session,
++        uint32_t imported_cells,
++        skippy_error ** out_error) {
++    if (imported_cells > llama_n_ctx(session->ctx)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "imported state cell count exceeds context size");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    return SKIPPY_STATUS_OK;
 +}
 +
 +enum skippy_status skippy_export_state(
@@ -812,7 +886,12 @@ index 000000000..80376f961
 +
 +    uint32_t imported_cells = 0;
 +    if (input_bytes >= sizeof(imported_cells)) {
++        // The partial sequence-state wire header stores its cell count first.
 +        std::memcpy(&imported_cells, input, sizeof(imported_cells));
++    }
++    status = skippy_validate_imported_cell_count(session, imported_cells, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
 +    }
 +
 +    session->ctx->synchronize();
@@ -895,7 +974,12 @@ index 000000000..80376f961
 +
 +    uint32_t imported_cells = 0;
 +    if (input_bytes >= 2 * sizeof(uint32_t)) {
++        // The full sequence-state wire header stores its cell count after the sequence id.
 +        std::memcpy(&imported_cells, static_cast<const uint8_t *>(input) + sizeof(uint32_t), sizeof(imported_cells));
++    }
++    status = skippy_validate_imported_cell_count(session, imported_cells, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
 +    }
 +
 +    session->ctx->synchronize();
@@ -1172,8 +1256,8 @@ index 000000000..80376f961
 +        uint64_t token_start,
 +        uint64_t token_count,
 +        skippy_error ** out_error) {
-+    if (session == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is null");
++    if (session == nullptr || session->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "active session is required");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +    if (!skippy_memory_needs_verify_checkpoint(session->ctx->get_memory())) {
@@ -1448,14 +1532,7 @@ index 000000000..80376f961
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +
-+    int32_t seq_id = -1;
-+    for (uint32_t i = 0; i < model->lane_in_use.size(); ++i) {
-+        if (!model->lane_in_use[i]) {
-+            model->lane_in_use[i] = true;
-+            seq_id = static_cast<int32_t>(i);
-+            break;
-+        }
-+    }
++    const int32_t seq_id = skippy_claim_execution_lane(model);
 +    if (seq_id < 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "no skippy execution lane is available");
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
@@ -1467,7 +1544,7 @@ index 000000000..80376f961
 +    llama_memory_t memory = nullptr;
 +    enum skippy_status status = skippy_get_resident_prefix_memory(&temp, &memory, out_error);
 +    if (status != SKIPPY_STATUS_OK) {
-+        model->lane_in_use[static_cast<size_t>(seq_id)] = false;
++        skippy_release_execution_lane(model, seq_id);
 +        return status;
 +    }
 +
@@ -1476,7 +1553,7 @@ index 000000000..80376f961
 +        const llama_pos max_pos = llama_memory_seq_pos_max(memory, cache_seq_id);
 +        if (max_pos < static_cast<llama_pos>(token_count - 1)) {
 +            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident prefix sequence is incomplete");
-+            model->lane_in_use[static_cast<size_t>(seq_id)] = false;
++            skippy_release_execution_lane(model, seq_id);
 +            return SKIPPY_STATUS_INVALID_ARGUMENT;
 +        }
 +    }
@@ -1490,7 +1567,7 @@ index 000000000..80376f961
 +    if (!lane_prefix_hit) {
 +        if (!llama_memory_seq_rm(memory, seq_id, -1, -1)) {
 +            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to clear borrowed execution lane");
-+            model->lane_in_use[static_cast<size_t>(seq_id)] = false;
++            skippy_release_execution_lane(model, seq_id);
 +            return SKIPPY_STATUS_RUNTIME_ERROR;
 +        }
 +        if (token_count > 0) {
@@ -1499,7 +1576,7 @@ index 000000000..80376f961
 +    }
 +    if (!llama_memory_seq_rm(memory, seq_id, static_cast<llama_pos>(token_count), -1)) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim borrowed execution lane");
-+        model->lane_in_use[static_cast<size_t>(seq_id)] = false;
++        skippy_release_execution_lane(model, seq_id);
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +
