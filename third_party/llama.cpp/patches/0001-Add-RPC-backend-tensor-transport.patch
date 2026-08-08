@@ -1,7 +1,7 @@
 From 26b46c6ce3a998fdbf2eebb22d04282c5959cb54 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 01/11] Add RPC backend tensor transport
+Subject: [PATCH 01/12] Add RPC backend tensor transport
 
 ---
  ggml/include/ggml-rpc.h        |  4 +-

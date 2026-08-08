@@ -1,7 +1,7 @@
 From ff55c4a85c4517c3f5d007a2de5a96062e40dfbf Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 02/11] Add staged model graph and family support
+Subject: [PATCH 02/12] Add staged model graph and family support
 
 ---
  include/llama.h                |   7 +
