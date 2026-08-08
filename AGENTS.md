@@ -154,6 +154,34 @@ libraries. The only durable llama.cpp patch queue is
   `scripts/build-llama.sh`, `scripts/update-llama-pin.sh`, and
   `scripts/summarize-llama-upstream.sh`.
 
+### Skippy Native Source Layout
+
+Treat the patched Skippy C ABI as a set of capability-owned modules, not as one
+implementation file.
+
+- Keep `include/skippy.h` as an umbrella header only. Public declarations
+  belong in standalone C-compatible headers under `include/skippy/`, named for
+  their capability: for example `sampling.h`, `speculative_decoding.h`,
+  `state.h`, and `model_package.h`.
+- Keep capability implementations in `src/skippy/<capability>.cpp`. Private
+  C++ declarations belong beside them in narrowly named headers under
+  `src/skippy/`; they are not part of the installed ABI.
+- Put new behavior in its owning module. Do not add a separable responsibility
+  back to `src/skippy.cpp`; that file is reserved for the remaining runtime,
+  session, execution, and activation orchestration while those boundaries are
+  extracted further.
+- Use `snake_case` filenames and preserve the `skippy_` prefix for exported C
+  symbols. Avoid generic `helpers`, `utils`, or expanded `common` buckets.
+- Keep new implementation files below 1,000 lines. If a capability approaches
+  that size, split it by a narrower responsibility before adding more code.
+- Public headers must compile independently as C11 and C++17 headers. Declare
+  each implementation source explicitly in CMake and install the complete
+  `include/skippy/` header tree.
+- Source include compatibility is not assumed. Do not add forwarding headers
+  for retired paths unless a task explicitly requires them. Binary ABI changes
+  still require the normal Skippy ABI version bump and synchronized Rust FFI
+  constants.
+
 ## Workspace Crates
 
 The workspace lives under `crates/`. The most important crates:

@@ -266,7 +266,7 @@ Current branch status:
   template;
 - peer consultations still force `mesh_hooks: false` to preserve the recursion
   guard;
-- skippy's llama.cpp ABI patch queue now exposes `skippy-signals.h` for
+- skippy's llama.cpp ABI patch queue now exposes `skippy/signals.h` for
   first-token and generation-window telemetry;
 - skippy chat generation now calls post-prefill uncertainty and mid-generation
   drift hooks in-process using runtime token/window signals;

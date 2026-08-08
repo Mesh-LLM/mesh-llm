@@ -10,6 +10,13 @@ The external `llama-server` / `rpc-server` runtime lane described below as
 document as background for why the patch queue and embedded ABI are shaped the
 way they are; do not treat its "current state" sections as current.
 
+The current native Skippy source is organized by capability. `include/skippy.h`
+is the umbrella API; independently compilable public C headers live under
+`include/skippy/`, while implementations and private C++ headers live under
+`src/skippy/`. New work extends the owning capability module instead of growing
+`src/skippy.cpp`. Source include paths are allowed to break, but exported binary
+ABI changes still require a version bump and synchronized Rust FFI constants.
+
 ## Purpose
 
 Track the planned integration of `/Users/jdumay/code/llama-stage-runtime` into
