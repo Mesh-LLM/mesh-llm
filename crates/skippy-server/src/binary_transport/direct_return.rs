@@ -193,7 +193,12 @@ impl PredictionReturnHub {
                         return Ok(());
                     }
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    let _ = sender.send(Err(format!(
+                        "direct prediction return closed before the next reply: {error}"
+                    )));
+                    return Ok(());
+                }
                 Err(error) => {
                     let _ = sender.send(Err(error.to_string()));
                     return Err(error).context("read direct prediction return");
@@ -534,6 +539,30 @@ mod tests {
                 .is_none()
         );
         assert!(started.elapsed() >= Duration::from_millis(8));
+    }
+
+    #[test]
+    fn closed_prediction_return_wakes_waiter_with_error() {
+        let request_id = 61;
+        let session_id = 67;
+        let hub = Arc::new(PredictionReturnHub::default());
+        let receiver = hub.register(request_id, session_id).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let open = prediction_return_open_message(request_id, session_id);
+        let handle = {
+            let hub = hub.clone();
+            thread::spawn(move || hub.handle_return_connection(open, server))
+        };
+
+        drop(client);
+
+        let error = receiver
+            .recv_expected_timeout(WireReplyKind::PredictedToken, Duration::from_secs(1))
+            .expect_err("closed prediction return must wake the waiter");
+        assert!(error.to_string().contains("closed before the next reply"));
+        handle.join().unwrap().unwrap();
     }
 
     #[test]
