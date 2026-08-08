@@ -1,4 +1,4 @@
-From 77c21acdd795e0259a60f58197a52efff937b8dc Mon Sep 17 00:00:00 2001
+From f8b40163c8da7c5f5d92445914571a38d37f6936 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
 Subject: [PATCH 10/11] Add Skippy tokenization and stage chat
@@ -12,10 +12,10 @@ Subject: [PATCH 10/11] Add Skippy tokenization and stage chat
  common/chat.h                         |   5 +-
  common/stage-chat.cpp                 | 377 ++++++++++++++++++++++++++
  include/skippy/tokenization.h         |  80 ++++++
- src/skippy/tokenization.cpp           | 136 ++++++++++
+ src/skippy/tokenization.cpp           | 137 ++++++++++
  tests/test-chat-auto-parser.cpp       |  48 +++-
  tests/test-chat.cpp                   | 208 +++++++++++++-
- 11 files changed, 1155 insertions(+), 47 deletions(-)
+ 11 files changed, 1156 insertions(+), 47 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 include/skippy/tokenization.h
  create mode 100644 src/skippy/tokenization.cpp
@@ -1089,10 +1089,10 @@ index 000000000..2a00c384d
 +#endif // SKIPPY_TOKENIZATION_H
 diff --git a/src/skippy/tokenization.cpp b/src/skippy/tokenization.cpp
 new file mode 100644
-index 000000000..63d86d180
+index 000000000..89d69ff3a
 --- /dev/null
 +++ b/src/skippy/tokenization.cpp
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,137 @@
 +#include "skippy/tokenization.h"
 +#include "skippy/errors.h"
 +#include "skippy/runtime_types.h"
@@ -1100,6 +1100,7 @@ index 000000000..63d86d180
 +#include "llama-model.h"
 +
 +#include <cstring>
++#include <limits>
 +#include <string>
 +#include <vector>
 +
