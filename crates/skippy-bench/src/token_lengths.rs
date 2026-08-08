@@ -105,6 +105,7 @@ pub fn token_lengths(args: TokenLengthsArgs) -> Result<()> {
                     add_assistant: true,
                     enable_thinking: Some(args.enable_thinking),
                     reasoning_format: None,
+                    ..ChatTemplateOptions::default()
                 },
             )
             .with_context(|| {

@@ -132,6 +132,7 @@ impl StageOpenAiBackend {
                     add_assistant: options.add_assistant,
                     enable_thinking: options.enable_thinking,
                     reasoning_format: options.reasoning_format,
+                    chat_template_kwargs: options.chat_template_kwargs.clone(),
                     tools_json,
                     tool_choice_json,
                     parallel_tool_calls: request.parallel_tool_calls.unwrap_or(true),

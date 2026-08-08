@@ -363,11 +363,12 @@ impl ChatReasoningFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatTemplateOptions {
     pub add_assistant: bool,
     pub enable_thinking: Option<bool>,
     pub reasoning_format: Option<ChatReasoningFormat>,
+    pub chat_template_kwargs: Option<String>,
 }
 
 impl Default for ChatTemplateOptions {
@@ -376,6 +377,7 @@ impl Default for ChatTemplateOptions {
             add_assistant: true,
             enable_thinking: None,
             reasoning_format: None,
+            chat_template_kwargs: None,
         }
     }
 }
@@ -385,6 +387,7 @@ pub struct ChatTemplateJsonOptions {
     pub add_assistant: bool,
     pub enable_thinking: Option<bool>,
     pub reasoning_format: Option<ChatReasoningFormat>,
+    pub chat_template_kwargs: Option<String>,
     pub tools_json: Option<String>,
     pub tool_choice_json: Option<String>,
     pub parallel_tool_calls: bool,
@@ -396,6 +399,7 @@ impl Default for ChatTemplateJsonOptions {
             add_assistant: true,
             enable_thinking: None,
             reasoning_format: None,
+            chat_template_kwargs: None,
             tools_json: None,
             tool_choice_json: None,
             parallel_tool_calls: true,

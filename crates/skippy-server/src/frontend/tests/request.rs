@@ -464,6 +464,43 @@ fn top_level_reasoning_effort_overrides_chat_template_thinking() {
 }
 
 #[test]
+fn reasoning_effort_modes_reach_chat_template_kwargs() {
+    for (effort, enabled) in [("none", false), ("high", true), ("max", true)] {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
+            "messages": [{"role": "user", "content": "hello"}],
+            "reasoning_effort": effort
+        }))
+        .unwrap();
+
+        let options =
+            chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
+        assert_eq!(options.enable_thinking, Some(enabled), "effort={effort}");
+        let kwargs: Value =
+            serde_json::from_str(options.chat_template_kwargs.as_deref().unwrap()).unwrap();
+        assert_eq!(kwargs["reasoning_effort"], effort, "effort={effort}");
+    }
+}
+
+#[test]
+fn explicit_chat_template_kwargs_override_reasoning_effort_and_preserve_custom_values() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_effort": "high",
+        "chat_template_kwargs": {"reasoning_effort": "max", "custom_mode": 7}
+    }))
+    .unwrap();
+
+    let options =
+        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
+    let kwargs: Value =
+        serde_json::from_str(options.chat_template_kwargs.as_deref().unwrap()).unwrap();
+    assert_eq!(kwargs["reasoning_effort"], "max");
+    assert_eq!(kwargs["custom_mode"], 7);
+}
+
+#[test]
 fn provider_enable_thinking_overrides_chat_template_thinking() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
