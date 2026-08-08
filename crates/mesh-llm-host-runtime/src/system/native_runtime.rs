@@ -278,7 +278,15 @@ mod dynamic {
         target_skippy_abi: Option<&str>,
         selection: &RuntimeSelection,
     ) -> Result<Option<NativeRuntimeStartupLoadPlan>> {
-        let installed = cache.installed()?;
+        let scan = cache.installed_lenient()?;
+        for skipped in &scan.skipped {
+            tracing::warn!(
+                path = %skipped.path.display(),
+                reason = %skipped.reason,
+                "Skipping unusable native runtime cache entry during startup"
+            );
+        }
+        let installed = scan.runtimes;
         if installed.is_empty() {
             return Ok(None);
         }
@@ -519,6 +527,57 @@ mod dynamic {
                 plan.libraries,
                 vec![runtime_dir.join(test_library_rel_path())]
             );
+        }
+
+        #[test]
+        fn stale_pre_checksum_cache_entry_does_not_block_startup_plan() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.75.0";
+            let runtime_dir = cache.runtime_dir(release_version, runtime_id);
+            write_runtime(&runtime_dir, release_version, runtime_id);
+
+            // Simulate a cache entry written by a pre-0.75 loader: the
+            // manifest has no per-file checksums (issue #1162).
+            let legacy_dir = cache.runtime_dir("0.74.0", runtime_id);
+            let library_rel_path = test_library_rel_path();
+            fs::create_dir_all(legacy_dir.join(library_rel_path.parent().unwrap())).unwrap();
+            fs::write(legacy_dir.join(&library_rel_path), b"legacy runtime").unwrap();
+            fs::write(
+                legacy_dir.join("manifest.json"),
+                format!(
+                    r#"{{
+  "runtime": {{
+    "id": "{runtime_id}",
+    "mesh_version": "0.74.0",
+    "skippy_abi": "0.1.25",
+    "platform": {{"os": "{os}", "arch": "{arch}"}},
+    "backend": {{"kind": "cpu"}},
+    "libraries": ["{library}"]
+  }}
+}}"#,
+                    os = std::env::consts::OS,
+                    arch = std::env::consts::ARCH,
+                    library = library_rel_path.to_string_lossy().replace('\\', "/"),
+                ),
+            )
+            .unwrap();
+
+            let plan = resolve_installed_native_runtime_plan(
+                &cache,
+                &HostRuntimeProfile::current_without_gpu_probe(),
+                release_version,
+                release_version,
+                Some("0.1.25"),
+                &RuntimeSelection::Recommended,
+            )
+            .unwrap()
+            .expect("a stale pre-checksum cache entry must not block the valid runtime");
+
+            assert_eq!(plan.cache_mesh_version, release_version);
+            assert_eq!(plan.native_runtime_id, runtime_id);
+            assert_eq!(plan.source, NativeRuntimePlanSource::CacheHit);
         }
 
         #[test]

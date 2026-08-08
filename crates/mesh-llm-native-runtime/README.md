@@ -126,6 +126,7 @@ let profile = HostRuntimeProfile {
     gpus: Vec::new(),
     cuda: Some(HostCudaProfile {
         toolkit_majors: BTreeSet::from([12]),
+        driver_max_major: Some(12),
         driver_version: None,
         gpu_arches: BTreeSet::from(["sm_90".to_string()]),
     }),
@@ -137,8 +138,26 @@ let profile = HostRuntimeProfile {
 `mesh-llm-hardware-profile` builds this profile for real hosts. It supports
 explicit environment overrides for CI/release testing, including
 `MESH_LLM_CUDA_TOOLKIT_MAJOR`, `MESH_LLM_CUDA_TOOLKIT_MAJORS`,
-`MESH_LLM_CUDA_GPU_ARCHES`, `MESH_LLM_ROCM_GPU_ARCHES`, and
-`MESH_LLM_VULKAN_AVAILABLE`.
+`MESH_LLM_CUDA_DRIVER_MAX_MAJOR`, `MESH_LLM_CUDA_GPU_ARCHES`,
+`MESH_LLM_ROCM_GPU_ARCHES`, and `MESH_LLM_VULKAN_AVAILABLE`.
+
+### CUDA toolkit vs driver
+
+`toolkit_majors` and `driver_max_major` are deliberately separate:
+
+- `toolkit_majors` — CUDA majors whose runtime libraries are actually installed
+  (probed from `libcudart.so.<major>` sonames and `/usr/local/cuda-<version>`).
+- `driver_max_major` — the newest CUDA the installed driver supports, from
+  `nvidia-smi`. This is an upper bound only.
+
+Linux native runtimes link `libcudart`/`libcublas` without bundling them, so
+they can only load when a matching toolkit major is installed. Windows runtimes
+ship their own copies and are self contained, so they are accepted on any driver
+new enough to run them.
+
+Conflating the two selects a runtime the host cannot load. A CUDA 13 driver with
+a CUDA 12 toolkit must still choose the cuda12 runtime, otherwise startup fails
+with `libcudart.so.13: cannot open shared object file`.
 
 ## Resolution
 

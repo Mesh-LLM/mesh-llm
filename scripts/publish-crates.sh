@@ -233,7 +233,11 @@ run_cargo_publish_once() {
     fi
 
     echo "cargo ${args[*]}"
-    if output="$(cargo "${args[@]}" 2>&1)"; then
+    # Registry verification runs from the isolated package tarball, where the
+    # repository-only patched llama.cpp build inputs are intentionally absent.
+    # Verify the Rust package surface through skippy-ffi's dynamic link mode;
+    # this does not change the uploaded crate contents or feature defaults.
+    if output="$(LLAMA_STAGE_LINK_MODE=dynamic cargo "${args[@]}" 2>&1)"; then
         last_publish_output="$output"
         print_publish_output "$output"
         return 0
