@@ -1,4 +1,4 @@
-From 4b0227e2b92da92a24cc95f33d8239f354860a9e Mon Sep 17 00:00:00 2001
+From ea6f06efc35a3fb998ca58a2db6e8997335f5e4c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
 Subject: [PATCH 05/11] Add Skippy ABI and model lifecycle
@@ -19,10 +19,10 @@ Subject: [PATCH 05/11] Add Skippy ABI and model lifecycle
  src/skippy/model_load_config_internal.h |  22 +
  src/skippy/model_loading.cpp            | 929 ++++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |  29 +
- src/skippy/model_package.cpp            | 704 ++++++++++++++++++
+ src/skippy/model_package.cpp            | 705 ++++++++++++++++++
  src/skippy/runtime_support.h            |  28 +
  src/skippy/runtime_types.h              | 133 ++++
- 18 files changed, 2866 insertions(+)
+ 18 files changed, 2867 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/common.h
  create mode 100644 include/skippy/devices.h
@@ -2135,10 +2135,10 @@ index 000000000..ee1e43035
 +} // extern "C"
 diff --git a/src/skippy/model_package.cpp b/src/skippy/model_package.cpp
 new file mode 100644
-index 000000000..fbdb09b25
+index 000000000..3d199add8
 --- /dev/null
 +++ b/src/skippy/model_package.cpp
-@@ -0,0 +1,704 @@
+@@ -0,0 +1,705 @@
 +#include "skippy/model_package.h"
 +#include "skippy/errors.h"
 +
@@ -2149,6 +2149,7 @@ index 000000000..fbdb09b25
 +#include <cstdint>
 +#include <cstdio>
 +#include <cstring>
++#include <limits>
 +#include <regex>
 +#include <string>
 +#include <utility>
