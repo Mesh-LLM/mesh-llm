@@ -1,4 +1,5 @@
 pub(crate) mod auto_route;
+mod forwarded_request;
 pub(crate) mod ingress;
 pub(crate) mod moa_gateway;
 mod request_normalize;

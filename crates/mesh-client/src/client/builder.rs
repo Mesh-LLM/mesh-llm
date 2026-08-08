@@ -622,17 +622,108 @@ fn host_header(base_url: &str) -> Result<String, String> {
     socket_addr(base_url)
 }
 
+/// Extracts the `host:port` authority from an OpenAI-compatible base URL.
+///
+/// The `OpenAiHttp` transport speaks plaintext HTTP/1.1 over a raw `TcpStream`,
+/// so HTTPS base URLs are rejected rather than silently downgraded to
+/// cleartext. Scheme matching is case-insensitive; a bare `host:port` (no
+/// scheme) is accepted and treated as plaintext.
 fn socket_addr(base_url: &str) -> Result<String, String> {
-    base_url
-        .strip_prefix("http://")
-        .or_else(|| base_url.strip_prefix("https://"))
-        .unwrap_or(base_url)
+    let scheme_end = base_url.find("://").map(|index| index + 3);
+    let (scheme, authority) = match scheme_end {
+        Some(end) => (base_url[..end - 3].to_ascii_lowercase(), &base_url[end..]),
+        None => (String::new(), base_url),
+    };
+
+    match scheme.as_str() {
+        "https" => {
+            return Err("HTTPS is not supported by the raw-TCP OpenAiHttp transport".to_string());
+        }
+        "" | "http" => {}
+        other => {
+            return Err(format!(
+                "unsupported API base URL scheme '{other}': the OpenAiHttp transport only supports plaintext HTTP"
+            ));
+        }
+    }
+
+    authority
         .trim_end_matches('/')
         .split('/')
         .next()
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string())
         .ok_or_else(|| format!("invalid API base URL: {base_url}"))
+}
+
+#[cfg(test)]
+mod socket_addr_tests {
+    use super::socket_addr;
+
+    const HTTPS_REJECTED: &str = "HTTPS is not supported by the raw-TCP OpenAiHttp transport";
+
+    #[test]
+    fn rejects_https() {
+        let error = socket_addr("https://example.com:9337/v1")
+            .expect_err("raw TCP transport must reject HTTPS URLs");
+
+        assert_eq!(error, HTTPS_REJECTED);
+    }
+
+    #[test]
+    fn rejects_mixed_case_https() {
+        for base_url in [
+            "HTTPS://example.com:9337/v1",
+            "Https://example.com:9337/v1",
+            "hTTpS://example.com:9337/v1",
+        ] {
+            let error = socket_addr(base_url)
+                .expect_err("mixed-case HTTPS must be rejected with the HTTPS error");
+
+            assert_eq!(error, HTTPS_REJECTED, "unexpected error for {base_url}");
+        }
+    }
+
+    #[test]
+    fn accepts_mixed_case_http() {
+        assert_eq!(
+            socket_addr("HTTP://example.com:9337/v1"),
+            Ok("example.com:9337".to_string())
+        );
+        assert_eq!(
+            socket_addr("Http://example.com:9337/v1/"),
+            Ok("example.com:9337".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_scheme() {
+        let error = socket_addr("ftp://example.com:9337/v1")
+            .expect_err("non-HTTP schemes must be rejected");
+
+        assert!(
+            error.contains("unsupported API base URL scheme 'ftp'"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn preserves_plaintext_url_behavior() {
+        assert_eq!(
+            socket_addr("http://example.com:9337/v1/"),
+            Ok("example.com:9337".to_string())
+        );
+        assert_eq!(
+            socket_addr("example.com:9337/v1/"),
+            Ok("example.com:9337".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_empty_authority() {
+        assert!(socket_addr("http://").is_err());
+        assert!(socket_addr("").is_err());
+    }
 }
 
 #[cfg(test)]
