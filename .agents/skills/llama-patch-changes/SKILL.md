@@ -44,12 +44,15 @@ pinned upstream, verify the reconstructed head is tree-identical to the
 authoritative final checkout, then regenerate the patch queue:
 
 ```bash
-mv /path/to/mesh-llm/third_party/llama.cpp/patches /tmp/mesh-llm-patches-backup
-mkdir -p /path/to/mesh-llm/third_party/llama.cpp/patches
-git format-patch \
+repo_root="$(pwd)"
+llama_checkout="${LLAMA_CHECKOUT:-$repo_root/.deps/llama.cpp}"
+patch_backup="$(mktemp -d /tmp/mesh-llm-patches.XXXXXX)"
+mv "$repo_root/third_party/llama.cpp/patches" "$patch_backup/patches"
+mkdir -p "$repo_root/third_party/llama.cpp/patches"
+git -C "$llama_checkout" format-patch \
   --start-number 1 \
-  --output-directory /path/to/mesh-llm/third_party/llama.cpp/patches \
-  "$(cat /path/to/mesh-llm/third_party/llama.cpp/upstream.txt)..HEAD"
+  --output-directory "$repo_root/third_party/llama.cpp/patches" \
+  "$(cat "$repo_root/third_party/llama.cpp/upstream.txt")..HEAD"
 ```
 
 Keep the temporary backup until clean patch application and the required native
@@ -62,7 +65,7 @@ Validate that patches apply in a clean checkout:
 
 ```bash
 tmp_llama="$(mktemp -d /tmp/mesh-llm-llama.XXXXXX)"
-rm -rf "$tmp_llama"
+trap 'rm -rf -- "$tmp_llama"' EXIT
 LLAMA_WORKDIR="$tmp_llama" scripts/prepare-llama.sh pinned
 ```
 
@@ -75,7 +78,7 @@ just build
 For Rust-only fallout from build-system or runtime call-site changes:
 
 ```bash
-cargo fmt --all -- --check
+cargo fmt --all --check
 cargo check -p mesh-llm
 ```
 

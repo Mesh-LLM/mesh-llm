@@ -1,17 +1,17 @@
-From 171a92c2fec008b81cdec6e07663d97926094edd Mon Sep 17 00:00:00 2001
+From e64c3caa1674a4e198ee00d1a2623d42f95e9345 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 09/11] Add Skippy sampling and speculative decoding
+Subject: [PATCH 10/12] Add Skippy sampling and speculative decoding
 
 ---
- common/ngram-cache.cpp                | 153 +++++-
+ common/ngram-cache.cpp                | 153 ++++++-
  include/skippy/sampling.h             |  33 ++
  include/skippy/speculative_decoding.h |  60 +++
- src/skippy/sampling.cpp               | 668 ++++++++++++++++++++++++++
+ src/skippy/sampling.cpp               | 629 ++++++++++++++++++++++++++
  src/skippy/sampling_internal.h        |  42 ++
- src/skippy/speculative_decoding.cpp   | 523 ++++++++++++++++++++
+ src/skippy/speculative_decoding.cpp   | 524 +++++++++++++++++++++
  src/skippy/speculative_internal.h     |  28 ++
- 7 files changed, 1502 insertions(+), 5 deletions(-)
+ 7 files changed, 1464 insertions(+), 5 deletions(-)
  create mode 100644 include/skippy/sampling.h
  create mode 100644 include/skippy/speculative_decoding.h
  create mode 100644 src/skippy/sampling.cpp
@@ -328,10 +328,10 @@ index 000000000..67fc99716
 +#endif // SKIPPY_SPECULATIVE_DECODING_H
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 new file mode 100644
-index 000000000..90da83641
+index 000000000..3a9fb82f0
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,668 @@
+@@ -0,0 +1,629 @@
 +#include "skippy/sampling.h"
 +#include "skippy/errors.h"
 +#include "skippy/execution_internal.h"
@@ -407,10 +407,8 @@ index 000000000..90da83641
 +        };
 +        enum skippy_status status = skippy_decode_batch(session, batch, 1, glm_dsa_phase_hint, out_error);
 +        if (status == SKIPPY_STATUS_OK) {
-+            status = skippy_mtp_sync_target_inputs(session, token_ids, nullptr, token_count, pos, out_error);
-+        }
-+        if (status == SKIPPY_STATUS_OK) {
 +            skippy_record_tokens(session, token_ids, token_count);
++            status = skippy_mtp_sync_target_inputs(session, token_ids, nullptr, token_count, pos, out_error);
 +        }
 +        return status;
 +    }
@@ -429,10 +427,8 @@ index 000000000..90da83641
 +    enum skippy_status status = skippy_decode_batch(session, batch, token_count, glm_dsa_phase_hint, out_error);
 +    llama_batch_free(batch);
 +    if (status == SKIPPY_STATUS_OK) {
-+        status = skippy_mtp_sync_target_inputs(session, token_ids, nullptr, token_count, token_start, out_error);
-+    }
-+    if (status == SKIPPY_STATUS_OK) {
 +        skippy_record_tokens(session, token_ids, token_count);
++        status = skippy_mtp_sync_target_inputs(session, token_ids, nullptr, token_count, token_start, out_error);
 +    }
 +    return status;
 +}
@@ -475,10 +471,8 @@ index 000000000..90da83641
 +            out_error);
 +    llama_batch_free(batch);
 +    if (status == SKIPPY_STATUS_OK) {
-+        status = skippy_mtp_sync_target_inputs(session, token_ids, nullptr, token_count, token_start, out_error);
-+    }
-+    if (status == SKIPPY_STATUS_OK) {
 +        skippy_record_tokens(session, token_ids, token_count);
++        status = skippy_mtp_sync_target_inputs(session, token_ids, nullptr, token_count, token_start, out_error);
 +    }
 +    return status;
 +}
@@ -920,8 +914,11 @@ index 000000000..90da83641
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling,
 +        int32_t logits_index) {
++    if (session == nullptr || session->ctx == nullptr ||
++            session->stage_model == nullptr || session->stage_model->model == nullptr) {
++        return 0;
++    }
 +    if (skippy_mtp_greedy_sampling_fastpath_enabled() &&
-+            session != nullptr &&
 +            session->grammar_sampler == nullptr &&
 +            skippy_sampling_is_greedy_equivalent(sampling)) {
 +        if (session->sampling_chain != nullptr) {
@@ -929,7 +926,7 @@ index 000000000..90da83641
 +        }
 +        return skippy_greedy_sample_ith(session, logits_index);
 +    }
-+    if (session != nullptr && session->sampling_chain != nullptr) {
++    if (session->sampling_chain != nullptr) {
 +        if (!session->chat_sampling_metadata.empty() ||
 +                (skippy_sampling_enabled(sampling) &&
 +                 session->sampling_config_valid &&
@@ -946,45 +943,10 @@ index 000000000..90da83641
 +    }
 +    llama_synchronize(session->ctx);
 +
-+    llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
-+    llama_sampler * sampler = llama_sampler_chain_init(chain_params);
++    llama_sampler * sampler = skippy_build_sampling_chain(session, sampling);
 +    if (sampler == nullptr) {
 +        return skippy_greedy_sample_ith(session, logits_index);
 +    }
-+
-+    const int32_t penalty_last_n = sampling->penalty_last_n == 0 ? -1 : sampling->penalty_last_n;
-+    const float repeat_penalty = sampling->repeat_penalty == 0.0f ? 1.0f : sampling->repeat_penalty;
-+    if (repeat_penalty != 1.0f || sampling->frequency_penalty != 0.0f || sampling->presence_penalty != 0.0f) {
-+        llama_sampler_chain_add(
-+                sampler,
-+                llama_sampler_init_penalties(
-+                        penalty_last_n,
-+                        repeat_penalty,
-+                        sampling->frequency_penalty,
-+                        sampling->presence_penalty));
-+    }
-+    const uint32_t logit_bias_count = std::min<uint32_t>(sampling->logit_bias_count, SKIPPY_MAX_LOGIT_BIAS);
-+    if (logit_bias_count > 0) {
-+        const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+        llama_sampler_chain_add(
-+                sampler,
-+                llama_sampler_init_logit_bias(
-+                        llama_vocab_n_tokens(vocab),
-+                        static_cast<int32_t>(logit_bias_count),
-+                        sampling->logit_bias));
-+    }
-+    if (sampling->top_k > 0) {
-+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(sampling->top_k));
-+    }
-+    if (sampling->top_p > 0.0f && sampling->top_p < 1.0f) {
-+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(sampling->top_p, 0));
-+    }
-+    if (sampling->min_p > 0.0f && sampling->min_p < 1.0f) {
-+        llama_sampler_chain_add(sampler, llama_sampler_init_min_p(sampling->min_p, 0));
-+    }
-+    llama_sampler_chain_add(sampler, llama_sampler_init_temp_ext(sampling->temperature, 0.0f, 1.0f));
-+    const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed;
-+    llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
 +
 +    for (const llama_token token : session->token_history) {
 +        llama_sampler_accept(sampler, token);
@@ -999,7 +961,6 @@ index 000000000..90da83641
 +        const skippy_sampling_config * sampling) {
 +    return skippy_sample_token_ith(session, sampling, -1);
 +}
-+
 diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
 new file mode 100644
 index 000000000..724a25ab9
@@ -1050,10 +1011,10 @@ index 000000000..724a25ab9
 +llama_token skippy_sample_token(skippy_session * session, const skippy_sampling_config * sampling);
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
 new file mode 100644
-index 000000000..b2838f832
+index 000000000..bbea68c3d
 --- /dev/null
 +++ b/src/skippy/speculative_decoding.cpp
-@@ -0,0 +1,523 @@
+@@ -0,0 +1,524 @@
 +#include "skippy/speculative_decoding.h"
 +#include "skippy/environment.h"
 +#include "skippy/errors.h"
@@ -1072,6 +1033,8 @@ index 000000000..b2838f832
 +#include <cstddef>
 +#include <cstdint>
 +#include <cstdio>
++#include <cstdlib>
++#include <cstring>
 +#include <limits>
 +#include <utility>
 +#include <vector>
@@ -1576,7 +1539,6 @@ index 000000000..b2838f832
 +    }
 +    return skippy_success(out_error);
 +}
-+
 diff --git a/src/skippy/speculative_internal.h b/src/skippy/speculative_internal.h
 new file mode 100644
 index 000000000..db0055657

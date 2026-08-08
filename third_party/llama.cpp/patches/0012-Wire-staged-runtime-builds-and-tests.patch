@@ -1,15 +1,15 @@
-From dffb6ffb160125ec59b659adf357eba94f9c248f Mon Sep 17 00:00:00 2001
+From 146c1beb881d7ad07790fa40d7c5df98e8679d14 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 11/11] Wire staged runtime builds and tests
+Subject: [PATCH 12/12] Wire staged runtime builds and tests
 
 ---
- CMakeLists.txt             |   5 +
- common/CMakeLists.txt      |   1 +
- src/CMakeLists.txt         |  17 +
- tests/CMakeLists.txt       |  11 +
- tests/test-llama-archs.cpp | 988 ++++++++++++++++++++++++++++++++++++-
- 5 files changed, 1017 insertions(+), 5 deletions(-)
+ CMakeLists.txt             |    5 +
+ common/CMakeLists.txt      |    1 +
+ src/CMakeLists.txt         |   17 +
+ tests/CMakeLists.txt       |   11 +
+ tests/test-llama-archs.cpp | 1042 +++++++++++++++++++++++++++++++++++-
+ 5 files changed, 1071 insertions(+), 5 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 3df1d82db..8e93a13ce 100644
@@ -104,7 +104,7 @@ index 7a93b19a0..4a1db624c 100644
  llama_build_and_test(test-autorelease.cpp       LABEL "model")
  llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index d02e65c9e..c7efc95a4 100644
+index d02e65c9e..fd6f84603 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -14,6 +14,7 @@
@@ -192,7 +192,7 @@ index d02e65c9e..c7efc95a4 100644
      ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
      ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
      // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,     n_embd);
-@@ -261,9 +306,242 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -261,9 +306,244 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -257,7 +257,8 @@ index d02e65c9e..c7efc95a4 100644
 +        size_t tmp = seed;
 +        llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
 +        if (!model) {
-+            return true;
++            fprintf(stderr, "GLM_DSA conflicting-metadata model load failed without the expected error\n");
++            return false;
 +        }
 +        GGML_UNUSED(model);
 +    } catch (const std::exception & err) {
@@ -283,7 +284,8 @@ index d02e65c9e..c7efc95a4 100644
 +        size_t tmp = seed;
 +        llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
 +        if (!model) {
-+            return true;
++            fprintf(stderr, "GLM_DSA shared-first model load failed without the expected error\n");
++            return false;
 +        }
 +        GGML_UNUSED(model);
 +    } catch (const std::exception & err) {
@@ -371,10 +373,10 @@ index d02e65c9e..c7efc95a4 100644
 +
 +static bool glm_dsa_graph_op_counter_callback(ggml_tensor * tensor, bool ask, void * user_data) {
 +    glm_dsa_graph_op_counts * counts = static_cast<glm_dsa_graph_op_counts *>(user_data);
-+    ++counts->total;
 +    if (!ask) {
 +        return true;
 +    }
++    ++counts->total;
 +
 +    if (tensor->op == GGML_OP_LIGHTNING_INDEXER) {
 +        ++counts->lightning_indexer;
@@ -436,7 +438,7 @@ index d02e65c9e..c7efc95a4 100644
      GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
      llama_model_params model_params = llama_model_default_params();
      model_params.progress_callback = silent_model_load_progress;
-@@ -279,6 +557,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -279,6 +559,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      if (!encode) {
          ctx_params.n_ubatch = 64;
      }
@@ -446,7 +448,7 @@ index d02e65c9e..c7efc95a4 100644
  
      size_t tmp = seed;
      llama_model_ptr model(gguf_ctx != nullptr ?
-@@ -294,6 +575,656 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -294,6 +577,656 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -1103,7 +1105,7 @@ index d02e65c9e..c7efc95a4 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -427,6 +1358,9 @@ static bool arch_supported(const llm_arch arch) {
+@@ -427,6 +1360,9 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK4) {
          return false;
      }
@@ -1113,7 +1115,7 @@ index d02e65c9e..c7efc95a4 100644
  
      // FIXME some models are segfaulting with WebGPU:
  #ifdef GGML_USE_WEBGPU
-@@ -438,6 +1372,20 @@ static bool arch_supported(const llm_arch arch) {
+@@ -438,6 +1374,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -1134,32 +1136,84 @@ index d02e65c9e..c7efc95a4 100644
  static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -551,6 +1499,33 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -551,6 +1501,85 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
      const std::string template_row_res = "%15s %10s|%20s|\n";
  
      bool all_ok = true;
 +    if (target_arch == LLM_ARCH_UNKNOWN || target_arch == LLM_ARCH_GLM_DSA) {
-+        const bool glm_dsa_contract_ok =
-+                test_glm_dsa_rejects_conflicting_indexshare_metadata(seed) &&
-+                test_glm_dsa_rejects_shared_first_indexshare_metadata(seed) &&
-+                test_glm_dsa_full_shared_indexshare_graph(seed, {}) &&
-+                test_glm_dsa_full_shared_shared_indexshare_graph(seed, {}) &&
-+                test_glm_dsa_periodic_full_shared_indexshare_graph(seed, {}) &&
-+                test_glm_dsa_direct_sparse_decode_graph(seed, glm_dsa_native_sparse_devs()) &&
-+                test_glm_dsa_compact_decode_graph(seed, glm_dsa_cpu_devs()) &&
-+                test_glm_dsa_cpu_compact_decode_graph(seed) &&
-+                test_glm_dsa_cpu_direct_sparse_decode_falls_back_graph(seed) &&
-+                test_glm_dsa_compact_min_kv_decode_graph(seed, glm_dsa_cpu_devs()) &&
-+                test_glm_dsa_default_compact_decode_graph(seed, glm_dsa_cpu_devs()) &&
-+                test_glm_dsa_short_history_compact_decode_graph(seed, glm_dsa_cpu_devs()) &&
-+                test_glm_dsa_native_top_k_compact_decode_graph(seed, glm_dsa_cpu_devs()) &&
-+                test_glm_dsa_compact_disabled_decode_graph(seed, glm_dsa_cpu_devs()) &&
-+                test_glm_dsa_verify_dense_graph(seed, {}) &&
-+                test_glm_dsa_native_top_k_verify_dense_graph(seed, {}) &&
-+                test_glm_dsa_short_prefill_dense_graph(seed, {}) &&
-+                test_glm_dsa_native_top_k_short_prefill_dense_graph(seed, {}) &&
-+                test_glm_dsa_long_prefill_dense_mask_guard_graph(seed, glm_dsa_native_sparse_devs()) &&
-+                test_glm_dsa_native_top_k_long_prefill_dense_mask_guard_graph(seed, glm_dsa_native_sparse_devs());
++        bool glm_dsa_contract_ok = true;
++        const auto run_glm_dsa_contract_test = [&](const char * name, auto && test) {
++            bool passed = false;
++            try {
++                passed = test();
++            } catch (const std::exception & err) {
++                fprintf(stderr, "GLM_DSA test %s threw: %s\n", name, err.what());
++            } catch (...) {
++                fprintf(stderr, "GLM_DSA test %s threw an unknown exception\n", name);
++            }
++            if (!passed) {
++                fprintf(stderr, "GLM_DSA test failed: %s\n", name);
++                glm_dsa_contract_ok = false;
++            }
++        };
++
++        run_glm_dsa_contract_test("rejects-conflicting-indexshare-metadata", [&] {
++            return test_glm_dsa_rejects_conflicting_indexshare_metadata(seed);
++        });
++        run_glm_dsa_contract_test("rejects-shared-first-indexshare-metadata", [&] {
++            return test_glm_dsa_rejects_shared_first_indexshare_metadata(seed);
++        });
++        run_glm_dsa_contract_test("full-shared-indexshare-graph", [&] {
++            return test_glm_dsa_full_shared_indexshare_graph(seed, {});
++        });
++        run_glm_dsa_contract_test("full-shared-shared-indexshare-graph", [&] {
++            return test_glm_dsa_full_shared_shared_indexshare_graph(seed, {});
++        });
++        run_glm_dsa_contract_test("periodic-full-shared-indexshare-graph", [&] {
++            return test_glm_dsa_periodic_full_shared_indexshare_graph(seed, {});
++        });
++        run_glm_dsa_contract_test("direct-sparse-decode-graph", [&] {
++            return test_glm_dsa_direct_sparse_decode_graph(seed, glm_dsa_native_sparse_devs());
++        });
++        run_glm_dsa_contract_test("cpu-compact-decode-graph", [&] {
++            return test_glm_dsa_cpu_compact_decode_graph(seed);
++        });
++        run_glm_dsa_contract_test("cpu-direct-sparse-fallback-graph", [&] {
++            return test_glm_dsa_cpu_direct_sparse_decode_falls_back_graph(seed);
++        });
++        run_glm_dsa_contract_test("compact-min-kv-decode-graph", [&] {
++            return test_glm_dsa_compact_min_kv_decode_graph(seed, glm_dsa_cpu_devs());
++        });
++        run_glm_dsa_contract_test("default-compact-decode-graph", [&] {
++            return test_glm_dsa_default_compact_decode_graph(seed, glm_dsa_cpu_devs());
++        });
++        run_glm_dsa_contract_test("short-history-compact-decode-graph", [&] {
++            return test_glm_dsa_short_history_compact_decode_graph(seed, glm_dsa_cpu_devs());
++        });
++        run_glm_dsa_contract_test("native-top-k-compact-decode-graph", [&] {
++            return test_glm_dsa_native_top_k_compact_decode_graph(seed, glm_dsa_cpu_devs());
++        });
++        run_glm_dsa_contract_test("compact-disabled-decode-graph", [&] {
++            return test_glm_dsa_compact_disabled_decode_graph(seed, glm_dsa_cpu_devs());
++        });
++        run_glm_dsa_contract_test("verify-dense-graph", [&] {
++            return test_glm_dsa_verify_dense_graph(seed, {});
++        });
++        run_glm_dsa_contract_test("native-top-k-verify-dense-graph", [&] {
++            return test_glm_dsa_native_top_k_verify_dense_graph(seed, {});
++        });
++        run_glm_dsa_contract_test("short-prefill-dense-graph", [&] {
++            return test_glm_dsa_short_prefill_dense_graph(seed, {});
++        });
++        run_glm_dsa_contract_test("native-top-k-short-prefill-dense-graph", [&] {
++            return test_glm_dsa_native_top_k_short_prefill_dense_graph(seed, {});
++        });
++        run_glm_dsa_contract_test("long-prefill-dense-mask-guard-graph", [&] {
++            return test_glm_dsa_long_prefill_dense_mask_guard_graph(seed, glm_dsa_native_sparse_devs());
++        });
++        run_glm_dsa_contract_test("native-top-k-long-prefill-dense-mask-guard-graph", [&] {
++            return test_glm_dsa_native_top_k_long_prefill_dense_mask_guard_graph(seed, glm_dsa_native_sparse_devs());
++        });
 +        if (!glm_dsa_contract_ok) {
 +            fprintf(stderr, "GLM_DSA IndexShare metadata contract test failed\n");
 +            all_ok = false;
@@ -1168,7 +1222,7 @@ index d02e65c9e..c7efc95a4 100644
      common_log_flush(common_log_main());
      printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
      printf("|");
-@@ -600,6 +1575,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -600,6 +1629,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                  std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                  char nmse_str[12] = {0};
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
