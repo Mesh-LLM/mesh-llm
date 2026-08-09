@@ -1206,8 +1206,7 @@ export const CONFIGURATION_DEFAULTS = {
         options: [
           { value: 'auto', label: 'auto' },
           { value: 'disabled', label: 'disabled' },
-          { value: 'draft', label: 'draft' },
-          { value: 'ngram', label: 'n-gram' }
+          { value: 'draft', label: 'draft' }
         ]
       }
     },

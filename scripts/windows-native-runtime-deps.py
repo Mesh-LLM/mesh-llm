@@ -136,16 +136,21 @@ def is_host_dll(name: str) -> bool:
 
 def default_search_dirs() -> list[pathlib.Path]:
     candidates: list[pathlib.Path] = []
-    vulkan_sdk = os.environ.get("VULKAN_SDK")
-    if vulkan_sdk:
-        candidates.extend(
-            [pathlib.Path(vulkan_sdk) / "Bin", pathlib.Path(vulkan_sdk) / "Bin32"]
-        )
+    for compiler in ("g++", "gcc"):
+        compiler_path = shutil.which(compiler)
+        if compiler_path:
+            candidates.append(pathlib.Path(compiler_path).parent)
+            break
     candidates.extend(
         pathlib.Path(entry)
         for entry in os.environ.get("PATH", "").split(os.pathsep)
         if entry
     )
+    vulkan_sdk = os.environ.get("VULKAN_SDK")
+    if vulkan_sdk:
+        candidates.extend(
+            [pathlib.Path(vulkan_sdk) / "Bin", pathlib.Path(vulkan_sdk) / "Bin32"]
+        )
     return candidates
 
 

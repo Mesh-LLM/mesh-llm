@@ -1605,11 +1605,6 @@ describe('ConfigurationPage', () => {
     await user.click(screen.getByRole('button', { name: /show advanced/i }))
     expect(screen.getByRole('slider', { name: 'Default draft acceptance threshold' })).toBeDisabled()
 
-    await user.click(modeControl().getByRole('radio', { name: 'n-gram' }))
-    expect(draftPolicyControl().getByRole('radio', { name: 'auto' })).toBeDisabled()
-    expect(pairingBehaviorControl().getByRole('radio', { name: 'Warn & Disable' })).toBeDisabled()
-    expect(screen.getByRole('slider', { name: 'Default draft max tokens' })).toBeDisabled()
-
     await user.click(modeControl().getByRole('radio', { name: 'draft' }))
     expect(draftPolicyControl().getByRole('radio', { name: 'auto' })).not.toBeDisabled()
     expect(pairingBehaviorControl().getByRole('radio', { name: 'Warn & Disable' })).not.toBeDisabled()
