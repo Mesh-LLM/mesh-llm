@@ -3,7 +3,7 @@ use std::path::Path;
 use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
-use skippy_ffi::{ChatMessage as RawChatMessage, Model as RawModel};
+use skippy_ffi::Model as RawModel;
 
 use crate::error::{ensure_ok, free_error};
 use crate::logging::write_native_log_note;
@@ -458,70 +458,28 @@ impl StageModel {
         messages: &[ChatTemplateMessage],
         options: ChatTemplateOptions,
     ) -> Result<String> {
-        let roles = messages
-            .iter()
-            .map(|message| {
-                CString::new(message.role.as_str())
-                    .context("message role contains an interior NUL byte")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let contents = messages
-            .iter()
-            .map(|message| {
-                CString::new(message.content.as_str())
-                    .context("message content contains an interior NUL byte")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let raw_messages = roles
-            .iter()
-            .zip(contents.iter())
-            .map(|(role, content)| RawChatMessage {
-                role: role.as_ptr(),
-                content: content.as_ptr(),
-            })
-            .collect::<Vec<_>>();
-
-        let mut bytes = 0usize;
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_apply_chat_template(
-                self.raw,
-                raw_messages.as_ptr(),
-                raw_messages.len(),
-                options.add_assistant,
-                options.enable_thinking.is_some(),
-                options.enable_thinking.unwrap_or(true),
-                ptr::null_mut(),
-                0,
-                &mut bytes,
-                &mut error,
-            )
-        };
-        if status != Status::BufferTooSmall && status != Status::Ok {
-            ensure_ok(status, error)?;
-        } else {
-            free_error(error);
-        }
-
-        let mut output = vec![0_u8; bytes.max(1)];
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_apply_chat_template(
-                self.raw,
-                raw_messages.as_ptr(),
-                raw_messages.len(),
-                options.add_assistant,
-                options.enable_thinking.is_some(),
-                options.enable_thinking.unwrap_or(true),
-                output.as_mut_ptr().cast(),
-                output.len(),
-                &mut bytes,
-                &mut error,
-            )
-        };
-        ensure_ok(status, error)?;
-        output.truncate(bytes);
-        String::from_utf8(output).context("chat template output is not valid UTF-8")
+        let messages_json = serde_json::to_string(
+            &messages
+                .iter()
+                .map(|message| {
+                    serde_json::json!({
+                        "role": message.role,
+                        "content": message.content,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        let rendered = self.apply_chat_template_json(
+            &messages_json,
+            ChatTemplateJsonOptions {
+                add_assistant: options.add_assistant,
+                enable_thinking: options.enable_thinking,
+                reasoning_format: options.reasoning_format,
+                chat_template_kwargs: options.chat_template_kwargs,
+                ..ChatTemplateJsonOptions::default()
+            },
+        )?;
+        Ok(rendered.prompt)
     }
 
     pub fn apply_chat_template_json(
