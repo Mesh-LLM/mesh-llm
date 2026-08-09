@@ -85,6 +85,8 @@ trait TokenizerSource: Send + Sync {
 struct LoadedStageZeroTokenizer {
     runtime: Arc<Mutex<RuntimeState>>,
     active: Arc<AtomicBool>,
+    #[cfg(test)]
+    initial_check_signal: Option<Arc<std::sync::Barrier>>,
 }
 
 impl LoadedStageZeroTokenizer {
@@ -105,6 +107,10 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
         max_tokens: usize,
     ) -> Result<Vec<i32>, TokenizerCapabilityError> {
         self.ensure_active()?;
+        #[cfg(test)]
+        if let Some(signal) = &self.initial_check_signal {
+            signal.wait();
+        }
         let runtime =
             self.runtime
                 .lock()
@@ -168,8 +174,12 @@ impl TokenizerCapability {
             &config.model_id,
             config.source_model_sha256.as_deref(),
         )?;
-        let source: Arc<dyn TokenizerSource> =
-            Arc::new(LoadedStageZeroTokenizer { runtime, active });
+        let source: Arc<dyn TokenizerSource> = Arc::new(LoadedStageZeroTokenizer {
+            runtime,
+            active,
+            #[cfg(test)]
+            initial_check_signal: None,
+        });
         let inventory = inventory_from_stage(config, &identity, source.as_ref()).map(Arc::new);
         Ok(Self {
             identity,
@@ -422,7 +432,11 @@ async fn tokenize_entrypoint(
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::atomic::AtomicBool, thread, time::Duration};
+    use std::{
+        sync::{Barrier, atomic::AtomicBool},
+        thread,
+        time::Duration,
+    };
 
     use axum::{
         body::{Body, to_bytes},
@@ -562,6 +576,7 @@ mod tests {
         let source = Arc::new(LoadedStageZeroTokenizer {
             runtime: Arc::clone(&runtime),
             active: Arc::clone(&active),
+            initial_check_signal: Some(Arc::new(Barrier::new(2))),
         });
         let held = runtime.lock().expect("runtime lock");
         let (result_tx, result_rx) = std::sync::mpsc::channel();
@@ -572,10 +587,11 @@ mod tests {
                 .expect("send tokenizer result");
         });
 
-        assert!(
-            result_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "tokenizer request should remain queued behind the runtime lock"
-        );
+        source
+            .initial_check_signal
+            .as_ref()
+            .expect("test synchronization signal")
+            .wait();
         active.store(false, Ordering::Release);
         drop(held);
 
