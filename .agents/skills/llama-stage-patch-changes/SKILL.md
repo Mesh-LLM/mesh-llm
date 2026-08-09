@@ -41,6 +41,39 @@ Use this skill when changing the Skippy staged-runtime ABI carried in
 - Do not preserve retired source include paths unless the task explicitly asks
   for compatibility. Continue to version and mirror any binary ABI change.
 
+## ABI PR documentation requirements
+
+Every pull request that changes the Skippy ABI must include an explicit ABI
+inventory in the PR description. Do not describe a changed function signature
+as a newly added function.
+
+The inventory must state, for each change:
+
+- the exact symbol or declaration name and its complete signature or field
+  change;
+- whether it was added, changed, deprecated, deleted, or removed;
+- the public header containing the declaration;
+- the implementation source and Rust FFI mirror, when applicable;
+- the ABI version before and after the change;
+- why the change is required and what data or behavior it enables;
+- whether an older host can load or call the newer runtime, and whether a
+  newer host can detect or reject an older runtime; and
+- the tests that exercise the native ABI boundary, including public-header
+  compilation when a header changes.
+
+Use this compact table in the PR description:
+
+| Status | Symbol/declaration | Public header | Implementation / mirror | Reason | Compatibility |
+|---|---|---|---|---|---|
+| Changed / Added / Removed | exact name and signature | `include/skippy/<capability>.h` | `src/skippy/<capability>.cpp`; Rust FFI path | behavior enabled | old/new runtime behavior |
+
+For a changed function signature, call out that it is an ABI change even when
+the symbol name is unchanged. List removed declarations explicitly as
+“none” when no functions or fields were deleted; this prevents reviewers from
+having to infer removals from a patch diff. Keep this inventory synchronized
+with the ABI version constants in `include/skippy/common.h` and the mirrors in
+`crates/skippy-ffi/src/lib.rs`.
+
 ## Local Flow
 
 Prepare the pinned checkout and current patch queue:
