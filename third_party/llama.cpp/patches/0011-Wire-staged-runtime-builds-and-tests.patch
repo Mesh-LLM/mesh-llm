@@ -1,7 +1,7 @@
-From b1a3259c68c8a7bb377e5c7d28b060a78cd90ce0 Mon Sep 17 00:00:00 2001
+From 9ca4c0879623fcf65c0fb2dcf482ea58ed97494e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 12/12] Wire staged runtime builds and tests
+Subject: [PATCH 11/13] Wire staged runtime builds and tests
 
 ---
  CMakeLists.txt             |    5 +
@@ -1236,4 +1236,5 @@ index a1ed2a76f..483751c0c 100644
                      if (logits_cpu.empty()) {
                          model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
+

@@ -1,7 +1,7 @@
-From c80f6a21a588e9ad1581c8fd23a77e863dad2b66 Mon Sep 17 00:00:00 2001
+From 070c108276ac7ef4f68b2aaa71ce47ff9c17ef3f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 17:06:42 +1000
-Subject: [PATCH 06/12] Add Skippy model lifecycle and package support
+Subject: [PATCH 05/13] Add Skippy model lifecycle and package support
 
 ---
  src/skippy/devices.cpp                  | 106 +++
@@ -2350,5 +2350,5 @@ index 000000000..c20c52e71
 +};
 +
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

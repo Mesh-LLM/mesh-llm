@@ -1,7 +1,7 @@
-From ff55c4a85c4517c3f5d007a2de5a96062e40dfbf Mon Sep 17 00:00:00 2001
+From 15a05fecf87022415ea49fa52931131bbefbf654 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 02/12] Add staged model graph and family support
+Subject: [PATCH 01/13] Add staged model graph and family support
 
 ---
  include/llama.h                |   7 +
@@ -2512,7 +2512,7 @@ index 3812c594e..264b0b5b1 100644
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index be0a0df55..0e45dc460 100644
+index 7a70585fa..57ee4777f 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -311,6 +311,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -2524,7 +2524,7 @@ index be0a0df55..0e45dc460 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -1135,6 +1137,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
+@@ -1136,6 +1138,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
      std::fill(hparams.is_swa_impl.begin(),   hparams.is_swa_impl.end(), 0);
      std::fill(hparams.is_recr_impl.begin(),  hparams.is_recr_impl.end(),  llm_arch_is_recurrent(ml.get_arch()) ? 1 : 0);
      std::fill(hparams.is_indexer_full_impl.begin(), hparams.is_indexer_full_impl.end(), 0);
@@ -2532,7 +2532,7 @@ index be0a0df55..0e45dc460 100644
  
      std::fill(hparams.xielu_alpha_n.begin(), hparams.xielu_alpha_n.end(), 0.0f);
      std::fill(hparams.xielu_alpha_p.begin(), hparams.xielu_alpha_p.end(), 0.0f);
-@@ -1313,13 +1316,29 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1314,13 +1317,29 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
  
      const int i_gpu_start = std::max(n_layer_all + 1 - n_gpu_layers, 0);
      const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_layer_all + 1);
@@ -2563,7 +2563,7 @@ index be0a0df55..0e45dc460 100644
          auto * dev = devices.at(layer_gpu).dev;
          LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
          return {dev, &pimpl->gpu_buft_list.at(dev)};
-@@ -1403,13 +1422,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1404,13 +1423,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              }
  
              // MoE expert weight scales (per-expert, shape {n_expert})
@@ -2580,7 +2580,7 @@ index be0a0df55..0e45dc460 100644
                  layer.ffn_up_exps_s = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "scale", i), {n_expert}, TENSOR_NOT_REQUIRED);
              }
  
-@@ -2047,6 +2066,22 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
+@@ -2048,6 +2067,22 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
      return layers[il].rope_short;
  }
  
@@ -2603,7 +2603,7 @@ index be0a0df55..0e45dc460 100644
  llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
      llama_memory_i * res;
  
-@@ -2107,15 +2142,26 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2108,15 +2143,26 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              std::max((uint32_t) 1, cparams.n_seq_max),
                              cparams.n_seq_max,
                              cparams.n_rs_seq,
@@ -2631,7 +2631,7 @@ index be0a0df55..0e45dc460 100644
                      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                          filter_attn = [&](uint32_t il) {
                              return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
-@@ -2132,6 +2178,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2133,6 +2179,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          };
                      }
  
@@ -2641,7 +2641,7 @@ index be0a0df55..0e45dc460 100644
                      if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
                          // Use hybrid-iswa for hybrid models with SWA
                          res = new llama_memory_hybrid_iswa(
-@@ -2201,6 +2250,16 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2202,6 +2251,16 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          }
                      }
  
@@ -2658,7 +2658,7 @@ index be0a0df55..0e45dc460 100644
                      if (arch == LLM_ARCH_DEEPSEEK4) {
                          GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
  
-@@ -2453,6 +2512,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -2454,6 +2513,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_NEMOTRON_H:
          case LLM_ARCH_NEMOTRON_H_MOE:
          case LLM_ARCH_KIMI_LINEAR:
@@ -2666,7 +2666,7 @@ index be0a0df55..0e45dc460 100644
              return LLAMA_ROPE_TYPE_NONE;
  
          // use what we call a normal RoPE, operating on pairs of consecutive head values
-@@ -2770,7 +2830,8 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
+@@ -2771,7 +2831,8 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
          int flags) {
      const int64_t n_embd_qkv = n_embd_q_ + n_embd_k_ + n_embd_v_;
      layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", bid), {n_embd_, n_embd_qkv}, TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
@@ -2677,10 +2677,10 @@ index be0a0df55..0e45dc460 100644
      } else {
          layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", bid), {n_embd_, n_embd_q_}, flags);
 diff --git a/src/llama-model.h b/src/llama-model.h
-index d6a40fa30..8d00d5fa1 100644
+index 056a6efa5..418411121 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -532,6 +532,15 @@ struct llama_layer {
+@@ -533,6 +533,15 @@ struct llama_layer {
      struct llama_layer_shortconv shortconv;
  
      struct llama_layer_nextn nextn;
@@ -5667,10 +5667,10 @@ index 367f6990d..2426dfa0f 100644
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
  
 diff --git a/src/models/laguna.cpp b/src/models/laguna.cpp
-index fb55ec12f..7144a389c 100644
+index 82c9a9538..e23087c68 100644
 --- a/src/models/laguna.cpp
 +++ b/src/models/laguna.cpp
-@@ -157,7 +157,12 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+@@ -158,7 +158,12 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -5684,7 +5684,7 @@ index fb55ec12f..7144a389c 100644
      // No MuP embedding scale (laguna omits this; afmoe scales by sqrt(hidden)).
  
      ggml_tensor * inp_pos = build_inp_pos();
-@@ -166,11 +171,11 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+@@ -167,11 +172,11 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
      const bool has_swa = hparams.swa_type != LLAMA_SWA_TYPE_NONE;
      llm_graph_input_attn_kv      * inp_attn_kv   = has_swa ? nullptr : build_attn_inp_kv();
      llm_graph_input_attn_kv_iswa * inp_attn_iswa = has_swa ? build_attn_inp_kv_iswa() : nullptr;
@@ -5698,7 +5698,7 @@ index fb55ec12f..7144a389c 100644
          const bool    is_swa_il   = hparams.is_swa(il);
          const int64_t n_head_il   = hparams.n_head(il);
          const int64_t n_head_kv_il = hparams.n_head_kv(il);
-@@ -320,6 +325,14 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+@@ -321,6 +326,14 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
      }
  
      cur = inpL;
@@ -8266,5 +8266,5 @@ index 313500129..0aada2095 100644
  
      cb(cur, "result_norm", -1);
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

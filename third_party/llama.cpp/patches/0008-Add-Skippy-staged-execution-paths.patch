@@ -1,7 +1,7 @@
-From 47f118d6975cd752d44a24b6842efa06fade1be8 Mon Sep 17 00:00:00 2001
+From 0ef02bed2e78919a7752d5ac656b1a00b0987ce6 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 09/12] Add Skippy staged execution paths
+Subject: [PATCH 08/13] Add Skippy staged execution paths
 
 ---
  include/skippy/execution.h      | 193 ++++++++++
@@ -1442,5 +1442,5 @@ index 000000000..b140efbb0
 +
 +} // extern "C"
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

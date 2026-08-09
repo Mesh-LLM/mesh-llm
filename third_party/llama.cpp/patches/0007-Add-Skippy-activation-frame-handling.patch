@@ -1,7 +1,7 @@
-From ed83bf4b97104b9cab160784cfa644c8a2a3e3bd Mon Sep 17 00:00:00 2001
+From 166bc749483a06b00951f127cfb3f14cb1c4648f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 08/12] Add Skippy activation frame handling
+Subject: [PATCH 07/13] Add Skippy activation frame handling
 
 ---
  include/skippy/activation.h      |  44 ++
@@ -2726,5 +2726,5 @@ index 000000000..581be3ffd
 +};
 +
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

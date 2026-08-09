@@ -1,7 +1,7 @@
-From a7a9f4e7c1f581b2d235c9ce92b1735baba1e6c9 Mon Sep 17 00:00:00 2001
+From 51070ae622a354b7267d363067261a24f85be39e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 04/12] Add Inkling model and multimodal support
+Subject: [PATCH 03/13] Add Inkling model and multimodal support
 
 ---
  conversion/__init__.py         |   2 +
@@ -2929,5 +2929,5 @@ index 93ca8cbcf..a70f326a9 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

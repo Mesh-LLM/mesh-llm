@@ -1,7 +1,7 @@
-From de24896094522dfe3476119af452ff778b65377c Mon Sep 17 00:00:00 2001
+From add4b74077843fe34edfd02cccfe5e6c9eecafb1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 11/12] Add Skippy tokenization and stage chat
+Subject: [PATCH 10/13] Add Skippy tokenization and stage chat
 
 ---
  common/chat-auto-parser-generator.cpp |  51 ++--
@@ -1583,5 +1583,5 @@ index 01b07953a..991102421 100644
  
              bool got_runtime_error = false;
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 
