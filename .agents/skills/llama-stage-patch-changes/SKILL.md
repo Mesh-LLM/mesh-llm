@@ -47,6 +47,25 @@ Use this skill when changing the Skippy staged-runtime ABI carried in
 - Do not preserve retired source include paths unless the task explicitly asks
   for compatibility. Continue to version and mirror any binary ABI change.
 
+## Native API documentation
+
+- Treat Doxygen-style comments in `include/skippy.h` and
+  `include/skippy/*.h` as the source of truth for the public API reference.
+  Every public header and exported `skippy_*` function must have an adjacent
+  `@brief` describing what it is used for.
+- When the public header surface changes, prepare the patched checkout and
+  regenerate the website reference before finishing the change:
+
+  ```bash
+  scripts/prepare-llama.sh pinned
+  python3 scripts/generate-skippy-api-doc.py
+  python3 scripts/generate-skippy-api-doc.py --check
+  ```
+
+- Commit `website/src/docs/pages/skippy-api.md` alongside the native queue
+  change. The generated page must not be hand-edited, and its inventory must
+  include every public header and exported function in the prepared checkout.
+
 ## ABI PR documentation requirements
 
 Every pull request that changes the Skippy ABI must include an explicit ABI
