@@ -325,6 +325,21 @@ impl StageModel {
     }
 
     pub fn tokenize(&self, text: &str, add_special: bool) -> Result<Vec<i32>> {
+        self.tokenize_bounded(text, add_special, usize::MAX)?
+            .ok_or_else(|| anyhow!("tokenizer output exceeds the requested limit"))
+    }
+
+    /// Tokenize without allocating a token buffer larger than `max_tokens`.
+    ///
+    /// The native ABI reports the required count during its sizing call. When
+    /// that count exceeds the bound, this returns `Ok(None)` before allocating
+    /// the output vector.
+    pub fn tokenize_bounded(
+        &self,
+        text: &str,
+        add_special: bool,
+        max_tokens: usize,
+    ) -> Result<Option<Vec<i32>>> {
         let text = CString::new(text).context("text contains an interior NUL byte")?;
         let mut count = 0usize;
         let mut error = ptr::null_mut();
@@ -345,6 +360,10 @@ impl StageModel {
             free_error(error);
         }
 
+        if count > max_tokens {
+            return Ok(None);
+        }
+
         let mut tokens = vec![0_i32; count];
         let mut error = ptr::null_mut();
         let status = unsafe {
@@ -358,9 +377,13 @@ impl StageModel {
                 &mut error,
             )
         };
+        if status == Status::BufferTooSmall {
+            free_error(error);
+            return Ok(None);
+        }
         ensure_ok(status, error)?;
         tokens.truncate(count);
-        Ok(tokens)
+        Ok(Some(tokens))
     }
 
     pub fn detokenize(&self, tokens: &[i32]) -> Result<String> {

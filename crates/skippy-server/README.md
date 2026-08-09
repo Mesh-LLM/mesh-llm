@@ -77,6 +77,20 @@ topology, builds the stage configs, loads/starts handles, watches readiness and
 status, withdraws routes before shutdown, and then calls handle shutdown during
 unload or replan.
 
+### In-process tokenizer capability
+
+`SkippyRuntimeHandle::tokenizer_capability()` returns a model-bound
+`skippy_tokenizer::Tokenizer` backed by the already-loaded stage-zero runtime.
+Consumers can call `tokenize_batch` for bounded, ordered results without an HTTP
+round trip or a second model load. Every request supplies the expected
+`TokenizerIdentity`; mismatches are returned as per-item errors. The identity
+includes the model, source digest, tokenizer id, stage, and serving profile.
+
+The `/v1/tokenize` route is retained only as an explicit compatibility and
+out-of-band adapter. It accepts the legacy `add_special` field as well as the
+facade's `special_tokens` policy and is not part of generation or proposal
+deadline handling.
+
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.

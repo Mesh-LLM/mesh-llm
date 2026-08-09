@@ -391,7 +391,8 @@ unpublished_registry_deps() {
                 skippy-cache \
                 skippy-metrics \
                 skippy-protocol \
-                skippy-runtime
+                skippy-runtime \
+                skippy-tokenizer
             ;;
         mesh-native-serving-plugin-host)
             printf '%s\n' \
@@ -473,6 +474,7 @@ should_skip_initial_dry_run() {
 
 publish_crates=(
     mesh-llm-identity
+    skippy-tokenizer
     mesh-llm-protocol
     mesh-llm-routing
     mesh-llm-types

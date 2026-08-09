@@ -1,6 +1,7 @@
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex, TryLockError},
+    sync::atomic::{AtomicBool, Ordering},
+    sync::{Arc, Mutex, OnceLock, TryLockError},
 };
 
 use anyhow::{Context, Result};
@@ -84,6 +85,8 @@ pub struct SkippyRuntimeHandle {
     runtime: Arc<Mutex<RuntimeState>>,
     telemetry: Telemetry,
     status: Arc<Mutex<RuntimeHandleState>>,
+    tokenizer_active: Arc<AtomicBool>,
+    tokenizer_capability: OnceLock<Result<TokenizerCapability, TokenizerCapabilityError>>,
     /// Last session stats read out of [`Self::runtime`], and when.
     ///
     /// A native call (long prefill, decode batch) holds the runtime lock while
@@ -140,6 +143,8 @@ impl SkippyRuntimeHandle {
                 stopped_at_unix_nanos: None,
                 last_error: None,
             })),
+            tokenizer_active: Arc::new(AtomicBool::new(true)),
+            tokenizer_capability: OnceLock::new(),
             last_session_stats: Arc::new(Mutex::new(initial_session_stats)),
         }
     }
@@ -241,7 +246,15 @@ impl SkippyRuntimeHandle {
     /// Returns the stateless tokenizer capability backed by this already-loaded
     /// stage-zero runtime. This never opens a second model.
     pub fn tokenizer_capability(&self) -> Result<TokenizerCapability, TokenizerCapabilityError> {
-        TokenizerCapability::from_stage_zero(&self.config, self.runtime.clone())
+        self.tokenizer_capability
+            .get_or_init(|| {
+                TokenizerCapability::from_stage_zero_with_lifecycle(
+                    &self.config,
+                    self.runtime.clone(),
+                    self.tokenizer_active.clone(),
+                )
+            })
+            .clone()
     }
 
     pub fn status(&self) -> EmbeddedRuntimeStatus {
@@ -270,6 +283,7 @@ impl SkippyRuntimeHandle {
     }
 
     pub fn shutdown(&self) {
+        self.tokenizer_active.store(false, Ordering::Release);
         let mut status = self.status.lock().expect("runtime status lock poisoned");
         if status.state == EmbeddedState::Stopped {
             return;
