@@ -134,7 +134,7 @@ read it directly:
 | `ACTIVATION_FRAME` | `1 << 7` | Descriptor-plus-payload execution calls |
 | `SESSION_RESET` | `1 << 9` | `skippy_session_reset` |
 | `BATCH_VERIFY` | `1 << 10` | `skippy_verify_tokens` |
-| `CHAT_TEMPLATE` | `1 << 11` | `skippy_apply_chat_template` |
+| `CHAT_TEMPLATE` | `1 << 11` | `skippy_apply_chat_template_json` |
 | `SAMPLING_CONFIG` | `1 << 12` | Sampled decode calls using `SamplingConfig` |
 | `BATCH_VERIFY_FRAME` | `1 << 13` | `skippy_verify_tokens_frame` |
 | `LOGIT_BIAS` | `1 << 15` | `SamplingConfig.logit_bias` |
@@ -230,7 +230,6 @@ hook currently bound by this crate.
 | `skippy_tokenize` | Tokenizes text with optional special-token insertion. |
 | `skippy_detokenize` | Converts token IDs back to text bytes. |
 | `skippy_token_is_eog` | Reports whether a token is an end-of-generation token. |
-| `skippy_apply_chat_template` | Applies the model chat template, with optional assistant prompt and thinking-mode override. |
 | `skippy_apply_chat_template_json` | Applies llama.cpp's OpenAI-compatible chat template path from JSON messages, tools, and tool-choice metadata, returning the prompt plus parser metadata. |
 | `skippy_parse_chat_response_json` | Parses generated assistant text with llama.cpp's chat parser and returns an OpenAI-compatible assistant message JSON object, including tool calls when emitted by the model. |
 
