@@ -4,9 +4,6 @@ use crate::network::openai::routing_rank::{capabilities_for_model, descriptor_fo
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-const STANDARD_REASONING_EFFORTS: &[&str] =
-    &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-
 pub async fn send_models_list_with_descriptors(
     mut stream: TcpStream,
     models: &[String],
@@ -73,16 +70,6 @@ fn models_list_json(
                 "audio_status": capabilities.audio_status(),
                 "reasoning_status": capabilities.reasoning_status(),
             });
-            if capabilities.reasoning == crate::models::CapabilityLevel::Supported
-                && let Some(object) = model.as_object_mut()
-            {
-                object.insert(
-                    "reasoning".to_string(),
-                    serde_json::json!({
-                        "supported_efforts": STANDARD_REASONING_EFFORTS,
-                    }),
-                );
-            }
             if let Some(metadata) = model_metadata_json(base_model, descriptor, runtimes)
                 && let Some(object) = model.as_object_mut()
             {
@@ -524,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn models_list_reports_supported_reasoning_efforts() {
+    fn models_list_does_not_advertise_reasoning_effort_values() {
         let models = vec!["Inkling-32B-Q4_K_M".to_string()];
         let descriptors = vec![local_gguf_descriptor_with_capabilities(
             &models[0],
@@ -536,9 +523,7 @@ mod tests {
 
         let body = models_list_json(&models, &descriptors, &[]);
 
-        assert_eq!(
-            body["data"][0]["reasoning"]["supported_efforts"],
-            serde_json::json!(STANDARD_REASONING_EFFORTS)
-        );
+        assert_eq!(body["data"][0]["reasoning_status"], "supported");
+        assert!(body["data"][0].get("reasoning").is_none());
     }
 }
