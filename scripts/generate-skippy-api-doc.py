@@ -10,23 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-HEADER_BRIEFS = {
-    "skippy.h": "Umbrella include for the complete capability-oriented API.",
-    "common.h": "ABI versioning, feature discovery, status codes, and errors.",
-    "devices.h": "Backend-device enumeration and capability reporting.",
-    "events.h": "Versioned model-open and runtime lifecycle callbacks.",
-    "runtime.h": "Model loading, session lifecycle, and llama.cpp context access.",
-    "activation.h": "Activation-frame descriptors exchanged between stages.",
-    "execution.h": "Prefill, decode, verification, framing, and batching.",
-    "state.h": "KV, recurrent, checkpoint, and resident-prefix state movement.",
-    "sampling.h": "Sampling parameters for decode entrypoints.",
-    "speculative_decoding.h": "Native MTP draft results and request-local n-gram drafting.",
-    "tokenization.h": "Token, detokenization, chat-template, and response helpers.",
-    "model_package.h": "GGUF tensor inspection and layer-package writing.",
-    "signals.h": "Generation uncertainty and repetition signals.",
-}
-
-
 @dataclass(frozen=True)
 class Function:
     name: str
@@ -70,6 +53,7 @@ def function_anchor(function: Function) -> str:
 def comment_brief(comment: str) -> str:
     lines = []
     for line in comment.splitlines():
+        line = re.sub(r"^\s*\*/\s*$", "", line)
         line = re.sub(r"^\s*/?\*+\s?", "", line)
         line = re.sub(r"\s*\*/\s*$", "", line)
         lines.append(line.strip())
@@ -83,7 +67,11 @@ def comment_brief(comment: str) -> str:
 def parse_header(path: Path) -> Header:
     text = path.read_text()
     file_comment = re.search(r"/\*\*.*?@file.*?\*/", text, re.DOTALL)
-    brief = HEADER_BRIEFS[path.name]
+    if file_comment is None:
+        raise ValueError(f"missing file documentation in {path}")
+    brief = comment_brief(file_comment.group(0))
+    if not brief:
+        raise ValueError(f"missing @brief for {path}")
 
     functions: list[Function] = []
     function_pattern = re.compile(r"LLAMA_API\s+.*?;", re.DOTALL)
@@ -94,7 +82,8 @@ def parse_header(path: Path) -> Header:
             continue
         preceding = text[: match.start()]
         comments = list(re.finditer(r"/\*\*.*?\*/", preceding, re.DOTALL))
-        function_brief = comment_brief(comments[-1].group(0)) if comments else ""
+        comment = comments[-1] if comments and not preceding[comments[-1].end():].strip() else None
+        function_brief = comment_brief(comment.group(0)) if comment else ""
         if not function_brief:
             raise ValueError(f"missing @brief for {name_match.group(1)} in {path}")
         functions.append(Function(name_match.group(1), declaration, function_brief))
@@ -103,6 +92,8 @@ def parse_header(path: Path) -> Header:
     for match in re.finditer(r"^(?:struct|enum)\s+(skippy_[a-zA-Z0-9_]+)\s*(?:\{|;)", text, re.MULTILINE):
         declarations.append(match.group(1))
     for match in re.finditer(r"^#define\s+(SKIPPY_[A-Z0-9_]+)(?:[ \t]+(.+))?$", text, re.MULTILINE):
+        if match.group(1) == "SKIPPY_H" or match.group(1).endswith("_H"):
+            continue
         value = (match.group(2) or "").strip()
         declarations.append(f"{match.group(1)} = {value}" if value else match.group(1))
 
@@ -213,7 +204,7 @@ def render(headers: list[Header], include_dir: Path) -> str:
                     "",
                 ]
             )
-        lines.extend([f'<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>', ""])
+        lines.extend(['<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>', ""])
 
     lines.extend([ '<a id="skippy-native-declarations"></a>', "## Native declarations", "", "The headers also define the following enums, structs, opaque handles, and ABI constants:", ""])
     for header in headers:
@@ -254,7 +245,7 @@ def main() -> int:
         )
         return 2
 
-    paths = [args.include_dir.parent / "skippy.h"] + sorted(args.include_dir.glob("*.h"))
+    paths = [args.include_dir.parent / "skippy.h", *sorted(args.include_dir.glob("*.h"))]
     headers = [parse_header(path) for path in paths if path.exists()]
     output = render(headers, args.include_dir)
     if args.check:

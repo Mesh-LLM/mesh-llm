@@ -160,19 +160,19 @@ Capability consumers can include a narrower header:
 
 | Header | Used for |
 |---|---|
-| `include/skippy.h` | Umbrella include for the complete capability-oriented API. |
-| `include/skippy/activation.h` | Activation-frame descriptors exchanged between stages. |
-| `include/skippy/common.h` | ABI versioning, feature discovery, status codes, and errors. |
-| `include/skippy/devices.h` | Backend-device enumeration and capability reporting. |
-| `include/skippy/events.h` | Versioned model-open and runtime lifecycle callbacks. |
-| `include/skippy/execution.h` | Prefill, decode, verification, framing, and batching. |
-| `include/skippy/model_package.h` | GGUF tensor inspection and layer-package writing. |
+| `include/skippy.h` | Umbrella include for the capability-oriented Skippy C API. Include a narrower header when a consumer only needs one capability. This file exists for consumers that want the complete staged-runtime surface. |
+| `include/skippy/activation.h` | Describes activation-frame payloads exchanged between stages. The descriptor carries the payload representation, layer range, token and sequence shape, and model-family sideband flags needed by downstream stages. |
+| `include/skippy/common.h` | ABI versioning, feature discovery, status codes, and errors. Every other public Skippy header depends on this capability boundary. The ABI is intentionally C-compatible so Rust and other native callers do not depend on private llama.cpp C++ layouts. |
+| `include/skippy/devices.h` | Enumerates backend devices available to the staged runtime. |
+| `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
+| `include/skippy/execution.h` | Prefill, decode, verification, activation-frame, and batched execution. |
+| `include/skippy/model_package.h` | Inspects GGUF tensors and writes layer-range or multi-part packages. |
 | `include/skippy/runtime.h` | Model loading, session lifecycle, and llama.cpp context access. |
-| `include/skippy/sampling.h` | Sampling parameters for decode entrypoints. |
-| `include/skippy/signals.h` | Generation uncertainty and repetition signals. |
+| `include/skippy/sampling.h` | Sampling parameters shared by single-token and batched decode calls. |
+| `include/skippy/signals.h` | Generation uncertainty and repetition signals for routing or policy. |
 | `include/skippy/speculative_decoding.h` | Native MTP draft results and request-local n-gram drafting. |
-| `include/skippy/state.h` | KV, recurrent, checkpoint, and resident-prefix state movement. |
-| `include/skippy/tokenization.h` | Token, detokenization, chat-template, and response helpers. |
+| `include/skippy/state.h` | Moves KV, recurrent, checkpoint, and resident-prefix state. |
+| `include/skippy/tokenization.h` | Token, detokenization, chat-template, and chat-response helpers. |
 
 <a id="skippy-abi-conventions"></a>
 ## ABI conventions
@@ -1281,18 +1281,15 @@ LLAMA_API enum skippy_status skippy_parse_chat_response_json(
 
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
-- `skippy.h`: `SKIPPY_H`
-- `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_H`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_COMMON_H`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 37`
-- `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`, `SKIPPY_DEVICES_H`
-- `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_EVENTS_H`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
-- `execution.h`: `SKIPPY_EXECUTION_H`
-- `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_slice_plan`, `skippy_tensor_info`, `SKIPPY_MODEL_PACKAGE_H`
-- `runtime.h`: `skippy_load_mode`, `skippy_model`, `skippy_session`, `skippy_runtime_config`, `SKIPPY_RUNTIME_H`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`
-- `sampling.h`: `skippy_sampling_config`, `SKIPPY_SAMPLING_H`, `SKIPPY_MAX_LOGIT_BIAS = 256`
-- `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`, `SKIPPY_SIGNALS_H`
-- `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_SPECULATIVE_DECODING_H`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`
-- `state.h`: `skippy_kv_page_flag`, `skippy_kv_page_desc`, `SKIPPY_STATE_H`
-- `tokenization.h`: `SKIPPY_TOKENIZATION_H`
+- `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 37`
+- `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
+- `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
+- `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_slice_plan`, `skippy_tensor_info`
+- `runtime.h`: `skippy_load_mode`, `skippy_model`, `skippy_session`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`
+- `sampling.h`: `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`
+- `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`
+- `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`
+- `state.h`: `skippy_kv_page_flag`, `skippy_kv_page_desc`
 
 Source directory: `include/skippy/`. Regenerate this page after changing any public header or exported function.
