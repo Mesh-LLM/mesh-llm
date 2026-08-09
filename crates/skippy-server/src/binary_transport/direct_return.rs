@@ -547,7 +547,7 @@ mod tests {
         let session_id = 67;
         let hub = Arc::new(PredictionReturnHub::default());
         let receiver = hub.register(request_id, session_id).unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = TcpListener::bind("localhost:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let open = prediction_return_open_message(request_id, session_id);
