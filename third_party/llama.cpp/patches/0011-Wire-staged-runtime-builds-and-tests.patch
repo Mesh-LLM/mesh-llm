@@ -1,4 +1,4 @@
-From 9ca4c0879623fcf65c0fb2dcf482ea58ed97494e Mon Sep 17 00:00:00 2001
+From 48f7af92c658d123f6a4933eaa07fda6d0ad8481 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
 Subject: [PATCH 11/13] Wire staged runtime builds and tests
@@ -8,8 +8,8 @@ Subject: [PATCH 11/13] Wire staged runtime builds and tests
  common/CMakeLists.txt      |    1 +
  src/CMakeLists.txt         |   17 +
  tests/CMakeLists.txt       |   11 +
- tests/test-llama-archs.cpp | 1045 +++++++++++++++++++++++++++++++++++-
- 5 files changed, 1074 insertions(+), 5 deletions(-)
+ tests/test-llama-archs.cpp | 1046 +++++++++++++++++++++++++++++++++++-
+ 5 files changed, 1075 insertions(+), 5 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 3df1d82db..8e93a13ce 100644
@@ -104,7 +104,7 @@ index 7a93b19a0..4a1db624c 100644
  llama_build_and_test(test-autorelease.cpp       LABEL "model")
  llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index a1ed2a76f..483751c0c 100644
+index a1ed2a76f..927df38cd 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -14,6 +14,7 @@
@@ -1136,11 +1136,12 @@ index a1ed2a76f..483751c0c 100644
  static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -551,6 +1501,85 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -551,6 +1501,86 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
      const std::string template_row_res = "%15s %10s|%20s|\n";
  
      bool all_ok = true;
-+    if (target_arch == LLM_ARCH_UNKNOWN || target_arch == LLM_ARCH_GLM_DSA) {
++    if ((target_arch == LLM_ARCH_UNKNOWN || target_arch == LLM_ARCH_GLM_DSA) &&
++        arch_supported(LLM_ARCH_GLM_DSA)) {
 +        bool glm_dsa_contract_ok = true;
 +        const auto run_glm_dsa_contract_test = [&](const char * name, auto && test) {
 +            bool passed = false;
@@ -1222,7 +1223,7 @@ index a1ed2a76f..483751c0c 100644
      common_log_flush(common_log_main());
      printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
      printf("|");
-@@ -600,6 +1629,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -600,6 +1630,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                  std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                  char nmse_str[12] = {0};
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
