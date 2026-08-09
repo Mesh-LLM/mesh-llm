@@ -8,8 +8,8 @@ Subject: [PATCH 12/12] Wire staged runtime builds and tests
  common/CMakeLists.txt      |    1 +
  src/CMakeLists.txt         |   17 +
  tests/CMakeLists.txt       |   11 +
- tests/test-llama-archs.cpp | 1042 +++++++++++++++++++++++++++++++++++-
- 5 files changed, 1071 insertions(+), 5 deletions(-)
+ tests/test-llama-archs.cpp | 1045 +++++++++++++++++++++++++++++++++++-
+ 5 files changed, 1074 insertions(+), 5 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 3df1d82db..8e93a13ce 100644
@@ -104,7 +104,7 @@ index 7a93b19a0..4a1db624c 100644
  llama_build_and_test(test-autorelease.cpp       LABEL "model")
  llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index d02e65c9e..fd6f84603 100644
+index a1ed2a76f..483751c0c 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -14,6 +14,7 @@
@@ -1113,7 +1113,7 @@ index d02e65c9e..fd6f84603 100644
 +        return false; // TODO fixture params for the arch-specific hparams (d_rel, rel_extent, shortconv, logit_scale_denom)
 +    }
  
-     // FIXME some models are segfaulting with WebGPU:
+     // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
  #ifdef GGML_USE_WEBGPU
 @@ -438,6 +1374,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
@@ -1222,16 +1222,18 @@ index d02e65c9e..fd6f84603 100644
      common_log_flush(common_log_main());
      printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
      printf("|");
-@@ -600,6 +1629,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -600,6 +1629,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                  std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                  char nmse_str[12] = {0};
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
 +                if (arch == LLM_ARCH_GLM_DSA && !glm_dsa_backend_config_supported(dc.devs)) {
 +                    skip = true;
 +                }
- #if defined(GGML_USE_WEBGPU)
-                 skip = true; // FIXME
- #endif // GGML_USE_WEBGPU
++#if defined(GGML_USE_WEBGPU)
++                skip = true; // FIXME
++#endif // GGML_USE_WEBGPU
+                 if (!skip) {
+                     if (logits_cpu.empty()) {
+                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
 -- 
 2.54.0 (Apple Git-157)
-
