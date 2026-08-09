@@ -105,12 +105,14 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
         max_tokens: usize,
     ) -> Result<Vec<i32>, TokenizerCapabilityError> {
         self.ensure_active()?;
-        let tokens = self
-            .runtime
-            .lock()
-            .map_err(|_| TokenizerCapabilityError::BackendFailure {
-                message: "runtime lock poisoned".to_owned(),
-            })?
+        let runtime =
+            self.runtime
+                .lock()
+                .map_err(|_| TokenizerCapabilityError::BackendFailure {
+                    message: "runtime lock poisoned".to_owned(),
+                })?;
+        self.ensure_active()?;
+        let tokens = runtime
             .model
             .tokenize_bounded(text, add_special, max_tokens)
             .map_err(|error| TokenizerCapabilityError::BackendFailure {
@@ -127,6 +129,7 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
                 .map_err(|_| TokenizerCapabilityError::BackendFailure {
                     message: "runtime lock poisoned".to_owned(),
                 })?;
+        self.ensure_active()?;
         token_ids
             .iter()
             .map(|token_id| {
@@ -419,6 +422,8 @@ async fn tokenize_entrypoint(
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::atomic::AtomicBool, thread, time::Duration};
+
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode, header::CONTENT_TYPE},
@@ -548,6 +553,39 @@ mod tests {
             special_tokens: SpecialTokenPolicy::Omit,
             include_token_pieces: false,
         }
+    }
+
+    #[test]
+    fn queued_tokenization_rechecks_lifecycle_after_runtime_lock() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let active = Arc::new(AtomicBool::new(true));
+        let source = Arc::new(LoadedStageZeroTokenizer {
+            runtime: Arc::clone(&runtime),
+            active: Arc::clone(&active),
+        });
+        let held = runtime.lock().expect("runtime lock");
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let request_source = Arc::clone(&source);
+        thread::spawn(move || {
+            result_tx
+                .send(request_source.tokenize("hello", false, 8))
+                .expect("send tokenizer result");
+        });
+
+        assert!(
+            result_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "tokenizer request should remain queued behind the runtime lock"
+        );
+        active.store(false, Ordering::Release);
+        drop(held);
+
+        assert_eq!(
+            result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("receive tokenizer result")
+                .unwrap_err(),
+            TokenizerCapabilityError::RuntimeUnavailable
+        );
     }
 
     async fn post_tokenize(capability: TokenizerCapability, request: &TokenizeRequest) -> Response {

@@ -284,6 +284,8 @@ impl SkippyRuntimeHandle {
 
     pub fn shutdown(&self) {
         self.tokenizer_active.store(false, Ordering::Release);
+        let runtime = self.runtime.lock().expect("runtime lock poisoned");
+        drop(runtime);
         let mut status = self.status.lock().expect("runtime status lock poisoned");
         if status.state == EmbeddedState::Stopped {
             return;
@@ -701,6 +703,28 @@ mod tests {
         assert_eq!(status.sessions.lane_count, 4);
         assert_eq!(status.sessions.active_sessions, 0);
         assert!(status.runtime_loaded);
+    }
+
+    #[test]
+    fn shutdown_waits_for_runtime_lock_after_invalidating_tokenizer() {
+        let handle = Arc::new(test_handle(1));
+        let held = handle.runtime.lock().expect("runtime lock");
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let shutdown_handle = Arc::clone(&handle);
+        thread::spawn(move || {
+            shutdown_handle.shutdown();
+            shutdown_tx.send(()).expect("send shutdown result");
+        });
+
+        assert!(
+            shutdown_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "shutdown should synchronize with an in-flight runtime operation"
+        );
+        drop(held);
+        shutdown_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("shutdown should complete after the runtime lock is released");
+        assert_eq!(handle.status().state, EmbeddedState::Stopped);
     }
 
     fn empty_cache(value: u32) -> Mutex<Captured<u32>> {
