@@ -22,6 +22,12 @@ Use this skill when changing the Skippy staged-runtime ABI carried in
   contiguous.
 - Keep public ABI declarations separate from independently reviewable model
   lifecycle, loading, and package implementation changes.
+- The Skippy native ABI is an internal lockstep boundary, not a stable
+  cross-version compatibility contract. It may change whenever the feature
+  requires it; update the Rust FFI mirror and all callers in the same change.
+- Do not preserve old native ABI signatures for compatibility. Bump the ABI
+  version when the boundary changes so mismatches are diagnosable, and make
+  sure the shipped Rust side and native runtime are built from the same queue.
 - Do not add a terminal source-reorganization patch. A deliberate layout or
   ownership change must be represented in the recreated patches that own the
   affected capabilities.
@@ -56,23 +62,25 @@ The inventory must state, for each change:
 - the implementation source and Rust FFI mirror, when applicable;
 - the ABI version before and after the change;
 - why the change is required and what data or behavior it enables;
-- whether an older host can load or call the newer runtime, and whether a
-  newer host can detect or reject an older runtime; and
+- that backward compatibility with older native runtimes is intentionally not
+  required, and that the Rust FFI mirror and callers were updated in lockstep;
 - the tests that exercise the native ABI boundary, including public-header
   compilation when a header changes.
 
 Use this compact table in the PR description:
 
-| Status | Symbol/declaration | Public header | Implementation / mirror | Reason | Compatibility |
+| Status | Symbol/declaration | Public header | Implementation / mirror | Reason | Lockstep update |
 |---|---|---|---|---|---|
-| Changed / Added / Removed | exact name and signature | `include/skippy/<capability>.h` | `src/skippy/<capability>.cpp`; Rust FFI path | behavior enabled | old/new runtime behavior |
+| Changed / Added / Removed | exact name and signature | `include/skippy/<capability>.h` | `src/skippy/<capability>.cpp`; Rust FFI path | behavior enabled | Rust mirror/callers updated; old ABI not supported |
 
 For a changed function signature, call out that it is an ABI change even when
 the symbol name is unchanged. List removed declarations explicitly as
 “none” when no functions or fields were deleted; this prevents reviewers from
 having to infer removals from a patch diff. Keep this inventory synchronized
 with the ABI version constants in `include/skippy/common.h` and the mirrors in
-`crates/skippy-ffi/src/lib.rs`.
+`crates/skippy-ffi/src/lib.rs`. Do not add compatibility shims solely to
+support an older native runtime; the acceptance criterion is a synchronized
+Rust/native build and a clear version mismatch if the pieces are mixed.
 
 ## Local Flow
 
