@@ -406,6 +406,24 @@ impl StageOpenAiBackend {
                 })
                 .collect::<OpenAiResult<Vec<_>>>()?
         };
+        // Archive one candidate so a split stage 0's prefix survives restart,
+        // matching the binary recorders on the downstream stages. Without
+        // this, stage 0 is the only stage in the pipeline with no persistent
+        // tier, and the cross-stage agreement gate would veto every restore
+        // attempt on its miss -- wasting every downstream disk hit.
+        let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
+        for (identity, record) in identities.iter().zip(resident_records.iter()) {
+            if let Some(record) = record {
+                archive_candidate.offer(identity, record.token_count, token_ids.len());
+            }
+        }
+        if let Some(identity) = archive_candidate.take() {
+            let mut runtime = self
+                .runtime
+                .lock()
+                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+            let _ = kv.archive_dense_prefix(&mut runtime, session_id, &identity);
+        }
         let activation_records = kv.record_resident_activation(
             &self.config,
             &base,
@@ -519,6 +537,14 @@ impl StageOpenAiBackend {
                 })
                 .collect::<OpenAiResult<Vec<_>>>()?
         };
+        // See the chunked recorder above: archive the lowest candidate.
+        if let Some(identity) = identities.last() {
+            let mut runtime = self
+                .runtime
+                .lock()
+                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+            let _ = kv.archive_dense_prefix(&mut runtime, session_id, identity);
+        }
         let mut recorded_any = false;
         for record in records.into_iter().flatten() {
             recorded_any = true;
@@ -884,10 +910,22 @@ impl StageOpenAiBackend {
                 .map_err(openai_backend_error)?
             {
                 Some(restored) => Some(restored.token_count),
-                None => kv
+                None => match kv
                     .restore_resident_prefix(&mut runtime, session_key, &identities, prefill_tokens)
                     .map_err(openai_backend_error)?
-                    .map(|restored| restored.token_count),
+                {
+                    Some(restored) => Some(restored.token_count),
+                    // Third tier, matching the binary path on downstream
+                    // stages: a prefix this stage archived in an earlier
+                    // process. Without this, stage 0 is the only stage in a
+                    // split with no persistent tier, so after a restart it
+                    // always misses and the agreement gate below vetoes the
+                    // whole pipeline -- downstream disk hits would be wasted.
+                    None => kv
+                        .restore_dense_prefix_from_disk(&mut runtime, session_key, &identities)
+                        .map_err(openai_backend_error)?
+                        .map(|restored| (restored.token_count as usize).min(prefill_tokens.len())),
+                },
             }
         };
         let Some(local_restore) = local_restore else {

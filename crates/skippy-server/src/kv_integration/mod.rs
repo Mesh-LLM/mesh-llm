@@ -19,6 +19,7 @@ use crate::kv_proto::{
 mod activation;
 mod config;
 mod dense_disk;
+pub use dense_disk::ArchiveCandidate;
 mod exact_state;
 mod identity;
 mod records;

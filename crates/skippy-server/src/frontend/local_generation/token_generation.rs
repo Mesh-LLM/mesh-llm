@@ -679,7 +679,7 @@ impl StageOpenAiBackend {
             // all under the runtime lock on the prefill path; doing that once
             // per ladder candidate would mean several hundred-MB exports for a
             // single large prompt.
-            let mut archive_candidate: Option<_> = None;
+            let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
             for identity in kv.record_identities(&self.config, &base, 0, prefill_tokens) {
                 if let Ok(Some(record)) =
                     kv.record_resident_prefix(runtime, session_id, &identity, prefill_tokens)
@@ -692,13 +692,14 @@ impl StageOpenAiBackend {
                     // Remember the *shortest* recorded candidate as the
                     // archive target. Candidates arrive longest-first, so the
                     // last one is the lowest — and the low candidate is the
-                    // shareable one: it is the stable system-prompt/tool-schema
-                    // region that a different session, or this node after a
-                    // restart, will probe for. Archiving the longest candidate
-                    // instead stores the request's own tail, which nothing
-                    // else ever asks for.
+                    // See `ArchiveCandidate` for which candidate is chosen
+                    // and why the obvious choices are both wrong.
                     if record.stored {
-                        archive_candidate = Some(identity.clone());
+                        archive_candidate.offer(
+                            &identity,
+                            record.token_count,
+                            prefill_tokens.len(),
+                        );
                     }
                     let mut attrs = self.openai_attrs(ids);
                     attrs.insert(
@@ -729,7 +730,7 @@ impl StageOpenAiBackend {
             // process restart. Done here, after recording, rather than on
             // eviction: eviction runs on the decode hot path and a
             // multi-hundred-MB export there would spike TTFT.
-            if let Some(identity) = archive_candidate
+            if let Some(identity) = archive_candidate.take()
                 && let Ok(true) = kv.archive_dense_prefix(runtime, session_id, &identity)
             {
                 let mut attrs = self.openai_attrs(ids);

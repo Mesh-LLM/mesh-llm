@@ -504,6 +504,81 @@ Still unmeasured: multi-node split topologies (where per-stage pages are
 smaller and *every* stage must hit), and how often topology replanning
 invalidates pages in a live mesh.
 
+
+## Split serving
+
+Retention is per stage: `prefix_hash_with_namespace` hashes `stage_id`,
+`stage_index`, `layer_start`, `layer_end`, so each stage caches only its own
+layer range and the pages are not interchangeable.
+
+### What was already there
+
+The investigation found more existing machinery than the plan assumed:
+
+- `PrefillChunkMessage` carries `token_ids` alongside activations, so
+  downstream stages *can* compute a prefix hash.
+- `KvStageIntegration` is constructed for every stage, and the per-stage
+  resident cache in `binary_transport/binary_kv.rs` is not gated on
+  `stage_index`.
+- **A cross-stage agreement protocol already exists.**
+  `try_restore_embedded_split_prefill` has stage 0 state its restore length on
+  the wire, and `prefix_cache.rs` vetoes the entire attempt unless every stage
+  reports a hit. Middle stages fold downstream stats into their own reply, so
+  a miss at depth N propagates back to stage 0.
+
+So per-stage disk restore did **not** need new negotiation. It is a third
+tier under an existing gate.
+
+### Three invariants that keep splits correct
+
+These are load-bearing and were undocumented. Relaxing any one gives wrong
+tokens rather than an error:
+
+1. `config.layer_start == 0` — suffix-only execution after a partial hit is
+   permitted only on the first stage.
+2. `restored.token_count >= token_ids.len()` when `downstream.is_some()` —
+   full-restore-only whenever a stage has a downstream.
+3. The all-or-nothing veto in `prefix_cache.rs`.
+
+Invariant 1 was previously enforced only as a side effect of a payload-size
+check in the encoder. It is now an explicit named assertion in
+`forwarding.rs`, with tests.
+
+### Measured, 2-node split on loopback (0.5B, ~2.1k tokens)
+
+| Scenario | Cold | Warm |
+|---|---|---|
+| Cross-session, same prefix, new tail | 1.34s | **0.57s** |
+| First request after restarting both nodes | 1.33s | 1.32s |
+
+Cross-session split reuse works. **Restart reuse does not yet pay off**, and
+the reason is visible in the archive index: stage 0 archives its full ladder
+including the 2048-token shared bulk, but the downstream stage archives only a
+512-token page. Because of the veto, one stage's shallow archive negates the
+other's good one.
+
+This also exposed a real bug in the first implementation: archiving the
+*lowest* ladder candidate. For a 2129-token prompt that is a 256-token page —
+12% of the prefill, indistinguishable from noise. `ArchiveCandidate` now
+selects the longest prefix that still excludes the request's tail (2048 here,
+96%), which is the actual shared bulk. That fix is in and unit-tested; the
+remaining gap is why the downstream stage's ladder is shallower.
+
+Not yet measured: a large MoE model across a real multi-machine split, which
+is the shape where the solo 8B result (2.44x) suggests the payoff should be
+largest.
+
+### MoE
+
+MoE is **not** a special case here. `family_policy.rs` maps MoE families
+(`qwen3moe`, `glm4_moe`, `deepseek3`, `openai_moe`, `llama4`, `hunyuan_moe`,
+`phimoe`, `ernie4_5_moe`, ...) to the same `resident_kv_policy` as dense
+models. MoE changes FFN weights, not KV cache shape; attention KV is still the
+full continuation state. Only hybrid/recurrent families (`qwen3next`,
+`falcon_h1`, `mamba`, `rwkv`, `qwen35moe`, `nemotron_h_moe`) take the
+`kv_recurrent` path. So the dense archive path covers the large MoE models
+that motivate split serving.
+
 ### Not done
 
 - **W1** KV quantization, **W3** page-granular export, **W5** export-on-eviction,

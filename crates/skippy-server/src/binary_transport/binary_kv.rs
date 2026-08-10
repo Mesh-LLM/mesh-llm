@@ -69,6 +69,23 @@ impl BinaryRestoredPrefix {
         }
     }
 
+    /// A prefix imported from the disk tier.
+    ///
+    /// Deliberately not `resident`: a disk restore imports KV directly into
+    /// the live session and owns no cache sequence, so there is no `seq_id` to
+    /// release and nothing is borrowed. Reporting a synthetic sequence here
+    /// would invite a caller to try to drop it.
+    fn from_disk(page_id: String, token_count: usize, entries: usize) -> Self {
+        Self {
+            page_id,
+            token_count,
+            entries,
+            resident_seq_id: None,
+            resident_borrowed: None,
+            exact: false,
+        }
+    }
+
     fn resident(
         page_id: String,
         token_count: usize,
@@ -306,19 +323,43 @@ fn restore_binary_prefix(
             restored.token_count,
             restored.entries,
         ))),
-        None => kv
-            .restore_resident_prefix(runtime, session_id, identities, token_ids)
-            .map(|restored| {
-                restored.map(|restored| {
-                    BinaryRestoredPrefix::resident(
-                        restored.page_id,
-                        restored.token_count,
-                        restored.seq_id,
-                        restored.entries,
-                        restored.borrowed,
-                    )
-                })
-            }),
+        None => {
+            if let Some(restored) =
+                kv.restore_resident_prefix(runtime, session_id, identities, token_ids)?
+            {
+                return Ok(Some(BinaryRestoredPrefix::resident(
+                    restored.page_id,
+                    restored.token_count,
+                    restored.seq_id,
+                    restored.entries,
+                    restored.borrowed,
+                )));
+            }
+            // Third tier: a prefix this stage archived in an earlier process.
+            //
+            // Placed here rather than in the callers so both lookup branches
+            // (the activation-paired one used when this stage has a
+            // downstream, and the plain one) get it from a single site, and so
+            // a disk hit is indistinguishable from a resident hit to
+            // everything above. That matters for split serving: the
+            // cross-stage agreement protocol in `frontend/prefix_cache.rs`
+            // vetoes the whole attempt unless *every* stage reports a hit, and
+            // it keys on hit/miss counts rather than on how the hit was
+            // obtained. Returning a normal resident hit here means a stage can
+            // satisfy its part of a negotiated restore from disk without the
+            // protocol needing to know.
+            let restored = kv.restore_dense_prefix_from_disk(runtime, session_id, identities)?;
+            Ok(restored.map(|restored| {
+                BinaryRestoredPrefix::from_disk(
+                    restored.page_id,
+                    // Clamp exactly as the resident path does. Reporting more
+                    // tokens than were asked for would make stage 0 skip
+                    // tokens that downstream stages never received.
+                    (restored.token_count as usize).min(token_ids.len()),
+                    1,
+                )
+            }))
+        }
     }
 }
 pub(in crate::binary_transport) fn emit_binary_proactive_eviction(
@@ -583,6 +624,16 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
         telemetry.emit("stage.binary_kv_record_decision", attrs);
         return result;
     }
+    let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
+    if std::env::var("SKIPPY_KV_DBG").is_ok() {
+        eprintln!(
+            "KVDBG rec_chunked stage={} layers={}..{} tokens={}",
+            config.stage_index,
+            config.layer_start,
+            config.layer_end,
+            token_ids.len()
+        );
+    }
     {
         let mut runtime = runtime.lock().expect("runtime lock poisoned");
         for identity in identities {
@@ -648,6 +699,9 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
                 &token_ids[..token_count_usize],
             ) {
                 Ok(Some(record)) => {
+                    // See `ArchiveCandidate`: the useful page is the longest
+                    // prefix that still excludes this request's tail.
+                    archive_candidate.offer(&identity, record.token_count, token_ids.len());
                     result.recorded_pages = result.recorded_pages.saturating_add(1);
                     result.recorded_tokens = result
                         .recorded_tokens
@@ -689,6 +743,18 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
             message,
             &records,
         );
+        // At most one archive per request: each one is a full KV export plus a
+        // synced write, and this runs under the runtime lock, which serializes
+        // every other lane on this stage.
+        if let Some(identity) = archive_candidate.take() {
+            let mut runtime = runtime.lock().expect("runtime lock poisoned");
+            if let Ok(true) = kv.archive_dense_prefix(&mut runtime, session_id, &identity) {
+                attrs.insert(
+                    "skippy.kv.archived_tokens".to_string(),
+                    json!(identity.identity.token_count),
+                );
+            }
+        }
     }
     attrs.insert(
         "skippy.kv.record_ms".to_string(),
@@ -776,6 +842,16 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
         json!("full_prefill_record"),
     );
     let started = Instant::now();
+    let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
+    if std::env::var("SKIPPY_KV_DBG").is_ok() {
+        eprintln!(
+            "KVDBG rec_full stage={} layers={}..{} tokens={}",
+            config.stage_index,
+            config.layer_start,
+            config.layer_end,
+            token_ids.len()
+        );
+    }
     for identity in identities {
         let token_count_usize = usize::try_from(identity.identity.token_count)
             .unwrap_or(usize::MAX)
@@ -831,6 +907,9 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
             &token_ids[..token_count_usize],
         ) {
             Ok(Some(record)) => {
+                // See `ArchiveCandidate`: the useful page is the longest
+                // prefix that still excludes this request's tail.
+                archive_candidate.offer(&identity, record.token_count, token_ids.len());
                 result.recorded_pages = result.recorded_pages.saturating_add(1);
                 result.recorded_tokens = result
                     .recorded_tokens
@@ -857,6 +936,16 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
                 break;
             }
         }
+    }
+    // One archive per request; see the chunked recorder. The caller already
+    // holds the runtime lock on this path.
+    if let Some(identity) = archive_candidate.take()
+        && let Ok(true) = kv.archive_dense_prefix(runtime, session_id, &identity)
+    {
+        attrs.insert(
+            "skippy.kv.archived_tokens".to_string(),
+            json!(identity.identity.token_count),
+        );
     }
     attrs.insert(
         "skippy.kv.record_ms".to_string(),

@@ -72,9 +72,15 @@ impl KvStageIntegration {
         identity: &PrefillKvIdentity,
     ) -> Result<bool> {
         if !self.dense_archive_enabled() {
+            if std::env::var("SKIPPY_KV_DBG").is_ok() {
+                eprintln!("KVDBG archive: dense_archive disabled");
+            }
             return Ok(false);
         }
         let token_count = identity.identity.token_count;
+        if std::env::var("SKIPPY_KV_DBG").is_ok() {
+            eprintln!("KVDBG archive: called tokens={token_count}");
+        }
         if token_count < MIN_ARCHIVE_TOKENS.max(self.candidate_policy.min_tokens) {
             return Ok(false);
         }
@@ -92,7 +98,12 @@ impl KvStageIntegration {
         // archived bytes and the identity always agree.
         let page = match runtime.export_kv_page(session_id, 0, token_count) {
             Ok(page) => page,
-            Err(_) => return Ok(false),
+            Err(e) => {
+                if std::env::var("SKIPPY_KV_DBG").is_ok() {
+                    eprintln!("KVDBG archive: export failed tokens={token_count}: {e}");
+                }
+                return Ok(false);
+            }
         };
         let mut cache = self
             .exact_states
@@ -191,4 +202,108 @@ impl KvStageIntegration {
 pub struct DenseDiskRestore {
     pub page_id: String,
     pub token_count: u64,
+}
+
+/// Picks which recorded candidate to archive, at most one per request.
+///
+/// The naive choices are both wrong:
+///
+/// - **Longest** is the request's own full length, including its unique tail.
+///   Nothing else ever probes for it.
+/// - **Lowest** is maximally shareable but tiny. Restoring 256 tokens of a
+///   2129-token prompt saves 12% of the prefill -- indistinguishable from
+///   noise, which is exactly what a split restart measured before this
+///   existed.
+///
+/// The useful candidate is the **longest one strictly shorter than the full
+/// prompt**: the largest stride-aligned prefix that excludes this request's
+/// tail. For an agent workload that is the shared system-prompt-plus-tool-
+/// schema bulk, so a restore covers nearly the whole prefill while still
+/// matching a different session's divergent tail.
+///
+/// Archiving is capped at one page per request because each one is a full KV
+/// export plus a synced write, and on the binary path that happens under the
+/// runtime lock.
+#[derive(Debug, Default)]
+pub struct ArchiveCandidate {
+    best: Option<(PrefillKvIdentity, usize)>,
+}
+
+impl ArchiveCandidate {
+    /// Offer a freshly recorded candidate. Keeps the longest one that is
+    /// strictly shorter than `full_len`; if every candidate is full-length
+    /// (a short prompt with a single ladder entry), keeps that instead so
+    /// small prompts still archive something.
+    pub fn offer(&mut self, identity: &PrefillKvIdentity, token_count: usize, full_len: usize) {
+        let partial = token_count < full_len;
+        let better = match &self.best {
+            None => true,
+            Some((_, best_tokens)) => {
+                let best_partial = *best_tokens < full_len;
+                match (partial, best_partial) {
+                    // Prefer any partial candidate over a full-length one.
+                    (true, false) => true,
+                    // Among partials, prefer the longest.
+                    (true, true) => token_count > *best_tokens,
+                    // Never displace a partial with a full-length candidate.
+                    (false, true) => false,
+                    (false, false) => token_count > *best_tokens,
+                }
+            }
+        };
+        if better {
+            self.best = Some((identity.clone(), token_count));
+        }
+    }
+
+    /// Take the selected candidate, if any.
+    pub fn take(&mut self) -> Option<PrefillKvIdentity> {
+        self.best.take().map(|(identity, _)| identity)
+    }
+}
+
+#[cfg(test)]
+mod archive_candidate_tests {
+    use super::*;
+
+    fn identity(tokens: u64) -> PrefillKvIdentity {
+        PrefillKvIdentity {
+            page_id: format!("page-{tokens}"),
+            identity: crate::kv_proto::PageIdentity {
+                token_count: tokens,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// The whole point: for an agent prompt the archived page must be the
+    /// shared bulk, not the tiny floor candidate and not the unique tail.
+    #[test]
+    fn picks_the_largest_prefix_that_excludes_the_request_tail() {
+        let full = 2129;
+        let mut pick = ArchiveCandidate::default();
+        // Ladder arrives longest-first, as the recorders emit it.
+        for tokens in [2129usize, 2048, 1920, 1024, 512, 256] {
+            pick.offer(&identity(tokens as u64), tokens, full);
+        }
+        let chosen = pick.take().expect("a candidate must be chosen");
+        assert_eq!(
+            chosen.identity.token_count, 2048,
+            "must archive the shared bulk, not the tail (2129) or the floor (256)"
+        );
+    }
+
+    /// A short prompt whose only candidate is its full length should still
+    /// archive; otherwise small prompts silently never persist.
+    #[test]
+    fn falls_back_to_the_full_length_candidate_when_that_is_all_there_is() {
+        let mut pick = ArchiveCandidate::default();
+        pick.offer(&identity(512), 512, 512);
+        assert_eq!(pick.take().expect("candidate").identity.token_count, 512);
+    }
+
+    #[test]
+    fn offering_nothing_selects_nothing() {
+        assert!(ArchiveCandidate::default().take().is_none());
+    }
 }
