@@ -470,16 +470,39 @@ request initially picked the *longest* recorded candidate — the request's own
 tail, which nothing else ever asks for. Cross-restart hits disappeared until
 the archive target was changed to the *lowest* (most shareable) candidate.
 
-### Measured, single node, Qwen2.5-0.5B dense, ~2k-token agent prompt
+### Measured
 
-| Scenario | Result |
-|---|---|
-| Cross-session, same system prompt, different tail | 0.31–0.42s → **0.13–0.20s** |
-| First request after restart (warm disk vs cold control) | 0.31s → **0.25s** |
+Two shapes, single node, same binary, cold control = identical run against an
+empty cache directory.
 
-The restart number is modest because a 0.5B model's prefill is already cheap;
-the plan's ratio argument predicts this improves with model and prefix size. It
-has **not** been measured on a large model or a split topology.
+**Qwen2.5-0.5B dense, ~2k-token prompt** — the *worst* case for this work:
+
+| Scenario | Cold | Warm |
+|---|---|---|
+| Cross-session, same prefix, different tail | 0.31–0.42s | **0.13–0.20s** |
+| First request after restart | 0.31s | **0.25s** |
+
+**Qwen3-8B Q4_K_M layer package, ~12.4k-token agent prompt** — the shape the
+plan was actually written for:
+
+| Scenario | Cold | Warm | Saved |
+|---|---|---|---|
+| Cross-session, same prefix, different tail | 21.50s | **8.85s** | 12.65s |
+| First request after **process restart** | 21.60s | **8.85s** | 12.75s (2.44×) |
+
+The archived page is **0.96 GB** for 12288 tokens. Restoring it beats
+recomputing it by ~12.7s, and the restart case matches the cross-session case
+exactly — the mmap restore costs the same whether the page was written by this
+process or a previous one.
+
+This is the ratio argument in the plan holding up: the win scales with the size
+of the reusable bulk, because restore cost is bounded by bytes while prefill
+cost is superlinear in tokens. The 0.5B number is small because there was
+almost nothing to save, not because the mechanism is weak.
+
+Still unmeasured: multi-node split topologies (where per-stage pages are
+smaller and *every* stage must hit), and how often topology replanning
+invalidates pages in a live mesh.
 
 ### Not done
 
