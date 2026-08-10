@@ -1,26 +1,8 @@
-From 166bc749483a06b00951f127cfb3f14cb1c4648f Mon Sep 17 00:00:00 2001
+From e4d015c3698c4e72aa9f2fd65d59b38900a60822 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 07/13] Add Skippy activation frame handling
+Subject: [PATCH 08/16] Add Skippy activation frame handling
 
----
- include/skippy/activation.h      |  44 ++
- src/skippy/activation.cpp        | 957 ++++++++++++++++++++++++++++++
- src/skippy/activation_internal.h |  90 +++
- src/skippy/activation_layout.cpp | 414 +++++++++++++
- src/skippy/activation_scopes.h   | 134 +++++
- src/skippy/glm_dsa.cpp           | 958 +++++++++++++++++++++++++++++++
- src/skippy/glm_dsa.h             |  14 +
- src/skippy/graph_filter_scope.h  |  44 ++
- 8 files changed, 2655 insertions(+)
- create mode 100644 include/skippy/activation.h
- create mode 100644 src/skippy/activation.cpp
- create mode 100644 src/skippy/activation_internal.h
- create mode 100644 src/skippy/activation_layout.cpp
- create mode 100644 src/skippy/activation_scopes.h
- create mode 100644 src/skippy/glm_dsa.cpp
- create mode 100644 src/skippy/glm_dsa.h
- create mode 100644 src/skippy/graph_filter_scope.h
 
 diff --git a/include/skippy/activation.h b/include/skippy/activation.h
 new file mode 100644
@@ -2725,6 +2707,3 @@ index 000000000..581be3ffd
 +    bool enabled = false;
 +};
 +
--- 
-2.50.1 (Apple Git-155)
-

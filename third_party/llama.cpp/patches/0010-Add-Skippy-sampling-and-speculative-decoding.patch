@@ -1,23 +1,8 @@
-From e37a403978215286710b4e5541634cd71718c36a Mon Sep 17 00:00:00 2001
+From 5d511682401f1e98250dc9689cc10064cf27bc06 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 09/13] Add Skippy sampling and speculative decoding
+Subject: [PATCH 10/16] Add Skippy sampling and speculative decoding
 
----
- common/ngram-cache.cpp                | 153 ++++++-
- include/skippy/sampling.h             |  33 ++
- include/skippy/speculative_decoding.h |  60 +++
- src/skippy/sampling.cpp               | 629 ++++++++++++++++++++++++++
- src/skippy/sampling_internal.h        |  42 ++
- src/skippy/speculative_decoding.cpp   | 524 +++++++++++++++++++++
- src/skippy/speculative_internal.h     |  28 ++
- 7 files changed, 1464 insertions(+), 5 deletions(-)
- create mode 100644 include/skippy/sampling.h
- create mode 100644 include/skippy/speculative_decoding.h
- create mode 100644 src/skippy/sampling.cpp
- create mode 100644 src/skippy/sampling_internal.h
- create mode 100644 src/skippy/speculative_decoding.cpp
- create mode 100644 src/skippy/speculative_internal.h
 
 diff --git a/common/ngram-cache.cpp b/common/ngram-cache.cpp
 index dce54b364..ae4f910f7 100644
@@ -1573,6 +1558,3 @@ index 000000000..db0055657
 +        size_t max_draft_tokens,
 +        skippy_native_mtp_draft * out_mtp_draft,
 +        skippy_error ** out_error);
--- 
-2.50.1 (Apple Git-155)
-

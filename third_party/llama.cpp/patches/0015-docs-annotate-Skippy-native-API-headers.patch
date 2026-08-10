@@ -1,23 +1,8 @@
-From 1d4c66059b355bb75d5de713a705a41f618cbcdc Mon Sep 17 00:00:00 2001
+From 1931c72518037222b94c42463a7fc7e86547a7b1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 10 Aug 2026 09:25:54 +1000
-Subject: [PATCH] docs: annotate Skippy native API headers
+Subject: [PATCH 15/16] docs: annotate Skippy native API headers
 
----
- include/skippy.h                      |  8 ++++++++
- include/skippy/activation.h           |  9 +++++++++
- include/skippy/common.h               | 12 ++++++++++++
- include/skippy/devices.h              |  7 +++++++
- include/skippy/events.h               | 11 +++++++++++
- include/skippy/execution.h            | 19 +++++++++++++++++++
- include/skippy/model_package.h        | 15 +++++++++++++++
- include/skippy/runtime.h              | 25 +++++++++++++++++++++++++
- include/skippy/sampling.h             |  6 ++++++
- include/skippy/signals.h              |  9 +++++++++
- include/skippy/speculative_decoding.h | 11 +++++++++++
- include/skippy/state.h                | 19 +++++++++++++++++++
- include/skippy/tokenization.h         | 11 +++++++++++
- 13 files changed, 162 insertions(+)
 
 diff --git a/include/skippy.h b/include/skippy.h
 index 6ee2a9991..2d245cb54 100644
@@ -826,6 +811,3 @@ index 7b8c4dcc4..ccf3d020c 100644
  LLAMA_API enum skippy_status skippy_parse_chat_response_json(
          const char * generated_text,
          const char * metadata_json,
--- 
-2.50.1 (Apple Git-155)
-

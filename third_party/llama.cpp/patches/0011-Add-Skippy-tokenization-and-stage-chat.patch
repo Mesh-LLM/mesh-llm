@@ -1,24 +1,8 @@
-From add4b74077843fe34edfd02cccfe5e6c9eecafb1 Mon Sep 17 00:00:00 2001
+From 26f390fbd45bdc2f7950e457d42eb5996a906e47 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 10/13] Add Skippy tokenization and stage chat
+Subject: [PATCH 11/16] Add Skippy tokenization and stage chat
 
----
- common/chat-auto-parser-generator.cpp |  51 ++--
- common/chat-diff-analyzer.cpp         |  10 +-
- common/chat-peg-parser.cpp            |  31 ++-
- common/chat-peg-parser.h              |  11 +
- common/chat.cpp                       | 245 ++++++++++++++++-
- common/chat.h                         |   5 +-
- common/stage-chat.cpp                 | 377 ++++++++++++++++++++++++++
- include/skippy/tokenization.h         |  80 ++++++
- src/skippy/tokenization.cpp           | 137 ++++++++++
- tests/test-chat-auto-parser.cpp       |  48 +++-
- tests/test-chat.cpp                   | 208 +++++++++++++-
- 11 files changed, 1156 insertions(+), 47 deletions(-)
- create mode 100644 common/stage-chat.cpp
- create mode 100644 include/skippy/tokenization.h
- create mode 100644 src/skippy/tokenization.cpp
 
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
 index af84ff323..98db861e3 100644
@@ -158,10 +142,10 @@ index 7db1dcb0f..e1bd5775d 100644
  
      template_params params_content_only;
 diff --git a/common/chat-peg-parser.cpp b/common/chat-peg-parser.cpp
-index f786f5ff2..6ee1f21cf 100644
+index 1910b4f1e..7d8fa9fae 100644
 --- a/common/chat-peg-parser.cpp
 +++ b/common/chat-peg-parser.cpp
-@@ -300,6 +300,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
+@@ -340,6 +340,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
      bool is_arg_name         = node.tag == common_chat_peg_builder::TOOL_ARG_NAME;
      bool is_arg_value        = node.tag == common_chat_peg_builder::TOOL_ARG_VALUE;
      bool is_arg_string_value = node.tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE;
@@ -169,7 +153,7 @@ index f786f5ff2..6ee1f21cf 100644
  
      if (is_tool_open) {
          pending_tool_call     = common_chat_tool_call();
-@@ -307,6 +308,13 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
+@@ -347,6 +348,13 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
          arg_count             = 0;
          args_buffer.clear();
          closing_quote_pending = false;
@@ -183,7 +167,7 @@ index f786f5ff2..6ee1f21cf 100644
      }
  
      if (is_tool_id && current_tool) {
-@@ -348,11 +356,15 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
+@@ -388,11 +396,15 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
      }
  
      if (is_arg_name && current_tool) {
@@ -200,7 +184,7 @@ index f786f5ff2..6ee1f21cf 100644
          ++arg_count;
  
          auto & target = args_target();
-@@ -393,6 +405,11 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
+@@ -433,6 +445,11 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
      }
  
      if (is_tool_close && current_tool) {
@@ -212,7 +196,7 @@ index f786f5ff2..6ee1f21cf 100644
          // Flush buffer to arguments if tool name was never seen
          if (current_tool->name.empty() && !args_buffer.empty()) {
              current_tool->arguments = args_buffer;
-@@ -631,10 +648,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
+@@ -671,10 +688,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
          // Arguments — either wrapped in args_key or parsed directly
          common_peg_parser args_parser = eps();
          if (args_key.empty()) {
@@ -225,7 +209,7 @@ index f786f5ff2..6ee1f21cf 100644
          }
          inner_fields.push_back(args_parser);
  
-@@ -695,7 +712,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
+@@ -735,7 +752,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
          auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
                            atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
@@ -234,7 +218,7 @@ index f786f5ff2..6ee1f21cf 100644
  
          auto nested_object = literal("{") + space() +
                              nested_name + space() + literal(",") + space() +
-@@ -751,7 +768,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+@@ -791,7 +808,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
  
      auto tool_choices    = choice();
      auto name_key_parser = literal("\"" + effective_name_key + "\"");
@@ -245,7 +229,7 @@ index f786f5ff2..6ee1f21cf 100644
  
      for (const auto & tool_def : tools) {
          if (!tool_def.contains("function")) {
-@@ -764,7 +783,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+@@ -804,7 +823,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
          auto tool_name_ = name_key_parser + space() + literal(":") + space() +
                           atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto tool_args_ = args_key_parser + space() + literal(":") + space() +
@@ -255,7 +239,7 @@ index f786f5ff2..6ee1f21cf 100644
          // Build ID parsers if keys are provided
          common_peg_parser id_parser = eps();
 diff --git a/common/chat-peg-parser.h b/common/chat-peg-parser.h
-index cd14f2c11..fb2180874 100644
+index 5d764dbaa..a9ef9ed7f 100644
 --- a/common/chat-peg-parser.h
 +++ b/common/chat-peg-parser.h
 @@ -5,6 +5,7 @@
@@ -275,7 +259,7 @@ index cd14f2c11..fb2180874 100644
  
        // Returns a reference to the active argument destination string.
        // Before tool_name is known, writes go to args_buffer; after, to current_tool->arguments.
-@@ -75,6 +78,7 @@ class common_chat_peg_builder : public common_peg_parser_builder {
+@@ -77,6 +80,7 @@ class common_chat_peg_builder : public common_peg_parser_builder {
      static constexpr const char * TOOL_ARG_NAME         = "tool-arg-name";
      static constexpr const char * TOOL_ARG_VALUE        = "tool-arg-value";
      static constexpr const char * TOOL_ARG_STRING_VALUE = "tool-arg-string-value";  // For schema-declared string types
@@ -283,7 +267,7 @@ index cd14f2c11..fb2180874 100644
  
      // Low-level tag methods (from former common_chat_peg_base_builder)
      common_peg_parser reasoning_block(const common_peg_parser & p) { return tag(REASONING_BLOCK, p); }
-@@ -104,6 +108,13 @@ class common_chat_peg_builder : public common_peg_parser_builder {
+@@ -106,6 +110,13 @@ class common_chat_peg_builder : public common_peg_parser_builder {
      common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
      common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
  
@@ -295,10 +279,10 @@ index cd14f2c11..fb2180874 100644
 +    }
 +
  
-     // Return a parser that parses the prefix of a string, up to a given delimiter.
-     common_peg_parser prefix(const std::string & s, const std::string & delimiter = {});
+     // Matches every parser exactly once, in any order.
+     common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 7740f35c0..753af9384 100644
+index 6cbf23b50..769b87b0e 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
 @@ -226,6 +226,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
@@ -457,7 +441,7 @@ index 7740f35c0..753af9384 100644
      if (default_template_src.empty() || default_template_src == "chatml") {
          if (!template_tool_use_src.empty()) {
              default_template_src = template_tool_use_src;
-@@ -2530,6 +2649,122 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
+@@ -2721,6 +2840,122 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
      return data;
  }
  
@@ -580,7 +564,7 @@ index 7740f35c0..753af9384 100644
  namespace workaround {
  
  static void map_developer_role_to_system(json & messages) {
-@@ -2947,6 +3182,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
+@@ -3289,6 +3524,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
          return common_chat_params_init_cohere2moe(tmpl, params);
      }
  
@@ -1231,10 +1215,10 @@ index 000000000..89d69ff3a
 +
 +} // extern "C"
 diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
-index 4218f8d57..3273e66cd 100644
+index f5cfa45b4..fc8c70545 100644
 --- a/tests/test-chat-auto-parser.cpp
 +++ b/tests/test-chat-auto-parser.cpp
-@@ -66,9 +66,11 @@ static void test_laguna_s_tool_format(testing & t);
+@@ -67,9 +67,11 @@ static void test_laguna_s_preserve_reasoning(testing & t);
  static void test_laguna_xs2_analysis(testing & t);
  static void test_laguna_xs2_reasoning_detection(testing & t);
  static void test_laguna_xs2_tool_format(testing & t);
@@ -1246,7 +1230,7 @@ index 4218f8d57..3273e66cd 100644
  static void test_cohere_analysis(testing & t);
  
  // SmolLM3 template analysis tests
-@@ -1318,6 +1320,7 @@ static common_chat_template load_nemotron_template(testing & t) {
+@@ -1319,6 +1321,7 @@ static common_chat_template load_nemotron_template(testing & t) {
  static void test_nemotron_analysis(testing & t) {
      t.test("Nemotron reasoning detection", test_nemotron_reasoning_detection);
      t.test("Nemotron tool format", test_nemotron_tool_format);
@@ -1254,7 +1238,7 @@ index 4218f8d57..3273e66cd 100644
  }
  
  static void test_nemotron_reasoning_detection(testing & t) {
-@@ -1478,12 +1481,56 @@ static void test_laguna_xs2_analysis(testing & t) {
+@@ -1484,12 +1487,56 @@ static void test_laguna_xs2_analysis(testing & t) {
      t.test("Laguna-XS.2(v5) tool format", test_laguna_xs2_tool_format);
  }
  
@@ -1311,13 +1295,13 @@ index 4218f8d57..3273e66cd 100644
  }
  
  static void test_cohere_reasoning_detection(testing & t) {
-@@ -2192,4 +2239,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
+@@ -2198,4 +2245,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
          }
      }
  }
 -
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 01b07953a..991102421 100644
+index f54a58f9b..5b980ddf1 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -436,6 +436,21 @@ static common_chat_tool special_function_tool{
@@ -1395,7 +1379,7 @@ index 01b07953a..991102421 100644
  }
  
  static void test_msg_token_delimiters_split() {
-@@ -2996,6 +3027,97 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -2935,6 +2966,97 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
              .run();
      }
  
@@ -1493,7 +1477,7 @@ index 01b07953a..991102421 100644
      {
          // Google Gemma 2 2B - does not support tool calling
          auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja");
-@@ -4246,6 +4368,15 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -4305,6 +4427,15 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
      {
          auto tst = peg_tester("models/templates/GLM-4.7-Flash.jinja", detailed_debug);
  
@@ -1509,7 +1493,7 @@ index 01b07953a..991102421 100644
          // Pure content (no reasoning)
          tst.test("Hello, world!\nWhat's up?")
              .enable_thinking(false)
-@@ -4272,6 +4403,63 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -4331,6 +4462,63 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
              .expect_reconstruction()
              .run();
  
@@ -1573,7 +1557,7 @@ index 01b07953a..991102421 100644
          // Tool call with reasoning (forced-open mode)
          tst.test(
                 "I'm\nthinking</think>"
-@@ -4383,7 +4571,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -4442,7 +4630,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                  "Thinking.\n"
                  "</think>"
                  "<tool_call>get_weather"
@@ -1582,6 +1566,3 @@ index 01b07953a..991102421 100644
                  "</tool_call>\n";
  
              bool got_runtime_error = false;
--- 
-2.50.1 (Apple Git-155)
-
