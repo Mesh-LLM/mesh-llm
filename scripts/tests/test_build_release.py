@@ -101,6 +101,13 @@ class BuildReleaseScriptTests(unittest.TestCase):
                 """,
             )
             self.write_executable(
+                bin_dir / "ld.lld",
+                """
+                #!/usr/bin/env bash
+                exit 0
+                """,
+            )
+            self.write_executable(
                 bin_dir / "git",
                 """
                 #!/usr/bin/env bash

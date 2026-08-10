@@ -248,7 +248,11 @@ fi
 version="${version#v}"
 host_version_output="$("$output_dir/$INPUT_BINARY_NAME" --version)"
 host_version="$(awk '{print $NF}' <<<"$host_version_output")"
-if [[ "$host_version" != "$version" ]]; then
+# Non-release hosts carry semver build metadata (`+g<sha>[.dirty]`) so a dev
+# binary cannot be mistaken for a release one. Build metadata is not part of
+# version identity, so compare the release version and ignore any suffix.
+host_release_version="${host_version%%+*}"
+if [[ "$host_release_version" != "$version" ]]; then
     echo "composed host version mismatch: expected $version, got ${host_version:-<empty>}" >&2
     echo "Output: $host_version_output" >&2
     exit 1
