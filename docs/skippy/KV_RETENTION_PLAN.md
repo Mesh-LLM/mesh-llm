@@ -602,6 +602,65 @@ seeing only an excerpt.
 Re-measured after hardening, solo 0.5B, ~2.1k tokens: cross-session
 0.42s -> 0.13s, restart 0.42s -> 0.21s. Two-node split smoke passes.
 
+
+## Why retention matters more for splits than the solo numbers suggest
+
+Three effects compound for large split models. The second is the largest and
+was not in the original plan.
+
+### 1. Prefix commonality is high in agent fleets
+
+A fleet running one agent sends near-identical system prompt plus tool schemas
+on every request. Hit *frequency* is high and the value per hit is a full cold
+prefill, so the ideal is that a given prefix is warmed once per node ever.
+That is a retention-time argument, and it is what the disk tier addresses:
+survive eviction, survive restart, survive a redeploy.
+
+### 2. A chain restore removes stage-boundary traffic almost entirely
+
+This is the significant finding, and it is not a KV-cache effect --- it is a
+*network* effect specific to split serving.
+
+Prefill activations cross every stage boundary. For the restored span,
+`embedded_prefix_cache_message` (`frontend/wire_messages.rs:264-288`) builds
+the `TryRestorePrefill` message with **`activation: Vec::new()`** and carries
+only `tokens`. So on a chain restore the restored prefix costs 4 bytes per
+token on the wire instead of `hidden_width x dtype_bytes`:
+
+| width | dtype | tokens | cold (activations) | warm (token ids) | ratio |
+|---|---|---|---|---|---|
+| 4096 | f32 | 128k | 2.10 GB | 0.5 MB | 4096x |
+| 4096 | f16 | 128k | 1.05 GB | 0.5 MB | 2048x |
+| 8192 | f16 | 128k | 2.10 GB | 0.5 MB | 4096x |
+
+Per stage boundary, per request. On a thin or shared link this can dominate
+total prefill time, which means **for splits the bandwidth saving may matter
+more than the compute saving** --- and it is invisible in single-node
+wall-clock benchmarks like the ones measured so far. Prefill compute
+parallelizes across stages; the boundary transfer does not.
+
+Corollary: the all-or-nothing veto is expensive here. A single stage missing
+does not just lose that stage's compute, it forces full activation traffic
+across *every* boundary for the whole prompt.
+
+### 3. Pre-seeding is a natural consequence, not a separate feature
+
+If prefixes are fleet-common and a hit removes both prefill compute and
+boundary traffic, there is no reason to wait for organic traffic to warm a
+node. The disk tier is already a content-addressed, checksummed,
+identity-anchored page store; seeding it is a *write* into that store rather
+than new machinery.
+
+What makes this plausible now: the identity no longer contains `topology_id`
+or any per-process value, so a page is valid for any process with the same
+weights, layer range, KV dtype, and backend. What still blocks it: the layer
+range and stage identity *are* hashed, so a seed is only valid for an
+identical split. Seeding must therefore either happen after topology is
+chosen, or be keyed by topology and matched at plan time.
+
+Not designed or built. Recorded because the identity work needed for it is
+already done.
+
 ### Not done
 
 - **W1** KV quantization, **W3** page-granular export, **W5** export-on-eviction,
