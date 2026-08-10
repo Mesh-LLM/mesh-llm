@@ -85,6 +85,7 @@ mod connections;
 mod direct_path;
 mod gossip;
 mod heartbeat;
+mod host_role_claims;
 mod identity_persistence;
 mod lan_bootstrap;
 mod model_identity;
@@ -107,6 +108,7 @@ mod stun;
 
 use connection_reservation::*;
 use connections::*;
+pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use model_identity::*;
 use node_identity::*;
 use owner_control::*;
@@ -133,7 +135,6 @@ pub use identity_persistence::{
     load_node_key_from_path, mark_was_public, save_last_mesh_id, save_node_key_to_path,
     was_previously_public,
 };
-pub(crate) use node::{HostRoleClaim, PeerDownReport, peer_down_endpoint_id};
 #[expect(
     unused_imports,
     reason = "public compatibility re-export for existing mesh node callers"
@@ -141,6 +142,7 @@ pub(crate) use node::{HostRoleClaim, PeerDownReport, peer_down_endpoint_id};
 pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_vram_bytes_capped,
 };
+pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
 pub(crate) use peer_state::{
     ControlListenerLifecycle, DEAD_PEER_TTL, MeshState, PEER_DOWN_REPORTER_COOLDOWN_SECS,
     PEER_STALE_SECS, resolve_peer_leaving,

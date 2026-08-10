@@ -11,7 +11,7 @@ use crate::plugin;
 use crate::proto::node::{GossipFrame, NodeRole, PeerAnnouncement, RouteTableRequest};
 use serial_test::serial;
 use skippy_protocol::proto::stage as skippy_stage_proto;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use tokio::sync::{mpsc, watch};
 
 mod direct_path;
@@ -418,7 +418,7 @@ async fn make_test_node_with_requirements(
             recent_mesh_rejections: VecDeque::new(),
         })),
         role: Arc::new(Mutex::new(role)),
-        host_role_claims: Arc::new(Mutex::new(BTreeMap::new())),
+        host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
         models: Arc::new(Mutex::new(Vec::new())),
         model_source: Arc::new(Mutex::new(None)),
         serving_models: Arc::new(Mutex::new(Vec::new())),
@@ -504,6 +504,65 @@ async fn make_test_node_with_requirements(
     });
 
     Ok(node)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_role_claim_transitions_regossip_to_connected_peer() -> Result<()> {
+    let host = make_test_node(super::NodeRole::Worker).await?;
+    let peer = make_test_node(super::NodeRole::Worker).await?;
+    host.set_mesh_id("host-role-claim-regossip-test".to_string())
+        .await;
+    peer.set_mesh_id("host-role-claim-regossip-test".to_string())
+        .await;
+    host.start_accepting();
+    peer.start_accepting();
+
+    let host_id = host.id();
+    peer.join(&host.invite_token().await).await?;
+    wait_for_peer(&peer, host_id).await;
+    wait_for_peer(&host, peer.id()).await;
+
+    host.claim_host_role(super::HostRoleClaim::PluginInference, 9337)
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if peer
+                .peers()
+                .await
+                .into_iter()
+                .find(|candidate| candidate.id == host_id)
+                .is_some_and(|candidate| {
+                    candidate.role == super::NodeRole::Host { http_port: 9337 }
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("connected peer should receive host promotion gossip");
+
+    host.release_host_role(super::HostRoleClaim::PluginInference)
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if peer
+                .peers()
+                .await
+                .into_iter()
+                .find(|candidate| candidate.id == host_id)
+                .is_some_and(|candidate| candidate.role == super::NodeRole::Worker)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("connected peer should receive host demotion gossip");
+
+    Ok(())
 }
 
 #[tokio::test]

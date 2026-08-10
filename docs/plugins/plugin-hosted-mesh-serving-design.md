@@ -2,11 +2,11 @@
 
 ## Status
 
-Implemented in the commit immediately preceding this document on this
-branch. Written after live end-to-end testing — a single node running an
-external-relay plugin, serving an LM Studio model through that node's own
-local proxy (not yet exercised through an actual inbound mesh tunnel from
-another peer; see "Deliberately deferred" below) — surfaced a gap in how
+Implemented in this branch. A live end-to-end test covered a single node
+running an external-relay plugin and serving an LM Studio model through that
+node's own local proxy; it did not exercise an inbound mesh tunnel from
+another peer or mesh-wide discovery and routing (see "Deliberately deferred"
+below). That test surfaced a gap in how
 a plugin-only node — one with zero local (downloaded) models, whose only
 inference capacity comes from a plugin endpoint (e.g.
 `inference: [openai_http(...)]`) — is treated by the rest of the mesh.
@@ -83,37 +83,21 @@ completing.
 - **Host role**: add `spawn_plugin_host_role_watcher`, a small background
   task started alongside the tunnel manager (skipped for `--client`
   nodes) that polls `plugin_manager.inference_models()` on a short
-  interval and promotes to `NodeRole::Host { http_port: api_port }` when
-  it's non-empty, demoting back to `Worker` when it becomes empty again.
-  It tracks whether *it* performed the last promotion via a task-local
-  flag and only demotes when that flag is set, but this is a soft
-  safeguard, not real ownership tracking — `node.set_role()` is a plain,
-  unconditional overwrite with no concept of "who claimed this role and
-  why," and a local model's `Host { http_port }` (`startup_handles.rs`)
-  uses the identical `http_port` value this watcher does (both derive it
-  from the same `api_port`), so the role value alone can't distinguish
-  the two callers. The demotion path additionally checks
-  `node.models_being_served()` is empty before actually changing the
-  role, so a node that starts serving a local model *after* this watcher
-  promoted it won't have that model's `Host` status pulled out from under
-  it once the plugin's models later disappear — but this is a targeted
-  patch for the one race that's currently reachable, not a general
-  ownership mechanism. A node with more complex overlapping
-  local-model/plugin lifecycles than "plugin promotes first, local model
-  starts being served later" isn't fully covered by this. Buzz's relay
-  feature (the motivating use case) never sets a local `model_id`, so it
-  doesn't exercise this at all; a caller that does mix both should treat
-  this watcher's demotion behavior as best-effort until a real
-  ownership-aware transition mechanism exists. `inference_models()` reads
-  the plugin manager's own already-debounced health state (see
-  `plugin::health`'s startup-grace/failure-threshold logic) rather than
-  probing anything itself, so the short poll interval doesn't add
-  flapping risk beyond what that debouncing already provides.
+  interval and claims `NodeRole::Host { http_port: api_port }` when the
+  successful result is non-empty, releasing that claim when it becomes
+  empty again. Errors are logged and leave the previous role state intact
+  until a successful sample arrives. `mesh::Node` reference-counts local
+  model and plugin claims, demotes only after the final claimant releases,
+  and re-gossips actual role transitions. The local-model `Exit` fallback
+  path also releases its claim explicitly because it bypasses the shared
+  shutdown teardown. `inference_models()` reads the plugin manager's own
+  already-debounced health state (see `plugin::health`'s startup-grace/
+  failure-threshold logic) rather than probing anything itself, so the
+  short poll interval doesn't add flapping risk beyond that debouncing.
 
-Both changes land at a single call site in `run_auto()`'s existing startup
-path: the tunnel-port fix is an unconditional one-line addition; the
-host-role watcher is new (if small) background machinery, started
-conditionally (skipped for `--client` nodes, which have no compute to
+The tunnel-port fix is an unconditional addition in `run_auto()`'s existing
+startup path. The host-role watcher is new (if small) background machinery,
+started conditionally (skipped for `--client` nodes, which have no compute to
 offer regardless of plugin state). Neither threads through the
 passive-listener/model-selection context that an earlier version of this
 fix (written against an older fork base, before the
@@ -122,16 +106,10 @@ would have been dead weight added to an already-dead code path.
 
 ## Deliberately deferred
 
-- **Real ownership tracking for `NodeRole::Host`.** Nothing in `mesh::Node`
-  currently tracks *why* a node is `Host` — `set_role()` is a plain
-  overwrite. The plugin-host-role watcher's task-local flag plus a
-  `models_being_served()` check (see above) closes the one race that's
-  reachable today, but a real fix would give `NodeRole::Host` (or a
-  parallel piece of state) an explicit set of claimants — local model
-  load, plugin health, potentially others later — and only clear the role
-  when the last claimant releases it. That's a bigger, more invasive
-  change than this fix's scope; worth doing if a node mixing local models
-  and plugins becomes a real use case rather than a theoretical one.
+- **Additional host-role claim sources.** Local model load and plugin health
+  now have explicit claims, but future host capabilities may need their own
+  claim type and lifecycle. Any new claimant must use the same ownership and
+  re-gossip path so it cannot demote a node still serving for another source.
 - **Capacity/VRAM-based host ordering.** `order_remote_hosts_by_context`
   and related host-ranking logic (used when multiple peers can serve the
   same model) is built around real local VRAM/context-window numbers. A

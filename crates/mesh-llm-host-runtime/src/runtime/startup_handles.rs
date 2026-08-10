@@ -664,6 +664,11 @@ pub(super) async fn startup_handle_fallback_failure(
             event.reason, event.generation, unavailable_stage_nodes
         )),
     });
+    // The failed fallback exits without the shared shutdown path, so release
+    // the local-model host claim explicitly before returning to the runtime.
+    ctx.node
+        .release_host_role(mesh::HostRoleClaim::LocalModel)
+        .await;
     startup_remove_runtime_instance_artifacts(ctx, model_name).await;
     StartupLoopControl::Return
 }

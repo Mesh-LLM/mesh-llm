@@ -1,7 +1,6 @@
 use super::*;
 use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 use serde_json::json;
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 mod startup;
@@ -11,12 +10,6 @@ use startup::{
     bind_mesh_endpoint, init_owner_runtime, startup_secret_key, wait_for_endpoint_online,
 };
 pub(crate) use startup::{default_plugin_event_source, hardware_snapshot_for_start};
-
-#[derive(Debug, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum HostRoleClaim {
-    LocalModel,
-    PluginInference,
-}
 
 /// Lightweight routing table for passive nodes (clients + standby GPU).
 /// Contains just enough info to route requests to the right host.
@@ -47,7 +40,7 @@ pub struct Node {
     pub(crate) local_mesh_requirements: crate::MeshRequirements,
     pub(crate) state: Arc<Mutex<MeshState>>,
     pub(crate) role: Arc<Mutex<NodeRole>>,
-    pub(crate) host_role_claims: Arc<Mutex<BTreeMap<HostRoleClaim, usize>>>,
+    pub(crate) host_role_claims: Arc<Mutex<HostRoleClaims>>,
     pub(crate) models: Arc<Mutex<Vec<String>>>,
     pub(crate) model_source: Arc<Mutex<Option<String>>>,
     pub(crate) serving_models: Arc<Mutex<Vec<String>>>,
@@ -783,7 +776,7 @@ impl Node {
                 recent_mesh_rejections: VecDeque::new(),
             })),
             role: Arc::new(Mutex::new(role)),
-            host_role_claims: Arc::new(Mutex::new(BTreeMap::new())),
+            host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
             models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
@@ -959,7 +952,7 @@ impl Node {
                 recent_mesh_rejections: VecDeque::new(),
             })),
             role: Arc::new(Mutex::new(role)),
-            host_role_claims: Arc::new(Mutex::new(BTreeMap::new())),
+            host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
             models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
@@ -1167,33 +1160,6 @@ impl Node {
     #[cfg(test)]
     pub async fn set_role(&self, role: NodeRole) {
         *self.role.lock().await = role;
-    }
-
-    pub async fn claim_host_role(&self, claim: HostRoleClaim, http_port: u16) {
-        let mut claims = self.host_role_claims.lock().await;
-        *claims.entry(claim).or_default() += 1;
-        let mut role = self.role.lock().await;
-        if matches!(*role, NodeRole::Worker) {
-            *role = NodeRole::Host { http_port };
-        }
-    }
-
-    pub async fn release_host_role(&self, claim: HostRoleClaim) {
-        let mut claims = self.host_role_claims.lock().await;
-        let Some(count) = claims.get_mut(&claim) else {
-            return;
-        };
-        if *count > 1 {
-            *count -= 1;
-        } else {
-            claims.remove(&claim);
-        }
-        if claims.is_empty() {
-            let mut role = self.role.lock().await;
-            if matches!(*role, NodeRole::Host { .. }) {
-                *role = NodeRole::Worker;
-            }
-        }
     }
 
     pub async fn set_release_attestation_report(
@@ -1852,26 +1818,6 @@ mod node_tests {
             latency_observer_id: None,
             inference_admission_state: None,
         }
-    }
-
-    #[tokio::test]
-    async fn host_role_claims_are_reference_counted_across_sources() {
-        let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
-
-        node.claim_host_role(HostRoleClaim::LocalModel, 9337).await;
-        node.claim_host_role(HostRoleClaim::PluginInference, 9337)
-            .await;
-        assert_eq!(node.role().await, NodeRole::Host { http_port: 9337 });
-
-        node.release_host_role(HostRoleClaim::PluginInference).await;
-        assert_eq!(node.role().await, NodeRole::Host { http_port: 9337 });
-
-        node.claim_host_role(HostRoleClaim::LocalModel, 9337).await;
-        node.release_host_role(HostRoleClaim::LocalModel).await;
-        assert_eq!(node.role().await, NodeRole::Host { http_port: 9337 });
-
-        node.release_host_role(HostRoleClaim::LocalModel).await;
-        assert_eq!(node.role().await, NodeRole::Worker);
     }
 
     #[tokio::test]
