@@ -7442,6 +7442,7 @@ dependencies = [
  "protoc-bin-vendored",
  "serde",
  "serde_json",
+ "skippy-tokenizer",
 ]
 
 [[package]]
@@ -7497,12 +7498,21 @@ dependencies = [
  "skippy-metrics",
  "skippy-protocol",
  "skippy-runtime",
+ "skippy-tokenizer",
  "socket2",
  "tempfile",
  "tokio",
  "tokio-stream",
  "tonic",
  "tower",
+]
+
+[[package]]
+name = "skippy-tokenizer"
+version = "0.72.1"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

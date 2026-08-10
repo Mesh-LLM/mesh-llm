@@ -195,7 +195,6 @@ implementation file.
   for retired paths unless a task explicitly requires them. Binary ABI changes
   still require the normal Skippy ABI version bump and synchronized Rust FFI
   constants.
-
 ### Skippy native API documentation
 
 - Treat Doxygen-style comments in `include/skippy.h` and
@@ -214,7 +213,6 @@ implementation file.
 - Commit the regenerated `website/src/docs/pages/skippy-api.md` with the
   native queue change. Do not hand-edit the generated page or let a native API
   PR merge without updating the website reference.
-
 ## Workspace Crates
 
 The workspace lives under `crates/`. The most important crates:

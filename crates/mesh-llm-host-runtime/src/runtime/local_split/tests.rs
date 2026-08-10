@@ -1018,8 +1018,26 @@ fn split_recovery_candidate_participants_excludes_unavailable_stage_nodes() {
     );
 }
 
-#[tokio::test]
-async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load_failure() {
+#[test]
+fn load_split_runtime_generation_stops_candidate_stages_after_partial_load_failure() {
+    std::thread::Builder::new()
+        .name("local-split-test".to_owned())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build local split test runtime")
+                .block_on(
+                    load_split_runtime_generation_stops_candidate_stages_after_partial_load_failure_inner(),
+                );
+        })
+        .expect("spawn local split test thread")
+        .join()
+        .expect("local split test thread panicked");
+}
+
+async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load_failure_inner() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
         .await
         .unwrap();
