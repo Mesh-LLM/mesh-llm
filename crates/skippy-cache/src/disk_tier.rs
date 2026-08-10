@@ -51,7 +51,18 @@ use crate::CacheBytes;
 
 /// Bumped whenever the on-disk layout or the identity contract changes, so a
 /// stale directory from an older build is discarded rather than misread.
-const DISK_TIER_FORMAT_VERSION: u32 = 2;
+const DISK_TIER_FORMAT_VERSION: u32 = 3;
+
+/// Checksum the caller metadata that describes how to interpret a page.
+///
+/// Uses `serde_json::to_vec` on the value; `serde_json::Value` maps are
+/// `BTreeMap`-backed so key order is deterministic and the digest is stable
+/// across processes.
+fn extra_digest(extra: Option<&serde_json::Value>) -> Option<String> {
+    let value = extra?;
+    let encoded = serde_json::to_vec(value).ok()?;
+    Some(blake3::hash(&encoded).to_hex().to_string())
+}
 const INDEX_FILE_NAME: &str = "index.json";
 const ENTRY_DIR_NAME: &str = "pages";
 
@@ -88,6 +99,20 @@ pub struct DiskEntry {
     /// does not need to know the runtime's descriptor type.
     #[serde(default)]
     pub extra: Option<serde_json::Value>,
+    /// Checksum over the canonical encoding of `extra`.
+    ///
+    /// The payload checksum covers the bytes but not the metadata that says
+    /// how to interpret them. For a KV page `extra` carries the descriptor --
+    /// layer range, K/V ggml types, row strides -- so an index corrupted into
+    /// still-valid JSON could hand correctly-checksummed bytes to the runtime
+    /// under the wrong layout. That is silent numerical corruption on a path
+    /// that looks verified, so the metadata is checksummed too.
+    ///
+    /// Optional for forward/backward tolerance: an entry written before this
+    /// field existed has `None` and is rejected on load rather than trusted,
+    /// which is why the format version is also bumped.
+    #[serde(default)]
+    pub extra_checksum: Option<String>,
     pub written_at_secs: u64,
     pub last_used_secs: u64,
     /// Monotonic use counter, used to break ties when several entries share a
@@ -146,6 +171,22 @@ impl DirectoryLock {
                 ));
             }
         }
+        #[cfg(not(unix))]
+        {
+            // No advisory-lock equivalent is wired up here yet. Failing open
+            // would be the dangerous choice: two instances sharing a cache
+            // directory delete each other's mapped page files during LRU
+            // eviction and orphan reclaim, and on Windows unlinking a mapped
+            // file can fault the reader. Refuse to enable the tier instead of
+            // silently running unprotected.
+            let _ = &file;
+            return Err(anyhow!(
+                "KV disk tier requires advisory directory locking, which is not \
+                 implemented on this platform; refusing to open {}",
+                root.display()
+            ));
+        }
+        #[cfg(unix)]
         Ok(Self { _file: file })
     }
 }
@@ -288,10 +329,15 @@ impl PrefixDiskTier {
             let name = file.file_name();
             let Some(name) = name.to_str() else { continue };
             if !known.contains(name) {
-                // Never reclaim our own lock or a live temp file.
-                if name == "owner.lock" || name.ends_with(".tmp") {
+                if name == "owner.lock" {
                     continue;
                 }
+                // Temp files are reclaimed too. This only runs at open, and
+                // opening means we hold the exclusive directory lock, so no
+                // other writer exists and every `.tmp` here is debris from a
+                // crash between writing a page and renaming it into place.
+                // Skipping them (the previous behaviour) leaked a full page's
+                // bytes per crash, unbounded, with nothing to ever clean up.
                 let _ = fs::remove_file(file.path());
             }
         }
@@ -366,6 +412,7 @@ impl PrefixDiskTier {
                 total_bytes,
                 components: descriptors,
                 payload_kind: payload_kind.to_string(),
+                extra_checksum: extra_digest(extra.as_ref()),
                 extra,
                 written_at_secs: now,
                 last_used_secs: now,
@@ -427,6 +474,21 @@ impl PrefixDiskTier {
                 mmap
             }
         };
+
+        // Verify the metadata before the payload. `extra` tells the caller
+        // how to interpret these bytes (for a KV page: layer range, ggml
+        // types, row strides), so trusting it while only checksumming the
+        // payload would let a corrupted index apply a valid page under the
+        // wrong layout. An entry written by an older format has no digest;
+        // the format version bump means we never see one, but reject rather
+        // than trust if we somehow do.
+        if extra_digest(entry.extra.as_ref()) != entry.extra_checksum {
+            self.quarantine(page_id);
+            self.stats.corrupt_entries = self.stats.corrupt_entries.saturating_add(1);
+            return Err(anyhow!(
+                "KV disk entry failed metadata checksum verification for page {page_id}"
+            ));
+        }
 
         let mut parts = Vec::with_capacity(entry.components.len());
         for component in &entry.components {
@@ -894,5 +956,81 @@ mod concurrency_and_safety_tests {
 
         let tier = PrefixDiskTier::open(dir.path(), 1 << 20).unwrap();
         assert_eq!(tier.stats().entries, 0);
+    }
+
+    /// Metadata corruption must fail closed.
+    ///
+    /// The payload checksum does not cover `extra`, which for a KV page is
+    /// the descriptor saying how to interpret the bytes. An index corrupted
+    /// into still-valid JSON would otherwise hand correctly-checksummed bytes
+    /// to the runtime under the wrong layout -- silent numerical corruption
+    /// on a path that reports success.
+    #[test]
+    fn tampered_metadata_is_rejected_even_though_the_payload_is_intact() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let payload = vec![7u8; 256];
+        {
+            let mut tier = PrefixDiskTier::open(dir.path(), 1 << 20).expect("open");
+            tier.store(
+                "page-meta",
+                128,
+                "resident_kv_archive",
+                &[&payload],
+                Some(serde_json::json!({ "k_type": 1, "layer_start": 0 })),
+            )
+            .expect("store");
+        }
+
+        // Rewrite the descriptor the way a corrupted index would: still valid
+        // JSON, payload untouched, so only the metadata digest can catch it.
+        let index_path = dir.path().join("index.json");
+        let raw = std::fs::read(&index_path).expect("read index");
+        let mut index: serde_json::Value = serde_json::from_slice(&raw).expect("parse index");
+        index["entries"][0]["extra"]["k_type"] = serde_json::json!(8);
+        std::fs::write(&index_path, serde_json::to_vec(&index).expect("encode"))
+            .expect("write index");
+
+        let mut tier = PrefixDiskTier::open(dir.path(), 1 << 20).expect("reopen");
+        let error = tier
+            .load("page-meta", "resident_kv_archive")
+            .expect_err("tampered metadata must be rejected");
+        assert!(
+            error.to_string().contains("metadata checksum"),
+            "expected a metadata checksum failure, got: {error}"
+        );
+        assert!(
+            tier.load("page-meta", "resident_kv_archive")
+                .ok()
+                .flatten()
+                .is_none(),
+            "a quarantined entry must not come back on a later load"
+        );
+    }
+
+    /// Crash debris must not leak forever.
+    ///
+    /// A crash between writing a page file and committing the index leaves a
+    /// `.tmp` file. Open holds the exclusive directory lock, so nothing can
+    /// still be writing one, and skipping them leaked a full page's bytes per
+    /// crash with nothing to ever reclaim it.
+    #[test]
+    fn crash_left_temp_files_are_reclaimed_on_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let mut tier = PrefixDiskTier::open(dir.path(), 1 << 20).expect("open");
+            tier.store("page-live", 64, "kind", &[&[1u8; 64][..]], None)
+                .expect("store");
+        }
+        let pages = dir.path().join(ENTRY_DIR_NAME);
+        let debris = pages.join("kvp.999.1.tmp");
+        std::fs::write(&debris, vec![0u8; 4096]).expect("write debris");
+        assert!(debris.exists());
+
+        let mut tier = PrefixDiskTier::open(dir.path(), 1 << 20).expect("reopen");
+        assert!(!debris.exists(), "crash debris must be reclaimed at open");
+        assert!(
+            tier.load("page-live", "kind").expect("load").is_some(),
+            "reclaiming debris must not disturb a live entry"
+        );
     }
 }

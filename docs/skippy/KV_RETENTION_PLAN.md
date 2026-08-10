@@ -579,6 +579,29 @@ full continuation state. Only hybrid/recurrent families (`qwen3next`,
 `kv_recurrent` path. So the dense archive path covers the large MoE models
 that motivate split serving.
 
+
+## Expert review round 2
+
+Two independent reviews (split correctness; disk tier + identity). Split
+correctness came back clean on all five questions. The disk-tier review found
+five real issues, all now fixed:
+
+| Finding | Fix |
+|---|---|
+| Metadata (`extra`, the KV page descriptor) was not checksummed, only the payload. A corrupted-but-valid-JSON index could apply correct bytes under a wrong layout. | `extra_checksum` on every entry, verified before the payload; format version bumped to 3. Test: `tampered_metadata_is_rejected_even_though_the_payload_is_intact`. |
+| Weights with no content digest could alias: two different GGUFs served under one `model_id` collide on disk. | The tier now refuses to open unless at least one of `manifest_sha256` / `source_model_sha256` / `package_ref` is present, and says why. |
+| No directory locking on non-Unix; the tier silently ran unprotected. | Non-Unix now fails closed with an explicit error rather than running without a lock. |
+| Crash-left `.tmp` files were never reclaimed, leaking a page's bytes per crash. | Reclaimed at open, which is safe because open holds the exclusive lock. Test: `crash_left_temp_files_are_reclaimed_on_open`. |
+| Debug `eprintln!` instrumentation left in committed code. | Removed. |
+
+Two review claims were checked and found **incorrect**: `page_id` is a full
+BLAKE3 hex digest (not truncated to 64 bits), and the index *is* committed
+atomically via write-temp-then-rename. Both were artifacts of the reviewer
+seeing only an excerpt.
+
+Re-measured after hardening, solo 0.5B, ~2.1k tokens: cross-session
+0.42s -> 0.13s, restart 0.42s -> 0.21s. Two-node split smoke passes.
+
 ### Not done
 
 - **W1** KV quantization, **W3** page-granular export, **W5** export-on-eviction,

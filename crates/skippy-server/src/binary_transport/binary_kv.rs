@@ -625,15 +625,6 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
         return result;
     }
     let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
-    if std::env::var("SKIPPY_KV_DBG").is_ok() {
-        eprintln!(
-            "KVDBG rec_chunked stage={} layers={}..{} tokens={}",
-            config.stage_index,
-            config.layer_start,
-            config.layer_end,
-            token_ids.len()
-        );
-    }
     {
         let mut runtime = runtime.lock().expect("runtime lock poisoned");
         for identity in identities {
@@ -843,15 +834,6 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
     );
     let started = Instant::now();
     let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
-    if std::env::var("SKIPPY_KV_DBG").is_ok() {
-        eprintln!(
-            "KVDBG rec_full stage={} layers={}..{} tokens={}",
-            config.stage_index,
-            config.layer_start,
-            config.layer_end,
-            token_ids.len()
-        );
-    }
     for identity in identities {
         let token_count_usize = usize::try_from(identity.identity.token_count)
             .unwrap_or(usize::MAX)

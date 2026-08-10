@@ -72,15 +72,9 @@ impl KvStageIntegration {
         identity: &PrefillKvIdentity,
     ) -> Result<bool> {
         if !self.dense_archive_enabled() {
-            if std::env::var("SKIPPY_KV_DBG").is_ok() {
-                eprintln!("KVDBG archive: dense_archive disabled");
-            }
             return Ok(false);
         }
         let token_count = identity.identity.token_count;
-        if std::env::var("SKIPPY_KV_DBG").is_ok() {
-            eprintln!("KVDBG archive: called tokens={token_count}");
-        }
         if token_count < MIN_ARCHIVE_TOKENS.max(self.candidate_policy.min_tokens) {
             return Ok(false);
         }
@@ -98,12 +92,7 @@ impl KvStageIntegration {
         // archived bytes and the identity always agree.
         let page = match runtime.export_kv_page(session_id, 0, token_count) {
             Ok(page) => page,
-            Err(e) => {
-                if std::env::var("SKIPPY_KV_DBG").is_ok() {
-                    eprintln!("KVDBG archive: export failed tokens={token_count}: {e}");
-                }
-                return Ok(false);
-            }
+            Err(_) => return Ok(false),
         };
         let mut cache = self
             .exact_states
@@ -173,6 +162,18 @@ impl KvStageIntegration {
                 || desc.token_count != expected_tokens
                 || restored.token_count != expected_tokens
             {
+                continue;
+            }
+
+            // The token range agreeing is not sufficient. The descriptor also
+            // tells the runtime how to *interpret* the bytes: layer range,
+            // K/V ggml types, row strides. The tier checksums the descriptor
+            // JSON as well as the payload (see `DiskEntry::extra_checksum`),
+            // so a corrupted index cannot hand correctly-checksummed bytes to
+            // the runtime under a wrong layout. Cross-check the one field
+            // that must also agree with the bytes actually mapped, since that
+            // relationship spans the two checksummed regions.
+            if desc.payload_bytes != kv.as_ref().len() as u64 {
                 continue;
             }
 

@@ -83,6 +83,29 @@ const DEFAULT_DISK_TIER_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 /// *directories* separable so operators can reason about and delete them.
 fn open_disk_tier(config: &StageConfig) -> Option<PrefixDiskTier> {
     let max_bytes = disk_tier_budget_bytes()?;
+    // Persisting pages requires the identity to be anchored to *content*, not
+    // to a display name. `model_id` is a human-facing label -- two different
+    // GGUFs can legitimately be served under one name, and across a restart
+    // there is nothing to notice the swap. In-process that is harmless
+    // because pages die with the process; on disk it means a stale page from
+    // different weights is served as a hit, which is silent numerical
+    // corruption.
+    //
+    // So require at least one content digest before enabling the tier, and
+    // say why when declining. Refusing to cache is always recoverable; a
+    // wrong hit is not.
+    if config.manifest_sha256.is_none()
+        && config.source_model_sha256.is_none()
+        && config.package_ref.is_none()
+    {
+        eprintln!(
+            "skippy: KV disk tier disabled for stage {}: no content digest \
+             (manifest_sha256/source_model_sha256/package_ref) to anchor cache \
+             identity across restarts",
+            config.stage_id
+        );
+        return None;
+    }
     let root = disk_tier_root(config);
     match PrefixDiskTier::open(&root, max_bytes) {
         Ok(tier) => Some(tier),
