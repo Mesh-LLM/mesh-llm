@@ -295,168 +295,53 @@ publish_crate_with_retry() {
     return 101
 }
 
+# Publishable workspace dependencies for every crate, derived once from cargo
+# metadata into "<crate> <dep>" lines.
+#
+# This is intentionally derived rather than hand-maintained: a stale hand-written
+# map silently breaks the dry-run whenever a new crate joins the workspace, and
+# the failure only surfaces at release time, at the end of a long release build.
+registry_dep_pairs=""
+
+load_registry_dep_pairs() {
+    local metadata=""
+    if ! metadata="$(cargo metadata --format-version 1 --no-deps 2>/dev/null)"; then
+        echo "failed to read cargo metadata for workspace dependency derivation" >&2
+        exit 1
+    fi
+    if [[ -z "$metadata" ]]; then
+        echo "cargo metadata returned no workspace data" >&2
+        exit 1
+    fi
+    registry_dep_pairs="$(
+        printf '%s' "$metadata" | python3 -c '
+import json
+import sys
+
+metadata = json.load(sys.stdin)
+
+publishable = [p for p in metadata["packages"] if p.get("publish") != []]
+by_manifest_dir = {
+    p["manifest_path"].rsplit("/", 1)[0]: p["name"] for p in publishable
+}
+
+for package in publishable:
+    for dependency in package["dependencies"]:
+        if dependency.get("kind") == "dev":
+            continue
+        path = dependency.get("path")
+        if not path:
+            continue
+        name = by_manifest_dir.get(path.rstrip("/"))
+        if name and name != package["name"]:
+            print(package["name"], name)
+'
+    )"
+}
+
 unpublished_registry_deps() {
-    case "$1" in
-        model-artifact)
-            printf '%s\n' model-ref
-            ;;
-        model-hf)
-            printf '%s\n' \
-                model-artifact \
-                model-ref
-            ;;
-        mesh-llm-hardware-profile)
-            printf '%s\n' \
-                mesh-llm-native-runtime
-            ;;
-        mesh-llm-runtime-install)
-            printf '%s\n' \
-                mesh-llm-build-info \
-                mesh-llm-hardware-profile \
-                mesh-llm-native-runtime \
-                skippy-ffi
-            ;;
-        mesh-llm-client)
-            printf '%s\n' \
-                model-artifact \
-                mesh-llm-identity \
-                mesh-llm-protocol \
-                mesh-llm-routing \
-                mesh-llm-types
-            ;;
-        mesh-llm-api-client)
-            printf '%s\n' \
-                mesh-llm-client
-            ;;
-        mesh-llm-console-server)
-            printf '%s\n' \
-                mesh-llm-ui
-            ;;
-        mesh-llm-cli)
-            printf '%s\n' \
-                mesh-llm-build-info \
-                mesh-llm-events
-            ;;
-        mesh-llm-tui)
-            printf '%s\n' \
-                mesh-llm-events
-            ;;
-        mesh-llm-plugin-manager)
-            printf '%s\n' \
-                mesh-llm-skills
-            ;;
-        mesh-llm-system)
-            printf '%s\n' \
-                mesh-llm-build-info \
-                mesh-llm-gpu-bench \
-                mesh-llm-native-runtime \
-                mesh-llm-release-footer \
-                mesh-llm-runtime-install \
-                skippy-runtime
-            ;;
-        mesh-llm-config)
-            printf '%s\n' \
-                mesh-llm-types \
-                skippy-protocol
-            ;;
-        mesh-mixture-of-agents)
-            printf '%s\n' \
-                mesh-llm-guardrails
-            ;;
-        model-resolver)
-            printf '%s\n' \
-                model-artifact \
-                model-ref
-            ;;
-        model-package)
-            printf '%s\n' \
-                model-hf \
-                model-ref
-            ;;
-        openai-frontend)
-            printf '%s\n' \
-                mesh-llm-guardrails
-            ;;
-        skippy-cache)
-            printf '%s\n' \
-                skippy-protocol
-            ;;
-        skippy-runtime)
-            printf '%s\n' \
-                skippy-ffi
-            ;;
-        skippy-server)
-            printf '%s\n' \
-                openai-frontend \
-                skippy-cache \
-                skippy-metrics \
-                skippy-protocol \
-                skippy-runtime \
-                skippy-tokenizer
-            ;;
-        mesh-native-serving-plugin-host)
-            printf '%s\n' \
-                mesh-native-serving-plugin-api \
-                skippy-server
-            ;;
-        mesh-llm-host-runtime)
-            printf '%s\n' \
-                mesh-llm-api-server \
-                mesh-llm-build-info \
-                mesh-llm-client \
-                mesh-llm-config \
-                mesh-llm-events \
-                mesh-llm-guardrails \
-                mesh-llm-identity \
-                mesh-llm-native-runtime \
-                mesh-llm-node \
-                mesh-llm-plugin \
-                mesh-llm-plugin-manager \
-                mesh-llm-protocol \
-                mesh-llm-routing \
-                mesh-llm-runtime-install \
-                mesh-llm-system \
-                mesh-llm-types \
-                mesh-llm-ui \
-                mesh-mixture-of-agents \
-                mesh-native-serving-plugin-host \
-                model-artifact \
-                model-hf \
-                model-package \
-                model-ref \
-                model-resolver \
-                openai-frontend \
-                skippy-coordinator \
-                skippy-protocol \
-                skippy-runtime \
-                skippy-server \
-                skippy-topology
-            ;;
-        mesh-llm-sdk)
-            printf '%s\n' \
-                mesh-llm-api-client \
-                mesh-llm-api-server \
-                mesh-llm-console-server \
-                mesh-llm-embedded-runtime \
-                mesh-llm-runtime-install
-            ;;
-        mesh-llm-embedded-runtime)
-            printf '%s\n' \
-                mesh-llm-host-runtime
-            ;;
-        mesh-llm-node)
-            printf '%s\n' \
-                mesh-llm-types \
-                model-artifact \
-                model-hf \
-                model-ref
-            ;;
-        mesh-llm-api-server)
-            printf '%s\n' \
-                mesh-llm-api-client \
-                mesh-llm-node
-            ;;
-    esac
+    local crate="$1"
+    printf '%s\n' "$registry_dep_pairs" | awk -v crate="$crate" '$1 == crate { print $2 }'
 }
 
 should_skip_initial_dry_run() {
@@ -520,6 +405,10 @@ publish_crates=(
     mesh-llm-embedded-runtime
     mesh-llm-sdk
 )
+
+if [[ "$dry_run" -eq 1 ]]; then
+    load_registry_dep_pairs
+fi
 
 for index in "${!publish_crates[@]}"; do
     crate="${publish_crates[$index]}"

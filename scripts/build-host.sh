@@ -87,6 +87,8 @@ configure_rust_cache() {
 stamp_build_version() {
     local release_version=""
     local pkgid=""
+    local sha=""
+    local dirty_suffix=""
 
     if [[ -n "${MESH_LLM_BUILD_VERSION:-}" ]]; then
         echo "Using preset MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
@@ -105,8 +107,35 @@ stamp_build_version() {
         return 0
     fi
 
-    export MESH_LLM_BUILD_VERSION="$release_version"
-    echo "Using release MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+    # A release product reports the plain workspace version. Non-release builds
+    # append the commit SHA so `mesh-llm --version` cannot be mistaken for a
+    # release binary, and so is_sha_build() resolves native runtimes from the
+    # latest release rather than a pinned tag. This mirrors build-windows.ps1.
+    if [[ "$BUILD_PROFILE" == "release" ]]; then
+        export MESH_LLM_BUILD_VERSION="$release_version"
+        echo "Using release MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+        return 0
+    fi
+
+    if ! sha="$(git -C "$REPO_ROOT" rev-parse --short=6 HEAD 2>/dev/null)" || [[ -z "$sha" ]]; then
+        echo "Warning: unable to derive build version; git SHA unavailable." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+    sha="$(printf '%s' "$sha" | tr '[:lower:]' '[:upper:]')"
+
+    local status_output=""
+    if ! status_output="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all 2>/dev/null)"; then
+        echo "Warning: unable to derive build version; git status unavailable." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+    if [[ -n "$status_output" ]]; then
+        dirty_suffix=".dirty"
+    fi
+
+    export MESH_LLM_BUILD_VERSION="${release_version}+g${sha}${dirty_suffix}"
+    echo "Derived MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
 }
 
 if [[ "${MESH_LLM_DYNAMIC_NATIVE_RUNTIME:-1}" != "1" ]]; then

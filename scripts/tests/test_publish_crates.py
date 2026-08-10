@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import tempfile
@@ -13,6 +15,26 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "publish-crates.sh"
+
+
+def _publish_chain_crates() -> list[str]:
+    """The crate order the publish script itself declares."""
+    contents = SCRIPT.read_text(encoding="utf-8")
+    array = re.search(r"publish_crates=\(\n(.*?)\n\)", contents, re.S)
+    if array is None:
+        raise AssertionError("scripts/publish-crates.sh: missing publish_crates array")
+    return [line.strip() for line in array.group(1).splitlines() if line.strip()]
+
+
+PUBLISH_CHAIN_CRATES = _publish_chain_crates()
+
+# Path dependencies the fixture models by default. These mirror a few real
+# workspace edges so the derived skip logic has something to resolve.
+DEFAULT_WORKSPACE_DEPS = {
+    "model-artifact": ["model-ref"],
+    "model-hf": ["model-artifact", "model-ref"],
+    "mesh-llm-api-server": ["mesh-llm-api-client", "mesh-llm-node"],
+}
 
 
 class PublishCratesScriptTests(unittest.TestCase):
@@ -85,6 +107,36 @@ class PublishCratesScriptTests(unittest.TestCase):
             self.assertIn(
                 "retry limit exceeded for model-artifact@0.68.0 after 2 attempts",
                 result.stderr,
+            )
+
+    def test_dry_run_skips_dependents_of_a_brand_new_workspace_crate(self) -> None:
+        """A crate added to the workspace is not yet on crates.io.
+
+        v0.75.1 failed here: `skippy-tokenizer` was new, `skippy-protocol`
+        depends on it, and the hand-maintained dependency map had no
+        `skippy-protocol` entry, so its dry-run was not skipped and
+        `cargo publish` could not resolve the dependency from the registry.
+        Deriving the map from cargo metadata must skip the dependent instead.
+        """
+        with PublishCratesFixture() as fixture:
+            fixture.write_curl_statuses({})
+            fixture.write_fake_cargo(
+                workspace_deps={"skippy-protocol": ["skippy-tokenizer"]}
+            )
+            fixture.write_fake_sleep()
+            fixture.write_fake_date()
+
+            result = fixture.run(["--dry-run", "--allow-dirty"])
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertIn(
+                "dry-run cannot verify skippy-protocol until "
+                "skippy-tokenizer@0.68.0 exists in crates.io",
+                result.stdout,
+            )
+            self.assertNotIn(
+                "-p skippy-protocol --dry-run",
+                fixture.read_log("cargo.log"),
             )
 
     def test_dry_run_skips_crates_with_unpublished_registry_deps_without_sleeping(self) -> None:
@@ -220,9 +272,14 @@ class PublishCratesFixture:
         *,
         fail_crates: dict[str, int] | None = None,
         failure_output: str = "",
+        workspace_deps: dict[str, list[str]] | None = None,
     ) -> None:
         failure_path = self.tmp_path / "cargo-failure.txt"
         failure_path.write_text(failure_output, encoding="utf-8")
+        metadata_path = self.tmp_path / "cargo-metadata.json"
+        metadata_path.write_text(
+            self._workspace_metadata_json(workspace_deps), encoding="utf-8"
+        )
         fail_cases = "\n".join(
             f"{crate}:{count}" for crate, count in (fail_crates or {}).items()
         )
@@ -230,6 +287,10 @@ class PublishCratesFixture:
             "cargo",
             f"""#!/usr/bin/env bash
 set -euo pipefail
+if [[ "${{1:-}}" == "metadata" ]]; then
+    cat "{metadata_path}"
+    exit 0
+fi
 crate=""
 prev=""
 for arg in "$@"; do
@@ -321,6 +382,41 @@ fi
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8")
+
+    def _workspace_metadata_json(
+        self, workspace_deps: dict[str, list[str]] | None
+    ) -> str:
+        """Fake `cargo metadata --no-deps` output for the publish chain.
+
+        The script derives each crate's publishable workspace dependencies from
+        this, so the fixture models path dependencies the same way Cargo does:
+        `path` points at the dependency's manifest directory.
+        """
+        deps = dict(DEFAULT_WORKSPACE_DEPS if workspace_deps is None else workspace_deps)
+        crate_names = set(PUBLISH_CHAIN_CRATES)
+        for crate, crate_deps in deps.items():
+            crate_names.add(crate)
+            crate_names.update(crate_deps)
+
+        packages = []
+        for crate in sorted(crate_names):
+            packages.append(
+                {
+                    "name": crate,
+                    "version": "0.68.0",
+                    "manifest_path": f"{self.tmp_path}/crates/{crate}/Cargo.toml",
+                    "dependencies": [
+                        {
+                            "name": dep,
+                            "req": "^0.68.0",
+                            "kind": None,
+                            "path": f"{self.tmp_path}/crates/{dep}",
+                        }
+                        for dep in deps.get(crate, [])
+                    ],
+                }
+            )
+        return json.dumps({"packages": packages})
 
     def _write_executable(self, name: str, content: str) -> None:
         path = self.bin_dir / name
