@@ -83,6 +83,18 @@ pub(crate) async fn model_has_eligible_remote_host(
     model_has_eligible_target(node, model, required_tokens, &targets, affinity).await
 }
 
+/// Whether this node itself serves `model`, independent of the target table.
+///
+/// A freshly started serve node loads its model and records it in
+/// `serving_models` / `hosted_models` before the election target table and peer
+/// gossip catch up. During that window the model has no routable target and no
+/// remote host, so a strict readiness check would exclude the node's own model
+/// from auto routing. This keeps it eligible.
+pub(crate) async fn model_is_locally_served(node: &mesh::Node, model: &str) -> bool {
+    node.hosted_models().await.iter().any(|m| m == model)
+        || node.serving_models().await.iter().any(|m| m == model)
+}
+
 pub(crate) fn pool_for_ready_models<'a>(
     available: &[router::RoutingCandidate<'a>],
     ready_models: &[&str],
@@ -130,6 +142,29 @@ mod tests {
 
         assert_eq!(pool.len(), 1);
         assert_eq!(pool[0].name, "ready-model");
+    }
+
+    #[tokio::test]
+    async fn model_served_by_nobody_is_not_locally_served() {
+        let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .expect("test node");
+
+        assert!(!model_is_locally_served(&node, "phantom/model:Q4_K_M").await);
+    }
+
+    #[tokio::test]
+    async fn freshly_loaded_local_model_stays_eligible_before_targets_populate() {
+        let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .expect("test node");
+        // A serve node records its model here before the election target table
+        // and peer gossip catch up.
+        node.set_hosted_models(vec!["local/fresh-model:Q4_K_M".to_string()])
+            .await;
+
+        assert!(model_is_locally_served(&node, "local/fresh-model:Q4_K_M").await);
+        assert!(!model_is_locally_served(&node, "some/other-model:Q4_K_M").await);
     }
 
     #[test]
