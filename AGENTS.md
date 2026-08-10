@@ -195,7 +195,24 @@ implementation file.
   for retired paths unless a task explicitly requires them. Binary ABI changes
   still require the normal Skippy ABI version bump and synchronized Rust FFI
   constants.
+### Skippy native API documentation
 
+- Treat Doxygen-style comments in `include/skippy.h` and
+  `include/skippy/*.h` as the source of truth for the public native API
+  reference. Document every public header and exported `skippy_*` function
+  beside its declaration with an `@brief` describing the capability it owns.
+- After changing a public Skippy header or exported function, prepare the
+  patched native checkout and regenerate the website page:
+
+  ```bash
+  scripts/prepare-llama.sh pinned
+  python3 scripts/generate-skippy-api-doc.py
+  python3 scripts/generate-skippy-api-doc.py --check
+  ```
+
+- Commit the regenerated `website/src/docs/pages/skippy-api.md` with the
+  native queue change. Do not hand-edit the generated page or let a native API
+  PR merge without updating the website reference.
 ## Workspace Crates
 
 The workspace lives under `crates/`. The most important crates:
