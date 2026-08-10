@@ -34,6 +34,11 @@ const ERROR_BUFFER_BYTES: usize = 2_048;
 const MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS: usize = 4_096;
 const PROPOSAL_POLL_INTERVAL: Duration = Duration::from_micros(50);
 
+const _: () = assert!(
+    abi::MAX_TOKENIZER_INPUT_PIECES == skippy_tokenizer::MAX_TOKENIZE_PIECES,
+    "ABI and tokenizer piece bounds must match",
+);
+
 /// Mesh-owned factory for one independently built native serving plugin.
 #[derive(Clone)]
 pub struct NativeServingPluginFactory {
@@ -226,7 +231,7 @@ impl HostTokenizerCapability {
             .binding_digest()
             .context("bound model does not expose a tokenizer binding digest")?;
         let limits = tokenizer.limits();
-        let mut capability = Box::new(Self {
+        let mut capability = Arc::new(Self {
             tokenizer,
             inventory,
             inventory_view: abi::TokenizerInventoryView {
@@ -251,15 +256,16 @@ impl HostTokenizerCapability {
                 encode: encode_tokenizer,
             },
         });
-        let identity = capability.tokenizer.identity();
-        capability.abi.model_id = abi::ByteSlice::from_bytes(identity.model_id.as_bytes());
-        capability.abi.source_model_sha256 =
+        let inner = Arc::get_mut(&mut capability).expect("new tokenizer capability is unique");
+        let identity = inner.tokenizer.identity().clone();
+        inner.abi.model_id = abi::ByteSlice::from_bytes(identity.model_id.as_bytes());
+        inner.abi.source_model_sha256 =
             abi::ByteSlice::from_bytes(identity.source_model_sha256.as_bytes());
-        capability.abi.tokenizer_id = abi::ByteSlice::from_bytes(identity.tokenizer_id.as_bytes());
-        capability.inventory_view = capability.inventory.view();
-        capability.abi.inventory = &raw const capability.inventory_view;
-        capability.abi.context = (&raw const capability.tokenizer).cast_mut().cast();
-        Ok(Arc::from(capability))
+        inner.abi.tokenizer_id = abi::ByteSlice::from_bytes(identity.tokenizer_id.as_bytes());
+        inner.inventory_view = inner.inventory.view();
+        inner.abi.inventory = &raw const inner.inventory_view;
+        inner.abi.context = (&raw const inner.tokenizer).cast_mut().cast();
+        Ok(capability)
     }
 }
 

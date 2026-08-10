@@ -159,28 +159,35 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
         pieces: &[InputPiece],
         max_tokens: usize,
     ) -> Result<Vec<i32>, TokenizerCapabilityError> {
-        let mut output = Vec::new();
+        let mut bytes = Vec::new();
         for piece in pieces {
-            let InputPiece::Bytes(bytes) = piece else {
-                return Err(TokenizerCapabilityError::UnsupportedInput {
-                    reason: "native control descriptor is unsupported by this backend".to_owned(),
-                });
-            };
-            let text = std::str::from_utf8(bytes).map_err(|_| {
-                TokenizerCapabilityError::UnsupportedInput {
-                    reason: "input is not valid UTF-8".to_owned(),
+            match piece {
+                InputPiece::Bytes(piece_bytes) => bytes.extend_from_slice(piece_bytes),
+                InputPiece::Control { .. } => {
+                    return Err(TokenizerCapabilityError::UnsupportedInput {
+                        reason: "native control descriptor is unsupported by this backend"
+                            .to_owned(),
+                    });
                 }
-            })?;
-            if text.as_bytes().contains(&0) {
-                return Err(TokenizerCapabilityError::UnsupportedInput {
-                    reason: "input contains an interior NUL byte".to_owned(),
-                });
             }
-            let remaining = max_tokens.saturating_sub(output.len());
-            let tokens = self.tokenize(text, false, remaining)?;
-            output.extend(tokens);
         }
-        Ok(output)
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
+        if max_tokens == 0 {
+            return Err(TokenizerCapabilityError::TooManyTokens { limit: 0 });
+        }
+        let text = std::str::from_utf8(&bytes).map_err(|_| {
+            TokenizerCapabilityError::UnsupportedInput {
+                reason: "input is not valid UTF-8".to_owned(),
+            }
+        })?;
+        if text.as_bytes().contains(&0) {
+            return Err(TokenizerCapabilityError::UnsupportedInput {
+                reason: "input contains an interior NUL byte".to_owned(),
+            });
+        }
+        self.tokenize(text, false, max_tokens)
     }
 }
 
