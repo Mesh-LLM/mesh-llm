@@ -26,6 +26,7 @@ use skippy_server::frontend::{
 };
 use skippy_server::serving_hooks::{ModelServingHooks, ModelServingHooksFactory};
 use skippy_server::tokenizer::TokenizerCapability;
+use skippy_tokenizer::{EncodeRequest, InputPiece};
 
 use plugin_dispatch::{PluginCommand, PluginDriver};
 
@@ -86,13 +87,8 @@ impl NativeServingPluginFactory {
 
 impl ModelServingHooksFactory for NativeServingPluginFactory {
     fn create(&self, tokenizer: TokenizerCapability) -> Result<ModelServingHooks> {
-        let identity = tokenizer.identity();
-        let inventory = ActivationInventory::from_inventory(
-            tokenizer
-                .inventory()
-                .context("bound model does not expose a tokenizer inventory")?,
-        )?;
-        let inventory_view = inventory.view();
+        let tokenizer_capability = HostTokenizerCapability::new(tokenizer)?;
+        let identity = tokenizer_capability.tokenizer.identity();
         let context = abi::ActivationContext {
             struct_size: size_of::<abi::ActivationContext>(),
             model_id: abi::ByteSlice::from_bytes(identity.model_id.as_bytes()),
@@ -100,7 +96,7 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
                 identity.source_model_sha256.as_bytes(),
             ),
             tokenizer_id: abi::ByteSlice::from_bytes(identity.tokenizer_id.as_bytes()),
-            tokenizer_inventory: &raw const inventory_view,
+            tokenizer_capability: &tokenizer_capability.abi,
             config_path: path_slice(&self.config_path),
             state_directory: path_slice(&self.state_directory),
             proposal_deadline_ns: u64::try_from(self.proposal_deadline.as_nanos())
@@ -125,6 +121,7 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
         let active = ActivePlugin {
             definition: Arc::clone(&self.definition),
             instance: Some(instance),
+            _tokenizer_capability: Some(tokenizer_capability),
             proposal_token_buffer: Mutex::new(vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS]),
             committed_generated_tokens: Mutex::new(HashMap::new()),
         };
@@ -152,28 +149,46 @@ impl ActivationInventory {
     fn from_inventory(inventory: &abi::TokenizerInventory) -> Result<Self> {
         if inventory.schema_version != abi::TOKENIZER_INVENTORY_SCHEMA
             || inventory.tokens.is_empty()
+            || inventory.tokens.len() > abi::MAX_TOKENIZER_INVENTORY_ENTRIES
         {
             bail!("bound model exposes an unsupported or empty tokenizer inventory");
         }
+        let mut previous_id = None;
         let entries = inventory
             .tokens
             .iter()
             .map(|entry| {
+                if entry.id > abi::MAX_TOKENIZER_INVENTORY_ENTRIES as u32 {
+                    return Err(anyhow!(
+                        "native tokenizer ID exceeds the bounded inventory limit"
+                    ));
+                }
+                if previous_id.is_some_and(|previous| entry.id <= previous) {
+                    return Err(anyhow!(
+                        "native tokenizer inventory IDs must be strictly increasing"
+                    ));
+                }
+                previous_id = Some(entry.id);
                 let (piece_kind, bytes) = match &entry.piece {
                     abi::TokenizerInventoryPiece::Bytes { bytes } => {
                         (abi::TokenizerPieceKind::BYTES, bytes.as_slice())
                     }
-                    abi::TokenizerInventoryPiece::Control { identity } => {
-                        (abi::TokenizerPieceKind::CONTROL, identity.as_bytes())
+                    abi::TokenizerInventoryPiece::Control { descriptor } => {
+                        if descriptor.is_empty() {
+                            return Err(anyhow!(
+                                "native tokenizer control descriptor must not be empty"
+                            ));
+                        }
+                        (abi::TokenizerPieceKind::CONTROL, descriptor.as_slice())
                     }
                 };
-                abi::TokenizerInventoryEntry {
+                Ok(abi::TokenizerInventoryEntry {
                     id: entry.id,
                     piece_kind,
                     bytes: abi::ByteSlice::from_bytes(bytes),
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self { entries })
     }
 
@@ -187,9 +202,194 @@ impl ActivationInventory {
     }
 }
 
+struct HostTokenizerCapability {
+    tokenizer: TokenizerCapability,
+    inventory: ActivationInventory,
+    inventory_view: abi::TokenizerInventoryView,
+    abi: abi::TokenizerCapability,
+}
+
+// SAFETY: the raw pointers are immutable views into fields of this boxed
+// value, which is kept alive by ActivePlugin for the whole plugin lifetime.
+unsafe impl Send for HostTokenizerCapability {}
+// SAFETY: the callback delegates to the model-bound, synchronized tokenizer.
+unsafe impl Sync for HostTokenizerCapability {}
+
+impl HostTokenizerCapability {
+    fn new(tokenizer: TokenizerCapability) -> Result<Arc<Self>> {
+        let inventory = ActivationInventory::from_inventory(
+            tokenizer
+                .inventory()
+                .context("bound model does not expose a tokenizer inventory")?,
+        )?;
+        let binding_digest = tokenizer
+            .binding_digest()
+            .context("bound model does not expose a tokenizer binding digest")?;
+        let limits = tokenizer.limits();
+        let mut capability = Box::new(Self {
+            tokenizer,
+            inventory,
+            inventory_view: abi::TokenizerInventoryView {
+                struct_size: 0,
+                schema_version: 0,
+                entries: std::ptr::null(),
+                entry_count: 0,
+            },
+            abi: abi::TokenizerCapability {
+                struct_size: size_of::<abi::TokenizerCapability>(),
+                abi_version: abi::TOKENIZER_CAPABILITY_ABI,
+                model_id: abi::ByteSlice::default(),
+                source_model_sha256: abi::ByteSlice::default(),
+                tokenizer_id: abi::ByteSlice::default(),
+                limits: abi::TokenizerLimits {
+                    max_input_bytes: limits.max_input_bytes,
+                    max_output_tokens: limits.max_output_tokens,
+                },
+                binding_digest,
+                inventory: std::ptr::null(),
+                context: std::ptr::null_mut(),
+                encode: encode_tokenizer,
+            },
+        });
+        let identity = capability.tokenizer.identity();
+        capability.abi.model_id = abi::ByteSlice::from_bytes(identity.model_id.as_bytes());
+        capability.abi.source_model_sha256 =
+            abi::ByteSlice::from_bytes(identity.source_model_sha256.as_bytes());
+        capability.abi.tokenizer_id = abi::ByteSlice::from_bytes(identity.tokenizer_id.as_bytes());
+        capability.inventory_view = capability.inventory.view();
+        capability.abi.inventory = &raw const capability.inventory_view;
+        capability.abi.context = (&raw const capability.tokenizer).cast_mut().cast();
+        Ok(Arc::from(capability))
+    }
+}
+
+unsafe extern "C" fn encode_tokenizer(
+    context: *mut c_void,
+    input_pieces: *const abi::TokenizerInputPiece,
+    input_piece_count: usize,
+    output_tokens: *mut i32,
+    output_capacity: usize,
+    output_length: *mut usize,
+) -> abi::TokenizerEncodeStatus {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if context.is_null() || output_length.is_null() {
+            return abi::TokenizerEncodeStatus::INVALID_ARGUMENT;
+        }
+        if input_pieces.is_null() && input_piece_count != 0 {
+            return abi::TokenizerEncodeStatus::INVALID_ARGUMENT;
+        }
+        if output_tokens.is_null() && output_capacity != 0 {
+            return abi::TokenizerEncodeStatus::INVALID_ARGUMENT;
+        }
+        if input_piece_count > abi::MAX_TOKENIZER_INPUT_PIECES {
+            unsafe { *output_length = 0 };
+            return abi::TokenizerEncodeStatus::LIMIT_EXCEEDED;
+        }
+        let pieces = if input_piece_count == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(input_pieces, input_piece_count) }
+        };
+        let mut total_input_bytes = 0usize;
+        for piece in pieces {
+            if piece.bytes.pointer.is_null() && piece.bytes.length != 0 {
+                return abi::TokenizerEncodeStatus::INVALID_ARGUMENT;
+            }
+            total_input_bytes = match total_input_bytes.checked_add(piece.bytes.length) {
+                Some(total) => total,
+                None => return abi::TokenizerEncodeStatus::LIMIT_EXCEEDED,
+            };
+        }
+        let tokenizer = unsafe { &*context.cast::<TokenizerCapability>() };
+        let limits = tokenizer.limits();
+        if total_input_bytes > limits.max_input_bytes {
+            unsafe { *output_length = 0 };
+            return abi::TokenizerEncodeStatus::LIMIT_EXCEEDED;
+        }
+        unsafe { *output_length = 0 };
+        let mut owned_pieces = Vec::with_capacity(input_piece_count);
+        for piece in pieces {
+            let bytes = if piece.bytes.length == 0 {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(piece.bytes.pointer, piece.bytes.length) }
+            };
+            owned_pieces.push(match piece.kind {
+                kind if kind == abi::TokenizerInputPieceKind::BYTES => {
+                    InputPiece::Bytes(bytes.to_vec())
+                }
+                kind if kind == abi::TokenizerInputPieceKind::CONTROL => InputPiece::Control {
+                    descriptor: bytes.to_vec(),
+                },
+                _ => return abi::TokenizerEncodeStatus::UNSUPPORTED_INPUT,
+            });
+        }
+        let request = EncodeRequest::new(tokenizer.identity().clone(), owned_pieces);
+        let encoded = match tokenizer.encode(request) {
+            Ok(encoded) => encoded,
+            Err(error) => return encode_status(error),
+        };
+        write_encode_output(
+            &encoded.token_ids,
+            output_tokens,
+            output_capacity,
+            output_length,
+        )
+    }));
+    result.unwrap_or(abi::TokenizerEncodeStatus::INTERNAL_ERROR)
+}
+
+fn write_encode_output(
+    token_ids: &[i32],
+    output_tokens: *mut i32,
+    output_capacity: usize,
+    output_length: *mut usize,
+) -> abi::TokenizerEncodeStatus {
+    if output_length.is_null() || (output_tokens.is_null() && output_capacity != 0) {
+        return abi::TokenizerEncodeStatus::INVALID_ARGUMENT;
+    }
+    unsafe { *output_length = token_ids.len() };
+    if token_ids.len() > output_capacity {
+        return abi::TokenizerEncodeStatus::OUTPUT_TOO_SMALL;
+    }
+    if !token_ids.is_empty() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(token_ids.as_ptr(), output_tokens, token_ids.len());
+        }
+    }
+    abi::TokenizerEncodeStatus::OK
+}
+
+fn encode_status(error: skippy_tokenizer::TokenizerError) -> abi::TokenizerEncodeStatus {
+    match error {
+        skippy_tokenizer::TokenizerError::UnsupportedInput { .. } => {
+            abi::TokenizerEncodeStatus::UNSUPPORTED_INPUT
+        }
+        skippy_tokenizer::TokenizerError::RuntimeUnavailable => {
+            abi::TokenizerEncodeStatus::UNAVAILABLE
+        }
+        skippy_tokenizer::TokenizerError::InputTooLarge { .. }
+        | skippy_tokenizer::TokenizerError::TooManyPieces { .. }
+        | skippy_tokenizer::TokenizerError::TooManyTokens { .. } => {
+            abi::TokenizerEncodeStatus::LIMIT_EXCEEDED
+        }
+        skippy_tokenizer::TokenizerError::IdentityMismatch { .. }
+        | skippy_tokenizer::TokenizerError::IdentityUnavailable
+        | skippy_tokenizer::TokenizerError::StageZeroRequired
+        | skippy_tokenizer::TokenizerError::UnsupportedStage { .. } => {
+            abi::TokenizerEncodeStatus::INVALID_ARGUMENT
+        }
+        skippy_tokenizer::TokenizerError::BackendFailure { .. }
+        | skippy_tokenizer::TokenizerError::BatchTooLarge { .. }
+        | skippy_tokenizer::TokenizerError::BatchInputTooLarge { .. } => {
+            abi::TokenizerEncodeStatus::INTERNAL_ERROR
+        }
+    }
+}
+
 struct LoadedDefinition {
     _library: Option<Library>,
-    api: NonNull<abi::NativeServingPluginV1>,
+    api: NonNull<abi::NativeServingPluginV2>,
     name: String,
 }
 
@@ -204,7 +404,7 @@ impl LoadedDefinition {
         let library = unsafe { Library::new(path) }
             .with_context(|| format!("load native serving plugin {}", path.display()))?;
         let entry = unsafe {
-            library.get::<abi::NativeServingPluginEntryV1>(abi::NATIVE_SERVING_PLUGIN_ENTRY_V1)
+            library.get::<abi::NativeServingPluginEntryV2>(abi::NATIVE_SERVING_PLUGIN_ENTRY_V2)
         }
         .with_context(|| {
             format!(
@@ -222,7 +422,7 @@ impl LoadedDefinition {
         })
     }
 
-    fn api(&self) -> &abi::NativeServingPluginV1 {
+    fn api(&self) -> &abi::NativeServingPluginV2 {
         unsafe { self.api.as_ref() }
     }
 
@@ -246,19 +446,19 @@ impl LoadedDefinition {
     }
 }
 
-fn validate_table(table: &abi::NativeServingPluginV1) -> Result<String> {
-    if table.abi_version != abi::NATIVE_SERVING_PLUGIN_ABI_V1 {
+fn validate_table(table: &abi::NativeServingPluginV2) -> Result<String> {
+    if table.abi_version != abi::NATIVE_SERVING_PLUGIN_ABI_V2 {
         bail!(
             "native serving plugin ABI {} is incompatible with host ABI {}",
             table.abi_version,
-            abi::NATIVE_SERVING_PLUGIN_ABI_V1
+            abi::NATIVE_SERVING_PLUGIN_ABI_V2
         );
     }
-    if table.struct_size != size_of::<abi::NativeServingPluginV1>() {
+    if table.struct_size != size_of::<abi::NativeServingPluginV2>() {
         bail!(
             "native serving plugin table size {} does not match host size {}",
             table.struct_size,
-            size_of::<abi::NativeServingPluginV1>()
+            size_of::<abi::NativeServingPluginV2>()
         );
     }
     let name = unsafe { read_utf8(table.plugin_name, "plugin name") }?;
@@ -271,6 +471,7 @@ fn validate_table(table: &abi::NativeServingPluginV1) -> Result<String> {
 struct ActivePlugin {
     definition: Arc<LoadedDefinition>,
     instance: Option<NonNull<c_void>>,
+    _tokenizer_capability: Option<Arc<HostTokenizerCapability>>,
     proposal_token_buffer: Mutex<Vec<i32>>,
     committed_generated_tokens: Mutex<HashMap<(u64, u64), usize>>,
 }
@@ -908,7 +1109,7 @@ mod tests {
                 .to_string()
                 .contains("incompatible")
         );
-        table.abi_version = abi::NATIVE_SERVING_PLUGIN_ABI_V1;
+        table.abi_version = abi::NATIVE_SERVING_PLUGIN_ABI_V2;
         table.struct_size -= 1;
         assert!(
             validate_table(&table)

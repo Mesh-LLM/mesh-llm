@@ -14,9 +14,20 @@ layout of the prefix understood by an older plugin. Removing or reordering
 fields, changing a field's type, or changing a callback signature requires a
 new versioned ABI table and continued support for the previous table.
 
-The V1 activation contract lends the complete native tokenizer inventory through
-`ActivationContext`. A plugin copies or transforms the inventory before
-returning from `activate`.
+The V2 activation contract lends a model-bound tokenizer capability through
+`ActivationContext`. The capability includes the opaque native tokenizer
+inventory, the model identity and binding digest, explicit input/output
+limits, and a bounded encode callback for tagged ordinary-byte and opaque
+control pieces. Mesh does not know or own Rosetta vocabulary: a consumer
+builds any translation from the inventory and calls the capability outside the
+proposal deadline. Unsupported or non-lossless input is rejected; it is never
+decoded with replacement semantics. A plugin copies or transforms the
+inventory before returning from `activate` and must not call the encode
+callback from proposal callbacks.
+
+The V2 table is a breaking replacement for V1. Plugins must resolve
+`mesh_native_serving_plugin_v2` and validate the V2 ABI/version and structure
+sizes before use.
 
 Each proposal query carries the capacity Skippy can verify at that exact decode
 position. The native host adapter also applies a bounded implementation cap so

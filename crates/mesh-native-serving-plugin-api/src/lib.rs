@@ -14,10 +14,13 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const NATIVE_SERVING_PLUGIN_ABI_V1: u32 = 1;
-pub const NATIVE_SERVING_PLUGIN_ENTRY_V1: &[u8] = b"mesh_native_serving_plugin_v1\0";
+pub const NATIVE_SERVING_PLUGIN_ABI_V2: u32 = 2;
+pub const NATIVE_SERVING_PLUGIN_ENTRY_V2: &[u8] = b"mesh_native_serving_plugin_v2\0";
 pub const MAX_DECISION_ID_BYTES: usize = 64;
 pub const TOKENIZER_INVENTORY_SCHEMA: u32 = 1;
+pub const TOKENIZER_CAPABILITY_ABI: u32 = 1;
+pub const MAX_TOKENIZER_INVENTORY_ENTRIES: usize = 1_000_000;
+pub const MAX_TOKENIZER_INPUT_PIECES: usize = 4_096;
 
 /// Host-owned typed inventory. This Rust value never crosses the ABI directly.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,8 +40,14 @@ pub struct TokenizerInventoryToken {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TokenizerInventoryPiece {
-    Bytes { bytes: Vec<u8> },
-    Control { identity: String },
+    Bytes {
+        bytes: Vec<u8>,
+    },
+    /// Opaque bytes for a native special-token descriptor. Mesh never parses
+    /// or names this value; the plugin owns its interpretation.
+    Control {
+        descriptor: Vec<u8>,
+    },
 }
 
 pub type PluginInstance = *mut c_void;
@@ -90,6 +99,70 @@ pub struct TokenizerInventoryView {
     pub schema_version: u32,
     pub entries: *const TokenizerInventoryEntry,
     pub entry_count: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TokenizerLimits {
+    pub max_input_bytes: usize,
+    pub max_output_tokens: usize,
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TokenizerInputPieceKind(pub u32);
+
+impl TokenizerInputPieceKind {
+    pub const BYTES: Self = Self(0);
+    pub const CONTROL: Self = Self(1);
+}
+
+impl Default for TokenizerInputPieceKind {
+    fn default() -> Self {
+        Self::BYTES
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TokenizerInputPiece {
+    pub kind: TokenizerInputPieceKind,
+    pub bytes: ByteSlice,
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TokenizerEncodeStatus(pub u32);
+
+impl TokenizerEncodeStatus {
+    pub const OK: Self = Self(0);
+    pub const INVALID_ARGUMENT: Self = Self(1);
+    pub const UNSUPPORTED_INPUT: Self = Self(2);
+    pub const OUTPUT_TOO_SMALL: Self = Self(3);
+    pub const LIMIT_EXCEEDED: Self = Self(4);
+    pub const UNAVAILABLE: Self = Self(5);
+    pub const INTERNAL_ERROR: Self = Self(6);
+}
+
+/// A model-bound, host-owned tokenizer capability. The table and its
+/// inventory view are lent only for `activate`; the `context` passed to
+/// `encode` remains valid until plugin shutdown. Plugins must copy any
+/// activation data they need and must perform preparation/encoding outside the
+/// latency-sensitive proposal callbacks. Mesh never invokes `encode` from the
+/// proposal path.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TokenizerCapability {
+    pub struct_size: usize,
+    pub abi_version: u32,
+    pub model_id: ByteSlice,
+    pub source_model_sha256: ByteSlice,
+    pub tokenizer_id: ByteSlice,
+    pub limits: TokenizerLimits,
+    pub binding_digest: [u8; 32],
+    pub inventory: *const TokenizerInventoryView,
+    pub context: *mut c_void,
+    pub encode: EncodeTokenizer,
 }
 
 #[repr(C)]
@@ -183,6 +256,15 @@ impl ProposalDiscardReason {
 
 pub type MonotonicNowNs = unsafe extern "C" fn(context: *mut c_void) -> u64;
 
+pub type EncodeTokenizer = unsafe extern "C" fn(
+    context: *mut c_void,
+    input_pieces: *const TokenizerInputPiece,
+    input_piece_count: usize,
+    output_tokens: *mut i32,
+    output_capacity: usize,
+    output_length: *mut usize,
+) -> TokenizerEncodeStatus;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ActivationContext {
@@ -190,7 +272,7 @@ pub struct ActivationContext {
     pub model_id: ByteSlice,
     pub source_model_sha256: ByteSlice,
     pub tokenizer_id: ByteSlice,
-    pub tokenizer_inventory: *const TokenizerInventoryView,
+    pub tokenizer_capability: *const TokenizerCapability,
     pub config_path: ByteSlice,
     pub state_directory: ByteSlice,
     pub proposal_deadline_ns: u64,
@@ -336,7 +418,7 @@ pub type LastError =
     unsafe extern "C" fn(instance: PluginInstance, output: *mut c_char, capacity: usize) -> usize;
 
 #[repr(C)]
-pub struct NativeServingPluginV1 {
+pub struct NativeServingPluginV2 {
     pub abi_version: u32,
     pub struct_size: usize,
     pub plugin_name: ByteSlice,
@@ -358,9 +440,9 @@ pub struct NativeServingPluginV1 {
 // `plugin_name` to remain immutable and valid for the loaded library's entire
 // lifetime. The host copies the name during load and only calls function
 // pointers afterward.
-unsafe impl Sync for NativeServingPluginV1 {}
+unsafe impl Sync for NativeServingPluginV2 {}
 
-pub type NativeServingPluginEntryV1 = unsafe extern "C" fn() -> *const NativeServingPluginV1;
+pub type NativeServingPluginEntryV2 = unsafe extern "C" fn() -> *const NativeServingPluginV2;
 
 #[cfg(test)]
 mod tests {
@@ -379,8 +461,22 @@ mod tests {
     }
 
     #[test]
-    fn initial_contract_is_v1() {
+    fn initial_contract_is_v2() {
         assert_eq!(MAX_DECISION_ID_BYTES, 64);
-        assert_eq!(NATIVE_SERVING_PLUGIN_ABI_V1, 1);
+        assert_eq!(NATIVE_SERVING_PLUGIN_ABI_V2, 2);
+        assert_eq!(TOKENIZER_CAPABILITY_ABI, 1);
+    }
+
+    #[test]
+    fn structured_input_piece_kinds_are_stable_and_opaque() {
+        assert_eq!(TokenizerInputPieceKind::BYTES.0, 0);
+        assert_eq!(TokenizerInputPieceKind::CONTROL.0, 1);
+        let descriptor = [0xff, 0x00];
+        let piece = TokenizerInputPiece {
+            kind: TokenizerInputPieceKind::CONTROL,
+            bytes: ByteSlice::from_bytes(&descriptor),
+        };
+        assert_eq!(piece.bytes.length, 2);
+        assert_eq!(piece.bytes.pointer, descriptor.as_ptr());
     }
 }

@@ -15,13 +15,14 @@ use mesh_native_serving_plugin_api as native_plugin_api;
 use model_artifact::gguf::scan_gguf_tokenizer_inventory;
 use serde::{Deserialize, Serialize};
 use skippy_protocol::StageConfig;
+use skippy_tokenizer::{
+    EncodeRequest, EncodeResponse, InputPiece, SpecialTokenPolicy, TokenizeBatchItem,
+    TokenizeRequest, TokenizeResponse, Tokenizer, TokenizerError, TokenizerIdentity,
+    TokenizerLimits,
+};
 pub use skippy_tokenizer::{
     MAX_TOKENIZE_BATCH_INPUT_BYTES, MAX_TOKENIZE_BATCH_SIZE, MAX_TOKENIZE_INPUT_BYTES,
     MAX_TOKENIZE_TOKENS, TOKENIZER_VERSION,
-};
-use skippy_tokenizer::{
-    SpecialTokenPolicy, TokenizeBatchItem, TokenizeRequest, TokenizeResponse, Tokenizer,
-    TokenizerError, TokenizerIdentity, TokenizerLimits,
 };
 
 use crate::runtime_state::RuntimeState;
@@ -77,6 +78,11 @@ trait TokenizerSource: Send + Sync {
         &self,
         text: &str,
         add_special: bool,
+        max_tokens: usize,
+    ) -> Result<Vec<i32>, TokenizerCapabilityError>;
+    fn encode(
+        &self,
+        pieces: &[InputPiece],
         max_tokens: usize,
     ) -> Result<Vec<i32>, TokenizerCapabilityError>;
     fn token_pieces(&self, token_ids: &[i32]) -> Result<Vec<Vec<u8>>, TokenizerCapabilityError>;
@@ -147,6 +153,35 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
             })
             .collect()
     }
+
+    fn encode(
+        &self,
+        pieces: &[InputPiece],
+        max_tokens: usize,
+    ) -> Result<Vec<i32>, TokenizerCapabilityError> {
+        let mut output = Vec::new();
+        for piece in pieces {
+            let InputPiece::Bytes(bytes) = piece else {
+                return Err(TokenizerCapabilityError::UnsupportedInput {
+                    reason: "native control descriptor is unsupported by this backend".to_owned(),
+                });
+            };
+            let text = std::str::from_utf8(bytes).map_err(|_| {
+                TokenizerCapabilityError::UnsupportedInput {
+                    reason: "input is not valid UTF-8".to_owned(),
+                }
+            })?;
+            if text.as_bytes().contains(&0) {
+                return Err(TokenizerCapabilityError::UnsupportedInput {
+                    reason: "input contains an interior NUL byte".to_owned(),
+                });
+            }
+            let remaining = max_tokens.saturating_sub(output.len());
+            let tokens = self.tokenize(text, false, remaining)?;
+            output.extend(tokens);
+        }
+        Ok(output)
+    }
 }
 
 #[derive(Clone)]
@@ -154,6 +189,7 @@ pub struct TokenizerCapability {
     identity: TokenizerIdentity,
     source: Arc<dyn TokenizerSource>,
     inventory: Option<Arc<native_plugin_api::TokenizerInventory>>,
+    binding_digest: Option<[u8; 32]>,
 }
 
 impl TokenizerCapability {
@@ -181,10 +217,14 @@ impl TokenizerCapability {
             initial_check_signal: None,
         });
         let inventory = inventory_from_stage(config, &identity, source.as_ref()).map(Arc::new);
+        let binding_digest = inventory
+            .as_deref()
+            .map(|inventory| tokenizer_binding_digest(&identity, inventory));
         Ok(Self {
             identity,
             source,
             inventory,
+            binding_digest,
         })
     }
 
@@ -197,6 +237,23 @@ impl TokenizerCapability {
     /// binding the model, never from the decode proposal path.
     pub fn inventory(&self) -> Option<&native_plugin_api::TokenizerInventory> {
         self.inventory.as_deref()
+    }
+
+    /// A stable digest of the bound identity, inventory, and encode behavior.
+    /// It is absent when the model did not expose a complete native inventory.
+    pub fn binding_digest(&self) -> Option<[u8; 32]> {
+        self.binding_digest
+    }
+
+    pub fn limits(&self) -> TokenizerLimits {
+        <Self as Tokenizer>::limits(self)
+    }
+
+    pub fn encode(
+        &self,
+        request: EncodeRequest,
+    ) -> Result<EncodeResponse, TokenizerCapabilityError> {
+        <Self as Tokenizer>::encode(self, request)
     }
 
     pub fn tokenize(
@@ -255,6 +312,44 @@ impl Tokenizer for TokenizerCapability {
             })
             .collect();
         Ok(items)
+    }
+
+    fn encode(&self, request: EncodeRequest) -> Result<EncodeResponse, TokenizerCapabilityError> {
+        if !identity_matches(&request.expected_identity, &self.identity) {
+            return Err(TokenizerCapabilityError::IdentityMismatch {
+                expected: Box::new(request.expected_identity),
+                actual: Box::new(self.identity.clone()),
+            });
+        }
+        let limits = self.limits();
+        if request.pieces.len() > skippy_tokenizer::MAX_TOKENIZE_PIECES {
+            return Err(TokenizerCapabilityError::TooManyPieces {
+                limit: skippy_tokenizer::MAX_TOKENIZE_PIECES,
+            });
+        }
+        let input_bytes =
+            request
+                .total_input_bytes()
+                .ok_or(TokenizerCapabilityError::InputTooLarge {
+                    limit: limits.max_input_bytes,
+                })?;
+        if input_bytes > limits.max_input_bytes {
+            return Err(TokenizerCapabilityError::InputTooLarge {
+                limit: limits.max_input_bytes,
+            });
+        }
+        let token_ids = self
+            .source
+            .encode(&request.pieces, limits.max_output_tokens)?;
+        if token_ids.len() > limits.max_output_tokens {
+            return Err(TokenizerCapabilityError::TooManyTokens {
+                limit: limits.max_output_tokens,
+            });
+        }
+        Ok(EncodeResponse {
+            identity: self.identity.clone(),
+            token_ids,
+        })
     }
 }
 
@@ -327,7 +422,7 @@ fn inventory_from_stage(
         let id = u32::try_from(id).ok()?;
         let piece = if token.is_control {
             native_plugin_api::TokenizerInventoryPiece::Control {
-                identity: String::from_utf8(token.raw).ok()?,
+                descriptor: token.raw,
             }
         } else {
             native_plugin_api::TokenizerInventoryPiece::Bytes { bytes }
@@ -341,6 +436,41 @@ fn inventory_from_stage(
         tokenizer_id: identity.tokenizer_id.clone(),
         tokens,
     })
+}
+
+fn tokenizer_binding_digest(
+    identity: &TokenizerIdentity,
+    inventory: &native_plugin_api::TokenizerInventory,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"mesh-native-tokenizer-binding-v1\0");
+    update_string(&mut hasher, &identity.model_id);
+    update_string(&mut hasher, &identity.source_model_sha256);
+    update_string(&mut hasher, &identity.tokenizer_id);
+    update_string(&mut hasher, TOKENIZER_VERSION);
+    hasher.update(&inventory.schema_version.to_le_bytes());
+    hasher.update(&(inventory.tokens.len() as u64).to_le_bytes());
+    for token in &inventory.tokens {
+        hasher.update(&token.id.to_le_bytes());
+        match &token.piece {
+            native_plugin_api::TokenizerInventoryPiece::Bytes { bytes } => {
+                hasher.update(&[0]);
+                hasher.update(&(bytes.len() as u64).to_le_bytes());
+                hasher.update(bytes);
+            }
+            native_plugin_api::TokenizerInventoryPiece::Control { descriptor } => {
+                hasher.update(&[1]);
+                hasher.update(&(descriptor.len() as u64).to_le_bytes());
+                hasher.update(descriptor);
+            }
+        }
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn update_string(hasher: &mut blake3::Hasher, value: &str) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
 }
 
 #[derive(Debug, Serialize)]
@@ -384,9 +514,11 @@ impl IntoResponse for TokenizerHttpError {
     fn into_response(self) -> Response {
         let status = match self.0 {
             TokenizerCapabilityError::InputTooLarge { .. }
+            | TokenizerCapabilityError::TooManyPieces { .. }
             | TokenizerCapabilityError::BatchInputTooLarge { .. }
             | TokenizerCapabilityError::BatchTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             TokenizerCapabilityError::TooManyTokens { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            TokenizerCapabilityError::UnsupportedInput { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             TokenizerCapabilityError::BackendFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             TokenizerCapabilityError::StageZeroRequired
             | TokenizerCapabilityError::UnsupportedStage { .. }
@@ -542,6 +674,32 @@ mod tests {
                 .map(|token_id| token_id.to_string().into_bytes())
                 .collect())
         }
+
+        fn encode(
+            &self,
+            pieces: &[InputPiece],
+            max_tokens: usize,
+        ) -> Result<Vec<i32>, TokenizerCapabilityError> {
+            if pieces
+                .iter()
+                .any(|piece| matches!(piece, InputPiece::Control { .. }))
+            {
+                return Err(TokenizerCapabilityError::UnsupportedInput {
+                    reason: "recording source does not support controls".to_owned(),
+                });
+            }
+            for piece in pieces {
+                let InputPiece::Bytes(bytes) = piece else {
+                    unreachable!();
+                };
+                std::str::from_utf8(bytes).map_err(|_| {
+                    TokenizerCapabilityError::UnsupportedInput {
+                        reason: "recording source only accepts UTF-8".to_owned(),
+                    }
+                })?;
+            }
+            self.tokenize("", false, max_tokens)
+        }
     }
 
     fn identity() -> TokenizerIdentity {
@@ -555,6 +713,7 @@ mod tests {
                 identity: identity(),
                 source: source.clone(),
                 inventory: None,
+                binding_digest: None,
             },
             source,
         )
@@ -632,6 +791,59 @@ mod tests {
         request.special_tokens = SpecialTokenPolicy::Add;
         let response = capability.tokenize(request).unwrap();
         assert_eq!(response.token_ids, vec![1, 4, 5]);
+    }
+
+    #[test]
+    fn encode_preserves_identity_and_rejects_non_utf8_without_fallback() {
+        let (capability, _) = capability(vec![4, 5]);
+        let response = capability
+            .encode(EncodeRequest::bytes(identity(), b"hello".to_vec()))
+            .unwrap();
+        assert_eq!(response.identity, identity());
+        assert_eq!(response.token_ids, vec![4, 5]);
+
+        assert!(matches!(
+            capability.encode(EncodeRequest::bytes(identity(), vec![0xff])),
+            Err(TokenizerCapabilityError::UnsupportedInput { .. })
+        ));
+    }
+
+    #[test]
+    fn encode_enforces_the_input_bound_before_calling_the_source() {
+        let (capability, _) = capability(vec![4, 5]);
+        let request = EncodeRequest::new(
+            identity(),
+            vec![InputPiece::Bytes(vec![
+                b'a';
+                skippy_tokenizer::MAX_TOKENIZE_INPUT_BYTES
+                    + 1
+            ])],
+        );
+        assert_eq!(
+            capability.encode(request).unwrap_err(),
+            TokenizerCapabilityError::InputTooLarge {
+                limit: skippy_tokenizer::MAX_TOKENIZE_INPUT_BYTES
+            }
+        );
+    }
+
+    #[test]
+    fn encode_rejects_opaque_controls_when_backend_cannot_preserve_them() {
+        let (capability, _) = capability(vec![4, 5]);
+        let request = EncodeRequest::new(
+            identity(),
+            vec![
+                InputPiece::Bytes(b"before".to_vec()),
+                InputPiece::Control {
+                    descriptor: vec![0xff, 0x00],
+                },
+                InputPiece::Bytes(b"after".to_vec()),
+            ],
+        );
+        assert!(matches!(
+            capability.encode(request),
+            Err(TokenizerCapabilityError::UnsupportedInput { .. })
+        ));
     }
 
     #[test]

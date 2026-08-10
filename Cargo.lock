@@ -4305,6 +4305,7 @@ dependencies = [
  "libloading",
  "mesh-native-serving-plugin-api",
  "skippy-server",
+ "skippy-tokenizer",
 ]
 
 [[package]]
