@@ -31,6 +31,71 @@ MoE vs dense is **not** the relevant axis. DeepSeek3 is MoE and uses
 `ResidentKv`. The axis is whether attention KV alone is the full continuation
 state.
 
+## Motivating scenario: partial reuse across a long gap
+
+This is the case the plan exists for, and it needs **two** workstreams that are
+often mistaken for alternatives.
+
+A large prompt (say 8k tokens of system prompt plus tool schemas) was served a
+while ago. A new request arrives with the same bulk and a **new tail**.
+
+| Sub-problem | Solved by | Not solved by |
+|---|---|---|
+| "new tail" — reuse the bulk, prefill only the divergent part | the candidate grid + suffix prefill (**W2b**) | a disk tier |
+| "not seen for a while" — the page was LRU-evicted from RAM and is gone | the mmap tier (**W4**) | the candidate grid |
+
+So **W2b decides whether a reusable page exists at a shareable length; W4
+decides whether it survived the gap.** Either alone yields nothing for this
+scenario.
+
+Why mmap suits the "massive bulk" shape specifically: restore cost is bounded by
+the page's bytes and the kernel only faults in pages actually touched. A 4 GB
+page still warm in page cache is nearly free; cold, it is one sequential read
+(~1.4 s at 3 GB/s) against ~8+ s of quadratic-attention prefill. **The larger
+the reusable bulk, the better the ratio** — the opposite of most caches.
+
+Caveats: restore lands on a `shared_prefix_stride_tokens` floor, so up to
+`stride - 1` tokens get re-prefilled — irrelevant against a multi-thousand-token
+bulk. And a very long new tail after a restore must not exceed the runtime's
+suffix-prefill limits, or it falls back to full recompute and the win is lost
+(see `.agents/skills/kv-tool-loop-stability`).
+
+### Skippy specifics: this applies to split serving *and* solo serving
+
+KV retention is **per stage**, not per model. `prefix_hash_with_namespace`
+(`skippy-cache/src/identity.rs:50-56`) hashes `stage_id`, `stage_index`,
+`layer_start`, and `layer_end`, so:
+
+- **Solo serving** — one stage covering all layers; one KV page per prefix.
+- **Split serving** — each node owns a layer range and caches KV **only for its
+  own layers**. A node holding layers 0–19 stores a page for 0–19; the node
+  holding 20–39 stores a separate page. They are distinct `page_id`s and are not
+  interchangeable.
+
+Consequences specific to split topologies:
+
+- A cold prefill on **any** stage in the chain costs the whole request. Retention
+  has to hold across every stage for the pipeline to benefit, so per-stage hit
+  rate matters more than aggregate hit rate. One stage missing negates upstream
+  hits.
+- Per-stage pages are **smaller** than a whole-model page — bytes scale with that
+  stage's layer count — which improves W5's bandwidth ratio per node and makes a
+  disk tier cheaper per node than the solo numbers suggest.
+- Package-backed stages already cache only their own layer range, so W4 composes
+  with materialized stage caches without loading a monolithic GGUF.
+- Because `topology_id` and the layer range are in the hash, **re-splitting
+  invalidates every page.** A mesh that replans topology loses its entire
+  retention benefit. Worth measuring how often replanning happens before
+  investing in W4/W5.
+- **Gap: activation frames have no serialize path.** `ResidentActivationCache`
+  (`skippy-cache/src/resident/activation.rs`) is resident-only — there are no
+  `activation` references in `payload/mod.rs` or `exact_state.rs`. So the
+  activation-frame reuse that removes work at a *stage boundary* cannot survive
+  eviction or a restart at all, and W4 as scoped does not cover it. Whether to
+  extend the mmap tier to activation frames is an open question; it may be the
+  larger split-serving win, since an activation frame is far smaller than a KV
+  page.
+
 ## Verified starting facts
 
 Each confirmed against the tree at `5bf7330d` (branch
