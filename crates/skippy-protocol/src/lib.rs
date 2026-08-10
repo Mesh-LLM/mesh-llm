@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-pub mod tokenizer;
+/// Compatibility namespace for tokenizer contracts.
+///
+/// New consumers should depend on `skippy-tokenizer` directly. Keeping this
+/// re-export avoids breaking older protocol users while the contract moves
+/// out of the wire-protocol crate.
+pub mod tokenizer {
+    pub use skippy_tokenizer::*;
+}
 
 pub mod binary;
 pub mod proto {

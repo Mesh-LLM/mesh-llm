@@ -107,7 +107,7 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         expected = {
             "cuda": (
                 "sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd",
-                'LLAMA_STAGE_CUDA_ARCHITECTURES: "75;80;86;87;89;90"',
+                'LLAMA_STAGE_CUDA_ARCHITECTURES: "61;75;80;86;87;89;90"',
             ),
             "rocm": (
                 "sha256:0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b",
@@ -136,6 +136,13 @@ class CiWorkflowArtifactTests(unittest.TestCase):
                 )
                 self.assertIn(image, runtime)
                 self.assertIn(backend_env, runtime)
+                if backend == "cuda":
+                    self.assertIn(
+                        "LLAMA_STAGE_BUILD_DIR: "
+                        ".deps/llama-build/build-stage-abi-dynamic-cuda-"
+                        "sm61_75_80_86_87_89_90",
+                        runtime,
+                    )
                 self.assertIn(
                     "uses: ./.github/actions/prepare-native-runtime-input",
                     runtime,

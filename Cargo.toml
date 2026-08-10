@@ -39,6 +39,7 @@ members = [
     "crates/model-artifact",
     "crates/model-hf",
     "crates/model-resolver",
+    "crates/skippy-tokenizer",
     "crates/skippy-protocol",
     "crates/skippy-coordinator",
     "crates/skippy-topology",

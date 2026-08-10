@@ -1038,14 +1038,14 @@ pub(super) fn should_show_serve_config_help(
         reason = "legacy size parsing remains covered by capacity compatibility tests"
     )
 )]
-pub(super) fn parse_size_str(s: &str) -> u64 {
+pub(super) fn parse_size_str(s: &str) -> Option<u64> {
     let s = s.trim();
     if let Some(gb) = s.strip_suffix("GB") {
-        (gb.parse::<f64>().unwrap_or(0.0) * 1e9) as u64
+        gb.parse::<f64>().ok().map(|gb| (gb * 1e9) as u64)
     } else if let Some(mb) = s.strip_suffix("MB") {
-        (mb.parse::<f64>().unwrap_or(0.0) * 1e6) as u64
+        mb.parse::<f64>().ok().map(|mb| (mb * 1e6) as u64)
     } else {
-        0
+        None
     }
 }
 

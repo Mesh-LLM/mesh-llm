@@ -20,6 +20,28 @@ Check the install:
 mesh-llm --version
 ```
 
+### Minimal Linux images
+
+The Linux native runtime uses the GNU OpenMP runtime. On minimal Debian or
+Ubuntu images, install `libgomp1` before running Mesh:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y libgomp1
+```
+
+When building a container image, the build usually runs as `root`, so use the
+equivalent Dockerfile form without `sudo` and clean up the apt lists:
+
+```Dockerfile
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+This is especially important for `nvidia/cuda:*runtime` images, which commonly
+omit `libgomp1`. The maintained Mesh OCI images already include this package.
+
 ## Native packages and containers
 
 Versioned Ubuntu 24.04 `.deb` and Arch Linux `.pkg.tar.zst` files are published

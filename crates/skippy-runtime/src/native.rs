@@ -3,7 +3,7 @@ use std::path::Path;
 use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
-use skippy_ffi::{ChatMessage as RawChatMessage, Model as RawModel};
+use skippy_ffi::Model as RawModel;
 
 use crate::error::{ensure_ok, free_error};
 use crate::logging::write_native_log_note;
@@ -325,6 +325,21 @@ impl StageModel {
     }
 
     pub fn tokenize(&self, text: &str, add_special: bool) -> Result<Vec<i32>> {
+        self.tokenize_bounded(text, add_special, usize::MAX)?
+            .ok_or_else(|| anyhow!("tokenizer output exceeds the requested limit"))
+    }
+
+    /// Tokenize without allocating a token buffer larger than `max_tokens`.
+    ///
+    /// The native ABI reports the required count during its sizing call. When
+    /// that count exceeds the bound, this returns `Ok(None)` before allocating
+    /// the output vector.
+    pub fn tokenize_bounded(
+        &self,
+        text: &str,
+        add_special: bool,
+        max_tokens: usize,
+    ) -> Result<Option<Vec<i32>>> {
         let text = CString::new(text).context("text contains an interior NUL byte")?;
         let mut count = 0usize;
         let mut error = ptr::null_mut();
@@ -345,6 +360,10 @@ impl StageModel {
             free_error(error);
         }
 
+        if count > max_tokens {
+            return Ok(None);
+        }
+
         let mut tokens = vec![0_i32; count];
         let mut error = ptr::null_mut();
         let status = unsafe {
@@ -358,9 +377,13 @@ impl StageModel {
                 &mut error,
             )
         };
+        if status == Status::BufferTooSmall {
+            free_error(error);
+            return Ok(None);
+        }
         ensure_ok(status, error)?;
         tokens.truncate(count);
-        Ok(tokens)
+        Ok(Some(tokens))
     }
 
     pub fn detokenize(&self, tokens: &[i32]) -> Result<String> {
@@ -425,6 +448,7 @@ impl StageModel {
                 add_assistant,
                 enable_thinking: None,
                 reasoning_format: None,
+                ..ChatTemplateOptions::default()
             },
         )
     }
@@ -434,70 +458,28 @@ impl StageModel {
         messages: &[ChatTemplateMessage],
         options: ChatTemplateOptions,
     ) -> Result<String> {
-        let roles = messages
-            .iter()
-            .map(|message| {
-                CString::new(message.role.as_str())
-                    .context("message role contains an interior NUL byte")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let contents = messages
-            .iter()
-            .map(|message| {
-                CString::new(message.content.as_str())
-                    .context("message content contains an interior NUL byte")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let raw_messages = roles
-            .iter()
-            .zip(contents.iter())
-            .map(|(role, content)| RawChatMessage {
-                role: role.as_ptr(),
-                content: content.as_ptr(),
-            })
-            .collect::<Vec<_>>();
-
-        let mut bytes = 0usize;
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_apply_chat_template(
-                self.raw,
-                raw_messages.as_ptr(),
-                raw_messages.len(),
-                options.add_assistant,
-                options.enable_thinking.is_some(),
-                options.enable_thinking.unwrap_or(true),
-                ptr::null_mut(),
-                0,
-                &mut bytes,
-                &mut error,
-            )
-        };
-        if status != Status::BufferTooSmall && status != Status::Ok {
-            ensure_ok(status, error)?;
-        } else {
-            free_error(error);
-        }
-
-        let mut output = vec![0_u8; bytes.max(1)];
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_apply_chat_template(
-                self.raw,
-                raw_messages.as_ptr(),
-                raw_messages.len(),
-                options.add_assistant,
-                options.enable_thinking.is_some(),
-                options.enable_thinking.unwrap_or(true),
-                output.as_mut_ptr().cast(),
-                output.len(),
-                &mut bytes,
-                &mut error,
-            )
-        };
-        ensure_ok(status, error)?;
-        output.truncate(bytes);
-        String::from_utf8(output).context("chat template output is not valid UTF-8")
+        let messages_json = serde_json::to_string(
+            &messages
+                .iter()
+                .map(|message| {
+                    serde_json::json!({
+                        "role": message.role,
+                        "content": message.content,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        let rendered = self.apply_chat_template_json(
+            &messages_json,
+            ChatTemplateJsonOptions {
+                add_assistant: options.add_assistant,
+                enable_thinking: options.enable_thinking,
+                reasoning_format: options.reasoning_format,
+                chat_template_kwargs: options.chat_template_kwargs,
+                ..ChatTemplateJsonOptions::default()
+            },
+        )?;
+        Ok(rendered.prompt)
     }
 
     pub fn apply_chat_template_json(
@@ -537,6 +519,16 @@ impl StageModel {
             .as_ref()
             .map(|value| value.as_ptr())
             .unwrap_or(ptr::null());
+        let chat_template_kwargs = options
+            .chat_template_kwargs
+            .as_deref()
+            .map(CString::new)
+            .transpose()
+            .context("chat template kwargs contain an interior NUL byte")?;
+        let chat_template_kwargs_ptr = chat_template_kwargs
+            .as_ref()
+            .map(|value| value.as_ptr())
+            .unwrap_or(ptr::null());
 
         let mut prompt_bytes = 0usize;
         let mut metadata_bytes = 0usize;
@@ -552,6 +544,7 @@ impl StageModel {
                 options.enable_thinking.unwrap_or(true),
                 options.parallel_tool_calls,
                 reasoning_format_ptr,
+                chat_template_kwargs_ptr,
                 ptr::null_mut(),
                 0,
                 &mut prompt_bytes,
@@ -581,6 +574,7 @@ impl StageModel {
                 options.enable_thinking.unwrap_or(true),
                 options.parallel_tool_calls,
                 reasoning_format_ptr,
+                chat_template_kwargs_ptr,
                 prompt.as_mut_ptr().cast(),
                 prompt.len(),
                 &mut prompt_bytes,

@@ -30,6 +30,7 @@ use crate::telemetry::{Telemetry, TelemetryLevel};
 #[derive(Default)]
 struct RecordingReceiptSink {
     receipts: Mutex<Vec<GenerationReceipt>>,
+    commits: Mutex<Vec<GenerationCommit>>,
     fail: AtomicBool,
 }
 
@@ -38,7 +39,8 @@ impl GenerationReceiptSink for RecordingReceiptSink {
         Ok(())
     }
 
-    fn committed(&self, _commit: &GenerationCommit) -> Result<()> {
+    fn committed(&self, commit: &GenerationCommit) -> Result<()> {
+        self.commits.lock().unwrap().push(commit.clone());
         Ok(())
     }
 
@@ -189,6 +191,9 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     )?;
 
     wait_for_receipts(&sink, 1);
+    let commits = sink.commits.lock().unwrap();
+    assert!(commits.is_empty());
+    drop(commits);
     let receipts = sink.receipts.lock().unwrap();
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].request_id, ids.request_id);

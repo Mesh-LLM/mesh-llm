@@ -1465,6 +1465,33 @@ class CiArtifactActionTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("composed host version mismatch", result.stderr)
 
+    def test_product_composer_accepts_host_build_metadata(self) -> None:
+        """Non-release hosts carry `+g<sha>[.dirty]` build metadata.
+
+        Semver build metadata is not part of version identity, so a debug host
+        stamped with its commit SHA still composes against the runtime's
+        release version.
+        """
+        for host_version in ("1.2.3+gABC123", "1.2.3+gABC123.dirty"):
+            with self.subTest(host_version=host_version):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    result = self.run_product_composer(
+                        Path(temp_dir),
+                        host_version=host_version,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_product_composer_rejects_drift_despite_build_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = self.run_product_composer(
+                Path(temp_dir),
+                host_version="9.9.9+gABC123",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("composed host version mismatch", result.stderr)
+
     def test_product_composer_accepts_one_checksums_runtime_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = self.run_product_composer(

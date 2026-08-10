@@ -538,8 +538,8 @@ jobs:
             cuda_major: '12'
             runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
             toolchain_epoch: mesh-llm-cuda-runner-sha256-c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
-            cuda_architectures: '75;80;86;87;89;90'
-            cuda_architectures_cache: '75_80_86_87_89_90'
+            cuda_architectures: '61;75;80;86;87;89;90'
+            cuda_architectures_cache: '61_75_80_86_87_89_90'
           - cuda_version: '13.1.2'
             cuda_major: '13'
             runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
@@ -1434,7 +1434,7 @@ jobs:
         include:
           - name: CUDA
             backend: cuda
-            cuda_architectures: '75;80;86;87;89;90'
+            cuda_architectures: '61;75;80;86;87;89;90'
             artifact_name: release-native-runtime-windows-x86_64-cuda12
           - name: ROCm
             backend: rocm

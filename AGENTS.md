@@ -153,7 +153,66 @@ libraries. The only durable llama.cpp patch queue is
 - If you need to update upstream llama.cpp, use `scripts/prepare-llama.sh`,
   `scripts/build-llama.sh`, `scripts/update-llama-pin.sh`, and
   `scripts/summarize-llama-upstream.sh`.
+- Keep the queue ordered by functional ownership, with unique contiguous patch
+  numbers. A source-layout change must be folded into the patches that own the
+  affected capabilities; do not append a terminal "split", "move", or
+  "cleanup" patch that reorganizes code introduced by earlier patches.
+- Ordinary capability changes may append one focused patch. When deliberately
+  changing queue boundaries, recreate the affected series from the pinned
+  upstream and prove that the rebuilt series produces the intended final tree.
+  Once a capability has an owning module, every patch in the recreated series
+  must edit that module directly rather than introducing code in an obsolete
+  monolith and moving it later.
+- Treat the public Skippy ABI surface and model lifecycle/loading as distinct
+  patch boundaries. Public declarations may precede their implementation, but
+  a patch should not combine ABI definition with independently reviewable model
+  loading or package behavior.
 
+### Skippy Native Source Layout
+
+Treat the patched Skippy C ABI as a set of capability-owned modules, not as one
+implementation file.
+
+- Keep `include/skippy.h` as an umbrella header only. Public declarations
+  belong in standalone C-compatible headers under `include/skippy/`, named for
+  their capability: for example `sampling.h`, `speculative_decoding.h`,
+  `state.h`, and `model_package.h`.
+- Keep capability implementations in `src/skippy/<capability>.cpp`. Private
+  C++ declarations belong beside them in narrowly named headers under
+  `src/skippy/`; they are not part of the installed ABI.
+- Put new behavior in its owning module. `src/skippy.cpp` is retired; do not
+  recreate it. Runtime lifecycle, sessions, activation framing, execution,
+  verification, sampling, state, tokenization, and model packaging each belong
+  to their existing capability-owned source files.
+- Use `snake_case` filenames and preserve the `skippy_` prefix for exported C
+  symbols. Avoid generic `helpers`, `utils`, or expanded `common` buckets.
+- Keep new implementation files below 1,000 lines. If a capability approaches
+  that size, split it by a narrower responsibility before adding more code.
+- Public headers must compile independently as C11 and C++17 headers. Declare
+  each implementation source explicitly in CMake and install the complete
+  `include/skippy/` header tree.
+- Source include compatibility is not assumed. Do not add forwarding headers
+  for retired paths unless a task explicitly requires them. Binary ABI changes
+  still require the normal Skippy ABI version bump and synchronized Rust FFI
+  constants.
+### Skippy native API documentation
+
+- Treat Doxygen-style comments in `include/skippy.h` and
+  `include/skippy/*.h` as the source of truth for the public native API
+  reference. Document every public header and exported `skippy_*` function
+  beside its declaration with an `@brief` describing the capability it owns.
+- After changing a public Skippy header or exported function, prepare the
+  patched native checkout and regenerate the website page:
+
+  ```bash
+  scripts/prepare-llama.sh pinned
+  python3 scripts/generate-skippy-api-doc.py
+  python3 scripts/generate-skippy-api-doc.py --check
+  ```
+
+- Commit the regenerated `website/src/docs/pages/skippy-api.md` with the
+  native queue change. Do not hand-edit the generated page or let a native API
+  PR merge without updating the website reference.
 ## Workspace Crates
 
 The workspace lives under `crates/`. The most important crates:

@@ -470,8 +470,16 @@ pub(super) async fn pick_model_assignment(
             let Some(size_label) = cat.size.as_deref() else {
                 continue;
             };
-            let size_bytes = parse_size_str(size_label);
-            let needed = (size_bytes as f64 * 1.1) as u64;
+            let Some(needed) = catalog_model_required_bytes(size_label) else {
+                let _ = emit_event(OutputEvent::Info {
+                    message: format!(
+                        "Skipping {} — catalog size {:?} is missing or invalid",
+                        m, size_label
+                    ),
+                    context: None,
+                });
+                continue;
+            };
             if needed <= my_vram {
                 downloadable.push((m.clone(), d.request_count));
             } else {
@@ -540,6 +548,24 @@ pub(super) async fn pick_model_assignment_for_role(
         None
     } else {
         pick_model_assignment(node, local_models).await
+    }
+}
+
+pub(super) fn catalog_model_required_bytes(size_label: &str) -> Option<u64> {
+    parse_size_str(size_label)
+        .filter(|size| *size > 0)
+        .map(|size| (size as f64 * 1.1) as u64)
+}
+
+pub(super) async fn pick_run_auto_model_assignment(
+    is_client: bool,
+    node: &mesh::Node,
+    local_models: &[String],
+) -> Option<String> {
+    if is_client {
+        None
+    } else {
+        pick_model_assignment_for_role(node, local_models).await
     }
 }
 
@@ -1129,7 +1155,8 @@ pub(super) async fn select_run_auto_model_path(
     });
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-    let assignment = pick_model_assignment_for_role(ctx.node, ctx.local_models).await;
+    let assignment =
+        pick_run_auto_model_assignment(ctx.is_client, ctx.node, ctx.local_models).await;
     let assignment = if assignment.is_none()
         && (ctx.options.auto || ctx.options.discover.is_some())
         && !ctx.is_client

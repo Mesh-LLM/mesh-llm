@@ -509,4 +509,21 @@ mod tests {
         assert_eq!(body["data"][0]["vision_status"], "supported");
         assert_eq!(body["data"][0]["multimodal_status"], "supported");
     }
+
+    #[test]
+    fn models_list_does_not_advertise_reasoning_effort_values() {
+        let models = vec!["Inkling-32B-Q4_K_M".to_string()];
+        let descriptors = vec![local_gguf_descriptor_with_capabilities(
+            &models[0],
+            crate::models::ModelCapabilities {
+                reasoning: crate::models::CapabilityLevel::Supported,
+                ..Default::default()
+            },
+        )];
+
+        let body = models_list_json(&models, &descriptors, &[]);
+
+        assert_eq!(body["data"][0]["reasoning_status"], "supported");
+        assert!(body["data"][0].get("reasoning").is_none());
+    }
 }

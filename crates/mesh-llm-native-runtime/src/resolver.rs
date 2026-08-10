@@ -875,6 +875,27 @@ mod tests {
     }
 
     #[test]
+    fn cuda12_runtime_with_pascal_arch_is_selected_for_61() {
+        let mut host = profile();
+        host.cuda.as_mut().unwrap().gpu_arches = BTreeSet::from(["61".to_string()]);
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![cuda_runtime(
+                "meshllm-runtime-linux-x86_64-cuda12",
+                12,
+                &["61", "75", "80", "86", "87", "89", "90"],
+            )],
+        };
+
+        let selected =
+            select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
+                .expect("CUDA 12 runtime with Pascal kernels should be compatible");
+
+        assert_eq!(selected.artifact.id, "meshllm-runtime-linux-x86_64-cuda12");
+    }
+
+    #[test]
     fn unsupported_rocm_apu_arch_falls_back_to_cpu() {
         let manifest = NativeRuntimeReleaseManifest {
             mesh_version: "0.68.0".to_string(),
