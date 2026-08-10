@@ -8,8 +8,8 @@ use std::{
 
 use anyhow::Result;
 use skippy_cache::{
-    ExactStateCache, PrefixCandidatePolicy, ResidentActivationCache, ResidentCacheConfig,
-    ResidentPrefixCache,
+    ExactStateCache, PrefixCandidatePolicy, PrefixDiskTier, ResidentActivationCache,
+    ResidentCacheConfig, ResidentPrefixCache,
 };
 use skippy_protocol::{
     LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
@@ -40,8 +40,18 @@ impl KvStageIntegration {
         {
             return Ok(None);
         }
-        let candidate_policy = PrefixCandidatePolicy::from_cache(&cache_config);
+        let mut candidate_policy = PrefixCandidatePolicy::from_cache(&cache_config);
         let resident_config = ResidentCacheConfig::from_stage(config, &cache_config);
+        // Bound the record ladder by the same token budget the resident cache
+        // enforces, so a single request cannot record more than it can hold.
+        candidate_policy.max_resident_tokens_hint = resident_config.max_resident_tokens;
+        let mut exact_states = ExactStateCache::<ExactStateExtra>::new(
+            cache_config.max_entries.clamp(1, 512),
+            cache_config.max_bytes,
+        );
+        if let Some(disk) = open_disk_tier(config) {
+            exact_states = exact_states.with_disk_tier(disk);
+        }
         Ok(Some(Self {
             mode,
             payload,
@@ -51,14 +61,84 @@ impl KvStageIntegration {
             inflight_records: Arc::new(Mutex::new(BTreeSet::new())),
             resident: Arc::new(Mutex::new(ResidentPrefixCache::new(resident_config))),
             activations: Arc::new(Mutex::new(ResidentActivationCache::new(resident_config))),
-            exact_states: Arc::new(Mutex::new(ExactStateCache::<ExactStateExtra>::new(
-                cache_config.max_entries.clamp(1, 512),
-                cache_config.max_bytes,
-            ))),
+            exact_states: Arc::new(Mutex::new(exact_states)),
             first_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             replay_tokens: Arc::new(Mutex::new(BTreeMap::new())),
         }))
     }
+}
+
+/// Default disk-tier budget when enabled without an explicit size.
+const DEFAULT_DISK_TIER_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Open the KV disk tier for this stage, if configured.
+///
+/// The tier is **opt-in**: it writes gigabytes to the user's disk, so it is
+/// not something to enable silently. Set `SKIPPY_KV_DISK_TIER_MIB` to a size
+/// (or `SKIPPY_KV_DISK_TIER=1` for the default budget) to turn it on.
+///
+/// Entries are namespaced per stage identity, so two stages on one machine —
+/// including two stages of the same split — never share a directory. Page
+/// identity already covers configuration differences; this keeps the
+/// *directories* separable so operators can reason about and delete them.
+fn open_disk_tier(config: &StageConfig) -> Option<PrefixDiskTier> {
+    let max_bytes = disk_tier_budget_bytes()?;
+    let root = disk_tier_root(config);
+    match PrefixDiskTier::open(&root, max_bytes) {
+        Ok(tier) => Some(tier),
+        Err(error) => {
+            // A cache that cannot be opened must never stop the node serving.
+            eprintln!("skippy: KV disk tier unavailable, continuing without it: {error}");
+            None
+        }
+    }
+}
+
+fn disk_tier_budget_bytes() -> Option<u64> {
+    if let Ok(value) = std::env::var("SKIPPY_KV_DISK_TIER_MIB")
+        && let Ok(mib) = value.trim().parse::<u64>()
+    {
+        return (mib > 0).then(|| mib.saturating_mul(1024 * 1024));
+    }
+    let enabled = std::env::var("SKIPPY_KV_DISK_TIER")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "on" | "true"
+            )
+        })
+        .unwrap_or(false);
+    enabled.then_some(DEFAULT_DISK_TIER_BYTES)
+}
+
+fn disk_tier_root(config: &StageConfig) -> PathBuf {
+    let base = std::env::var("SKIPPY_KV_DISK_TIER_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("MESH_LLM_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| dirs_home().join(".mesh-llm"))
+                .join("kv-cache")
+        });
+    // Stage identity, hashed so no model or path text lands in a directory
+    // name, and so the name stays a fixed length.
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(config.model_id.as_bytes());
+    hasher.update(config.stage_id.as_bytes());
+    hasher.update(&config.stage_index.to_le_bytes());
+    hasher.update(&config.layer_start.to_le_bytes());
+    hasher.update(&config.layer_end.to_le_bytes());
+    let stage_key = hasher.finalize().to_hex();
+    base.join(&stage_key[..16])
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
 }
 
 fn effective_cache_payload(

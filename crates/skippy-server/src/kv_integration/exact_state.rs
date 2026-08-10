@@ -20,10 +20,26 @@ impl KvStageIntegration {
         }
         for identity in identities {
             let lookup = {
-                self.exact_states
+                let mut cache = self
+                    .exact_states
                     .lock()
-                    .expect("exact state cache lock poisoned")
-                    .lookup(&identity.page_id)
+                    .expect("exact state cache lock poisoned");
+                // Fall through to the disk tier on a RAM miss, so a demoted
+                // page is actually readable. Without this the tier is
+                // write-only: eviction pays to serialize every payload and
+                // nothing ever reads one back.
+                //
+                // A verification failure inside the tier is a hard error and
+                // quarantines the entry; treat it as a miss here and keep
+                // probing shorter candidates rather than failing the request.
+                match cache.lookup_with_disk(
+                    &identity.page_id,
+                    self.payload.into(),
+                    Default::default,
+                ) {
+                    Ok(found) => found,
+                    Err(_) => continue,
+                }
             };
             let Some(lookup) = lookup else {
                 continue;
@@ -183,6 +199,10 @@ impl From<skippy_cache::ExactStatePayloadKind> for StagePrefixCachePayload {
             skippy_cache::ExactStatePayloadKind::FullState => Self::FullState,
             skippy_cache::ExactStatePayloadKind::KvRecurrent => Self::KvRecurrent,
             skippy_cache::ExactStatePayloadKind::RecurrentOnly => Self::Disabled,
+            // A dense archive is a disk-tier payload, not an exact-state
+            // family: the resident cache, not `ExactStateCache`, owns reuse
+            // for these models.
+            skippy_cache::ExactStatePayloadKind::ResidentKvArchive => Self::ResidentKv,
         }
     }
 }

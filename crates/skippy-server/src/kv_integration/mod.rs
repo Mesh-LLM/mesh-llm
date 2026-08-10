@@ -18,6 +18,7 @@ use crate::kv_proto::{
 
 mod activation;
 mod config;
+mod dense_disk;
 mod exact_state;
 mod identity;
 mod records;
@@ -109,7 +110,7 @@ pub enum StagePrefixCachePayload {
     FullState,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ExactStateExtra {
     pub(crate) kv_desc: Option<RuntimeKvPageDesc>,
 }

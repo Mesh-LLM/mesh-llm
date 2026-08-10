@@ -511,16 +511,63 @@ impl StageOpenAiBackend {
                             .emit("stage.openai_kv_lookup_decision", attrs);
                     }
                     Ok(None) => {
-                        self.telemetry.emit(
-                            "stage.openai_kv_lookup_decision",
-                            BTreeMap::from([
-                                ("skippy.kv.decision".to_string(), json!("miss")),
-                                (
-                                    "llama_stage.request_id".to_string(),
-                                    json!(ids.request_id_string()),
-                                ),
-                            ]),
-                        );
+                        // Resident RAM miss. For dense families the prefix may
+                        // still exist in the disk tier, having outlived either
+                        // eviction or a restart. Restoring it here is what
+                        // turns a cold quadratic prefill into a linear read.
+                        match kv.restore_dense_prefix_from_disk(runtime, session_id, &identities) {
+                            Ok(Some(restored)) => {
+                                let restored_tokens =
+                                    (restored.token_count as usize).min(prefill_tokens.len());
+                                restored_prefill = true;
+                                restored_prefill_tokens = restored_tokens;
+                                cache_stats.status = "hit";
+                                cache_stats.hit_kind = Some("disk_prefix");
+                                cache_stats.cached_prompt_tokens = saturating_u32(restored_tokens);
+                                let mut attrs = self.openai_attrs(ids);
+                                attrs.insert("skippy.kv.decision".to_string(), json!("disk_hit"));
+                                attrs.insert(
+                                    "skippy.kv.hit_page_id".to_string(),
+                                    json!(restored.page_id),
+                                );
+                                attrs.insert(
+                                    "skippy.kv.restored_tokens".to_string(),
+                                    json!(restored_tokens),
+                                );
+                                attrs.insert(
+                                    "skippy.kv.matched_prefix_tokens".to_string(),
+                                    json!(restored_tokens),
+                                );
+                                attrs.insert(
+                                    "skippy.kv.suffix_prefill_tokens".to_string(),
+                                    json!(prefill_tokens.len().saturating_sub(restored_tokens)),
+                                );
+                                self.telemetry
+                                    .emit("stage.openai_kv_lookup_decision", attrs);
+                            }
+                            Ok(None) => {
+                                self.telemetry.emit(
+                                    "stage.openai_kv_lookup_decision",
+                                    BTreeMap::from([
+                                        ("skippy.kv.decision".to_string(), json!("miss")),
+                                        (
+                                            "llama_stage.request_id".to_string(),
+                                            json!(ids.request_id_string()),
+                                        ),
+                                    ]),
+                                );
+                            }
+                            Err(error) => {
+                                let mut attrs = self.openai_attrs(ids);
+                                attrs.insert("skippy.kv.decision".to_string(), json!("disk_error"));
+                                attrs.insert(
+                                    "skippy.kv.error".to_string(),
+                                    json!(error.to_string()),
+                                );
+                                self.telemetry
+                                    .emit("stage.openai_kv_lookup_decision", attrs);
+                            }
+                        }
                     }
                     Err(error) => {
                         let mut attrs = self.openai_attrs(ids);
@@ -627,11 +674,32 @@ impl StageOpenAiBackend {
                 self.telemetry
                     .emit("stage.openai_kv_record_decision", attrs);
             }
+            // At most one archive per request. Each archive is a full
+            // `export_kv_page` into a fresh buffer plus a synced file write,
+            // all under the runtime lock on the prefill path; doing that once
+            // per ladder candidate would mean several hundred-MB exports for a
+            // single large prompt.
+            let mut archive_candidate: Option<_> = None;
             for identity in kv.record_identities(&self.config, &base, 0, prefill_tokens) {
                 if let Ok(Some(record)) =
                     kv.record_resident_prefix(runtime, session_id, &identity, prefill_tokens)
                 {
                     resident_recorded_pages = resident_recorded_pages.saturating_add(1);
+                    // Archive dense prefixes so they outlive resident eviction
+                    // and process restart. Done here, at record time, rather
+                    // than on eviction: eviction runs on the decode hot path
+                    // and a multi-hundred-MB export there would spike TTFT.
+                    // Remember the *shortest* recorded candidate as the
+                    // archive target. Candidates arrive longest-first, so the
+                    // last one is the lowest — and the low candidate is the
+                    // shareable one: it is the stable system-prompt/tool-schema
+                    // region that a different session, or this node after a
+                    // restart, will probe for. Archiving the longest candidate
+                    // instead stores the request's own tail, which nothing
+                    // else ever asks for.
+                    if record.stored {
+                        archive_candidate = Some(identity.clone());
+                    }
                     let mut attrs = self.openai_attrs(ids);
                     attrs.insert(
                         "skippy.kv.recorded_page_id".to_string(),
@@ -656,6 +724,22 @@ impl StageOpenAiBackend {
                     self.telemetry
                         .emit("stage.openai_kv_record_decision", attrs);
                 }
+            }
+            // Archive dense prefixes so they outlive resident eviction and
+            // process restart. Done here, after recording, rather than on
+            // eviction: eviction runs on the decode hot path and a
+            // multi-hundred-MB export there would spike TTFT.
+            if let Some(identity) = archive_candidate
+                && let Ok(true) = kv.archive_dense_prefix(runtime, session_id, &identity)
+            {
+                let mut attrs = self.openai_attrs(ids);
+                attrs.insert("skippy.kv.decision".to_string(), json!("disk_archive"));
+                attrs.insert(
+                    "skippy.kv.archived_tokens".to_string(),
+                    json!(identity.identity.token_count),
+                );
+                self.telemetry
+                    .emit("stage.openai_kv_record_decision", attrs);
             }
         }
         // Proactive eviction: after prefill recording, evict enough

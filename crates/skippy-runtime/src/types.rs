@@ -102,7 +102,12 @@ impl ActivationFrame {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Serde is derived so a descriptor can be persisted alongside an exported KV
+/// page. A page's bytes are meaningless without its row strides and element
+/// types, so a cache that stores the payload without the descriptor cannot
+/// import it back. This is a plain data mirror of the native struct; the
+/// derive does not affect its layout, which is fixed by [`RawKvPageDesc`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeKvPageDesc {
     pub version: u32,
     pub layer_start: i32,

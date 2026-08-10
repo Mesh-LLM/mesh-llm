@@ -77,6 +77,7 @@ ahash = "0.8.12"
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+memmap2 = "0.9"
 mesh-llm-build-info = { path = "crates/mesh-llm-build-info", version = "0.72.1" }
 mesh-llm-release-footer = { path = "crates/mesh-llm-release-footer", version = "0.72.1" }
 mesh-llm-skills = { path = "crates/mesh-llm-skills", version = "0.72.1" }

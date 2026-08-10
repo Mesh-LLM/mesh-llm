@@ -435,3 +435,69 @@ Dropped now: radix tree, partial eviction, defrag.
   `skippy-ffi/src/lib.rs` in the same change.
 - **File size** — `resident/prefix.rs` at 885 lines is near the 1k threshold; any
   change touching it should extract rather than grow it.
+
+---
+
+## Implementation status (branch `feat/kv-prefix-retention`)
+
+### Landed
+
+| WS | State | Notes |
+|---|---|---|
+| **W0** identity completeness | done | Hashes `cache_type_k/v`, flash-attn, `n_gpu_layers`, backend device. Also **removes `topology_id`** and adds explicit **weight identity**. |
+| **W2** miss-reason instrumentation | done | `PrefixMissTracker`: `evicted_recently` / `never_seen` / `identity_mismatch`, bucketed by gap. Bounded tombstone table, O(log n) trim. |
+| **W2b** deeper record ladder | done | Keeps exact + near-tail, then geometric low candidates. Bounded by a **token** budget, not slot count. |
+| **W4** mmap disk tier | done | `CacheBytesRepr::Mapped` borrows; `PrefixDiskTier` with checksums, atomic rename, LRU, directory lock. |
+| **dense bridge** | done | Dense (`ResidentKv`) families archive at *record* time, restore on resident miss. This is what makes W4 useful for llama/qwen/gemma rather than recurrent-only. |
+
+### Two findings that changed the design
+
+**1. `topology_id` made persistence impossible.** Local serving derives it as
+`topology-mesh-skippy-{unix_nanos}` (`runtime/local.rs`), so it is unique per
+process. While it was hashed, every restart produced fresh `page_id`s: a
+persistent tier could never read anything back. Removing it is required.
+
+But removing it also removed an *accidental* safety property. `model_id` is a
+display name, not a content digest — two runs can serve different tensors under
+the same alias (different quant, repacked layer package, swapped GGUF). So
+identity now hashes `manifest_sha256`, `source_model_sha256`, `package_ref` and
+`load_mode` explicitly. Without that, removing `topology_id` would turn a
+never-collides namespace into one keyed on a user-facing string, with silent
+numerical corruption as the failure mode.
+
+**2. Archiving the longest candidate is useless.** Capping to one archive per
+request initially picked the *longest* recorded candidate — the request's own
+tail, which nothing else ever asks for. Cross-restart hits disappeared until
+the archive target was changed to the *lowest* (most shareable) candidate.
+
+### Measured, single node, Qwen2.5-0.5B dense, ~2k-token agent prompt
+
+| Scenario | Result |
+|---|---|
+| Cross-session, same system prompt, different tail | 0.31–0.42s → **0.13–0.20s** |
+| First request after restart (warm disk vs cold control) | 0.31s → **0.25s** |
+
+The restart number is modest because a 0.5B model's prefill is already cheap;
+the plan's ratio argument predicts this improves with model and prefix size. It
+has **not** been measured on a large model or a split topology.
+
+### Not done
+
+- **W1** KV quantization, **W3** page-granular export, **W5** export-on-eviction,
+  **W6** prefix-affinity routing, **W7** peer fetch.
+- Activation frames still have no serialize path, so stage-boundary reuse does
+  not survive eviction. Likely the larger split-serving win.
+- Miss-reason stats are collected but **not yet exported** as OTLP metrics, so
+  W2 cannot yet answer the W4/W5 go/no-go question in production.
+
+### Operational notes
+
+The tier is **opt-in**: `SKIPPY_KV_DISK_TIER_MIB=<size>` (or
+`SKIPPY_KV_DISK_TIER=1`), with `SKIPPY_KV_DISK_TIER_DIR` overriding the
+location. Default-off means the serving path is unchanged apart from the
+identity hash and ladder depth.
+
+Cache directories are per stage-shape and hold an exclusive lock; a second
+instance on the same directory declines the tier rather than sharing it, because
+the index is last-writer-wins and orphan reclaim would delete the other
+instance's live files.
