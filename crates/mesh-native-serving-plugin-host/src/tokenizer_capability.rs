@@ -68,6 +68,9 @@ impl ActivationInventory {
 
 pub(super) struct HostTokenizerCapability {
     pub(super) tokenizer: TokenizerCapability,
+    model_id: Vec<u8>,
+    source_model_sha256: Vec<u8>,
+    tokenizer_id: Vec<u8>,
     inventory: ActivationInventory,
     inventory_view: abi::TokenizerInventoryView,
     pub(super) abi: abi::TokenizerCapability,
@@ -90,8 +93,12 @@ impl HostTokenizerCapability {
             .binding_digest()
             .context("bound model does not expose a tokenizer binding digest")?;
         let limits = tokenizer.limits();
+        let identity = tokenizer.identity().clone();
         let mut capability = Arc::new(Self {
             tokenizer,
+            model_id: identity.model_id.into_bytes(),
+            source_model_sha256: identity.source_model_sha256.into_bytes(),
+            tokenizer_id: identity.tokenizer_id.into_bytes(),
             inventory,
             inventory_view: abi::TokenizerInventoryView {
                 struct_size: 0,
@@ -116,11 +123,9 @@ impl HostTokenizerCapability {
             },
         });
         let inner = Arc::get_mut(&mut capability).expect("new tokenizer capability is unique");
-        let identity = inner.tokenizer.identity().clone();
-        inner.abi.model_id = abi::ByteSlice::from_bytes(identity.model_id.as_bytes());
-        inner.abi.source_model_sha256 =
-            abi::ByteSlice::from_bytes(identity.source_model_sha256.as_bytes());
-        inner.abi.tokenizer_id = abi::ByteSlice::from_bytes(identity.tokenizer_id.as_bytes());
+        inner.abi.model_id = abi::ByteSlice::from_bytes(&inner.model_id);
+        inner.abi.source_model_sha256 = abi::ByteSlice::from_bytes(&inner.source_model_sha256);
+        inner.abi.tokenizer_id = abi::ByteSlice::from_bytes(&inner.tokenizer_id);
         inner.inventory_view = inner.inventory.view();
         inner.abi.inventory = &raw const inner.inventory_view;
         inner.abi.context = (&raw const inner.tokenizer).cast_mut().cast();
