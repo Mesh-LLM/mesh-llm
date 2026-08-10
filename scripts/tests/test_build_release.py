@@ -55,6 +55,101 @@ class BuildReleaseScriptTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_build_release_with_backend("metal", dynamic_native_runtime=False)
 
+    def test_non_release_profiles_stamp_the_commit_sha(self) -> None:
+        """A dev build must not report a bare, release-shaped version.
+
+        `stamp_build_version` derives `+g<sha>` for non-release profiles, but it
+        is only useful if it actually runs for those profiles. Guard the call
+        site: stamping used to sit inside the release-only branch, so the
+        derivation was unreachable and debug builds shipped an unstamped
+        version indistinguishable from a release binary.
+        """
+        for profile in ("debug", "dev"):
+            with self.subTest(profile=profile):
+                stamped = self.run_build_host_with_profile(profile)
+                self.assertEqual(stamped, "0.68.0+gABC123")
+
+    def test_release_profile_stamps_the_plain_version(self) -> None:
+        self.assertEqual(self.run_build_host_with_profile("release"), "0.68.0")
+
+    def run_build_host_with_profile(self, profile: str) -> str:
+        """Returns MESH_LLM_BUILD_VERSION as seen by `cargo build`."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            scripts_dir = tmp / "scripts"
+            bin_dir = tmp / "bin"
+            scripts_dir.mkdir()
+            bin_dir.mkdir()
+
+            copied_host_script = scripts_dir / "build-host.sh"
+            shutil.copy(HOST_SCRIPT, copied_host_script)
+            copied_host_script.chmod(copied_host_script.stat().st_mode | stat.S_IXUSR)
+
+            self.write_executable(
+                scripts_dir / "build-ui.sh",
+                """
+                #!/usr/bin/env bash
+                set -euo pipefail
+                echo "stub build-ui $*"
+                """,
+            )
+            self.write_executable(
+                bin_dir / "uname",
+                """
+                #!/usr/bin/env bash
+                echo Linux
+                """,
+            )
+            self.write_executable(
+                bin_dir / "git",
+                """
+                #!/usr/bin/env bash
+                if [[ "$1" == "-C" ]]; then
+                  shift 2
+                fi
+                case "$1" in
+                  rev-parse) echo abc123 ;;
+                  status) ;;
+                  *) echo "unexpected git $*" >&2; exit 2 ;;
+                esac
+                """,
+            )
+            version_log = tmp / "build-version.log"
+            self.write_executable(
+                bin_dir / "cargo",
+                """
+                #!/usr/bin/env bash
+                set -euo pipefail
+                if [[ "$1" == "pkgid" ]]; then
+                  echo "file:///tmp/mesh-llm#0.68.0"
+                  exit 0
+                fi
+                if [[ "$1" == "build" ]]; then
+                  printf '%s' "${MESH_LLM_BUILD_VERSION:-<unset>}" > "$VERSION_LOG"
+                fi
+                """,
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "VERSION_LOG": str(version_log),
+                    "MESH_LLM_SKIP_UI": "1",
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                }
+            )
+            env.pop("MESH_LLM_BUILD_VERSION", None)
+            subprocess.run(
+                [str(copied_host_script), "--profile", profile],
+                cwd=tmp,
+                env=env,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return version_log.read_text(encoding="utf-8")
+
     def run_build_release_with_backend(
         self, backend: str, *, dynamic_native_runtime: bool = True
     ) -> str:

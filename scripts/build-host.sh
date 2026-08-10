@@ -153,10 +153,11 @@ else
     echo "Skipping mesh-llm UI build because MESH_LLM_SKIP_UI=1."
 fi
 
+stamp_build_version
+
 cargo_args=(build --locked -p mesh-llm --bin mesh-llm --no-default-features \
     --features "web-ui,dynamic-native-runtime")
 if [[ "$BUILD_PROFILE" == "release" ]]; then
-    stamp_build_version
     cargo_args=(build --release --locked -p mesh-llm --bin mesh-llm --no-default-features \
         --features "web-ui,dynamic-native-runtime")
 fi

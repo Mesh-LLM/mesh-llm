@@ -18,12 +18,23 @@ SCRIPT = ROOT / "scripts" / "publish-crates.sh"
 
 
 def _publish_chain_crates() -> list[str]:
-    """The crate order the publish script itself declares."""
+    """The crate order the publish script itself declares.
+
+    Mirrors the array parsing in `tools/xtask/src/publish_consistency.rs`:
+    comment lines are skipped and surrounding quotes are stripped, so a quoted
+    entry still matches the package name the script publishes.
+    """
     contents = SCRIPT.read_text(encoding="utf-8")
     array = re.search(r"publish_crates=\(\n(.*?)\n\)", contents, re.S)
     if array is None:
         raise AssertionError("scripts/publish-crates.sh: missing publish_crates array")
-    return [line.strip() for line in array.group(1).splitlines() if line.strip()]
+    entries = []
+    for line in array.group(1).splitlines():
+        trimmed = line.strip()
+        if not trimmed or trimmed.startswith("#"):
+            continue
+        entries.append(trimmed.strip('"'))
+    return entries
 
 
 PUBLISH_CHAIN_CRATES = _publish_chain_crates()
