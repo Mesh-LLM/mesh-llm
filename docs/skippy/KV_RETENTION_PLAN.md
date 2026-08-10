@@ -661,6 +661,62 @@ chosen, or be keyed by topology and matched at plan time.
 Not designed or built. Recorded because the identity work needed for it is
 already done.
 
+
+## Seeding by replaying a prefix (measured)
+
+The cheap version of pre-seeding needs no new machinery at all: **send the
+canonical prefix through the node once as an ordinary request.** Recording
+happens on the normal serving path, so a warmup run populates the disk tier
+exactly as real traffic would.
+
+Solo, 0.5B, ~2.1k-token agent prefix. The seed run sends the system prompt
+with *no user turn*; the measured request then uses a tail the seed never saw,
+on a freshly restarted process with cold RAM:
+
+| | First real request |
+|---|---|
+| Unseeded (empty disk, cold RAM) | 0.41s |
+| Seeded (disk warmed by one prior prefix-only run, cold RAM) | **0.21s** |
+
+The seed run archived a single 2048-token page --- the shared bulk --- and a
+later process with an unrelated tail hit it. So a node can be useful on its
+*first ever* real request, which is the "never warm up again" property.
+
+Why it works without new code: identity contains no `session_id` and no
+per-process value, so a page recorded by a warmup run is valid for any later
+session or process with the same weights, layer range, KV dtype and backend.
+`ArchiveCandidate` also prefers the longest *partial* candidate, which is
+correct here --- a seed prompt's full length is exactly the shared prefix.
+
+### It does not yet work on splits
+
+Same experiment across a 2-node split: seeded first-request 1.27s against
+~1.30s cold, i.e. no gain. The per-stage archives show why:
+
+```
+stage 0 : [2048, 1920, 1792, ... 512]   <- full ladder
+stage 1 : [512]                          <- floor only
+```
+
+512 is exactly `MIN_ARCHIVE_TOKENS`, so the downstream stage is archiving the
+smallest page it is allowed to and nothing else. With the all-or-nothing veto,
+stage 1's shallow archive cancels stage 0's good one.
+
+Root cause: `record_completed_prefill` passes `min_record_tokens =
+restored_tokens` (`binary_messaging/prefill_recording.rs:67-81`) and the
+recorder skips every candidate `<= min_record_tokens`
+(`binary_kv.rs:632`). On a warm chain restore the downstream stage therefore
+declines to record precisely the shared-bulk candidates it just served. The
+ladder can only get shallower with each warm request --- a ratchet in the
+wrong direction.
+
+That gate is right for its original purpose (do not re-record what was just
+restored *into the resident cache*) and wrong for the archive, which needs the
+shared bulk specifically. Fixing it is a behaviour change on the record path
+and should land separately, with per-stage archive depth as the evidence.
+
+Until then, seeding is a **solo-only** capability.
+
 ### Not done
 
 - **W1** KV quantization, **W3** page-granular export, **W5** export-on-eviction,
