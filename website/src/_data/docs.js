@@ -108,6 +108,7 @@ export default [
     description: "API reference, CLI commands, testing, and technical reference documentation.",
     links: [
       ["API reference", "/docs/pages/api-reference/"],
+      ["Crate API reference", "/crates/"],
       ["Skippy native API", "/docs/pages/skippy-api/"],
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
       ["CLI reference", "/docs/pages/CLI/"],
