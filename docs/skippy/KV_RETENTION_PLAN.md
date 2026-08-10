@@ -109,6 +109,68 @@ round-robin premise with real numbers rather than reasoning.
 Extends `skippy.kv.*` attributes; must follow `.agents/skills/skippy-metrics`
 and `.agents/skills/telemetry-privacy-review`.
 
+### W2b — Deepen the shared-prefix record ladder (highest bandwidth win)
+
+Cross-session prefix sharing **already works by design**, and this is where the
+agentic system-prompt/tool-schema win lives. But the recording side is throttled
+to the point where the shared prefix is almost never captured.
+
+What already works:
+
+- `prefix_hash_with_namespace` (`skippy-cache/src/identity.rs:47-70`) contains
+  **zero `session_id` references**. Two unrelated sessions with the same leading
+  tokens produce the same `prefix_hash` and the same `page_id`.
+- The namespace is `base.chat_template_id`
+  (`kv_integration/identity.rs:22`), fed from `ids.cache.namespace()`
+  (`frontend/prefix_cache.rs:198`), which is `Some` **only** when the client
+  sends `prompt_cache_key`
+  (`frontend/generation/cache_hints.rs:111-115`). Ordinary requests get `None`
+  → the shared default namespace → cross-session reuse.
+
+The throttle — `family_policy.rs:107-109` sets
+`shared_prefix_stride_tokens: 128` and **`shared_prefix_record_limit: 2`**.
+`record_candidate_token_counts` (`skippy-cache/src/config.rs:150-184`) always
+keeps the full length first, so with a limit of 2 only two lengths are ever
+recorded. Simulating the real policy for an 8000-token request:
+
+| | value |
+|---|---|
+| Lengths **probed** on lookup | 62 (8000 down to 256 in 128-token steps) |
+| Lengths actually **recorded** | `[8000, 7936]` |
+| Is a 2048-token shared system prompt recorded? | **No** |
+| Would 2048 be found if it had been recorded? | **Yes** — it is probed |
+
+So the lookup side is ready to exploit shared prefixes across sessions and the
+record side never stores them. Both recorded entries sit at the *tail* of one
+request, which is the least shareable part. A second session with the same
+system prompt but a different tail probes 2048, finds nothing, and does a full
+cold prefill.
+
+This is a strong candidate for the largest win in the whole plan and it is
+mostly a policy change:
+
+- Record at least one **low, stable** candidate (near `min_tokens`, or aligned to
+  a detected system-prompt/tool-schema boundary) rather than only the two
+  longest.
+- Consider a non-uniform ladder — a couple of tail candidates for
+  same-session continuation plus a couple of low candidates for cross-session
+  sharing. These two goals are currently in direct competition for 2 slots.
+- Pairs naturally with W3: page-granular export makes recording several
+  candidates cheap instead of O(prefix) bytes each.
+- Note `derive_max_entries_from_kv_cells` (`family_policy.rs:101,132-148`) bounds
+  entries by `n_ctx / (2 * min_tokens)`, so a deeper ladder competes for resident
+  cells. Recording more candidates without more capacity just churns the LRU —
+  which is precisely why this pairs with W1 (q8_0 doubles capacity) and W4.
+- **Caveat:** a client sending `prompt_cache_key` *partitions* the namespace and
+  thereby **disables** cross-session sharing. Worth documenting, and worth
+  checking that agent harnesses are not setting it by default and silently
+  losing the biggest win.
+
+Evidence: with a fixed shared system prompt and N distinct tails across distinct
+sessions, measure `skippy.kv.matched_prefix_tokens` and
+`skippy.kv.cached_prompt_tokens` at `record_limit` 2 vs a deeper ladder. The
+expected result is near-zero cross-session matched tokens today.
+
 ### W3 — Page-granular export
 
 `KvPageDesc` already carries `token_start`/`token_count` but
@@ -278,12 +340,16 @@ surgery — contiguity is a load-bearing assumption
 ## Sequence
 
 1. **W0** identity completeness — blocker, one file
-2. **W1** KV quantization policy — config, already executable
-3. **W6** prefix-affinity routing — may remove the need for W4/W5
-4. **W2** miss-reason instrumentation — gate for the expensive work
-5. **W3** page-granular export — contained win, de-risks the rest
-6. **W4/W5** decide from W2 + W6 data
-7. **W7** only if peer BW beats local disk BW
+2. **W2** miss-reason instrumentation — gate for the expensive work; also
+   measures W2b's baseline
+3. **W2b** deepen the shared-prefix record ladder — likely the largest win,
+   mostly policy
+4. **W1** KV quantization policy — config, already executable; supplies the
+   capacity W2b needs
+5. **W6** prefix-affinity routing — may remove the need for W4/W5
+6. **W3** page-granular export — contained win, makes a deeper ladder cheap
+7. **W4/W5** decide from W2 + W6 data
+8. **W7** only if peer BW beats local disk BW
 
 Dropped now: radix tree, partial eviction, defrag.
 
