@@ -77,7 +77,7 @@ pub struct Publisher {
 impl Publisher {
     pub async fn new(keys: Keys, relays: &[String]) -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::new(keys.clone());
+        let client = Client::new();
         for relay in relays {
             client.add_relay(relay).await?;
         }
@@ -94,16 +94,15 @@ impl Publisher {
         let content = serde_json::to_string(listing)?;
 
         let tags = vec![
-            Tag::custom(TagKind::Custom("d".into()), vec!["mesh-llm".to_string()]),
-            Tag::custom(TagKind::Custom("k".into()), vec!["mesh-llm".to_string()]),
-            Tag::custom(
-                TagKind::Custom("expiration".into()),
-                vec![expiration.to_string()],
-            ),
+            Tag::custom("d", vec!["mesh-llm".to_string()]),
+            Tag::custom("k", vec!["mesh-llm".to_string()]),
+            Tag::custom("expiration", vec![expiration.to_string()]),
         ];
 
-        let builder = EventBuilder::new(Kind::Custom(MESH_SERVICE_KIND), content).tags(tags);
-        self.client.send_event_builder(builder).await?;
+        let event = EventBuilder::new(Kind::Custom(MESH_SERVICE_KIND), content)
+            .tags(tags)
+            .finalize(&self.keys)?;
+        self.client.send_event(&event).await?;
         Ok(())
     }
 
@@ -114,14 +113,14 @@ impl Publisher {
             .limit(10);
         let events = self
             .client
-            .fetch_events(filter, Duration::from_secs(5))
+            .fetch_events(filter)
+            .timeout(Duration::from_secs(5))
             .await?;
         for event in events.iter() {
             let request = EventDeletionRequest::new().id(event.id);
-            let _ = self
-                .client
-                .send_event_builder(EventBuilder::delete(request))
-                .await;
+            if let Ok(deletion) = request.finalize(&self.keys) {
+                let _ = self.client.send_event(&deletion).await;
+            }
         }
         Ok(())
     }
@@ -178,9 +177,9 @@ pub struct DiscoveryClient {
 }
 
 impl DiscoveryClient {
-    pub async fn new(keys: Keys, relays: &[String]) -> Result<Self> {
+    pub async fn new(relays: &[String]) -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::new(keys);
+        let client = Client::new();
         let mut added = 0;
         for relay in relays {
             match client.add_relay(relay).await {
@@ -209,8 +208,7 @@ pub async fn discover(
         &cc.client
     } else {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let keys = Keys::generate();
-        let c = Client::new(keys);
+        let c = Client::new();
         let mut added = 0;
         for relay in relays {
             match c.add_relay(relay).await {
@@ -231,14 +229,12 @@ pub async fn discover(
 
     let nostr_filter = Filter::new()
         .kind(Kind::Custom(MESH_SERVICE_KIND))
-        .custom_tag(
-            SingleLetterTag::lowercase(Alphabet::K),
-            "mesh-llm".to_string(),
-        )
+        .custom_tag(SingleLetterTag::LOWERCASE_K, "mesh-llm".to_string())
         .limit(100);
 
     let events = match client
-        .fetch_events(nostr_filter, Duration::from_secs(5))
+        .fetch_events(nostr_filter)
+        .timeout(Duration::from_secs(5))
         .await
     {
         Ok(e) => e,
