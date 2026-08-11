@@ -85,6 +85,47 @@ cargo check -p mesh-llm
 Run Cargo commands serially. This repo frequently hits Cargo lock conflicts
 when multiple Cargo commands run at once.
 
+### Model-load spot check (required for backend or model-switch changes)
+
+A clean patch replay plus a green build does **not** prove the runtime works.
+Metal shaders in `ggml-metal.metal` are JIT-compiled on-device at first model
+open, so a broken shader builds green everywhere and only fails at load time.
+Machine-reconciled patches can also silently drop arch cases from switches in
+`src/llama-model.cpp` (for example `llama_model_rope_type`), which only fail
+when a model of that arch creates a context.
+
+After any queue change that touches backend sources (`.metal`, CUDA, Vulkan),
+`ggml.c`/`ggml-*.h` kernel argument structs, or `src/llama-model.cpp` switch
+statements, load a small real model on your local backend and confirm one
+completion returns:
+
+```bash
+./target/debug/mesh-llm serve --model "Qwen/Qwen2.5-3B-Instruct-GGUF@main:q4_k_m" --log-format json
+# wait for the model to appear, then:
+curl -s http://127.0.0.1:9337/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m","messages":[{"role":"user","content":"Say OK"}],"max_tokens":5}'
+```
+
+On a Mac this exercises the Metal shader JIT path directly. Watch the JSON log
+for `metal_library_init: error` and `model-open failure`. If the change adds or
+touches support for a specific model family, spot-check a model of that family
+as well.
+
+When regenerating the queue against a new upstream pin, also diff the arch
+case lists of reconciled switches against upstream and account for every
+deletion:
+
+```bash
+# example: rope-type switch parity
+git -C .deps/llama.cpp show <upstream-pin>:src/llama-model.cpp \
+  | awk '/llama_rope_type llama_model_rope_type/,/^}$/' \
+  | grep -oE "LLM_ARCH_[A-Z0-9_]+" | sort > /tmp/upstream-cases.txt
+awk '/llama_rope_type llama_model_rope_type/,/^}$/' .deps/llama.cpp/src/llama-model.cpp \
+  | grep -oE "LLM_ARCH_[A-Z0-9_]+" | sort > /tmp/patched-cases.txt
+comm -23 /tmp/upstream-cases.txt /tmp/patched-cases.txt  # must be empty or explained
+```
+
 ## Updating The Upstream Pin
 
 Test the queue against current upstream without moving the pin:
