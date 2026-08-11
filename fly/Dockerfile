@@ -103,8 +103,12 @@ COPY crates/mesh-llm-native-runtime/ crates/mesh-llm-native-runtime/
 COPY crates/mesh-llm-runtime-install/ crates/mesh-llm-runtime-install/
 COPY crates/mesh-llm-sdk/ crates/mesh-llm-sdk/
 COPY crates/mesh-llm-tui/ crates/mesh-llm-tui/
+COPY crates/skippy-tokenizer/ crates/skippy-tokenizer/
+COPY crates/mesh-native-serving-plugin-api/ crates/mesh-native-serving-plugin-api/
+COPY crates/mesh-native-serving-plugin-host/ crates/mesh-native-serving-plugin-host/
 COPY tools/xtask/ tools/xtask/
 COPY scripts/prepare-llama.sh scripts/build-llama.sh scripts/
+COPY scripts/lib/ scripts/lib/
 COPY third_party/llama.cpp/upstream.txt third_party/llama.cpp/upstream.txt
 COPY third_party/llama.cpp/patches/ third_party/llama.cpp/patches/
 RUN --mount=type=cache,id=mesh-llm-sccache-debian-bookworm-gcc12-cpu-${TARGETARCH},target=/root/.cache/sccache,sharing=locked \
