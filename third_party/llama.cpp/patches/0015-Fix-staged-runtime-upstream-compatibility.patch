@@ -1,4 +1,4 @@
-From 04f3a8984801c27249ef4d108a1343f99535c2f7 Mon Sep 17 00:00:00 2001
+From 3f13f1626d0e91836a7e15e5526ff8ef3482b0a2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 11 Aug 2026 07:18:23 +1000
 Subject: [PATCH 15/15] Fix staged runtime upstream compatibility
@@ -734,7 +734,7 @@ index 4d74e3527..a3565b051 100644
      uint32_t n_layer() const;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 25bde1b26..4a022d220 100644
+index 25bde1b26..8824c03fc 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -39,6 +39,8 @@
@@ -797,7 +797,29 @@ index 25bde1b26..4a022d220 100644
                                  filter,
                                  reuse);
                      } else if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-@@ -2810,7 +2821,8 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+@@ -2535,11 +2546,13 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_DEEPSEEK2OCR:
+         case LLM_ARCH_DEEPSEEK32:
+         case LLM_ARCH_DEEPSEEK4:
++        case LLM_ARCH_MUSE_GLIMMER:
+         case LLM_ARCH_PLM:
+         case LLM_ARCH_CHATGLM:
+         case LLM_ARCH_GRANITE:
+         case LLM_ARCH_GRANITE_MOE:
+         case LLM_ARCH_GRANITE_HYBRID:
++        case LLM_ARCH_GRANITE_SWITCH:
+         case LLM_ARCH_CHAMELEON:
+         case LLM_ARCH_BAILINGMOE:
+         case LLM_ARCH_NEO_BERT:
+@@ -2636,6 +2649,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_QWEN3VLMOE:
+         case LLM_ARCH_QWEN35:
+         case LLM_ARCH_QWEN35MOE:
++        case LLM_ARCH_QWEN3TTS:
+             return LLAMA_ROPE_TYPE_IMROPE;
+ 
+         case LLM_ARCH_GLM4:
+@@ -2810,7 +2824,8 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
      TENSOR_DUPLICATED     (llama_model_loader::TENSOR_DUPLICATED),
      TENSOR_NOT_REQUIRED   (llama_model_loader::TENSOR_NOT_REQUIRED),
      TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
@@ -807,7 +829,7 @@ index 25bde1b26..4a022d220 100644
  
  ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
      GGML_ASSERT(ml != nullptr);
-@@ -2851,3 +2863,38 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
+@@ -2851,3 +2866,38 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
  uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
      return (uint32_t) model->target_layer_ids.size();
  }
