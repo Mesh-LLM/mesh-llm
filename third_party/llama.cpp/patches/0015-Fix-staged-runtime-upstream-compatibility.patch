@@ -1,7 +1,7 @@
-From 224acf564a09b4276191a103c47d401103145e3e Mon Sep 17 00:00:00 2001
+From 70a6d909942fb0d2473c57ca2db43a7ef3cd80e5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 11 Aug 2026 07:18:23 +1000
-Subject: [PATCH 16/16] Fix staged runtime upstream compatibility
+Subject: [PATCH 15/15] Fix staged runtime upstream compatibility
 
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
@@ -48,7 +48,7 @@ diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-
 index 99484db33..8265573c4 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -566,7 +566,32 @@ void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
+@@ -566,7 +566,32 @@ struct ggml_metal_rsets {
      dispatch_group_t d_group;
  };
  
@@ -575,7 +575,7 @@ index 4d74e3527..a3565b051 100644
      uint32_t n_layer() const;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 0e45dc460..2338ae000 100644
+index 25bde1b26..4a022d220 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -39,6 +39,8 @@

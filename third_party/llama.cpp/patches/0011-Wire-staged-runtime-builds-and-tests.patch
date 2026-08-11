@@ -1,7 +1,7 @@
-From 897833a87a1a41286a2d30dea71cca9735082a93 Mon Sep 17 00:00:00 2001
+From 66902b293dd126bd23ce266bd80c757ee74e0f71 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 12/16] Wire staged runtime builds and tests
+Subject: [PATCH 11/15] Wire staged runtime builds and tests
 
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt

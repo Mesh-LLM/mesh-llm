@@ -1,7 +1,7 @@
-From 0cb71783831b6aaf78e2eba64c91468ae188e49d Mon Sep 17 00:00:00 2001
+From e6999a73cb1ecd85fe8ad89b14bd164b28a9ed58 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 02/16] Add staged model graph and family support
+Subject: [PATCH 01/15] Add staged model graph and family support
 
 
 diff --git a/include/llama.h b/include/llama.h
@@ -3533,7 +3533,7 @@ index abca773a9..837ac505f 100644
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 3bf3a22f2..0e45dc460 100644
+index 3bf3a22f2..25bde1b26 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -11,7 +11,6 @@
@@ -3653,7 +3653,8 @@ index 3bf3a22f2..0e45dc460 100644
                  layer.ffn_up_exps_s = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "scale", i), {n_expert}, TENSOR_NOT_REQUIRED);
              }
  
-@@ -1520,7 +1520,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1520,7 +1529,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+             }
          }
      }
 -    ml.done_getting_tensors();
@@ -3661,7 +3662,6 @@ index 3bf3a22f2..0e45dc460 100644
  
      // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
      // If sidecar scales exist, the output weight must be an actual output tensor.
-     GGML_ASSERT(!(output && tok_embd &&
 @@ -1918,7 +1927,6 @@ void llama_model::print_info() const {
                  arch == LLM_ARCH_GRANITE ||
                  arch == LLM_ARCH_GRANITE_MOE ||

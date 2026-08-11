@@ -1,7 +1,7 @@
-From ccb96fb7c0ccc341024d96cd15b693425e3ba13c Mon Sep 17 00:00:00 2001
+From cf3cca7d2f41bdcf38308bac0e36c33cca3eded9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 11/16] Add Skippy tokenization and stage chat
+Subject: [PATCH 10/15] Add Skippy tokenization and stage chat
 
 
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp

@@ -1,7 +1,7 @@
-From c33ec87c4bd0a53c0ba2617359f6b1b67d2785a1 Mon Sep 17 00:00:00 2001
+From 02e82c15733852ebfcc0c727ba7f4f7523d92c81 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 10 Aug 2026 09:25:54 +1000
-Subject: [PATCH 15/16] docs: annotate Skippy native API headers
+Subject: [PATCH 14/15] docs: annotate Skippy native API headers
 
 
 diff --git a/include/skippy.h b/include/skippy.h

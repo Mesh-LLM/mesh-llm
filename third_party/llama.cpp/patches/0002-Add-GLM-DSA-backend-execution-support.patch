@@ -1,7 +1,7 @@
-From fbbdfe3e42aed87699fdc172b3d909b8400b82c9 Mon Sep 17 00:00:00 2001
+From e94cf9ff0b3f0ad901c86e5d3747f630ee55dfc3 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 03/16] Add GLM-DSA backend execution support
+Subject: [PATCH 02/15] Add GLM-DSA backend execution support
 
 
 diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
@@ -2338,7 +2338,7 @@ index 32d97cd5d..8f406c7af 100644
  struct ggml_metal_command_buffer {
      id<MTLCommandBuffer> obj;
  };
-@@ -54,6 +173,8 @@
+@@ -54,6 +173,8 @@ struct ggml_metal {
  
      // command buffer state
      int n_cb;           // number of extra threads used to submit the command buffers
@@ -2347,7 +2347,7 @@ index 32d97cd5d..8f406c7af 100644
      int n_nodes_0;      // number of nodes submitted by the main thread
      int n_nodes_1;      // remaining number of nodes submitted by the n_cb threads
      int n_nodes_per_cb;
-@@ -65,6 +186,7 @@
+@@ -65,6 +186,7 @@ struct ggml_metal {
  
      // n_cb command buffers + 1 used by the main thread
      struct ggml_metal_command_buffer cmd_bufs[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
@@ -6288,7 +6288,7 @@ index df85ab02c..99484db33 100644
  void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
      [encoder->obj endEncoding];
  }
-@@ -558,32 +566,7 @@ void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
+@@ -558,32 +566,7 @@ struct ggml_metal_rsets {
      dispatch_group_t d_group;
  };
  
@@ -6592,7 +6592,7 @@ index df85ab02c..99484db33 100644
          case GGML_OP_SOLVE_TRI:
          case GGML_OP_MUL_MAT:
          case GGML_OP_MUL_MAT_ID:
-@@ -1523,6 +1552,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1523,6 +1552,7 @@ struct ggml_metal_buffer {
  
      // pointers to global device
      ggml_metal_device_t dev;
