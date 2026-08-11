@@ -939,7 +939,7 @@ jobs:
     # model load on a Metal GPU proves the patched .metal source compiles.
     # GitHub macos-15 runners are Apple Silicon with a working Metal GPU.
     needs: [changes, macos_cpu_artifact]
-    if: ${{ needs.macos_cpu_artifact.result == 'success' && contains(fromJson(needs.changes.outputs.required_jobs_json), 'inference_smoke_tests') && needs.changes.outputs.backend_changed == 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'macos_metal_inference_smoke_tests') }}
     uses: ./.github/workflows/smoke.yml
     with:
       artifact_name: ci-macos-inference-binaries
@@ -1686,6 +1686,7 @@ jobs:
       - linux_public_mesh_admission
       - hf_download_smoke
       - inference_smoke_tests
+      - macos_metal_inference_smoke_tests
       - agent_live_smokes
       - two_node_client_serving_smoke
       - two_node_split_smoke
