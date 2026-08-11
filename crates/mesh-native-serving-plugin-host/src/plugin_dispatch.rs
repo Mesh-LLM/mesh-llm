@@ -449,8 +449,11 @@ fn plugin_worker(
                 unreachable!("passive plugin callbacks must use the passive worker queue")
             }
         };
-        if lifecycle && result.is_err() {
-            lifecycle_delivery_failures.fetch_add(1, Ordering::Relaxed);
+        if lifecycle {
+            if let Err(error) = &result {
+                eprintln!("native serving plugin lifecycle callback failed: {error:#}");
+                lifecycle_delivery_failures.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }
