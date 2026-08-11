@@ -142,7 +142,11 @@ unsafe extern "C" fn encode_tokenizer(
     output_length: *mut usize,
 ) -> abi::TokenizerEncodeStatus {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if context.is_null() || output_length.is_null() {
+        if output_length.is_null() {
+            return abi::TokenizerEncodeStatus::INVALID_ARGUMENT;
+        }
+        unsafe { *output_length = 0 };
+        if context.is_null() {
             return abi::TokenizerEncodeStatus::INVALID_ARGUMENT;
         }
         if input_pieces.is_null() && input_piece_count != 0 {
@@ -152,7 +156,6 @@ unsafe extern "C" fn encode_tokenizer(
             return abi::TokenizerEncodeStatus::INVALID_ARGUMENT;
         }
         if input_piece_count > abi::MAX_TOKENIZER_INPUT_PIECES {
-            unsafe { *output_length = 0 };
             return abi::TokenizerEncodeStatus::LIMIT_EXCEEDED;
         }
         let pieces = if input_piece_count == 0 {
@@ -173,10 +176,8 @@ unsafe extern "C" fn encode_tokenizer(
         let tokenizer = unsafe { &*context.cast::<TokenizerCapability>() };
         let limits = tokenizer.limits();
         if total_input_bytes > limits.max_input_bytes {
-            unsafe { *output_length = 0 };
             return abi::TokenizerEncodeStatus::LIMIT_EXCEEDED;
         }
-        unsafe { *output_length = 0 };
         let mut owned_pieces = Vec::with_capacity(input_piece_count);
         for piece in pieces {
             let bytes = if piece.bytes.length == 0 {

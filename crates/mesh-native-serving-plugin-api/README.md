@@ -29,6 +29,13 @@ The V2 table is a breaking replacement for V1. Plugins must resolve
 `mesh_native_serving_plugin_v2` and validate the V2 ABI/version and structure
 sizes before use.
 
+For `TokenizerCapability::encode`, a non-null `output_length` is required. The
+host initializes it to zero before validating the remaining arguments, so every
+non-OK return other than `OUTPUT_TOO_SMALL` reports zero tokens; on
+`OUTPUT_TOO_SMALL` it reports the required capacity, and on `OK` it reports the
+number of written tokens. A null `output_length` cannot be written and therefore
+returns `INVALID_ARGUMENT`.
+
 Each proposal query carries the capacity Skippy can verify at that exact decode
 position. The native host adapter also applies a bounded implementation cap so
 a request cannot force an unbounded host allocation.
