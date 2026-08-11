@@ -2,7 +2,7 @@ use std::ffi::CString;
 use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
-use skippy_ffi::{LoadMode, RuntimeConfig as RawRuntimeConfig};
+use skippy_ffi::{LoadMode, MtpSource as RawMtpSource, RuntimeConfig as RawRuntimeConfig};
 
 pub const GGML_TYPE_F16: u32 = 1;
 pub const GGML_TYPE_Q4_0: u32 = 2;
@@ -24,6 +24,26 @@ pub enum FlashAttentionType {
     Auto = -1,
     Disabled = 0,
     Enabled = 1,
+}
+
+/// Selects whether this target keeps no MTP tensors, its integrated MTP heads,
+/// or waits for an external MTP sidecar to attach.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MtpSource {
+    #[default]
+    Disabled,
+    Integrated,
+    External,
+}
+
+impl MtpSource {
+    const fn as_raw(self) -> RawMtpSource {
+        match self {
+            Self::Disabled => RawMtpSource::Disabled,
+            Self::Integrated => RawMtpSource::Integrated,
+            Self::External => RawMtpSource::External,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +68,7 @@ pub struct RuntimeConfig {
     pub projector_path: Option<String>,
     pub include_embeddings: bool,
     pub include_output: bool,
+    pub mtp_source: MtpSource,
     pub filter_tensors_on_load: bool,
 }
 
@@ -137,6 +158,7 @@ impl RuntimeConfig {
                 filter_tensors_on_load: self.filter_tensors_on_load,
                 include_embeddings: self.include_embeddings,
                 include_output: self.include_output,
+                mtp_source: self.mtp_source.as_raw(),
                 selected_backend_device: selected_backend_device_ptr,
                 glm_dsa_policy_profile: 0,
                 glm_dsa_policy_flags: 0,
@@ -155,7 +177,7 @@ impl RuntimeConfig {
             .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count));
         let n_ubatch = self.n_ubatch.unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH);
         format!(
-            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} mmap={} mlock={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} include_embeddings={} include_output={} filter_tensors_on_load={}",
+            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} mmap={} mlock={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} include_embeddings={} include_output={} mtp_source={:?} filter_tensors_on_load={}",
             self.stage_index,
             self.layer_start,
             self.layer_end,
@@ -175,6 +197,7 @@ impl RuntimeConfig {
             self.load_mode,
             self.include_embeddings,
             self.include_output,
+            self.mtp_source,
             self.filter_tensors_on_load,
         )
     }
@@ -216,6 +239,7 @@ impl Default for RuntimeConfig {
             projector_path: None,
             include_embeddings: true,
             include_output: true,
+            mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
         }
     }
@@ -331,7 +355,27 @@ mod tests {
         assert_eq!(raw.glm_dsa_direct_sparse_decode_max_top_k, 0);
         assert_eq!(raw.glm_dsa_dense_sparse_mask_max_bytes, 0);
         assert_eq!(raw.glm_dsa_compact_flash_min_kv, 0);
+        assert_eq!(raw.mtp_source, RawMtpSource::Disabled);
         assert!(raw.selected_backend_device.is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_preserves_explicit_mtp_source() -> anyhow::Result<()> {
+        for (source, expected) in [
+            (MtpSource::Disabled, RawMtpSource::Disabled),
+            (MtpSource::Integrated, RawMtpSource::Integrated),
+            (MtpSource::External, RawMtpSource::External),
+        ] {
+            let raw = RuntimeConfig {
+                mtp_source: source,
+                ..RuntimeConfig::default()
+            }
+            .as_raw()?
+            .raw;
+
+            assert_eq!(raw.mtp_source, expected);
+        }
         Ok(())
     }
 

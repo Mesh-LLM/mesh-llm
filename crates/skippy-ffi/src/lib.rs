@@ -1,6 +1,6 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 37;
+pub const ABI_VERSION_PATCH: u32 = 38;
 pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
@@ -151,6 +151,15 @@ pub enum LoadMode {
     ArtifactSlice = 2,
 }
 
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MtpSource {
+    #[default]
+    Disabled = 0,
+    Integrated = 1,
+    External = 2,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum TensorRole {
@@ -226,6 +235,7 @@ pub struct RuntimeConfig {
     pub filter_tensors_on_load: bool,
     pub include_embeddings: bool,
     pub include_output: bool,
+    pub mtp_source: MtpSource,
     pub selected_backend_device: *const c_char,
     pub glm_dsa_policy_profile: i32,
     pub glm_dsa_policy_flags: u32,

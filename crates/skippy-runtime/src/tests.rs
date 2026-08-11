@@ -5,7 +5,7 @@ mod tests {
 
     use super::{
         ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
-        GGML_TYPE_F16, ModelInfo, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
+        GGML_TYPE_F16, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
         StageModel, StageSession, Status, TensorRole, format_skippy_error,
     };
     use std::{
@@ -82,6 +82,7 @@ mod tests {
             projector_path: None,
             include_embeddings: true,
             include_output: true,
+            mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
         };
         StageModel::open(model_path, &config)

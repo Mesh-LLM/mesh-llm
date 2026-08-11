@@ -5,11 +5,11 @@ use anyhow::anyhow;
 use anyhow::bail;
 use skippy_protocol::StageConfig;
 use skippy_runtime::FlashAttentionType as RuntimeFlashAttentionType;
-use skippy_runtime::ModelInfo;
 use skippy_runtime::RuntimeConfig;
 use skippy_runtime::RuntimeLoadMode;
 use skippy_runtime::StageModel;
 use skippy_runtime::StageSession;
+use skippy_runtime::{ModelInfo, MtpSource};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,6 +59,7 @@ impl DraftRunner {
                 projector_path: None,
                 include_embeddings: true,
                 include_output: true,
+                mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: false,
             },
         )
@@ -160,6 +161,7 @@ pub(in crate::frontend) fn attach_native_mtp_draft_model(
                 projector_path: None,
                 include_embeddings: true,
                 include_output: true,
+                mtp_source: MtpSource::External,
                 filter_tensors_on_load: false,
             },
         )
