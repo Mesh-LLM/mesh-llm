@@ -4,7 +4,8 @@ use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use serde::Serialize;
 use skippy_runtime::{
-    FlashAttentionType, GGML_TYPE_F16, ModelInfo, RuntimeConfig, RuntimeLoadMode, StageModel,
+    FlashAttentionType, GGML_TYPE_F16, ModelInfo, MtpSource, RuntimeConfig, RuntimeLoadMode,
+    StageModel,
 };
 
 use crate::output::{print_json_pretty, print_success};
@@ -176,6 +177,7 @@ fn runtime_config(
         projector_path: projector.map(|path| path.display().to_string()),
         include_embeddings: true,
         include_output: true,
+        mtp_source: MtpSource::External,
         filter_tensors_on_load: false,
     }
 }
@@ -194,6 +196,7 @@ mod tests {
         assert_eq!(config.n_batch, Some(64));
         assert_eq!(config.n_ubatch, Some(64));
         assert_eq!(config.mmap, Some(true));
+        assert_eq!(config.mtp_source, MtpSource::External);
         assert_eq!(
             config.projector_path.as_deref(),
             Some("/models/mmproj.gguf")

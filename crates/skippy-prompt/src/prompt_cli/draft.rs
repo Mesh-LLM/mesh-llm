@@ -32,6 +32,7 @@ impl DraftRunner {
                 projector_path: None,
                 include_embeddings: true,
                 include_output: true,
+                mtp_source: skippy_runtime::MtpSource::Disabled,
                 filter_tensors_on_load: true,
                 mlock: false,
                 mmap: Some(true),
