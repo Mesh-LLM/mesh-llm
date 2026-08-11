@@ -8,7 +8,9 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
-use skippy_runtime::{ModelInfo, RuntimeConfig, RuntimeLoadMode, StageModel, StageSession};
+use skippy_runtime::{
+    ModelInfo, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel, StageSession,
+};
 
 const DEFAULT_CORPUS: &str = "crates/skippy-bench/corpora/kv_mixed_prompts.jsonl";
 
@@ -242,6 +244,7 @@ fn open_full_model(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Stag
             projector_path: None,
             include_embeddings: true,
             include_output: true,
+            mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
             mlock: false,
             mmap: Some(true),
