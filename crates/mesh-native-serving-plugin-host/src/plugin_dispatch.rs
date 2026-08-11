@@ -436,11 +436,11 @@ fn plugin_worker(
         command,
     }) = queue.next()
     {
-        let (result, lifecycle) = match command {
-            PluginCommand::Begin(event) => (active.begin(&event), true),
-            PluginCommand::Committed(event) => (active.committed(&event), true),
-            PluginCommand::Abort(event) => (active.abort(&event), true),
-            PluginCommand::Finish(event) => (active.finish(&event), true),
+        let result = match command {
+            PluginCommand::Begin(event) => active.begin(&event),
+            PluginCommand::Committed(event) => active.committed(&event),
+            PluginCommand::Abort(event) => active.abort(&event),
+            PluginCommand::Finish(event) => active.finish(&event),
             PluginCommand::Proposal(query, reply) => {
                 run_proposal(&active, &passive_queue, enqueued_at, query, &reply);
                 continue;
@@ -449,7 +449,8 @@ fn plugin_worker(
                 unreachable!("passive plugin callbacks must use the passive worker queue")
             }
         };
-        if lifecycle && result.is_err() {
+        if let Err(error) = &result {
+            eprintln!("native serving plugin lifecycle callback failed: {error:#}");
             lifecycle_delivery_failures.fetch_add(1, Ordering::Relaxed);
         }
     }

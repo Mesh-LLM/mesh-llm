@@ -40,16 +40,18 @@ existing Markdown documentation. The root `docs/` tree is therefore mixed
 ownership by path: generated website artifacts live at `docs/index.html`,
 `docs/CNAME`, `docs/install.sh`, `docs/install.ps1`, `docs/setup-mesh`,
 `docs/mesh-llm-logo.svg`, `docs/funding.json`, `docs/.well-known/`,
-`docs/catalog/`, `docs/assets/`, `docs/pagefind/`, and `docs/docs/`; project
+`docs/catalog/`, `docs/assets/`, `docs/pagefind/`, `docs/docs/`, and
+`docs/crates/`; project
 documentation Markdown such as `docs/MESHES.md`, `docs/design/**`,
 `docs/plugins/**`, and `docs/specs/**` remains source. Do not hand-edit the
 generated website artifact paths; update files under `website/src/` and rebuild
 instead.
 
 ```bash
-just website-build # cd website && npm run build; writes generated output to docs/
+just website-build # build website and crate API docs into docs/
 just website-dev   # Eleventy dev server on port 8765
 just website-clean # remove generated website output while preserving docs/ source
+just crate-docs    # regenerate only the published crate API docs
 ```
 
 The website build runs Tailwind first, then Eleventy, then Pagefind. Eleventy

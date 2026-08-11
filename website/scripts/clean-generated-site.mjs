@@ -17,6 +17,7 @@ const generatedPaths = [
   "docs/assets",
   "docs/catalog",
   "docs/docs",
+  "docs/crates",
   "docs/pagefind",
   "website/src/assets/site.generated.css",
 ];

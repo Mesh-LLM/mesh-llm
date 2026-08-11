@@ -13,6 +13,7 @@ anyhow.workspace = true
 libloading = "0.8"
 mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.72.1" }
 skippy-server = { path = "../skippy-server", version = "0.72.1" }
+skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.72.1" }
 
 [lints]
 workspace = true

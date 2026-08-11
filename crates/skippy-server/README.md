@@ -86,6 +86,15 @@ round trip or a second model load. Every request supplies the expected
 `TokenizerIdentity`; mismatches are returned as per-item errors. The identity
 includes the model, source digest, tokenizer id, stage, and serving profile.
 
+The capability also exposes a bounded structured encode operation for ordinary
+byte runs and opaque native control descriptors. Mesh does not interpret
+Rosetta vocabulary or control identities. The loaded backend accepts only
+lossless inputs it can preserve; unsupported controls, invalid UTF-8, interior
+NULs, identity mismatches, and limit violations return explicit errors rather
+than being decoded with replacement semantics. Native-serving plugins receive
+the same capability and inventory during activation and must prepare outside
+the proposal deadline.
+
 The `/v1/tokenize` route is retained only as an explicit compatibility and
 out-of-band adapter. It accepts the legacy `add_special` field as well as the
 facade's `special_tokens` policy and is not part of generation or proposal
