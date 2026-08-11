@@ -579,6 +579,16 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
     result
 }
 
+/// Whether a record candidate is already covered by this request's restore.
+///
+/// `min_record_tokens` is the restored prefix length. Candidates at or below
+/// it are resident already, so recording them again is wasted work — but they
+/// are still the right thing to *archive*, which is why this is a named
+/// predicate rather than an inline `continue` guard.
+fn candidate_already_resident(token_count: u64, min_record_tokens: u64) -> bool {
+    token_count <= min_record_tokens
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(in crate::binary_transport) fn maybe_record_binary_prefill(
     config: &StageConfig,
@@ -629,12 +639,21 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
         let mut runtime = runtime.lock().expect("runtime lock poisoned");
         for identity in identities {
             let token_count = identity.identity.token_count;
-            if token_count <= min_record_tokens {
-                continue;
-            }
             let token_count_usize = usize::try_from(token_count)
                 .unwrap_or(usize::MAX)
                 .min(token_ids.len());
+            if candidate_already_resident(token_count, min_record_tokens) {
+                // Already resident: this candidate is covered by the restore
+                // that produced `min_record_tokens`, so re-recording it into
+                // the resident cache is work for no gain. The *archive* is a
+                // different question. On a warm restore these are exactly the
+                // shared-bulk candidates worth persisting, and skipping them
+                // here made a downstream stage's archive ladder ratchet
+                // shallower on every warm request until only the floor
+                // candidate survived.
+                archive_candidate.offer(&identity, token_count_usize, token_ids.len());
+                continue;
+            }
             if token_count_usize == token_ids.len() {
                 match kv.record_exact_state(&mut runtime, session_id, &identity) {
                     Ok(Some(record)) => {
@@ -734,17 +753,19 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
             message,
             &records,
         );
-        // At most one archive per request: each one is a full KV export plus a
-        // synced write, and this runs under the runtime lock, which serializes
-        // every other lane on this stage.
-        if let Some(identity) = archive_candidate.take() {
-            let mut runtime = runtime.lock().expect("runtime lock poisoned");
-            if let Ok(true) = kv.archive_dense_prefix(&mut runtime, session_id, &identity) {
-                attrs.insert(
-                    "skippy.kv.archived_tokens".to_string(),
-                    json!(identity.identity.token_count),
-                );
-            }
+    }
+    // At most one archive per request: each one is a full KV export plus a
+    // synced write, and this runs under the runtime lock, which serializes
+    // every other lane on this stage. This is deliberately outside the
+    // downstream branch: the last stage of a split has no downstream, and
+    // gating archival on one meant the tail of every chain never persisted.
+    if let Some(identity) = archive_candidate.take() {
+        let mut runtime = runtime.lock().expect("runtime lock poisoned");
+        if let Ok(true) = kv.archive_dense_prefix(&mut runtime, session_id, &identity) {
+            attrs.insert(
+                "skippy.kv.archived_tokens".to_string(),
+                json!(identity.identity.token_count),
+            );
         }
     }
     attrs.insert(
@@ -1047,5 +1068,59 @@ mod tests {
 
         assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
         assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+    }
+}
+
+#[cfg(test)]
+mod record_gate_tests {
+    use super::candidate_already_resident;
+    use crate::kv_integration::{ArchiveCandidate, PrefillKvIdentity};
+
+    fn identity(tokens: u64) -> PrefillKvIdentity {
+        PrefillKvIdentity {
+            page_id: format!("page-{tokens}"),
+            identity: crate::kv_proto::PageIdentity {
+                token_count: tokens,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn restored_candidates_are_not_re_recorded_into_the_resident_cache() {
+        assert!(candidate_already_resident(2048, 2048));
+        assert!(candidate_already_resident(512, 2048));
+        assert!(!candidate_already_resident(2176, 2048));
+    }
+
+    /// The split-serving regression: on a warm restore the downstream stage
+    /// skipped recording the shared-bulk candidates, and because the archive
+    /// was fed only from recorded candidates its ladder ratcheted down to the
+    /// floor. Candidates below the restore point must still be offered for
+    /// archival.
+    #[test]
+    fn restored_candidates_are_still_offered_for_archival() {
+        let full = 2214usize;
+        let min_record_tokens = 2048u64;
+        let mut pick = ArchiveCandidate::default();
+        let mut resident_records = 0usize;
+        for tokens in [2214u64, 2176, 2048, 512] {
+            let token_count_usize = usize::try_from(tokens).unwrap().min(full);
+            // Mirrors the recorder: archival is offered for every candidate,
+            // resident recording only for those above the restore point.
+            pick.offer(&identity(tokens), token_count_usize, full);
+            if !candidate_already_resident(tokens, min_record_tokens) {
+                resident_records += 1;
+            }
+        }
+        assert_eq!(
+            resident_records, 2,
+            "only candidates longer than the restore should re-enter the resident cache"
+        );
+        assert_eq!(
+            pick.take().expect("candidate").identity.token_count,
+            2176,
+            "the shared bulk must still be archivable after a warm restore"
+        );
     }
 }
