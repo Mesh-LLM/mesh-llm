@@ -25,6 +25,7 @@ blake3.workspace = true
 clap.workspace = true
 futures-util = "0.3"
 skippy-runtime = { path = "../skippy-runtime", version = "0.72.1"  }
+skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.72.1" }
 model-artifact = { path = "../model-artifact", version = "0.72.1" }
 mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.72.1" }
 skippy-protocol = { path = "../skippy-protocol", version = "0.72.1"  }

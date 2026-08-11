@@ -22,6 +22,7 @@ pub(crate) fn check_publish_crates_consistency(repo_root: &Path) -> DynResult<()
     check_publish_crate_metadata(repo_root, &publish_crates, &packages_by_name)?;
     check_publish_crate_dependencies(&publish_order, &packages_by_name, &packages_by_dir)?;
     check_publish_literal_includes(&publish_crates, &packages_by_name)?;
+    check_publish_registry_deps_are_derived(repo_root)?;
     check_publish_catalog_sync(repo_root)?;
     check_publish_workflow_invariants(repo_root)?;
 
@@ -314,6 +315,63 @@ fn literal_include_paths(source: &str) -> Vec<String> {
         }
     }
     paths
+}
+
+/// The publish script must derive each crate's publishable workspace
+/// dependencies from `cargo metadata` rather than hand-maintaining them.
+///
+/// A hand-written map drifts silently: adding a new workspace crate updates the
+/// `publish_crates` array (which this module validates) while leaving the
+/// dependency map stale, and the resulting `cargo publish --dry-run` failure
+/// only surfaces during a release. Keep the derivation in place so a new crate
+/// cannot reintroduce that class of failure.
+fn check_publish_registry_deps_are_derived(repo_root: &Path) -> DynResult<()> {
+    let relative_path = "scripts/publish-crates.sh";
+    let contents = fs::read_to_string(repo_root.join(relative_path))?;
+    let loader = shell_function_body(&contents, "load_registry_dep_pairs")
+        .ok_or_else(|| format!("{relative_path}: missing load_registry_dep_pairs function"))?;
+    let lookup = shell_function_body(&contents, "unpublished_registry_deps")
+        .ok_or_else(|| format!("{relative_path}: missing unpublished_registry_deps function"))?;
+
+    ensure_contains(
+        loader,
+        "cargo metadata --format-version 1 --no-deps",
+        "publish script derives registry dependencies from cargo metadata",
+    )?;
+
+    for function in [loader, lookup] {
+        if let Some(branch) = hand_maintained_case_branch(function) {
+            return Err(format!(
+                "{relative_path}: workspace dependencies must be derived from cargo metadata, \
+                 but a `{branch})` branch is hand-maintained. Adding a crate to a hand-written \
+                 map is the failure mode this check exists to prevent.",
+            )
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
+/// Returns the body of a top-level `name() { ... }` shell function.
+fn shell_function_body<'a>(contents: &'a str, name: &str) -> Option<&'a str> {
+    contents
+        .split_once(&format!("\n{name}() {{"))
+        .map(|(_, rest)| rest)
+        .and_then(|rest| rest.split_once("\n}"))
+        .map(|(body, _)| body)
+}
+
+/// Returns the name of a hand-maintained `<crate-name>)` case branch, if any.
+fn hand_maintained_case_branch(function: &str) -> Option<String> {
+    function.lines().map(str::trim).find_map(|line| {
+        let candidate = line.strip_suffix(')')?;
+        let is_crate_name = !candidate.is_empty()
+            && candidate
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        (is_crate_name && candidate.contains('-')).then(|| candidate.to_string())
+    })
 }
 
 fn check_publish_catalog_sync(repo_root: &Path) -> DynResult<()> {

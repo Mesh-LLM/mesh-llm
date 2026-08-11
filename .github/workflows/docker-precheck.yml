@@ -96,6 +96,7 @@ jobs:
             crates/model-artifact/ \
             crates/model-hf/ \
             crates/skippy-protocol/ \
+            crates/skippy-tokenizer/ \
             crates/skippy-topology/ \
             crates/skippy-ffi/ \
             crates/skippy-runtime/ \

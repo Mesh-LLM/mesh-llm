@@ -183,7 +183,7 @@ release-build-aarch64: release-host-build
 release-build-aarch64-cuda: release-host-build
     @cuda_version="${MESH_CUDA_VERSION:-12}"; \
       MESH_LLM_CUDA_TOOLKIT_MAJOR="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}" \
-      LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "$cuda_version" == 13.* ]]; then echo '75;80;86;87;89;90;110'; else echo '75;80;86;87;89;90'; fi)" \
+      LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "$cuda_version" == 13.* ]]; then echo '75;80;86;87;89;90;110'; else echo '61;75;80;86;87;89;90'; fi)" \
       scripts/package-native-runtime.sh --build --backend cuda --target aarch64-unknown-linux-gnu
 
 # Prepare the pinned llama.cpp checkout and apply the Mesh-LLM ABI patch queue.
@@ -209,10 +209,10 @@ release-host-build-windows:
 release-build-cuda: release-host-build
     @cuda_version="${MESH_CUDA_VERSION:-12}"; \
       MESH_LLM_CUDA_TOOLKIT_MAJOR="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}" \
-      LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "$cuda_version" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '75;80;86;87;89;90'; fi)" \
+      LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "$cuda_version" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '61;75;80;86;87;89;90'; fi)" \
       scripts/package-native-runtime.sh --build --backend cuda --target x86_64-unknown-linux-gnu
 
-release-build-cuda-windows cuda_arch="75;80;86;87;89;90":
+release-build-cuda-windows cuda_arch="61;75;80;86;87;89;90":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cuda -CudaArch "{{ cuda_arch }}" -BuildProfile release -DynamicHost
 
 # Build a Linux ROCm ABI release artifact with an explicit architecture list.
@@ -419,7 +419,12 @@ ui-dev-public: (ui-dev "https://public.meshllm.cloud")
 
 # Build the public website into docs/ for static hosting.
 website-build:
-    cd "{{ website_dir }}" && npm run build
+    cd "{{ website_dir }}" && npm run clean && npm run build
+    just crate-docs
+
+# Build Rustdoc for the crates published by the release workflow.
+crate-docs:
+    scripts/build-crate-docs.sh
 
 # Run the public website dev server on port 8765.
 website-dev:

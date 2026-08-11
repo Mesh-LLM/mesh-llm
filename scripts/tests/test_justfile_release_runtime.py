@@ -38,6 +38,30 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
                 recipe,
             )
 
+    def test_cuda12_release_recipes_include_pascal_sm61(self) -> None:
+        contents = JUSTFILE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "else echo '61;75;80;86;87;89;90'",
+            self.recipe("release-build-cuda"),
+        )
+        self.assertIn(
+            "else echo '61;75;80;86;87;89;90'",
+            self.recipe("release-build-aarch64-cuda"),
+        )
+        self.assertIn(
+            "if [[ \"$cuda_version\" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'",
+            self.recipe("release-build-cuda"),
+        )
+        self.assertIn(
+            "if [[ \"$cuda_version\" == 13.* ]]; then echo '75;80;86;87;89;90;110'",
+            self.recipe("release-build-aarch64-cuda"),
+        )
+        self.assertIn(
+            'release-build-cuda-windows cuda_arch="61;75;80;86;87;89;90"',
+            contents,
+        )
+
     def test_bundle_uses_the_product_packager_and_copies_its_checksum(self) -> None:
         recipe = self.recipe("bundle")
 

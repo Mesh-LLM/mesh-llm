@@ -26,6 +26,8 @@ struct LinearProposalExecution {
 
 #[derive(Clone, Copy)]
 pub(crate) struct LinearProposalExecutionParams<'a> {
+    pub(crate) request_id: u64,
+    pub(crate) request_session_id: u64,
     pub(crate) session_id: &'a str,
     pub(crate) current: i32,
     pub(crate) base_position: u64,
@@ -104,6 +106,8 @@ impl StageOpenAiBackend {
             });
         let total_elapsed_us = elapsed_us(queried.operation_started);
         Ok(Some(LinearProposalReceipt {
+            request_id: params.request_id,
+            session_id: params.request_session_id,
             decision_id: queried.proposal.decision_id,
             disposition,
             proposal_token_count,

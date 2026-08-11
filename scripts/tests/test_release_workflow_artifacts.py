@@ -535,6 +535,40 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             producer,
         )
 
+    def test_cuda12_release_runtime_includes_pascal_sm61(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        linux_cuda = job_block(
+            workflow,
+            "build_native_runtime_linux_x86_64_cuda",
+            "build_native_runtime_linux_x86_64_rocm",
+        )
+        windows_cuda = job_block(
+            workflow,
+            "build_native_runtime_windows_gpu",
+            "publish",
+        )
+
+        self.assertIn(
+            "cuda_architectures: '61;75;80;86;87;89;90'",
+            linux_cuda,
+        )
+        self.assertIn(
+            "cuda_architectures_cache: '61_75_80_86_87_89_90'",
+            linux_cuda,
+        )
+        self.assertIn(
+            "cuda_architectures: '75;80;86;87;89;90;100;103;120;121'",
+            linux_cuda,
+        )
+        self.assertIn(
+            "cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'",
+            linux_cuda,
+        )
+        self.assertIn(
+            "cuda_architectures: '61;75;80;86;87;89;90'",
+            windows_cuda,
+        )
+
     def test_linux_cuda_composition_uses_hosted_runner(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         composer = job_block(

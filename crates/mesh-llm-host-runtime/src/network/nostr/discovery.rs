@@ -81,8 +81,7 @@ pub struct DiscoveryClient {
 impl DiscoveryClient {
     pub async fn new(relays: &[String]) -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let keys = Keys::generate();
-        let client = Client::new(keys);
+        let client = Client::new();
         let mut added = 0;
         for relay in relays {
             match client.add_relay(relay).await {
@@ -122,14 +121,12 @@ pub async fn discover(
 
     let nostr_filter = Filter::new()
         .kind(Kind::Custom(MESH_SERVICE_KIND))
-        .custom_tag(
-            SingleLetterTag::lowercase(Alphabet::K),
-            "mesh-llm".to_string(),
-        )
+        .custom_tag(SingleLetterTag::LOWERCASE_K, "mesh-llm".to_string())
         .limit(100);
 
     let events = match client
-        .fetch_events(nostr_filter, Duration::from_secs(5))
+        .fetch_events(nostr_filter)
+        .timeout(Duration::from_secs(5))
         .await
     {
         Ok(e) => e,
@@ -168,8 +165,7 @@ pub async fn discover(
 
 async fn build_discovery_client(relays: &[String]) -> Result<Client> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let keys = Keys::generate();
-    let client = Client::new(keys);
+    let client = Client::new();
     let mut added = 0;
     for relay in relays {
         match client.add_relay(relay).await {
@@ -187,7 +183,9 @@ async fn build_discovery_client(relays: &[String]) -> Result<Client> {
     Ok(client)
 }
 
-fn latest_events_by_pubkey<'a>(events: &'a Events) -> std::collections::HashMap<String, &'a Event> {
+fn latest_events_by_pubkey<'a>(
+    events: &'a std::collections::BTreeSet<Event>,
+) -> std::collections::HashMap<String, &'a Event> {
     let mut latest: std::collections::HashMap<String, &'a Event> = std::collections::HashMap::new();
     for event in events.iter() {
         let pubkey = event.pubkey.to_hex();

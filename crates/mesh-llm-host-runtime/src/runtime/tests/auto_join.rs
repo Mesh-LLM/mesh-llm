@@ -87,6 +87,29 @@ async fn model_assignment_is_derived_from_node_role() {
     );
 }
 
+#[tokio::test]
+async fn client_mode_skips_model_assignment_even_for_worker_role() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+
+    assert_eq!(
+        pick_run_auto_model_assignment(true, &node, &["model-on-disk".to_string()]).await,
+        None,
+        "client mode must enter the passive proxy path without checking assignments"
+    );
+}
+
+#[test]
+fn catalog_size_parser_rejects_unknown_and_zero_sizes() {
+    assert_eq!(parse_size_str("36 layers"), None);
+    assert_eq!(parse_size_str("0GB"), Some(0));
+    assert_eq!(parse_size_str("12.5GB"), Some(12_500_000_000));
+    assert_eq!(catalog_model_required_bytes("36 layers"), None);
+    assert_eq!(catalog_model_required_bytes("0GB"), None);
+    assert_eq!(catalog_model_required_bytes("1GB"), Some(1_100_000_000));
+}
+
 fn make_cli(args: &[&str]) -> RuntimeOptions {
     runtime_options_for_test(args)
 }

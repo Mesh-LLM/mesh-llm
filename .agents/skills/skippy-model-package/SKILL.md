@@ -16,6 +16,11 @@ Rust owns package manifests, topology planning inputs, cache policy, and mesh
 model-storage integration. The patched llama/skippy ABI owns GGUF tensor
 inspection and GGUF artifact writing.
 
+The native package ABI is declared in `include/skippy/model_package.h` and
+implemented in `src/skippy/model_package.cpp`. Keep model inspection, tensor
+filtering, metadata copying, and package writing in that module; do not grow
+`src/skippy.cpp` with package behavior.
+
 Direct GGUF loading in mesh should materialize as a fake package identity in
 the skippy runtime so the split-serving path can use the same package-backed
 stage machinery as Hugging Face packages.

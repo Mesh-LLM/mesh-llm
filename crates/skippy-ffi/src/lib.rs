@@ -1,6 +1,6 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 35;
+pub const ABI_VERSION_PATCH: u32 = 37;
 pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
@@ -284,13 +284,6 @@ pub type SkippyDecodeStepSampledMtpFn = unsafe extern "C" fn(
     out_mtp_draft: *mut NativeMtpDraft,
     out_error: *mut *mut Error,
 ) -> Status;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct ChatMessage {
-    pub role: *const c_char,
-    pub content: *const c_char,
-}
 
 #[repr(C)]
 pub struct SlicePlan {
@@ -925,18 +918,6 @@ mod dynamic {
         out_model: *mut *mut Model,
         out_error: *mut *mut Error,
     ) -> Status;
-    type SkippyApplyChatTemplateFn = unsafe extern "C" fn(
-        model: *mut Model,
-        messages: *const ChatMessage,
-        message_count: usize,
-        add_assistant: bool,
-        override_enable_thinking: bool,
-        enable_thinking: bool,
-        output_text: *mut c_char,
-        output_text_capacity: usize,
-        out_text_bytes: *mut usize,
-        out_error: *mut *mut Error,
-    ) -> Status;
     type SkippyApplyChatTemplateJsonFn = unsafe extern "C" fn(
         model: *mut Model,
         messages_json: *const c_char,
@@ -947,6 +928,7 @@ mod dynamic {
         enable_thinking: bool,
         parallel_tool_calls: bool,
         reasoning_format: *const c_char,
+        chat_template_kwargs: *const c_char,
         output_text: *mut c_char,
         output_text_capacity: usize,
         out_text_bytes: *mut usize,
@@ -1022,13 +1004,6 @@ mod dynamic {
         })
     }
 
-    fn skippy_apply_chat_template_fn() -> Option<SkippyApplyChatTemplateFn> {
-        static CACHE: OnceLock<Option<SkippyApplyChatTemplateFn>> = OnceLock::new();
-        *CACHE.get_or_init(|| {
-            symbols().lookup_optional::<SkippyApplyChatTemplateFn>(b"skippy_apply_chat_template\0")
-        })
-    }
-
     fn skippy_apply_chat_template_json_fn() -> Option<SkippyApplyChatTemplateJsonFn> {
         static CACHE: OnceLock<Option<SkippyApplyChatTemplateJsonFn>> = OnceLock::new();
         *CACHE.get_or_init(|| {
@@ -1048,38 +1023,6 @@ mod dynamic {
     }
 
     #[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
-    pub unsafe fn skippy_apply_chat_template(
-        model: *mut Model,
-        messages: *const ChatMessage,
-        message_count: usize,
-        add_assistant: bool,
-        override_enable_thinking: bool,
-        enable_thinking: bool,
-        output_text: *mut c_char,
-        output_text_capacity: usize,
-        out_text_bytes: *mut usize,
-        out_error: *mut *mut Error,
-    ) -> Status {
-        let Some(function) = skippy_apply_chat_template_fn() else {
-            return Status::Unsupported;
-        };
-        unsafe {
-            function(
-                model,
-                messages,
-                message_count,
-                add_assistant,
-                override_enable_thinking,
-                enable_thinking,
-                output_text,
-                output_text_capacity,
-                out_text_bytes,
-                out_error,
-            )
-        }
-    }
-
-    #[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
     pub unsafe fn skippy_apply_chat_template_json(
         model: *mut Model,
         messages_json: *const c_char,
@@ -1090,6 +1033,7 @@ mod dynamic {
         enable_thinking: bool,
         parallel_tool_calls: bool,
         reasoning_format: *const c_char,
+        chat_template_kwargs: *const c_char,
         output_text: *mut c_char,
         output_text_capacity: usize,
         out_text_bytes: *mut usize,
@@ -1112,6 +1056,7 @@ mod dynamic {
                 enable_thinking,
                 parallel_tool_calls,
                 reasoning_format,
+                chat_template_kwargs,
                 output_text,
                 output_text_capacity,
                 out_text_bytes,
@@ -1696,19 +1641,6 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
-    pub fn skippy_apply_chat_template(
-        model: *mut Model,
-        messages: *const ChatMessage,
-        message_count: usize,
-        add_assistant: bool,
-        override_enable_thinking: bool,
-        enable_thinking: bool,
-        output_text: *mut c_char,
-        output_text_capacity: usize,
-        out_text_bytes: *mut usize,
-        out_error: *mut *mut Error,
-    ) -> Status;
-
     pub fn skippy_apply_chat_template_json(
         model: *mut Model,
         messages_json: *const c_char,
@@ -1719,6 +1651,7 @@ unsafe extern "C" {
         enable_thinking: bool,
         parallel_tool_calls: bool,
         reasoning_format: *const c_char,
+        chat_template_kwargs: *const c_char,
         output_text: *mut c_char,
         output_text_capacity: usize,
         out_text_bytes: *mut usize,

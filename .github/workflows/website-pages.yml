@@ -9,6 +9,12 @@ on:
       - "install.sh"
       - "install.ps1"
       - "install.md"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "Justfile"
+      - "crates/**"
+      - "scripts/build-crate-docs.sh"
+      - "scripts/publish-crates.sh"
       - ".github/workflows/website-pages.yml"
 
 permissions:
@@ -23,11 +29,17 @@ jobs:
     name: Build public website
     if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+
+      - name: Install just
+        uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
 
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -48,6 +60,9 @@ jobs:
         working-directory: website
         run: npm run build
 
+      - name: Build published crate API docs
+        run: just crate-docs
+
       - name: Stage Pages artifact
         run: |
           set -euo pipefail
@@ -67,6 +82,7 @@ jobs:
           cp -R docs/catalog "$artifact_dir/"
           cp -R docs/.well-known "$artifact_dir/"
           cp -R docs/docs "$artifact_dir/"
+          cp -R docs/crates "$artifact_dir/"
           cp -R docs/pagefind "$artifact_dir/"
 
       - name: Upload Pages artifact

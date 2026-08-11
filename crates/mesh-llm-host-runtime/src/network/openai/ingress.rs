@@ -352,7 +352,15 @@ async fn auto_route_model_has_ready_ingress_target(
         .await;
     }
 
-    true
+    // No routable local target and no peer advertises this model. Fail closed:
+    // such a model is a phantom (stale gossip, or a peer that unloaded it), and
+    // letting it stay in the pool means `auto` can pick a model that then 404s
+    // on a model the user never named. Explicit requests still 404 honestly.
+    //
+    // The one exception is a freshly started serve node: its own model is
+    // loaded and in `serving_models` before the target table and gossip catch
+    // up, so keep it eligible rather than excluding this node's own model.
+    auto_route::model_is_locally_served(node, model).await
 }
 
 fn maybe_enable_auto_route_hooks(
@@ -1044,6 +1052,61 @@ mod tests {
             request_object_request_ids: Vec::new(),
             response_adapter: proxy::ResponseAdapter::None,
         }
+    }
+
+    /// A model nobody serves must not stay in the auto pool. Before this,
+    /// the readiness check fell through to `true`, so `auto` could select a
+    /// phantom (stale gossip, or a peer that unloaded) and 404 the caller on
+    /// a model they never named.
+    #[tokio::test]
+    async fn phantom_model_is_not_auto_route_eligible() {
+        let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .expect("test node");
+        let targets = election::ModelTargets::default();
+        let affinity = affinity::AffinityRouter::new();
+
+        let eligible = auto_route_model_has_ready_ingress_target(
+            &node,
+            &targets,
+            "phantom/model:Q4_K_M",
+            None,
+            &affinity,
+        )
+        .await;
+
+        assert!(
+            !eligible,
+            "a model with no local target and no remote host must not be auto-route eligible"
+        );
+    }
+
+    /// A freshly started serve node records its model before the target table
+    /// and gossip catch up. Failing closed must not exclude this node's own
+    /// model during that window.
+    #[tokio::test]
+    async fn freshly_served_local_model_is_auto_route_eligible() {
+        let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .expect("test node");
+        node.set_hosted_models(vec!["local/fresh-model:Q4_K_M".to_string()])
+            .await;
+        let targets = election::ModelTargets::default();
+        let affinity = affinity::AffinityRouter::new();
+
+        let eligible = auto_route_model_has_ready_ingress_target(
+            &node,
+            &targets,
+            "local/fresh-model:Q4_K_M",
+            None,
+            &affinity,
+        )
+        .await;
+
+        assert!(
+            eligible,
+            "a locally served model must stay eligible before targets populate"
+        );
     }
 
     #[test]

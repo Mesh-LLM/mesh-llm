@@ -50,6 +50,7 @@ For the concrete benchy command and contract, see
 | Request body limit | Supported | Configurable via `OpenAiFrontendConfig`; defaults to 4 MiB. |
 | Request IDs | Supported | Propagates or generates `x-request-id`, returns it on every response, and emits a tracing event with method, URI, status, and request ID. |
 | Backend timeout | Supported | Configurable via `OpenAiFrontendConfig`; defaults to 300 seconds and maps timeouts to OpenAI-shaped 504 errors. |
+| Agent session header | Supported | Set `MESH_AGENT_SESSION_HEADER` to accept a trusted upstream header as the stable agent-session identity. |
 | embeddings/rerank/infill/audio/vision | Out of scope | Not needed for staged text benchmark entrypoints. |
 
 ## Shape

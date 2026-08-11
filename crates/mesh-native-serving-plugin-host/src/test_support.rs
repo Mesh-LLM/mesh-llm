@@ -1,6 +1,7 @@
 //! Shared fake native plugin used by host and dispatch unit tests.
 
 use std::{
+    collections::HashMap,
     ffi::{c_char, c_void},
     ptr::NonNull,
     sync::{
@@ -257,6 +258,7 @@ pub(crate) fn fake_active_with_timing(
             definition,
             instance: NonNull::new(Box::into_raw(state).cast::<c_void>()),
             proposal_token_buffer: Mutex::new(vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS]),
+            committed_generated_tokens: Mutex::new(HashMap::new()),
         },
         events,
         abort_count,

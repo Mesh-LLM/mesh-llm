@@ -103,7 +103,7 @@ impl OpenAiBackend for StageOpenAiBackend {
         let template_options = chat_template_options(&request, &self.request_defaults)?;
         let parse_chat_output = chat_output_parser_required(&request, &template_options);
         let template_timer = PhaseTimer::start();
-        let prompt = self.prepare_chat_prompt(&request, template_options)?;
+        let prompt = self.prepare_chat_prompt(&request, template_options.clone())?;
         let mut template_attrs = self.openai_attrs(&ids);
         template_attrs.insert(
             "llama_stage.openai_operation".to_string(),

@@ -260,8 +260,23 @@ gpu_benchmark_tool_path() {
     fi
 }
 
+hip_offload_arch_args() {
+    local raw arch
+    local -a arches=()
+    raw="${LLAMA_STAGE_AMDGPU_TARGETS:-${SKIPPY_AMDGPU_TARGETS:-}}"
+    [[ -n "$raw" ]] || return 0
+
+    raw="${raw//;/ }"
+    raw="${raw//,/ }"
+    read -r -a arches <<< "$raw"
+    for arch in "${arches[@]}"; do
+        [[ -n "$arch" ]] && printf -- '--offload-arch=%s\n' "$arch"
+    done
+}
+
 build_gpu_benchmark_tool() {
-    local tool_rel tool_path source_root compiler
+    local tool_rel tool_path source_root compiler arch_arg
+    local -a hip_arch_args=()
     case "$BACKEND" in
         cuda|cuda-blackwell|rocm|hip|metal) ;;
         *) return 0 ;;
@@ -279,7 +294,11 @@ build_gpu_benchmark_tool() {
             ;;
         rocm|hip)
             compiler="${HIPCC:-hipcc}"
-            "$compiler" -O3 -std=c++17 "$source_root/hip/membench-fingerprint.hip" -o "$tool_path"
+            while IFS= read -r arch_arg; do
+                hip_arch_args+=("$arch_arg")
+            done < <(hip_offload_arch_args)
+            "$compiler" -O3 -std=c++17 "${hip_arch_args[@]}" \
+                "$source_root/hip/membench-fingerprint.hip" -o "$tool_path"
             ;;
         metal)
             compiler="${CC:-clang}"
@@ -458,6 +477,37 @@ if [[ "$runtime_os" == "windows" ]]; then
     for library in "${runtime_libraries[@]}"; do
         dependency_args+=(--search-dir "$(dirname "$library")")
     done
+    # The Vulkan SDK can contain an older MinGW runtime. Let the dependency
+    # resolver discover the compiler runtime before searching SDK directories.
+    # This also keeps CPU packages self-contained when their DLLs use MinGW.
+    if [[ "$BACKEND" == "cpu" || "$BACKEND" == "vulkan" ]]; then
+        mingw_compiler_spec="${MINGW_CXX:-${CXX:-}}"
+        if [[ -x "$mingw_compiler_spec" ]]; then
+            mingw_compiler="$mingw_compiler_spec"
+        elif [[ -n "$mingw_compiler_spec" ]]; then
+            # CXX may include a wrapper or compiler arguments. Resolve only
+            # the executable selected by the build instead of looking up the
+            # entire command string.
+            read -r mingw_compiler _ <<< "$mingw_compiler_spec"
+        else
+            mingw_compiler=g++
+        fi
+        if [[ "$mingw_compiler" == */* ]]; then
+            if [[ -x "$mingw_compiler" ]]; then
+                mingw_compiler_path="$mingw_compiler"
+            else
+                mingw_compiler_path=""
+            fi
+        else
+            mingw_compiler_path="$(command -v "$mingw_compiler" || true)"
+        fi
+        if [[ -n "$mingw_compiler_path" ]]; then
+            dependency_args+=(--search-dir "$(dirname "$mingw_compiler_path")")
+        elif [[ -n "$mingw_compiler_spec" ]]; then
+            echo "configured MinGW C++ compiler was not found: $mingw_compiler_spec" >&2
+            exit 1
+        fi
+    fi
     for dependency_root in CUDA_PATH ROCM_PATH VULKAN_SDK; do
         dependency_dir="${!dependency_root:-}"
         if [[ -n "$dependency_dir" ]]; then
