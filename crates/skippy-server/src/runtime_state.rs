@@ -9,7 +9,7 @@ use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
     FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, MediaInput,
-    MediaPrefill, MediaPrefillFrame, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
+    MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
     RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel, StageSession, TokenSignal,
     parse_cache_type,
 };
@@ -23,6 +23,7 @@ mod lane_lifecycle;
 pub struct RuntimeLaunchOverrides {
     pub n_threads: Option<usize>,
     pub n_threads_batch: Option<usize>,
+    pub mtp_source: MtpSource,
 }
 
 pub struct RuntimeState {
@@ -299,6 +300,7 @@ fn runtime_config_from_stage_config(
         include_embeddings: config.layer_start == 0
             || (config.load_mode == LoadMode::LayerPackage && config.downstream.is_none()),
         include_output: config.downstream.is_none(),
+        mtp_source: overrides.mtp_source,
         filter_tensors_on_load: config.filter_tensors_on_load,
     })
 }
@@ -343,7 +345,7 @@ mod tests {
     use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig, StageDevice};
     use skippy_runtime::{
         ActivationDesc, ActivationFrame, FlashAttentionType as RuntimeFlashAttentionType,
-        RuntimeActivationDType, RuntimeActivationLayout, SamplingConfig,
+        MtpSource, RuntimeActivationDType, RuntimeActivationLayout, RuntimeConfig, SamplingConfig,
     };
 
     use super::{
@@ -398,6 +400,7 @@ mod tests {
         let overrides = RuntimeLaunchOverrides {
             n_threads: Some(8),
             n_threads_batch: Some(4),
+            mtp_source: MtpSource::External,
         };
 
         let runtime_config = runtime_config_from_stage_config(&config, &overrides).unwrap();
@@ -417,6 +420,7 @@ mod tests {
             runtime_config.flash_attn_type,
             RuntimeFlashAttentionType::Enabled
         );
+        assert_eq!(runtime_config.mtp_source, MtpSource::External);
     }
 
     #[test]
@@ -472,23 +476,19 @@ mod tests {
 
         assert!(runtime_config.include_embeddings);
         assert!(runtime_config.include_output);
+        assert_eq!(runtime_config.mtp_source, MtpSource::Disabled);
     }
 
-    #[test]
-    fn glm52_final_stage_package_executes_native_mtp_when_fixture_is_set() -> anyhow::Result<()> {
-        let Some(package_path) = std::env::var_os("SKIPPY_GLM52_MTP_PACKAGE") else {
-            eprintln!("skipping: SKIPPY_GLM52_MTP_PACKAGE is not set");
-            return Ok(());
-        };
-        let package_path = std::path::PathBuf::from(package_path);
+    fn glm52_mtp_fixture() -> Option<(std::path::PathBuf, StageConfig)> {
+        let package_path =
+            std::env::var_os("SKIPPY_GLM52_MTP_PACKAGE").map(std::path::PathBuf::from)?;
         if !package_path.join("model-package.json").is_file() {
             eprintln!(
                 "skipping: {} does not look like a layer package",
                 package_path.display()
             );
-            return Ok(());
+            return None;
         }
-
         let config = StageConfig {
             run_id: "glm52-mtp-smoke".to_string(),
             topology_id: "glm52-mtp-smoke-topology".to_string(),
@@ -534,12 +534,12 @@ mod tests {
             }),
             downstream: None,
         };
+        Some((package_path, config))
+    }
 
-        let runtime = load_runtime_with_overrides(&config, &RuntimeLaunchOverrides::default())?
-            .expect("GLM final stage should load from the package");
-        let mut runtime = runtime.lock().expect("runtime mutex poisoned");
+    fn glm52_mtp_input() -> ActivationFrame {
         let hidden_bytes = 6144 * std::mem::size_of::<f32>();
-        let input = ActivationFrame {
+        ActivationFrame {
             desc: ActivationDesc {
                 version: 1,
                 dtype: RuntimeActivationDType::F32,
@@ -553,7 +553,26 @@ mod tests {
                 flags: 0,
             },
             payload: vec![0; hidden_bytes],
+        }
+    }
+
+    #[test]
+    fn glm52_final_stage_package_executes_native_mtp_when_fixture_is_set() -> anyhow::Result<()> {
+        let Some((_package_path, config)) = glm52_mtp_fixture() else {
+            eprintln!("skipping: SKIPPY_GLM52_MTP_PACKAGE is not set");
+            return Ok(());
         };
+
+        let runtime = load_runtime_with_overrides(
+            &config,
+            &RuntimeLaunchOverrides {
+                mtp_source: MtpSource::Integrated,
+                ..RuntimeLaunchOverrides::default()
+            },
+        )?
+        .expect("GLM final stage should load from the package");
+        let mut runtime = runtime.lock().expect("runtime mutex poisoned");
+        let input = glm52_mtp_input();
         let sampling = SamplingConfig {
             temperature: 0.0,
             ..SamplingConfig::default()
@@ -561,6 +580,106 @@ mod tests {
         let (predicted, draft, _output) =
             runtime.decode_frame_sampled_mtp("smoke", 1, Some(&sampling), Some(&input), 0, 1)?;
         let draft = draft.expect("GLM final stage should return a native MTP draft");
+
+        assert!(predicted >= 0);
+        assert_eq!(draft.token_ids.len(), 1);
+        assert!(draft.token_ids[0] >= 0);
+        Ok(())
+    }
+
+    #[test]
+    fn glm52_final_stage_does_not_create_integrated_mtp_when_disabled() -> anyhow::Result<()> {
+        let Some((_package_path, config)) = glm52_mtp_fixture() else {
+            eprintln!("skipping: SKIPPY_GLM52_MTP_PACKAGE is not set");
+            return Ok(());
+        };
+        let runtime = load_runtime_with_overrides(
+            &config,
+            &RuntimeLaunchOverrides {
+                mtp_source: MtpSource::Disabled,
+                ..RuntimeLaunchOverrides::default()
+            },
+        )?
+        .expect("GLM final stage should load from the package");
+        let mut runtime = runtime.lock().expect("runtime mutex poisoned");
+        let sampling = SamplingConfig {
+            temperature: 0.0,
+            ..SamplingConfig::default()
+        };
+        let (predicted, draft, _output) = runtime.decode_frame_sampled_mtp(
+            "disabled-mtp",
+            1,
+            Some(&sampling),
+            Some(&glm52_mtp_input()),
+            0,
+            1,
+        )?;
+
+        assert!(predicted >= 0);
+        assert!(
+            draft.is_none(),
+            "disabled MTP must not create a draft context"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn glm52_external_sidecar_attaches_when_target_has_integrated_mtp_tensors() -> anyhow::Result<()>
+    {
+        let Some((_package_path, config)) = glm52_mtp_fixture() else {
+            eprintln!("skipping: SKIPPY_GLM52_MTP_PACKAGE is not set");
+            return Ok(());
+        };
+        let Some(sidecar_path) = std::env::var_os("SKIPPY_GLM52_MTP_SIDECAR") else {
+            eprintln!("skipping: SKIPPY_GLM52_MTP_SIDECAR is not set");
+            return Ok(());
+        };
+        let sidecar_path = std::path::PathBuf::from(sidecar_path);
+        if !sidecar_path.is_file() {
+            eprintln!(
+                "skipping: {} is not an MTP sidecar GGUF",
+                sidecar_path.display()
+            );
+            return Ok(());
+        }
+
+        let runtime = load_runtime_with_overrides(
+            &config,
+            &RuntimeLaunchOverrides {
+                mtp_source: MtpSource::External,
+                ..RuntimeLaunchOverrides::default()
+            },
+        )?
+        .expect("GLM final stage should load from the package");
+        let mut runtime = runtime.lock().expect("runtime mutex poisoned");
+        runtime.model.attach_mtp_draft_model(
+            &sidecar_path,
+            &RuntimeConfig {
+                ctx_size: config.ctx_size,
+                lane_count: config.lane_count,
+                n_batch: config.n_batch,
+                n_ubatch: config.n_ubatch,
+                n_gpu_layers: config.n_gpu_layers,
+                mmap: config.mmap,
+                mlock: config.mlock,
+                selected_backend_device: Some("CPU".to_string()),
+                mtp_source: MtpSource::External,
+                ..RuntimeConfig::default()
+            },
+        )?;
+        let sampling = SamplingConfig {
+            temperature: 0.0,
+            ..SamplingConfig::default()
+        };
+        let (predicted, draft, _output) = runtime.decode_frame_sampled_mtp(
+            "external-mtp",
+            1,
+            Some(&sampling),
+            Some(&glm52_mtp_input()),
+            0,
+            1,
+        )?;
+        let draft = draft.expect("external MTP sidecar should attach to the target");
 
         assert!(predicted >= 0);
         assert_eq!(draft.token_ids.len(), 1);

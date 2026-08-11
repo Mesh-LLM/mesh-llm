@@ -166,6 +166,7 @@ impl SkippyRuntimeHandle {
             &RuntimeLaunchOverrides {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
+                mtp_source: skippy_runtime::MtpSource::Disabled,
             },
         )?
         .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;
@@ -201,6 +202,7 @@ impl SkippyRuntimeHandle {
             &RuntimeLaunchOverrides {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
+                mtp_source: skippy_runtime::MtpSource::Disabled,
             },
             model_open_event_reporter.as_mut().map(|reporter| {
                 reporter.as_mut() as &mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)

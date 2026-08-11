@@ -25,7 +25,7 @@ use crate::{
     config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs},
     kv_integration::KvStageIntegration,
-    runtime_state::load_runtime,
+    runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides},
     telemetry::{Telemetry, lifecycle_attrs},
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -71,6 +71,7 @@ pub async fn serve_binary_stage_with_shutdown(
 }
 
 fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> Result<()> {
+    let mtp_source = options.resolved_mtp_source();
     let BinaryStageOptions {
         config,
         topology,
@@ -102,7 +103,14 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
     if warm_downstream_preconnect_enabled() {
         spawn_downstream_preconnector(config.clone(), warm_downstream.clone(), shutdown.clone());
     }
-    let runtime = load_runtime(&config)?.context("binary stage server requires model_path")?;
+    let runtime = load_runtime_with_overrides(
+        &config,
+        &RuntimeLaunchOverrides {
+            mtp_source,
+            ..RuntimeLaunchOverrides::default()
+        },
+    )?
+    .context("binary stage server requires model_path")?;
     let decode_frame_batcher = DecodeFrameBatcher::new(runtime.clone(), max_inflight);
     if max_inflight > 0 {
         let timer = Instant::now();
