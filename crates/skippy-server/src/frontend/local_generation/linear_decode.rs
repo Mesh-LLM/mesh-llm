@@ -206,6 +206,10 @@ impl StageOpenAiBackend {
             .committed_tokens
             .last()
             .ok_or_else(|| OpenAiError::backend("linear proposal receipt committed no tokens"))?;
+        append_pending_linear_proposal_tokens(
+            &mut state.pending_linear_proposal_tokens,
+            &receipt.committed_tokens,
+        );
         committed_token_ids.extend_from_slice(&receipt.committed_tokens);
         let stopped_by_proposal = receipt.disposition == LinearProposalDisposition::Stopped;
         if state.emit_token_debug {
@@ -245,5 +249,83 @@ impl StageOpenAiBackend {
                 .telemetry
                 .emit("stage.openai_linear_proposal_source", attrs),
         }
+    }
+}
+
+fn append_pending_linear_proposal_tokens(pending: &mut Vec<i32>, committed_tokens: &[i32]) {
+    if !committed_tokens.is_empty() && !pending.ends_with(committed_tokens) {
+        pending.extend_from_slice(committed_tokens);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use anyhow::Result;
+
+    use super::*;
+    use crate::frontend::linear_proposal::{
+        LinearProposalDiscardReason, LinearProposalIngress, LinearProposalIngressConfig,
+        LinearProposalQuery, LinearProposalReceipt, LinearProposalSourceResponse,
+        query_linear_proposal,
+    };
+
+    #[derive(Default)]
+    struct PendingTokenIngress {
+        pending: Mutex<Vec<Box<[i32]>>>,
+    }
+
+    impl LinearProposalIngress for PendingTokenIngress {
+        fn propose(&self, query: LinearProposalQuery) -> Result<LinearProposalSourceResponse> {
+            self.pending.lock().unwrap().push(query.pending_token_ids);
+            Ok(LinearProposalSourceResponse::new(None))
+        }
+
+        fn report(&self, _receipt: &LinearProposalReceipt) -> Result<()> {
+            Ok(())
+        }
+
+        fn discard(
+            &self,
+            _decision_id: &crate::frontend::linear_proposal::OpaqueProposalDecisionId,
+            _reason: LinearProposalDiscardReason,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn accepted_proposal_tokens_are_pending_on_the_next_query() {
+        let source = Arc::new(PendingTokenIngress::default());
+        let config =
+            LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
+        let committed_tokens = [41, 42];
+        let mut pending = Vec::new();
+
+        append_pending_linear_proposal_tokens(&mut pending, &committed_tokens);
+        append_pending_linear_proposal_tokens(&mut pending, &committed_tokens);
+
+        assert!(matches!(
+            query_linear_proposal(
+                &config,
+                LinearProposalQueryParams {
+                    request_id: 7,
+                    session_id: 8,
+                    prompt_token_count: 2,
+                    decode_step: 1,
+                    committed_token_count: 3,
+                    remaining_new_tokens: 4,
+                    runtime_max_proposal_tokens: 4,
+                    pending_token_ids: pending.into_boxed_slice(),
+                },
+            )
+            .unwrap(),
+            LinearProposalQueryOutcome::NoProposal { .. }
+        ));
+        assert_eq!(
+            source.pending.lock().unwrap().as_slice(),
+            &[committed_tokens.to_vec().into_boxed_slice()]
+        );
     }
 }

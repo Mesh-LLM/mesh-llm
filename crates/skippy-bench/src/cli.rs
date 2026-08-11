@@ -66,6 +66,7 @@ pub enum EvalCommandKind {
 pub enum EvalId {
     SpeedBench,
     TerminalBench,
+    SweGym,
     SweBenchPro,
     McpAtlas,
 }
@@ -75,6 +76,7 @@ impl EvalId {
         match self {
             Self::SpeedBench => "speed-bench",
             Self::TerminalBench => "terminal-bench",
+            Self::SweGym => "swe-gym",
             Self::SweBenchPro => "swe-bench-pro",
             Self::McpAtlas => "mcp-atlas",
         }
@@ -145,6 +147,27 @@ pub struct EvalRunArgs {
     pub model: String,
     #[arg(long, default_value = "skippy-bench")]
     pub api_key: String,
+    #[arg(long, help = "Run one Harbor task instead of the selected dataset")]
+    pub task_id: Option<String>,
+    #[arg(long, default_value = "lite", help = "Harbor dataset or split")]
+    pub dataset: String,
+    #[arg(long, default_value = "terminus-2", help = "Harbor agent name")]
+    pub agent: String,
+    #[arg(
+        long,
+        help = "Endpoint URL reachable from the Harbor task container; required for Harbor runs when --base-url points at localhost"
+    )]
+    pub harbor_endpoint_url: Option<String>,
+    #[arg(
+        long,
+        help = "Stable session ID sent to Mesh as X-Session-ID and session_id"
+    )]
+    pub session_id: Option<String>,
+    #[arg(
+        long,
+        help = "Cacheline smoke state directory containing source/causal/ingestion assertion files"
+    )]
+    pub cacheline_state: Option<PathBuf>,
     #[arg(long)]
     pub cache_root: Option<PathBuf>,
     #[arg(long)]

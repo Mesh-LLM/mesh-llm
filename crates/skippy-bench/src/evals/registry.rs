@@ -1,5 +1,8 @@
 use super::*;
 
+pub(super) const HARBOR_REPO: &str = "https://github.com/harbor-framework/harbor.git";
+pub(super) const HARBOR_REF: &str = "ff69e554fac1c751aa608e03de027db9043a2eac";
+
 pub(super) fn list_evals(args: EvalListArgs) -> Result<()> {
     let root = cache_root(args.cache_root.clone())?;
     let views = selected_evals(&[], EvalPack::Core)
@@ -70,14 +73,30 @@ pub(super) fn definition(id: EvalId) -> EvalDefinition {
         EvalId::TerminalBench => EvalDefinition {
             id,
             name: "Terminal-Bench",
-            repo_url: "https://github.com/harbor-framework/terminal-bench.git",
-            repo_ref: "main",
-            cache_name: "terminal-bench",
+            repo_url: HARBOR_REPO,
+            repo_ref: HARBOR_REF,
+            cache_name: "harbor",
             description: "Agent benchmark for real terminal tasks in Docker sandboxes.",
             disk_estimate: "5-20GB depending on Docker images",
-            required_tools: &["git", "uv", "python3.12", "tb", "docker"],
-            sync_notes: &["Clones task repo and installs the terminal-bench uv tool."],
-            run_notes: &["Runs the Terminal-Bench CLI against the full selected dataset."],
+            required_tools: &["git", "uv", "python3.12", "docker"],
+            sync_notes: &["Clones the pinned Harbor checkout and prepares its uv environment."],
+            run_notes: &[
+                "Runs Terminal-Bench through Harbor jobs; the legacy tb runner is unsupported.",
+            ],
+        },
+        EvalId::SweGym => EvalDefinition {
+            id,
+            name: "SWE-Gym Lite",
+            repo_url: HARBOR_REPO,
+            repo_ref: HARBOR_REF,
+            cache_name: "harbor",
+            description: "Software-engineering agent benchmark over the Harbor SWE-Gym Lite adapter.",
+            disk_estimate: "10-30GB including task Docker images",
+            required_tools: &["git", "uv", "python3.12", "docker"],
+            sync_notes: &["Clones the pinned Harbor checkout and prepares its uv environment."],
+            run_notes: &[
+                "Generates SWE-Gym Lite tasks with Harbor's adapter, then runs Harbor jobs.",
+            ],
         },
         EvalId::SweBenchPro => EvalDefinition {
             id,

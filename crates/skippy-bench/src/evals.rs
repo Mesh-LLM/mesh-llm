@@ -20,9 +20,10 @@ use crate::cli::{
 };
 use crate::telemetry_report::{self, BenchTelemetry};
 
-const CORE_EVALS: [EvalId; 4] = [
+const CORE_EVALS: [EvalId; 5] = [
     EvalId::SpeedBench,
     EvalId::TerminalBench,
+    EvalId::SweGym,
     EvalId::SweBenchPro,
     EvalId::McpAtlas,
 ];
@@ -134,7 +135,7 @@ struct RunArtifact {
     path: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CommandSpec {
     program: String,
     args: Vec<String>,
@@ -466,18 +467,16 @@ fn shell_quote(raw: &str) -> String {
 mod tests {
     use super::*;
     use super::{
-        adapters::{
-            mcp_atlas_command, speed_bench_command, swe_bench_pro_command, terminal_bench_command,
-        },
+        adapters::{harbor_command, mcp_atlas_command, speed_bench_command, swe_bench_pro_command},
         doctor::preflight_eval_run,
         registry::{definition, selected_evals},
         run::{
-            fill_client_rates, resolved_harness_commit, run_artifacts, speed_bench_metrics,
-            speed_bench_output_path, speed_bench_response_timings_path, swe_bench_pro_metrics,
-            swe_bench_pro_output_path, telemetry_or_unavailable, terminal_bench_metrics,
-            terminal_bench_output_path,
+            fill_client_rates, harbor_jobs_output_path, harbor_metrics, resolved_harness_commit,
+            run_artifacts, speed_bench_metrics, speed_bench_output_path,
+            speed_bench_response_timings_path, swe_bench_pro_metrics, swe_bench_pro_output_path,
+            telemetry_or_unavailable, terminal_bench_metrics, terminal_bench_output_path,
         },
-        sync::existing_repo_sync_steps,
+        sync::{existing_repo_sync_steps, new_repo_sync_steps},
     };
 
     #[test]
@@ -505,6 +504,12 @@ mod tests {
             base_url: "http://127.0.0.1:9337/v1".to_string(),
             model: "tiny-local".to_string(),
             api_key: "test".to_string(),
+            task_id: None,
+            dataset: "lite".to_string(),
+            agent: "terminus-2".to_string(),
+            harbor_endpoint_url: None,
+            session_id: None,
+            cacheline_state: None,
             cache_root: None,
             output_dir: None,
             timeout_secs: 30,
@@ -595,6 +600,12 @@ mod tests {
             base_url: "http://127.0.0.1:9337/v1".to_string(),
             model: "tiny-local".to_string(),
             api_key: "terminal-secret-value".to_string(),
+            task_id: None,
+            dataset: "lite".to_string(),
+            agent: "terminus-2".to_string(),
+            harbor_endpoint_url: Some("http://host.docker.internal:9337/v1".to_string()),
+            session_id: None,
+            cacheline_state: None,
             cache_root: None,
             output_dir: None,
             timeout_secs: 30,
@@ -606,24 +617,107 @@ mod tests {
             metrics_finalize_only: false,
             dry_run: true,
         };
-        let command = terminal_bench_command(&args, Path::new("/tmp/skippy-run"));
-        assert!(
-            command
-                .args
-                .contains(&"terminal-bench-core==0.1.1".to_string())
-        );
+        let run_dir = temp_run_dir("terminal-harbor-command");
+        fs::create_dir_all(run_dir.join("raw")).unwrap();
+        let command = harbor_command(
+            definition(EvalId::TerminalBench),
+            &args,
+            Path::new("/tmp/skippy-cache"),
+            &run_dir,
+        )
+        .unwrap();
         assert!(!command.args.contains(&"--task-id".to_string()));
-        assert!(command.args.contains(&"--output-path".to_string()));
-        assert!(
-            command
-                .envs
-                .contains(&("OPENAI_BASE_URL".to_string(), args.base_url))
-        );
+        let script = fs::read_to_string(run_dir.join("raw/run-harbor.sh")).unwrap();
+        assert!(script.contains("terminal-bench@2.0"));
+        assert!(script.contains("harbor jobs start"));
+        assert!(script.contains("session_id"));
+        assert!(command.envs.contains(&(
+            "SKIPPY_BENCH_TASK_ENDPOINT_URL".to_string(),
+            "http://host.docker.internal:9337/v1".to_string()
+        )));
         assert!(command.secret_envs.contains(&(
             "OPENAI_API_KEY".to_string(),
             "terminal-secret-value".to_string()
         )));
+        assert!(script.contains("--n-concurrent 1"));
+        assert!(!script.contains("--n-concurrent-trials"));
+        assert!(!script.contains("--ae OPENAI_API_KEY"));
         assert!(!command.display().contains("terminal-secret-value"));
+        let _ = fs::remove_dir_all(run_dir);
+    }
+
+    #[test]
+    fn swe_gym_command_selects_one_instance_and_redacts_endpoint_credentials() {
+        let run_dir = temp_run_dir("swegym-harbor-command");
+        fs::create_dir_all(run_dir.join("raw")).unwrap();
+        let mut args = eval_run_args(EvalId::SweGym, "swegym-secret");
+        args.task_id = Some("getmoto__moto-5752".to_string());
+        args.run_id = Some("smoke/run".to_string());
+        args.harbor_endpoint_url = Some("http://host.docker.internal:9337/v1".to_string());
+
+        let command = harbor_command(
+            definition(EvalId::SweGym),
+            &args,
+            Path::new("/tmp/skippy-cache"),
+            &run_dir,
+        )
+        .unwrap();
+        let script = fs::read_to_string(run_dir.join("raw/run-harbor.sh")).unwrap();
+        assert!(script.contains("--dataset lite"));
+        assert!(script.contains("uv run --with swebench adapters/swegym/run_adapter.py"));
+        assert!(script.contains("--instance-id getmoto__moto-5752"));
+        assert!(script.contains("harbor jobs start \"$@\""));
+        assert!(script.contains("--ak session_id=\"$SKIPPY_BENCH_SESSION_ID\""));
+        assert!(script.contains("--job-name skippy-smoke-run"));
+        assert!(!script.contains("--ae OPENAI_API_KEY"));
+        assert!(
+            command
+                .secret_envs
+                .contains(&("OPENAI_API_KEY".to_string(), "swegym-secret".to_string()))
+        );
+        assert!(!command.display().contains("swegym-secret"));
+        let _ = fs::remove_dir_all(run_dir);
+    }
+
+    #[test]
+    fn swe_gym_without_task_id_uses_official_harbor_dataset() {
+        let run_dir = temp_run_dir("harbor-local-endpoint");
+        fs::create_dir_all(run_dir.join("raw")).unwrap();
+        let args = eval_run_args(EvalId::SweGym, "secret");
+        let command = harbor_command(
+            definition(EvalId::SweGym),
+            &args,
+            Path::new("/tmp/skippy-cache"),
+            &run_dir,
+        )
+        .unwrap();
+        let script = fs::read_to_string(run_dir.join("raw/run-harbor.sh")).unwrap();
+        assert!(script.contains("set -- -d swegym-lite"));
+        assert!(!script.contains("run_adapter.py"));
+        assert!(command.envs.iter().any(|(key, value)| {
+            key == "SKIPPY_BENCH_BASE_URL" && value == "http://127.0.0.1:9337/v1"
+        }));
+        let _ = fs::remove_dir_all(run_dir);
+    }
+
+    #[test]
+    fn swe_gym_rejects_unsafe_task_ids() {
+        for task_id in ["/absolute", "nested/task", "nested\\task", "..", "foo..bar"] {
+            let run_dir = temp_run_dir("unsafe-task-id");
+            fs::create_dir_all(run_dir.join("raw")).unwrap();
+            let mut args = eval_run_args(EvalId::SweGym, "secret");
+            args.task_id = Some(task_id.to_string());
+            let error = harbor_command(
+                definition(EvalId::SweGym),
+                &args,
+                Path::new("/tmp/skippy-cache"),
+                &run_dir,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("safe task name"), "{task_id}: {error}");
+            let _ = fs::remove_dir_all(run_dir);
+        }
     }
 
     #[test]
@@ -701,6 +795,41 @@ mod tests {
             steps[1].args,
             ["-C", "/tmp/harness", "checkout", "--detach", "FETCH_HEAD"]
         );
+    }
+
+    #[test]
+    fn new_repo_sync_fetches_and_checks_out_pinned_sha_after_branchless_clone() {
+        let steps = new_repo_sync_steps(
+            Path::new("/tmp/harbor"),
+            "https://github.com/harbor-framework/harbor.git",
+            "ff69e554fac1c751aa608e03de027db9043a2eac",
+        );
+
+        assert_eq!(
+            steps[0].args,
+            [
+                "clone",
+                "--recurse-submodules",
+                "https://github.com/harbor-framework/harbor.git",
+                "/tmp/harbor"
+            ]
+        );
+        assert_eq!(
+            steps[1].args,
+            [
+                "-C",
+                "/tmp/harbor",
+                "fetch",
+                "--prune",
+                "origin",
+                "ff69e554fac1c751aa608e03de027db9043a2eac"
+            ]
+        );
+        assert_eq!(
+            steps[2].args,
+            ["-C", "/tmp/harbor", "checkout", "--detach", "FETCH_HEAD"]
+        );
+        assert!(!steps[0].args.contains(&"--branch".to_string()));
     }
 
     #[test]
@@ -941,6 +1070,45 @@ mod tests {
     }
 
     #[test]
+    fn harbor_metrics_normalize_trial_rewards() {
+        let run_dir = temp_run_dir("harbor-metrics");
+        let job_dir = harbor_jobs_output_path(&run_dir).join("job");
+        fs::create_dir_all(&job_dir).unwrap();
+        fs::write(
+            job_dir.join("result.json"),
+            r#"{"n_total_trials": 5, "stats": {"n_completed_trials": 5}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(job_dir.join("trial-1")).unwrap();
+        fs::write(
+            job_dir.join("trial-1/result.json"),
+            r#"{"verifier_result": {"rewards": {"reward": 1}}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(job_dir.join("trial-2")).unwrap();
+        fs::write(
+            job_dir.join("trial-2/result.json"),
+            r#"{"verifier_result": {"rewards": {"reward": 0}}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(job_dir.join("trial-3")).unwrap();
+        fs::write(
+            job_dir.join("trial-3/result.json"),
+            r#"{"verifier_result": {}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(job_dir.join("trial-4")).unwrap();
+        fs::write(job_dir.join("trial-4/result.json"), "not-json").unwrap();
+        fs::create_dir_all(job_dir.join("trial-5")).unwrap();
+
+        let metrics = harbor_metrics(&run_dir).unwrap();
+        assert_eq!(metrics.request_count, Some(5));
+        assert_eq!(metrics.failed_count, Some(4));
+        assert_eq!(metrics.pass_rate, Some(0.2));
+        let _ = fs::remove_dir_all(run_dir);
+    }
+
+    #[test]
     fn fill_client_rates_computes_missing_rates() {
         let mut metrics = EvalMetrics {
             prompt_tokens: Some(20),
@@ -968,6 +1136,12 @@ mod tests {
             base_url: "http://127.0.0.1:9337/v1".to_string(),
             model: "tiny-local".to_string(),
             api_key: api_key.to_string(),
+            task_id: None,
+            dataset: "lite".to_string(),
+            agent: "terminus-2".to_string(),
+            harbor_endpoint_url: None,
+            session_id: None,
+            cacheline_state: None,
             cache_root: None,
             output_dir: None,
             timeout_secs: 30,
