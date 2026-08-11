@@ -56,12 +56,7 @@ pub(in crate::evals) fn harbor_command(
                 let task_path = args
                     .task_id
                     .as_deref()
-                    .map(|task_id| {
-                        format!(
-                            "{}",
-                            shell_quote(&task_root.join(task_id).display().to_string())
-                        )
-                    })
+                    .map(|task_id| shell_quote(&task_root.join(task_id).display().to_string()))
                     .unwrap_or_else(|| shell_quote(&task_root.display().to_string()));
                 format!(
                     "set -- -p {}\nuv run --with swebench adapters/swegym/run_adapter.py --dataset {}{} --task-dir {}\n",

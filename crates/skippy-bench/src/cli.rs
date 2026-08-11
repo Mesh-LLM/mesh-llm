@@ -58,7 +58,7 @@ pub enum EvalCommandKind {
     Sync(EvalSyncArgs),
     Install(EvalSyncArgs),
     Doctor(EvalDoctorArgs),
-    Run(EvalRunArgs),
+    Run(Box<EvalRunArgs>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

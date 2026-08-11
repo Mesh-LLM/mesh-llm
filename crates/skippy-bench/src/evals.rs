@@ -39,7 +39,7 @@ pub fn eval_command(args: EvalArgs) -> Result<()> {
         EvalCommandKind::Info(args) => registry::info_eval(args),
         EvalCommandKind::Sync(args) | EvalCommandKind::Install(args) => sync::sync_evals(args),
         EvalCommandKind::Doctor(args) => doctor::doctor_evals(args),
-        EvalCommandKind::Run(args) => run::run_eval(args),
+        EvalCommandKind::Run(args) => run::run_eval(*args),
     }
 }
 
@@ -474,7 +474,7 @@ mod tests {
             fill_client_rates, harbor_jobs_output_path, harbor_metrics, resolved_harness_commit,
             run_artifacts, speed_bench_metrics, speed_bench_output_path,
             speed_bench_response_timings_path, swe_bench_pro_metrics, swe_bench_pro_output_path,
-            telemetry_or_unavailable, terminal_bench_metrics, terminal_bench_output_path,
+            telemetry_or_unavailable,
         },
         sync::{existing_repo_sync_steps, new_repo_sync_steps},
     };
@@ -1033,39 +1033,6 @@ mod tests {
         assert_eq!(metrics.prompt_tokens, Some(28));
         assert_eq!(metrics.completion_tokens, Some(7));
         assert_eq!(metrics.total_tokens, Some(35));
-        let _ = fs::remove_dir_all(run_dir);
-    }
-
-    #[test]
-    fn terminal_bench_metrics_extract_accuracy_and_tokens() {
-        let run_dir = temp_run_dir("terminal-metrics");
-        let result_dir = terminal_bench_output_path(&run_dir).join("run-id");
-        fs::create_dir_all(&result_dir).unwrap();
-        fs::write(
-            result_dir.join("results.json"),
-            r#"{
-              "results": [
-                {
-                  "task_id": "hello-world",
-                  "is_resolved": true,
-                  "total_input_tokens": 100,
-                  "total_output_tokens": 25
-                }
-              ],
-              "n_resolved": 1,
-              "n_unresolved": 0,
-              "accuracy": 1.0
-            }"#,
-        )
-        .unwrap();
-
-        let metrics = terminal_bench_metrics(&run_dir).unwrap();
-        assert_eq!(metrics.request_count, Some(1));
-        assert_eq!(metrics.failed_count, Some(0));
-        assert_eq!(metrics.pass_rate, Some(1.0));
-        assert_eq!(metrics.prompt_tokens, Some(100));
-        assert_eq!(metrics.completion_tokens, Some(25));
-        assert_eq!(metrics.total_tokens, Some(125));
         let _ = fs::remove_dir_all(run_dir);
     }
 

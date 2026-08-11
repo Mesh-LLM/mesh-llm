@@ -229,10 +229,9 @@ SkippyBench launches it through a small adapter that adds the bearer token from
 `--api-key` without modifying the upstream harness.
 SWE-Bench Pro records OpenAI usage tokens and client-side tok/s when the
 upstream flow produces them.
-Terminal-Bench records pass rate, resolved/unresolved task counts, token totals
-when the agent reports them, and raw harness artifacts. The MCP-Atlas adapter
-records wall time, raw completion CSV artifacts, the native scoring output
-directory, and CSV task row count.
+Terminal-Bench and SWE-Gym record Harbor trial counts, pass rates, and raw
+Harbor job artifacts. The MCP-Atlas adapter records wall time, raw completion
+CSV artifacts, the native scoring output directory, and CSV task row count.
 
 `eval run` requires metrics-server for every external benchmark. `--metrics-http` defaults to
 `http://127.0.0.1:18080`; the command creates a metrics-server run before the

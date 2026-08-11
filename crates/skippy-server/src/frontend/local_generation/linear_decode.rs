@@ -22,6 +22,36 @@ impl StageOpenAiBackend {
         state: &mut DecodeState,
         emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<LinearProposalProgress> {
+        self.try_execute_linear_proposal_with_executor(
+            request,
+            session_id,
+            state,
+            emit_token,
+            |backend, params, queried, cancellation, emit_token| {
+                backend.execute_local_linear_proposal(params, queried, cancellation, emit_token)
+            },
+        )
+    }
+
+    fn try_execute_linear_proposal_with_executor<F>(
+        &self,
+        request: &LocalGeneration<'_>,
+        session_id: &str,
+        state: &mut DecodeState,
+        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
+        execute: F,
+    ) -> OpenAiResult<LinearProposalProgress>
+    where
+        F: for<'a> FnOnce(
+            &StageOpenAiBackend,
+            LinearProposalExecutionParams<'a>,
+            crate::frontend::linear_proposal::QueriedLinearProposal,
+            Option<&'a openai_frontend::CancellationToken>,
+            &'a mut dyn FnMut(i32) -> OpenAiResult<TokenControl>,
+        ) -> OpenAiResult<
+            Option<crate::frontend::linear_proposal::LinearProposalReceipt>,
+        >,
+    {
         let Some(config) = self.linear_proposal_ingress.as_ref() else {
             return Ok(LinearProposalProgress::NotUsed);
         };
@@ -137,7 +167,8 @@ impl StageOpenAiBackend {
         };
         let decision_id = queried.proposal.decision_id.clone();
         let receipt = execute_linear_proposal_with_terminal_discard(config, &decision_id, || {
-            self.execute_local_linear_proposal(
+            execute(
+                self,
                 LinearProposalExecutionParams {
                     request_id: request.ids.request_id,
                     request_session_id: request.ids.session_id,
@@ -260,29 +291,56 @@ fn append_pending_linear_proposal_tokens(pending: &mut Vec<i32>, committed_token
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
     use anyhow::Result;
+    use skippy_protocol::{LoadMode, StageConfig};
+    use skippy_runtime::SamplingConfig;
+    use tokio::sync::Semaphore;
 
     use super::*;
+    use crate::binary_transport::DecodeFrameBatcher;
+    use crate::frontend::admission::GenerationTokenBudget;
+    use crate::frontend::decode_batcher::DecodeBatcher;
+    use crate::frontend::generation::{OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds};
     use crate::frontend::linear_proposal::{
-        LinearProposalDiscardReason, LinearProposalIngress, LinearProposalIngressConfig,
-        LinearProposalQuery, LinearProposalReceipt, LinearProposalSourceResponse,
-        query_linear_proposal,
+        LinearProposal, LinearProposalDiscardReason, LinearProposalIngress,
+        LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt,
+        LinearProposalSourceResponse, OpaqueProposalDecisionId,
     };
+    use crate::frontend::native_mtp::{NativeMtpDecodeOptions, NativeMtpVerifier};
+    use crate::frontend::{EmbeddedOpenAiRequestDefaults, SpeculativeDecodeConfig};
+    use crate::runtime_state::RuntimeState;
+    use crate::telemetry::{Telemetry, TelemetryLevel};
 
     #[derive(Default)]
     struct PendingTokenIngress {
         pending: Mutex<Vec<Box<[i32]>>>,
+        reports: Mutex<Vec<Box<[i32]>>>,
+        proposals: AtomicUsize,
     }
 
     impl LinearProposalIngress for PendingTokenIngress {
         fn propose(&self, query: LinearProposalQuery) -> Result<LinearProposalSourceResponse> {
             self.pending.lock().unwrap().push(query.pending_token_ids);
-            Ok(LinearProposalSourceResponse::new(None))
+            if self
+                .proposals
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                == 0
+            {
+                Ok(LinearProposalSourceResponse::new(Some(
+                    LinearProposal::new(OpaqueProposalDecisionId::new("test-decision")?, [41, 42]),
+                )))
+            } else {
+                Ok(LinearProposalSourceResponse::new(None))
+            }
         }
 
-        fn report(&self, _receipt: &LinearProposalReceipt) -> Result<()> {
+        fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
+            self.reports
+                .lock()
+                .unwrap()
+                .push(receipt.committed_tokens.clone());
             Ok(())
         }
 
@@ -300,32 +358,179 @@ mod tests {
         let source = Arc::new(PendingTokenIngress::default());
         let config =
             LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
-        let committed_tokens = [41, 42];
-        let mut pending = Vec::new();
-
-        append_pending_linear_proposal_tokens(&mut pending, &committed_tokens);
-        append_pending_linear_proposal_tokens(&mut pending, &committed_tokens);
+        let stage_config = StageConfig {
+            run_id: "linear-proposal-test".to_string(),
+            topology_id: "linear-proposal-test".to_string(),
+            model_id: "linear-proposal-test".to_string(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: None,
+            projector_path: None,
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 1,
+            ctx_size: 128,
+            lane_count: 1,
+            n_batch: Some(4),
+            n_ubatch: Some(4),
+            n_gpu_layers: 0,
+            mmap: Some(true),
+            mlock: false,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: Default::default(),
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: false,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_string(),
+            upstream: None,
+            downstream: None,
+        };
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let speculative = SpeculativeDecodeConfig::default();
+        let backend = StageOpenAiBackend {
+            runtime: runtime.clone(),
+            config: stage_config.clone(),
+            telemetry: Telemetry::new(None, 1, stage_config, TelemetryLevel::Off),
+            model_id: "linear-proposal-test".to_string(),
+            default_max_tokens: 4,
+            request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+            ctx_size: 128,
+            mode: OpenAiBackendMode::LocalRuntime,
+            draft: None,
+            speculative_window: 0,
+            adaptive_speculative_window: false,
+            ngram_max: 0,
+            speculative: speculative.clone(),
+            generation_limit: Arc::new(Semaphore::new(1)),
+            generation_queue_depth: Arc::new(AtomicUsize::new(0)),
+            generation_queue_limit: 1,
+            generation_token_budget: Arc::new(GenerationTokenBudget::new(128)),
+            hook_policy: None,
+            generation_receipt: None,
+            linear_proposal_ingress: Some(config),
+            kv: None,
+            decode_batcher: DecodeBatcher::new(runtime.clone(), 1),
+            decode_frame_batcher: DecodeFrameBatcher::new(runtime, 1),
+        };
+        let sampling = SamplingConfig::default();
+        let ids = OpenAiGenerationIds::new(OpenAiCacheHints::default(), None);
+        let prompt_token_ids = [1, 2];
+        let request = LocalGeneration {
+            prompt_token_ids: &prompt_token_ids,
+            max_tokens: 5,
+            sampling: &sampling,
+            chat_sampling_metadata: None,
+            speculative: &speculative,
+            native_mtp_enabled: false,
+            hook_request: None,
+            hook_runtime: None,
+            cancellation: None,
+            ids: &ids,
+        };
+        let mut state = DecodeState {
+            decoded_tokens: 0,
+            current: 2,
+            stopped: false,
+            runtime_lock_wait_ms: 0.0,
+            runtime_lock_wait_max_ms: 0.0,
+            runtime_lock_hold_ms: 0.0,
+            runtime_lock_hold_max_ms: 0.0,
+            runtime_lock_acquires: 0,
+            runtime_sessions_before: None,
+            runtime_sessions_after: None,
+            hook_request: None,
+            hook_runtime: None,
+            generation_hooks_active: false,
+            linear_proposal_max_tokens: 4,
+            linear_context_tokens: Some(prompt_token_ids.to_vec()),
+            pending_linear_proposal_tokens: Vec::new(),
+            emit_token_debug: false,
+            native_mtp_options: NativeMtpDecodeOptions::from_config(&speculative),
+            native_mtp: NativeMtpVerifier::default(),
+            post_prefill_hook_checked: false,
+            last_mid_generation_hook_at: None,
+        };
+        let mut emitted = Vec::new();
 
         assert!(matches!(
-            query_linear_proposal(
-                &config,
-                LinearProposalQueryParams {
-                    request_id: 7,
-                    session_id: 8,
-                    prompt_token_count: 2,
-                    decode_step: 1,
-                    committed_token_count: 3,
-                    remaining_new_tokens: 4,
-                    runtime_max_proposal_tokens: 4,
-                    pending_token_ids: pending.into_boxed_slice(),
-                },
-            )
-            .unwrap(),
-            LinearProposalQueryOutcome::NoProposal { .. }
+            backend
+                .try_execute_linear_proposal_with_executor(
+                    &request,
+                    "linear-proposal-session",
+                    &mut state,
+                    &mut |token| {
+                        emitted.push(token);
+                        Ok(TokenControl::Continue)
+                    },
+                    |_backend, _params, queried, _cancellation, _emit_token| {
+                        Ok(Some(LinearProposalReceipt {
+                            request_id: 7,
+                            session_id: 8,
+                            decision_id: queried.proposal.decision_id,
+                            disposition: LinearProposalDisposition::FullAccept,
+                            proposal_token_count: 2,
+                            verification_rows: 3,
+                            accepted_proposal_tokens: 2,
+                            committed_tokens: [41, 42].into(),
+                            verification_row_predictions: [41, 42, 43].into(),
+                            canonical_prediction_count: 2,
+                            correction_or_boundary_token: Some(43),
+                            base_position: 1,
+                            position_after_verification: 4,
+                            canonical_position: 3,
+                            trimmed_rows: 1,
+                            proposal_elapsed_us: 0,
+                            verification_elapsed_us: 0,
+                            repair_elapsed_us: 0,
+                            total_elapsed_us: 0,
+                            runtime_lock_wait_us: 0,
+                            runtime_lock_hold_us: 0,
+                            runtime_lock_acquires: 0,
+                        }))
+                    },
+                )
+                .unwrap(),
+            LinearProposalProgress::Continue
+        ));
+
+        assert_eq!(state.pending_linear_proposal_tokens, vec![41, 42]);
+        assert_eq!(
+            state.linear_context_tokens.as_deref(),
+            Some(&[1, 2, 41, 42][..])
+        );
+
+        assert!(matches!(
+            backend
+                .try_execute_linear_proposal_with_executor(
+                    &request,
+                    "linear-proposal-session",
+                    &mut state,
+                    &mut |_| Ok(TokenControl::Continue),
+                    |_backend, _params, _queried, _cancellation, _emit_token| Ok(None),
+                )
+                .unwrap(),
+            LinearProposalProgress::NotUsed
         ));
         assert_eq!(
             source.pending.lock().unwrap().as_slice(),
-            &[committed_tokens.to_vec().into_boxed_slice()]
+            &[
+                Vec::<i32>::new().into_boxed_slice(),
+                vec![41, 42].into_boxed_slice(),
+            ]
         );
+        assert_eq!(
+            source.reports.lock().unwrap().as_slice(),
+            &[vec![41, 42].into_boxed_slice()]
+        );
+        assert!(emitted.is_empty());
     }
 }

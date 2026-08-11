@@ -322,28 +322,6 @@ fn swe_bench_pro_pass_rate(value: &Value) -> Option<f64> {
     (total > 0).then_some(resolved as f64 / total as f64)
 }
 
-pub(super) fn terminal_bench_metrics(run_dir: &Path) -> Result<EvalMetrics> {
-    let value = read_json(&terminal_bench_results_path(run_dir)?)?;
-    let results = value
-        .get("results")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    let mut metrics = EvalMetrics {
-        request_count: Some(results.len() as u64),
-        failed_count: value.get("n_unresolved").and_then(Value::as_u64),
-        pass_rate: value.get("accuracy").and_then(Value::as_f64),
-        ..EvalMetrics::default()
-    };
-    metrics.prompt_tokens = sum_u64_field(results, "total_input_tokens");
-    metrics.completion_tokens = sum_u64_field(results, "total_output_tokens");
-    metrics.total_tokens = match (metrics.prompt_tokens, metrics.completion_tokens) {
-        (Some(prompt), Some(completion)) => Some(prompt + completion),
-        _ => None,
-    };
-    Ok(metrics)
-}
-
 pub(super) fn harbor_metrics(run_dir: &Path) -> Result<EvalMetrics> {
     let root = harbor_jobs_output_path(run_dir);
     let mut rewards = Vec::new();
@@ -397,9 +375,10 @@ fn collect_harbor_trial_rewards(root: &Path, rewards: &mut Vec<Option<f64>>) -> 
             rewards.push(reward);
         }
         if let Some(expected_trials) = expected_trials {
-            rewards.extend(
-                std::iter::repeat(None).take(expected_trials.saturating_sub(child_count) as usize),
-            );
+            rewards.extend(std::iter::repeat_n(
+                None,
+                expected_trials.saturating_sub(child_count) as usize,
+            ));
         }
     }
     Ok(())
@@ -417,18 +396,6 @@ fn harbor_trial_reward(value: &Value) -> Option<f64> {
                 .and_then(|object| object.values().next())
         })
         .and_then(Value::as_f64)
-}
-
-fn terminal_bench_results_path(run_dir: &Path) -> Result<PathBuf> {
-    let root = terminal_bench_output_path(run_dir);
-    for entry in fs::read_dir(&root).with_context(|| format!("read {}", root.display()))? {
-        let entry = entry?;
-        let path = entry.path().join("results.json");
-        if path.is_file() {
-            return Ok(path);
-        }
-    }
-    bail!("no Terminal-Bench results.json under {}", root.display())
 }
 
 fn mcp_atlas_metrics(run_dir: &Path) -> Result<EvalMetrics> {
@@ -523,10 +490,6 @@ pub(super) fn mcp_atlas_output_path(run_dir: &Path) -> PathBuf {
 
 pub(super) fn mcp_atlas_score_dir(run_dir: &Path) -> PathBuf {
     run_dir.join("raw/mcp-atlas-evaluation-results")
-}
-
-pub(super) fn terminal_bench_output_path(run_dir: &Path) -> PathBuf {
-    run_dir.join("raw/terminal-bench")
 }
 
 pub(super) fn harbor_jobs_output_path(run_dir: &Path) -> PathBuf {
