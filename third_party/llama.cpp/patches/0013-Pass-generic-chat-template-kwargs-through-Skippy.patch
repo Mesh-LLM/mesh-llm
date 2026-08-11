@@ -1,4 +1,4 @@
-From 6a80f2d72434bfd410453e5c99ac1b156841ae1d Mon Sep 17 00:00:00 2001
+From 5265249793f0e29804afbf5c269ba4bee1beb7e8 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 9 Aug 2026 09:40:13 +1000
 Subject: [PATCH 13/16] Pass generic chat template kwargs through Skippy

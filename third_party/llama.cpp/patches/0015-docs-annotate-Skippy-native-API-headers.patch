@@ -1,4 +1,4 @@
-From 1931c72518037222b94c42463a7fc7e86547a7b1 Mon Sep 17 00:00:00 2001
+From c33ec87c4bd0a53c0ba2617359f6b1b67d2785a1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 10 Aug 2026 09:25:54 +1000
 Subject: [PATCH 15/16] docs: annotate Skippy native API headers

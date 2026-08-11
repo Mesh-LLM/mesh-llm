@@ -3653,6 +3653,15 @@ index 3bf3a22f2..0e45dc460 100644
                  layer.ffn_up_exps_s = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "scale", i), {n_expert}, TENSOR_NOT_REQUIRED);
              }
  
+@@ -1520,7 +1520,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+         }
+     }
+-    ml.done_getting_tensors();
++    ml.done_getting_tensors(llama_model_loader_get_stage_filter().enabled);
+ 
+     // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
+     // If sidecar scales exist, the output weight must be an actual output tensor.
+     GGML_ASSERT(!(output && tok_embd &&
 @@ -1918,7 +1927,6 @@ void llama_model::print_info() const {
                  arch == LLM_ARCH_GRANITE ||
                  arch == LLM_ARCH_GRANITE_MOE ||

@@ -1,4 +1,4 @@
-From 1b7f551ccf9079461baff93fa30dd32eaf38a236 Mon Sep 17 00:00:00 2001
+From 2a131339bb5d90a42557dc2ad21e7b806dafc5f2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
 Subject: [PATCH 04/16] Add Inkling model and multimodal support
@@ -2131,7 +2131,7 @@ index 761aabf64..a59fc7f1b 100644
      ggml_tensor * patch_norm_1_w = nullptr;
      ggml_tensor * patch_norm_1_b = nullptr;
 diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index 1e53eddf8..eb1f8f386 100644
+index 1e53eddf8..3322e12d9 100644
 --- a/tools/mtmd/clip.cpp
 +++ b/tools/mtmd/clip.cpp
 @@ -904,6 +904,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
@@ -2241,15 +2241,6 @@ index 1e53eddf8..eb1f8f386 100644
          case PROJECTOR_TYPE_MUSE_GLIMMER:
              {
                  const int grid_w = pos_w;            // image_size_width  / patch_size
-@@ -4278,7 +4334,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
-                 for (int oy = 0; oy < grid_h / f; oy++)
-                     for (int ox = 0; ox < grid_w / f; ox++)
-                         for (int ry = 0; ry < f; ry++)
--                            for (int rx = 0; rx < f; rx++)
-+                for (int rx = 0; rx < f; rx++)
-                                 dsp.push_back((oy * f + ry) * grid_w + (ox * f + rx));
-                 set_input_i32("muse_glimmer_ds_perm", dsp);
-             } break;
 @@ -5438,6 +5494,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
  int clip_n_mmproj_embd(const struct clip_ctx * ctx) {

@@ -1,4 +1,4 @@
-From e4d015c3698c4e72aa9f2fd65d59b38900a60822 Mon Sep 17 00:00:00 2001
+From 8601e207758c553879db711eaad1ae06a333813b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
 Subject: [PATCH 08/16] Add Skippy activation frame handling

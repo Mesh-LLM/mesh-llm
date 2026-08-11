@@ -1,4 +1,4 @@
-From 2c5ca94807891a8bfc6a2ec8c7037895d73770ab Mon Sep 17 00:00:00 2001
+From daae681abcbff626fde29d32d87846583d64591f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 17:06:42 +1000
 Subject: [PATCH 06/16] Add Skippy model lifecycle and package support

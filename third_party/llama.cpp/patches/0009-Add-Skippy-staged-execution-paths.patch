@@ -1,4 +1,4 @@
-From df8fae8867e09bef83e019dddca8593b22f50218 Mon Sep 17 00:00:00 2001
+From b78c3b6129f826ac77e4ed0eb4b5f6fd56df4af4 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
 Subject: [PATCH 09/16] Add Skippy staged execution paths

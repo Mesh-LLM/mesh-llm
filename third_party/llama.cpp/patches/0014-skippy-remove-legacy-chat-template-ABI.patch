@@ -1,4 +1,4 @@
-From 17e02c42d8dd70df50213797b5f2bfdcb9bcfe5e Mon Sep 17 00:00:00 2001
+From 8a9f7ef5c9ebb9d6fb31429ae5e7d63cdd95827b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 9 Aug 2026 11:38:10 +1000
 Subject: [PATCH 14/16] skippy: remove legacy chat template ABI
