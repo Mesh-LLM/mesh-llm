@@ -761,7 +761,7 @@ strategy = "ngram-suffix"
 }
 
 #[test]
-fn standalone_ngram_rejected_for_single_stage_serving() {
+fn standalone_ngram_uses_native_plugin_verify_path_for_single_stage_serving() {
     let mesh_config = parse_config(
         r#"
 [defaults.speculative]
@@ -789,16 +789,15 @@ ngram_max_proposal_tokens = 48
         .to_embedded_openai_args(4096, true)
         .expect("staged serving should build OpenAI args");
 
-    // Single-stage/direct serving has no N-gram verify path, so it must reject
-    // rather than silently run target-only while reporting a proposer.
-    let error = resolved
+    // Single-stage/direct serving uses the native plugin ingress, whose
+    // proposal is verified and repaired by the local target runtime.
+    let openai = resolved
         .to_embedded_openai_args(0, false)
-        .expect_err("single-stage standalone N-gram must be rejected");
-    assert!(
-        error
-            .to_string()
-            .contains("requires multi-stage split serving"),
-        "{error}"
+        .expect("single-stage standalone N-gram should use the native plugin verify path");
+    assert_eq!(openai.speculative_window, 48);
+    assert_eq!(
+        openai.speculative.ngram.as_ref().map(|ngram| ngram.kind),
+        Some(skippy_server::NgramProposerKind::Suffix)
     );
 }
 
