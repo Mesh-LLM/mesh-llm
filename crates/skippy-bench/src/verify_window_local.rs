@@ -7,8 +7,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use skippy_runtime::{
-    FlashAttentionType, GenerationSignalWindow, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
-    StageModel, StageSession, TokenSignal, parse_cache_type,
+    FlashAttentionType, GenerationSignalWindow, MtpSource, RuntimeConfig, RuntimeLoadMode,
+    SamplingConfig, StageModel, StageSession, TokenSignal, parse_cache_type,
 };
 
 use crate::cli::{FlashAttentionArg, MAX_VERIFY_WINDOW_WIDTH, VerifyWindowLocalArgs};
@@ -225,6 +225,7 @@ fn full_runtime_config(args: &VerifyWindowLocalArgs) -> Result<RuntimeConfig> {
         projector_path: None,
         include_embeddings: true,
         include_output: true,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: false,
     })
 }
@@ -865,6 +866,7 @@ fn split_runtime_configs(
         projector_path: None,
         include_embeddings: true,
         include_output: false,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
     };
     let stage1 = RuntimeConfig {
@@ -888,6 +890,7 @@ fn split_runtime_configs(
         projector_path: None,
         include_embeddings: false,
         include_output: true,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
     };
     Ok((stage0, stage1))

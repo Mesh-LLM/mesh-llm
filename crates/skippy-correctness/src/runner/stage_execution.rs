@@ -17,7 +17,7 @@ use skippy_protocol::binary::{
     activation_state_flags_from_frame_flags, recv_reply, write_stage_message,
 };
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, RuntimeConfig, RuntimeLoadMode,
+    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode,
     package::{MaterializedPackage, PackageStageRequest, materialize_layer_package_details},
 };
 
@@ -447,6 +447,7 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             projector_path: None,
             include_embeddings: true,
             include_output: false,
+            mtp_source: MtpSource::Disabled,
             filter_tensors_on_load,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
