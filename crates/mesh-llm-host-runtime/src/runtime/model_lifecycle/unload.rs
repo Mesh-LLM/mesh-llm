@@ -111,6 +111,7 @@ pub(crate) async fn run_auto_unload_runtime_model(
                 message: format!("Unloaded managed model '{}'", model),
                 context: None,
             });
+            record_runtime_operational_event(RuntimeOperationalEvent::ModelUnloaded);
             Ok(api::RuntimeUnloadResponse {
                 model,
                 instance_id: unload.instance_id,
@@ -270,6 +271,7 @@ pub(crate) async fn run_auto_unload_runtime_entry(
         message: format!("Unloaded local model '{}' from :{}", model, port),
         context: None,
     });
+    record_runtime_operational_event(RuntimeOperationalEvent::ModelUnloaded);
     Ok(api::RuntimeUnloadResponse {
         model,
         instance_id: unload.instance_id,

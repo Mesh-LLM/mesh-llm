@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use model_artifact::ModelIdentity;
 use serde_json::json;
 use skippy_protocol::binary::{StageWireMessage, WireReplyKind, write_stage_message};
-use skippy_runtime::{GGML_TYPE_F16, RuntimeConfig, StageModel};
+use skippy_runtime::{GGML_TYPE_F16, MtpSource, RuntimeConfig, StageModel};
 
 use crate::{
     cli::{ChainArgs, DtypeMatrixArgs, FlashAttentionArg, SplitScanArgs, StageLoadMode},
@@ -333,6 +333,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         projector_path: None,
         include_embeddings: true,
         include_output: false,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,

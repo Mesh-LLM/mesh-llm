@@ -1,11 +1,11 @@
-use super::common::{
-    ResponseRetryPolicy, RouteAttemptResult, parse_completion_tokens_from_json_body,
-};
+use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body};
 use super::probe::{ResponseProbe, response_is_event_stream, try_parse_response_headers};
 use super::relay::{relay_error_response, relay_success_response};
+use crate::logging::{ArtifactUnavailableReason, OpenAiRouteObserver};
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::ChatStreamNormalizationState;
 use anyhow::{Context, Result, anyhow};
+use mesh_llm_events::logging::events::TokenUsage;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -16,7 +16,7 @@ struct ResponsesStreamRelayState {
     model: String,
     output_text: String,
     usage: Option<serde_json::Value>,
-    observed_completion_tokens: Option<u64>,
+    observed_usage: Option<TokenUsage>,
     sequence_number: i32,
     created_emitted: bool,
     output_item_emitted: bool,
@@ -35,7 +35,7 @@ impl ResponsesStreamRelayState {
             model: String::new(),
             output_text: String::new(),
             usage: None,
-            observed_completion_tokens: None,
+            observed_usage: None,
             sequence_number: 0,
             created_emitted: false,
             output_item_emitted: false,
@@ -55,28 +55,42 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
 
     if !(200..300).contains(&probe.status_code) {
-        return relay_error_response(tcp_stream, reader, probe).await;
+        route_observer.stream_error("upstream_status");
+        return relay_error_response(tcp_stream, reader, probe, route_observer).await;
     }
 
     let parsed = try_parse_response_headers(&probe.buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
     if !response_is_event_stream(&parsed) {
-        return relay_success_response(tcp_stream, reader, probe, parsed, retry_policy).await;
+        return relay_success_response(
+            tcp_stream,
+            reader,
+            probe,
+            parsed,
+            retry_policy,
+            route_observer,
+        )
+        .await;
     }
 
     let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
     let mut state = ChatStreamNormalizationState::default();
-    let mut observed_completion_tokens = None;
+    let mut observed_usage = None;
     let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
     tcp_stream.write_all(header.as_bytes()).await?;
+    route_observer
+        .capture_response_unavailable(ArtifactUnavailableReason::StreamingResponseNotAssembled);
+    route_observer.stream_started(None);
 
     let mut done_seen = false;
+    let mut first_chunk_seen = false;
     loop {
         let mut processed = 0usize;
         while let Some(frame_end_rel) = carry[processed..].find("\n\n") {
@@ -98,12 +112,17 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
                 break;
             }
 
-            if observed_completion_tokens.is_none() {
-                observed_completion_tokens =
-                    parse_completion_tokens_from_json_body(data.as_bytes());
+            if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
+                observed_usage = Some(usage);
             }
             let normalized = state.normalize_data(&data);
             response_adapter::write_chunked_sse_event(tcp_stream, None, &normalized).await?;
+            if first_chunk_seen {
+                route_observer.stream_chunk();
+            } else {
+                route_observer.stream_first_token();
+                first_chunk_seen = true;
+            }
         }
         if processed > 0 {
             carry = carry[processed..].to_string();
@@ -127,9 +146,14 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
 
     let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
     let _ = tcp_stream.shutdown().await;
+    if !done_seen {
+        route_observer.stream_error("upstream_stream_incomplete");
+        return Err(anyhow!("upstream chat stream ended before [DONE]"));
+    }
+    route_observer.stream_completed(observed_usage);
     Ok(RouteAttemptResult::Delivered {
-        status_code: probe.status_code,
-        completion_tokens: observed_completion_tokens,
+        status_code: 200,
+        usage: observed_usage,
     })
 }
 
@@ -140,6 +164,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     fn should_parse_stream_chunk(data: &str, model_missing: bool, usage_missing: bool) -> bool {
         model_missing
@@ -155,7 +180,8 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     }
 
     if !(200..300).contains(&probe.status_code) {
-        return relay_error_response(tcp_stream, reader, probe).await;
+        route_observer.stream_error("upstream_status");
+        return relay_error_response(tcp_stream, reader, probe, route_observer).await;
     }
 
     let parsed = try_parse_response_headers(&probe.buffered)?
@@ -164,8 +190,12 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     let mut state = ResponsesStreamRelayState::new();
     let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
     tcp_stream.write_all(header.as_bytes()).await?;
+    route_observer
+        .capture_response_unavailable(ArtifactUnavailableReason::StreamingResponseNotAssembled);
+    route_observer.stream_started(None);
 
     let mut done_seen = false;
+    let mut first_chunk_seen = false;
     loop {
         let mut processed = 0usize;
         while let Some(frame_end_rel) = carry[processed..].find("\n\n") {
@@ -191,6 +221,12 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
             }
 
             process_translated_responses_frame(tcp_stream, &mut state, &data).await?;
+            if first_chunk_seen {
+                route_observer.stream_chunk();
+            } else {
+                route_observer.stream_first_token();
+                first_chunk_seen = true;
+            }
         }
         if processed > 0 {
             carry = carry[processed..].to_string();
@@ -213,13 +249,18 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         }
     }
 
+    if !done_seen {
+        route_observer.stream_error("upstream_stream_incomplete");
+        return Err(anyhow!("upstream Responses stream ended before [DONE]"));
+    }
     finish_translated_responses_stream(tcp_stream, &mut state).await?;
     response_adapter::write_chunked_sse_event(tcp_stream, Some("done"), "[DONE]").await?;
     let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
     let _ = tcp_stream.shutdown().await;
+    route_observer.stream_completed(state.observed_usage);
     Ok(RouteAttemptResult::Delivered {
-        status_code: probe.status_code,
-        completion_tokens: state.observed_completion_tokens,
+        status_code: 200,
+        usage: state.observed_usage,
     })
 }
 
@@ -380,17 +421,15 @@ fn update_translated_responses_usage(
     state: &mut ResponsesStreamRelayState,
     chunk: &openai_frontend::responses::ChatCompletionStreamChunk,
 ) {
-    if state.usage.is_none() {
-        state.usage = chunk
-            .usage
-            .as_ref()
-            .map(response_adapter::stream_usage_to_responses_usage);
-    }
-    if state.observed_completion_tokens.is_none() {
-        state.observed_completion_tokens = chunk
-            .usage
-            .as_ref()
-            .and_then(|usage| usage.completion_tokens);
+    if let Some(usage) = chunk.usage.as_ref() {
+        state.usage = Some(response_adapter::stream_usage_to_responses_usage(usage));
+        if let Some(authoritative) = TokenUsage::from_counts(
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+        ) {
+            state.observed_usage = Some(authoritative);
+        }
     }
 }
 
@@ -490,7 +529,33 @@ async fn emit_translated_stream_done_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logging::OpenAiArtifactCapture;
+    use mesh_llm_events::logging::identifiers::RequestId;
+    use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
+
+    #[derive(Default)]
+    struct Captures(Mutex<Vec<ArtifactUnavailableReason>>);
+
+    impl OpenAiArtifactCapture for Captures {
+        fn capture_body(
+            &self,
+            _request_id: RequestId,
+            _kind: &'static str,
+            _content: &[u8],
+            _media_kind: Option<&str>,
+        ) {
+        }
+
+        fn capture_unavailable(
+            &self,
+            _request_id: RequestId,
+            _kind: &'static str,
+            reason: ArtifactUnavailableReason,
+        ) {
+            self.0.lock().unwrap().push(reason);
+        }
+    }
 
     #[tokio::test]
     async fn relay_translated_responses_stream_emits_one_delta_per_upstream_chunk() {
@@ -505,9 +570,9 @@ mod tests {
         let server_task = tokio::spawn(async move {
             let (mut client_socket, _) = listener.accept().await.unwrap();
             let probe = ResponseProbe {
-                buffered: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
-                header_end: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".len(),
-                status_code: 200,
+                buffered: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
+                header_end: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".len(),
+                status_code: 201,
                 retryable_context_overflow: false,
             };
             relay_translated_responses_stream(
@@ -515,6 +580,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                OpenAiRouteObserver::default(),
             )
             .await
             .expect("relay")
@@ -530,7 +596,7 @@ mod tests {
             // tiny gap so the relay actually services the chunk
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-        let finish = r#"{"id":"chatcmpl-x","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#;
+        let finish = r#"{"id":"chatcmpl-x","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":13,"total_tokens":18}}"#;
         upstream_writer
             .write_all(format!("data: {}\n\n", finish).as_bytes())
             .await
@@ -546,7 +612,21 @@ mod tests {
         use tokio::io::AsyncReadExt;
         let mut output = Vec::new();
         client.read_to_end(&mut output).await.unwrap();
-        let _ = server_task.await.expect("server task");
+        let route_result = server_task.await.expect("server task");
+
+        assert!(output.starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        assert_eq!(
+            route_result,
+            RouteAttemptResult::Delivered {
+                status_code: 200,
+                usage: Some(TokenUsage {
+                    prompt_tokens: Some(5),
+                    completion_tokens: Some(13),
+                    total_tokens: Some(18),
+                }),
+            }
+        );
 
         let body = String::from_utf8_lossy(&output);
         let delta_count = body
@@ -560,5 +640,166 @@ mod tests {
             body.contains("\"type\":\"response.completed\""),
             "missing completed event:\n{body}"
         );
+    }
+
+    #[tokio::test]
+    async fn relay_normalized_chat_completion_stream_returns_completion_tokens() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let capture = Arc::new(Captures::default());
+        let observer_capture: Arc<dyn OpenAiArtifactCapture> = capture.clone();
+        let server_task = tokio::spawn(async move {
+            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let probe = ResponseProbe {
+                buffered: header.to_vec(),
+                header_end: header.len(),
+                status_code: 201,
+                retryable_context_overflow: false,
+            };
+            relay_normalized_chat_completion_stream(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                OpenAiRouteObserver::capture_test_observer(RequestId::new(), &observer_capture),
+            )
+            .await
+            .expect("relay")
+        });
+
+        let usage_chunk = r#"{"id":"chatcmpl-y","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}],"usage":{"prompt_tokens":2,"completion_tokens":7,"total_tokens":9}}"#;
+        upstream_writer
+            .write_all(format!("data: {usage_chunk}\n\n").as_bytes())
+            .await
+            .unwrap();
+        upstream_writer
+            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+            .await
+            .unwrap();
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        let route_result = server_task.await.expect("server task");
+
+        assert!(output.starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        assert_eq!(
+            route_result,
+            RouteAttemptResult::Delivered {
+                status_code: 200,
+                usage: Some(TokenUsage {
+                    prompt_tokens: Some(2),
+                    completion_tokens: Some(7),
+                    total_tokens: Some(9),
+                }),
+            }
+        );
+        assert!(String::from_utf8_lossy(&output).contains("hello"));
+        let captured = capture.0.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            captured[0],
+            ArtifactUnavailableReason::StreamingResponseNotAssembled
+        );
+    }
+
+    #[tokio::test]
+    async fn incomplete_normalized_stream_is_an_error_without_synthesized_done() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let server_task = tokio::spawn(async move {
+            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let probe = ResponseProbe {
+                buffered: header.to_vec(),
+                header_end: header.len(),
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            super::super::dispatch::relay_attempted_response(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                super::super::dispatch::RelayAttemptContext {
+                    request_id: RequestId::new(),
+                    disconnect_message: "test client disconnected",
+                    commit_message: "test stream relay failed",
+                    route_observer: OpenAiRouteObserver::default(),
+                },
+                ResponseRetryPolicy::next_target_available(false),
+                crate::network::openai::request_normalize::ResponseAdapter::OpenAiChatCompletionsStream,
+            )
+            .await
+        });
+
+        upstream_writer
+            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":7,\"total_tokens\":9}}\n\n")
+            .await
+            .unwrap();
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        let route_result = server_task.await.expect("server task");
+        let body = String::from_utf8_lossy(&output);
+
+        assert_eq!(
+            route_result,
+            RouteAttemptResult::CommittedStreamFailure { status_code: 200 }
+        );
+        assert!(!body.contains("data: [DONE]"));
+    }
+
+    #[tokio::test]
+    async fn incomplete_translated_stream_is_an_error_without_completed_tail() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let server_task = tokio::spawn(async move {
+            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let probe = ResponseProbe {
+                buffered: header.to_vec(),
+                header_end: header.len(),
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            relay_translated_responses_stream(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+
+        upstream_writer
+            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":7,\"total_tokens\":9}}\n\n")
+            .await
+            .unwrap();
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        let route_result = server_task.await.expect("server task");
+        let body = String::from_utf8_lossy(&output);
+
+        assert!(route_result.is_err());
+        assert!(!body.contains("response.completed"));
+        assert!(!body.contains("data: [DONE]"));
     }
 }

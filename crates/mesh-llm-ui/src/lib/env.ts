@@ -18,7 +18,7 @@ export function hrefWithBasePath(path: string, basePath = env.routerBasePath) {
 
 export function stripBasePath(pathname: string, basePath = env.routerBasePath) {
   const normalizedBasePath = normalizeRouterBasePath(basePath)
-  if (normalizedBasePath === '/' || !pathname.startsWith(normalizedBasePath)) return pathname
+  if (!normalizedBasePath || !pathname.startsWith(normalizedBasePath)) return pathname
 
   const strippedPathname = pathname.slice(normalizedBasePath.length)
   if (!strippedPathname) return '/'

@@ -573,6 +573,30 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertIn("name: Windows lightweight checks", self.windows_checks)
         self.assertIn("cargo check --locked -p mesh-llm --bin mesh-llm", self.windows_checks)
+        self.assertIn(
+            "name: Test Windows log artifact privacy ACL",
+            self.windows_checks,
+        )
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' || "
+            "contains(fromJson(needs.changes.outputs.affected_crates), "
+            "'mesh-llm-log-store')",
+            self.windows_checks,
+        )
+        self.assertIn(
+            "cargo test --locked -p mesh-llm-log-store --lib "
+            "windows_artifact_paths_have_current_owner_and_exact_user_only_dacl",
+            self.windows_checks,
+        )
+        self.assertIn(
+            "name: Test Windows log SQLite storage ACL",
+            self.windows_checks,
+        )
+        self.assertIn(
+            "cargo test --locked -p mesh-llm-log-store --lib "
+            "sqlite_root_database_and_sidecars_have_only_current_user_acl",
+            self.windows_checks,
+        )
         self.assertNotIn("prepare-windows-host-input", self.windows_checks)
         self.assertNotIn("prepare-native-runtime-input", self.windows_checks)
         self.assertNotIn("compose-product-input", self.windows_checks)

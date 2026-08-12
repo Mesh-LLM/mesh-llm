@@ -41,6 +41,11 @@ use std::sync::atomic::AtomicUsize;
 use std::time::Instant;
 use tokio::sync::Semaphore;
 
+pub(in crate::frontend) struct GenerationSessionLockEntry {
+    pub(in crate::frontend) semaphore: Arc<Semaphore>,
+    pub(in crate::frontend) users: AtomicUsize,
+}
+
 #[derive(Clone)]
 pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) runtime: Arc<Mutex<RuntimeState>>,
@@ -59,6 +64,8 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) generation_limit: Arc<Semaphore>,
     pub(in crate::frontend) generation_queue_depth: Arc<AtomicUsize>,
     pub(in crate::frontend) generation_queue_limit: usize,
+    pub(in crate::frontend) generation_session_locks:
+        Arc<Mutex<BTreeMap<String, Arc<GenerationSessionLockEntry>>>>,
     pub(in crate::frontend) generation_token_budget: Arc<GenerationTokenBudget>,
     pub(in crate::frontend) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
     pub(in crate::frontend) generation_receipt: Option<GenerationReceiptConfig>,

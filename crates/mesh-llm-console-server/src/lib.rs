@@ -117,6 +117,8 @@ fn is_index_route(path: &str) -> bool {
             | "/dashboard/"
             | "/reserves"
             | "/reserves/"
+            | "/logs"
+            | "/logs/"
             | "/chat"
             | "/chat/"
             | "/configuration"
@@ -125,6 +127,7 @@ fn is_index_route(path: &str) -> bool {
             | "/__meshviz-perf"
     ) || path.starts_with("/chat/")
         || path.starts_with("/configuration/")
+        || path.starts_with("/logs/")
         || path.starts_with("/plugins/")
 }
 
@@ -295,6 +298,7 @@ mod tests {
             "/configuration",
             "/configuration/defaults",
             "/configuration/local-deployment",
+            "/logs",
             "/plugins/web-ui-exemplar/overview",
             "/reserves",
             "/chat/thread",

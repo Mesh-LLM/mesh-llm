@@ -168,10 +168,10 @@ unsafe extern "C" fn fake_last_error(
     0
 }
 
-pub(crate) fn fake_table() -> abi::NativeServingPluginV1 {
-    abi::NativeServingPluginV1 {
-        abi_version: abi::NATIVE_SERVING_PLUGIN_ABI_V1,
-        struct_size: size_of::<abi::NativeServingPluginV1>(),
+pub(crate) fn fake_table() -> abi::NativeServingPluginV2 {
+    abi::NativeServingPluginV2 {
+        abi_version: abi::NATIVE_SERVING_PLUGIN_ABI_V2,
+        struct_size: size_of::<abi::NativeServingPluginV2>(),
         plugin_name: abi::ByteSlice::from_bytes(FAKE_NAME),
         activate: fake_activate,
         shutdown: fake_shutdown,
@@ -257,6 +257,7 @@ pub(crate) fn fake_active_with_timing(
         ActivePlugin {
             definition,
             instance: NonNull::new(Box::into_raw(state).cast::<c_void>()),
+            _tokenizer_capability: None,
             proposal_token_buffer: Mutex::new(vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS]),
             committed_generated_tokens: Mutex::new(HashMap::new()),
         },

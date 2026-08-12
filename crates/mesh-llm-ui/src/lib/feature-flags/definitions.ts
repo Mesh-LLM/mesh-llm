@@ -7,12 +7,16 @@ export type FeatureFlagGroup = {
 export const DEFAULT_FEATURE_FLAGS = {
   global: {
     newConfigurationPage: true,
-    newReservesPage: false
+    newReservesPage: false,
+    // Logging is a production operator surface. Keep its route and navigation
+    // available without relying on the development-only feature playground.
+    logsPage: true
   },
   configuration: {
     signingAttestation: false,
     integrations: true,
-    wakePolicyConfiguration: false
+    wakePolicyConfiguration: false,
+    logsSettings: true
   },
   chat: {
     systemPromptButton: false,
@@ -24,9 +28,11 @@ export type FeatureFlagSectionId = 'global' | 'configuration' | 'chat'
 export type FeatureFlagPath =
   | 'global/newConfigurationPage'
   | 'global/newReservesPage'
+  | 'global/logsPage'
   | 'configuration/signingAttestation'
   | 'configuration/integrations'
   | 'configuration/wakePolicyConfiguration'
+  | 'configuration/logsSettings'
   | 'chat/systemPromptButton'
   | 'chat/transparencyTab'
 
@@ -64,6 +70,14 @@ export const FEATURE_FLAG_SECTIONS: readonly FeatureFlagSectionDefinition[] = [
         path: 'global/newReservesPage',
         label: 'New reserves page',
         description: 'Shows the Reserves page in the primary navigation while the reserve-capacity migration rolls out.'
+      },
+      {
+        sectionId: 'global',
+        key: 'logsPage',
+        path: 'global/logsPage',
+        label: 'Logs page',
+        description:
+          'Shows the Logs page in the primary navigation while the request-log inspection surface is being rolled out.'
       }
     ]
   },
@@ -115,6 +129,14 @@ export const FEATURE_FLAG_SECTIONS: readonly FeatureFlagSectionDefinition[] = [
         path: 'configuration/wakePolicyConfiguration',
         label: 'Reserves',
         description: 'Shows the Reserves tab in Configuration while reserve-capacity settings are still UI-only.'
+      },
+      {
+        sectionId: 'configuration',
+        key: 'logsSettings',
+        path: 'configuration/logsSettings',
+        label: 'Logs settings',
+        description:
+          'Shows the Logs configuration tab with audit and logging settings while log management is being rolled out.'
       }
     ]
   }
@@ -147,12 +169,16 @@ export function getBaseFeatureFlagValue(path: FeatureFlagPath): boolean {
       return DEFAULT_FEATURE_FLAGS.global.newConfigurationPage
     case 'global/newReservesPage':
       return DEFAULT_FEATURE_FLAGS.global.newReservesPage
+    case 'global/logsPage':
+      return DEFAULT_FEATURE_FLAGS.global.logsPage
     case 'configuration/signingAttestation':
       return DEFAULT_FEATURE_FLAGS.configuration.signingAttestation
     case 'configuration/integrations':
       return DEFAULT_FEATURE_FLAGS.configuration.integrations
     case 'configuration/wakePolicyConfiguration':
       return DEFAULT_FEATURE_FLAGS.configuration.wakePolicyConfiguration
+    case 'configuration/logsSettings':
+      return DEFAULT_FEATURE_FLAGS.configuration.logsSettings
     case 'chat/systemPromptButton':
       return DEFAULT_FEATURE_FLAGS.chat.systemPromptButton
     case 'chat/transparencyTab':

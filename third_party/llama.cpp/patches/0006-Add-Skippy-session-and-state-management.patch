@@ -1,28 +1,8 @@
-From eea5d027ada2d1f022f369e18bcf7d9a0b18b91d Mon Sep 17 00:00:00 2001
+From 664aefb2c946825ca397c10897482070336c9082 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 06/13] Add Skippy session and state management
+Subject: [PATCH 06/15] Add Skippy session and state management
 
----
- include/skippy/signals.h                      |  44 +
- include/skippy/state.h                        | 129 +++
- src/skippy-verify-checkpoint.h                |  24 +
- src/skippy/runtime_support.h                  |   3 +
- src/skippy/runtime_types.h                    |   3 +-
- src/skippy/session.cpp                        | 452 +++++++++
- src/skippy/state.cpp                          | 868 ++++++++++++++++++
- tests/test-skippy-kv-cells-contiguous.cpp     |  20 +
- tests/test-skippy-kv-page-export.cpp          | 259 ++++++
- ...st-skippy-verify-checkpoint-retirement.cpp |  26 +
- 10 files changed, 1827 insertions(+), 1 deletion(-)
- create mode 100644 include/skippy/signals.h
- create mode 100644 include/skippy/state.h
- create mode 100644 src/skippy-verify-checkpoint.h
- create mode 100644 src/skippy/session.cpp
- create mode 100644 src/skippy/state.cpp
- create mode 100644 tests/test-skippy-kv-cells-contiguous.cpp
- create mode 100644 tests/test-skippy-kv-page-export.cpp
- create mode 100644 tests/test-skippy-verify-checkpoint-retirement.cpp
 
 diff --git a/include/skippy/signals.h b/include/skippy/signals.h
 new file mode 100644
@@ -1940,6 +1920,3 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
--- 
-2.50.1 (Apple Git-155)
-

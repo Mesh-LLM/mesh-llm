@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use skippy_runtime::{
-    FlashAttentionType, GGML_TYPE_F16, RuntimeConfig, RuntimeLoadMode, StageModel,
+    FlashAttentionType, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel,
     package::{PackageStageRequest, select_layer_package_parts},
 };
 
@@ -86,6 +86,7 @@ fn decode_boundary(
         projector_path: None,
         include_embeddings: true,
         include_output: false,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
     };
     let selection = select_layer_package_parts(&PackageStageRequest {

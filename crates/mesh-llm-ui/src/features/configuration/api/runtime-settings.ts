@@ -17,6 +17,8 @@ import {
   titleCaseIdentifier
 } from './schema-setting-order'
 
+const ENABLED_SETTING_ORDER = 10
+
 /** Build runtime-policy settings harness data (runtime.mode, activity.*, etc.) from schema. */
 export function createRuntimePolicySettingsFromSchema(
   schema: RuntimeConfigSchemaReference | undefined,
@@ -182,7 +184,8 @@ function schemaSettingFromEntry(
     tomlKey: name,
     rendererId: undefined,
     controlHint: entry.presentation?.control_hint,
-    settingOrder: entry.presentation?.setting_order ?? DEFAULT_SETTING_ORDER,
+    settingOrder:
+      entry.presentation?.setting_order ?? (name === 'enabled' ? ENABLED_SETTING_ORDER : DEFAULT_SETTING_ORDER),
     icon: CATEGORY_ICON_BY_ID[category.id] ?? 'cog',
     label: entry.presentation?.label ?? titleCaseIdentifier(name),
     description: entry.presentation?.help ?? (entry.description ? entry.description : entry.canonical_path),
@@ -193,6 +196,8 @@ function schemaSettingFromEntry(
     controlState: entryControlState,
     visibility: entry.visibility === 'advanced' ? 'advanced' : 'standard',
     mutability: schemaMutability(entry),
+    applyMode: entry.apply_mode,
+    restartScope: entry.restart_scope,
     validationConstraints: entry.constraints,
     categoryOrder: category.order ?? DEFAULT_CATEGORY_ORDER
   }

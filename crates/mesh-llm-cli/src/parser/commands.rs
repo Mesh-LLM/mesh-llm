@@ -7,6 +7,7 @@ use crate::benchmark::{BenchmarkCommand, GpuBenchmarkBackend};
 use crate::models;
 use crate::runtime::RuntimeCommand;
 use mesh_llm_events::LogFormat;
+use mesh_llm_events::audit::{AuditLevel, AuditLogFormat};
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -424,6 +425,18 @@ pub struct Cli {
     /// Terminal output format for app-owned runtime events.
     #[arg(long, value_enum, default_value_t = LogFormat::Pretty)]
     pub log_format: LogFormat,
+
+    /// Audit log file path (enables audit logging when set).
+    #[arg(long, hide = true)]
+    pub audit_log_path: Option<PathBuf>,
+
+    /// Audit log format.
+    #[arg(long, value_enum, default_value_t = AuditLogFormat::JsonLines, hide = true)]
+    pub audit_log_format: AuditLogFormat,
+
+    /// Minimum audit log level.
+    #[arg(long, value_enum, default_value_t = AuditLevel::Info, hide = true)]
+    pub audit_log_level: AuditLevel,
 
     /// Enable mesh runtime debug output; set MESH_LLM_DEBUG_NATIVE_VERBOSE=1 for verbose llama.cpp native logs.
     #[arg(long)]

@@ -79,6 +79,66 @@ async fn generation_admission_times_out_and_releases_queue_slot() {
 }
 
 #[tokio::test]
+async fn generation_admission_honors_existing_absolute_deadline() {
+    let generation_limit = Arc::new(Semaphore::new(0));
+    let generation_queue_depth = Arc::new(AtomicUsize::new(0));
+    let reservation = reserve_generation_queue(generation_queue_depth.clone(), 1)
+        .expect("generation queue reservation");
+    let cancellation = openai_frontend::CancellationToken::new();
+    let started = std::time::Instant::now();
+
+    let error = acquire_generation_permit_with_queue_reservation(
+        generation_limit,
+        reservation,
+        Duration::from_secs(1),
+        std::time::Instant::now() + Duration::from_millis(5),
+        &cancellation,
+    )
+    .await
+    .unwrap_err();
+
+    assert_generation_rate_limit(error, "timed out waiting");
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "admission must use the supplied absolute deadline"
+    );
+    assert_eq!(generation_queue_depth.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn cancelled_queued_admission_releases_queue_slot() {
+    let generation_limit = Arc::new(Semaphore::new(0));
+    let generation_queue_depth = Arc::new(AtomicUsize::new(0));
+    let reservation = reserve_generation_queue(generation_queue_depth.clone(), 1)
+        .expect("generation queue reservation");
+    let cancellation = openai_frontend::CancellationToken::new();
+    let waiter_cancellation = cancellation.clone();
+    let waiter = tokio::spawn(async move {
+        acquire_generation_permit_with_queue_reservation(
+            generation_limit,
+            reservation,
+            Duration::from_secs(1),
+            std::time::Instant::now() + Duration::from_secs(1),
+            &waiter_cancellation,
+        )
+        .await
+    });
+
+    assert_eq!(generation_queue_depth.load(Ordering::Acquire), 1);
+    cancellation.cancel();
+    let result = tokio::time::timeout(Duration::from_millis(100), waiter)
+        .await
+        .expect("cancelled queue waiter returned")
+        .expect("queue waiter task completed");
+    let error = match result {
+        Ok(_) => panic!("cancelled queue waiter unexpectedly acquired a permit"),
+        Err(error) => error,
+    };
+    assert!(error.body().error.message.contains("request cancelled"));
+    assert_eq!(generation_queue_depth.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
 async fn generation_admission_waits_for_released_lane() {
     let generation_limit = Arc::new(Semaphore::new(0));
     let generation_queue_depth = Arc::new(AtomicUsize::new(0));
@@ -254,7 +314,7 @@ fn maps_generation_exhaustion_to_length_finish_reason() {
 #[test]
 fn generation_ids_are_unique_under_fast_creation() {
     let ids = (0..1024)
-        .map(|_| OpenAiGenerationIds::new(OpenAiCacheHints::default(), None))
+        .map(|_| OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false))
         .collect::<Vec<_>>();
     let mut sessions = std::collections::BTreeSet::new();
     let mut requests = std::collections::BTreeSet::new();

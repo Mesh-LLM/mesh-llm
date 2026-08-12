@@ -229,6 +229,26 @@ Config file semantics:
   execute in staged mode.
 - Unsupported or deferred rows are documented as rejected, not silent no-ops.
 
+## Local request logging
+
+The advanced help (`mesh-llm --help-advanced`) describes the node-local
+logging store, artifact capture modes, retention, and configuration precedence.
+Canonical request lifecycle events now use the production `OutputEvent`
+projection. `--log-format json` writes one JSON object per stdout line, while
+pretty and TUI output stays on stderr. The bounded local fields are request and
+event IDs, replay channel and sequence, terminal outcome, HTTP status,
+duration, and numeric token counts when available; prompts, completions,
+artifact bodies, credentials, URLs, and free-form payload/error detail are
+excluded. These local IDs stay out of mesh/network and OTLP telemetry; terminal
+output is process observation, not the trusted-local ledger export.
+
+The interactive request ledger is the embedded console's **Logs** tab. It is a
+trusted-local management surface, distinct from `/api/events` and
+`/api/runtime/events`; operators should use the console rather than parsing
+terminal output to perform export, retention cleanup, request deletion, or
+webhook retry. See [LOGGING.md](LOGGING.md) for the operator workflow and
+privacy boundary.
+
 ## Commands
 
 ### `models`

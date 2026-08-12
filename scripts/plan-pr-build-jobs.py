@@ -45,6 +45,7 @@ JOB_ROUTES: tuple[tuple[str, str], ...] = (
     ("linux_public_mesh_admission", "public_mesh_admission"),
     ("hf_download_smoke", "hf_download"),
     ("inference_smoke_tests", "inference_smoke"),
+    ("macos_metal_inference_smoke_tests", "macos_metal_inference_smoke"),
     ("agent_live_smokes", "agent_live"),
     ("two_node_client_serving_smoke", "two_node_client"),
     ("two_node_split_smoke", "two_node_split"),
@@ -185,6 +186,11 @@ def route_requirements(raw_payload: object) -> dict[str, bool]:
         "kotlin_sdk_input": eligible and sdk_required,
         "swift_sdk": eligible and macos_inference and sdk_required,
         "macos_product": eligible and macos_inference,
+        # Metal shaders JIT-compile at model open, so backend changes need a
+        # real model load on a Metal GPU (macos-15 = Apple Silicon).
+        "macos_metal_inference_smoke": eligible
+        and macos_inference
+        and payload["backend_changed"],
         "macos_unit_tests": eligible
         and (
             payload["all_rust"]
@@ -199,6 +205,7 @@ def route_requirements(raw_payload: object) -> dict[str, bool]:
             or payload["all_rust"]
             or payload["windows_cpu_required"]
             or payload["windows_gpu_required"]
+            or "mesh-llm-log-store" in affected
         ),
         "windows_host": eligible
         and (

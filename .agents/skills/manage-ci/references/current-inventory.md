@@ -119,9 +119,11 @@ unseeded cache.
 `pr_builds.yml` uses the same split producer/composer shape for Linux CPU/GPU
 and macOS Metal products while retaining debug-profile hosts for lightweight
 PR iteration. Windows broad-Rust validation stays at lightweight Cargo checks;
-the debug host plus CPU or GPU runtime/product graph runs only for its
-platform/backend input or manual dispatch. Unsupported macOS CUDA, ROCm, and
-Vulkan combinations are omitted rather than emitted as no-op jobs.
+`windows_checks` also runs focused `mesh-llm-log-store` artifact-path and
+SQLite root/database/WAL/SHM privacy-ACL tests when that crate is affected or
+on manual dispatch. The debug host plus CPU or GPU runtime/product graph runs
+only for its platform/backend input or manual dispatch. Unsupported macOS CUDA,
+ROCm, and Vulkan combinations are omitted rather than emitted as no-op jobs.
 `scripts/plan-pr-build-jobs.py` converts the central change signals into one
 ordered `required_jobs_json` list. Every conditional PR Builds job routes on
 membership in that list and retains normal dependency-success behavior through
@@ -206,7 +208,7 @@ Local actions:
 
 Routing and test-planning scripts:
 
-- `scripts/affected-crates.sh` computes affected crates and reverse dependents.
+- `scripts/affected-crates.sh` computes affected crates and reverse dependents; its fail-open workspace list includes `mesh-llm-log-store`.
 - `scripts/plan-pr-build-jobs.py` maps PR change signals to the single ordered
   top-level job plan consumed by both conditional PR Builds jobs and its stable
   summary gate.

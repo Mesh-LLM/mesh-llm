@@ -1,13 +1,20 @@
 use super::*;
 use std::path::PathBuf;
 
+fn audit_runtime_model_load_result<T>(result: Result<T>) -> Result<T> {
+    result.inspect_err(|_| {
+        record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadFailed);
+    })
+}
+
 /// Run auto-load for a runtime model.
 pub(crate) async fn run_auto_load_runtime_model(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     spec: String,
     profile: String,
 ) -> Result<api::RuntimeLoadResponse> {
-    let model_path = resolve_model(&PathBuf::from(&spec)).await?;
+    record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadStarted);
+    let model_path = audit_runtime_model_load_result(resolve_model(&PathBuf::from(&spec)).await)?;
     let runtime_model_name = find_remote_catalog_model_exact_blocking(spec.clone())
         .await
         .map(|model| models::remote_catalog_model_ref(&model))
@@ -44,14 +51,15 @@ pub(crate) async fn run_auto_load_runtime_model(
         &ctx.config.gpu,
     );
     let instance_id = next_runtime_instance_id(ctx.next_runtime_instance_sequence);
-    let capacity_reservation = reserve_runtime_capacity_for_model(
-        ctx.runtime_capacity_ledger,
-        &instance_id,
-        &runtime_model_name,
-        None,
-        ctx.node.local_runtime_capacity_bytes(),
-        model_bytes,
-    )?;
+    let capacity_reservation =
+        audit_runtime_model_load_result(reserve_runtime_capacity_for_model(
+            ctx.runtime_capacity_ledger,
+            &instance_id,
+            &runtime_model_name,
+            None,
+            ctx.node.local_runtime_capacity_bytes(),
+            model_bytes,
+        ))?;
     add_serving_assignment(ctx.node, ctx.primary_model_name, &runtime_model_name).await;
     let launch_started = Instant::now();
     let capacity_budget_bytes = capacity_reservation.capacity_budget_bytes();
@@ -100,6 +108,7 @@ pub(crate) async fn run_auto_load_runtime_model(
                 launch_started.elapsed(),
                 survey::classify_launch_failure(&err),
             );
+            record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadFailed);
             return Err(err);
         }
     };
@@ -195,6 +204,7 @@ pub(crate) async fn run_auto_load_runtime_model(
             lifecycle,
         },
     );
+    record_runtime_operational_event(RuntimeOperationalEvent::ModelReady);
     Ok(api::RuntimeLoadResponse {
         model_ref: requested_model,
         model: loaded_name,

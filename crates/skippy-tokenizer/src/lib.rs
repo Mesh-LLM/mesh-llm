@@ -12,7 +12,60 @@ pub const MAX_TOKENIZE_INPUT_BYTES: usize = 1_048_576;
 pub const MAX_TOKENIZE_BATCH_SIZE: usize = 64;
 pub const MAX_TOKENIZE_BATCH_INPUT_BYTES: usize = 8 * MAX_TOKENIZE_INPUT_BYTES;
 pub const MAX_TOKENIZE_TOKENS: usize = 262_144;
+pub const MAX_TOKENIZE_PIECES: usize = 4_096;
 pub const TOKENIZER_VERSION: &str = "gguf-native-v1";
+
+/// One piece of a structured, lossless encode request. Control descriptors are
+/// opaque to Mesh; a runtime may accept them only when it can preserve their
+/// native meaning without decoding them as ordinary text.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InputPiece {
+    Bytes(Vec<u8>),
+    Control { descriptor: Vec<u8> },
+}
+
+impl InputPiece {
+    fn len(&self) -> usize {
+        match self {
+            Self::Bytes(bytes) | Self::Control { descriptor: bytes } => bytes.len(),
+        }
+    }
+}
+
+/// A bounded request to encode structured input. The byte run is not decoded
+/// with replacement semantics: runtimes that cannot preserve it must return
+/// [`TokenizerError::UnsupportedInput`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncodeRequest {
+    pub expected_identity: TokenizerIdentity,
+    pub pieces: Vec<InputPiece>,
+}
+
+impl EncodeRequest {
+    pub fn new(expected_identity: TokenizerIdentity, pieces: Vec<InputPiece>) -> Self {
+        Self {
+            expected_identity,
+            pieces,
+        }
+    }
+
+    pub fn bytes(expected_identity: TokenizerIdentity, bytes: Vec<u8>) -> Self {
+        Self::new(expected_identity, vec![InputPiece::Bytes(bytes)])
+    }
+
+    pub fn total_input_bytes(&self) -> Option<usize> {
+        self.pieces
+            .iter()
+            .map(InputPiece::len)
+            .try_fold(0, usize::checked_add)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EncodeResponse {
+    pub identity: TokenizerIdentity,
+    pub token_ids: Vec<i32>,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TokenizerIdentity {
@@ -165,8 +218,14 @@ pub enum TokenizerError {
     InputTooLarge {
         limit: usize,
     },
+    TooManyPieces {
+        limit: usize,
+    },
     TooManyTokens {
         limit: usize,
+    },
+    UnsupportedInput {
+        reason: String,
     },
     BackendFailure {
         message: String,
@@ -184,7 +243,9 @@ impl TokenizerError {
             Self::BatchTooLarge { .. } => "batch_too_large",
             Self::BatchInputTooLarge { .. } => "batch_input_too_large",
             Self::InputTooLarge { .. } => "input_too_large",
+            Self::TooManyPieces { .. } => "too_many_pieces",
             Self::TooManyTokens { .. } => "too_many_tokens",
+            Self::UnsupportedInput { .. } => "unsupported_input",
             Self::BackendFailure { .. } => "backend_failure",
         }
     }
@@ -209,8 +270,14 @@ impl fmt::Display for TokenizerError {
             Self::InputTooLarge { limit } => {
                 write!(formatter, "tokenizer input exceeds {limit} bytes")
             }
+            Self::TooManyPieces { limit } => {
+                write!(formatter, "tokenizer input exceeds {limit} pieces")
+            }
             Self::TooManyTokens { limit } => {
                 write!(formatter, "tokenizer output exceeds {limit} tokens")
+            }
+            Self::UnsupportedInput { reason } => {
+                write!(formatter, "tokenizer does not support this input: {reason}")
             }
             Self::BackendFailure { message } => {
                 write!(formatter, "tokenizer backend failure: {message}")
@@ -238,6 +305,13 @@ pub trait Tokenizer: Send + Sync {
         &self,
         requests: &[TokenizeRequest],
     ) -> Result<Vec<TokenizeBatchItem>, TokenizerError>;
+
+    /// Encode one structured byte/control sequence with automatic special-token
+    /// insertion disabled. Implementations must reject input they cannot
+    /// preserve exactly instead of applying lossy decoding. Mesh does not
+    /// interpret Rosetta or control identities; control descriptors remain
+    /// opaque to this contract.
+    fn encode(&self, request: EncodeRequest) -> Result<EncodeResponse, TokenizerError>;
 }
 
 #[cfg(test)]
@@ -289,6 +363,13 @@ mod tests {
         assert_eq!(
             TokenizerError::UnsupportedStage { stage_index: 1 }.code(),
             "unsupported_stage"
+        );
+        assert_eq!(
+            TokenizerError::UnsupportedInput {
+                reason: "invalid UTF-8".to_owned()
+            }
+            .code(),
+            "unsupported_input"
         );
     }
 }

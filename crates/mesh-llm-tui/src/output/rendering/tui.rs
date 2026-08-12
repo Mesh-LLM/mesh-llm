@@ -3,8 +3,7 @@ use super::{
     Layout, Line, PRETTY_TUI_MIN_DASHBOARD_WIDTH, Paragraph, RatatuiClear, Rect, Span, Style,
     TuiTerminal, dashboard_status_line, render_events_panel, render_join_token_panel,
     render_model_progress_loader, render_models_panel, render_process_table,
-    render_processes_panel, render_requests_panel, render_tui_logo,
-    tui_join_token_copy_button_area, tui_layout, tui_theme,
+    render_processes_panel, render_requests_panel, render_tui_logo, tui_layout, tui_theme,
 };
 use std::io;
 
@@ -89,12 +88,9 @@ pub(in crate::output) fn render_full_screen_panel(
         .areas(panel_area);
 
     match panel {
-        DashboardPanel::JoinToken => render_join_token_panel(
-            frame,
-            state,
-            panel_area,
-            tui_join_token_copy_button_area(panel_area),
-        ),
+        DashboardPanel::JoinToken => {
+            render_join_token_panel(frame, state, panel_area, Rect::default())
+        }
         DashboardPanel::Events => render_events_panel(frame, state, title_area, body_area),
         DashboardPanel::LlamaCpp | DashboardPanel::Webserver => {
             render_process_table(frame, state, panel, title_area, body_area)

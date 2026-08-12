@@ -109,7 +109,7 @@ function buildProps(overrides: Partial<Parameters<typeof ChatPage>[0]> = {}): Pa
       my_vram_gb: 12,
       peers: []
     },
-    inviteToken: 'invite-token',
+    invitationReady: true,
     isPublicMesh: false,
     isFlyHosted: false,
     inflightRequests: 0,
@@ -341,6 +341,16 @@ afterEach(() => {
 })
 
 describe('ChatPage', () => {
+  it('keeps private mesh invitation details token-free', () => {
+    render(<ChatPage {...buildProps({ invitationReady: true, selectedModel: 'model-a' })} />)
+
+    expect(screen.getByText('Private mesh invitation ready')).toBeInTheDocument()
+    expect(screen.getByText('Selected model: model-a')).toBeInTheDocument()
+    expect(screen.getByText('Use the mesh connection controls to securely add another machine.')).toBeInTheDocument()
+    expect(screen.queryByText('invite-token')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /copy invite/i })).not.toBeInTheDocument()
+  })
+
   it('allows attachment-only sends and renders attachment controls', () => {
     render(
       <ChatPage

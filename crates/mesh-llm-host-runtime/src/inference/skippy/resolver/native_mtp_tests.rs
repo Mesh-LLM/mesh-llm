@@ -1,12 +1,91 @@
+use super::super::{SkippyModelHandle, SkippyModelLoadOptions};
 use super::test_support::*;
 use super::*;
 use crate::inference::skippy::SkippyTelemetryOptions;
+use anyhow::Result;
+use openai_frontend::OpenAiBackend;
 use skippy_protocol::LoadMode;
 use skippy_runtime::package::{
     PackageExtensionPolicyInfo, PackageGenerationInfo, PackageSpeculativeDecodingInfo,
     PackageSpeculativeProposerInfo, PackageSpeculativeStrategyInfo, PackageWindowPolicyInfo,
 };
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+
+#[derive(Default)]
+struct RecordingNativeProposalIngress {
+    proposals: AtomicUsize,
+    reports: Mutex<Vec<skippy_server::LinearProposalReceipt>>,
+}
+
+impl skippy_server::LinearProposalIngress for RecordingNativeProposalIngress {
+    fn propose(
+        &self,
+        _query: skippy_server::LinearProposalQuery,
+    ) -> anyhow::Result<skippy_server::LinearProposalSourceResponse> {
+        self.proposals.fetch_add(1, Ordering::Relaxed);
+        let decision_id = skippy_server::OpaqueProposalDecisionId::new(vec![1])?;
+        Ok(skippy_server::LinearProposalSourceResponse::new(Some(
+            skippy_server::LinearProposal::new(decision_id, vec![0]),
+        )))
+    }
+
+    fn report(&self, receipt: &skippy_server::LinearProposalReceipt) -> anyhow::Result<()> {
+        self.reports.lock().unwrap().push(receipt.clone());
+        Ok(())
+    }
+}
+
+struct NoopGenerationReceiptSink;
+
+impl skippy_server::frontend::GenerationReceiptSink for NoopGenerationReceiptSink {
+    fn begin(&self, _start: &skippy_server::frontend::GenerationStart) -> Result<()> {
+        Ok(())
+    }
+
+    fn committed(&self, _commit: &skippy_server::frontend::GenerationCommit) -> Result<()> {
+        Ok(())
+    }
+
+    fn abort(&self, _abort: &skippy_server::frontend::GenerationAbort) -> Result<()> {
+        Ok(())
+    }
+
+    fn record(&self, _receipt: &skippy_server::frontend::GenerationReceipt) -> Result<()> {
+        Ok(())
+    }
+}
+
+struct RecordingNativeHooksFactory {
+    ingress: Arc<RecordingNativeProposalIngress>,
+}
+
+impl skippy_server::serving_hooks::ModelServingHooksFactory for RecordingNativeHooksFactory {
+    fn create(
+        &self,
+        _tokenizer: skippy_server::TokenizerCapability,
+    ) -> Result<skippy_server::serving_hooks::ModelServingHooks> {
+        let source: Arc<dyn skippy_server::LinearProposalIngress> = self.ingress.clone();
+        let ingress = skippy_server::frontend::LinearProposalIngressConfig::new(
+            source,
+            Duration::from_millis(25),
+            1,
+        )?;
+        Ok(skippy_server::serving_hooks::ModelServingHooks::new(
+            skippy_server::frontend::GenerationReceiptConfig::new(Arc::new(
+                NoopGenerationReceiptSink,
+            )),
+            ingress,
+        ))
+    }
+}
 
 fn native_mtp_generation() -> PackageGenerationInfo {
     let mut proposers = BTreeMap::new();
@@ -761,7 +840,7 @@ strategy = "ngram-suffix"
 }
 
 #[test]
-fn standalone_ngram_rejected_for_single_stage_serving() {
+fn standalone_ngram_uses_native_plugin_verify_path_for_single_stage_serving() {
     let mesh_config = parse_config(
         r#"
 [defaults.speculative]
@@ -789,17 +868,102 @@ ngram_max_proposal_tokens = 48
         .to_embedded_openai_args(4096, true)
         .expect("staged serving should build OpenAI args");
 
-    // Single-stage/direct serving has no N-gram verify path, so it must reject
-    // rather than silently run target-only while reporting a proposer.
-    let error = resolved
+    // Single-stage/direct serving uses the native plugin ingress, whose
+    // proposal is verified and repaired by the local target runtime.
+    let openai = resolved
         .to_embedded_openai_args(0, false)
-        .expect_err("single-stage standalone N-gram must be rejected");
-    assert!(
-        error
-            .to_string()
-            .contains("requires multi-stage split serving"),
-        "{error}"
+        .expect("single-stage standalone N-gram should use the native plugin verify path");
+    assert_eq!(openai.speculative_window, 48);
+    assert_eq!(
+        openai.speculative.ngram.as_ref().map(|ngram| ngram.kind),
+        Some(skippy_server::NgramProposerKind::Suffix)
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_single_stage_serving_delivers_target_authoritative_native_receipts() -> Result<()> {
+    let Some(model_path) = std::env::var_os("SKIPPY_NATIVE_PLUGIN_MODEL") else {
+        eprintln!("skipping: SKIPPY_NATIVE_PLUGIN_MODEL is not set");
+        return Ok(());
+    };
+    let model_path = Path::new(&model_path);
+    let model_bytes = std::fs::metadata(model_path)?.len();
+    let model_id = "Qwen/Qwen3-0.6B:Q4_K_M";
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "ngram-suffix"
+ngram_min = 2
+ngram_max = 8
+ngram_max_proposal_tokens = 1
+"#,
+    );
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id,
+        model_path,
+        model_bytes,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })?;
+    let embedded_openai = resolved.to_embedded_openai_args(0, false)?;
+    let ingress = Arc::new(RecordingNativeProposalIngress::default());
+    let factory: skippy_server::serving_hooks::SharedModelServingHooksFactory =
+        Arc::new(RecordingNativeHooksFactory {
+            ingress: Arc::clone(&ingress),
+        });
+    let mut options = SkippyModelLoadOptions::for_direct_gguf(model_id, model_path)
+        .with_ctx_size(256)
+        .with_embedded_openai(embedded_openai)
+        .with_serving_hooks_factory(Some(factory));
+    options.n_gpu_layers = 0;
+
+    let handle = SkippyModelHandle::load_with_hooks(
+        options,
+        None,
+        crate::runtime::survey::SurveyTelemetry::disabled(),
+    )?;
+    let request = serde_json::from_value(serde_json::json!({
+        "model": model_id,
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "max_tokens": 2,
+        "temperature": 0.0
+    }))?;
+    let response = handle.chat_completion(request).await;
+    handle.shutdown();
+    response?;
+
+    for _ in 0..100 {
+        if !ingress.reports.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(ingress.proposals.load(Ordering::Relaxed) > 0);
+    let reports = ingress.reports.lock().unwrap();
+    assert!(
+        !reports.is_empty(),
+        "native proposal report was not delivered"
+    );
+    for receipt in reports.iter() {
+        assert_eq!(receipt.proposal_token_count, 1);
+        assert!(receipt.verification_rows > 0);
+        assert!(receipt.accepted_proposal_tokens <= receipt.proposal_token_count);
+        assert!(!receipt.committed_tokens.is_empty());
+        assert_eq!(
+            receipt.canonical_prediction_count,
+            receipt.committed_tokens.len()
+        );
+        assert_eq!(
+            receipt.verification_rows,
+            receipt.verification_row_predictions.len()
+        );
+        assert!(receipt.canonical_prediction_count <= receipt.verification_rows);
+        assert!(receipt.canonical_position >= receipt.base_position);
+        assert!(receipt.canonical_position <= receipt.position_after_verification);
+    }
+    Ok(())
 }
 
 #[test]

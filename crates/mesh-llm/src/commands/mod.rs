@@ -23,7 +23,11 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
     let Some(cmd) = cli.command.as_ref() else {
         return Ok(false);
     };
-    dispatch_command(cli, cmd).await?;
+    let command_boundary =
+        mesh_llm_commands::operational_logging::CommandDispatchBoundary::start(cmd);
+    let result = dispatch_command(cli, cmd).await;
+    command_boundary.finish(&result);
+    result?;
     Ok(true)
 }
 

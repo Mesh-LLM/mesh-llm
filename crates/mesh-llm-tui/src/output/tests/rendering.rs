@@ -576,269 +576,71 @@ pub(super) fn tui_band_heights_never_exceed_terminal_budget() {
     );
 }
 #[test]
-pub(super) fn tui_invite_token_event_populates_join_token_panel() {
+pub(super) fn tui_invite_event_exposes_token_in_dashboard() {
     let mut state = DashboardState::default();
-    state.reduce(DashboardAction::OutputEvent(OutputEvent::InviteToken {
-        token: "mesh-invite-token-123".to_string(),
-        mesh_id: "mesh-alpha".to_string(),
-        mesh_name: None,
-    }));
-
-    let join_token = state
-        .join_token
-        .as_ref()
-        .expect("invite token event should populate dashboard join token state");
-    assert_eq!(join_token.token, "mesh-invite-token-123");
-    assert_eq!(join_token.mesh_id, "mesh-alpha");
-    assert_eq!(join_token.copy_status, DashboardJoinTokenCopyStatus::Idle);
-
-    let rendered = render_tui_frame_snapshot(&state, 120, 24);
-    let (join_index, _) = find_rendered_line(&rendered, "Join Token");
-    let (events_index, _) = find_rendered_line(&rendered, "Mesh Events");
-    assert!(
-        join_index < events_index,
-        "join token panel should render above existing dashboard panels\n{rendered}"
-    );
-    assert!(rendered.contains("mesh-invite-token-123"));
-    assert!(rendered.contains("Copy"));
-
-    let lines: Vec<&str> = rendered.lines().collect();
-    assert!(
-        lines[join_index.saturating_add(1)]
-            .trim_matches(|ch| ch == '│' || ch == ' ')
-            .is_empty(),
-        "join token panel should leave one blank body row above the token\n{rendered}"
-    );
-    assert!(
-        lines[join_index.saturating_add(3)]
-            .trim_matches(|ch| ch == '│' || ch == ' ')
-            .is_empty(),
-        "join token panel should leave one blank body row below the token\n{rendered}"
-    );
-}
-#[test]
-pub(super) fn tui_join_token_copy_button_hit_test_uses_latest_resize() {
-    let mut state = DashboardState::default();
-    state.apply_tui_event(TuiEvent::Resize {
-        columns: 120,
-        rows: 24,
-    });
-    state.reduce(DashboardAction::OutputEvent(OutputEvent::InviteToken {
-        token: "mesh-invite-token-123".to_string(),
-        mesh_id: "mesh-alpha".to_string(),
-        mesh_name: None,
-    }));
-    let areas = tui_layout(Rect::new(0, 0, 120, 24), &state);
-
-    assert!(state.join_token_copy_button_contains(
-        areas.join_token_copy_button.x,
-        areas.join_token_copy_button.y
-    ));
-    assert!(!state.join_token_copy_button_contains(0, 0));
-}
-#[test]
-pub(super) fn tui_join_token_is_selectable_with_backtab_and_mouse() {
-    let mut state = DashboardState::default();
-    state.apply_tui_event(TuiEvent::Resize {
-        columns: 120,
-        rows: 24,
-    });
-    assert_eq!(state.panel_focus, DashboardPanel::Events);
-
-    state.apply_tui_event(TuiEvent::Key(TuiKeyEvent::BackTab));
-    assert_eq!(state.panel_focus, DashboardPanel::JoinToken);
-
-    state.panel_focus = DashboardPanel::Events;
-    let areas = tui_layout(Rect::new(0, 0, 120, 24), &state);
-    state.apply_tui_event(TuiEvent::MouseDown {
-        column: areas.join_token_panel.x.saturating_add(1),
-        row: areas.join_token_panel.y.saturating_add(1),
-    });
-    assert_eq!(state.panel_focus, DashboardPanel::JoinToken);
-
-    let rendered = render_tui_frame_snapshot(&state, 120, 24);
-    assert!(
-        rendered.contains("▶ Join Token"),
-        "focused join-token panel should use the standard focus marker\n{rendered}"
-    );
-}
-#[test]
-pub(super) fn tui_join_token_copy_shortcut_does_not_require_panel_focus() {
-    let mut state = DashboardState::default();
-    state.reduce(DashboardAction::OutputEvent(OutputEvent::InviteToken {
-        token: "mesh-invite-token-123".to_string(),
-        mesh_id: "mesh-alpha".to_string(),
-        mesh_name: None,
-    }));
-    state.panel_focus = DashboardPanel::Events;
-
-    assert!(state.join_token_copy_shortcut_enabled());
-
-    state.events_filter.editing = true;
-    assert!(!state.join_token_copy_shortcut_enabled());
-}
-#[test]
-pub(super) fn tui_join_token_scrolls_horizontally_with_left_right_keys() {
-    let mut state = DashboardState::default();
-    state.apply_tui_event(TuiEvent::Resize {
-        columns: 48,
-        rows: 24,
-    });
-    state.reduce(DashboardAction::OutputEvent(OutputEvent::InviteToken {
-        token: "mesh-invite-token-abcdefghijklmnopqrstuvwxyz-0123456789".to_string(),
-        mesh_id: "mesh-alpha".to_string(),
-        mesh_name: None,
-    }));
-    state.panel_focus = DashboardPanel::JoinToken;
-
-    assert_eq!(
-        state
-            .panel_view_state(DashboardPanel::JoinToken)
-            .scroll_offset,
-        0
-    );
-    state.apply_tui_event(TuiEvent::Key(TuiKeyEvent::Right));
-    assert_eq!(
-        state
-            .panel_view_state(DashboardPanel::JoinToken)
-            .scroll_offset,
-        1
-    );
-    state.apply_tui_event(TuiEvent::Key(TuiKeyEvent::Left));
-    assert_eq!(
-        state
-            .panel_view_state(DashboardPanel::JoinToken)
-            .scroll_offset,
-        0
-    );
-
-    state.apply_tui_event(TuiEvent::Key(TuiKeyEvent::Char('G')));
-    let view = state.panel_view_state(DashboardPanel::JoinToken);
-    assert!(
-        view.scroll_offset > 0,
-        "G should jump to the end of the horizontally scrollable token"
-    );
-    state.apply_tui_event(TuiEvent::Key(TuiKeyEvent::Char('g')));
-    assert_eq!(
-        state
-            .panel_view_state(DashboardPanel::JoinToken)
-            .scroll_offset,
-        0
-    );
-}
-#[test]
-pub(super) fn join_token_slice_indicates_hidden_content() {
-    let token = "abcdefghij";
-
-    assert_eq!(join_token_visible_slice(token, 0, 5), "abcd…");
-    assert_eq!(join_token_visible_slice(token, 2, 5), "…cde…");
-    assert_eq!(join_token_visible_slice(token, 5, 5), "…fghi");
-    assert_eq!(join_token_visible_slice(token, 0, 10), token);
-}
-#[test]
-pub(super) fn join_token_slice_handles_narrow_widths() {
-    assert_eq!(join_token_visible_slice("", 0, 5), "");
-    assert_eq!(join_token_visible_slice("abcdef", 0, 0), "");
-    assert_eq!(join_token_visible_slice("abcdef", 0, 1), "…");
-    assert_eq!(join_token_visible_slice("abcdef", 2, 1), "…");
-    assert_eq!(join_token_visible_slice("abcdef", 5, 1), "…");
-}
-#[test]
-pub(super) fn tui_join_token_status_renders_on_right_title_bar() {
-    let mut state = DashboardState::default();
-    state.reduce(DashboardAction::OutputEvent(OutputEvent::InviteToken {
-        token: "mesh-invite-token-123".to_string(),
-        mesh_id: "mesh-alpha".to_string(),
-        mesh_name: None,
-    }));
-    state.reduce(DashboardAction::SetJoinTokenCopyStatus(
-        DashboardJoinTokenCopyStatus::Copied { at: Instant::now() },
-    ));
-
-    let rendered = render_tui_frame_snapshot(&state, 120, 24);
-    let (_, join_title_line) = find_rendered_line(&rendered, "Join Token");
-    let mesh_index = join_title_line
-        .find("mesh=mesh-alpha")
-        .expect("left title should include mesh id");
-    let copied_index = join_title_line
-        .rfind("copied to clipboard")
-        .expect("right title should include copy status");
-    assert!(
-        mesh_index < 40,
-        "mesh id should stay near the left title bar"
-    );
-    assert!(
-        copied_index > 90,
-        "copy status should be aligned toward the far right title bar: {join_title_line:?}"
-    );
-    assert!(
-        rendered.contains("Copied"),
-        "copy status should be visible on the copy control too\n{rendered}"
-    );
-}
-#[test]
-pub(super) fn tui_join_token_copy_status_clears_after_ttl() {
-    let mut state = DashboardState::default();
-    state.reduce(DashboardAction::OutputEvent(OutputEvent::InviteToken {
-        token: "mesh-invite-token-123".to_string(),
-        mesh_id: "mesh-alpha".to_string(),
-        mesh_name: None,
-    }));
-    let now = Instant::now();
-    state.reduce(DashboardAction::SetJoinTokenCopyStatus(
-        DashboardJoinTokenCopyStatus::Copied {
-            at: now - Duration::from_secs(1),
-        },
-    ));
-
-    assert!(!state.clear_expired_join_token_copy_status(now));
-    assert!(matches!(
-        state
-            .join_token
-            .as_ref()
-            .map(|join_token| &join_token.copy_status),
-        Some(DashboardJoinTokenCopyStatus::Copied { .. })
-    ));
-
-    state.reduce(DashboardAction::SetJoinTokenCopyStatus(
-        DashboardJoinTokenCopyStatus::Failed {
-            message: "clipboard unavailable".to_string(),
-            at: now - PRETTY_TUI_JOIN_TOKEN_COPY_STATUS_TTL - Duration::from_millis(1),
-        },
-    ));
-
-    assert!(state.clear_expired_join_token_copy_status(now));
-    assert_eq!(
-        state
-            .join_token
-            .as_ref()
-            .map(|join_token| &join_token.copy_status),
-        Some(&DashboardJoinTokenCopyStatus::Idle)
-    );
-}
-#[test]
-pub(super) fn tui_full_screen_join_token_wraps_long_token() {
-    let mut state = DashboardState::default();
-    state.apply_tui_event(TuiEvent::Resize {
-        columns: 64,
-        rows: 16,
-    });
     state.reduce(DashboardAction::OutputEvent(OutputEvent::InviteToken {
         token: "mesh-invite-token-abcdefghijklmnopqrstuvwxyz-0123456789-tail".to_string(),
         mesh_id: "mesh-alpha".to_string(),
         mesh_name: None,
     }));
-    state.panel_focus = DashboardPanel::JoinToken;
-    state.apply_tui_event(TuiEvent::Key(TuiKeyEvent::Enter));
-    assert_eq!(state.full_screen_panel, Some(DashboardPanel::JoinToken));
+    let join_token = state
+        .join_token
+        .as_ref()
+        .expect("invite metadata is retained");
+    assert_eq!(join_token.mesh_id, "mesh-alpha");
+    assert_eq!(
+        join_token.token,
+        "mesh-invite-token-abcdefghijklmnopqrstuvwxyz-0123456789-tail"
+    );
 
-    let rendered = render_tui_frame_snapshot(&state, 64, 16);
-
+    let areas = tui_layout(Rect::new(0, 0, 120, 24), &state);
+    assert_eq!(areas.join_token_copy_button.width, 0);
+    assert_eq!(areas.join_token_copy_button.height, 0);
     assert!(
-        rendered.contains("789-tail"),
-        "expected full-screen join-token panel to wrap instead of slicing the token tail\n{rendered}"
+        join_token_text_area(areas.join_token_panel).height >= 2,
+        "join token text area must have room for the mesh label and token"
+    );
+
+    let rendered = render_tui_frame_snapshot(&state, 120, 24);
+    assert!(rendered.contains("Invite for mesh mesh-alpha"));
+    assert!(rendered.contains("mesh-invite-token-abcdefghijklmnopqrstuvwxyz-0123456789-tail"));
+}
+
+#[test]
+pub(super) fn tui_join_token_text_area_requires_two_message_rows() {
+    let too_short = join_token_text_area(Rect::new(0, 0, 80, 3));
+    assert_eq!(
+        too_short.height, 0,
+        "a three-row panel cannot fit both lines"
+    );
+
+    let two_lines = join_token_text_area(Rect::new(0, 0, 80, 4));
+    assert_eq!(two_lines.height, 2, "a four-row panel fits both lines");
+}
+
+#[test]
+pub(super) fn tui_join_token_wraps_and_redraws_in_a_constrained_frame() {
+    let mut state = DashboardState::default();
+    state.reduce(DashboardAction::OutputEvent(OutputEvent::InviteToken {
+        token: "mesh-invite-token-abcdefghijklmnopqrstuvwxyz-0123456789-tail".to_string(),
+        mesh_id: "mesh-alpha".to_string(),
+        mesh_name: None,
+    }));
+    state.reduce(DashboardAction::EnterFullScreenPanel(
+        DashboardPanel::JoinToken,
+    ));
+
+    let rendered = render_tui_frame_snapshot(&state, 60, 8);
+    assert!(
+        rendered.contains("mesh-invite-token-abcdefghijklmnopqrstuvwxyz"),
+        "expected the narrow frame to render the first wrapped token line: {rendered}"
+    );
+    assert!(
+        rendered.contains("9-tail"),
+        "expected the narrow frame to redraw the token tail: {rendered}"
     );
 }
+
 #[test]
 pub(super) fn tui_join_token_title_includes_mesh_name_when_available() {
     let mut state = DashboardState::default();

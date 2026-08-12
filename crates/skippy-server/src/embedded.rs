@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::Router;
-use openai_frontend::OpenAiBackend;
+use openai_frontend::{OpenAiBackend, OpenAiFrontendConfig, OpenAiLifecycleObserver};
 use skippy_protocol::{StageConfig, StageTopology};
 use tokio::{sync::oneshot, task::JoinHandle};
 
@@ -166,6 +166,7 @@ impl SkippyRuntimeHandle {
             &RuntimeLaunchOverrides {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
+                mtp_source: skippy_runtime::MtpSource::Disabled,
             },
         )?
         .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;
@@ -201,6 +202,7 @@ impl SkippyRuntimeHandle {
             &RuntimeLaunchOverrides {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
+                mtp_source: skippy_runtime::MtpSource::Disabled,
             },
             model_open_event_reporter.as_mut().map(|reporter| {
                 reporter.as_mut() as &mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)
@@ -437,6 +439,44 @@ pub(crate) fn openai_backend_router(
     tokenizer: TokenizerCapability,
 ) -> Router {
     openai_frontend::router_for(backend).merge(tokenizer_http_router(tokenizer))
+}
+
+/// Start an OpenAI backend with an optional metadata-only lifecycle observer.
+///
+/// The existing [`start_openai_backend`] entry point retains the no-observer
+/// behavior for embedders that do not own a logging runtime.
+pub fn start_openai_backend_with_lifecycle_observer(
+    bind_addr: SocketAddr,
+    backend: Arc<dyn OpenAiBackend>,
+    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+) -> EmbeddedServerHandle {
+    spawn_openai_backend(
+        bind_addr,
+        openai_backend_router_with_lifecycle_observer(backend, lifecycle_observer),
+    )
+}
+
+/// Start a tokenizer-aware OpenAI backend with an optional metadata-only
+/// lifecycle observer.
+pub fn start_openai_backend_with_tokenizer_and_lifecycle_observer(
+    bind_addr: SocketAddr,
+    backend: Arc<dyn OpenAiBackend>,
+    tokenizer: TokenizerCapability,
+    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+) -> EmbeddedServerHandle {
+    let router = openai_backend_router_with_lifecycle_observer(backend, lifecycle_observer)
+        .merge(tokenizer_http_router(tokenizer));
+    spawn_openai_backend(bind_addr, router)
+}
+
+fn openai_backend_router_with_lifecycle_observer(
+    backend: Arc<dyn OpenAiBackend>,
+    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+) -> Router {
+    let config = lifecycle_observer.map_or_else(OpenAiFrontendConfig::default, |observer| {
+        OpenAiFrontendConfig::default().with_lifecycle_observer(observer)
+    });
+    openai_frontend::router_for_with_config(backend, config)
 }
 
 pub fn start_binary_stage(options: BinaryStageOptions) -> EmbeddedServerHandle {
@@ -805,5 +845,110 @@ mod tests {
         });
         assert!(source.is_poisoned(), "precondition: source is poisoned");
         let _ = read_without_blocking(&source, &cache, |v| *v);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use openai_frontend::{
+        ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, ModelObject,
+        OpenAiFrontendRoute, OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRequestContext,
+        OpenAiResult,
+    };
+    use tower::ServiceExt;
+
+    use super::*;
+
+    struct ModelsBackend;
+
+    #[async_trait]
+    impl OpenAiBackend for ModelsBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(vec![ModelObject::new("embedded-model")])
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            Err(openai_frontend::OpenAiError::unsupported(
+                "not used by this test",
+            ))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            Err(openai_frontend::OpenAiError::unsupported(
+                "not used by this test",
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingObserver(Mutex<Vec<OpenAiLifecycleEvent>>);
+
+    impl OpenAiLifecycleObserver for RecordingObserver {
+        fn observe(&self, event: &OpenAiLifecycleEvent) {
+            self.0
+                .lock()
+                .expect("recording observer lock poisoned")
+                .push(event.clone());
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_observer_reaches_frontend_router_and_legacy_path_stays_available() {
+        let observer = Arc::new(RecordingObserver::default());
+        let observed_response = openai_backend_router_with_lifecycle_observer(
+            Arc::new(ModelsBackend),
+            Some(Arc::clone(&observer) as Arc<dyn OpenAiLifecycleObserver>),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/v1/models")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+        assert_eq!(observed_response.status(), StatusCode::OK);
+        assert!(
+            observer
+                .0
+                .lock()
+                .expect("recording observer lock poisoned")
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    OpenAiLifecycleEvent::Admitted {
+                        context: openai_frontend::OpenAiLifecycleContext {
+                            route: OpenAiFrontendRoute::Models,
+                            ..
+                        }
+                    }
+                ))
+        );
+
+        let legacy_response =
+            openai_backend_router_with_lifecycle_observer(Arc::new(ModelsBackend), None)
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/models")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("router response");
+        assert_eq!(legacy_response.status(), StatusCode::OK);
     }
 }

@@ -8,6 +8,7 @@ members = [
     "crates/mesh-llm-build-info",
     "crates/mesh-llm-gpu-bench",
     "crates/mesh-llm-host-runtime",
+    "crates/mesh-llm-log-store",
     "crates/mesh-llm-hardware-profile",
     "crates/mesh-llm-identity",
     "crates/mesh-llm-native-runtime",

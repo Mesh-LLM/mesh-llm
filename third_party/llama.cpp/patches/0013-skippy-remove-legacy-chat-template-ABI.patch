@@ -1,13 +1,8 @@
-From b0f462268a3839905f51aad642d9eda81ca33b6a Mon Sep 17 00:00:00 2001
+From 40d0345c5bde93d4d7456fadf0cbce54655844e7 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 9 Aug 2026 11:38:10 +1000
-Subject: [PATCH 13/13] skippy: remove legacy chat template ABI
+Subject: [PATCH 13/15] skippy: remove legacy chat template ABI
 
----
- common/stage-chat.cpp         | 94 -----------------------------------
- include/skippy/common.h       |  2 +-
- include/skippy/tokenization.h | 12 -----
- 3 files changed, 1 insertion(+), 107 deletions(-)
 
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
 index 6106600fc..305b9d081 100644
@@ -150,6 +145,3 @@ index d6961e378..7b8c4dcc4 100644
  LLAMA_API enum skippy_status skippy_apply_chat_template_json(
          struct skippy_model * model,
          const char * messages_json,
--- 
-2.50.1 (Apple Git-155)
-

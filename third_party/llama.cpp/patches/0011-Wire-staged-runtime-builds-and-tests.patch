@@ -1,15 +1,8 @@
-From 48f7af92c658d123f6a4933eaa07fda6d0ad8481 Mon Sep 17 00:00:00 2001
+From 66902b293dd126bd23ce266bd80c757ee74e0f71 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 11/13] Wire staged runtime builds and tests
+Subject: [PATCH 11/15] Wire staged runtime builds and tests
 
----
- CMakeLists.txt             |    5 +
- common/CMakeLists.txt      |    1 +
- src/CMakeLists.txt         |   17 +
- tests/CMakeLists.txt       |   11 +
- tests/test-llama-archs.cpp | 1046 +++++++++++++++++++++++++++++++++++-
- 5 files changed, 1075 insertions(+), 5 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 3df1d82db..8e93a13ce 100644
@@ -47,10 +40,10 @@ index 799d22751..a3cfaec11 100644
      speculative.h
      subproc.cpp
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 320784c3a..14caacae8 100644
+index 24f05cc91..ace4a461d 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -36,6 +36,23 @@ add_library(llama
+@@ -37,6 +37,23 @@ add_library(llama
              llama-model.cpp
              llama-quant.cpp
              llama-sampler.cpp
@@ -75,11 +68,11 @@ index 320784c3a..14caacae8 100644
              unicode-data.cpp
              unicode.cpp
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 7a93b19a0..4a1db624c 100644
+index 419e1eba4..6aa8e347a 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -151,6 +151,9 @@ endif ()
- llama_build(test-recurrent-state-rollback.cpp get-model.cpp)
+ llama_build(test-recurrent-state-rollback.cpp)
  
  if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 +    llama_build_and_test(test-skippy-kv-page-export.cpp)
@@ -88,7 +81,7 @@ index 7a93b19a0..4a1db624c 100644
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
      llama_build_and_test(test-sampling.cpp)
      llama_build_and_test(test-reasoning-budget.cpp)
-@@ -265,6 +268,14 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
+@@ -268,6 +271,14 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
  endif()
  llama_build_and_test(test-backend-ops.cpp)
  
@@ -104,7 +97,7 @@ index 7a93b19a0..4a1db624c 100644
  llama_build_and_test(test-autorelease.cpp       LABEL "model")
  llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index a1ed2a76f..927df38cd 100644
+index e900bdc0d..2101381fc 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -14,6 +14,7 @@
@@ -154,7 +147,7 @@ index a1ed2a76f..927df38cd 100644
      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
          n_layer = 3;
      } else if (arch == LLM_ARCH_CHAMELEON) {
-@@ -204,10 +224,35 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -206,10 +226,35 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
      // indexer head count is independent of the main attention head count.
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MINIMAX_M3 ? n_head : uint32_t(1));
@@ -192,7 +185,7 @@ index a1ed2a76f..927df38cd 100644
      ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
      ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
      // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,     n_embd);
-@@ -261,9 +306,244 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -264,9 +309,244 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -438,7 +431,7 @@ index a1ed2a76f..927df38cd 100644
      GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
      llama_model_params model_params = llama_model_default_params();
      model_params.progress_callback = silent_model_load_progress;
-@@ -279,6 +559,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -282,6 +562,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      if (!encode) {
          ctx_params.n_ubatch = 64;
      }
@@ -448,7 +441,7 @@ index a1ed2a76f..927df38cd 100644
  
      size_t tmp = seed;
      llama_model_ptr model(gguf_ctx != nullptr ?
-@@ -294,6 +577,656 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -297,6 +580,656 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -1105,7 +1098,7 @@ index a1ed2a76f..927df38cd 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -427,6 +1360,9 @@ static bool arch_supported(const llm_arch arch) {
+@@ -433,6 +1366,9 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK4) {
          return false;
      }
@@ -1115,7 +1108,7 @@ index a1ed2a76f..927df38cd 100644
  
      // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
  #ifdef GGML_USE_WEBGPU
-@@ -438,6 +1374,20 @@ static bool arch_supported(const llm_arch arch) {
+@@ -452,6 +1388,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -1136,12 +1129,11 @@ index a1ed2a76f..927df38cd 100644
  static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -551,6 +1501,86 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -565,6 +1515,85 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
      const std::string template_row_res = "%15s %10s|%20s|\n";
  
      bool all_ok = true;
-+    if ((target_arch == LLM_ARCH_UNKNOWN || target_arch == LLM_ARCH_GLM_DSA) &&
-+        arch_supported(LLM_ARCH_GLM_DSA)) {
++    if (target_arch == LLM_ARCH_UNKNOWN || target_arch == LLM_ARCH_GLM_DSA) {
 +        bool glm_dsa_contract_ok = true;
 +        const auto run_glm_dsa_contract_test = [&](const char * name, auto && test) {
 +            bool passed = false;
@@ -1223,7 +1215,7 @@ index a1ed2a76f..927df38cd 100644
      common_log_flush(common_log_main());
      printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
      printf("|");
-@@ -600,6 +1630,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -614,6 +1643,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                  std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                  char nmse_str[12] = {0};
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -1236,6 +1228,3 @@ index a1ed2a76f..927df38cd 100644
                  if (!skip) {
                      if (logits_cpu.empty()) {
                          model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
--- 
-2.50.1 (Apple Git-155)
-

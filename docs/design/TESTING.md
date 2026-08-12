@@ -268,6 +268,78 @@ required PR gate. Use it to prove KV/cache stability on a real direct-model
 endpoint after local unit tests and before relying on agent workloads such as
 Goose, Pi, or OpenCode for broad smoke coverage.
 
+### 0g. Logging workflow certification
+
+Use the request logging checks after changing the trusted-local logging service,
+the Logs console, logging configuration, terminal projection, or its privacy
+boundary. Run the UI gates serially from the UI crate:
+
+```bash
+pnpm run lint
+pnpm run typecheck
+pnpm run test
+pnpm run build
+pnpm run test:e2e
+```
+
+The browser suite must use the embedded console routes and exercise the real
+typed logging client paths. Its deterministic contract fixture covers an active
+request reaching a terminal outcome, immediate details, stream filtering,
+replay-gap recovery with a `null` cursor, bounded polling fallback, explicit
+download of a redacted artifact, missing artifacts, metadata-only export,
+previewed cleanup with an audit receipt, validated manual webhook retry input,
+and an older host that reports the logs API as unsupported and stays inert. The
+dedicated stream repeats the backend-supported ledger filters `from`, `to`,
+`model`, `provider`, `engine`, `route`, and `outcome`; `source` stays REST-only
+and is never serialized as an SSE filter. The focused hook/schema/component
+tests additionally cover ledger-filter reopen with the last cursor, both
+omitted and `null` recovery cursors, and success-only maintenance refresh: only
+`completed` or `partial` cleanup/delete receipts refetch the active ledger. A
+partial receipt with failed artifact deletion work retries with its frozen
+operation ID and audit reason, while previews and failed mutations do not
+refresh. Dead-letter retry requires a manually entered, validated delivery ID;
+it must not claim a request-details delivery context. It must not use the
+existing status or runtime SSE stream as a substitute.
+
+For a live-host certification, run the matching workflow against an isolated
+trusted-local host after the normal build succeeds:
+
+```bash
+just build
+```
+
+Verify that an active request reaches exactly one terminal outcome, detail is
+available immediately, and the dedicated stream reconnects. Then force a
+replay gap and an unavailable stream, confirm the authoritative ledger refresh
+and bounded polling indication, review redacted/missing artifact states, and
+perform a metadata-only export plus a preview-and-confirm cleanup using a
+meaningful audit reason. Verify that only a returned `completed` or `partial`
+maintenance receipt refreshes the active ledger and that a partial artifact
+deletion result retries with the same operation ID and audit reason. Test a
+host without the logs API separately and expect the console's accessible
+unsupported state. Do not place prompts, completions, credentials, artifact
+bodies, raw identifiers, local paths, or URL query data in certification
+evidence.
+
+Visual and accessibility certification covers the Logs list and details pages
+at 375, 768, and 1280 CSS pixels in light and dark themes. Check no horizontal
+overflow or clipped controls, keyboard-only list-to-details and modal focus
+return, reduced-motion behavior, and an axe scan. The dedicated Logs axe suite
+also runs all 14 theme/accent combinations (two themes × seven accent modes),
+including active and terminal status badges. A clean certification has no
+serious or critical violations. If a shared UI finding is already present,
+preserve the exact axe output, identify the affected shared token or primitive,
+and record the result as prerequisite-limited; do not disable the rule or
+represent the run as clean. Browser screenshots assist visual review but do not
+replace the functional assertions above.
+
+Report the two results separately: a functional E2E pass establishes the
+lifecycle, recovery, operations, and unsupported-host contract only; it is not
+a waiver for a serious or critical accessibility finding. Until the shared
+finding is fixed, record the functional result as passed and the visual and
+accessibility result as prerequisite-limited, including the exact affected
+route, theme, viewport, selector, and axe rule in the certification evidence.
+
 ## Single-model permutations
 
 ### 1. Solo (single node)

@@ -20,6 +20,7 @@ use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
 mod embedded_config;
+pub(crate) mod embedded_logging;
 mod embedded_startup;
 
 pub use embedded_config::*;
@@ -141,6 +142,7 @@ pub async fn start_embedded_node(
 ) -> Result<EmbeddedServeHandle> {
     embedded_startup::prepare_embedded_native_runtime(&config.mode)?;
     let isolated_config = prepare_isolated_config(&mut config)?;
+    embedded_logging::validate_embedded_config(config.storage.config_path.as_deref())?;
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
     let runtime_options = embedded_runtime_options(&config, Some(control_rx));
     let api_base_url = format!("http://127.0.0.1:{}/v1", config.http.api_port);

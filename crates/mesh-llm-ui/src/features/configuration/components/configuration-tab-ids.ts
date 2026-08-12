@@ -8,6 +8,7 @@ export type ConfigurationTabId =
   | 'signing'
   | 'plugins'
   | 'toml-review'
+  | 'audit'
 
 export const CONFIGURATION_TAB_IDS = [
   'general',
@@ -18,24 +19,28 @@ export const CONFIGURATION_TAB_IDS = [
   'wake-policy',
   'signing',
   'plugins',
-  'toml-review'
+  'toml-review',
+  'audit'
 ] as const satisfies readonly ConfigurationTabId[]
 
 type ConfigurationTabAvailability = {
   pluginsEnabled?: boolean
   signingAttestationEnabled?: boolean
   wakePolicyEnabled?: boolean
+  logsSettingsEnabled?: boolean
 }
 
 export function getEnabledConfigurationTabIds({
   pluginsEnabled = true,
   signingAttestationEnabled = true,
-  wakePolicyEnabled = true
+  wakePolicyEnabled = true,
+  logsSettingsEnabled = true
 }: ConfigurationTabAvailability = {}): ConfigurationTabId[] {
   return CONFIGURATION_TAB_IDS.filter((tabId) => {
     if (tabId === 'wake-policy') return wakePolicyEnabled
     if (tabId === 'signing') return signingAttestationEnabled
     if (tabId === 'plugins') return pluginsEnabled
+    if (tabId === 'audit') return logsSettingsEnabled
     return true
   })
 }

@@ -4,12 +4,15 @@ use crate::frontend::util::stable_wire_id;
 use openai_frontend::ChatCompletionRequest;
 use openai_frontend::CompletionRequest;
 use skippy_protocol::binary::StageReplyStats;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+use uuid::Uuid;
 
 pub(in crate::frontend) static OPENAI_GENERATION_COUNTER: AtomicU64 = AtomicU64::new(1);
+static OPENAI_PROCESS_NONCE: OnceLock<String> = OnceLock::new();
 
 /// Sentinel meaning "no caller-specified max completion length; let the
 /// request consume the entire remaining context window when the client
@@ -41,23 +44,41 @@ pub(in crate::frontend) struct OpenAiGenerationIds {
     pub(in crate::frontend) request_id: u64,
     pub(in crate::frontend) request_started_at: Instant,
     pub(in crate::frontend) agent_session_id: Option<Box<str>>,
+    pub(in crate::frontend) agent_session_trusted: bool,
     pub(in crate::frontend) cache: OpenAiCacheHints,
 }
 
 impl OpenAiGenerationIds {
-    pub(in crate::frontend) fn new(
+    pub(in crate::frontend) fn new_with_trust(
         cache: OpenAiCacheHints,
         agent_session_id: Option<&str>,
+        agent_session_trusted: bool,
     ) -> Self {
         let request_started_at = Instant::now();
         let sequence = OPENAI_GENERATION_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let session_label = format!("openai-session-{}-{sequence}", now_unix_millis());
+        let process_nonce = process_nonce();
+        // Only identity supplied by the configured trusted transport header is
+        // allowed to bind multiple requests to one native KV session. Request
+        // payload metadata and protocol-level conversation IDs remain isolated.
+        let trusted_session_id = agent_session_id
+            .filter(|_| agent_session_trusted)
+            .map(|id| stable_wire_id(&[b"openai-agent-session", id.as_bytes()]));
+        let session_label = trusted_session_id
+            .map(|id| format!("openai-agent-session-{id}"))
+            .unwrap_or_else(|| {
+                format!(
+                    "openai-session-{}-{process_nonce}-{sequence}",
+                    now_unix_millis()
+                )
+            });
         Self {
-            session_id: stable_wire_id(&[session_label.as_bytes()]),
-            request_id: stable_wire_id(&[session_label.as_bytes(), b"request"]),
+            session_id: trusted_session_id
+                .unwrap_or_else(|| stable_wire_id(&[session_label.as_bytes()])),
+            request_id: request_id(&session_label, sequence, process_nonce),
             session_label,
             request_started_at,
             agent_session_id: agent_session_id.map(Into::into),
+            agent_session_trusted: agent_session_trusted && agent_session_id.is_some(),
             cache,
         }
     }
@@ -68,6 +89,85 @@ impl OpenAiGenerationIds {
 
     pub(in crate::frontend) fn request_id_string(&self) -> String {
         self.request_id.to_string()
+    }
+}
+
+fn process_nonce() -> &'static str {
+    OPENAI_PROCESS_NONCE.get_or_init(|| Uuid::new_v4().simple().to_string())
+}
+
+fn request_id(session_label: &str, sequence: u64, process_nonce: &str) -> u64 {
+    let request_sequence = sequence.to_string();
+    stable_wire_id(&[
+        session_label.as_bytes(),
+        b"request",
+        process_nonce.as_bytes(),
+        request_sequence.as_bytes(),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trusted_agent_session_reuses_native_session_but_not_request_id() {
+        let first = OpenAiGenerationIds::new_with_trust(
+            OpenAiCacheHints::default(),
+            Some("agent-42"),
+            true,
+        );
+        let second = OpenAiGenerationIds::new_with_trust(
+            OpenAiCacheHints::default(),
+            Some("agent-42"),
+            true,
+        );
+
+        assert!(first.session_label.starts_with("openai-agent-session-"));
+        assert!(!first.session_label.contains("agent-42"));
+        assert_eq!(first.session_label, second.session_label);
+        assert_eq!(first.session_id, second.session_id);
+        assert_ne!(first.request_id, second.request_id);
+    }
+
+    #[test]
+    fn requests_without_agent_session_get_fresh_native_sessions() {
+        let first = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);
+        let second = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);
+
+        assert!(first.session_label.contains(process_nonce()));
+        assert_ne!(first.session_id, second.session_id);
+        assert_ne!(first.request_id, second.request_id);
+    }
+
+    #[test]
+    fn repeated_untrusted_agent_sessions_get_fresh_native_sessions() {
+        let first = OpenAiGenerationIds::new_with_trust(
+            OpenAiCacheHints::default(),
+            Some("conversation-7"),
+            false,
+        );
+        let second = OpenAiGenerationIds::new_with_trust(
+            OpenAiCacheHints::default(),
+            Some("conversation-7"),
+            false,
+        );
+
+        assert_eq!(first.agent_session_id.as_deref(), Some("conversation-7"));
+        assert_eq!(second.agent_session_id.as_deref(), Some("conversation-7"));
+        assert!(!first.agent_session_trusted);
+        assert!(!second.agent_session_trusted);
+        assert_ne!(first.session_label, second.session_label);
+        assert_ne!(first.session_id, second.session_id);
+        assert_ne!(first.request_id, second.request_id);
+    }
+
+    #[test]
+    fn request_ids_differ_for_replica_equivalent_sequences() {
+        assert_ne!(
+            request_id("openai-agent-session-agent-42", 7, "process-a"),
+            request_id("openai-agent-session-agent-42", 7, "process-b")
+        );
     }
 }
 

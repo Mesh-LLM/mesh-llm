@@ -655,6 +655,7 @@ impl Node {
             let node = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = node.handle_incoming(incoming).await {
+                    record_mesh_operational_event(MeshOperationalEvent::QuicHandlerFailed);
                     tracing::warn!("Incoming connection error: {e}");
                 }
             });
@@ -680,6 +681,7 @@ impl Node {
                     let node = self.clone();
                     tokio::spawn(Box::pin(async move {
                         if let Err(error) = node.handle_control_incoming(incoming).await {
+                            record_mesh_operational_event(MeshOperationalEvent::ControlHandlerFailed);
                             tracing::debug!("Control-plane incoming connection error: {error}");
                         }
                     }));
@@ -751,6 +753,7 @@ impl Node {
         if self.handle_stage_alpn(&alpn, conn.clone(), remote).await {
             return Ok(());
         }
+        record_mesh_operational_event(MeshOperationalEvent::QuicInboundAccepted);
         tracing::info!("Inbound connection from {}", remote.fmt_short());
 
         // Store connection for stream dispatch (tunneling, route requests, etc.)
@@ -803,13 +806,16 @@ impl Node {
     ) -> Result<()> {
         let mut accepting = incoming.accept()?;
         let alpn = accepting.alpn().await?;
-        anyhow::ensure!(
-            alpn.as_slice() == ALPN_CONTROL_V1,
-            "unexpected control-plane ALPN {:?}",
-            String::from_utf8_lossy(&alpn)
-        );
+        if alpn.as_slice() != ALPN_CONTROL_V1 {
+            record_mesh_operational_event(MeshOperationalEvent::ControlAlpnRejected);
+            anyhow::bail!(
+                "unexpected control-plane ALPN {:?}",
+                String::from_utf8_lossy(&alpn)
+            );
+        }
         let conn = accepting.await?;
         let remote = conn.remote_id();
+        record_mesh_operational_event(MeshOperationalEvent::ControlConnectionAccepted);
         let permits = control_stream_semaphore();
         loop {
             let permit = match permits.clone().acquire_owned().await {

@@ -282,6 +282,19 @@
     }
   },
   {
+    "name": "Muse-Glimmer-30B-UD-Q4_K_XL",
+    "file": "Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
+    "url": "https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/main/Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
+    "size": "15.9GB",
+    "description": "Meta Muse Glimmer 30B dense, vision + text, agentic tool calling and reasoning",
+    "draft": null,
+    "extra_files": [],
+    "mmproj": {
+      "file": "mmproj-Muse-Glimmer-30B-BF16.gguf",
+      "url": "https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/main/mmproj-Muse-Glimmer-30B-BF16.gguf"
+    }
+  },
+  {
     "name": "Qwen3-Coder-Next-Q4_K_M",
     "file": "Qwen3-Coder-Next-Q4_K_M-00001-of-00004.gguf",
     "url": "https://huggingface.co/Qwen/Qwen3-Coder-Next-GGUF/resolve/main/Qwen3-Coder-Next-Q4_K_M/Qwen3-Coder-Next-Q4_K_M-00001-of-00004.gguf",

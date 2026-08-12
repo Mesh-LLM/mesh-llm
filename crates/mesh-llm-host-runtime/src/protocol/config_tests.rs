@@ -43,6 +43,7 @@ fn config_sync_full_config_roundtrip() {
             settings: Default::default(),
             startup: Default::default(),
         }],
+        logging: Default::default(),
         extra: Default::default(),
     };
     let snapshot = mesh_config_to_proto(&config);

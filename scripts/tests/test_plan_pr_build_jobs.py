@@ -165,6 +165,19 @@ class PrBuildJobPlanTests(unittest.TestCase):
         self.assertIn("agent_live_smokes", with_endpoint)
         self.assertIn("two_node_client_serving_smoke", without_endpoint)
 
+    def test_log_store_routes_only_the_windows_storage_privacy_checks(self) -> None:
+        jobs = set(
+            PLANNER.required_jobs(
+                base_payload(affected_crates=["mesh-llm-log-store"])
+            )
+        )
+        self.assertIn("windows_checks", jobs)
+        self.assertNotIn("windows_host_input", jobs)
+        self.assertNotIn("windows_cpu_runtime_input", jobs)
+        self.assertNotIn("windows_gpu_runtime_inputs", jobs)
+        self.assertNotIn("windows_cpu_product", jobs)
+        self.assertNotIn("windows_gpu_products", jobs)
+
     def test_manual_dispatch_preserves_public_mesh_and_platform_canaries(self) -> None:
         jobs = set(
             PLANNER.required_jobs(

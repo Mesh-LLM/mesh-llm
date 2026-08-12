@@ -1,4 +1,5 @@
 mod commands;
+mod logging_help;
 mod normalization;
 mod runtime_surface_help;
 mod validation;
@@ -8,6 +9,7 @@ pub use commands::{
     GpuCommand, MeshDiscoveryMode, MeshGuardrailCliMode, PluginCommand, SkillAgentArg,
     SkillCommand, TrustCommand, TrustPolicy,
 };
+pub use logging_help::logging_help;
 pub use normalization::{
     NormalizedRuntimeArgs, RuntimeSurface, legacy_runtime_surface_warning,
     normalize_runtime_surface_args,

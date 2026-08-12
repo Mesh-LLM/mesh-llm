@@ -77,6 +77,7 @@ pub(crate) fn status_payload(snapshot: StatusViewSnapshot) -> StatusPayload {
         first_joined_mesh_ts: snapshot.hardware.first_joined_mesh_ts,
         mesh_requirements: None,
         recent_mesh_rejections: vec![],
+        logging: None,
     }
 }
 
@@ -236,6 +237,7 @@ mod tests {
             first_joined_mesh_ts: Some(123),
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         assert_eq!(

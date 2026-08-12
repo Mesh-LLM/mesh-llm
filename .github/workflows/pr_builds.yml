@@ -934,6 +934,20 @@ jobs:
       mesh_binary_target: target/debug/mesh-llm
       cache_key_prefix: ''
 
+  macos_metal_inference_smoke_tests:
+    # Metal shaders are JIT-compiled on-device at model open, so only a real
+    # model load on a Metal GPU proves the patched .metal source compiles.
+    # GitHub macos-15 runners are Apple Silicon with a working Metal GPU.
+    needs: [changes, macos_cpu_artifact]
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'macos_metal_inference_smoke_tests') }}
+    uses: ./.github/workflows/smoke.yml
+    with:
+      artifact_name: ci-macos-inference-binaries
+      artifact_path: ci-artifacts/macos
+      mesh_binary_target: target/debug/mesh-llm
+      cache_key_prefix: ''
+      runner: macos-15
+
   agent_live_smokes:
     needs: [changes, linux_cpu_artifact]
     if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'agent_live_smokes') }}
@@ -1329,6 +1343,14 @@ jobs:
         if: ${{ env.RUN_WINDOWS_PRODUCT != 'true' }}
         shell: pwsh
         run: cargo check --locked -p mesh-llm --bin mesh-llm --features dynamic-native-runtime
+      - name: Test Windows log artifact privacy ACL
+        if: ${{ github.event_name == 'workflow_dispatch' || contains(fromJson(needs.changes.outputs.affected_crates), 'mesh-llm-log-store') }}
+        shell: pwsh
+        run: cargo test --locked -p mesh-llm-log-store --lib windows_artifact_paths_have_current_owner_and_exact_user_only_dacl
+      - name: Test Windows log SQLite storage ACL
+        if: ${{ github.event_name == 'workflow_dispatch' || contains(fromJson(needs.changes.outputs.affected_crates), 'mesh-llm-log-store') }}
+        shell: pwsh
+        run: cargo test --locked -p mesh-llm-log-store --lib sqlite_root_database_and_sidecars_have_only_current_user_acl
       - name: Check Node SDK addon on Windows
         shell: pwsh
         run: cargo check --locked -p mesh-llm-nodejs
@@ -1672,6 +1694,7 @@ jobs:
       - linux_public_mesh_admission
       - hf_download_smoke
       - inference_smoke_tests
+      - macos_metal_inference_smoke_tests
       - agent_live_smokes
       - two_node_client_serving_smoke
       - two_node_split_smoke

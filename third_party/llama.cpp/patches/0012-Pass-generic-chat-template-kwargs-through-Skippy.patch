@@ -1,14 +1,8 @@
-From 286f866669669cb72fd1d70bfe5b868c64767c50 Mon Sep 17 00:00:00 2001
+From dd58b10a0bb34a3de2c77b717040c28c5ef865b9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 9 Aug 2026 09:40:13 +1000
-Subject: [PATCH 12/13] Pass generic chat template kwargs through Skippy
+Subject: [PATCH 12/15] Pass generic chat template kwargs through Skippy
 
----
- common/stage-chat.cpp         | 13 +++++++
- include/skippy/common.h       |  2 +-
- include/skippy/tokenization.h |  1 +
- tests/test-chat.cpp           | 68 +++++++++++++++++++++++++++++++++++
- 4 files changed, 83 insertions(+), 1 deletion(-)
 
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
 index 16ce255af..6106600fc 100644
@@ -67,10 +61,10 @@ index 2a00c384d..d6961e378 100644
          size_t output_text_capacity,
          size_t * out_text_bytes,
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 991102421..4941538d7 100644
+index 5b980ddf1..614cba5d5 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
-@@ -6643,6 +6643,63 @@ static void test_template_generation_prompt() {
+@@ -6854,6 +6854,63 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
@@ -134,7 +128,7 @@ index 991102421..4941538d7 100644
  }
  
  // Test the developer role to system workaround with a simple mock template
-@@ -6967,6 +7024,7 @@ static void test_msg_diffs_compute() {
+@@ -7178,6 +7235,7 @@ static void test_msg_diffs_compute() {
  int main(int argc, char ** argv) {
      bool detailed_debug    = false;
      bool only_run_filtered = false;
@@ -142,7 +136,7 @@ index 991102421..4941538d7 100644
  
      // Check for --template and --detailed flags
      for (int i = 1; i < argc; i++) {
-@@ -6984,9 +7042,19 @@ int main(int argc, char ** argv) {
+@@ -7195,9 +7253,19 @@ int main(int argc, char ** argv) {
              g_force_reconstruction_test = true;
              only_run_filtered          = true;
          }
@@ -162,6 +156,3 @@ index 991102421..4941538d7 100644
          test_template_output_peg_parsers(detailed_debug);
          std::cout << "\n[chat] All template tests passed!" << '\n';
          return 0;
--- 
-2.50.1 (Apple Git-155)
-

@@ -1,4 +1,5 @@
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
+import { Check } from 'lucide-react'
 import { forwardRef, type ComponentPropsWithoutRef, type ComponentRef } from 'react'
 import { cn } from '@/lib/cn'
 
@@ -21,6 +22,18 @@ export const DropdownMenuSeparator = forwardRef<
   ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>
 >((props, ref) => <DropdownMenuPrimitive.Separator ref={ref} {...props} />)
 DropdownMenuSeparator.displayName = 'DropdownMenuSeparator'
+
+export const DropdownMenuLabel = forwardRef<
+  ComponentRef<typeof DropdownMenuPrimitive.Label>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.Label
+    ref={ref}
+    className={cn('px-2 py-1.5 text-[length:var(--density-type-caption)] font-semibold text-foreground', className)}
+    {...props}
+  />
+))
+DropdownMenuLabel.displayName = 'DropdownMenuLabel'
 
 export const DropdownMenuContent = forwardRef<
   ComponentRef<typeof DropdownMenuPrimitive.Content>,
@@ -61,3 +74,26 @@ export const DropdownMenuItem = forwardRef<ComponentRef<typeof DropdownMenuPrimi
   )
 )
 DropdownMenuItem.displayName = 'DropdownMenuItem'
+
+export const DropdownMenuCheckboxItem = forwardRef<
+  ComponentRef<typeof DropdownMenuPrimitive.CheckboxItem>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem>
+>(({ className, children, checked, ...props }, ref) => (
+  <DropdownMenuPrimitive.CheckboxItem
+    ref={ref}
+    checked={checked}
+    className={cn(
+      'relative flex cursor-default select-none items-center gap-2 rounded-[calc(var(--radius)-2px)] py-1.5 pl-8 pr-2 outline-none transition-[background,color] focus:bg-panel focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      className
+    )}
+    {...props}
+  >
+    <span className="absolute left-2 flex size-3.5 items-center justify-center">
+      <DropdownMenuPrimitive.ItemIndicator>
+        <Check className="size-3.5" aria-hidden="true" />
+      </DropdownMenuPrimitive.ItemIndicator>
+    </span>
+    {children}
+  </DropdownMenuPrimitive.CheckboxItem>
+))
+DropdownMenuCheckboxItem.displayName = 'DropdownMenuCheckboxItem'

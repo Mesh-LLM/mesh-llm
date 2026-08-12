@@ -1,26 +1,8 @@
-From 34fb2a4780783c0db24c740531546d26b7579172 Mon Sep 17 00:00:00 2001
+From e5f1991d8d86991e11cc00e9418caf88573bfc8e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 17:06:42 +1000
-Subject: [PATCH 04/13] Add Skippy public ABI surface
+Subject: [PATCH 04/15] Add Skippy public ABI surface
 
----
- include/skippy.h               |  18 ++++
- include/skippy/common.h        |  92 ++++++++++++++++++
- include/skippy/devices.h       |  49 ++++++++++
- include/skippy/events.h        |  95 ++++++++++++++++++
- include/skippy/model_package.h |  87 +++++++++++++++++
- include/skippy/runtime.h       | 172 +++++++++++++++++++++++++++++++++
- src/skippy/abi.cpp             |  48 +++++++++
- src/skippy/errors.h            |  44 +++++++++
- 8 files changed, 605 insertions(+)
- create mode 100644 include/skippy.h
- create mode 100644 include/skippy/common.h
- create mode 100644 include/skippy/devices.h
- create mode 100644 include/skippy/events.h
- create mode 100644 include/skippy/model_package.h
- create mode 100644 include/skippy/runtime.h
- create mode 100644 src/skippy/abi.cpp
- create mode 100644 src/skippy/errors.h
 
 diff --git a/include/skippy.h b/include/skippy.h
 new file mode 100644
@@ -675,6 +657,3 @@ index 000000000..e3e7cb38d
 +    }
 +    return SKIPPY_STATUS_OK;
 +}
--- 
-2.50.1 (Apple Git-155)
-
