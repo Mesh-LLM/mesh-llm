@@ -100,6 +100,7 @@ COPY crates/mesh-llm-events/ crates/mesh-llm-events/
 COPY crates/mesh-llm-build-info/ crates/mesh-llm-build-info/
 COPY crates/mesh-llm-hardware-profile/ crates/mesh-llm-hardware-profile/
 COPY crates/mesh-llm-native-runtime/ crates/mesh-llm-native-runtime/
+COPY crates/mesh-llm-provider-runtime/ crates/mesh-llm-provider-runtime/
 COPY crates/mesh-llm-runtime-install/ crates/mesh-llm-runtime-install/
 COPY crates/mesh-llm-sdk/ crates/mesh-llm-sdk/
 COPY crates/mesh-llm-tui/ crates/mesh-llm-tui/

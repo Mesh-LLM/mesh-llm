@@ -179,6 +179,142 @@ semantic domains, signals, selected slices, reasons, typed matrices, runner
 roles, cache modes and fan-out budgets. Unknown paths and malformed inputs fail
 closed.
 
+- `pr_quality.yml` is named **PR Quality Checks** and owns the earliest Rust,
+  React console, and CLI-documentation feedback: formatting, React console UI
+  quality when relevant, the CLI-docs sync guard when Rust CLI definitions
+  change, and deterministic clippy bins from
+  `scripts/plan-clippy-batches.sh`. Routing no longer waits for the compiled
+  consistency checks; `ci-consistency` runs beside it and remains part of the
+  summary gate. Formatting and UI quality run directly on the selected runner
+  instead of paying the public backend-image pull cost.
+- `pr_website.yml` is named **PR Website Checks** and owns the public website PR
+  canary. It uses `.github/actions/compute-changes` and runs
+  `website-build` only when `website_changed` is true, or when manually
+  dispatched, so public website validation is separate from Rust/React-console
+  quality checks while still using the central routing signals.
+- `ui_changed` and `website_changed` intentionally describe different products:
+  `ui_changed` is only the embedded React console under `crates/mesh-llm-ui/**`,
+  while `website_changed` is only the public Eleventy/Tailwind/Pagefind website
+  and its passthrough inputs. Website changes do not trigger React console UI
+  quality or UI artifact rebuilds.
+- CLI surface changes in `crates/mesh-llm-cli/src/{parser,models,runtime,benchmark}.rs`
+  set `cli_surface_changed`. When that flag is true, `cli-docs-sync` requires a
+  public website docs/example update under `website/src/docs/pages/` or
+  `website/src/_includes/`, with `website/src/docs/pages/CLI.md` as the primary
+  command reference.
+- Changes to `compute-changes` or the central PR/main/release workflow callers
+  fail open to the SDK producer and smoke graph. Caller-owned mode, timeout,
+  artifact, and trust-policy edits therefore cannot skip the reusable SDK
+  contracts they modify.
+- `pr_builds.yml` is named **PR Builds** and owns PR target jobs plus integration
+  and smoke validation. Linux and macOS CPU artifact jobs upload the binaries
+  that downstream smoke jobs consume before long validation groups finish.
+  Every affected Rust workspace crate is assigned to a generated
+  `rust_crate_tests` matrix and runs its complete `cargo test -p <crate>` suite;
+  the shard containing `skippy-runtime` downloads the public Qwen3 correctness
+  fixture and sets `SKIPPY_CORRECTNESS_MODEL`, so the model-backed grammar
+  equivalence test runs instead of being skipped; protocol compatibility and
+  Skippy smoke remain separate integration rows.
+  Linux host/CPU-runtime and macOS host/Metal-runtime producers run
+  independently, and their product composers never compile. Linux backend rows
+  are split into one independent CUDA, ROCm, or Vulkan runtime producer plus
+  one matching `runner_4` composition-only product job. They consume the same
+  immutable host without a matrix-wide fan-in barrier. Windows follows the
+  same graph: one debug neutral host, independent CPU/CUDA/ROCm/Vulkan runtime
+  inputs, and composition-only products. Unsupported macOS CUDA, ROCm, and
+  Vulkan rows are omitted. The PR Swift `host-only` XCFramework producer starts
+  directly from change routing, in parallel with the macOS product and unit
+  tests; Swift smoke waits only for the macOS product and XCFramework inputs.
+  `sdk_smoke_required` makes the shared static CPU ABI producer eligible; the PR
+  Kotlin debug native-SDK producer restores that immutable ABI, validates its
+  complete link closure, pinned build-image epoch, and build stamp through the
+  verification-only `--require-prebuilt-llama` path, and compiles only the Rust
+  FFI while the Linux product proceeds independently. Both build-script and
+  Cargo auto-build fallbacks are disabled for that reuse path. Kotlin smoke
+  waits only for the product and native-SDK inputs and performs no native
+  compilation.
+- **PR Builds Summary** is the stable, non-matrix branch-protection check for
+  this workflow. `changes` runs `scripts/plan-pr-build-jobs.py` once and exports
+  `required_jobs_json`; every conditional top-level job uses membership in
+  that plan as its route, while normal `needs` success semantics keep consumers
+  behind their producers. The summary directly depends on every other
+  top-level job and consumes the same plan. A skipped job is accepted only when
+  the planner did not require it, so a required producer or dependency chain
+  cannot disappear behind propagated skips. Any failure, cancellation, unknown
+  result, duplicate plan entry, or required ID outside the summary graph fails
+  the gate. The job uses `if: ${{ !cancelled() }}` so ordinary upstream
+  failures are still summarized without using `always()`.
+- Product readiness starts a local mDNS client and never depends on the mutable
+  public mesh. The public `client --auto` admission probe is manual-only, so an
+  external peer outage cannot block a pull request or release.
+- Pull requests test affected crates plus their reverse dependents. Main pushes
+  and manual dispatches assign every Cargo workspace member to the matrix, so a
+  targeted-routing mistake cannot permanently hide a crate suite.
+- The executable-provider artifact contract in `mesh-llm-provider-runtime` is
+  an SDK-smoke input. It remains separate from the Skippy-native runtime crate,
+  but changes to either contract exercise SDK consumers.
+- `rust_changed` is not an artifact-build signal. Rust tooling changes such as
+  `tools/xtask/**` still run PR Quality formatting/clippy, but PR Builds only
+  builds `mesh-llm` artifacts when `inference_artifact_required` is true: a
+  runtime-facing crate, SDK smoke input, React console UI artifact input,
+  backend/native input, all-rust fail-open/escalation, or manual dispatch.
+- `Justfile` is routed by changed hunks, not by path alone. Website/dev recipe
+  edits stay light, while native build, ABI, release, bundle, and package
+  recipe edits set `backend_recipe_changed`, which feeds backend artifacts and
+  Windows CPU/GPU build eligibility.
+- Workflow/orchestration-only PR edits validate the PR routing graph without
+  becoming Rust crate changes. They must not fan out into Linux/macOS artifact
+  producers, native backend, Windows GPU, benchmark, or SDK-smoke lanes unless a
+  changed file also affects Rust crates, React console UI assets, public website
+  inputs, SDK inputs, or backend products. Backend lanes are reserved for files
+  that can affect native ABI/backend products, such as `third_party/llama.cpp/**`,
+  `crates/skippy-ffi/**`, backend build scripts, backend-relevant Justfile
+  hunks, and `.github/cache-version.txt`.
+- Windows broad-Rust changes run lightweight Cargo checks. The immutable debug
+  host, CPU runtime, and CPU product run only when
+  `windows_cpu_build_required` is true or the workflow is manually dispatched.
+  CUDA/ROCm/Vulkan runtime producers and composition-only product jobs run only
+  when `windows_gpu_build_required` is true, backend-relevant Justfile hunks
+  changed, or the workflow is manually dispatched. All products consume the
+  same host artifact and use the release composer contract.
+- `pr_cleanup.yml` deletes PR merge-ref caches and artifacts from positively
+  matched PR workflow runs when a pull request closes. Cache cleanup first plans
+  deterministic shards, then fans deletion out across
+  `vars.PR_CACHE_CLEANUP_WORKERS` workers (default `5`) while keeping each worker
+  serial and rate-limited; a final summary aggregates cache shard results plus
+  artifact cleanup. Cleanup-only workflow edits do not fan out into
+  Rust/build/smoke jobs.
+- Docker image and npm publishing are intentionally not part of pull request
+  CI. `docker.yml` is a manual, non-publishing client Dockerfile validation
+  workflow. `release.yml` owns backend-neutral host artifacts per
+  OS/architecture, manifested native runtimes per backend lane, and product
+  composition that records both immutable digests while retaining
+  compatibility archive names. Host producers attest and import-check the host;
+  consumers verify and copy those exact bytes rather than rebuilding or
+  re-stamping them. The Windows host input includes a checksum-protected
+  producer-built attestation verifier so Windows composers do not compile
+  workspace code. Product consumers never rebuild a missing producer. It
+  dispatches a completed stable release with the full GPU matrix to
+  `Mesh-LLM/mesh-packaging`, which owns package, GHCR, and npm publication.
+  Prereleases publish immutable GitHub Release inputs but never dispatch
+  downstream publication.
+- Merged
+  [`mesh-packaging#16`](https://github.com/Mesh-LLM/mesh-packaging/pull/16)
+  makes that downstream graph artifact-only and build-once. Its complete
+  `v0.75.0-rc1` dry rehearsal
+  [30593548823](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30593548823)
+  passed 41 jobs with 15 intentional publication-only skips, exercising all
+  11 native package rows, exact final-image QA, Homebrew, all five upstream
+  Node addon lanes, npm assembly, host invariants, and immutable evidence.
+  Merge commit `76c619bcdd82773e159248a2282187b0b2973daa` then passed
+  default-branch Packaging Precheck
+  [30595367445](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30595367445).
+- `fly-deploy-console.yml` is a manual (`workflow_dispatch`) deploy of the
+  `mesh-llm-console` Fly app. It builds the image on Fly's remote builders from
+  `fly/Dockerfile` and authenticates with the app-scoped `FLY_API_TOKEN` repo
+  secret. It carries no pull request trigger and does not run release or smoke
+  jobs.
+
 Control-plane changes fail open through the selected profile. When they
 require the `web` slice, both console and website rows execute even without a
 content-specific change signal, so the stable gate receives a successful

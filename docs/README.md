@@ -46,6 +46,7 @@ Use [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) for Skippy split-serving workflows.
 | [SWARM_CAPTURE.md](SWARM_CAPTURE.md) | Opt-in local debug capture for mesh membership and connection diagnostics |
 | [design/](design/) | Architecture notes, protocol design, testing playbooks, carried llama.cpp patch documentation |
 | [design/NATIVE_RUNTIMES.md](design/NATIVE_RUNTIMES.md) | Native runtime artifact packaging, exact version matching, resolver behavior, and SDK/autoupdater ownership |
+| [design/PROVIDER_RUNTIMES.md](design/PROVIDER_RUNTIMES.md) | Signed executable-provider manifests, resolution, download verification, and immutable cache installation |
 | [design/APPLE_RUNTIME.md](design/APPLE_RUNTIME.md) | Experimental Apple sidecar architecture, Milestone 0 evidence, packaging boundary, and rollout gates |
 | [design/NODE_OWNER_IDENTITY.md](design/NODE_OWNER_IDENTITY.md) | Owner identity, trust policy, and how owner trust stays separate from release attestation |
 | [design/EMITTER_HOOKS.md](design/EMITTER_HOOKS.md) | Inventory of hook, callback, and emitter surfaces plus readiness ownership. |
