@@ -52,6 +52,142 @@ fn explicit_debug_and_listen_all_options_survive_false_config_defaults() {
 }
 
 #[test]
+fn cli_audit_path_has_precedence_and_enables_sink_configuration() {
+    let cli_path = std::path::PathBuf::from("cli-audit.log");
+    let mut options = RuntimeOptions {
+        audit_log_path: Some(cli_path.clone()),
+        audit_log_format: mesh_llm_events::audit::AuditLogFormat::JsonLines,
+        audit_log_level: mesh_llm_events::audit::AuditLevel::Error,
+        ..RuntimeOptions::default()
+    };
+    let mut config = plugin::MeshConfig::default();
+    config.logging.audit.enabled = Some(false);
+    config.logging.audit.log_path = Some("config-audit.log".into());
+    config.logging.audit.log_format = Some("json_lines".into());
+    config.logging.audit.log_level = Some("info".into());
+    config.logging.audit.max_file_size_mb = Some(7);
+    config.logging.audit.max_files = Some(3);
+
+    apply_runtime_config_options(&mut options, &config);
+
+    assert_eq!(options.audit_log_path, Some(cli_path));
+    assert_eq!(
+        options.audit_log_format,
+        mesh_llm_events::audit::AuditLogFormat::JsonLines
+    );
+    assert_eq!(
+        options.audit_log_level,
+        mesh_llm_events::audit::AuditLevel::Error
+    );
+    assert_eq!(options.audit_max_file_size, 7 * 1024 * 1024);
+    assert_eq!(options.audit_max_files, 3);
+}
+
+#[test]
+fn configured_audit_path_implicitly_enables_config_sink() {
+    let mut options = RuntimeOptions::default();
+    let mut config = plugin::MeshConfig::default();
+    config.logging.audit.log_path = Some("configured-audit.log".into());
+    config.logging.audit.max_file_size_mb = Some(2);
+    config.logging.audit.max_files = Some(4);
+
+    apply_runtime_config_options(&mut options, &config);
+
+    assert_eq!(options.audit_log_path, config.logging.audit.log_path);
+    assert_eq!(options.audit_max_file_size, 2 * 1024 * 1024);
+    assert_eq!(options.audit_max_files, 4);
+}
+
+#[test]
+fn early_topology_audit_configuration_applies_configured_and_cli_settings() {
+    let mut config = plugin::MeshConfig::default();
+    config.logging.audit.log_path = Some("configured-audit.log".into());
+    config.logging.audit.log_level = Some("warn".into());
+    config.logging.audit.max_file_size_mb = Some(2);
+    config.logging.audit.max_files = Some(4);
+
+    let mut local_model_only = RuntimeOptions {
+        local_model_only: true,
+        ..RuntimeOptions::default()
+    };
+    let local_model_only_initializations = std::cell::Cell::new(0);
+    initialize_early_topology_audit_logging_with(
+        &mut local_model_only,
+        || Ok(config.clone()),
+        |options| {
+            local_model_only_initializations.set(local_model_only_initializations.get() + 1);
+            assert_eq!(
+                options.audit_log_path,
+                Some(std::path::PathBuf::from("configured-audit.log"))
+            );
+            assert_eq!(
+                options.audit_log_level,
+                mesh_llm_events::audit::AuditLevel::Warn
+            );
+            assert_eq!(options.audit_max_file_size, 2 * 1024 * 1024);
+            assert_eq!(options.audit_max_files, 4);
+            Ok(())
+        },
+    )
+    .expect("local-model-only audit initialization succeeds");
+    assert_eq!(local_model_only_initializations.get(), 1);
+
+    let cli_path = std::path::PathBuf::from("cli-audit.log");
+    let mut plugin = RuntimeOptions {
+        plugin: Some("example".to_string()),
+        audit_log_path: Some(cli_path.clone()),
+        audit_log_level: mesh_llm_events::audit::AuditLevel::Error,
+        ..RuntimeOptions::default()
+    };
+    let plugin_initializations = std::cell::Cell::new(0);
+    initialize_early_topology_audit_logging_with(
+        &mut plugin,
+        || Ok(config),
+        |options| {
+            plugin_initializations.set(plugin_initializations.get() + 1);
+            assert_eq!(options.audit_log_path, Some(cli_path.clone()));
+            assert_eq!(
+                options.audit_log_level,
+                mesh_llm_events::audit::AuditLevel::Error
+            );
+            assert_eq!(options.audit_max_file_size, 2 * 1024 * 1024);
+            assert_eq!(options.audit_max_files, 4);
+            Ok(())
+        },
+    )
+    .expect("plugin audit initialization succeeds");
+    assert_eq!(plugin_initializations.get(), 1);
+}
+
+#[test]
+fn early_topology_audit_configuration_load_failures_are_nonfatal() {
+    let cli_path = std::path::PathBuf::from("cli-audit.log");
+    let mut options = RuntimeOptions {
+        plugin: Some("example".to_string()),
+        audit_log_path: Some(cli_path.clone()),
+        audit_log_level: mesh_llm_events::audit::AuditLevel::Error,
+        ..RuntimeOptions::default()
+    };
+
+    let initializations = std::cell::Cell::new(0);
+    initialize_early_topology_audit_logging_with(
+        &mut options,
+        || Err(anyhow::anyhow!("invalid config")),
+        |options| {
+            initializations.set(initializations.get() + 1);
+            assert_eq!(options.audit_log_path, Some(cli_path.clone()));
+            assert_eq!(
+                options.audit_log_level,
+                mesh_llm_events::audit::AuditLevel::Error
+            );
+            Ok(())
+        },
+    )
+    .expect("config load failures do not prevent plugin startup");
+    assert_eq!(initializations.get(), 1);
+}
+
+#[test]
 fn cli_speculative_overrides_take_precedence_without_dropping_model_tuning() {
     let mut config: plugin::MeshConfig = toml::from_str(
         r#"

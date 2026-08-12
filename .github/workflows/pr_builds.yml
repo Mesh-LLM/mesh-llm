@@ -1343,6 +1343,14 @@ jobs:
         if: ${{ env.RUN_WINDOWS_PRODUCT != 'true' }}
         shell: pwsh
         run: cargo check --locked -p mesh-llm --bin mesh-llm --features dynamic-native-runtime
+      - name: Test Windows log artifact privacy ACL
+        if: ${{ github.event_name == 'workflow_dispatch' || contains(fromJson(needs.changes.outputs.affected_crates), 'mesh-llm-log-store') }}
+        shell: pwsh
+        run: cargo test --locked -p mesh-llm-log-store --lib windows_artifact_paths_have_current_owner_and_exact_user_only_dacl
+      - name: Test Windows log SQLite storage ACL
+        if: ${{ github.event_name == 'workflow_dispatch' || contains(fromJson(needs.changes.outputs.affected_crates), 'mesh-llm-log-store') }}
+        shell: pwsh
+        run: cargo test --locked -p mesh-llm-log-store --lib sqlite_root_database_and_sidecars_have_only_current_user_acl
       - name: Check Node SDK addon on Windows
         shell: pwsh
         run: cargo check --locked -p mesh-llm-nodejs

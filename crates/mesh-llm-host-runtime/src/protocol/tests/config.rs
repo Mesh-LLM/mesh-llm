@@ -268,6 +268,7 @@ pub(crate) fn mesh_requirements_survive_owner_control_config_round_trip() {
         runtime: Default::default(),
         models: vec![],
         plugins: vec![],
+        logging: Default::default(),
         extra: Default::default(),
     };
     let snapshot = mesh_config_to_proto(&original);
@@ -404,6 +405,7 @@ fn config_sync_config_hash_determinism() {
             ..Default::default()
         }],
         plugins: vec![],
+        logging: Default::default(),
         extra: Default::default(),
     };
     let snap1 = mesh_config_to_proto(&config);
@@ -437,6 +439,7 @@ fn config_sync_config_hash_determinism() {
             ..Default::default()
         }],
         plugins: vec![],
+        logging: Default::default(),
         extra: Default::default(),
     };
     let snap3 = mesh_config_to_proto(&config2);
@@ -504,6 +507,7 @@ fn pinned_gpu_proto_roundtrip() {
             ..Default::default()
         }],
         plugins: vec![],
+        logging: Default::default(),
         extra: Default::default(),
     };
 

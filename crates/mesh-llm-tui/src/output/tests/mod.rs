@@ -17,7 +17,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use tokio::time::Instant;
 
 mod dashboard;
 mod formatting;
@@ -786,18 +785,10 @@ fn assert_join_token_layout(state: &DashboardState, areas: &TuiFrameAreas) {
         areas.join_token_panel.height,
         PRETTY_TUI_JOIN_TOKEN_PANEL_HEIGHT
     );
-    assert!(areas.join_token_copy_button.x > areas.join_token_panel.x);
-    assert_eq!(areas.join_token_copy_button.y, areas.join_token_panel.y + 2);
+    assert_eq!(areas.join_token_copy_button.width, 0);
+    assert_eq!(areas.join_token_copy_button.height, 0);
     assert_eq!(
-        areas.join_token_copy_button.right(),
-        areas
-            .join_token_panel
-            .right()
-            .saturating_sub(1)
-            .saturating_sub(PRETTY_TUI_JOIN_TOKEN_HORIZONTAL_PADDING)
-    );
-    assert_eq!(
-        join_token_text_area(areas.join_token_panel, areas.join_token_copy_button).x,
+        join_token_text_area(areas.join_token_panel).x,
         areas
             .join_token_panel
             .x

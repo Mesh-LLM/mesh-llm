@@ -29,6 +29,7 @@ mesh-llm-build-info.workspace = true
 mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.72.1"  }
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.72.1"  }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.72.1"  }
+mesh-llm-log-store = { path = "../mesh-llm-log-store", version = "0.72.1"  }
 mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.72.1"  }
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.72.1"  }
 mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.72.1", features = ["host-io"]  }
@@ -111,6 +112,14 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 hf_hub = { package = "mesh-llm-hf-hub", version = "1.0.2", default-features = false, features = ["blocking"] }
 tabwriter = "1"
 tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
 
 [dev-dependencies]
 serial_test = "3"

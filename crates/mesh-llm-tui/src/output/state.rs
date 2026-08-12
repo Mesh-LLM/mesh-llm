@@ -447,23 +447,6 @@ pub(super) struct DashboardJoinTokenState {
     pub(super) token: String,
     pub(super) mesh_id: String,
     pub(super) mesh_name: Option<String>,
-    pub(super) copy_status: DashboardJoinTokenCopyStatus,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum DashboardJoinTokenCopyStatus {
-    Idle,
-    Copied { at: Instant },
-    Failed { message: String, at: Instant },
-}
-
-impl DashboardJoinTokenCopyStatus {
-    pub(super) fn feedback_at(&self) -> Option<Instant> {
-        match self {
-            Self::Idle => None,
-            Self::Copied { at } | Self::Failed { at, .. } => Some(*at),
-        }
-    }
 }
 
 impl DashboardJoinTokenState {
@@ -472,7 +455,6 @@ impl DashboardJoinTokenState {
             token,
             mesh_id,
             mesh_name,
-            copy_status: DashboardJoinTokenCopyStatus::Idle,
         }
     }
 

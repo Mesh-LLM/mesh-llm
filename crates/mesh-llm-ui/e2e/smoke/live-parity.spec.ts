@@ -300,7 +300,9 @@ async function readBackendState(page: Page): Promise<BackendState> {
   return page.evaluate(() => (window as unknown as { __liveParityBackendState: BackendState }).__liveParityBackendState)
 }
 
-test('live shell metadata shows status-backed API and invite instructions', async ({ page }, testInfo) => {
+test('live shell metadata shows status-backed API and operator-ready private invitation guidance', async ({
+  page
+}, testInfo) => {
   await installLiveBackend(page)
 
   await page.goto(resolveAppUrl('/chat', testInfo))
@@ -327,9 +329,13 @@ test('live shell metadata shows status-backed API and invite instructions', asyn
   await expect(joinCard.getByText(`mesh-llm --auto --join ${LIVE_STATUS.token}`, { exact: true })).toBeVisible()
   await expect(joinCard.getByText(`mesh-llm client --join ${LIVE_STATUS.token}`, { exact: true })).toBeVisible()
   await expect(page.getByText('<mesh-invite-token>')).toHaveCount(0)
+  await expect(joinCard.getByText('Invite token', { exact: true })).toBeVisible()
+  await expect(joinCard.getByRole('button', { name: 'Copy Invite token' })).toBeEnabled()
+  await expect(joinCard.getByRole('button', { name: 'Copy Auto join and serve command' })).toBeEnabled()
+  await expect(joinCard.getByRole('button', { name: 'Copy Client-only join command' })).toBeEnabled()
 })
 
-test('missing invite token degrades safely in live shell mode', async ({ page }, testInfo) => {
+test('missing private invite token shows unavailable live shell guidance', async ({ page }, testInfo) => {
   const statusWithoutToken = { ...LIVE_STATUS, token: '' }
   await installLiveBackend(page, { statusPayload: statusWithoutToken })
 
@@ -337,10 +343,12 @@ test('missing invite token degrades safely in live shell mode', async ({ page },
   await page.getByRole('button', { name: 'Mesh join and invite instructions' }).click()
 
   const joinCard = page.getByLabel('Join or invite')
+  await expect(joinCard.getByText('Invite token', { exact: true })).toBeVisible()
   await expect(joinCard.getByText('Invite token unavailable', { exact: true })).toBeVisible()
-  await expect(joinCard.getByText('Auto join command unavailable', { exact: true })).toBeVisible()
-  await expect(joinCard.getByText('Client-only join command unavailable', { exact: true })).toBeVisible()
   await expect(joinCard.getByText('<mesh-invite-token>')).toHaveCount(0)
+  await expect(joinCard.getByRole('button', { name: 'Copy Invite token' })).toBeDisabled()
+  await expect(joinCard.getByRole('button', { name: 'Copy Auto join and serve command' })).toBeDisabled()
+  await expect(joinCard.getByRole('button', { name: 'Copy Client-only join command' })).toBeDisabled()
 
   await page.getByRole('button', { name: 'API target instructions' }).click()
   await expect(page.getByRole('heading', { name: 'API access' })).toBeVisible()

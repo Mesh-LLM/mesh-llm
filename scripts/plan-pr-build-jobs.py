@@ -205,6 +205,7 @@ def route_requirements(raw_payload: object) -> dict[str, bool]:
             or payload["all_rust"]
             or payload["windows_cpu_required"]
             or payload["windows_gpu_required"]
+            or "mesh-llm-log-store" in affected
         ),
         "windows_host": eligible
         and (

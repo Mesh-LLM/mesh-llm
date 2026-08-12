@@ -18,6 +18,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-host-runtime"
   "mesh-llm-hardware-profile"
   "mesh-llm-identity"
+  "mesh-llm-log-store"
   "mesh-llm-native-runtime"
   "mesh-llm-protocol"
   "mesh-llm-release-footer"

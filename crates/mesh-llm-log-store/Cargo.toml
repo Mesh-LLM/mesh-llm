@@ -1,0 +1,38 @@
+[package]
+name = "mesh-llm-log-store"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "SQLite persistence for mesh-llm canonical logging pipeline"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+keywords = ["llm", "mesh", "logging", "sqlite"]
+categories = ["database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+data-encoding = "2.6"
+hex = "0.4"
+mesh-llm-events = { version = "^0.72.1", path = "../mesh-llm-events" }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3"

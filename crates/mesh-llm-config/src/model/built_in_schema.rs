@@ -136,6 +136,15 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
         ),
         telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::Url),
+        logging_audit_setting("logging.audit.enabled", ConfigValueSchema::Boolean),
+        logging_audit_setting("logging.audit.log_path", ConfigValueSchema::Path),
+        logging_audit_setting("logging.audit.log_format", string_enum(["json_lines"])),
+        logging_audit_setting(
+            "logging.audit.log_level",
+            string_enum(["info", "warn", "error", "critical"]),
+        ),
+        logging_audit_setting("logging.audit.max_file_size_mb", ConfigValueSchema::Integer),
+        logging_audit_setting("logging.audit.max_files", ConfigValueSchema::Integer),
         startup_runtime_setting("runtime.debug", ConfigValueSchema::Boolean),
         startup_runtime_setting("runtime.listen_all", ConfigValueSchema::Boolean),
         startup_runtime_setting(
@@ -203,6 +212,8 @@ fn build_built_in_config_schema() -> ConfigSchema {
             ConfigValueSchema::Integer,
         ),
     ];
+
+    settings.extend(logging_settings());
 
     settings.extend(model_defaults_settings());
     settings.extend(model_entry_settings());
@@ -998,6 +1009,23 @@ fn telemetry_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSetti
     setting
 }
 
+fn logging_audit_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
+    setting.apply_mode = ConfigApplyMode::StaticOnLoad;
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
+    if matches!(
+        path,
+        "logging.audit.max_file_size_mb" | "logging.audit.max_files"
+    ) {
+        setting.constraints.push(ConfigConstraint::Range {
+            min: Some("1".to_string()),
+            max: None,
+        });
+    }
+    setting
+}
+
 fn runtime_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
@@ -1038,6 +1066,106 @@ fn plugin_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingS
     ];
     setting.restart_scope = ConfigRestartScope::ProcessRestart;
     setting
+}
+
+fn logging_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.control_surfaces = vec![ConfigControlSurface::ConfigFile];
+    // Logging settings requiring process restart (structural / path / capability changes).
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
+    setting.visibility = ConfigVisibility::Advanced;
+    setting
+}
+
+fn logging_dynamic_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.control_surfaces = vec![ConfigControlSurface::ConfigFile];
+    setting.apply_mode = ConfigApplyMode::DynamicApply;
+    setting.restart_scope = ConfigRestartScope::None;
+    setting.visibility = ConfigVisibility::Advanced;
+    setting
+}
+
+fn logging_settings() -> Vec<ConfigSettingSchema> {
+    let mut settings = vec![
+        logging_setting("logging.enabled", ConfigValueSchema::Boolean),
+        logging_setting("logging.application_state_root", ConfigValueSchema::Path),
+        logging_setting("logging.summary_line_limit", ConfigValueSchema::Integer),
+        logging_setting("logging.event_buffer_size", ConfigValueSchema::Integer),
+        // Only these two limits have a dynamic service-application contract.
+        logging_dynamic_setting("logging.retention_ttl_secs", ConfigValueSchema::Integer),
+        logging_setting("logging.retention_max_rows", ConfigValueSchema::Integer),
+        logging_dynamic_setting("logging.replay_capacity", ConfigValueSchema::Integer),
+        logging_setting("logging.queue_capacity", ConfigValueSchema::Integer),
+        logging_setting("logging.cleanup_cadence_secs", ConfigValueSchema::Integer),
+        logging_setting(
+            "logging.artifact.capture_mode",
+            string_enum(["metadata_only", "redacted_artifacts"]),
+        ),
+        logging_setting(
+            "logging.artifact.byte_limit_bytes",
+            ConfigValueSchema::Integer,
+        ),
+        logging_setting(
+            "logging.artifact.aggregate_limit_bytes",
+            ConfigValueSchema::Integer,
+        ),
+        logging_setting("logging.export_limit_bytes", ConfigValueSchema::Integer),
+        logging_setting("logging.webhook.enabled", ConfigValueSchema::Boolean),
+        logging_setting("logging.webhook.url", ConfigValueSchema::Url),
+        logging_setting("logging.webhook.max_attempts", ConfigValueSchema::Integer),
+        logging_setting("logging.webhook.timeout_secs", ConfigValueSchema::Integer),
+        logging_setting(
+            "logging.webhook.dead_letter_retention_secs",
+            ConfigValueSchema::Integer,
+        ),
+    ];
+
+    for setting in &mut settings {
+        let path = setting.path.render();
+        setting.description = match path.as_str() {
+            "logging.summary_line_limit" => Some(
+                "Maximum Unicode characters in each payload-free local presentation summary line; changes require a process restart."
+                    .to_string(),
+            ),
+            "logging.event_buffer_size" => Some(
+                "Process-restart hard ceiling on entries held by the in-memory replay buffer."
+                    .to_string(),
+            ),
+            "logging.replay_capacity" => Some(
+                "Initial and live current replay target in entries; it applies dynamically and must not exceed logging.event_buffer_size."
+                    .to_string(),
+            ),
+            "logging.queue_capacity" => Some(
+                "Process-restart capacity of the persistence/dispatch queue; it does not control replay retention."
+                    .to_string(),
+            ),
+            _ => setting.description.take(),
+        };
+        let range = match path.as_str() {
+            "logging.summary_line_limit" => Some(("1", "65536")),
+            "logging.event_buffer_size" => Some(("50", "100000")),
+            "logging.retention_ttl_secs" => Some(("3600", "7776000")),
+            "logging.replay_capacity" => Some(("1", "10000")),
+            "logging.queue_capacity" => Some(("64", "131072")),
+            "logging.cleanup_cadence_secs" => Some(("300", "86400")),
+            "logging.artifact.byte_limit_bytes" => Some(("1024", "16777216")),
+            "logging.artifact.aggregate_limit_bytes" => Some(("524288", "524288000")),
+            "logging.export_limit_bytes" => Some(("65536", "104857600")),
+            "logging.webhook.max_attempts" => Some(("1", "20")),
+            "logging.webhook.timeout_secs" => Some(("1", "60")),
+            "logging.webhook.dead_letter_retention_secs" => Some(("3600", "1555200")),
+            _ => None,
+        };
+        if let Some((min, max)) = range {
+            setting.constraints.push(ConfigConstraint::Range {
+                min: Some(min.to_string()),
+                max: Some(max.to_string()),
+            });
+        }
+    }
+
+    settings
 }
 
 fn basic_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
@@ -1200,6 +1328,10 @@ fn apply_aliases(
         setting.alias_policy.aliases.extend_from_slice(aliases);
     }
 }
+
+#[cfg(test)]
+#[path = "built_in_schema/logging_contract_tests.rs"]
+mod logging_contract_tests;
 
 #[cfg(test)]
 mod tests {

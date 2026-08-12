@@ -5,7 +5,7 @@
 ## Stream contract
 
 - JSON records always include `timestamp`, `level`, `event`, and `message`, plus the event fields below. `error` records also include `error_type`.
-- Pretty mode consumes the same events to update the dashboard, event history, endpoint cards, model progress, process rows, and the join-token panel.
+- Pretty mode consumes the same events to update the dashboard, event history, endpoint cards, model progress, and process rows. Invitation readiness is represented without a token copy control.
 - `ready` is the aggregate runtime-ready event. Multi-model startup emits it only after every declared startup model reaches readiness, then queues the first `>` prompt.
 - Interactive pretty mode is only used when stdin and stderr are TTYs. The fallback line renderer still honors `h` for help, `i` for an info snapshot, and `q` for clean shutdown.
 
@@ -14,7 +14,7 @@
 Keep these details current when changing `OutputEvent` or dashboard state:
 
 - The dashboard state is event-driven via `PrettyDashboardState::apply_output_event()` plus periodic `PrettyDashboardSnapshot` refreshes for process/model/request telemetry.
-- `invite_token` includes `mesh_name?`; the dashboard uses it for the join-token panel.
+- `invite_token` signals that an invitation is ready and includes the token needed to join.
 - `model_download_progress` is emitted during catalog preparation when the interactive TUI is active and drives the model-progress panel.
 - `ready` may include `pi_command` and `goose_command`; these are operational hints shown after startup.
 - Some variants are schema/dashboard-supported before all of them have production emitters. Mark that explicitly rather than leaving stale source-search notes.
@@ -29,7 +29,7 @@ Keep these details current when changing `OutputEvent` or dashboard state:
 | `info` | `message`, `context?` | Shared informational helper for runtime, discovery, routing, mesh, and tracing-to-output bridge notes. |
 | `startup` | `version`, `message?` | Formatter/dashboard-supported process bootstrap record; no production emitter was found in this pass. |
 | `node_identity` | `node_id`, `mesh_id?` | Formatter/dashboard-supported node header seed; no production emitter was found in this pass. |
-| `invite_token` | `token`, `mesh_id`, `mesh_name?` | Emitted when an invite token is ready; also fills the dashboard join-token panel. |
+| `invite_token` | `token`, `mesh_id`, `mesh_name?` | Emitted when an invitation is ready; presentation surfaces display the token so an operator can join another node. |
 | `discovery_starting` | `source` | Discovery or re-discovery path is starting. |
 | `mesh_found` | `mesh`, `peers`, `region?` | A discovery candidate was found before join. |
 | `discovery_joined` | `mesh` | Discovery candidate joined successfully. |

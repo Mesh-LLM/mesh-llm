@@ -35,7 +35,9 @@ use crate::network::{
 use crate::plugin;
 use crate::runtime::release_attestation;
 use crate::runtime::survey;
-use crate::runtime::{InstanceLifecycleRecord, InstanceLifecycleState};
+use crate::runtime::{
+    InstanceLifecycleRecord, InstanceLifecycleState, tracing_writer::init_audit_logging,
+};
 use crate::system::{autoupdate, benchmark, hardware};
 use anyhow::Result;
 use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
@@ -182,6 +184,7 @@ pub(crate) async fn run_cli(
 
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
     initialize_embedded_runtime_entrypoint()?;
+    crate::sdk::embedded_logging::initialize_embedded_logging(options.config_path.as_deref())?;
 
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
@@ -247,14 +250,17 @@ pub(super) async fn run_runtime_cli(
         });
     }
 
-    // This topology is intentionally selected before plugin startup, release
-    // lookup, config-driven mesh discovery, and `mesh::Node::start`. Its only
-    // long-lived serving surfaces are the local Skippy runtime and OpenAI API.
+    // These topologies are intentionally selected before plugin startup,
+    // release lookup, config-driven mesh discovery, and `mesh::Node::start`.
+    // Load config only to configure their optional audit sink; failures stay
+    // nonfatal so they retain their early-return behavior.
     if options.local_model_only {
+        initialize_early_topology_audit_logging(&mut options)?;
         return run_local_model_only(options).await;
     }
 
     if let Some(name) = options.plugin.clone() {
+        initialize_early_topology_audit_logging(&mut options)?;
         return plugin::run_plugin_process(name).await;
     }
 
@@ -280,6 +286,9 @@ pub(super) async fn run_runtime_cli(
     options.client = effective_mode == mesh_llm_config::RuntimeMode::Client;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     apply_runtime_config_options(&mut options, &config);
+
+    initialize_audit_logging_for_options(&options)?;
+
     let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&options, &config)?;
     let cli_has_explicit_models = cli_has_explicit_models(&options);
     let has_config_models = !config.models.is_empty();
@@ -340,6 +349,78 @@ pub(super) fn apply_runtime_config_options(
 ) {
     options.debug |= config.runtime.debug;
     options.listen_all |= config.runtime.listen_all;
+
+    let cli_path_supplied = options.audit_log_path.is_some();
+    let audit = &config.logging.audit;
+    let config_enabled =
+        config.logging.enabled && audit.enabled.unwrap_or(audit.log_path.is_some());
+    options.audit_max_file_size = audit
+        .max_file_size_mb
+        .unwrap_or(100)
+        .saturating_mul(1024 * 1024);
+    options.audit_max_files = audit.max_files.unwrap_or(10);
+    if !cli_path_supplied && config_enabled {
+        options.audit_log_path = audit.log_path.clone();
+        options.audit_log_format = audit
+            .log_format
+            .as_deref()
+            .and_then(|s| {
+                (s == "json_lines").then_some(mesh_llm_events::audit::AuditLogFormat::JsonLines)
+            })
+            .unwrap_or(mesh_llm_events::audit::AuditLogFormat::JsonLines);
+        options.audit_log_level = audit
+            .log_level
+            .as_deref()
+            .and_then(|s| match s {
+                "info" => Some(mesh_llm_events::audit::AuditLevel::Info),
+                "warn" => Some(mesh_llm_events::audit::AuditLevel::Warn),
+                "error" => Some(mesh_llm_events::audit::AuditLevel::Error),
+                "critical" => Some(mesh_llm_events::audit::AuditLevel::Critical),
+                _ => None,
+            })
+            .unwrap_or(mesh_llm_events::audit::AuditLevel::Info);
+    }
+}
+
+fn initialize_early_topology_audit_logging(options: &mut RuntimeOptions) -> Result<()> {
+    let config_path = options.config.clone();
+    initialize_early_topology_audit_logging_with(
+        options,
+        || plugin::load_config(config_path.as_deref()),
+        initialize_audit_logging_for_options,
+    )
+}
+
+pub(super) fn initialize_early_topology_audit_logging_with(
+    options: &mut RuntimeOptions,
+    load_config: impl FnOnce() -> Result<plugin::MeshConfig>,
+    initialize_audit_logging: impl FnOnce(&RuntimeOptions) -> Result<()>,
+) -> Result<()> {
+    match load_config() {
+        Ok(config) => apply_runtime_config_options(options, &config),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "failed to load config for early topology audit logging; continuing without config-derived audit settings"
+            );
+        }
+    }
+    initialize_audit_logging(options)
+}
+
+fn initialize_audit_logging_for_options(options: &RuntimeOptions) -> Result<()> {
+    // An effective path is the enabling condition. A CLI path is an explicit
+    // opt-in even when the persisted config disables its own sink.
+    if options.audit_log_path.is_some() {
+        init_audit_logging(
+            options.audit_log_path.clone(),
+            options.audit_log_format,
+            options.audit_log_level,
+            options.audit_max_file_size,
+            options.audit_max_files,
+        )?;
+    }
+    Ok(())
 }
 
 pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(

@@ -185,6 +185,11 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         trust_policy: cli.trust_policy.map(map_trust_policy),
         trust_owner: cli.trust_owner,
         nostr_discovery: cli.nostr_discovery,
+        audit_log_path: cli.audit_log_path,
+        audit_log_format: cli.audit_log_format,
+        audit_log_level: cli.audit_log_level,
+        audit_max_file_size: 100 * 1024 * 1024,
+        audit_max_files: 10,
     }
 }
 

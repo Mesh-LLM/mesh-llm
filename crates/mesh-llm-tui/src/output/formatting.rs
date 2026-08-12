@@ -181,6 +181,7 @@ impl OutputEventPresentation for OutputEvent {
                 Self::contextual_summary(context.as_deref(), message)
             }
             OutputEvent::LlamaNativeLog { message, .. } => message.clone(),
+            OutputEvent::CanonicalLog(envelope) => envelope.presentation_message(),
             _ => self.message().to_string(),
         }
     }
@@ -260,6 +261,9 @@ impl OutputEventPresentation for OutputEvent {
 
     fn json_fields(&self) -> Map<String, Value> {
         let value = match self {
+            OutputEvent::CliCommandLifecycle { family, outcome } => {
+                json!({ "command_family": family.as_str(), "code": outcome.code(), "outcome": outcome.as_str() })
+            }
             OutputEvent::Info { message, context } => {
                 json!({ "message": message, "context": context })
             }
@@ -449,6 +453,7 @@ impl OutputEventPresentation for OutputEvent {
                 }
                 Value::Object(map)
             }
+            OutputEvent::CanonicalLog(_) => Value::Object(Map::new()),
         };
 
         match value {
@@ -737,13 +742,6 @@ impl InteractiveDashboardFormatter {
     pub(in crate::output) fn render_if_dirty(&mut self) -> io::Result<bool> {
         if self.panic_restored() {
             return Ok(false);
-        }
-        if self
-            .state
-            .clear_expired_join_token_copy_status(Instant::now())
-            && self.terminal_active
-        {
-            self.dirty = true;
         }
         if !self.terminal_active || !self.dirty {
             return Ok(false);

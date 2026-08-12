@@ -3876,10 +3876,16 @@ name = "mesh-llm-events"
 version = "0.72.1"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "crossterm 0.28.1",
+ "libc",
  "ratatui",
+ "serde",
  "serde_json",
+ "tempfile",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3983,6 +3989,7 @@ dependencies = [
  "mesh-llm-guardrails",
  "mesh-llm-hf-hub",
  "mesh-llm-identity",
+ "mesh-llm-log-store",
  "mesh-llm-native-runtime",
  "mesh-llm-node",
  "mesh-llm-plugin",
@@ -4037,6 +4044,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "urlencoding",
+ "windows-sys 0.61.2",
  "zeroize",
  "zip",
 ]
@@ -4061,6 +4069,24 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "zeroize",
+]
+
+[[package]]
+name = "mesh-llm-log-store"
+version = "0.72.1"
+dependencies = [
+ "chrono",
+ "data-encoding",
+ "hex",
+ "mesh-llm-events",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8780,6 +8806,7 @@ dependencies = [
  "atomic",
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 
