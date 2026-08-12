@@ -117,8 +117,7 @@ function finiteMetric(value: number | undefined): number {
 
 function providerLoadPct(
   runtimes:
-    | Array<Pick<ProviderRuntimeInfo, 'max_concurrent_requests' | 'active_requests' | 'queued_requests'>>
-    | undefined
+    Array<Pick<ProviderRuntimeInfo, 'max_concurrent_requests' | 'active_requests' | 'queued_requests'>> | undefined
 ): number | undefined {
   const capacity = runtimes?.reduce((sum, runtime) => sum + finiteMetric(runtime.max_concurrent_requests), 0) ?? 0
   if (capacity <= 0) return undefined
