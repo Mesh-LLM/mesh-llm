@@ -10,6 +10,10 @@ readme = "README.md"
 keywords = ["llm", "mesh", "sdk", "inference"]
 categories = ["api-bindings", "network-programming"]
 
+[[example]]
+name = "apple_system"
+required-features = ["serving"]
+
 [features]
 default = ["client"]
 client = ["dep:mesh-llm-api-client"]
@@ -39,3 +43,6 @@ mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.
 reqwest = { version = "0.12", features = ["json"], optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

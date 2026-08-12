@@ -5,10 +5,10 @@ use super::status::mesh_guardrail_mode_to_openai;
 use super::{
     AutoRuntimeNodeSetup, BootstrapProxyStopTx, DashboardContextUsage, ManagedModelController,
     ModelTargetReconciliationPolicy, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
-    PreparedRuntimeStartup, ProviderSupervisorContext, ProviderSupervisorHandle,
-    RunAutoAdditionalModelsContext, RunAutoConsoleStateContext, RunAutoRuntimeLifecycleContext,
-    RunAutoServingSurface, RunAutoServingSurfaceContext, RuntimeCapacityLedger,
-    RuntimeDashboardSnapshotProvider, RuntimeEvent, RuntimeInstanceRegistry,
+    PreparedRuntimeStartup, ProviderRuntimeDiscoveryOptions, ProviderSupervisorContext,
+    ProviderSupervisorHandle, RunAutoAdditionalModelsContext, RunAutoConsoleStateContext,
+    RunAutoRuntimeLifecycleContext, RunAutoServingSurface, RunAutoServingSurfaceContext,
+    RuntimeCapacityLedger, RuntimeDashboardSnapshotProvider, RuntimeEvent, RuntimeInstanceRegistry,
     RuntimeModelHandleEntry, RuntimeOperationalEvent, RuntimeOptions,
     RuntimeResourcePlanningProfile, RuntimeSurface, SkippyNativeLogForwardingGuard,
     StartupLocalModelTask, StartupMeshCreationState, StartupModelPlan, StartupModelSpec,
@@ -119,6 +119,7 @@ pub(crate) struct EmbeddedRuntimeOptions {
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) log_format: LogFormat,
     pub(crate) headless: bool,
+    pub(crate) provider_runtimes: ProviderRuntimeDiscoveryOptions,
     pub(crate) control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 }
 
@@ -174,7 +175,7 @@ pub(super) fn write_runtime_owner_metadata(
 
 pub(crate) async fn run() -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(RuntimeOptions::default(), None, None, None).await
+    run_runtime_cli(RuntimeOptions::default(), None, None, None, None).await
 }
 
 pub(crate) async fn run_cli(
@@ -183,7 +184,7 @@ pub(crate) async fn run_cli(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(options, explicit_surface, legacy_warning, None).await
+    run_runtime_cli(options, explicit_surface, legacy_warning, None, None).await
 }
 
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
@@ -193,8 +194,16 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
 
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
+    let provider_runtimes = options.provider_runtimes.clone();
     let options = options_from_embedded_options(options);
-    run_runtime_cli(options, Some(surface), None, control_rx).await
+    run_runtime_cli(
+        options,
+        Some(surface),
+        None,
+        control_rx,
+        Some(provider_runtimes),
+    )
+    .await
 }
 
 pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
@@ -245,6 +254,7 @@ pub(super) async fn run_runtime_cli(
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    provider_runtime_discovery: Option<ProviderRuntimeDiscoveryOptions>,
 ) -> Result<()> {
     options.validate_discovery_mode_args()?;
 
@@ -344,6 +354,7 @@ pub(super) async fn run_runtime_cli(
         runtime,
         auto_join_candidates,
         embedded_control_rx,
+        provider_runtime_discovery,
     })
     .await
 }
@@ -1322,6 +1333,7 @@ pub(super) struct RunAutoContext {
     pub(super) auto_join_candidates: Vec<(String, Option<String>)>,
     pub(super) embedded_control_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    pub(super) provider_runtime_discovery: Option<ProviderRuntimeDiscoveryOptions>,
 }
 
 #[expect(
@@ -1339,6 +1351,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         runtime,
         auto_join_candidates,
         mut embedded_control_rx,
+        provider_runtime_discovery,
     } = ctx;
     let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;

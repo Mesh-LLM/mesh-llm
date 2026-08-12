@@ -306,6 +306,7 @@ select artifacts and policy with:
 just apple::live
 just apple::contract
 just apple::mesh
+just apple::rust-sdk
 just apple::carriers
 just apple::launchd
 just apple::instruments
@@ -318,6 +319,12 @@ files under `target/apple-runtime/instruments/`. Only its aggregate
 
 `just apple::contract` verifies `provider-runtime.json`, every declared file
 digest, and the executable bit through the shared Rust provider-runtime crate.
+
+`just apple::rust-sdk` starts a provider-only embedded MeshLLM node through the
+public Rust SDK builder. It supplies the carrier root through typed
+configuration while setting invalid process discovery variables, then proves
+`apple/system@27.0`, completion, and tool execution. This path intentionally
+does not install or load a Skippy runtime.
 
 ## Packaging and signing
 
@@ -382,7 +389,7 @@ caveats, and rollout gates.
 |---|---|---|
 | 0 | Policy, entitlement, packaging, signing, launchd, and accelerator spike | complete |
 | 1 | Local `apple/system` REST vertical slice | experimental implementation complete |
-| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | CLI release packaging and auto-discovery implemented; SDK carrier publication and bindings pending |
+| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | CLI and Rust SDK carriers implemented; Swift, Node/Electron, and Kotlin/JVM pending |
 | 3 | Private-mesh routing, load, failover, affinity, and withdrawal | not implemented |
 
 This runtime does not alter the Skippy ABI or use Skippy stage execution.

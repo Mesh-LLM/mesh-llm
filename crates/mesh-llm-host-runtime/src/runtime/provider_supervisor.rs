@@ -40,6 +40,15 @@ pub(super) struct ProviderSupervisorContext {
     pub(super) console_state: Option<api::MeshApi>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ProviderRuntimeDiscoveryOptions {
+    pub(crate) bundle_roots: Vec<PathBuf>,
+    pub(crate) release_manifest: Option<PathBuf>,
+    pub(crate) cache_dir: Option<PathBuf>,
+    pub(crate) allow_download: bool,
+    pub(crate) inherit_environment: bool,
+}
+
 pub(super) struct ProviderSupervisorHandle {
     shutdown_tx: watch::Sender<bool>,
     task: JoinHandle<()>,
@@ -98,8 +107,9 @@ impl ProviderSupervisorHandle {
 
 pub(super) async fn start_apple_provider_supervisor(
     context: ProviderSupervisorContext,
+    discovery_options: Option<&ProviderRuntimeDiscoveryOptions>,
 ) -> Option<ProviderSupervisorHandle> {
-    let resolved = match resolve_apple_provider_runtime().await {
+    let resolved = match resolve_apple_provider_runtime(discovery_options).await {
         Ok(Some(runtime)) => runtime,
         Ok(None) => return None,
         Err(error) => {
@@ -123,8 +133,10 @@ pub(super) async fn start_apple_provider_supervisor(
     Some(ProviderSupervisorHandle { shutdown_tx, task })
 }
 
-async fn resolve_apple_provider_runtime() -> Result<Option<InstalledProviderRuntime>> {
-    let discovery = ProviderDiscovery::from_environment()?;
+async fn resolve_apple_provider_runtime(
+    options: Option<&ProviderRuntimeDiscoveryOptions>,
+) -> Result<Option<InstalledProviderRuntime>> {
+    let discovery = ProviderDiscovery::from_options(options)?;
     if !discovery.has_candidates()? {
         return Ok(None);
     }
@@ -154,17 +166,31 @@ struct ProviderDiscovery {
 }
 
 impl ProviderDiscovery {
-    fn from_environment() -> Result<Self> {
-        let cache_dir = provider_cache_dir()?;
-        let mut roots = configured_bundle_roots();
-        roots.extend(default_bundle_roots());
+    fn from_options(options: Option<&ProviderRuntimeDiscoveryOptions>) -> Result<Self> {
+        let inherit_environment = options.is_none_or(|options| options.inherit_environment);
+        let cache_dir = provider_cache_dir(
+            options.and_then(|options| options.cache_dir.clone()),
+            inherit_environment,
+        )?;
+        let roots = discovery_roots(
+            options
+                .map(|options| options.bundle_roots.clone())
+                .unwrap_or_default(),
+            inherit_environment.then(configured_bundle_roots),
+            default_bundle_roots(),
+            inherit_environment,
+        );
         let bundle_dirs = discover_bundle_dirs(&roots)?;
-        let release_manifest = configured_release_manifest()?;
+        let release_manifest = provider_release_manifest(
+            options.and_then(|options| options.release_manifest.as_deref()),
+            inherit_environment,
+        )?;
         Ok(Self {
             bundle_dirs,
             release_manifest,
             cache_dir,
-            allow_download: environment_flag("MESH_LLM_PROVIDER_RUNTIME_DOWNLOAD"),
+            allow_download: options.is_some_and(|options| options.allow_download)
+                || (inherit_environment && environment_flag("MESH_LLM_PROVIDER_RUNTIME_DOWNLOAD")),
         })
     }
 
@@ -176,6 +202,19 @@ impl ProviderDiscovery {
             .list()?
             .is_empty())
     }
+}
+
+fn discovery_roots(
+    mut explicit: Vec<PathBuf>,
+    environment: Option<Vec<PathBuf>>,
+    defaults: Vec<PathBuf>,
+    inherit_environment: bool,
+) -> Vec<PathBuf> {
+    if inherit_environment {
+        explicit.extend(environment.unwrap_or_default());
+    }
+    explicit.extend(defaults);
+    explicit
 }
 
 fn configured_bundle_roots() -> Vec<PathBuf> {
@@ -227,11 +266,20 @@ fn discover_bundle_dirs(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(bundles)
 }
 
-fn configured_release_manifest() -> Result<ProviderRuntimeReleaseManifest> {
-    let Some(path) = std::env::var_os("MESH_LLM_PROVIDER_RUNTIME_INDEX") else {
+fn provider_release_manifest(
+    configured: Option<&Path>,
+    inherit_environment: bool,
+) -> Result<ProviderRuntimeReleaseManifest> {
+    let path = configured.map(Path::to_path_buf).or_else(|| {
+        inherit_environment
+            .then(|| std::env::var_os("MESH_LLM_PROVIDER_RUNTIME_INDEX"))
+            .flatten()
+            .map(PathBuf::from)
+    });
+    let Some(path) = path else {
         return Ok(empty_release_manifest());
     };
-    ProviderRuntimeReleaseManifest::read_from_path(Path::new(&path))
+    ProviderRuntimeReleaseManifest::read_from_path(&path)
 }
 
 fn empty_release_manifest() -> ProviderRuntimeReleaseManifest {
@@ -241,9 +289,14 @@ fn empty_release_manifest() -> ProviderRuntimeReleaseManifest {
     }
 }
 
-fn provider_cache_dir() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("MESH_LLM_PROVIDER_RUNTIME_CACHE_DIR") {
-        return Ok(PathBuf::from(path));
+fn provider_cache_dir(configured: Option<PathBuf>, inherit_environment: bool) -> Result<PathBuf> {
+    if let Some(path) = configured {
+        return Ok(path);
+    }
+    if inherit_environment
+        && let Some(path) = std::env::var_os("MESH_LLM_PROVIDER_RUNTIME_CACHE_DIR")
+    {
+        return Ok(path.into());
     }
     dirs::cache_dir()
         .or_else(|| dirs::home_dir().map(|home| home.join(".cache")))
@@ -922,6 +975,38 @@ mod tests {
 
         let discovered = discover_bundle_dirs(&[direct.clone(), parent]).unwrap();
         assert_eq!(discovered, vec![direct, nested]);
+    }
+
+    #[test]
+    fn embedded_discovery_roots_do_not_inherit_process_environment() {
+        let explicit = PathBuf::from("/sdk/resources/provider-runtimes/apple");
+        let environment = PathBuf::from("/process/provider-runtimes");
+        let adjacent = PathBuf::from("/app/Resources/provider-runtimes/apple");
+
+        let roots = discovery_roots(
+            vec![explicit.clone()],
+            Some(vec![environment]),
+            vec![adjacent.clone()],
+            false,
+        );
+
+        assert_eq!(roots, vec![explicit, adjacent]);
+    }
+
+    #[test]
+    fn cli_discovery_roots_retain_environment_and_adjacent_defaults() {
+        let explicit = PathBuf::from("/configured/provider-runtimes");
+        let environment = PathBuf::from("/process/provider-runtimes");
+        let adjacent = PathBuf::from("/bin/provider-runtimes/apple");
+
+        let roots = discovery_roots(
+            vec![explicit.clone()],
+            Some(vec![environment.clone()]),
+            vec![adjacent.clone()],
+            true,
+        );
+
+        assert_eq!(roots, vec![explicit, environment, adjacent]);
     }
 
     #[tokio::test]

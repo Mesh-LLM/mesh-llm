@@ -34,3 +34,8 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+Provider-only hosts can omit `.model(...)` and supply one or more packaged
+provider roots with `.provider_runtime_root(...)`. This path does not require a
+Skippy native runtime. Provider roots are SDK-owned resource locations; bundle
+validation, selection, launch, health, restart, routing, and shutdown remain
+owned by the shared host runtime.

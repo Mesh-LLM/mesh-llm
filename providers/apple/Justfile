@@ -73,6 +73,10 @@ product-qa mesh_version output="target/apple-runtime/product":
     @just --justfile "{{ apple_root }}/../../Justfile" \
       apple::product-smoke "{{ mesh_version }}" "{{ output }}"
 
+# Drive the Apple provider through typed Rust SDK carrier configuration.
+rust-sdk: package
+    @"{{ apple_root }}/QA/rust-sdk.sh"
+
 # Verify one signed runtime from CLI, Swift, Node, and JVM carrier layouts.
 carriers: package
     @"{{ apple_root }}/QA/carriers.sh"

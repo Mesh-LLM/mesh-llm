@@ -147,6 +147,20 @@ pub struct EmbeddedMeshStorageConfig {
     pub isolated_config: bool,
 }
 
+/// Executable provider runtimes carried by an embedded host application.
+///
+/// Bundle roots may point at either a provider bundle containing
+/// `provider-runtime.json` or a directory whose direct children are bundles.
+/// Embedded hosts use this typed configuration instead of process-global
+/// provider discovery environment variables.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EmbeddedProviderRuntimeConfig {
+    pub bundle_roots: Vec<PathBuf>,
+    pub release_manifest: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
+    pub allow_download: bool,
+}
+
 impl Default for EmbeddedMeshStorageConfig {
     fn default() -> Self {
         Self {
@@ -164,6 +178,7 @@ pub struct EmbeddedMeshNodeConfig {
     pub network: EmbeddedMeshNetworkConfig,
     pub admission: EmbeddedMeshAdmissionConfig,
     pub storage: EmbeddedMeshStorageConfig,
+    pub provider_runtimes: EmbeddedProviderRuntimeConfig,
     pub log_format: EmbeddedMeshLogFormat,
     pub startup_timeout: Duration,
 }
@@ -177,6 +192,7 @@ impl Default for EmbeddedMeshNodeConfig {
             network: EmbeddedMeshNetworkConfig::default(),
             admission: EmbeddedMeshAdmissionConfig::default(),
             storage: EmbeddedMeshStorageConfig::default(),
+            provider_runtimes: EmbeddedProviderRuntimeConfig::default(),
             log_format: EmbeddedMeshLogFormat::default(),
             startup_timeout: Duration::from_secs(30),
         }
@@ -463,6 +479,35 @@ impl EmbeddedMeshNodeBuilder {
         self
     }
 
+    pub fn provider_runtime_root(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config.provider_runtimes.bundle_roots.push(path.into());
+        self
+    }
+
+    pub fn provider_runtime_roots<I, P>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        self.config.provider_runtimes.bundle_roots = paths.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn provider_runtime_release_manifest(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config.provider_runtimes.release_manifest = Some(path.into());
+        self
+    }
+
+    pub fn provider_runtime_cache_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config.provider_runtimes.cache_dir = Some(path.into());
+        self
+    }
+
+    pub fn allow_provider_runtime_downloads(mut self, allowed: bool) -> Self {
+        self.config.provider_runtimes.allow_download = allowed;
+        self
+    }
+
     pub fn log_format(mut self, format: EmbeddedMeshLogFormat) -> Self {
         self.config.log_format = format;
         self
@@ -504,6 +549,7 @@ pub struct EmbeddedServeConfig {
     pub admission: EmbeddedMeshAdmissionConfig,
     pub config_path: Option<PathBuf>,
     pub isolated_config: bool,
+    pub provider_runtimes: EmbeddedProviderRuntimeConfig,
     pub log_format: EmbeddedMeshLogFormat,
     pub startup_timeout: Duration,
 }
@@ -535,6 +581,7 @@ impl Default for EmbeddedServeConfig {
             admission: EmbeddedMeshAdmissionConfig::default(),
             config_path: None,
             isolated_config: true,
+            provider_runtimes: EmbeddedProviderRuntimeConfig::default(),
             log_format: EmbeddedMeshLogFormat::default(),
             startup_timeout: Duration::from_secs(30),
         }
@@ -576,6 +623,7 @@ impl From<EmbeddedServeConfig> for EmbeddedMeshNodeConfig {
                 config_path: config.config_path,
                 isolated_config: config.isolated_config,
             },
+            provider_runtimes: config.provider_runtimes,
             log_format: config.log_format,
             startup_timeout: config.startup_timeout,
         }
@@ -609,6 +657,7 @@ impl From<EmbeddedMeshNodeConfig> for EmbeddedServeConfig {
             admission: config.admission,
             config_path: config.storage.config_path,
             isolated_config: config.storage.isolated_config,
+            provider_runtimes: config.provider_runtimes,
             log_format: config.log_format,
             startup_timeout: config.startup_timeout,
         }

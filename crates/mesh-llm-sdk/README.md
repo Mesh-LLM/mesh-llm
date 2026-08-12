@@ -69,6 +69,47 @@ let status = node.status().await?;
 node.shutdown().await?;
 ```
 
+## Packaged Provider Runtimes
+
+Host-capable SDK applications can carry executable provider runtimes in their
+own resources and pass those resource paths through typed configuration. The
+shared host resolver still verifies the manifest, payload hashes, platform,
+protocol, signature policy, and lifecycle; the SDK does not interpret an Apple
+bundle or bind Foundation Models itself.
+
+On Apple silicon with macOS Golden Gate, package the experimental sidecar and
+point the embedded host at either the bundle itself or its parent directory:
+
+```rust,no_run
+use mesh_llm_sdk::MeshNode;
+
+let node = MeshNode::builder()
+    .serve()
+    .provider_runtime_root(
+        "/Applications/MyApp.app/Contents/Resources/provider-runtimes/apple",
+    )
+    .start()
+    .await?;
+
+let models = node.openai_client().models().await?;
+node.shutdown().await?;
+```
+
+Provider-only embedded serving does not require a Skippy native runtime. Add a
+native runtime only when the same embedded host also loads GGUF models through
+`.model(...)`. Embedded provider discovery deliberately ignores
+`MESH_LLM_PROVIDER_RUNTIME_BUNDLE_DIR`,
+`MESH_LLM_PROVIDER_RUNTIME_INDEX`, and the provider download flag: SDK carriers
+must supply roots, an optional release manifest/cache, and download permission
+through the builder. This avoids process-global discovery collisions when more
+than one SDK host exists in an application.
+
+The complete Golden Gate example includes a versioned completion and tool call:
+
+```bash
+just apple::rust-sdk
+```
+
 ## Check and Install the Required Native Runtime
 
 Embedded serving requires a native runtime matching both the exact

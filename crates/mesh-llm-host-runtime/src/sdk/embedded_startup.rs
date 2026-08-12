@@ -3,10 +3,16 @@ use anyhow::Result;
 #[cfg(any(feature = "dynamic-native-runtime", test))]
 use std::path::Path;
 
-pub(super) fn prepare_embedded_native_runtime(mode: &EmbeddedMeshNodeMode) -> Result<()> {
+pub(super) fn prepare_embedded_native_runtime(
+    mode: &EmbeddedMeshNodeMode,
+    has_native_models: bool,
+) -> Result<()> {
     #[cfg(feature = "dynamic-native-runtime")]
     {
-        if *mode == EmbeddedMeshNodeMode::Client || skippy_runtime::native_runtime_loaded() {
+        if *mode == EmbeddedMeshNodeMode::Client
+            || !has_native_models
+            || skippy_runtime::native_runtime_loaded()
+        {
             return Ok(());
         }
         let cache = crate::system::native_runtime_install::default_native_runtime_cache()?;
@@ -20,11 +26,11 @@ pub(super) fn prepare_embedded_native_runtime(mode: &EmbeddedMeshNodeMode) -> Re
             crate::system::native_runtime::load_local_native_runtime_for_embedded_serving()?
                 .is_some()
                 || skippy_runtime::native_runtime_loaded();
-        ensure_embedded_native_runtime_ready(mode, loaded, requirement)?;
+        ensure_embedded_native_runtime_ready(mode, has_native_models, loaded, requirement)?;
     }
     #[cfg(not(feature = "dynamic-native-runtime"))]
     {
-        let _ = mode;
+        let _ = (mode, has_native_models);
     }
     Ok(())
 }
@@ -39,10 +45,11 @@ struct EmbeddedNativeRuntimeRequirement<'a> {
 #[cfg(any(feature = "dynamic-native-runtime", test))]
 fn ensure_embedded_native_runtime_ready(
     mode: &EmbeddedMeshNodeMode,
+    has_native_models: bool,
     loaded: bool,
     requirement: EmbeddedNativeRuntimeRequirement<'_>,
 ) -> Result<()> {
-    if *mode == EmbeddedMeshNodeMode::Client || loaded {
+    if *mode == EmbeddedMeshNodeMode::Client || !has_native_models || loaded {
         return Ok(());
     }
     anyhow::bail!(missing_native_runtime_message(requirement));
@@ -74,6 +81,7 @@ mod tests {
     fn missing_embedded_serve_runtime_error_names_versions_cache_and_fix() {
         let error = ensure_embedded_native_runtime_ready(
             &EmbeddedMeshNodeMode::Serve,
+            true,
             false,
             requirement(),
         )
@@ -89,13 +97,34 @@ mod tests {
 
     #[test]
     fn embedded_client_does_not_require_native_serving_runtime() {
-        ensure_embedded_native_runtime_ready(&EmbeddedMeshNodeMode::Client, false, requirement())
-            .expect("client-only embedding should not require a serving runtime");
+        ensure_embedded_native_runtime_ready(
+            &EmbeddedMeshNodeMode::Client,
+            true,
+            false,
+            requirement(),
+        )
+        .expect("client-only embedding should not require a serving runtime");
+    }
+
+    #[test]
+    fn provider_only_serve_does_not_require_native_serving_runtime() {
+        ensure_embedded_native_runtime_ready(
+            &EmbeddedMeshNodeMode::Serve,
+            false,
+            false,
+            requirement(),
+        )
+        .expect("provider-only embedded serving should not require Skippy");
     }
 
     #[test]
     fn loaded_native_runtime_allows_embedded_serve() {
-        ensure_embedded_native_runtime_ready(&EmbeddedMeshNodeMode::Serve, true, requirement())
-            .expect("loaded runtime should allow embedded serving");
+        ensure_embedded_native_runtime_ready(
+            &EmbeddedMeshNodeMode::Serve,
+            true,
+            true,
+            requirement(),
+        )
+        .expect("loaded runtime should allow embedded serving");
     }
 }

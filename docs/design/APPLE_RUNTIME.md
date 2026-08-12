@@ -214,6 +214,7 @@ just apple::live
 just apple::mesh
 just apple::product 0.72.1 target/apple-runtime/product
 just apple::product-qa 0.72.1 target/apple-runtime/product
+just apple::rust-sdk
 MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Mesh-LLM Local Codesign" \
   just apple::rest
 MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Mesh-LLM Local Codesign" \
@@ -252,6 +253,7 @@ Observed live results:
 | Core AI Instruments accelerator trace | pass; ANE load/prediction observed |
 | Supervisor SIGKILL/orphan prevention | pass; provider child exited |
 | Release-shaped CLI product auto-discovery | pass; no bundle/index override |
+| Rust SDK typed provider carrier | pass; completion and tool call |
 
 A representative deterministic text request completed in 2.30 seconds with a
 1.81-second time to first token, 73 input tokens, and 25 output tokens. A
@@ -345,12 +347,13 @@ MeshLLM's normal local OpenAI frontend and runtime-process management surface.
 ### 2. All host-capable macOS SDKs
 
 The shared executable-provider manifest, resolver, verified downloader,
-immutable cache contract, Rust host supervisor, CLI product composition, and
-adjacent-product auto-discovery are implemented. The release lane requires a
+immutable cache contract, Rust host supervisor, CLI product composition,
+adjacent-product auto-discovery, and typed Rust SDK carrier configuration are
+implemented. Provider-only Rust SDK hosts do not load Skippy. The release lane requires a
 Developer ID Application signature, secure timestamp, accepted notarization,
 and `spctl` assessment before composition. Next, publish that one signed macOS
-arm64 artifact and bind the Rust, Swift, Node/Electron, and Kotlin/JVM SDK
-surfaces to the same installation and host lifecycle contract. Validate Swift
+arm64 artifact and bind the Swift, Node/Electron, and Kotlin/JVM SDK surfaces
+to the same installation and host lifecycle contract. Validate Swift
 app embedding, sandboxing, quarantine, and launchd/service lifecycles, then
 certify every SDK against one protocol test suite.
 

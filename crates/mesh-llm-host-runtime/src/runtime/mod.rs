@@ -88,7 +88,10 @@ pub(crate) use self::operational_logging::{
     NativeSkippyOperationalEvent, RuntimeOperationalEvent, record_native_skippy_operational_event,
     record_runtime_operational_event, record_runtime_operational_event_with_context,
 };
-use self::provider_supervisor::*;
+pub(crate) use self::provider_supervisor::ProviderRuntimeDiscoveryOptions;
+use self::provider_supervisor::{
+    ProviderSupervisorContext, ProviderSupervisorHandle, start_apple_provider_supervisor,
+};
 use self::publication::*;
 pub use self::run_auto::load_resolved_plugins;
 use self::run_auto::*;

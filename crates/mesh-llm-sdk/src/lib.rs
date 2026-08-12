@@ -40,10 +40,10 @@ pub mod embedded_runtime {
         EmbeddedMeshHttpConfig, EmbeddedMeshLogFormat, EmbeddedMeshNetworkConfig,
         EmbeddedMeshNodeBuilder, EmbeddedMeshNodeConfig, EmbeddedMeshNodeHandle,
         EmbeddedMeshNodeMode, EmbeddedMeshNodeStatus, EmbeddedMeshRequirementsConfig,
-        EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig, EmbeddedServeConfig,
-        EmbeddedServeHandle, EmbeddedServeMode, EmbeddedServeStatus, EmbeddedServingController,
-        EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, initialize_host_runtime,
-        start_embedded_node, start_embedded_serve,
+        EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig, EmbeddedProviderRuntimeConfig,
+        EmbeddedServeConfig, EmbeddedServeHandle, EmbeddedServeMode, EmbeddedServeStatus,
+        EmbeddedServingController, EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
+        initialize_host_runtime, start_embedded_node, start_embedded_serve,
     };
 }
 
@@ -172,6 +172,14 @@ pub struct AdmissionConfig {
 pub struct ServingConfig {
     pub models: Vec<String>,
     pub max_vram_gb: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProviderRuntimeConfig {
+    pub bundle_roots: Vec<PathBuf>,
+    pub release_manifest: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
+    pub allow_download: bool,
 }
 
 #[cfg(feature = "serving")]
@@ -411,6 +419,36 @@ macro_rules! impl_common_builder_methods {
             self
         }
 
+        pub fn provider_runtime_root(mut self, path: impl Into<PathBuf>) -> Self {
+            self.config.provider_runtimes.bundle_roots.push(path.into());
+            self
+        }
+
+        pub fn provider_runtime_roots<I, P>(mut self, paths: I) -> Self
+        where
+            I: IntoIterator<Item = P>,
+            P: Into<PathBuf>,
+        {
+            self.config.provider_runtimes.bundle_roots =
+                paths.into_iter().map(Into::into).collect();
+            self
+        }
+
+        pub fn provider_runtime_release_manifest(mut self, path: impl Into<PathBuf>) -> Self {
+            self.config.provider_runtimes.release_manifest = Some(path.into());
+            self
+        }
+
+        pub fn provider_runtime_cache_dir(mut self, path: impl Into<PathBuf>) -> Self {
+            self.config.provider_runtimes.cache_dir = Some(path.into());
+            self
+        }
+
+        pub fn allow_provider_runtime_downloads(mut self, allowed: bool) -> Self {
+            self.config.provider_runtimes.allow_download = allowed;
+            self
+        }
+
         pub fn log_format(mut self, format: LogFormat) -> Self {
             self.config.log_format = format;
             self
@@ -486,6 +524,7 @@ pub mod client {
         pub network: NetworkConfig,
         pub admission: AdmissionConfig,
         pub storage: StorageConfig,
+        pub provider_runtimes: ProviderRuntimeConfig,
         pub log_format: LogFormat,
         pub startup_timeout: Duration,
     }
@@ -497,6 +536,7 @@ pub mod client {
                 network: NetworkConfig::default(),
                 admission: AdmissionConfig::default(),
                 storage: StorageConfig::default(),
+                provider_runtimes: ProviderRuntimeConfig::default(),
                 log_format: LogFormat::default(),
                 startup_timeout: Duration::from_secs(30),
             }
@@ -529,6 +569,7 @@ pub mod client {
             network: config.network,
             admission: config.admission,
             storage: config.storage,
+            provider_runtimes: config.provider_runtimes,
             serving: ServingConfig::default(),
             log_format: config.log_format,
             startup_timeout: config.startup_timeout,
@@ -547,6 +588,7 @@ pub mod serve {
         pub network: NetworkConfig,
         pub admission: AdmissionConfig,
         pub storage: StorageConfig,
+        pub provider_runtimes: ProviderRuntimeConfig,
         pub serving: ServingConfig,
         pub log_format: LogFormat,
         pub startup_timeout: Duration,
@@ -559,6 +601,7 @@ pub mod serve {
                 network: NetworkConfig::default(),
                 admission: AdmissionConfig::default(),
                 storage: StorageConfig::default(),
+                provider_runtimes: ProviderRuntimeConfig::default(),
                 serving: ServingConfig::default(),
                 log_format: LogFormat::default(),
                 startup_timeout: Duration::from_secs(30),
@@ -611,6 +654,7 @@ pub mod serve {
             network: config.network,
             admission: config.admission,
             storage: config.storage,
+            provider_runtimes: config.provider_runtimes,
             serving: config.serving,
             log_format: config.log_format,
             startup_timeout: config.startup_timeout,
@@ -634,6 +678,7 @@ struct EmbeddedNodeParts {
     network: NetworkConfig,
     admission: AdmissionConfig,
     storage: StorageConfig,
+    provider_runtimes: ProviderRuntimeConfig,
     serving: ServingConfig,
     log_format: LogFormat,
     startup_timeout: Duration,
@@ -716,6 +761,12 @@ fn host_config(parts: EmbeddedNodeParts) -> mesh_llm_embedded_runtime::EmbeddedM
             config_path: parts.storage.config_path,
             isolated_config: parts.storage.isolated_config,
         },
+        provider_runtimes: mesh_llm_embedded_runtime::EmbeddedProviderRuntimeConfig {
+            bundle_roots: parts.provider_runtimes.bundle_roots,
+            release_manifest: parts.provider_runtimes.release_manifest,
+            cache_dir: parts.provider_runtimes.cache_dir,
+            allow_download: parts.provider_runtimes.allow_download,
+        },
         log_format: match parts.log_format {
             LogFormat::Pretty => mesh_llm_embedded_runtime::EmbeddedMeshLogFormat::Pretty,
             LogFormat::Json => mesh_llm_embedded_runtime::EmbeddedMeshLogFormat::Json,
@@ -758,6 +809,7 @@ mod tests {
             .model("unsloth/Qwen3-0.6B-GGUF:Q4_K_M")
             .max_vram_gb(6.0)
             .mesh_name("sprout")
+            .provider_runtime_root("/app/Resources/provider-runtimes/apple")
             .build();
 
         assert_eq!(
@@ -766,6 +818,10 @@ mod tests {
         );
         assert_eq!(config.serving.max_vram_gb, Some(6.0));
         assert_eq!(config.network.mesh_name.as_deref(), Some("sprout"));
+        assert_eq!(
+            config.provider_runtimes.bundle_roots,
+            vec![PathBuf::from("/app/Resources/provider-runtimes/apple")]
+        );
     }
 
     #[test]

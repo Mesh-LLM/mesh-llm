@@ -156,5 +156,11 @@ provider supervisor, which owns platform policy, process lifecycle, health, and
 local route registration.
 
 The next stacked layer packages that same artifact and lifecycle for every
-host-capable macOS SDK. SDKs remain thin carriers or clients: they must not
-reimplement Foundation Models semantics or create divergent sidecars.
+host-capable macOS SDK. The Rust SDK now accepts carrier bundle roots, an
+optional release index/cache, and explicit download permission through its
+embedded-node builder. The typed configuration flows into the same resolver
+without mutating or inheriting process-global provider discovery environment.
+Provider-only Rust hosts also skip the unrelated Skippy native-runtime load.
+Swift, Node/Electron, and Kotlin/JVM should map their resource locations into
+this contract rather than reimplement Foundation Models semantics or create
+divergent sidecars.
