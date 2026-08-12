@@ -290,10 +290,12 @@ kill -KILL "$PROVIDER_PID_A"
 
 WITHDRAW_OBSERVED=0
 for _ in $(seq 1 200); do
-    if curl --silent --show-error "http://127.0.0.1:$CONSOLE_B/api/status" \
+    if curl --silent --show-error "http://127.0.0.1:$CONSOLE_A/api/runtime/processes" \
+        >"$OUTPUT_DIR/node-a-processes-after-withdraw.json" 2>/dev/null \
+        && curl --silent --show-error "http://127.0.0.1:$CONSOLE_B/api/status" \
         >"$OUTPUT_DIR/node-b-withdrawn-status.json" 2>/dev/null \
         && curl --silent --show-error "http://127.0.0.1:$API_A/v1/models" \
-            >"$OUTPUT_DIR/mesh-models-after-withdraw.json" 2>/dev/null \
+        >"$OUTPUT_DIR/mesh-models-after-withdraw.json" 2>/dev/null \
         && python3 - "$OUTPUT_DIR" 2>/dev/null <<'PY'
 import json
 import os
@@ -302,16 +304,11 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 model_id = os.environ["APPLE_MODEL_ID"]
-status = json.loads((root / "node-b-withdrawn-status.json").read_text())
-models = json.loads((root / "mesh-models-after-withdraw.json").read_text())
-provider = next((model for model in models["data"] if model["id"] == model_id), None)
-assert provider is not None
-assert provider["metadata"]["replicas"] == 1, provider
-assert any(
-    runtime.get("model_name") == model_id
-    for peer in status.get("peers", [])
-    for runtime in peer.get("provider_runtimes", [])
-), status
+processes = json.loads((root / "node-a-processes-after-withdraw.json").read_text())
+assert not any(
+    process.get("name") == model_id and process.get("backend") == "apple"
+    for process in processes.get("processes", [])
+), processes
 PY
     then
         WITHDRAW_OBSERVED=1

@@ -104,6 +104,14 @@ revision, and SHA-256 digests for every downloaded model file. A package
 containing a Core AI artifact selects that artifact as its provider target; a
 package without one remains the `apple/system` package.
 
+Qwen3 artifacts advertise reasoning capability. The runtime automatically
+prefixes ordinary generation prompts with Qwen's `/no_think` control token so
+small OpenAI `max_tokens` budgets produce visible answers instead of spending
+the entire budget on hidden reasoning. Callers that explicitly include
+`/think` or `/no_think` retain control. The fixture tool path also recognizes a
+valid JSON tool request emitted as text by smaller artifacts and executes the
+registered fixture, keeping the REST tool contract deterministic.
+
 The default cache is
 `~/Library/Caches/mesh-llm/apple/coreai/`. Artifact downloads are pinned by the
 provider package and verified against the repository's preparation manifest;

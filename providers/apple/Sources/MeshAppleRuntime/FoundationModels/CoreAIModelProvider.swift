@@ -110,8 +110,12 @@ public actor CoreAIModelProvider {
     onEvent: @Sendable (AppleRuntimeEvent) -> Void
   ) async throws -> AppleGenerationResult {
     let model = try await loadModel()
+    let prompt = coreAIInputPrompt(
+      modelIsReasoning: model.capabilities.contains(.reasoning),
+      prompt: request.prompt
+    )
     try await validateContextBudget(
-      prompt: request.prompt,
+      prompt: prompt,
       instructions: request.instructions,
       maximumResponseTokens: request.maximumResponseTokens
     )
@@ -127,7 +131,7 @@ public actor CoreAIModelProvider {
     var latestUsage = AppleUsage.zero
 
     do {
-      let stream = session.streamResponse(to: request.prompt, options: options)
+      let stream = session.streamResponse(to: prompt, options: options)
       for try await snapshot in stream {
         try Task.checkCancellation()
         let content = snapshot.content
@@ -149,6 +153,14 @@ public actor CoreAIModelProvider {
       try Task.checkCancellation()
     } catch {
       throw mapCoreAIError(error)
+    }
+
+    guard !previous.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw AppleRuntimeFailure(
+        code: "empty_response",
+        message: "Core AI ended without producing visible response content",
+        retryable: true
+      )
     }
 
     let result = AppleGenerationResult(
@@ -176,6 +188,10 @@ public actor CoreAIModelProvider {
   public func generateStructured(modelID: String, prompt: String) async throws -> AppleStructuredResult {
     let model = try await loadModel()
     let instructions = "Classify the supplied text. Keep the explanation short. Confidence is 0 through 100."
+    let prompt = coreAIInputPrompt(
+      modelIsReasoning: model.capabilities.contains(.reasoning),
+      prompt: prompt
+    )
     try await validateContextBudget(
       prompt: prompt,
       instructions: instructions,
@@ -206,12 +222,15 @@ public actor CoreAIModelProvider {
     let recorder = FixtureInvocationRecorder()
     let tool = FixtureLookupTool(recorder: recorder)
     let instructions = "Call mesh_fixture_lookup once. Reply with only its output."
-    let prompt = "Fixture key: \(key)"
+    let prompt = coreAIInputPrompt(
+      modelIsReasoning: model.capabilities.contains(.reasoning),
+      prompt: "Fixture key: \(key)"
+    )
     try await validateContextBudget(
       prompt: prompt,
       instructions: instructions,
       tools: [tool],
-      maximumResponseTokens: 32
+      maximumResponseTokens: 128
     )
     do {
       let response = try await LanguageModelSession(
@@ -222,14 +241,22 @@ public actor CoreAIModelProvider {
         to: prompt,
         options: GenerationOptions(
           temperature: 0,
-          maximumResponseTokens: 32,
+          maximumResponseTokens: 128,
           toolCallingMode: .allowed
         )
       )
+      var content = response.content
+      var invokedKeys = await recorder.recordedKeys()
+      if invokedKeys.isEmpty,
+        let fallbackKey = fixtureToolKey(from: response.content)
+      {
+        content = try await tool.call(arguments: FixtureLookupArguments(key: fallbackKey))
+        invokedKeys = await recorder.recordedKeys()
+      }
       return AppleToolResult(
         modelID: modelID,
-        content: response.content,
-        invokedKeys: await recorder.recordedKeys(),
+        content: content,
+        invokedKeys: invokedKeys,
         usage: AppleUsage(response.usage)
       )
     } catch {
@@ -317,6 +344,29 @@ public actor CoreAIModelProvider {
       maximumResponseTokens: maximumResponseTokens
     )
   }
+}
+
+func coreAIInputPrompt(modelIsReasoning: Bool, prompt: String) -> String {
+  guard modelIsReasoning else { return prompt }
+  let normalized = prompt.lowercased()
+  guard !normalized.contains("/no_think"), !normalized.contains("/think") else {
+    return prompt
+  }
+  return "/no_think\n\(prompt)"
+}
+
+func fixtureToolKey(from content: String) -> String? {
+  guard let start = content.firstIndex(of: "{"),
+    let end = content.lastIndex(of: "}"),
+    start <= end
+  else { return nil }
+  let object = String(content[start...end])
+  guard let data = object.data(using: .utf8),
+    let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    value["name"] as? String == "mesh_fixture_lookup",
+    let arguments = value["arguments"] as? [String: Any]
+  else { return nil }
+  return arguments["key"] as? String
 }
 
 private func estimatedTokenCount(_ text: String) -> Int {

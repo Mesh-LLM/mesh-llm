@@ -160,3 +160,30 @@ private actor SchedulerGate {
   #expect(!AppleRuntimeIdentifiers.isArtifactModelID("meshllm/qwen3/0.6b"))
   #expect(!AppleRuntimeIdentifiers.isArtifactModelID("qwen3-0.6b-4bit-aimodel"))
 }
+
+@Test func reasoningArtifactPromptsDisableThinkingByDefault() {
+  #expect(
+    coreAIInputPrompt(modelIsReasoning: true, prompt: "Say hello.")
+      == "/no_think\nSay hello."
+  )
+  #expect(
+    coreAIInputPrompt(modelIsReasoning: true, prompt: "/no_think\nSay hello.")
+      == "/no_think\nSay hello."
+  )
+  #expect(
+    coreAIInputPrompt(modelIsReasoning: true, prompt: "/think\nExplain carefully.")
+      == "/think\nExplain carefully."
+  )
+  #expect(coreAIInputPrompt(modelIsReasoning: false, prompt: "Say hello.") == "Say hello.")
+}
+
+@Test func fixtureToolFallbackExtractsOnlyTheSupportedTool() {
+  #expect(
+    fixtureToolKey(from: "\n{\"name\":\"mesh_fixture_lookup\",\"arguments\":{\"key\":\"alpha\"}}")
+      == "alpha"
+  )
+  #expect(
+    fixtureToolKey(from: "{\"name\":\"other_tool\",\"arguments\":{\"key\":\"alpha\"}}")
+      == nil
+  )
+}

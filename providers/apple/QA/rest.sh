@@ -73,19 +73,35 @@ curl --fail --silent --show-error "$BASE_URL/v1/models" >"$OUTPUT_DIR/models.jso
 
 VERSIONED_MODEL_ID="$(python3 - "$OUTPUT_DIR/models.json" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
 models = json.loads(pathlib.Path(sys.argv[1]).read_text())
-matches = [model["id"] for model in models["data"] if model["id"].startswith("apple/system@")]
+requested = os.environ.get("MESH_APPLE_RUNTIME_MODEL_ID")
+matches = [
+    model["id"] for model in models["data"]
+    if "@" in model["id"]
+    and model.get("availability") == "available"
+    and (requested is None or model["id"].startswith(requested + "@"))
+]
+if requested is None:
+    artifact_matches = [
+        model for model in matches if not model["id"].startswith("apple/system@")
+    ]
+    matches = artifact_matches or [
+        model for model in matches if model["id"].startswith("apple/system@")
+    ]
 assert len(matches) == 1, models
 print(matches[0])
 PY
 )"
+MODEL_ID="${VERSIONED_MODEL_ID%@*}"
+export APPLE_MODEL_ID="$MODEL_ID" VERSIONED_MODEL_ID
 
 curl --fail --silent --show-error \
     -H 'content-type: application/json' \
-    --data-binary '{"model":"apple/system","messages":[{"role":"user","content":"Reply with exactly: apple runtime REST ready"}],"temperature":0,"max_tokens":32}' \
+    --data-binary "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: apple runtime REST ready\"}],\"temperature\":0,\"max_tokens\":32}" \
     "$BASE_URL/v1/chat/completions" >"$OUTPUT_DIR/completion.json"
 
 curl --fail --silent --show-error \
@@ -95,18 +111,18 @@ curl --fail --silent --show-error \
 
 curl --fail --silent --show-error --no-buffer \
     -H 'content-type: application/json' \
-    --data-binary '{"model":"apple/system","messages":[{"role":"user","content":"Reply with exactly: streaming REST ready"}],"temperature":0,"max_tokens":32,"stream":true}' \
+    --data-binary "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: streaming REST ready\"}],\"temperature\":0,\"max_tokens\":32,\"stream\":true}" \
     "$BASE_URL/v1/chat/completions" >"$OUTPUT_DIR/stream.txt"
 
 curl --fail --silent --show-error \
     -H 'content-type: application/json' \
-    --data-binary '{"model":"apple/system","messages":[{"role":"user","content":"Use the tool with key: rest-demo"}],"tools":[{"type":"function","function":{"name":"mesh_fixture_lookup","description":"Look up a fixture","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}}}],"temperature":0}' \
+    --data-binary "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Use the tool with key: rest-demo\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"mesh_fixture_lookup\",\"description\":\"Look up a fixture\",\"parameters\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"}},\"required\":[\"key\"]}}}],\"temperature\":0}" \
     "$BASE_URL/v1/chat/completions" >"$OUTPUT_DIR/tool.json"
 
 set +e
 curl --silent --show-error --max-time 0.1 \
     -H 'content-type: application/json' \
-    --data-binary '{"model":"apple/system","messages":[{"role":"user","content":"Write a very long history of distributed computing."}],"max_tokens":512,"stream":true}' \
+    --data-binary "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a very long history of distributed computing.\"}],\"max_tokens\":512,\"stream\":true}" \
     "$BASE_URL/v1/chat/completions" >"$OUTPUT_DIR/cancelled-stream.txt" 2>"$OUTPUT_DIR/cancelled-stream.stderr"
 CANCEL_STATUS=$?
 set -e
@@ -117,7 +133,7 @@ set -e
 
 curl --fail --silent --show-error \
     -H 'content-type: application/json' \
-    --data-binary '{"model":"apple/system","messages":[{"role":"user","content":"Reply with exactly: slot released"}],"temperature":0,"max_tokens":16}' \
+    --data-binary "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: slot released\"}],\"temperature\":0,\"max_tokens\":32}" \
     "$BASE_URL/v1/chat/completions" >"$OUTPUT_DIR/after-cancel.json"
 
 ERROR_STATUS="$(curl --silent --show-error \
@@ -138,10 +154,12 @@ fi
 
 python3 - "$OUTPUT_DIR" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
+model_id = os.environ["APPLE_MODEL_ID"]
 models = json.loads((root / "models.json").read_text())
 completion = json.loads((root / "completion.json").read_text())
 versioned_completion = json.loads((root / "versioned-completion.json").read_text())
@@ -150,10 +168,10 @@ after_cancel = json.loads((root / "after-cancel.json").read_text())
 model_not_found = json.loads((root / "model-not-found.json").read_text())
 stream = (root / "stream.txt").read_text()
 
-assert any(model["id"] == "apple/system" for model in models["data"]), models
-versioned_models = [model for model in models["data"] if model["id"].startswith("apple/system@")]
+assert any(model["id"] == model_id for model in models["data"]), models
+versioned_models = [model for model in models["data"] if model["id"] == os.environ["VERSIONED_MODEL_ID"]]
 assert len(versioned_models) == 1, models
-assert completion["model"] == "apple/system", completion
+assert completion["model"] == model_id, completion
 assert completion["choices"][0]["message"]["content"], completion
 assert completion["usage"]["completion_tokens"] > 0, completion
 assert versioned_completion["model"] == versioned_models[0]["id"], versioned_completion
@@ -172,7 +190,7 @@ assert model_not_found["error"].get("code") or model_not_found["error"].get("typ
 
 summary = {
     "status": "pass",
-    "model": "apple/system",
+    "model": model_id,
     "versioned_model": versioned_models[0]["id"],
     "completion": completion,
     "versioned_completion": versioned_completion,
