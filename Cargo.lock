@@ -4006,6 +4006,7 @@ dependencies = [
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
  "mesh-llm-protocol",
+ "mesh-llm-provider-runtime",
  "mesh-llm-routing",
  "mesh-llm-runtime-install",
  "mesh-llm-system",

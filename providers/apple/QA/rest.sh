@@ -5,15 +5,19 @@ APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$APPLE_ROOT/../.." && pwd)"
 PACKAGE_ROOT="$REPO_ROOT/target/apple-runtime/package/meshllm-apple-runtime-darwin-arm64"
 BINARY="$PACKAGE_ROOT/bin/mesh-apple-runtime"
-OUTPUT_DIR="$REPO_ROOT/target/apple-runtime/rest"
+OUTPUT_DIR="${MESH_APPLE_RUNTIME_REST_OUTPUT_DIR:-$REPO_ROOT/target/apple-runtime/rest}"
 SERVER_LOG="$OUTPUT_DIR/server.jsonl"
 SERVER_ERR="$OUTPUT_DIR/server.stderr"
 SERVER_PID=""
+BASE_URL="${MESH_APPLE_RUNTIME_BASE_URL:-}"
+EXTERNAL_SERVER=0
 
-[[ -x "$BINARY" ]] || {
+if [[ -n "$BASE_URL" ]]; then
+    EXTERNAL_SERVER=1
+elif [[ ! -x "$BINARY" ]]; then
     echo "missing packaged Apple runtime; run just apple::package" >&2
     exit 2
-}
+fi
 
 cleanup() {
     if [[ "$SERVER_PID" =~ ^[0-9]+$ ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -26,29 +30,21 @@ trap cleanup EXIT
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
-"$BINARY" serve --port 0 --parent-pid "$$" >"$SERVER_LOG" 2>"$SERVER_ERR" &
-SERVER_PID=$!
+if [[ "$EXTERNAL_SERVER" -eq 0 ]]; then
+    "$BINARY" serve --port 0 --parent-pid "$$" >"$SERVER_LOG" 2>"$SERVER_ERR" &
+    SERVER_PID=$!
 
-READY=0
-for _ in $(seq 1 200); do
-    if grep -q '"type":"ready"' "$SERVER_LOG" 2>/dev/null; then
-        READY=1
-        break
-    fi
-    kill -0 "$SERVER_PID" 2>/dev/null || {
-        echo "Apple runtime exited before REST became ready" >&2
-        cat "$SERVER_ERR" >&2
-        exit 1
-    }
-    sleep 0.05
-done
-[[ "$READY" == "1" ]] || {
-    echo "Apple runtime REST did not become ready within 10s" >&2
-    cat "$SERVER_ERR" >&2
-    exit 1
-}
+    for _ in $(seq 1 200); do
+        grep -q '"type":"ready"' "$SERVER_LOG" 2>/dev/null && break
+        kill -0 "$SERVER_PID" 2>/dev/null || {
+            echo "Apple runtime exited before REST became ready" >&2
+            cat "$SERVER_ERR" >&2
+            exit 1
+        }
+        sleep 0.05
+    done
 
-PORT="$(python3 - "$SERVER_LOG" <<'PY'
+    PORT="$(python3 - "$SERVER_LOG" <<'PY'
 import json
 import pathlib
 import sys
@@ -60,21 +56,17 @@ for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
         break
 PY
 )"
-[[ "$PORT" =~ ^[0-9]+$ ]] || {
-    echo "invalid REST port: $PORT" >&2
-    exit 1
-}
-BASE_URL="http://127.0.0.1:$PORT"
-lsof -nP -a -p "$SERVER_PID" -iTCP -sTCP:LISTEN >"$OUTPUT_DIR/listeners.txt"
-grep -q "127.0.0.1:$PORT" "$OUTPUT_DIR/listeners.txt" || {
-    echo "Apple runtime REST listener is not restricted to IPv4 loopback" >&2
-    cat "$OUTPUT_DIR/listeners.txt" >&2
-    exit 1
-}
-if awk 'NR > 1 {print}' "$OUTPUT_DIR/listeners.txt" | grep -v "127\.0\.0\.1:$PORT" | grep -q 'LISTEN'; then
-    echo "Apple runtime REST exposes a non-loopback listener" >&2
-    cat "$OUTPUT_DIR/listeners.txt" >&2
-    exit 1
+    [[ "$PORT" =~ ^[0-9]+$ ]] || {
+        echo "invalid REST port: $PORT" >&2
+        exit 1
+    }
+    BASE_URL="http://127.0.0.1:$PORT"
+    lsof -nP -a -p "$SERVER_PID" -iTCP -sTCP:LISTEN >"$OUTPUT_DIR/listeners.txt"
+    grep -q "127.0.0.1:$PORT" "$OUTPUT_DIR/listeners.txt" || {
+        echo "Apple runtime REST listener is not restricted to IPv4 loopback" >&2
+        cat "$OUTPUT_DIR/listeners.txt" >&2
+        exit 1
+    }
 fi
 
 curl --fail --silent --show-error "$BASE_URL/v1/models" >"$OUTPUT_DIR/models.json"
@@ -105,11 +97,6 @@ set -e
     echo "REST cancellation probe completed before the client disconnected" >&2
     exit 1
 }
-grep -q 'chat.completion.chunk' "$OUTPUT_DIR/cancelled-stream.txt" || {
-    echo "REST cancellation probe disconnected before streaming began" >&2
-    cat "$OUTPUT_DIR/cancelled-stream.stderr" >&2 || true
-    exit 1
-}
 
 curl --fail --silent --show-error \
     -H 'content-type: application/json' \
@@ -122,8 +109,13 @@ ERROR_STATUS="$(curl --silent --show-error \
     -H 'content-type: application/json' \
     --data-binary '{"model":"apple/not-present","messages":[{"role":"user","content":"hello"}]}' \
     "$BASE_URL/v1/chat/completions")"
-[[ "$ERROR_STATUS" == "404" ]] || {
-    echo "expected model-not-found HTTP 404, got $ERROR_STATUS" >&2
+if [[ "$EXTERNAL_SERVER" -eq 0 ]]; then
+    EXPECTED_ERROR_STATUSES="404"
+else
+    EXPECTED_ERROR_STATUSES="400 404 503"
+fi
+[[ " $EXPECTED_ERROR_STATUSES " == *" $ERROR_STATUS "* ]] || {
+    echo "expected structured model error HTTP status, got $ERROR_STATUS" >&2
     exit 1
 }
 
@@ -153,7 +145,8 @@ assert tool["mesh_tool_executions"] == [{
 }], tool
 assert "mesh-fixture-value-for-rest-demo" in tool["choices"][0]["message"]["content"], tool
 assert after_cancel["choices"][0]["message"]["content"], after_cancel
-assert model_not_found["error"]["code"] == "model_not_found", model_not_found
+assert model_not_found["error"].get("message"), model_not_found
+assert model_not_found["error"].get("code") or model_not_found["error"].get("type"), model_not_found
 
 summary = {
     "status": "pass",

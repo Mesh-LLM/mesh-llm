@@ -5,9 +5,11 @@ model integrations. Its first logical model is Apple's on-device system model,
 exposed as `apple/system`. Named Core AI models will be added to the same
 runtime and protocol rather than shipped as a second sidecar.
 
-This work is **experimental**. It is not connected to MeshLLM's production
-OpenAI frontend, model gossip, or private-mesh routing yet. It implements the
-Milestone 0 evidence and an experimental local REST vertical slice from
+This work is **experimental**. A macOS `mesh-llm serve` host can supervise the
+runtime and expose `apple/system` through its normal local OpenAI frontend. The
+provider is not included in release products, model gossip, or private-mesh
+routing yet. It implements the Milestone 0 evidence, local REST vertical slice,
+and Rust host-supervision layer from
 [issue #1246](https://github.com/Mesh-LLM/mesh-llm/issues/1246).
 
 ## Requirements
@@ -234,11 +236,54 @@ just apple::rest
 This verifies model listing, buffered completion, SSE streaming, the fixture
 tool, client-disconnect cancellation, and slot reuse after cancellation.
 
+### 9. Exercise the MeshLLM host supervisor
+
+```bash
+just apple::mesh
+```
+
+This builds an ad-hoc-signed local provider package and the normal dynamic Rust
+host, starts `mesh-llm serve` with an isolated config, waits for `apple/system`
+on the host's ordinary `/v1/models`, and sends the same completion, SSE, tool,
+and cancellation probes through MeshLLM. It also verifies the provider process
+in `/api/runtime/processes`, kills the child to prove target withdrawal and
+restart, and terminates the host to prove child cleanup.
+
+Captured from the Golden Gate host through MeshLLM's REST API:
+
+```json
+{
+  "status": "pass",
+  "model": "apple/system",
+  "completion_content": "apple runtime REST ready",
+  "tool_executions": [{
+    "name": "mesh_fixture_lookup",
+    "arguments": {"key": "rest-demo"},
+    "result": "mesh-fixture-value-for-rest-demo"
+  }],
+  "stream_done": true,
+  "client_disconnect_cancelled": true,
+  "provider_restarted_after_crash": true,
+  "provider_exited_with_meshllm": true
+}
+```
+
+The recipe sets `MESH_LLM_APPLE_PROVIDER_ALLOW_AD_HOC=1` only for this local QA
+artifact. Product builds must use a trusted signature. Manual host testing can
+select artifacts and policy with:
+
+- `MESH_LLM_PROVIDER_RUNTIME_BUNDLE_DIR` for one or more carrier roots;
+- `MESH_LLM_PROVIDER_RUNTIME_INDEX` plus
+  `MESH_LLM_PROVIDER_RUNTIME_DOWNLOAD=1` for an opt-in release index;
+- `MESH_LLM_PROVIDER_RUNTIME_CACHE_DIR` for an isolated immutable cache; and
+- `MESH_LLM_APPLE_PROVIDER_ALLOW_AD_HOC=1` only for local development.
+
 ## Other validation commands
 
 ```bash
 just apple::live
 just apple::contract
+just apple::mesh
 just apple::carriers
 just apple::launchd
 just apple::instruments
@@ -276,7 +321,7 @@ caveats, and rollout gates.
 |---|---|---|
 | 0 | Policy, entitlement, packaging, signing, launchd, and accelerator spike | complete |
 | 1 | Local `apple/system` REST vertical slice | experimental implementation complete |
-| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | provider artifact contract implemented; supervisor and SDK lifecycle pending |
+| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | provider artifact and Rust host supervisor implemented; SDK packaging and bindings pending |
 | 3 | Private-mesh routing, load, failover, affinity, and withdrawal | not implemented |
 
 This runtime does not alter the Skippy ABI or use Skippy stage execution.

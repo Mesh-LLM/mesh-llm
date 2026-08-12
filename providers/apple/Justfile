@@ -29,6 +29,11 @@ contract: package
 rest: package
     @"{{ apple_root }}/QA/rest.sh"
 
+# Serve apple/system through MeshLLM's normal OpenAI API under host-owned lifecycle.
+mesh: package
+    @just --justfile "{{ apple_root }}/../../Justfile" build
+    @"{{ apple_root }}/QA/mesh.sh"
+
 # Verify one signed runtime from CLI, Swift, Node, and JVM carrier layouts.
 carriers: package
     @"{{ apple_root }}/QA/carriers.sh"
@@ -46,4 +51,4 @@ orphan: package
     @"{{ apple_root }}/QA/orphan.sh"
 
 # Run the complete experimental Apple runtime validation suite.
-qa: test live rest carriers launchd instruments orphan
+qa: test live rest mesh carriers launchd instruments orphan

@@ -120,6 +120,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         interactive_started,
         lan_bootstrap_tasks,
         runtime,
+        provider_supervisor,
     } = ctx;
     let input_handler_enabled = runtime_state.input_handler_enabled;
     let mut loop_ctx = RunAutoRuntimeLoopContext {
@@ -341,6 +342,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         runtime_data_producer,
         dashboard_context_usage: &runtime_state.dashboard_context_usage,
         runtime,
+        provider_supervisor,
     })
     .await;
 
@@ -382,6 +384,7 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
         runtime_data_producer,
         dashboard_context_usage,
         runtime,
+        provider_supervisor,
     } = ctx;
     node.broadcast_leaving().await;
 
@@ -400,6 +403,10 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
         console_server_handle,
     )
     .await;
+
+    if let Some(provider_supervisor) = provider_supervisor {
+        provider_supervisor.shutdown().await;
+    }
 
     shutdown_runtime_loaded_models(
         runtime_models,

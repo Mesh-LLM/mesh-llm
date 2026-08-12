@@ -116,13 +116,14 @@ quarantine, and entitlement verification remain additional policy gates owned
 by the host supervisor and release packaging. Manifest signature metadata is
 descriptive and is never treated as proof by itself.
 
-## Ownership and next layer
+## Ownership and host layer
 
 `mesh-llm-provider-runtime` owns this data and installation contract. It does
 not launch processes, bind ports, route inference, or expose language-specific
-APIs.
+APIs. The host runtime now consumes the contract through its experimental Apple
+provider supervisor, which owns platform policy, process lifecycle, health, and
+local route registration.
 
-The next stacked layer will add a Rust host supervisor that resolves one of
-these artifacts, validates platform signing policy, launches its entrypoint,
-tracks health and availability, forwards OpenAI requests, drains it, and
-terminates it with the owning MeshLLM instance.
+The next stacked layer packages that same artifact and lifecycle for every
+host-capable macOS SDK. SDKs remain thin carriers or clients: they must not
+reimplement Foundation Models semantics or create divergent sidecars.

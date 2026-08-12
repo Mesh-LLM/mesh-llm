@@ -1,7 +1,8 @@
 # Experimental Apple runtime
 
-Status: Milestone 0 and an experimental local REST vertical slice completed on
-2026-08-12; production integration remains gated. Tracking issue:
+Status: Milestone 0, the local REST vertical slice, executable-provider
+artifact contract, and experimental Rust host supervisor completed on
+2026-08-12; SDK distribution and mesh routing remain gated. Tracking issue:
 [#1246](https://github.com/mesh-llm/mesh-llm/issues/1246).
 
 ## Outcome
@@ -16,10 +17,10 @@ Core AI Instruments recorded active **Apple Neural Engine** load and prediction
 intervals during the request. This is direct evidence that the system model
 path uses Apple's native accelerator stack; it is not a CPU-only Swift wrapper.
 
-The experimental sidecar exposes a loopback OpenAI-shaped REST surface for local
-validation. It does not yet connect that surface to MeshLLM's public OpenAI
-frontend or gossip `apple/system` to peers. It intentionally proves the native,
-REST, and packaging boundaries first.
+The experimental sidecar exposes a loopback OpenAI-shaped REST surface. The
+Rust host can now resolve and supervise the packaged process and route
+`apple/system` through MeshLLM's normal local OpenAI frontend. It does not yet
+ship in release products or gossip `apple/system` to peers.
 
 ## Why this is valuable to Apple silicon users
 
@@ -96,21 +97,47 @@ The provider currently implements:
 - cancellation, including Foundation Models' empty-stream cancellation edge;
 - normalized retryable/non-retryable error codes.
 
-The sidecar provides a loopback diagnostic REST listener with `/health`,
+The sidecar provides a loopback provider REST listener with `/health`,
 `/v1/models`, and `/v1/chat/completions`. It supports buffered completions, SSE
 streaming, usage, disconnect cancellation, and the deterministic fixture-tool
-probe. This is experimental transport evidence, not yet the production MeshLLM
-frontend. The production host adapter should supervise the same executable over
-a versioned local protocol and translate it into the existing MeshLLM inference
-interface. This keeps Foundation Models and Swift out of the backend-neutral
-Rust host, and gives all SDKs one implementation instead of one implementation
-per language.
+probe. The Rust host adapter supervises the same executable and registers its
+ephemeral loopback port as an ordinary local inference target, so the existing
+MeshLLM frontend preserves completion, SSE, errors, usage, tools, and disconnect
+cancellation without an Apple-specific proxy. This keeps Foundation Models and
+Swift out of the backend-neutral Rust host.
 
 For process hosting, the runtime also accepts a validated `--parent-pid` and
 checks parent liveness every 50 ms. A QA supervisor is killed with `SIGKILL`
-mid-generation; the runtime must exit rather than becoming an orphan. The Rust
-provider manager must pass its real PID and retain instance-scoped child
-tracking so `mesh-llm stop`, host crashes, and orphan reaping remain correct.
+mid-generation; the runtime exits rather than becoming an orphan. The Rust
+supervisor passes its real PID, while the provider's parent watchdog covers an
+ungraceful host crash.
+
+### Rust host supervision
+
+Host-capable `mesh-llm serve` processes on macOS now start one experimental
+supervisor for `apple/system`; `mesh-llm client` never starts a local provider.
+The supervisor:
+
+- resolves a `kind=apple`, `model=apple/system`, protocol `0.1` artifact from a
+  product bundle, immutable cache, or explicitly enabled release index;
+- revalidates manifest hashes and executable policy, then verifies the macOS
+  code signature, declared signing identity/team, declared entitlements, and
+  notarization policy before execution;
+- removes common credential environment variables and launches the sidecar
+  with an ephemeral loopback port and the host's real parent PID;
+- waits for the structured readiness record and probes both `/health` and
+  `/v1/models` before registering the normal local inference target;
+- exposes PID, port, status, backend, context length, and restart state through
+  the existing runtime-process dashboard and management API;
+- withdraws the target immediately on unavailability, repeated health failure,
+  or process exit, and restarts unexpected exits with bounded backoff; and
+- stops ingress first during host shutdown, withdraws the route, sends
+  `SIGTERM`, waits up to five seconds, and force-kills a child that does not
+  exit.
+
+This phase deliberately advertises no provider state through gossip. The
+supervised model is local-only until the additive Phase 3 capability and
+availability fields, routing semantics, and mixed-version behavior are proven.
 
 ## Runtime packaging and SDK ownership
 
@@ -159,6 +186,7 @@ All repository commands use `just`:
 just apple::build
 just apple::test
 just apple::live
+just apple::mesh
 MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Mesh-LLM Local Codesign" \
   just apple::rest
 MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Mesh-LLM Local Codesign" \
@@ -183,6 +211,10 @@ Observed live results:
 | Loopback REST model listing/completion/SSE | pass |
 | REST tool execution | pass |
 | REST client-disconnect cancellation | pass |
+| MeshLLM `/v1` completion, SSE, tool, and cancellation | pass |
+| Management API provider PID, health, port, and context | pass |
+| Unexpected provider exit and supervised restart | pass |
+| MeshLLM shutdown and provider-child cleanup | pass |
 | Guided-generation API | pass, with quality caveat below |
 | Tool invocation | pass; exactly one recorded fixture lookup |
 | Local signing and strict verification | pass |
@@ -278,25 +310,25 @@ tools, packaging, signing, launchd behavior, SDK carriers, and Instruments.
 
 One Mac now serves model listing, buffered chat completion, SSE streaming,
 server-executed fixture tools, usage, errors, and client-disconnect cancellation
-from the shared sidecar. Production completion still requires the Rust
-supervisor and conformance mapping into MeshLLM's public OpenAI frontend.
+from the shared sidecar. The Rust supervisor now exposes the provider through
+MeshLLM's normal local OpenAI frontend and runtime-process management surface.
 
 ### 2. All host-capable macOS SDKs
 
-The shared executable-provider manifest, resolver, verified downloader, and
-immutable cache contract now live in `mesh-llm-provider-runtime`. Next, publish
-one signed macOS arm64 runtime artifact and teach CLI/Swift/npm/JVM
-resolvers to install, locate, launch, monitor, upgrade, and terminate it; add
-checksum policy; validate Swift app embedding, sandboxing, notarization,
-quarantine, and launchd/service lifecycles; then certify all SDKs against one
+The shared executable-provider manifest, resolver, verified downloader,
+immutable cache contract, and Rust host supervisor are implemented. Next,
+publish one signed macOS arm64 runtime artifact and bind the Rust, Swift,
+Node/Electron, and Kotlin/JVM SDK surfaces to the same installation and host
+lifecycle contract. Validate Swift app embedding, sandboxing, notarization,
+quarantine, and launchd/service lifecycles, then certify every SDK against one
 protocol test suite.
 
 ### 3. Private-mesh system-model routing
 
-Add the Rust runtime supervisor, dynamic availability and withdrawal, load and
-queue reporting, whole-model placement, pre-stream failover, request affinity,
-mixed-version behavior, and two-node validation. Keep `apple/system` explicit
-and private-mesh-only.
+Extend the local supervisor's availability and withdrawal state into additive
+gossip, then add load and queue reporting, whole-model placement, pre-stream
+failover, request affinity, mixed-version behavior, and two-node validation.
+Keep `apple/system` explicit and private-mesh-only.
 
 ### 4. Core AI model providers and workload certification
 

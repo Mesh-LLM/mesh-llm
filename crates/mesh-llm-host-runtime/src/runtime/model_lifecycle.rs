@@ -3,25 +3,23 @@ use super::{
     LocalRuntimeModelHandle, LocalRuntimeModelStartSpec, ManagedModelController, ModelIntent,
     ModelTargetReconciliationAction, ModelTargetReconciliationCandidate,
     ModelTargetReconciliationCapacityState, ModelTargetReconciliationInput,
-    ModelTargetReconciliationPolicy, ModelTargetReconciliationState, RunAutoRuntimeLoopContext,
-    RunAutoRuntimeState, RuntimeCapacityReservation, RuntimeEvent, RuntimeInstanceRegistry,
-    RuntimeOperationalEvent, RuntimeOptions, RuntimeUnloadCandidate, RuntimeUnloadOwner,
+    ModelTargetReconciliationPolicy, ModelTargetReconciliationState, ProviderSupervisorHandle,
+    RunAutoRuntimeLoopContext, RunAutoRuntimeState, RuntimeCapacityReservation, RuntimeEvent,
+    RuntimeInstanceRegistry, RuntimeOptions, RuntimeUnloadCandidate, RuntimeUnloadOwner,
     ShutdownRuntimeLoadedModelsContext, StartupModelSpec, StartupReadyReporter,
     add_runtime_local_target, add_serving_assignment, find_remote_catalog_model_exact_blocking,
     local_process_payload, next_runtime_instance_id, plan_model_target_reconciliation,
     publish_runtime_llama_slots, publish_runtime_llama_unavailable,
-    record_runtime_operational_event_with_context, refresh_dashboard_context_usage,
-    register_runtime_instance, remove_dashboard_context_usage, remove_dashboard_process,
-    remove_runtime_local_target, remove_serving_assignment, reserve_runtime_capacity_for_model,
-    resolve_model, runtime_model_ctx_size_override, runtime_model_planning_bytes,
-    runtime_process_payload_with_status, runtime_registry_has_model,
+    refresh_dashboard_context_usage, register_runtime_instance, remove_dashboard_context_usage,
+    remove_dashboard_process, remove_runtime_local_target, remove_serving_assignment,
+    reserve_runtime_capacity_for_model, resolve_model, runtime_model_ctx_size_override,
+    runtime_model_planning_bytes, runtime_process_payload_with_status, runtime_registry_has_model,
     runtime_resource_planning_profile, set_advertised_model_context, skippy_telemetry_options,
     start_runtime_local_model, unregister_runtime_instance, upsert_dashboard_process,
     withdraw_advertised_model,
 };
 use crate::api;
 use crate::inference::election;
-use crate::logging::{OperationalAuditContext, OperationalAuditSubjectKind};
 use crate::mesh;
 use crate::models;
 use crate::network::lan_bootstrap::LanBootstrapTasks;
@@ -34,19 +32,6 @@ use skippy_protocol::FlashAttentionType;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-pub(super) fn runtime_model_audit_context(
-    model: Option<&str>,
-    instance_id: &str,
-) -> OperationalAuditContext {
-    match model {
-        Some(model) => OperationalAuditContext::new()
-            .subject(OperationalAuditSubjectKind::Model, model)
-            .operation_id(instance_id),
-        None => OperationalAuditContext::new()
-            .subject(OperationalAuditSubjectKind::RuntimeInstance, instance_id),
-    }
-}
 
 mod load;
 pub(crate) mod reconciliation;
@@ -85,6 +70,7 @@ pub(super) struct RunAutoShutdownContext<'a> {
     pub(super) runtime_data_producer: Option<&'a crate::runtime_data::RuntimeDataProducer>,
     pub(super) dashboard_context_usage: &'a DashboardContextUsage,
     pub(super) runtime: Option<std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
+    pub(super) provider_supervisor: Option<ProviderSupervisorHandle>,
 }
 
 pub(super) struct RunAutoRuntimeLifecycleContext<'a> {
@@ -115,6 +101,7 @@ pub(super) struct RunAutoRuntimeLifecycleContext<'a> {
     pub(super) interactive_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub(super) lan_bootstrap_tasks: LanBootstrapTasks,
     pub(super) runtime: Option<std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
+    pub(super) provider_supervisor: Option<ProviderSupervisorHandle>,
 }
 
 pub(super) async fn run_auto_reconcile_model_targets(ctx: &mut RunAutoRuntimeLoopContext<'_>) {
@@ -273,7 +260,6 @@ pub(super) async fn shutdown_runtime_loaded_models(
     } = ctx;
 
     for (instance_id, entry) in runtime_models.drain() {
-        let unload_started = Instant::now();
         let RuntimeModelHandleEntry {
             model_name: name,
             handle,
@@ -302,10 +288,6 @@ pub(super) async fn shutdown_runtime_loaded_models(
         let _ = emit_event(OutputEvent::ModelUnloading {
             model: name.clone(),
         });
-        record_runtime_operational_event_with_context(
-            RuntimeOperationalEvent::ModelUnloadStarted,
-            runtime_model_audit_context(Some(&name), &instance_id).outcome("started"),
-        );
         let stopped_payload =
             runtime_process_payload_with_status(&name, Some(&instance_id), &handle, "stopped");
         {
@@ -324,14 +306,6 @@ pub(super) async fn shutdown_runtime_loaded_models(
         let _ = emit_event(OutputEvent::ModelUnloaded {
             model: name.clone(),
         });
-        record_runtime_operational_event_with_context(
-            RuntimeOperationalEvent::ModelUnloaded,
-            runtime_model_audit_context(Some(&name), &instance_id)
-                .outcome("completed")
-                .duration_ms(
-                    u64::try_from(unload_started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                ),
-        );
         upsert_dashboard_process(dashboard_processes, stopped_payload.clone()).await;
         if let Some(cs) = console_state {
             cs.upsert_local_process(stopped_payload).await;
@@ -342,16 +316,10 @@ pub(super) async fn shutdown_runtime_loaded_models(
 pub(super) async fn shutdown_runtime_managed_models(
     managed_models: &mut HashMap<String, ManagedModelController>,
 ) {
-    for (instance_id, controller) in managed_models.drain() {
-        let unload_started = Instant::now();
+    for (_, controller) in managed_models.drain() {
         let _ = emit_event(OutputEvent::ModelUnloading {
             model: controller.model_name.clone(),
         });
-        record_runtime_operational_event_with_context(
-            RuntimeOperationalEvent::ModelUnloadStarted,
-            runtime_model_audit_context(Some(&controller.model_name), &instance_id)
-                .outcome("started"),
-        );
         let _ = controller.stop_tx.send(true);
         let mut task = controller.task;
         match tokio::time::timeout(std::time::Duration::from_secs(3), &mut task).await {
@@ -365,16 +333,8 @@ pub(super) async fn shutdown_runtime_managed_models(
             }
         }
         let _ = emit_event(OutputEvent::ModelUnloaded {
-            model: controller.model_name.clone(),
+            model: controller.model_name,
         });
-        record_runtime_operational_event_with_context(
-            RuntimeOperationalEvent::ModelUnloaded,
-            runtime_model_audit_context(Some(&controller.model_name), &instance_id)
-                .outcome("completed")
-                .duration_ms(
-                    u64::try_from(unload_started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                ),
-        );
     }
 }
 
