@@ -37,7 +37,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             projector_path: None,
             include_embeddings: true,
             include_output: false,
-            mtp_source: skippy_runtime::MtpSource::Disabled,
+            mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: true,
         },
     )
@@ -84,7 +84,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 projector_path: None,
                 include_embeddings: true,
                 include_output: false,
-                mtp_source: skippy_runtime::MtpSource::Disabled,
+                mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: true,
             },
         )

@@ -60,6 +60,7 @@ pub(crate) fn run_validate_mtp_attach(args: ValidateMtpAttachArgs) -> Result<()>
         args.ctx_size,
         args.n_gpu_layers,
         args.projector.as_deref(),
+        MtpSource::Disabled,
     );
     let mut target = if args.model_parts.len() == 1 {
         StageModel::open(&args.model_parts[0], &target_config)
@@ -76,7 +77,13 @@ pub(crate) fn run_validate_mtp_attach(args: ValidateMtpAttachArgs) -> Result<()>
         mtp_layer_count > 0,
         "--mtp-layer-count must be greater than zero"
     );
-    let draft_config = runtime_config(mtp_layer_count, args.ctx_size, args.n_gpu_layers, None);
+    let draft_config = runtime_config(
+        mtp_layer_count,
+        args.ctx_size,
+        args.n_gpu_layers,
+        None,
+        MtpSource::External,
+    );
     target
         .attach_mtp_draft_model(&args.mtp_draft, &draft_config)
         .context("attach MTP draft model")?;
@@ -155,6 +162,7 @@ fn runtime_config(
     ctx_size: u32,
     n_gpu_layers: i32,
     projector: Option<&Path>,
+    mtp_source: MtpSource,
 ) -> RuntimeConfig {
     RuntimeConfig {
         stage_index: 0,
@@ -177,7 +185,7 @@ fn runtime_config(
         projector_path: projector.map(|path| path.display().to_string()),
         include_embeddings: true,
         include_output: true,
-        mtp_source: MtpSource::External,
+        mtp_source,
         filter_tensors_on_load: false,
     }
 }
@@ -188,7 +196,13 @@ mod tests {
 
     #[test]
     fn attach_probe_uses_small_mmap_runtime_config() {
-        let config = runtime_config(66, 64, 0, Some(Path::new("/models/mmproj.gguf")));
+        let config = runtime_config(
+            66,
+            64,
+            0,
+            Some(Path::new("/models/mmproj.gguf")),
+            MtpSource::Disabled,
+        );
 
         assert_eq!(config.layer_start, 0);
         assert_eq!(config.layer_end, 66);
@@ -196,7 +210,6 @@ mod tests {
         assert_eq!(config.n_batch, Some(64));
         assert_eq!(config.n_ubatch, Some(64));
         assert_eq!(config.mmap, Some(true));
-        assert_eq!(config.mtp_source, MtpSource::External);
         assert_eq!(
             config.projector_path.as_deref(),
             Some("/models/mmproj.gguf")
