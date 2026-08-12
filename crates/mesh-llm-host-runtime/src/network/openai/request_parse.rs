@@ -1,22 +1,30 @@
 use crate::mesh;
 use crate::plugin;
 use anyhow::{Context, Result, anyhow, bail};
+use mesh_llm_events::logging::identifiers::RequestId;
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::forwarded_request::finalize_forwarded_request;
 use super::request_normalize::{
     ResponseAdapter, normalize_openai_compat_request, resolve_request_object_references,
 };
 use super::routing_rank::descriptor_for_model;
 
-pub(super) const MAX_HEADER_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
+/// Private lifecycle ownership assertion used only on trusted mesh forwarding.
+///
+/// This header is removed from every parsed inbound request before the request
+/// is forwarded. Raw mesh ingress adds it only after claiming the matching
+/// lifecycle parent, so ordinary API clients cannot opt into target-owner
+/// suppression by sending it themselves.
+pub(crate) const RAW_LIFECYCLE_OWNER_HEADER: &str = "x-mesh-llm-raw-lifecycle";
 pub(super) const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CHUNKED_WIRE_BYTES: usize = MAX_BODY_BYTES * 6 + 64 * 1024;
 const MAX_OBJECT_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_OBJECT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 pub(super) const MAX_HEADERS: usize = 64;
+const MAX_CORRELATION_ID_CHARS: usize = 128;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HttpReadLimits {
@@ -36,9 +44,64 @@ struct ParsedHeaders {
     header_end: usize,
     method: String,
     path: String,
+    request_id: RequestId,
     content_length: Option<usize>,
     is_chunked: bool,
     expects_continue: bool,
+    correlation_id: Option<String>,
+}
+
+/// The bounded metadata available after HTTP headers parse, even if consuming
+/// or normalizing the body later fails. It is deliberately body/header-value
+/// free so an error response can be attached to the real ingress lifecycle
+/// without retaining raw request data.
+#[derive(Clone, Debug)]
+pub(crate) struct ParsedOpenAiRequestContext {
+    pub(crate) request_id: RequestId,
+    pub(crate) client_path: String,
+}
+
+/// A request-reader failure with optional safe lifecycle context.
+///
+/// `context` exists only after complete bounded headers were parsed. Callers
+/// must not manufacture a logging request for failures before that boundary.
+#[derive(Debug)]
+pub(crate) struct OpenAiRequestReadError {
+    error: anyhow::Error,
+    context: Option<ParsedOpenAiRequestContext>,
+}
+
+impl OpenAiRequestReadError {
+    fn before_headers(error: anyhow::Error) -> Self {
+        Self {
+            error,
+            context: None,
+        }
+    }
+
+    fn after_headers(error: anyhow::Error, parsed: &ParsedHeaders) -> Self {
+        Self {
+            error,
+            context: Some(ParsedOpenAiRequestContext {
+                request_id: parsed.request_id,
+                client_path: parsed.path.clone(),
+            }),
+        }
+    }
+
+    pub(crate) fn context(&self) -> Option<&ParsedOpenAiRequestContext> {
+        self.context.as_ref()
+    }
+
+    fn into_error(self) -> anyhow::Error {
+        self.error
+    }
+}
+
+impl std::fmt::Display for OpenAiRequestReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(formatter)
+    }
 }
 
 #[derive(Debug)]
@@ -47,6 +110,11 @@ pub struct BufferedHttpRequest {
     pub method: String,
     pub path: String,
     pub client_path: String,
+    /// One canonical UUID selected before any host OpenAI forwarding.
+    ///
+    /// The raw request is rebuilt with exactly this header, so local, remote,
+    /// and plugin routes receive the same metadata without retaining payloads.
+    pub request_id: RequestId,
     pub body_json: Option<serde_json::Value>,
     pub(super) body_json_attempted: bool,
     pub(super) body_bytes: Option<Vec<u8>>,
@@ -56,6 +124,7 @@ pub struct BufferedHttpRequest {
     pub model_name: Option<String>,
     pub request_object_request_ids: Vec<String>,
     pub response_adapter: ResponseAdapter,
+    pub correlation_id: Option<String>,
 }
 
 impl BufferedHttpRequest {
@@ -76,6 +145,64 @@ impl BufferedHttpRequest {
                 .or_else(|| parse_json_body_from_http_request(&self.raw));
             self.body_json_attempted = true;
         }
+    }
+
+    /// The only semantic request media kind trusted by artifact capture.
+    ///
+    /// This derives from the closed OpenAI ingress route vocabulary and a
+    /// successfully parsed JSON body. It intentionally never consults raw
+    /// client headers, whose arbitrary values are not a logging contract.
+    pub(crate) fn artifact_request_media_kind(&self) -> Option<&'static str> {
+        let path = self
+            .client_path
+            .split('?')
+            .next()
+            .unwrap_or(&self.client_path);
+        matches!(
+            path,
+            "/v1/chat/completions" | "/v1/completions" | "/v1/responses"
+        )
+        .then_some(())
+        .filter(|()| {
+            self.body_bytes
+                .as_deref()
+                .is_some_and(|body| serde_json::from_slice::<serde_json::Value>(body).is_ok())
+        })
+        .map(|()| "application/json")
+    }
+
+    /// Assert that this request is owned by the raw mesh lifecycle parent.
+    ///
+    /// The assertion is added after parsing and lifecycle registration, never
+    /// copied from client input. It is deliberately kept in the forwarded
+    /// bytes so the authenticated target tunnel can avoid creating a second
+    /// parent for this one-hop request.
+    pub(crate) fn mark_raw_lifecycle_owned(&mut self) {
+        let Some(header_end) = self.raw.windows(4).position(|window| window == b"\r\n\r\n") else {
+            return;
+        };
+        if self.raw[..header_end]
+            .split(|byte| *byte == b'\r' || *byte == b'\n')
+            .any(|line| {
+                line.split(|byte| *byte == b':').next().is_some_and(|name| {
+                    name.eq_ignore_ascii_case(RAW_LIFECYCLE_OWNER_HEADER.as_bytes())
+                })
+            })
+        {
+            return;
+        }
+        let marker = format!(
+            "{RAW_LIFECYCLE_OWNER_HEADER}: {}\r\n",
+            self.request_id.as_uuid()
+        );
+        // Keep the forwarded request within the same bounded header contract
+        // as ordinary client input. If there is no room for the assertion,
+        // leave it absent so the target safely retains frontend ownership.
+        if header_end.saturating_add(4).saturating_add(marker.len()) > MAX_HEADER_BYTES {
+            return;
+        }
+        self.raw
+            .splice(header_end + 2..header_end + 2, marker.into_bytes());
     }
 }
 
@@ -122,11 +249,13 @@ pub async fn read_http_request(stream: &mut TcpStream) -> Result<BufferedHttpReq
     read_http_request_with_limits(stream, HTTP_READ_LIMITS, None).await
 }
 
-pub async fn read_http_request_with_plugin_manager(
+/// Variant for host ingress boundaries that need to bind locally generated
+/// error responses to a safely established request lifecycle.
+pub(crate) async fn read_http_request_with_plugin_manager_with_context(
     stream: &mut TcpStream,
     plugin_manager: Option<&plugin::PluginManager>,
-) -> Result<BufferedHttpRequest> {
-    read_http_request_with_limits(stream, HTTP_READ_LIMITS, plugin_manager).await
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+    read_http_request_with_limits_with_context(stream, HTTP_READ_LIMITS, plugin_manager).await
 }
 
 pub(super) async fn read_http_request_with_limits(
@@ -134,12 +263,25 @@ pub(super) async fn read_http_request_with_limits(
     limits: HttpReadLimits,
     plugin_manager: Option<&plugin::PluginManager>,
 ) -> Result<BufferedHttpRequest> {
+    read_http_request_with_limits_with_context(stream, limits, plugin_manager)
+        .await
+        .map_err(OpenAiRequestReadError::into_error)
+}
+
+async fn read_http_request_with_limits_with_context(
+    stream: &mut TcpStream,
+    limits: HttpReadLimits,
+    plugin_manager: Option<&plugin::PluginManager>,
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
     let mut raw = Vec::with_capacity(8192);
-    let parsed = read_until_headers_parsed(stream, &mut raw, limits.max_header_bytes).await?;
+    let parsed = read_until_headers_parsed(stream, &mut raw, limits.max_header_bytes)
+        .await
+        .map_err(OpenAiRequestReadError::before_headers)?;
     let body_limits = body_limits_for_path(&parsed.path, limits);
     let header_end = parsed.header_end;
-    let body =
-        read_buffered_request_body(stream, &mut raw, &parsed, header_end, body_limits).await?;
+    let body = read_buffered_request_body(stream, &mut raw, &parsed, header_end, body_limits)
+        .await
+        .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
 
     let tokenize_request = is_tokenize_request(&parsed.method, &parsed.path);
     let metadata = if body.is_empty() {
@@ -147,7 +289,8 @@ pub(super) async fn read_http_request_with_limits(
     } else if tokenize_request {
         Some(
             serde_json::from_slice::<RequestMetadata>(&body)
-                .context("parse /v1/tokenize request metadata")?,
+                .context("parse /v1/tokenize request metadata")
+                .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?,
         )
     } else {
         serde_json::from_slice::<RequestMetadata>(&body).ok()
@@ -160,7 +303,8 @@ pub(super) async fn read_http_request_with_limits(
         plugin_manager,
         requires_json_transform,
     )
-    .await?;
+    .await
+    .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
     let mut response_adapter = rewrite.response_adapter;
     if response_adapter == ResponseAdapter::None
         && parsed.path.split('?').next().unwrap_or(&parsed.path) == "/v1/chat/completions"
@@ -178,7 +322,8 @@ pub(super) async fn read_http_request_with_limits(
                 .and_then(|value| value.expected_identity.as_ref())
                 .and_then(|identity| identity.model_id.as_deref())
                 .filter(|model_id| !model_id.is_empty())
-                .context("/v1/tokenize requires non-empty expected_identity.model_id")?
+                .context("/v1/tokenize requires non-empty expected_identity.model_id")
+                .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?
                 .to_owned(),
         )
     } else {
@@ -192,12 +337,14 @@ pub(super) async fn read_http_request_with_limits(
             .or(value.n_predict)
     });
     let raw = finalize_forwarded_request(
-        &raw,
+        raw,
+        header_end,
         parsed.expects_continue,
         Some(&rewrite.request_path),
         rewrite.rewritten_body.as_deref(),
-        &[],
-    )?;
+        parsed.request_id,
+    )
+    .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
     let body_len_bytes = body.len();
     let body_bytes = if body.is_empty() { None } else { Some(body) };
 
@@ -215,6 +362,8 @@ pub(super) async fn read_http_request_with_limits(
         model_name,
         request_object_request_ids: rewrite.request_object_request_ids,
         response_adapter,
+        request_id: parsed.request_id,
+        correlation_id: parsed.correlation_id,
     })
 }
 
@@ -355,6 +504,63 @@ fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {
     }
 }
 
+fn finalize_forwarded_request(
+    mut raw: Vec<u8>,
+    header_end: usize,
+    strip_expect: bool,
+    rewritten_path: Option<&str>,
+    rewritten_body: Option<&[u8]>,
+    request_id: RequestId,
+) -> Result<Vec<u8>> {
+    let original_body = raw.split_off(header_end);
+    // Re-parse with httparse so we iterate over validated header structs.
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut req = httparse::Request::new(&mut headers_buf);
+    let _ = req.parse(&raw).context("re-parse headers for forwarding")?;
+
+    let method = req.method.unwrap_or("GET");
+    let path = rewritten_path.unwrap_or_else(|| req.path.unwrap_or("/"));
+    let version = req.version.unwrap_or(1);
+
+    let mut rebuilt = format!("{method} {path} HTTP/1.{version}\r\n");
+
+    for header in req.headers.iter() {
+        let name = header.name;
+        if name.eq_ignore_ascii_case("connection") {
+            continue;
+        }
+        if name.eq_ignore_ascii_case("x-request-id") {
+            continue;
+        }
+        if name.eq_ignore_ascii_case(RAW_LIFECYCLE_OWNER_HEADER) {
+            continue;
+        }
+        if strip_expect && name.eq_ignore_ascii_case("expect") {
+            continue;
+        }
+        if rewritten_body.is_some()
+            && (name.eq_ignore_ascii_case("content-length")
+                || name.eq_ignore_ascii_case("transfer-encoding"))
+        {
+            continue;
+        }
+        let value = std::str::from_utf8(header.value).unwrap_or("");
+        rebuilt.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if let Some(body) = rewritten_body {
+        rebuilt.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    rebuilt.push_str(&format!("x-request-id: {}\r\n", request_id.as_uuid()));
+
+    // The proxy buffers exactly one request for routing, so force a single-request
+    // connection contract upstream instead of reusing the client connection blindly.
+    rebuilt.push_str("Connection: close\r\n\r\n");
+
+    let mut forwarded = rebuilt.into_bytes();
+    forwarded.extend_from_slice(rewritten_body.unwrap_or(&original_body));
+    Ok(forwarded)
+}
+
 /// Read from the stream until httparse can fully parse the request headers.
 /// Returns parsed metadata; `buf` contains all bytes read so far (headers +
 /// any trailing body bytes that arrived in the same read).
@@ -374,6 +580,7 @@ async fn read_until_headers_parsed(
                 let mut content_length = None;
                 let mut is_chunked = false;
                 let mut expects_continue = false;
+                let mut correlation_id = None;
 
                 for header in req.headers.iter() {
                     if header.name.eq_ignore_ascii_case("content-length") {
@@ -394,6 +601,11 @@ async fn read_until_headers_parsed(
                         expects_continue = val
                             .split(',')
                             .any(|part| part.trim().eq_ignore_ascii_case("100-continue"));
+                    } else if header.name.eq_ignore_ascii_case("x-correlation-id")
+                        || header.name.eq_ignore_ascii_case("x-request-id")
+                        || header.name.eq_ignore_ascii_case("correlation-id")
+                    {
+                        correlation_id = sanitized_correlation_id(header.value);
                     }
                 }
 
@@ -407,9 +619,11 @@ async fn read_until_headers_parsed(
                     header_end,
                     method,
                     path,
+                    request_id: request_id_from_headers(req.headers),
                     content_length,
                     is_chunked,
                     expects_continue,
+                    correlation_id,
                 });
             }
             Ok(httparse::Status::Partial) => {
@@ -421,6 +635,78 @@ async fn read_until_headers_parsed(
             Err(e) => bail!("HTTP parse error: {e}"),
         }
     }
+}
+
+fn sanitized_correlation_id(value: &[u8]) -> Option<String> {
+    let value = std::str::from_utf8(value).ok()?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let value = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>();
+    let path_safe = crate::logging::policy::sanitize_paths_in_text(&value);
+    let redacted = crate::logging::policy::apply_redaction(&path_safe).0;
+    let bounded = redacted
+        .chars()
+        .take(MAX_CORRELATION_ID_CHARS)
+        .collect::<String>();
+    (!bounded.is_empty()).then_some(bounded)
+}
+
+/// Parse the canonical request ID from a complete, bounded HTTP header prefix.
+///
+/// This never generates an identifier: tunnel ingress must fail open when the
+/// trusted forwarded header is absent, malformed, or duplicated.
+pub(crate) fn canonical_request_id_from_header_prefix(prefix: &[u8]) -> Option<RequestId> {
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut request = httparse::Request::new(&mut headers_buf);
+    match request.parse(prefix) {
+        Ok(httparse::Status::Complete(_)) => canonical_request_id_from_headers(request.headers),
+        Ok(httparse::Status::Partial) | Err(_) => None,
+    }
+}
+
+/// Parse the private raw-lifecycle assertion from a complete, bounded HTTP
+/// header prefix. The marker is accepted only once and only when its UUID
+/// exactly matches the one canonical `x-request-id` header.
+pub(crate) fn raw_lifecycle_owner_from_header_prefix(prefix: &[u8]) -> Option<RequestId> {
+    let parsed = canonical_request_id_from_header_prefix(prefix)?;
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut request = httparse::Request::new(&mut headers_buf);
+    let httparse::Status::Complete(_) = request.parse(prefix).ok()? else {
+        return None;
+    };
+    let mut markers = request
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case(RAW_LIFECYCLE_OWNER_HEADER));
+    let marker = markers.next()?;
+    if markers.next().is_some() {
+        return None;
+    }
+    let marker_id = std::str::from_utf8(marker.value)
+        .ok()
+        .and_then(openai_frontend::parse_request_id)?;
+    (marker_id == parsed).then_some(parsed)
+}
+
+fn request_id_from_headers(headers: &[httparse::Header<'_>]) -> RequestId {
+    canonical_request_id_from_headers(headers).unwrap_or_default()
+}
+
+fn canonical_request_id_from_headers(headers: &[httparse::Header<'_>]) -> Option<RequestId> {
+    let mut request_id_headers = headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("x-request-id"));
+    let header = request_id_headers.next()?;
+    if request_id_headers.next().is_some() {
+        return None;
+    }
+    std::str::from_utf8(header.value)
+        .ok()
+        .and_then(openai_frontend::parse_request_id)
 }
 
 async fn read_more(stream: &mut TcpStream, buf: &mut Vec<u8>) -> Result<()> {
@@ -790,7 +1076,147 @@ fn public_huggingface_model_ref(repo: &str, artifact: Option<&str>) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn correlation_ids_are_redacted_and_bounded_before_logging() {
+        let sanitized = sanitized_correlation_id(
+            format!(
+                "Bearer top-secret /Users/nick/private\r\n{}",
+                "x".repeat(256)
+            )
+            .as_bytes(),
+        )
+        .expect("non-empty correlation id");
+
+        assert!(sanitized.chars().count() <= MAX_CORRELATION_ID_CHARS);
+        assert!(!sanitized.chars().any(char::is_control));
+        assert!(!sanitized.contains("top-secret"));
+        assert!(!sanitized.contains("/Users/nick/private"));
+        assert_eq!(sanitized_correlation_id(b" \t\r\n"), None);
+    }
+
+    #[test]
+    fn canonical_request_id_from_header_prefix_requires_one_valid_uuid() {
+        let request_id = RequestId::new();
+        let prefix = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nx-request-id: {}\r\n\r\nsecret-body",
+            request_id.as_uuid()
+        );
+        assert_eq!(
+            canonical_request_id_from_header_prefix(prefix.as_bytes()),
+            Some(request_id)
+        );
+        assert_eq!(
+            canonical_request_id_from_header_prefix(b"GET / HTTP/1.1\r\n\r\n"),
+            None
+        );
+        assert_eq!(
+            canonical_request_id_from_header_prefix(
+                format!(
+                    "GET / HTTP/1.1\r\nx-request-id: {}\r\n",
+                    request_id.as_uuid()
+                )
+                .as_bytes(),
+            ),
+            None
+        );
+        assert_eq!(
+            canonical_request_id_from_header_prefix(
+                b"GET / HTTP/1.1\r\nx-request-id: not-a-uuid\r\n\r\n",
+            ),
+            None
+        );
+        assert_eq!(
+            canonical_request_id_from_header_prefix(
+                format!(
+                    "GET / HTTP/1.1\r\nx-request-id: {0}\r\nx-request-id: {0}\r\n\r\n",
+                    request_id.as_uuid()
+                )
+                .as_bytes(),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn raw_lifecycle_marker_requires_one_matching_canonical_request_id() {
+        let request_id = RequestId::new();
+        let valid = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nx-request-id: {}\r\n{}: {}\r\n\r\n",
+            request_id.as_uuid(),
+            RAW_LIFECYCLE_OWNER_HEADER,
+            request_id.as_uuid()
+        );
+        assert_eq!(
+            raw_lifecycle_owner_from_header_prefix(valid.as_bytes()),
+            Some(request_id)
+        );
+
+        let mismatched = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nx-request-id: {}\r\n{}: {}\r\n\r\n",
+            request_id.as_uuid(),
+            RAW_LIFECYCLE_OWNER_HEADER,
+            RequestId::new().as_uuid()
+        );
+        assert_eq!(
+            raw_lifecycle_owner_from_header_prefix(mismatched.as_bytes()),
+            None
+        );
+
+        let duplicate = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nx-request-id: {}\r\n{}: {}\r\n{}: {}\r\n\r\n",
+            request_id.as_uuid(),
+            RAW_LIFECYCLE_OWNER_HEADER,
+            request_id.as_uuid(),
+            RAW_LIFECYCLE_OWNER_HEADER,
+            request_id.as_uuid()
+        );
+        assert_eq!(
+            raw_lifecycle_owner_from_header_prefix(duplicate.as_bytes()),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let request_id = RequestId::new();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request_with_plugin_manager_with_context(&mut stream, None)
+                .await
+                .unwrap_err()
+        });
+        let mut client = TcpStream::connect(address).await.unwrap();
+        let request = format!(
+            "POST /v1/tokenize HTTP/1.1\r\nHost: localhost\r\nx-request-id: {request_id}\r\nContent-Length: 1\r\n\r\n{{",
+            request_id = request_id.as_uuid(),
+        );
+        client.write_all(request.as_bytes()).await.unwrap();
+        let error = server.await.unwrap();
+        let context = error.context().expect("complete headers establish context");
+        assert_eq!(context.request_id, request_id);
+        assert_eq!(context.client_path, "/v1/tokenize");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request_with_plugin_manager_with_context(&mut stream, None)
+                .await
+                .unwrap_err()
+        });
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nBad")
+            .await
+            .unwrap();
+        client.shutdown().await.unwrap();
+        assert!(server.await.unwrap().context().is_none());
+    }
 
     fn catalog_model_ref_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
         mesh::ServedModelDescriptor {
@@ -852,6 +1278,129 @@ mod tests {
         raw.extend_from_slice(&body);
         (raw, body)
     }
+
+    fn forwarded_request_id_headers(raw: &[u8]) -> Vec<&str> {
+        let header_end = raw
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("forwarded request should contain headers");
+        std::str::from_utf8(&raw[..header_end])
+            .expect("forwarded headers should remain UTF-8")
+            .split("\r\n")
+            .filter(|line| {
+                line.split_once(':')
+                    .is_some_and(|(name, _)| name.eq_ignore_ascii_case("x-request-id"))
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn preserves_a_single_valid_request_id_in_forwarded_headers() {
+        const REQUEST_ID: &str = "4c3ca94d-bc1f-4759-912d-f4f6d77d5515";
+        let request =
+            read_request_from_parts(vec![format!(
+            "GET /v1/models HTTP/1.1\r\nHost: localhost\r\nX-Request-Id: {REQUEST_ID}\r\n\r\n"
+        )
+        .into_bytes()])
+            .await;
+
+        assert_eq!(request.request_id.as_uuid().to_string(), REQUEST_ID);
+        let headers = forwarded_request_id_headers(&request.raw);
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0], format!("x-request-id: {REQUEST_ID}"));
+    }
+
+    #[tokio::test]
+    async fn strips_client_supplied_raw_lifecycle_marker_before_forwarding() {
+        let request = read_request_from_parts(vec![
+            format!(
+                "GET /v1/models HTTP/1.1\r\nHost: localhost\r\nx-request-id: {}\r\n{}: {}\r\n\r\n",
+                RequestId::new().as_uuid(),
+                RAW_LIFECYCLE_OWNER_HEADER,
+                RequestId::new().as_uuid()
+            )
+            .into_bytes(),
+        ])
+        .await;
+        let forwarded = std::str::from_utf8(&request.raw).unwrap();
+        assert!(
+            !forwarded
+                .to_ascii_lowercase()
+                .contains(RAW_LIFECYCLE_OWNER_HEADER)
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_lifecycle_marker_is_added_only_after_explicit_owner_claim() {
+        let mut request = read_request_from_parts(vec![
+            b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec(),
+        ])
+        .await;
+        assert!(raw_lifecycle_owner_from_header_prefix(&request.raw).is_none());
+
+        request.mark_raw_lifecycle_owned();
+        assert_eq!(
+            raw_lifecycle_owner_from_header_prefix(&request.raw),
+            Some(request.request_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn generates_a_request_id_when_the_header_is_missing() {
+        let request = read_request_from_parts(vec![
+            b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec(),
+        ])
+        .await;
+
+        let headers = forwarded_request_id_headers(&request.raw);
+        assert_eq!(headers.len(), 1);
+        assert_eq!(
+            headers[0],
+            format!("x-request-id: {}", request.request_id.as_uuid())
+        );
+    }
+
+    #[tokio::test]
+    async fn replaces_an_invalid_request_id_header_with_one_canonical_uuid() {
+        let request = read_request_from_parts(vec![
+            b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\nX-Request-Id: not-a-uuid\r\n\r\n"
+                .to_vec(),
+        ])
+        .await;
+
+        let headers = forwarded_request_id_headers(&request.raw);
+        assert_eq!(headers.len(), 1);
+        assert_eq!(
+            headers[0],
+            format!("x-request-id: {}", request.request_id.as_uuid())
+        );
+        assert!(
+            !std::str::from_utf8(&request.raw)
+                .expect("forwarded request should remain UTF-8")
+                .contains("not-a-uuid")
+        );
+    }
+
+    #[tokio::test]
+    async fn replaces_duplicate_request_id_headers_with_one_canonical_uuid() {
+        const FIRST_REQUEST_ID: &str = "4c3ca94d-bc1f-4759-912d-f4f6d77d5515";
+        const SECOND_REQUEST_ID: &str = "35e3c909-bd0b-420a-8d7a-e7aeb5e34a32";
+        let request = read_request_from_parts(vec![format!(
+            "GET /v1/models HTTP/1.1\r\nHost: localhost\r\nX-Request-Id: {FIRST_REQUEST_ID}\r\nx-request-id: {SECOND_REQUEST_ID}\r\n\r\n"
+        )
+        .into_bytes()])
+        .await;
+
+        let headers = forwarded_request_id_headers(&request.raw);
+        assert_eq!(headers.len(), 1);
+        assert_eq!(
+            headers[0],
+            format!("x-request-id: {}", request.request_id.as_uuid())
+        );
+        assert_ne!(request.request_id.as_uuid().to_string(), FIRST_REQUEST_ID);
+        assert_ne!(request.request_id.as_uuid().to_string(), SECOND_REQUEST_ID);
+    }
+
     fn build_chunked_request(body: &[u8], chunks: &[usize]) -> Vec<u8> {
         let mut out = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
         let mut pos = 0usize;
@@ -902,6 +1451,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/v1/chat/completions".to_string(),
             client_path: "/v1/chat/completions".to_string(),
+            request_id: RequestId::default(),
             body_json: Some(body),
             body_json_attempted: true,
             body_bytes: Some(body_bytes),
@@ -911,6 +1461,7 @@ mod tests {
             stream: None,
             request_object_request_ids: Vec::new(),
             response_adapter: ResponseAdapter::None,
+            correlation_id: None,
         };
 
         rewrite_public_model_alias(&mut request, &models, &descriptors);
@@ -1278,6 +1829,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/v1/chat/completions".to_string(),
             client_path: "/v1/chat/completions".to_string(),
+            request_id: RequestId::default(),
             body_json: None,
             body_json_attempted: false,
             body_bytes: None,
@@ -1287,6 +1839,7 @@ mod tests {
             stream: None,
             request_object_request_ids: Vec::new(),
             response_adapter: ResponseAdapter::None,
+            correlation_id: None,
         };
 
         rewrite_model_field(&mut request, "SmolLM2-135M-Instruct-Q8_0");
@@ -1313,6 +1866,41 @@ mod tests {
         let declared: usize = cl_line.split(':').nth(1).unwrap().trim().parse().unwrap();
         assert_eq!(declared, request.raw.len() - body_start);
         assert_eq!(declared, request.body_len_bytes);
+    }
+
+    #[test]
+    fn artifact_media_kind_is_closed_to_parsed_openai_json_routes() {
+        let request = |path: &str, body: Option<&[u8]>| BufferedHttpRequest {
+            raw: Vec::new(),
+            method: "POST".into(),
+            path: path.into(),
+            client_path: path.into(),
+            request_id: RequestId::default(),
+            body_json: None,
+            body_json_attempted: true,
+            body_bytes: body.map(ToOwned::to_owned),
+            body_len_bytes: body.map_or(0, <[u8]>::len),
+            completion_tokens: None,
+            model_name: None,
+            stream: None,
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+            correlation_id: None,
+        };
+
+        assert_eq!(
+            request("/v1/chat/completions?trace=ignored", Some(br#"{}"#))
+                .artifact_request_media_kind(),
+            Some("application/json")
+        );
+        assert_eq!(
+            request("/v1/responses", Some(b"not json")).artifact_request_media_kind(),
+            None
+        );
+        assert_eq!(
+            request("/mesh/load", Some(br#"{}"#)).artifact_request_media_kind(),
+            None
+        );
     }
 
     #[test]

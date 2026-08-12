@@ -138,6 +138,7 @@ fn test_absent_identity_fields_omitted() {
         LifecycleEvent::Completed {
             status_code: Some(200),
             duration_ms: None,
+            usage: None,
         },
     );
     let json = serde_json::to_string(&env).unwrap();
@@ -160,6 +161,7 @@ fn test_no_raw_invite_token_in_serialized_events() {
         "2025-01-01T00:00:00Z".into(),
         LifecycleEvent::Failed {
             error: "upstream rejected the request".into(),
+            status_code: None,
         },
     );
     let json = serde_json::to_string(&env).unwrap();

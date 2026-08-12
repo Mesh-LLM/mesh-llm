@@ -245,6 +245,7 @@ mod tests {
             LifecycleEvent::Completed {
                 status_code: Some(200),
                 duration_ms: None,
+                usage: None,
             },
         )
         .with_tenant("t-abc".into())
@@ -264,6 +265,7 @@ mod tests {
             "2025-07-01T10:00:00Z".into(),
             LifecycleEvent::Failed {
                 error: "timeout".into(),
+                status_code: None,
             },
         );
 

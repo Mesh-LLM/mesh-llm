@@ -1069,10 +1069,6 @@ async fn handle_tool_result(
 }
 
 fn repair_tool_result_answer(session: &Session, answer: &str) -> String {
-    if !tool_evidence_should_be_preserved(&session.last_user_text()) {
-        return answer.to_string();
-    }
-
     let missing = missing_tool_evidence_values(session, answer);
     if missing.is_empty() {
         return answer.to_string();
@@ -1085,24 +1081,6 @@ fn repair_tool_result_answer(session: &Session, answer: &str) -> String {
     repaired.push_str("Tool facts: ");
     repaired.push_str(&missing.join(", "));
     repaired
-}
-
-fn tool_evidence_should_be_preserved(user_text: &str) -> bool {
-    let text = user_text.to_ascii_lowercase();
-    contains_any(
-        &text,
-        &[
-            "tool fact",
-            "tool facts",
-            "tool result",
-            "tool output",
-            "final recall",
-            "include both",
-            "include all",
-            "answer with the tool",
-            "return the tool",
-        ],
-    )
 }
 
 fn missing_tool_evidence_values(session: &Session, answer: &str) -> Vec<String> {
@@ -2124,6 +2102,29 @@ mod response_builder_tests {
         assert!(repaired.contains("PRIMARY-FACT-123"));
         assert!(repaired.contains("SECONDARY-FACT-456"));
         assert!(!repaired.contains("primary"));
+    }
+
+    #[test]
+    fn repair_tool_result_answer_preserves_structured_result_after_forced_tool_call() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({
+                    "role": "user",
+                    "content": "Call the lookup_fixture_fact tool with key=codeword. Do not answer directly before the tool call."
+                }),
+                tool_call_msg("call_fixture", "lookup_fixture_fact"),
+                tool_result_msg(
+                    "call_fixture",
+                    r#"{"key":"codeword","value":"signal-7429"}"#,
+                ),
+            ],
+            &None,
+        );
+
+        let repaired = repair_tool_result_answer(&session, "Done.");
+
+        assert!(repaired.contains("signal-7429"));
     }
 
     #[test]

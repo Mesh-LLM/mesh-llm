@@ -7,9 +7,11 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use super::request_metadata::RequestSummaryMetadata;
+
 /// Summary record for a single request in the registry. Carries enough metadata to reconstruct
 /// what happened without persisting full payloads by default.
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct RequestSummaryEntry {
     /// UUID string identifying this request (from `RequestId::as_uuid()`).
     pub request_id: String,
@@ -22,6 +24,119 @@ pub struct RequestSummaryEntry {
 
     /// ISO 8601 timestamp of the terminal transition (completed/failed/etc.). `None` while active.
     pub terminal_at: Option<String>,
+
+    /// Bounded classifications captured by trusted lifecycle owners. Older
+    /// queued summaries omit this field and deserialize as an empty projection.
+    #[serde(default)]
+    pub(crate) metadata: RequestSummaryMetadata,
+}
+
+/// Bounded ledger state attached only to an internal replay-bus entry.
+///
+/// The SSE protocol projects the canonical lifecycle envelope separately, so
+/// this snapshot never crosses the public stream boundary. It gives stream
+/// filtering the same request-level fields that the REST ledger uses instead
+/// of making filters depend on the particular lifecycle event being replayed.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct RequestSummarySnapshot {
+    created_at: String,
+    state: String,
+    metadata: RequestSummaryMetadata,
+}
+
+impl RequestSummarySnapshot {
+    fn from_entry(entry: &RequestSummaryEntry) -> Self {
+        let created_at =
+            mesh_llm_events::logging::timestamp::canonical_logging_timestamp(&entry.created_at)
+                .unwrap_or_else(|_| entry.created_at.clone());
+        Self {
+            created_at,
+            state: entry.state.clone(),
+            metadata: entry.metadata.clone(),
+        }
+    }
+
+    pub(crate) fn created_at(&self) -> &str {
+        &self.created_at
+    }
+
+    pub(crate) fn state(&self) -> &str {
+        &self.state
+    }
+
+    pub(crate) fn metadata(&self) -> &RequestSummaryMetadata {
+        &self.metadata
+    }
+}
+
+/// Request-ledger membership before and after one replayed lifecycle event.
+///
+/// Non-terminal events carry only `after`. A terminal event carries both
+/// snapshots so a live `outcome=active` subscription is notified to remove a
+/// completed request while an `outcome=completed` subscription is notified to
+/// add it.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct RequestSummaryEventSnapshots {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    before: Option<RequestSummarySnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    after: Option<RequestSummarySnapshot>,
+}
+
+impl RequestSummaryEventSnapshots {
+    pub(crate) fn current(entry: &RequestSummaryEntry) -> Self {
+        Self {
+            before: None,
+            after: Some(RequestSummarySnapshot::from_entry(entry)),
+        }
+    }
+
+    pub(crate) fn terminal(before: &RequestSummaryEntry, after: &RequestSummaryEntry) -> Self {
+        Self {
+            before: Some(RequestSummarySnapshot::from_entry(before)),
+            after: Some(RequestSummarySnapshot::from_entry(after)),
+        }
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &RequestSummarySnapshot> {
+        self.before.iter().chain(self.after.iter())
+    }
+}
+
+/// A point-in-time, immutable-by-value view of active request summaries.
+///
+/// The registry copies the current active set while holding its mutex, releases
+/// that mutex, and only then sorts and returns the copy.  Consumers therefore
+/// never retain a registry lock while serializing, merging with durable rows,
+/// or otherwise processing the result.  Entries deliberately contain only the
+/// already-sanitized request summary fields; payloads, artifact paths, and
+/// attempt payloads do not live in this read model.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ActiveRequestSnapshot {
+    entries: Vec<RequestSummaryEntry>,
+}
+
+impl ActiveRequestSnapshot {
+    /// Borrow the stable, oldest-first active summaries.
+    pub fn entries(&self) -> &[RequestSummaryEntry] {
+        &self.entries
+    }
+
+    /// Consume this snapshot and take ownership of its independently cloned
+    /// summaries. Mutating those summaries cannot mutate the registry.
+    pub fn into_entries(self) -> Vec<RequestSummaryEntry> {
+        self.entries
+    }
+
+    /// Return whether the captured active set was empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Return the number of active summaries captured in this snapshot.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 /// Configuration controlling registry capacity bounds.
@@ -78,12 +193,26 @@ impl RequestRegistry {
 
     /// Insert an entry into the active set. If the set is already at capacity, evict the oldest
     /// entry (by `created_at` lexicographic comparison) and increment `active_evictions`.
-    pub fn register_active(&self, entry: RequestSummaryEntry) {
+    pub fn register_active(&self, mut entry: RequestSummaryEntry) {
+        if let Ok(created_at) =
+            mesh_llm_events::logging::timestamp::canonical_logging_timestamp(&entry.created_at)
+        {
+            entry.created_at = created_at;
+        }
         let mut map = self.active.lock().expect("registry mutex poisoned");
 
-        // Evict if at capacity.
-        if map.len() >= self.config.max_active {
-            evict_oldest(&mut map);
+        // A zero bound deliberately disables active retention. Do not admit a
+        // single entry as an accidental off-by-one exception.
+        if self.config.max_active == 0 {
+            return;
+        }
+
+        // Re-registering an existing request updates its summary without
+        // evicting an unrelated active request. New requests are bounded.
+        if !map.contains_key(&entry.request_id)
+            && map.len() >= self.config.max_active
+            && evict_oldest(&mut map)
+        {
             self.active_evictions.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -115,8 +244,13 @@ impl RequestRegistry {
         // Insert into recent. Evict oldest if at capacity.
         {
             let mut map = self.recent.lock().expect("registry mutex poisoned");
-            if map.len() >= self.config.max_recent {
-                evict_oldest(&mut map);
+            if self.config.max_recent == 0 {
+                return;
+            }
+            if !map.contains_key(&entry.request_id)
+                && map.len() >= self.config.max_recent
+                && evict_oldest(&mut map)
+            {
                 self.recent_evictions.fetch_add(1, Ordering::Relaxed);
             }
 
@@ -141,6 +275,84 @@ impl RequestRegistry {
             .expect("registry mutex poisoned")
             .get(request_id)
             .cloned()
+    }
+
+    /// Fill missing metadata for an active or recently terminal request.
+    pub(crate) fn merge_metadata(
+        &self,
+        request_id: &str,
+        metadata: RequestSummaryMetadata,
+    ) -> Option<RequestSummaryEntry> {
+        if metadata.is_empty() {
+            return None;
+        }
+
+        let mut active = self.active.lock().expect("registry mutex poisoned");
+        if let Some(entry) = active.get_mut(request_id) {
+            return entry
+                .metadata
+                .merge_missing(metadata)
+                .then(|| entry.clone());
+        }
+        drop(active);
+
+        let mut recent = self.recent.lock().expect("registry mutex poisoned");
+        recent.get_mut(request_id).and_then(|entry| {
+            entry
+                .metadata
+                .merge_missing(metadata)
+                .then(|| entry.clone())
+        })
+    }
+
+    /// Atomically move an active request to recent while retaining metadata
+    /// merged before its terminal transition.
+    pub(crate) fn terminalize(
+        &self,
+        request_id: &str,
+        state: &str,
+        terminal_at: String,
+    ) -> Option<(RequestSummaryEventSnapshots, RequestSummaryEntry)> {
+        let mut active = self.active.lock().expect("registry mutex poisoned");
+        let mut entry = active.remove(request_id)?;
+        let before = entry.clone();
+        entry.state = state.to_owned();
+        entry.terminal_at = Some(terminal_at);
+
+        let mut recent = self.recent.lock().expect("registry mutex poisoned");
+        if self.config.max_recent != 0 {
+            if !recent.contains_key(&entry.request_id)
+                && recent.len() >= self.config.max_recent
+                && evict_oldest(&mut recent)
+            {
+                self.recent_evictions.fetch_add(1, Ordering::Relaxed);
+            }
+            recent.insert(entry.request_id.clone(), entry.clone());
+        }
+        Some((
+            RequestSummaryEventSnapshots::terminal(&before, &entry),
+            entry,
+        ))
+    }
+
+    /// Capture a stable, bounded, oldest-first view of the active set.
+    ///
+    /// The mutex is held only while cloning the current map. Sorting happens
+    /// after it is released, so callers can safely hold the returned snapshot
+    /// across durable-store queries without blocking request registration or
+    /// terminal movement. Ties on creation timestamp use the request ID so
+    /// pagination/active-to-durable merge callers receive deterministic order.
+    pub fn snapshot_active(&self) -> ActiveRequestSnapshot {
+        let mut entries: Vec<_> = {
+            let map = self.active.lock().expect("registry mutex poisoned");
+            map.values().cloned().collect()
+        };
+        entries.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.request_id.cmp(&right.request_id))
+        });
+        ActiveRequestSnapshot { entries }
     }
 
     /// Clear both active and recent sets. Used for shutdown or test isolation.
@@ -171,7 +383,7 @@ impl RequestRegistry {
 
 /// Remove the entry with the lexicographically smallest `created_at` from the map.
 /// No-op if the map is empty. Uses ISO 8601 timestamp ordering (lexicographic = chronological).
-fn evict_oldest(map: &mut HashMap<String, RequestSummaryEntry>) {
+fn evict_oldest(map: &mut HashMap<String, RequestSummaryEntry>) -> bool {
     let oldest_key = map
         .iter()
         .min_by_key(|(_, entry)| &entry.created_at)
@@ -179,12 +391,16 @@ fn evict_oldest(map: &mut HashMap<String, RequestSummaryEntry>) {
 
     if let Some(key) = oldest_key {
         map.remove(&key);
+        true
+    } else {
+        false
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Barrier;
     use std::thread;
 
     fn make_entry(id: &str, ts: u8) -> RequestSummaryEntry {
@@ -193,6 +409,7 @@ mod tests {
             state: "active".into(),
             created_at: format!("2025-01-01T00:00:{:02}Z", ts),
             terminal_at: None,
+            metadata: RequestSummaryMetadata::default(),
         }
     }
 
@@ -258,6 +475,110 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
+    // Active snapshots
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn snapshot_active_is_oldest_first_with_stable_tie_breaker() {
+        let reg = RequestRegistry::new(RegistryConfig::default());
+        reg.register_active(make_entry("request-c", 2));
+        reg.register_active(make_entry("request-b", 1));
+        reg.register_active(make_entry("request-a", 2));
+
+        let snapshot = reg.snapshot_active();
+        let ids: Vec<_> = snapshot
+            .entries()
+            .iter()
+            .map(|entry| entry.request_id.as_str())
+            .collect();
+
+        assert_eq!(ids, ["request-b", "request-a", "request-c"]);
+    }
+
+    #[test]
+    fn snapshot_active_returns_isolated_value_copies() {
+        let reg = RequestRegistry::new(RegistryConfig::default());
+        reg.register_active(make_entry("request-copy", 1));
+
+        let mut entries = reg.snapshot_active().into_entries();
+        entries[0].state = "mutated-by-reader".into();
+        entries[0].terminal_at = Some("not-a-registry-write".into());
+
+        let stored = reg.get_active("request-copy").expect("active entry kept");
+        assert_eq!(stored.state, "active");
+        assert_eq!(stored.terminal_at, None);
+    }
+
+    #[test]
+    fn snapshot_active_excludes_terminal_entries_after_movement() {
+        let reg = RequestRegistry::new(RegistryConfig::default());
+        let mut terminal = make_entry("request-terminal", 1);
+        let active = make_entry("request-active", 2);
+        reg.register_active(terminal.clone());
+        reg.register_active(active);
+
+        terminal.state = "cancelled".into();
+        terminal.terminal_at = Some("2025-01-01T00:00:03Z".into());
+        reg.move_to_recent(terminal);
+
+        let snapshot = reg.snapshot_active();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot.entries()[0].request_id, "request-active");
+        assert!(snapshot.entries()[0].terminal_at.is_none());
+    }
+
+    #[test]
+    fn concurrent_registration_and_terminal_movement_keep_snapshots_bounded() {
+        let reg = Arc::new(RequestRegistry::new(RegistryConfig {
+            max_active: 8,
+            max_recent: 64,
+        }));
+        let start = Arc::new(Barrier::new(2));
+        let writer_registry = Arc::clone(&reg);
+        let writer_start = Arc::clone(&start);
+        let writer = thread::spawn(move || {
+            writer_start.wait();
+            for index in 0..64u8 {
+                let entry = make_entry(&format!("request-{index:02}"), index);
+                writer_registry.register_active(entry.clone());
+                if index % 2 == 0 {
+                    let mut terminal = entry;
+                    terminal.state = "completed".into();
+                    terminal.terminal_at = Some(format!("2025-01-01T00:01:{index:02}Z"));
+                    writer_registry.move_to_recent(terminal);
+                }
+            }
+        });
+
+        start.wait();
+        for _ in 0..64 {
+            let snapshot = reg.snapshot_active();
+            assert!(snapshot.len() <= 8);
+            assert!(
+                snapshot
+                    .entries()
+                    .iter()
+                    .all(|entry| { entry.state == "active" && entry.terminal_at.is_none() })
+            );
+            assert!(snapshot.entries().windows(2).all(|pair| {
+                (&pair[0].created_at, &pair[0].request_id)
+                    <= (&pair[1].created_at, &pair[1].request_id)
+            }));
+        }
+        writer.join().expect("writer thread panicked");
+
+        let final_snapshot = reg.snapshot_active();
+        assert!(final_snapshot.len() <= 8);
+        assert!(
+            final_snapshot
+                .entries()
+                .iter()
+                .all(|entry| { entry.state == "active" && entry.terminal_at.is_none() })
+        );
+        assert_eq!(reg.recent_count(), 32);
+    }
+
+    // ---------------------------------------------------------------------------
     // Eviction behavior
     // ---------------------------------------------------------------------------
 
@@ -283,6 +604,44 @@ mod tests {
         assert!(reg.get_active("req-2").is_some());
         assert!(reg.get_active("req-3").is_some());
         assert!(reg.get_active("req-4").is_some());
+    }
+
+    #[test]
+    fn test_zero_active_capacity_never_admits_an_entry() {
+        let reg = RequestRegistry::new(RegistryConfig {
+            max_active: 0,
+            max_recent: 10,
+        });
+
+        reg.register_active(make_entry("request-zero", 1));
+
+        assert!(reg.snapshot_active().is_empty());
+        assert_eq!(reg.active_count(), 0);
+        assert_eq!(reg.active_evictions.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_reregistering_at_capacity_does_not_evict_another_request() {
+        let reg = RequestRegistry::new(RegistryConfig {
+            max_active: 2,
+            max_recent: 10,
+        });
+        reg.register_active(make_entry("request-a", 1));
+        reg.register_active(make_entry("request-b", 2));
+
+        let mut replacement = make_entry("request-a", 1);
+        replacement.state = "still-active".into();
+        reg.register_active(replacement);
+
+        assert_eq!(reg.active_count(), 2);
+        assert_eq!(reg.active_evictions.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            reg.get_active("request-a")
+                .expect("replacement retained")
+                .state,
+            "still-active"
+        );
+        assert!(reg.get_active("request-b").is_some());
     }
 
     #[test]
@@ -421,6 +780,7 @@ mod tests {
                             i as u32 % 60
                         ),
                         terminal_at: None,
+                        metadata: RequestSummaryMetadata::default(),
                     };
                     r.register_active(entry);
                 }

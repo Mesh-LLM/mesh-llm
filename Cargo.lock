@@ -3713,6 +3713,7 @@ dependencies = [
  "mesh-llm-cli",
  "mesh-llm-client",
  "mesh-llm-commands",
+ "mesh-llm-events",
  "mesh-llm-host-runtime",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
@@ -3807,6 +3808,7 @@ dependencies = [
  "mesh-llm-build-info",
  "mesh-llm-cli",
  "mesh-llm-config",
+ "mesh-llm-events",
  "mesh-llm-hf-hub",
  "mesh-llm-identity",
  "mesh-llm-native-runtime",
@@ -4044,6 +4046,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "urlencoding",
+ "uuid",
  "windows-sys 0.61.2",
  "zeroize",
  "zip",
@@ -5266,6 +5269,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http-body-util",
+ "mesh-llm-events",
  "mesh-llm-guardrails",
  "serde",
  "serde_json",
@@ -5273,6 +5277,7 @@ dependencies = [
  "tokio-stream",
  "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

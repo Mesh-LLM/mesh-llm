@@ -5,6 +5,9 @@ use std::collections::HashMap;
 
 use mesh_llm_events::logging::events::LifecycleEvent;
 
+mod artifact_redaction;
+pub use artifact_redaction::redact_artifact_bytes;
+
 /// Redaction mode applied to a string value. The most restrictive applicable rule wins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RedactMode {
@@ -91,16 +94,6 @@ pub fn apply_redaction(value: &str) -> (String, RedactMode) {
     (value.to_string(), RedactMode::PassThrough)
 }
 
-/// Redact arbitrary artifact bytes with the same canonical privacy pipeline
-/// used for every other logging value. Invalid UTF-8 is lossily decoded so
-/// raw bytes can never bypass the text/token/path sanitizer.
-pub fn redact_artifact_bytes(content: &[u8]) -> Vec<u8> {
-    let text = String::from_utf8_lossy(content);
-    let path_safe = sanitize_paths_in_text(&text);
-    let (redacted, _) = apply_redaction(&path_safe);
-    redacted.into_bytes()
-}
-
 /// Sanitize every free-form string carried by a canonical lifecycle event.
 ///
 /// This is deliberately exhaustive: adding a string-bearing lifecycle variant
@@ -142,11 +135,16 @@ pub fn sanitize_lifecycle_event(event: LifecycleEvent) -> LifecycleEvent {
         LifecycleEvent::AuditError { message } => LifecycleEvent::AuditError {
             message: value(message),
         },
-        LifecycleEvent::Failed { error } => LifecycleEvent::Failed {
+        LifecycleEvent::Failed { error, status_code } => LifecycleEvent::Failed {
             error: value(error),
+            status_code,
         },
-        LifecycleEvent::Rejected { reason } => LifecycleEvent::Rejected {
+        LifecycleEvent::Rejected {
+            reason,
+            status_code,
+        } => LifecycleEvent::Rejected {
             reason: optional(reason),
+            status_code,
         },
         LifecycleEvent::Cancelled { reason } => LifecycleEvent::Cancelled {
             reason: optional(reason),
@@ -414,6 +412,7 @@ pub fn build_policy(config: &mesh_llm_config::LoggingConfig) -> PrivacyPolicy {
         summary_line_limit: config.summary_line_limit as usize,
         event_buffer_size: config.event_buffer_size as usize,
         retention_ttl_secs: config.retention_ttl_secs,
+        retention_max_rows: config.retention_max_rows,
         replay_capacity: config.replay_capacity as usize,
         queue_capacity: config.queue_capacity as usize,
         capture_mode,
@@ -440,6 +439,7 @@ pub struct PrivacyPolicy {
     pub summary_line_limit: usize,
     pub event_buffer_size: usize,
     pub retention_ttl_secs: u64,
+    pub retention_max_rows: u64,
     pub replay_capacity: usize,
     pub queue_capacity: usize,
     pub capture_mode: PolicyCaptureMode,
@@ -782,6 +782,7 @@ mod redaction_corpus_tests {
             "logging.application_state_root",
             "logging.summary_line_limit",
             "logging.event_buffer_size",
+            "logging.retention_max_rows",
             "logging.queue_capacity",
             "logging.cleanup_cadence_secs",
             "logging.artifact.capture_mode",
@@ -929,10 +930,12 @@ mod redaction_corpus_tests {
                 "request failed at {} https://example.test/run?token=secret {long_tail}",
                 home.join("private/model.gguf").display()
             ),
+            status_code: Some(502),
         };
-        let LifecycleEvent::Failed { error } = sanitize_lifecycle_event(event) else {
+        let LifecycleEvent::Failed { error, status_code } = sanitize_lifecycle_event(event) else {
             panic!("failed event expected");
         };
+        assert_eq!(status_code, Some(502));
         assert!(!error.contains("secret"));
         assert!(!error.contains(&home.display().to_string()));
         assert!(error.chars().count() <= MAX_LOG_STRING_LEN + "... [TRUNCATED]".len());

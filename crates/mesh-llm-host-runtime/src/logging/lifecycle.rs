@@ -10,6 +10,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
 
 /// Terminal outcomes for a lifecycle guard transition.
@@ -17,10 +18,21 @@ use mesh_llm_events::logging::identifiers::RequestId;
 pub enum TerminalOutcome {
     /// Request completed successfully.
     Completed,
+    /// Request completed successfully with its actual HTTP terminal status.
+    CompletedWithStatus(u16),
+    /// Request completed with its actual status and authoritative usage.
+    CompletedWithUsage { status_code: u16, usage: TokenUsage },
     /// Request failed with an error condition.
     Failed(String),
+    /// Request failed after an HTTP response was received.
+    FailedWithStatus { error: String, status_code: u16 },
     /// Request rejected before processing (e.g., invalid input).
     Rejected(Option<String>),
+    /// Request was rejected with its actual HTTP terminal status.
+    RejectedWithStatus {
+        reason: Option<String>,
+        status_code: u16,
+    },
     /// Request cancelled by caller or system.
     Cancelled(Option<String>),
     /// Request dropped without terminal processing (queue overflow, timeout, etc.).
@@ -31,9 +43,11 @@ impl TerminalOutcome {
     #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Completed => "completed",
-            Self::Failed(_) => "failed",
-            Self::Rejected(_) => "rejected",
+            Self::Completed | Self::CompletedWithStatus(_) | Self::CompletedWithUsage { .. } => {
+                "completed"
+            }
+            Self::Failed(_) | Self::FailedWithStatus { .. } => "failed",
+            Self::Rejected(_) | Self::RejectedWithStatus { .. } => "rejected",
             Self::Cancelled(_) => "cancelled",
             Self::Dropped(_) => "dropped",
         }
@@ -43,9 +57,13 @@ impl TerminalOutcome {
     #[allow(dead_code)]
     pub fn reason(&self) -> Option<&str> {
         match self {
-            Self::Completed => None,
+            Self::Completed | Self::CompletedWithStatus(_) | Self::CompletedWithUsage { .. } => {
+                None
+            }
             Self::Failed(e) => Some(e),
+            Self::FailedWithStatus { error, .. } => Some(error),
             Self::Rejected(r) => r.as_deref(),
+            Self::RejectedWithStatus { reason, .. } => reason.as_deref(),
             Self::Cancelled(r) => r.as_deref(),
             Self::Dropped(r) => r.as_deref(),
         }
@@ -54,16 +72,35 @@ impl TerminalOutcome {
     /// Is this a success outcome?
     #[allow(dead_code)]
     pub fn is_success(&self) -> bool {
-        matches!(self, Self::Completed)
+        matches!(
+            self,
+            Self::Completed | Self::CompletedWithStatus(_) | Self::CompletedWithUsage { .. }
+        )
+    }
+
+    pub(crate) const fn status_code(&self) -> Option<u16> {
+        match self {
+            Self::CompletedWithStatus(status) => Some(*status),
+            Self::CompletedWithUsage { status_code, .. } => Some(*status_code),
+            Self::FailedWithStatus { status_code, .. }
+            | Self::RejectedWithStatus { status_code, .. } => Some(*status_code),
+            _ => None,
+        }
     }
 }
 
 impl fmt::Display for TerminalOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Completed => write!(f, "completed"),
+            Self::Completed | Self::CompletedWithStatus(_) | Self::CompletedWithUsage { .. } => {
+                write!(f, "completed")
+            }
             Self::Failed(e) => write!(f, "failed: {}", e),
+            Self::FailedWithStatus { error, .. } => write!(f, "failed: {}", error),
             Self::Rejected(r) => write!(f, "rejected: {}", r.as_deref().unwrap_or("unknown")),
+            Self::RejectedWithStatus { reason, .. } => {
+                write!(f, "rejected: {}", reason.as_deref().unwrap_or("unknown"))
+            }
             Self::Cancelled(r) => write!(f, "cancelled: {}", r.as_deref().unwrap_or("unknown")),
             Self::Dropped(r) => write!(f, "dropped: {}", r.as_deref().unwrap_or("unknown")),
         }

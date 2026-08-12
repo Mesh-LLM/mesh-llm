@@ -4,7 +4,7 @@ use crate::artifact_privacy::{
     ArtifactPrivacy, PlatformArtifactPrivacy, create_private_directory_tree,
 };
 use crate::error::LogStoreError;
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, InterruptHandle, Transaction, TransactionBehavior};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -18,13 +18,17 @@ pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> String {
-        let dt = chrono::Utc::now();
-        format!("{}", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ"))
+        use chrono::SecondsFormat;
+
+        chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
     }
 }
 
 pub struct LogStore {
     conn: Mutex<Connection>,
+    /// A connection-scoped interrupt handle for an exclusively owned
+    /// background connection. Request persistence must never call this.
+    interrupt_handle: InterruptHandle,
     clock: std::sync::Arc<dyn Clock>,
     #[cfg_attr(not(test), allow(unused))]
     db_path: PathBuf,
@@ -74,9 +78,11 @@ impl LogStore {
         crate::migrations::apply_migrations(&conn)
             .map_err(|e| LogStoreError::MigrationFailed(e.to_string()))?;
         prepare_private_database_files(&db_path)?;
+        let interrupt_handle = conn.get_interrupt_handle();
 
         Ok(Self {
             conn: Mutex::new(conn),
+            interrupt_handle,
             clock,
             db_path,
         })
@@ -89,6 +95,30 @@ impl LogStore {
         Self::open(root_path, clock)
     }
 
+    /// Open a dedicated connection for a background owner. SQLite interrupts
+    /// are connection-scoped, so this lets retention stop without disturbing
+    /// request-path persistence on the primary connection.
+    pub fn reopen_for_background_worker(&self) -> Result<Self, LogStoreError> {
+        let parent = self.db_path.parent().ok_or_else(|| {
+            LogStoreError::IoError(std::io::Error::other("logging database has no parent"))
+        })?;
+        let store = Self::open(parent, std::sync::Arc::clone(&self.clock))?;
+        // Retention is opportunistic and cancellable.  A short busy timeout
+        // means a concurrent request writer makes this pass skip and retry on
+        // its next cadence instead of holding shutdown hostage to the normal
+        // request-path 30-second SQLite busy timeout.
+        store
+            .conn()
+            .busy_timeout(std::time::Duration::from_millis(100))
+            .map_err(LogStoreError::Sqlite)?;
+        Ok(store)
+    }
+
+    /// Interrupt the query currently executing on this exclusive connection.
+    pub fn interrupt(&self) {
+        self.interrupt_handle.interrupt();
+    }
+
     pub fn txn<T>(
         &self,
         f: impl FnOnce(&Transaction) -> Result<T, LogStoreError>,
@@ -96,9 +126,16 @@ impl LogStore {
         let mut conn = self
             .conn
             .lock()
-            .map_err(|_| LogStoreError::Sqlite(rusqlite::Error::ExecuteReturnedResults))?;
+            .map_err(|_| LogStoreError::ConnectionPoisoned)?;
 
-        let tx = conn.transaction().map_err(LogStoreError::Sqlite)?;
+        // Every caller of this helper mutates durable logging state. Acquiring
+        // the writer reservation up front avoids a WAL read snapshot being
+        // invalidated by request persistence before a later cleanup/delete
+        // can upgrade to a writer (SQLITE_BUSY_SNAPSHOT is not retried by a
+        // busy timeout).
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(LogStoreError::Sqlite)?;
         let result = f(&tx);
         if result.is_ok() {
             tx.commit().map_err(LogStoreError::Sqlite)?;
@@ -108,7 +145,10 @@ impl LogStore {
     }
 
     pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().expect("connection mutex poisoned")
+        match self.conn.lock() {
+            Ok(conn) => conn,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 
     pub fn now(&self) -> String {
@@ -210,5 +250,39 @@ fn reject_link_if_present(path: &Path) -> Result<(), LogStoreError> {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(LogStoreError::IoError(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+
+    use super::{LogStore, SystemClock};
+    use crate::LogStoreError;
+
+    #[test]
+    fn poisoned_connection_returns_typed_transaction_error_without_panicking_reads() {
+        let root = tempfile::tempdir().expect("temporary log store root");
+        let store = LogStore::open(root.path(), Arc::new(SystemClock)).expect("open log store");
+
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            let _connection = match store.conn.lock() {
+                Ok(connection) => connection,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            panic!("intentionally poison the connection lock");
+        }));
+        assert!(panic_result.is_err());
+
+        let transaction_error = store
+            .txn(|_| Ok(()))
+            .expect_err("poisoned connection must reject transactions");
+        assert!(matches!(
+            transaction_error,
+            LogStoreError::ConnectionPoisoned
+        ));
+
+        assert_eq!(store.schema_version(), crate::migrations::CURRENT_VERSION);
     }
 }

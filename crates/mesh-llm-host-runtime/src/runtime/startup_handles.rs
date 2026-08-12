@@ -5,13 +5,14 @@ use super::{
     DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL, DashboardContextUsage, InitialPromptMode,
     InstanceLifecycleRecord, InstanceLifecycleState, LocalRuntimeModelHandle,
     LocalRuntimeModelStartSpec, OpenAiGuardrailPolicyHandle, RuntimeCapacityLedger,
-    RuntimeCapacityReservation, RuntimeInstanceRegistry, RuntimeResourcePlanningProfile,
-    SPLIT_STANDBY_RETRY_INTERVAL, SplitCoordinatorAck, SplitCoordinatorEvent, SplitRuntimeReason,
-    SplitRuntimeStart, StartupPinnedGpuTarget, StartupRuntimePlan, add_runtime_local_target,
-    local_process_payload, publish_runtime_llama_slots, publish_runtime_llama_unavailable,
-    refresh_dashboard_context_usage, register_runtime_instance, remove_dashboard_context_usage,
-    remove_dashboard_process, remove_runtime_local_target, reserve_runtime_capacity_for_model,
-    runtime_model_planning_bytes, runtime_model_required_bytes,
+    RuntimeCapacityReservation, RuntimeInstanceRegistry, RuntimeOperationalEvent,
+    RuntimeResourcePlanningProfile, SPLIT_STANDBY_RETRY_INTERVAL, SplitCoordinatorAck,
+    SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart, StartupPinnedGpuTarget,
+    StartupRuntimePlan, add_runtime_local_target, local_process_payload,
+    publish_runtime_llama_slots, publish_runtime_llama_unavailable,
+    record_runtime_operational_event, refresh_dashboard_context_usage, register_runtime_instance,
+    remove_dashboard_context_usage, remove_dashboard_process, remove_runtime_local_target,
+    reserve_runtime_capacity_for_model, runtime_model_planning_bytes, runtime_model_required_bytes,
     runtime_process_payload_with_status, start_runtime_local_model, start_runtime_split_model,
     startup_runtime_plan, stop_split_generation_cleanup, unregister_runtime_instance,
     update_pi_models_json, upsert_dashboard_process,
@@ -1209,6 +1210,7 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
     let mut stop_rx = params.stop_rx.clone();
     loop {
         reset_startup_lifecycle(&params.lifecycle).await;
+        record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadStarted);
         let Some((launch_handles, launch_started)) =
             launch_startup_local_model_task(&params, &mut stop_rx, &prepared).await
         else {
@@ -1459,10 +1461,18 @@ async fn record_startup_terminal_failure(
     detail: &str,
 ) {
     let mut record = lifecycle.lock().await;
-    if !record.state().is_terminal() {
+    let transitioned_to_failure = if !record.state().is_terminal() {
         let _ = record.transition_to(InstanceLifecycleState::Failed);
-    }
+        true
+    } else {
+        false
+    };
     drop(record);
+
+    if transitioned_to_failure {
+        record_runtime_operational_event(RuntimeOperationalEvent::StartupFailed);
+        record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadFailed);
+    }
 
     let _ = runtime_event_tx.send(super::RuntimeEvent::StartupModelLoadFinished {
         model_ref: model_ref.to_string(),
@@ -1543,6 +1553,7 @@ pub(super) async fn startup_publish_loaded_runtime(
         message: format!("Startup-loaded model '{}' on :{}", loaded_name, handle.port),
         context: None,
     });
+    record_runtime_operational_event(RuntimeOperationalEvent::ModelReady);
 }
 
 pub(super) async fn startup_run_local_model_event_loop(
@@ -1778,6 +1789,7 @@ impl StartupReadyReporter {
             return;
         };
         let _ = emit_event(event);
+        record_runtime_operational_event(RuntimeOperationalEvent::Ready);
         let _ = schedule_ready_prompt();
     }
 }

@@ -7,21 +7,22 @@ use super::{
     PreparedRuntimeStartup, RunAutoAdditionalModelsContext, RunAutoConsoleStateContext,
     RunAutoRuntimeLifecycleContext, RunAutoServingSurface, RunAutoServingSurfaceContext,
     RuntimeCapacityLedger, RuntimeDashboardSnapshotProvider, RuntimeEvent, RuntimeInstanceRegistry,
-    RuntimeModelHandleEntry, RuntimeOptions, RuntimeResourcePlanningProfile, RuntimeSurface,
-    SkippyNativeLogForwardingGuard, StartupLocalModelTask, StartupMeshCreationState,
-    StartupModelPlan, StartupModelSpec, StartupReadyReporter, bridge_skippy_native_logs,
-    build_serving_list, cli_has_explicit_models, configure_skippy_native_logging,
-    emit_configuration_ui_read_only_hint, initialize_embedded_runtime_entrypoint,
-    initialize_runtime_entrypoint, maybe_discover_join_candidates, next_runtime_instance_id,
-    nostr_rediscovery, nostr_relays, openai_guardrail_policy_handle, owner_runtime_config,
-    prepare_runtime_startup, publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
-    resolve_runtime_owner_key_path, resolve_startup_mesh_creation_state, run_auto_join_mesh_phase,
-    run_auto_model_identity, run_auto_model_path_or_shutdown, run_auto_runtime_loop_and_shutdown,
-    run_local_model_only, runtime_data_producer_for_console, runtime_startup_requirements,
-    setup_run_auto_console_state, setup_run_auto_serving_surface,
-    spawn_embedded_runtime_control_forwarder, spawn_run_auto_additional_model_tasks,
-    spawn_run_auto_discovery_publisher, start_run_auto_bootstrap_proxy, startup_local_model_loop,
-    swarm_capture_observer_requested,
+    RuntimeModelHandleEntry, RuntimeOperationalEvent, RuntimeOptions,
+    RuntimeResourcePlanningProfile, RuntimeSurface, SkippyNativeLogForwardingGuard,
+    StartupLocalModelTask, StartupMeshCreationState, StartupModelPlan, StartupModelSpec,
+    StartupReadyReporter, bridge_skippy_native_logs, build_serving_list, cli_has_explicit_models,
+    configure_skippy_native_logging, emit_configuration_ui_read_only_hint,
+    initialize_embedded_runtime_entrypoint, initialize_runtime_entrypoint,
+    maybe_discover_join_candidates, next_runtime_instance_id, nostr_rediscovery, nostr_relays,
+    openai_guardrail_policy_handle, owner_runtime_config, prepare_runtime_startup,
+    publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
+    record_runtime_operational_event, resolve_runtime_owner_key_path,
+    resolve_startup_mesh_creation_state, run_auto_join_mesh_phase, run_auto_model_identity,
+    run_auto_model_path_or_shutdown, run_auto_runtime_loop_and_shutdown, run_local_model_only,
+    runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
+    setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
+    spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
+    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -184,7 +185,8 @@ pub(crate) async fn run_cli(
 
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
     initialize_embedded_runtime_entrypoint()?;
-    crate::sdk::embedded_logging::initialize_embedded_logging(options.config_path.as_deref())?;
+    crate::sdk::embedded_logging::initialize_embedded_logging(options.config_path.as_deref())
+        .await?;
 
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
@@ -810,6 +812,12 @@ pub(super) fn run_auto_survey_hardware(is_client: bool) -> hardware::HardwareSur
     }
 }
 
+fn attach_logging_metrics_to_survey(survey_telemetry: &survey::SurveyTelemetry) {
+    if let Some(logging) = crate::logging_runtime_state() {
+        logging.set_metrics_sink(survey_telemetry.logging_sink());
+    }
+}
+
 pub(super) async fn build_run_auto_node_setup(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -844,6 +852,7 @@ pub(super) async fn build_run_auto_node_setup(
             node_role: if is_client { "client" } else { "worker" }.into(),
         },
     );
+    attach_logging_metrics_to_survey(&survey_telemetry);
     node.set_routing_telemetry_sink(survey_telemetry.routing_sink());
     node.set_available_models(local_models.clone()).await;
     let _activity_policy_task = super::activity_policy::spawn_native_activity_policy(
@@ -994,6 +1003,10 @@ pub(super) struct RunAutoRuntimeState {
     pub(super) dashboard_context_usage: DashboardContextUsage,
     pub(super) input_handler_enabled: bool,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
+    /// The installed process-local logging service owned by this runtime
+    /// invocation. It is started only after the Phase 1 state has completed
+    /// its confined store/artifact recovery, then drained before runtime exit.
+    pub(super) logging_service: Option<Arc<crate::logging::LoggingService>>,
 }
 
 pub(super) struct RunAutoStartupTasksContext<'a> {
@@ -1040,7 +1053,21 @@ pub(super) fn initialize_run_auto_runtime_state(options: &RuntimeOptions) -> Run
         openai_guardrail_policy: openai_guardrail_policy_handle(mesh_guardrail_mode_to_openai(
             options.mesh_guardrails,
         )),
+        logging_service: None,
     }
+}
+
+/// Start the one persistence worker owned by the current runtime invocation.
+///
+/// The logging state is optional because disabled or fail-open initialization
+/// must never prevent serving. The state itself owns the corrected shared
+/// `LogStore`/artifact-capture resources, including startup recovery, so this
+/// function intentionally does not reopen either resource.
+pub(super) async fn start_run_auto_logging_service() -> Option<Arc<crate::logging::LoggingService>>
+{
+    crate::logging_runtime_state()?
+        .start_persistence_worker()
+        .await
 }
 
 pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksContext<'_>) {
@@ -1336,6 +1363,8 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     let (runtime_event_tx, mut runtime_event_rx) =
         tokio::sync::mpsc::unbounded_channel::<RuntimeEvent>();
     let mut runtime_state = initialize_run_auto_runtime_state(&options);
+    runtime_state.logging_service = start_run_auto_logging_service().await;
+    record_runtime_operational_event(RuntimeOperationalEvent::StartupStarted);
 
     // Model intent channel: owner-control commands send intents here, control loop polls.
     let mut model_intent_rx = install_run_auto_model_intent_channel(node.clone()).await;
@@ -1421,6 +1450,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
                 "Runtime daemon ready; no local models are loaded".to_string()
             }),
         });
+        record_runtime_operational_event(RuntimeOperationalEvent::Ready);
     }
 
     // Discovery publish loop (if --publish) or Nostr watchdog (if --auto, to take over if publisher dies).

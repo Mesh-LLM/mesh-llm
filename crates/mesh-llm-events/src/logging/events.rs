@@ -4,6 +4,43 @@ use serde::{Deserialize, Serialize};
 
 use super::identifiers::AttemptId;
 
+/// Upstream token counts exactly as reported by a compatible API. Each field
+/// remains absent when upstream omitted it; consumers must never estimate it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+}
+
+impl TokenUsage {
+    /// Construct an authoritative usage record only when the provider supplied
+    /// every count and the total is arithmetically consistent. Missing,
+    /// overflowing, or internally inconsistent usage must not be estimated.
+    pub fn from_counts(
+        prompt_tokens: Option<u64>,
+        completion_tokens: Option<u64>,
+        total_tokens: Option<u64>,
+    ) -> Option<Self> {
+        let (Some(prompt_tokens), Some(completion_tokens), Some(total_tokens)) =
+            (prompt_tokens, completion_tokens, total_tokens)
+        else {
+            return None;
+        };
+        if prompt_tokens.checked_add(completion_tokens) != Some(total_tokens) {
+            return None;
+        }
+        Some(Self {
+            prompt_tokens: Some(prompt_tokens),
+            completion_tokens: Some(completion_tokens),
+            total_tokens: Some(total_tokens),
+        })
+    }
+}
+
 /// Lifecycle event payloads carried inside [`CanonicalEnvelope`].
 ///
 /// Bounded metadata only — never raw request/response payloads or secrets.
@@ -57,8 +94,11 @@ pub enum LifecycleEvent {
     },
     /// A stream completed successfully.
     StreamCompleted {
+        /// Legacy compatibility field containing completion tokens only.
         #[serde(skip_serializing_if = "Option::is_none")]
         tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<TokenUsage>,
     },
     /// A stream errored.
     StreamError {
@@ -75,13 +115,23 @@ pub enum LifecycleEvent {
         status_code: Option<u16>,
         #[serde(skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<TokenUsage>,
     },
     /// Request failed.
-    Failed { error: String },
+    Failed {
+        error: String,
+        /// The terminal upstream HTTP status when one was received.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status_code: Option<u16>,
+    },
     /// Request rejected before processing.
     Rejected {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        /// The terminal upstream HTTP status when one was received.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status_code: Option<u16>,
     },
     /// Request cancelled.
     Cancelled {

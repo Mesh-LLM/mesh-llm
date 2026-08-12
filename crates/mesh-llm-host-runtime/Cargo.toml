@@ -100,6 +100,7 @@ tokio-stream = "0.1"
 crossterm = "0.28"
 url = "2"
 urlencoding = "2"
+uuid = { version = "1", features = ["v4"] }
 libc = "0.2.183"
 mdns-sd = "0.19"
 regex-lite = "0.1"

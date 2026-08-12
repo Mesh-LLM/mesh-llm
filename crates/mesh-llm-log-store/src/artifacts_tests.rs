@@ -1112,6 +1112,16 @@ fn artifact_cascade_cleanup_deletes_artifact_files() {
         "INSERT INTO lifecycle_events (event_id, request_id, occurred_at, payload_json) VALUES (?, ?, ?, ?)",
         rusqlite::params!["ev-mar-1", "req-mar", "2025-03-15T00:00:00Z", r#"{"type":"admitted"}"#],
     ).unwrap();
+    store
+        .write_terminal_event(
+            "req-jan",
+            "ev-jan-terminal",
+            r#"{"type":"completed"}"#,
+            "completed",
+            None,
+            "2025-01-15T00:00:00Z",
+        )
+        .unwrap();
 
     let afs_root = tempfile::tempdir().expect("artifact root");
     let afs = ArtifactFileStore::open(afs_root.path().to_path_buf(), clock.clone(), store).unwrap();
@@ -1131,7 +1141,6 @@ fn artifact_cascade_cleanup_deletes_artifact_files() {
         8192,
     )
     .unwrap();
-
     // Need a new store reference to write for req-mar (same store).
     afs.write_artifact(
         "art-mar",
@@ -1168,7 +1177,8 @@ fn artifact_cascade_cleanup_deletes_artifact_files() {
     assert_eq!(pointers[0].artifact_id, "art-jan");
 
     // Delete only the file path retained from the removed pointer row.
-    afs.delete_artifact_files(&pointers).unwrap();
+    afs.delete_artifact_files(&pointers)
+        .expect("delete queued artifact files");
 
     // Jan file should be gone; both a referenced newer file and the unowned
     // duplicate filename survive.
@@ -1204,6 +1214,16 @@ fn cascade_cleanup_retries_durable_artifact_deletions_after_filesystem_failure()
             None,
         )
         .expect("insert summary");
+    store
+        .write_terminal_event(
+            "req-retry",
+            "ev-retry-terminal",
+            r#"{"type":"completed"}"#,
+            "completed",
+            None,
+            "2025-01-15T00:00:01Z",
+        )
+        .expect("insert terminal event");
 
     let artifact_root = tempfile::tempdir().expect("artifact root");
     let afs = ArtifactFileStore::open(artifact_root.path().to_path_buf(), clock.clone(), store)
@@ -1255,6 +1275,116 @@ fn cascade_cleanup_retries_durable_artifact_deletions_after_filesystem_failure()
         .cascade_cleanup_before("2025-02-01T00:00:00Z")
         .expect("verify cleanup completion");
     assert!(completed.is_empty());
+}
+
+#[test]
+fn committed_cascade_survives_crash_reopen_and_retries_pending_file_deletion() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let database_root = root.path().join("database");
+    let artifact_root = root.path().join("artifacts");
+    let clock: Arc<dyn ClockTrait> = Arc::new(TestClock::default());
+    let store = LogStore::open(&database_root, Arc::clone(&clock)).expect("store");
+    store
+        .insert_summary(
+            "request-crash",
+            None,
+            None,
+            None,
+            None,
+            "2025-01-01T00:00:00Z",
+            None,
+            None,
+            None,
+        )
+        .expect("summary");
+    store
+        .write_terminal_event(
+            "request-crash",
+            "terminal-crash",
+            r#"{"type":"completed"}"#,
+            "completed",
+            None,
+            "2025-01-01T00:00:01Z",
+        )
+        .expect("terminal");
+    let artifacts = ArtifactFileStore::open(artifact_root.clone(), Arc::clone(&clock), store)
+        .expect("artifacts");
+    artifacts
+        .write_artifact(
+            "artifact-crash",
+            "request-crash",
+            "response",
+            "2025-01-01T00:00:01Z",
+            b"redacted",
+            None,
+            1,
+            true,
+            false,
+            128,
+            128,
+        )
+        .expect("artifact");
+
+    artifacts
+        .store_ref()
+        .cascade_cleanup_before("2025-02-01T00:00:00Z")
+        .expect("commit owner cascade");
+    let unsafe_leaf = artifact_root.join("request-crash").join("artifact-crash");
+    fs::remove_file(&unsafe_leaf).expect("replace artifact with unsafe directory");
+    fs::create_dir(&unsafe_leaf).expect("unsafe directory");
+    drop(artifacts);
+
+    let reopened_store =
+        LogStore::reopen_at(&database_root, Arc::clone(&clock)).expect("reopen store");
+    let pending = |store: &LogStore| {
+        let connection = store.conn();
+        let mut statement = connection
+            .prepare(
+                "SELECT artifact_id, request_id FROM pending_artifact_deletions \
+                 ORDER BY artifact_id",
+            )
+            .expect("pending deletion table");
+        statement
+            .query_map([], |row| {
+                Ok(crate::repositories::CascadeArtifactPointer {
+                    artifact_id: row.get(0)?,
+                    request_id: row.get(1)?,
+                })
+            })
+            .expect("pending query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("pending rows")
+    };
+    assert_eq!(
+        pending(&reopened_store),
+        vec![crate::repositories::CascadeArtifactPointer {
+            artifact_id: "artifact-crash".to_owned(),
+            request_id: "request-crash".to_owned(),
+        }],
+        "the committed cascade must survive a process restart"
+    );
+
+    let reopened =
+        ArtifactFileStore::open(artifact_root, Arc::clone(&clock), reopened_store).expect("reopen");
+    let first_attempt = pending(reopened.store_ref());
+    reopened
+        .delete_artifact_files(&first_attempt)
+        .expect_err("unsafe replacement must fail closed");
+    assert_eq!(
+        pending(reopened.store_ref()),
+        first_attempt,
+        "unsafe-path failures remain durable and retryable"
+    );
+
+    fs::remove_dir(&unsafe_leaf).expect("repair unsafe leaf");
+    let retry = pending(reopened.store_ref());
+    reopened
+        .delete_artifact_files(&retry)
+        .expect("missing file reconciliation succeeds");
+    assert!(
+        pending(reopened.store_ref()).is_empty(),
+        "missing-file reconciliation acknowledges"
+    );
 }
 
 // ════════════════════════════════

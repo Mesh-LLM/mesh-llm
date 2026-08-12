@@ -1,5 +1,5 @@
 use super::common::{
-    ResponseRetryPolicy, RouteAttemptResult, parse_completion_tokens_from_json_body,
+    ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body,
     retryable_quality_result,
 };
 use super::probe::{
@@ -7,6 +7,7 @@ use super::probe::{
     try_parse_response_headers,
 };
 use super::relay::relay_error_response;
+use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::normalize_chat_completion_json_body;
 use anyhow::{Result, anyhow};
@@ -28,13 +29,14 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
 
     if !(200..300).contains(&probe.status_code) {
-        return relay_error_response(tcp_stream, reader, probe).await;
+        return relay_error_response(tcp_stream, reader, probe, route_observer).await;
     }
     let mut buffered = probe.buffered;
     let parsed = try_parse_response_headers(&buffered)?
@@ -52,17 +54,18 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
         return Ok(result);
     }
     let translated_body = response_adapter::translate_chat_completion_to_responses(body)?;
-    let completion_tokens = parse_completion_tokens_from_json_body(&translated_body);
+    let usage = parse_token_usage_from_json_body(&translated_body);
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         translated_body.len()
     );
     tcp_stream.write_all(header.as_bytes()).await?;
     tcp_stream.write_all(&translated_body).await?;
+    route_observer.capture_response_body(&translated_body, Some("application/json"));
     let _ = tcp_stream.shutdown().await;
     Ok(RouteAttemptResult::Delivered {
-        status_code: probe.status_code,
-        completion_tokens,
+        status_code: 200,
+        usage,
     })
 }
 
@@ -73,13 +76,14 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
 
     if !(200..300).contains(&probe.status_code) {
-        return relay_error_response(tcp_stream, reader, probe).await;
+        return relay_error_response(tcp_stream, reader, probe, route_observer).await;
     }
     let mut buffered = probe.buffered;
     let parsed = try_parse_response_headers(&buffered)?
@@ -98,17 +102,18 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     if let Some(result) = retryable_quality_result(&normalized_body, retry_policy) {
         return Ok(result);
     }
-    let completion_tokens = parse_completion_tokens_from_json_body(&normalized_body);
+    let usage = parse_token_usage_from_json_body(&normalized_body);
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         normalized_body.len()
     );
     tcp_stream.write_all(header.as_bytes()).await?;
     tcp_stream.write_all(&normalized_body).await?;
+    route_observer.capture_response_body(&normalized_body, Some("application/json"));
     let _ = tcp_stream.shutdown().await;
     Ok(RouteAttemptResult::Delivered {
-        status_code: probe.status_code,
-        completion_tokens,
+        status_code: 200,
+        usage,
     })
 }
 
@@ -155,12 +160,12 @@ mod tests {
     async fn relay_normalized_chat_completion_json_adds_missing_tool_call_id() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let body = br#"{"id":"chatcmpl-a","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"type":"function","function":{"name":"lookup_fixture_fact","arguments":"{\"key\":\"codeword\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"completion_tokens":4}}"#;
+        let body = br#"{"id":"chatcmpl-a","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"type":"function","function":{"name":"lookup_fixture_fact","arguments":"{\"key\":\"codeword\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":4,"total_tokens":6}}"#;
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let header = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
             body.len()
         );
         let header_end = header.len();
@@ -169,7 +174,7 @@ mod tests {
             let probe = ResponseProbe {
                 buffered: header.into_bytes(),
                 header_end,
-                status_code: 200,
+                status_code: 201,
                 retryable_context_overflow: false,
             };
             relay_normalized_chat_completion_json(
@@ -177,6 +182,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                OpenAiRouteObserver::default(),
             )
             .await
             .expect("relay")
@@ -198,11 +204,17 @@ mod tests {
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&output[body_start..]).unwrap();
 
+        assert!(output.starts_with(b"HTTP/1.1 200 OK\r\n"));
+
         assert_eq!(
             route_result,
             RouteAttemptResult::Delivered {
                 status_code: 200,
-                completion_tokens: Some(4),
+                usage: Some(mesh_llm_events::logging::events::TokenUsage {
+                    prompt_tokens: Some(2),
+                    completion_tokens: Some(4),
+                    total_tokens: Some(6),
+                }),
             }
         );
         assert_eq!(
@@ -212,6 +224,62 @@ mod tests {
         assert_eq!(
             parsed["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
             "lookup_fixture_fact"
+        );
+    }
+
+    #[tokio::test]
+    async fn translated_responses_json_reports_client_visible_status_and_usage() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body = br#"{"id":"chatcmpl-a","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":4,"total_tokens":6}}"#;
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = format!(
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let header_end = header.len();
+        let server_task = tokio::spawn(async move {
+            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let probe = ResponseProbe {
+                buffered: header.into_bytes(),
+                header_end,
+                status_code: 201,
+                retryable_context_overflow: false,
+            };
+            relay_translated_responses_json(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        upstream_writer.write_all(body).await.unwrap();
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut output))
+            .await
+            .expect("relay should not wait for upstream keep-alive close")
+            .unwrap();
+        drop(upstream_writer);
+        let route_result = server_task.await.expect("server task");
+
+        assert!(output.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert_eq!(
+            route_result,
+            RouteAttemptResult::Delivered {
+                status_code: 200,
+                usage: Some(mesh_llm_events::logging::events::TokenUsage {
+                    prompt_tokens: Some(2),
+                    completion_tokens: Some(4),
+                    total_tokens: Some(6),
+                }),
+            }
         );
     }
 }

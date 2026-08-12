@@ -11,19 +11,37 @@ use std::time::Duration;
 use mesh_llm_events::logging::envelope::CanonicalEnvelope;
 use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_events::logging::identifiers::{AttemptId, EventId, RequestId};
-
-use mesh_llm_events::logging::replay::ReplayChannel;
+use mesh_llm_events::logging::proxy::ProxyRecord;
+use mesh_llm_events::logging::replay::{ReplayChannel, ReplaySequence};
+use mesh_llm_events::logging::timestamp::canonical_logging_timestamp;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinHandle};
 
 const PERSISTENCE_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
+mod artifact_persistence;
+use artifact_persistence::DEFAULT_ARTIFACT_MEMORY_BUDGET_BYTES;
+pub(crate) use artifact_persistence::{ArtifactCaptureContent, ArtifactUnavailableReason};
+pub use artifact_persistence::{ArtifactCaptureEntry, ArtifactPersistenceStatus};
+
+mod operational_audit;
+pub use operational_audit::{
+    OperationalAuditRecord, OperationalAuditRecordBuilder, OperationalAuditSeverity,
+};
+
 pub use super::bus::{BusEntry, ReplayBus};
 use super::lifecycle::LifecycleRecorder;
 pub use super::lifecycle::{DuplicateTerminalError, LifecycleGuard, TerminalOutcome};
 use super::limits::{DynamicLoggingLimits, LoggingDynamicLimits};
+use super::metrics::{
+    LoggingArtifactCaptureStatus, LoggingCleanupOutcome, LoggingMetric, LoggingMetrics,
+    LoggingMetricsSink, LoggingTerminalOutcome,
+};
+use super::output_projection::emit_accepted_canonical_event;
 use super::policy::sanitize_lifecycle_event;
+use super::registry::RequestSummaryEventSnapshots;
 pub use super::registry::{RegistryConfig, RequestRegistry, RequestSummaryEntry};
+use super::request_metadata::RequestSummaryMetadata;
 pub use super::sequences::SequenceGenerators;
 pub use super::writer::FailOpenWriter;
 
@@ -52,11 +70,21 @@ pub trait PersistSink: Send + Sync {
         artifact_data: serde_json::Value,
     ) -> Result<(), String>;
 
+    /// Persist one logging-owned OpenAI artifact command. Production sinks do
+    /// all redaction, filesystem, and SQLite work on their serial blocking
+    /// worker. The default keeps test and external sinks source-compatible.
+    async fn persist_artifact_capture(
+        &self,
+        _entry: ArtifactCaptureEntry,
+    ) -> Result<ArtifactPersistenceStatus, String> {
+        Err("artifact capture persistence is not configured".to_string())
+    }
+
     /// Persist a proxy transport record.
     async fn persist_proxy_record(&self, proxy_json: String) -> Result<(), String>;
 
-    /// Persist an audit entry for operational events (config changes, errors).
-    async fn persist_audit_entry(&self, level: String, message: String) -> Result<(), String>;
+    /// Persist one typed static operational audit record.
+    async fn persist_audit_entry(&self, record: OperationalAuditRecord) -> Result<(), String>;
 
     /// Persist a webhook delivery record.
     async fn persist_webhook_delivery(
@@ -82,10 +110,15 @@ pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> String {
-        use chrono::{DateTime, Utc};
-        let dt: DateTime<Utc> = Utc::now();
-        format!("{}", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ"))
+        use chrono::SecondsFormat;
+
+        chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
     }
+}
+
+fn canonical_clock_timestamp(clock: &dyn Clock) -> String {
+    let timestamp = clock.now();
+    canonical_logging_timestamp(&timestamp).unwrap_or(timestamp)
 }
 
 impl Default for SystemClock {
@@ -111,6 +144,9 @@ pub struct ServiceConfig {
     pub queue_capacity: usize,
     /// Registry configuration (max_active, max_recent).
     pub registry_config: RegistryConfig,
+    /// Maximum body bytes copied into one in-memory artifact command. The
+    /// sink independently owns and enforces the durable policy limits.
+    pub artifact_command_max_bytes: usize,
 }
 
 impl Default for ServiceConfig {
@@ -121,6 +157,7 @@ impl Default for ServiceConfig {
             replay_capacity: 128,
             queue_capacity: 4096, // matches config defaults from Todo 2.
             registry_config: RegistryConfig::default(),
+            artifact_command_max_bytes: 256 * 1024,
         }
     }
 }
@@ -133,6 +170,12 @@ impl ServiceConfig {
             event_buffer_size: policy.event_buffer_size,
             replay_capacity: policy.replay_capacity,
             queue_capacity: policy.queue_capacity,
+            artifact_command_max_bytes: match policy.capture_mode {
+                super::policy::PolicyCaptureMode::MetadataOnly => {
+                    Self::default().artifact_command_max_bytes
+                }
+                super::policy::PolicyCaptureMode::RedactedWithLimits(byte_limit, _) => byte_limit,
+            },
             ..Self::default()
         }
     }
@@ -141,12 +184,43 @@ impl ServiceConfig {
 /// Internal message sent from the service to the persistence worker via mpsc channel.
 #[derive(Debug)]
 enum WorkerMessage {
-    /// Persist a bus entry (serialized event payload).
-    PersistBusEntry(BusEntry),
+    /// Persist one accepted entry through the service-owned delivery path.
+    Persist(Box<PersistenceEntry>),
     /// Drain every preceding entry, acknowledge the drain, then exit. The
     /// control message is queued behind normal work so the acknowledgement is
     /// a precise durability boundary for the bounded worker channel.
     Shutdown(oneshot::Sender<()>),
+}
+
+/// One durable record accepted by the logging service. Proxy attempts are
+/// observational records, so they do not enter the lifecycle replay bus.
+#[derive(Debug)]
+enum PersistenceEntry {
+    Bus(BusEntry),
+    /// A terminal event carries its terminal summary on the priority lane so
+    /// a saturated normal queue can never strand a durable request as active.
+    Terminal {
+        entry: BusEntry,
+        summary: RequestSummaryEntry,
+    },
+    Audit(OperationalAuditRecord),
+    ProxyRecord(String),
+    Artifact {
+        entry: ArtifactCaptureEntry,
+        summary: RequestSummaryEntry,
+    },
+}
+
+impl PersistenceEntry {
+    fn is_terminal(&self) -> bool {
+        matches!(self, Self::Terminal { .. })
+    }
+}
+
+#[derive(Clone)]
+struct WorkerSenders {
+    normal: mpsc::Sender<WorkerMessage>,
+    terminal: mpsc::Sender<PersistenceEntry>,
 }
 
 /// The one owner of an accepted entry's persistence hand-off.
@@ -159,7 +233,7 @@ enum DeliveryMode {
     /// No worker is running. Entries are retained for an explicit
     /// [`LoggingService::pump_sync`] call or handed to the first worker.
     Manual {
-        pending: VecDeque<BusEntry>,
+        pending: VecDeque<PersistenceEntry>,
         capacity: usize,
     },
     /// A `pump_sync` task owns entries that were atomically removed from the
@@ -167,13 +241,33 @@ enum DeliveryMode {
     /// allowing another pump to duplicate those entries.
     ManualPumping(Arc<ManualPumpCompletion>),
     /// A dedicated worker owns delivery through this bounded channel.
-    Worker(mpsc::Sender<WorkerMessage>),
+    Worker(WorkerSenders),
     /// Shutdown has frozen new persistence hand-offs while the worker drains
     /// entries already accepted before the transition.
     Stopping,
     /// The previous worker is joined. New events still reach replay, but their
     /// persistence hand-off is counted as unavailable until a later spawn.
     Stopped,
+}
+
+/// Path-free local state of the persistence delivery owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PersistenceWorkerState {
+    NotStarted,
+    Running,
+    Stopping,
+    Stopped,
+}
+
+impl PersistenceWorkerState {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::NotStarted => "not_started",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+        }
+    }
 }
 
 struct ManualPumpCompletion {
@@ -216,6 +310,10 @@ pub struct LoggingService {
     /// Bounded replay bus for nonblocking enqueue with drop-oldest overflow policy.
     bus: Arc<ReplayBus>,
 
+    /// Process-local optional metrics adapter. Logging owns this closed
+    /// vocabulary and never depends on an OTLP implementation.
+    metrics: LoggingMetrics,
+
     /// Sequence generators per ReplayChannel (monotonic, shared across clones).
     sequences: SequenceGenerators,
 
@@ -250,6 +348,12 @@ pub struct LoggingService {
     /// Whether spawn() has been called (prevents double-spawn).
     spawned: Arc<AtomicBool>,
 
+    /// A retired runtime state must never be able to resurrect a persistence
+    /// worker through an `Arc<LoggingService>` captured by an earlier runtime
+    /// invocation. Retirement is permanent for this service instance; a new
+    /// process-local runtime receives a new service.
+    startable: AtomicBool,
+
     /// Accepted entries that could not be handed to the bounded persistence
     /// channel. This intentionally excludes replay-window evictions.
     persistence_queue_drops: Arc<AtomicU64>,
@@ -265,6 +369,12 @@ pub struct LoggingService {
     /// Accepted entries lost only because a shutdown drain timed out. This is
     /// separate from ordinary queue saturation and sink failure accounting.
     persistence_shutdown_losses: Arc<AtomicU64>,
+
+    /// Body bytes retained by accepted artifact commands. This independent
+    /// byte budget prevents a large count-bound persistence queue from
+    /// retaining an unbounded aggregate of request/response bodies.
+    artifact_memory_in_flight: Arc<AtomicU64>,
+    artifact_memory_budget_bytes: u64,
 
     /// Fixed upper bound for the worker drain/join phase. Tests inject zero to
     /// exercise the abort/accounting path without wall-clock sleeps.
@@ -291,6 +401,8 @@ pub struct LoggingService {
 #[derive(Clone)]
 struct EventDelivery {
     bus: Arc<ReplayBus>,
+    registry: Arc<RequestRegistry>,
+    metrics: LoggingMetrics,
     sequences: SequenceGenerators,
     summary_line_limit: usize,
     sink_enabled: bool,
@@ -302,7 +414,61 @@ struct EventDelivery {
 
 impl EventDelivery {
     fn enqueue(&self, request_id: RequestId, channel: ReplayChannel, payload_json: String) {
-        let _ = enqueue_event_with_delivery(self, request_id, channel, payload_json);
+        self.enqueue_with_summary_snapshots(request_id, channel, payload_json, None, None);
+    }
+
+    fn enqueue_with_summary_snapshots(
+        &self,
+        request_id: RequestId,
+        channel: ReplayChannel,
+        payload_json: String,
+        summary_snapshots: Option<RequestSummaryEventSnapshots>,
+        terminal_summary: Option<RequestSummaryEntry>,
+    ) {
+        let _ = enqueue_event_with_delivery(
+            self,
+            request_id,
+            channel,
+            payload_json,
+            None,
+            summary_snapshots,
+            terminal_summary,
+        );
+    }
+
+    fn enqueue_audit(&self, record: OperationalAuditRecord) {
+        let entry_id = EventId::new().as_uuid().to_string();
+        let occurred_at = canonical_clock_timestamp(self.clock.as_ref());
+        let record = record.with_identity(entry_id.clone(), occurred_at.clone());
+        let mut payload = serde_json::json!({
+            "kind": "audit",
+            "entry_id": entry_id,
+            "occurred_at": occurred_at,
+            "source": record.source(),
+            "code": record.code(),
+        });
+        if let Some(severity) = record.severity() {
+            payload
+                .as_object_mut()
+                .expect("audit payload is always an object")
+                .insert("severity".into(), serde_json::json!(severity.as_str()));
+        }
+        let entry = BusEntry {
+            payload: payload.to_string(),
+            channel_hint: 2,
+        };
+        let outcome = self
+            .bus
+            .push_audit_replay(entry.payload.clone(), entry.channel_hint);
+        if self.sink_enabled && !matches!(outcome, super::bus::PushOutcome::Rejected) {
+            offer_persistence_to(
+                &self.delivery,
+                &self.persistence_queue_drops,
+                &self.persistence_outstanding,
+                &self.metrics,
+                PersistenceEntry::Audit(record),
+            );
+        }
     }
 }
 
@@ -313,31 +479,83 @@ struct ServiceLifecycleRecorder {
 
 impl LifecycleRecorder for ServiceLifecycleRecorder {
     fn record_terminal(&self, request_id: RequestId, outcome: TerminalOutcome) {
+        self.event_delivery
+            .metrics
+            .record(LoggingMetric::LifecycleTerminal {
+                outcome: logging_terminal_outcome(&outcome),
+            });
         let request_id_string = request_id.as_uuid().to_string();
-        if let Some(mut entry) = self.registry.get_active(&request_id_string) {
-            entry.state = outcome.as_str().into();
-            entry.terminal_at = Some(self.event_delivery.clock.now());
-            self.registry.move_to_recent(entry);
-        }
+        let terminal = self.registry.terminalize(
+            &request_id_string,
+            outcome.as_str(),
+            canonical_clock_timestamp(self.event_delivery.clock.as_ref()),
+        );
 
         if let Ok(payload) = serde_json::to_string(&terminal_lifecycle_event(&outcome)) {
-            self.event_delivery
-                .enqueue(request_id, ReplayChannel::Requests, payload);
+            let (summary_snapshots, terminal_summary) = terminal
+                .map(|(snapshots, summary)| (Some(snapshots), Some(summary)))
+                .unwrap_or((None, None));
+            self.event_delivery.enqueue_with_summary_snapshots(
+                request_id,
+                ReplayChannel::Requests,
+                payload,
+                summary_snapshots,
+                terminal_summary,
+            );
         }
+    }
+}
+
+fn logging_terminal_outcome(outcome: &TerminalOutcome) -> LoggingTerminalOutcome {
+    match outcome {
+        TerminalOutcome::Completed
+        | TerminalOutcome::CompletedWithStatus(_)
+        | TerminalOutcome::CompletedWithUsage { .. } => LoggingTerminalOutcome::Completed,
+        TerminalOutcome::Failed(_) | TerminalOutcome::FailedWithStatus { .. } => {
+            LoggingTerminalOutcome::Failed
+        }
+        TerminalOutcome::Rejected(_) | TerminalOutcome::RejectedWithStatus { .. } => {
+            LoggingTerminalOutcome::Rejected
+        }
+        TerminalOutcome::Cancelled(_) => LoggingTerminalOutcome::Cancelled,
+        TerminalOutcome::Dropped(_) => LoggingTerminalOutcome::Dropped,
     }
 }
 
 fn terminal_lifecycle_event(outcome: &TerminalOutcome) -> LifecycleEvent {
     match outcome {
-        TerminalOutcome::Completed => LifecycleEvent::Completed {
-            status_code: None,
+        TerminalOutcome::Completed
+        | TerminalOutcome::CompletedWithStatus(_)
+        | TerminalOutcome::CompletedWithUsage { .. } => LifecycleEvent::Completed {
+            status_code: match outcome {
+                TerminalOutcome::CompletedWithStatus(status) => Some(*status),
+                TerminalOutcome::CompletedWithUsage { status_code, .. } => Some(*status_code),
+                _ => None,
+            },
             duration_ms: None,
+            usage: match outcome {
+                TerminalOutcome::CompletedWithUsage { usage, .. } => Some(*usage),
+                _ => None,
+            },
         },
         TerminalOutcome::Failed(error) => LifecycleEvent::Failed {
             error: error.clone(),
+            status_code: None,
+        },
+        TerminalOutcome::FailedWithStatus { error, status_code } => LifecycleEvent::Failed {
+            error: error.clone(),
+            status_code: Some(*status_code),
         },
         TerminalOutcome::Rejected(reason) => LifecycleEvent::Rejected {
             reason: reason.clone(),
+            status_code: None,
+        },
+        TerminalOutcome::RejectedWithStatus {
+            reason,
+            status_code,
+        } => LifecycleEvent::Rejected {
+            reason: reason.clone(),
+            status_code: Some(*status_code),
         },
         TerminalOutcome::Cancelled(reason) => LifecycleEvent::Cancelled {
             reason: reason.clone(),
@@ -362,9 +580,13 @@ fn enqueue_event_with_delivery(
     request_id: RequestId,
     channel: ReplayChannel,
     payload_json: String,
+    occurred_at: Option<String>,
+    summary_snapshots: Option<RequestSummaryEventSnapshots>,
+    terminal_summary: Option<RequestSummaryEntry>,
 ) -> EventId {
     let sequence = event_delivery.sequences.next(channel);
-    let occurred_at = event_delivery.clock.now();
+    let occurred_at =
+        occurred_at.unwrap_or_else(|| canonical_clock_timestamp(event_delivery.clock.as_ref()));
     let event_id = EventId::new();
     let canonical_envelope = serde_json::from_str::<LifecycleEvent>(&payload_json)
         .ok()
@@ -390,7 +612,7 @@ fn enqueue_event_with_delivery(
         "occurred_at": occurred_at,
         "payload": payload_json,
     });
-    if let Some(envelope) = canonical_envelope {
+    if let Some(ref envelope) = canonical_envelope {
         let entry_object = entry
             .as_object_mut()
             .expect("logging bus entry is always a JSON object");
@@ -406,6 +628,23 @@ fn enqueue_event_with_delivery(
             ),
         );
     }
+    let request_id_string = request_id.as_uuid().to_string();
+    let summary_snapshots = summary_snapshots.or_else(|| {
+        event_delivery
+            .registry
+            .get_active(&request_id_string)
+            .or_else(|| event_delivery.registry.get_recent(&request_id_string))
+            .map(|entry| RequestSummaryEventSnapshots::current(&entry))
+    });
+    if let Some(summary_snapshots) = summary_snapshots {
+        entry
+            .as_object_mut()
+            .expect("logging bus entry is always a JSON object")
+            .insert(
+                "request_summary_snapshots".into(),
+                serde_json::json!(summary_snapshots),
+            );
+    }
     let entry_payload = entry.to_string();
     let channel_hint = match channel {
         ReplayChannel::Requests => 0,
@@ -416,15 +655,22 @@ fn enqueue_event_with_delivery(
         payload: entry_payload,
         channel_hint,
     };
-    let outcome = event_delivery
-        .bus
-        .push_with_hint(entry.payload.clone(), entry.channel_hint);
+    let outcome = event_delivery.bus.push_replay(
+        entry.payload.clone(),
+        entry.channel_hint,
+        ReplaySequence::next(channel, sequence),
+    );
+    emit_accepted_canonical_event(outcome, canonical_envelope.as_ref());
     if event_delivery.sink_enabled && !matches!(outcome, super::bus::PushOutcome::Rejected) {
         offer_persistence_to(
             &event_delivery.delivery,
             &event_delivery.persistence_queue_drops,
             &event_delivery.persistence_outstanding,
-            entry,
+            &event_delivery.metrics,
+            match terminal_summary {
+                Some(summary) => PersistenceEntry::Terminal { entry, summary },
+                None => PersistenceEntry::Bus(entry),
+            },
         );
     }
     event_id
@@ -434,6 +680,7 @@ fn offer_summary_persistence(
     delivery: &Mutex<DeliveryMode>,
     persistence_queue_drops: &AtomicU64,
     persistence_outstanding: &AtomicU64,
+    metrics: &LoggingMetrics,
     summary: RequestSummaryEntry,
 ) {
     let payload = match serde_json::to_string(&serde_json::json!({
@@ -442,7 +689,7 @@ fn offer_summary_persistence(
     })) {
         Ok(payload) => payload,
         Err(_) => {
-            persistence_queue_drops.fetch_add(1, Ordering::Relaxed);
+            record_persistence_queue_drop(persistence_queue_drops, metrics);
             return;
         }
     };
@@ -450,10 +697,11 @@ fn offer_summary_persistence(
         delivery,
         persistence_queue_drops,
         persistence_outstanding,
-        BusEntry {
+        metrics,
+        PersistenceEntry::Bus(BusEntry {
             payload,
             channel_hint: 0,
-        },
+        }),
     );
 }
 
@@ -461,7 +709,8 @@ fn offer_persistence_to(
     delivery: &Mutex<DeliveryMode>,
     persistence_queue_drops: &AtomicU64,
     persistence_outstanding: &AtomicU64,
-    entry: BusEntry,
+    metrics: &LoggingMetrics,
+    entry: PersistenceEntry,
 ) {
     let mut delivery = match delivery.lock() {
         Ok(delivery) => delivery,
@@ -471,37 +720,147 @@ fn offer_persistence_to(
         DeliveryMode::Manual { pending, capacity } => {
             if pending.len() >= *capacity {
                 pending.pop_front();
-                persistence_queue_drops.fetch_add(1, Ordering::Relaxed);
-                decrement_outstanding(persistence_outstanding);
+                record_persistence_queue_drop(persistence_queue_drops, metrics);
+                decrement_outstanding(persistence_outstanding, metrics);
             }
             pending.push_back(entry);
-            persistence_outstanding.fetch_add(1, Ordering::Relaxed);
+            increment_outstanding(persistence_outstanding, metrics);
         }
-        DeliveryMode::Worker(tx) => {
-            if tx.try_send(WorkerMessage::PersistBusEntry(entry)).is_ok() {
-                persistence_outstanding.fetch_add(1, Ordering::Relaxed);
-            } else {
-                persistence_queue_drops.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        DeliveryMode::Worker(senders) => offer_worker_persistence(
+            senders,
+            persistence_queue_drops,
+            persistence_outstanding,
+            metrics,
+            entry,
+        ),
         DeliveryMode::ManualPumping(_) | DeliveryMode::Stopping | DeliveryMode::Stopped => {
-            persistence_queue_drops.fetch_add(1, Ordering::Relaxed);
+            record_persistence_queue_drop(persistence_queue_drops, metrics);
         }
     }
 }
 
-fn decrement_outstanding(outstanding: &AtomicU64) {
+fn offer_worker_persistence(
+    senders: &WorkerSenders,
+    persistence_queue_drops: &AtomicU64,
+    persistence_outstanding: &AtomicU64,
+    metrics: &LoggingMetrics,
+    entry: PersistenceEntry,
+) {
+    let accepted = if entry.is_terminal() {
+        senders.terminal.try_send(entry).is_ok()
+    } else {
+        senders
+            .normal
+            .try_send(WorkerMessage::Persist(Box::new(entry)))
+            .is_ok()
+    };
+    if accepted {
+        increment_outstanding(persistence_outstanding, metrics);
+    } else {
+        record_persistence_queue_drop(persistence_queue_drops, metrics);
+    }
+}
+
+fn record_persistence_queue_drop(counter: &AtomicU64, metrics: &LoggingMetrics) {
+    counter.fetch_add(1, Ordering::Relaxed);
+    metrics.record(LoggingMetric::PersistenceQueueDropped { count: 1 });
+}
+
+fn increment_persistence_failure(counter: &AtomicU64, metrics: &LoggingMetrics) {
+    counter.fetch_add(1, Ordering::Relaxed);
+    metrics.record(LoggingMetric::PersistenceFailure { count: 1 });
+}
+
+fn increment_outstanding(outstanding: &AtomicU64, metrics: &LoggingMetrics) {
+    let current = outstanding
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    metrics.record(LoggingMetric::PersistenceOutstanding { current });
+}
+
+fn decrement_outstanding(outstanding: &AtomicU64, metrics: &LoggingMetrics) {
     let _ = outstanding.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
         current.checked_sub(1)
+    });
+    metrics.record(LoggingMetric::PersistenceOutstanding {
+        current: outstanding.load(Ordering::Acquire),
     });
 }
 
 const PERSISTENCE_FAILURE_AUDIT: &str = "logging persistence delivery failed";
+const PROXY_TARGET_CLASSES: &[&str] = &["local", "remote", "external", "none"];
+const PROXY_PROVIDER_LABELS: &[&str] = &[
+    "openai_frontend",
+    "management_api",
+    "local",
+    "remote",
+    "external",
+];
+const PROXY_ENGINE_LABELS: &[&str] = &[
+    "models",
+    "chat_completion",
+    "chat_completion_stream",
+    "completion",
+    "completion_stream",
+    "responses",
+    "responses_stream",
+    "local",
+    "remote",
+    "external",
+];
+const PROXY_ERROR_LABELS: &[&str] = &[
+    "timeout",
+    "unavailable",
+    "connection_failed",
+    "client_disconnected",
+    "cancelled",
+    "rejected",
+    "upstream_status",
+];
+
+pub(super) fn validate_proxy_record(record: &ProxyRecord) -> bool {
+    is_allowed_proxy_label(PROXY_TARGET_CLASSES, &record.target)
+        && record
+            .provider
+            .as_deref()
+            .is_none_or(|value| is_allowed_proxy_label(PROXY_PROVIDER_LABELS, value))
+        && record
+            .engine
+            .as_deref()
+            .is_none_or(|value| is_allowed_proxy_label(PROXY_ENGINE_LABELS, value))
+        && record
+            .error
+            .as_deref()
+            .is_none_or(|value| is_allowed_proxy_label(PROXY_ERROR_LABELS, value))
+}
+
+fn sanitize_proxy_record(mut record: ProxyRecord) -> Option<ProxyRecord> {
+    if !is_allowed_proxy_label(PROXY_TARGET_CLASSES, &record.target) {
+        return None;
+    }
+    record.provider = record
+        .provider
+        .filter(|value| is_allowed_proxy_label(PROXY_PROVIDER_LABELS, value));
+    record.engine = record
+        .engine
+        .filter(|value| is_allowed_proxy_label(PROXY_ENGINE_LABELS, value));
+    record.error = record
+        .error
+        .filter(|value| is_allowed_proxy_label(PROXY_ERROR_LABELS, value));
+    Some(record)
+}
+
+fn is_allowed_proxy_label(allowed: &[&str], value: &str) -> bool {
+    allowed.contains(&value)
+}
 
 /// A fallback audit is itself a canonical System event. Its sink failure is
 /// deliberately terminal for the fallback path; producing another fallback
 /// would create an unbounded self-logging loop.
-fn is_fallback_audit(entry: &BusEntry) -> bool {
+fn is_fallback_audit(entry: &PersistenceEntry) -> bool {
+    let (PersistenceEntry::Bus(entry) | PersistenceEntry::Terminal { entry, .. }) = entry else {
+        return false;
+    };
     serde_json::from_str::<serde_json::Value>(&entry.payload)
         .ok()
         .and_then(|record| record.get("canonical_envelope").cloned())
@@ -512,7 +871,7 @@ fn is_fallback_audit(entry: &BusEntry) -> bool {
 fn record_persistence_failure(
     writer: &FailOpenWriter,
     event_delivery: &EventDelivery,
-    entry: &BusEntry,
+    entry: &PersistenceEntry,
 ) {
     if is_fallback_audit(entry) {
         writer.record_fallback_suppressed();
@@ -532,6 +891,14 @@ fn record_persistence_failure(
 }
 
 impl LoggingService {
+    /// Return a logging-owned timestamp for bounded persistence metadata.
+    ///
+    /// Request-path callers reach this only through lifecycle owners, so an
+    /// unowned or disabled observer cannot manufacture a durable record.
+    pub(crate) fn proxy_record_timestamp(&self) -> String {
+        canonical_clock_timestamp(self.clock.as_ref())
+    }
+
     /// Create a new logging service with the given sink and clock. In production, `sink` is the real LogStore; in tests, it's a Vec-backed mock.
     pub fn new(config: ServiceConfig, sink: Arc<dyn PersistSink>, clock: Box<dyn Clock>) -> Self {
         let dynamic_limits = LoggingDynamicLimits {
@@ -551,6 +918,7 @@ impl LoggingService {
     ) -> Self {
         let bounded_limits = Self::bounded_dynamic_limits(&config, dynamic_limits);
         let bus = Arc::new(ReplayBus::new(bounded_limits.replay_capacity));
+        let metrics = bus.metrics();
         let sequences = SequenceGenerators::new();
         let registry = Arc::new(RequestRegistry::new(config.registry_config.clone()));
         let writer = Arc::new(FailOpenWriter::new());
@@ -565,6 +933,8 @@ impl LoggingService {
             registry: Arc::clone(&registry),
             event_delivery: EventDelivery {
                 bus: Arc::clone(&bus),
+                registry: Arc::clone(&registry),
+                metrics: metrics.clone(),
                 sequences: sequences.clone(),
                 summary_line_limit: config.summary_line_limit,
                 sink_enabled: true,
@@ -577,6 +947,7 @@ impl LoggingService {
 
         Self {
             bus,
+            metrics,
             sequences,
             registry,
             writer,
@@ -587,10 +958,13 @@ impl LoggingService {
             manual_abort_handle: Arc::new(Mutex::new(None)),
             delivery,
             spawned: Arc::new(AtomicBool::new(false)),
+            startable: AtomicBool::new(true),
             persistence_queue_drops,
             persistence_failures: Arc::new(AtomicU64::new(0)),
             persistence_outstanding,
             persistence_shutdown_losses: Arc::new(AtomicU64::new(0)),
+            artifact_memory_in_flight: Arc::new(AtomicU64::new(0)),
+            artifact_memory_budget_bytes: DEFAULT_ARTIFACT_MEMORY_BUDGET_BYTES,
             shutdown_drain_timeout: PERSISTENCE_SHUTDOWN_DRAIN_TIMEOUT,
             lifecycle_recorder,
             config,
@@ -602,6 +976,7 @@ impl LoggingService {
     pub fn new_disabled(config: ServiceConfig) -> Self {
         let replay_capacity = config.replay_capacity.min(config.event_buffer_size);
         let bus = Arc::new(ReplayBus::new(replay_capacity));
+        let metrics = bus.metrics();
         let sequences = SequenceGenerators::new();
         let registry = Arc::new(RequestRegistry::new(config.registry_config.clone()));
         let writer = Arc::new(FailOpenWriter::new());
@@ -616,6 +991,8 @@ impl LoggingService {
             registry: Arc::clone(&registry),
             event_delivery: EventDelivery {
                 bus: Arc::clone(&bus),
+                registry: Arc::clone(&registry),
+                metrics: metrics.clone(),
                 sequences: sequences.clone(),
                 summary_line_limit: config.summary_line_limit,
                 sink_enabled: false,
@@ -628,6 +1005,7 @@ impl LoggingService {
 
         Self {
             bus,
+            metrics,
             sequences,
             registry,
             writer,
@@ -638,10 +1016,13 @@ impl LoggingService {
             manual_abort_handle: Arc::new(Mutex::new(None)),
             delivery,
             spawned: Arc::new(AtomicBool::new(false)),
+            startable: AtomicBool::new(true),
             persistence_queue_drops,
             persistence_failures: Arc::new(AtomicU64::new(0)),
             persistence_outstanding,
             persistence_shutdown_losses: Arc::new(AtomicU64::new(0)),
+            artifact_memory_in_flight: Arc::new(AtomicU64::new(0)),
+            artifact_memory_budget_bytes: DEFAULT_ARTIFACT_MEMORY_BUDGET_BYTES,
             shutdown_drain_timeout: PERSISTENCE_SHUTDOWN_DRAIN_TIMEOUT,
             lifecycle_recorder,
             config,
@@ -657,6 +1038,29 @@ impl LoggingService {
     /// not start a cleanup worker.
     pub fn dynamic_limits(&self) -> LoggingDynamicLimits {
         self.dynamic_limits.snapshot()
+    }
+
+    /// Attach the optional process-local telemetry adapter. `None` keeps all
+    /// logging metric emissions disabled; attaching the adapter publishes the
+    /// current bounded persistence gauge without replaying historical data.
+    pub(crate) fn set_metrics_sink(&self, sink: Option<Arc<dyn LoggingMetricsSink>>) {
+        self.metrics.set_sink(sink);
+        self.metrics.record(LoggingMetric::PersistenceOutstanding {
+            current: self.persistence_outstanding.load(Ordering::Acquire),
+        });
+    }
+
+    pub(crate) fn metrics(&self) -> LoggingMetrics {
+        self.metrics.clone()
+    }
+
+    pub(crate) fn record_cleanup_outcome(&self, outcome: LoggingCleanupOutcome) {
+        self.metrics.record(LoggingMetric::Cleanup { outcome });
+    }
+
+    pub(crate) fn record_artifact_capture_status(&self, status: LoggingArtifactCaptureStatus) {
+        self.metrics
+            .record(LoggingMetric::ArtifactCapture { status });
     }
 
     /// Apply both dynamically supported logging limits to this running
@@ -680,6 +1084,15 @@ impl LoggingService {
         limits
     }
 
+    #[cfg(test)]
+    pub(crate) fn poison_worker_handle_for_test(&self) {
+        let _worker_handle = match self.worker_handle.lock() {
+            Ok(worker_handle) => worker_handle,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        panic!("poison worker handle lock for recovery coverage");
+    }
+
     /// Start the persistence worker task. Entries accepted before startup are
     /// transferred from the bounded manual delivery queue. Idempotent: calling
     /// twice is a no-op (second call returns false). Returns true for a new
@@ -689,6 +1102,9 @@ impl LoggingService {
             .transition_lock
             .lock()
             .expect("transition mutex poisoned");
+        if !self.startable.load(Ordering::Acquire) {
+            return false;
+        }
         // Prevent double-spawn.
         if self
             .spawned
@@ -701,20 +1117,37 @@ impl LoggingService {
         let sink_opt = self.sink.clone();
         let persistence_failures = Arc::clone(&self.persistence_failures);
         let persistence_outstanding = Arc::clone(&self.persistence_outstanding);
+        let metrics = self.metrics.clone();
         let writer = Arc::clone(&self.writer);
         let failure_delivery = self.event_delivery();
         // Tokio rejects a zero-capacity bounded channel. Direct library users
         // can construct ServiceConfig without going through host validation,
         // so retain fail-open behavior with the smallest valid worker queue.
         let persistence_queue_capacity = self.config.queue_capacity.max(1);
+        // At most the active and recent registry windows can contribute a
+        // distinct terminal transition before a healthy worker catches up.
+        // Keep that durable boundary separate from normal observational
+        // traffic so stream/proxy volume cannot evict terminal state.
+        let terminal_queue_capacity = self
+            .config
+            .registry_config
+            .max_active
+            .saturating_add(self.config.registry_config.max_recent)
+            .max(1);
 
         let (tx, mut rx) = mpsc::channel::<WorkerMessage>(persistence_queue_capacity);
+        let (terminal_tx, mut terminal_rx) =
+            mpsc::channel::<PersistenceEntry>(terminal_queue_capacity);
+        let senders = WorkerSenders {
+            normal: tx.clone(),
+            terminal: terminal_tx,
+        };
 
         // Switch delivery modes while holding one lock. An enqueue can therefore
         // hand an entry to either the manual queue or worker, never both.
         let pending = {
             let mut delivery = self.delivery.lock().expect("delivery mutex poisoned");
-            match std::mem::replace(&mut *delivery, DeliveryMode::Worker(tx.clone())) {
+            match std::mem::replace(&mut *delivery, DeliveryMode::Worker(senders.clone())) {
                 DeliveryMode::Manual { pending, .. } => pending,
                 DeliveryMode::Stopped => VecDeque::new(),
                 DeliveryMode::ManualPumping(_) | DeliveryMode::Stopping => {
@@ -722,8 +1155,8 @@ impl LoggingService {
                     self.spawned.store(false, Ordering::Release);
                     return false;
                 }
-                DeliveryMode::Worker(existing_tx) => {
-                    *delivery = DeliveryMode::Worker(existing_tx);
+                DeliveryMode::Worker(existing_senders) => {
+                    *delivery = DeliveryMode::Worker(existing_senders);
                     self.spawned.store(false, Ordering::Release);
                     return false;
                 }
@@ -731,24 +1164,42 @@ impl LoggingService {
         };
 
         for entry in pending {
-            if tx.try_send(WorkerMessage::PersistBusEntry(entry)).is_err() {
-                self.persistence_queue_drops.fetch_add(1, Ordering::Relaxed);
-                decrement_outstanding(&self.persistence_outstanding);
+            // Entries were already counted when accepted into the manual
+            // queue, so transfer them without adjusting outstanding totals.
+            let accepted = if entry.is_terminal() {
+                senders.terminal.try_send(entry).is_ok()
+            } else {
+                senders
+                    .normal
+                    .try_send(WorkerMessage::Persist(Box::new(entry)))
+                    .is_ok()
+            };
+            if !accepted {
+                record_persistence_queue_drop(&self.persistence_queue_drops, &self.metrics);
+                decrement_outstanding(&self.persistence_outstanding, &self.metrics);
             }
         }
 
         let task = tokio::spawn(async move {
-            while let Some(msg) = rx.recv().await {
+            loop {
+                let msg = tokio::select! {
+                    biased;
+                    Some(entry) = terminal_rx.recv() => Some(WorkerMessage::Persist(Box::new(entry))),
+                    message = rx.recv() => message,
+                };
+                let Some(msg) = msg else {
+                    break;
+                };
                 match msg {
-                    WorkerMessage::PersistBusEntry(entry) => {
+                    WorkerMessage::Persist(entry) => {
                         // Parse the bus entry and persist via sink.
                         if let Some(sink) = &sink_opt {
                             // Best-effort: failures are absorbed by fail-open writer.
-                            if Self::process_bus_entry(sink.as_ref(), &entry)
+                            if Self::process_persistence_entry(sink.as_ref(), &entry, &metrics)
                                 .await
                                 .is_err()
                             {
-                                persistence_failures.fetch_add(1, Ordering::Relaxed);
+                                increment_persistence_failure(&persistence_failures, &metrics);
                                 record_persistence_failure(
                                     writer.as_ref(),
                                     &failure_delivery,
@@ -756,7 +1207,7 @@ impl LoggingService {
                                 );
                             }
                         }
-                        decrement_outstanding(&persistence_outstanding);
+                        decrement_outstanding(&persistence_outstanding, &metrics);
                     }
                     WorkerMessage::Shutdown(ack) => {
                         let _ = ack.send(());
@@ -777,6 +1228,59 @@ impl LoggingService {
         true
     }
 
+    async fn process_persistence_entry(
+        sink: &dyn PersistSink,
+        entry: &PersistenceEntry,
+        metrics: &LoggingMetrics,
+    ) -> Result<(), String> {
+        match entry {
+            PersistenceEntry::Bus(entry) => Self::process_bus_entry(sink, entry).await,
+            PersistenceEntry::Terminal { entry, summary } => {
+                // The priority lane also carries the current terminal summary.
+                // Persist it before the event so a dropped admitted/metadata
+                // entry cannot violate the lifecycle foreign key or leave a
+                // durable active row behind.
+                sink.persist_summary(summary.clone()).await?;
+                Self::process_bus_entry(sink, entry).await
+            }
+            PersistenceEntry::Audit(record) => sink.persist_audit_entry(record.clone()).await,
+            PersistenceEntry::ProxyRecord(proxy_json) => {
+                sink.persist_proxy_record(proxy_json.clone()).await
+            }
+            PersistenceEntry::Artifact { entry, summary } => {
+                // Carrying the canonical summary makes the artifact FK robust
+                // even if earlier observational queue entries were evicted.
+                sink.persist_summary(summary.clone()).await?;
+                match sink.persist_artifact_capture(entry.clone()).await {
+                    Ok(ArtifactPersistenceStatus::Written) => {
+                        metrics.record(LoggingMetric::ArtifactCapture {
+                            status: LoggingArtifactCaptureStatus::Written,
+                        });
+                        Ok(())
+                    }
+                    Ok(ArtifactPersistenceStatus::Unavailable) => {
+                        metrics.record(LoggingMetric::ArtifactCapture {
+                            status: LoggingArtifactCaptureStatus::Disabled,
+                        });
+                        Ok(())
+                    }
+                    Ok(ArtifactPersistenceStatus::FailedUnavailable) => {
+                        metrics.record(LoggingMetric::ArtifactCapture {
+                            status: LoggingArtifactCaptureStatus::Failed,
+                        });
+                        Ok(())
+                    }
+                    Err(error) => {
+                        metrics.record(LoggingMetric::ArtifactCapture {
+                            status: LoggingArtifactCaptureStatus::Failed,
+                        });
+                        Err(error)
+                    }
+                }
+            }
+        }
+    }
+
     async fn process_bus_entry(sink: &dyn PersistSink, entry: &BusEntry) -> Result<(), String> {
         let record: serde_json::Value = serde_json::from_str(&entry.payload)
             .map_err(|e| format!("invalid bus entry JSON: {}", e))?;
@@ -792,6 +1296,10 @@ impl LoggingService {
             return sink.persist_summary(summary).await;
         }
 
+        if record.get("kind").and_then(serde_json::Value::as_str) == Some("audit") {
+            return Err("audit bus record reached lifecycle persistence path".to_string());
+        }
+
         if let Some(envelope_value) = record
             .get("canonical_envelope")
             .filter(|value| !value.is_null())
@@ -801,10 +1309,12 @@ impl LoggingService {
             if let LifecycleEvent::AuditError { .. } = envelope.event {
                 return sink
                     .persist_audit_entry(
-                        "error".into(),
-                        serde_json::to_string(&envelope).map_err(|error| {
-                            format!("serialize canonical audit envelope: {error}")
-                        })?,
+                        OperationalAuditRecord::builder("logging_service", "audit_error")
+                            .severity(OperationalAuditSeverity::Error)
+                            .build()
+                            .with_internal_detail(serde_json::to_string(&envelope).map_err(
+                                |error| format!("serialize canonical audit envelope: {error}"),
+                            )?),
                     )
                     .await;
             }
@@ -823,8 +1333,13 @@ impl LoggingService {
 
         // Entries which are not canonical lifecycle records are operational
         // audit records. They stay out of the lifecycle repositories.
-        sink.persist_audit_entry("info".into(), entry.payload.clone())
-            .await
+        sink.persist_audit_entry(
+            OperationalAuditRecord::builder("logging_service", "uncategorized_bus_record")
+                .severity(OperationalAuditSeverity::Info)
+                .build()
+                .with_internal_detail(entry.payload.clone()),
+        )
+        .await
     }
 
     /// Enqueue a lifecycle event for the given request. This is fail-open: if the bus is full, drop counters increment and Ok(()) returns — the caller should NOT block or retry. Returns `Ok(())` always (the writer absorbs failures).
@@ -835,13 +1350,54 @@ impl LoggingService {
         payload_json: String,
     ) -> Result<(), BusEnqueueError> {
         let event_delivery = self.event_delivery();
-        let _ = enqueue_event_with_delivery(&event_delivery, request_id, channel, payload_json);
+        let _ = enqueue_event_with_delivery(
+            &event_delivery,
+            request_id,
+            channel,
+            payload_json,
+            None,
+            None,
+            None,
+        );
+        Ok(())
+    }
+
+    /// Enqueue one bounded proxy attempt for durable persistence. It does not
+    /// publish a lifecycle event or transition the parent request, so proxy
+    /// observation cannot acquire duplicate terminal ownership.
+    pub fn enqueue_proxy_record(&self, record: ProxyRecord) -> Result<(), BusEnqueueError> {
+        if self.sink.is_none() {
+            return Ok(());
+        }
+
+        let Some(record) = sanitize_proxy_record(record) else {
+            record_persistence_queue_drop(&self.persistence_queue_drops, &self.metrics);
+            return Ok(());
+        };
+        let proxy_json = match serde_json::to_string(&record) {
+            Ok(proxy_json) => proxy_json,
+            Err(_) => {
+                record_persistence_queue_drop(&self.persistence_queue_drops, &self.metrics);
+                return Ok(());
+            }
+        };
+        {
+            offer_persistence_to(
+                &self.delivery,
+                &self.persistence_queue_drops,
+                &self.persistence_outstanding,
+                &self.metrics,
+                PersistenceEntry::ProxyRecord(proxy_json),
+            );
+        }
         Ok(())
     }
 
     fn event_delivery(&self) -> EventDelivery {
         EventDelivery {
             bus: Arc::clone(&self.bus),
+            registry: Arc::clone(&self.registry),
+            metrics: self.metrics.clone(),
             sequences: self.sequences.clone(),
             summary_line_limit: self.config.summary_line_limit,
             sink_enabled: self.sink.is_some(),
@@ -854,15 +1410,26 @@ impl LoggingService {
 
     /// Register a new request in the active registry and emit an admitted event on the Requests channel. Returns a LifecycleGuard for tracking terminal transitions.
     pub fn register_request(&self, request_id: RequestId) -> (LifecycleGuard, EventId) {
+        self.register_request_with_metadata(request_id, RequestSummaryMetadata::default())
+    }
+
+    /// Register a request with metadata available at its trusted ingress boundary.
+    pub(crate) fn register_request_with_metadata(
+        &self,
+        request_id: RequestId,
+        metadata: RequestSummaryMetadata,
+    ) -> (LifecycleGuard, EventId) {
         let guard =
             LifecycleGuard::for_request(request_id, Arc::downgrade(&self.lifecycle_recorder));
 
         // Register summary in active set.
+        let created_at = canonical_clock_timestamp(self.clock.as_ref());
         let summary = RequestSummaryEntry {
             request_id: request_id.as_uuid().to_string(),
             state: "active".into(),
-            created_at: self.clock.now(),
+            created_at: created_at.clone(),
             terminal_at: None,
+            metadata,
         };
         self.registry.register_active(summary.clone());
         if self.sink.is_some() {
@@ -870,6 +1437,7 @@ impl LoggingService {
                 &self.delivery,
                 &self.persistence_queue_drops,
                 &self.persistence_outstanding,
+                &self.metrics,
                 summary,
             );
         }
@@ -887,9 +1455,36 @@ impl LoggingService {
                 method: None,
             })
             .expect("LifecycleEvent serialization is infallible"),
+            Some(created_at),
+            None,
+            None,
         );
 
         (guard, event_id)
+    }
+
+    /// Merge newly available truthful metadata into the request projection.
+    /// Evicted or absent requests simply retain no update.
+    pub(crate) fn merge_request_metadata(
+        &self,
+        request_id: RequestId,
+        metadata: RequestSummaryMetadata,
+    ) {
+        let Some(summary) = self
+            .registry
+            .merge_metadata(&request_id.as_uuid().to_string(), metadata)
+        else {
+            return;
+        };
+        if self.sink.is_some() {
+            offer_summary_persistence(
+                &self.delivery,
+                &self.persistence_queue_drops,
+                &self.persistence_outstanding,
+                &self.metrics,
+                summary,
+            );
+        }
     }
 
     /// Record the beginning of a transport attempt under an existing request.
@@ -975,6 +1570,15 @@ impl LoggingService {
         })
     }
 
+    /// Write one bounded operational audit record through the same replay and
+    /// persistence hand-off as lifecycle records.
+    pub fn write_operational_audit(&self, record: OperationalAuditRecord) -> bool {
+        let event_delivery = self.event_delivery();
+        self.writer.try_record_error(move || {
+            event_delivery.enqueue_audit(record);
+        })
+    }
+
     /// Explicit no-worker pump for deterministic tests. It never drains the
     /// replay bus, and it is a no-op while a worker owns delivery. Returns the
     /// number of entries offered to the sink.
@@ -1009,6 +1613,7 @@ impl LoggingService {
             let abort_state = Arc::clone(&self.manual_abort_handle);
             let failures = Arc::clone(&self.persistence_failures);
             let outstanding = Arc::clone(&self.persistence_outstanding);
+            let metrics = self.metrics.clone();
             let writer = Arc::clone(&self.writer);
             let failure_delivery = self.event_delivery();
             let task_completion = Arc::clone(&completion);
@@ -1016,14 +1621,14 @@ impl LoggingService {
             let task = tokio::spawn(async move {
                 let count = entries.len();
                 for entry in entries {
-                    if Self::process_bus_entry(sink.as_ref(), &entry)
+                    if Self::process_persistence_entry(sink.as_ref(), &entry, &metrics)
                         .await
                         .is_err()
                     {
-                        failures.fetch_add(1, Ordering::Relaxed);
+                        increment_persistence_failure(&failures, &metrics);
                         record_persistence_failure(writer.as_ref(), &failure_delivery, &entry);
                     }
-                    decrement_outstanding(&outstanding);
+                    decrement_outstanding(&outstanding, &metrics);
                 }
                 task_completion.finish();
                 let mut abort = abort_state.lock().expect("manual abort mutex poisoned");
@@ -1085,6 +1690,23 @@ impl LoggingService {
         self.persistence_outstanding.load(Ordering::Relaxed)
     }
 
+    /// Snapshot the delivery owner's state for trusted-local diagnostics.
+    #[allow(dead_code)]
+    pub(crate) fn persistence_worker_state(&self) -> PersistenceWorkerState {
+        let delivery = self
+            .delivery
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &*delivery {
+            DeliveryMode::Manual { .. } => PersistenceWorkerState::NotStarted,
+            DeliveryMode::ManualPumping(_) | DeliveryMode::Worker(_) => {
+                PersistenceWorkerState::Running
+            }
+            DeliveryMode::Stopping => PersistenceWorkerState::Stopping,
+            DeliveryMode::Stopped => PersistenceWorkerState::Stopped,
+        }
+    }
+
     /// Get the bus for direct access (tests).
     #[allow(dead_code)]
     pub fn bus_ref(&self) -> Arc<ReplayBus> {
@@ -1115,7 +1737,7 @@ impl LoggingService {
     pub async fn shutdown(&self) -> bool {
         enum ShutdownOwner {
             Worker(WorkerHandle),
-            Manual(VecDeque<BusEntry>),
+            Manual(VecDeque<PersistenceEntry>),
             ManualPump(Arc<ManualPumpCompletion>, AbortHandle),
             Unavailable,
         }
@@ -1188,18 +1810,21 @@ impl LoggingService {
                 Some(sink) => {
                     let result = tokio::time::timeout(self.shutdown_drain_timeout, async {
                         for entry in entries {
-                            if Self::process_bus_entry(sink.as_ref(), &entry)
+                            if Self::process_persistence_entry(sink.as_ref(), &entry, &self.metrics)
                                 .await
                                 .is_err()
                             {
-                                self.persistence_failures.fetch_add(1, Ordering::Relaxed);
+                                increment_persistence_failure(
+                                    &self.persistence_failures,
+                                    &self.metrics,
+                                );
                                 record_persistence_failure(
                                     self.writer.as_ref(),
                                     &self.event_delivery(),
                                     &entry,
                                 );
                             }
-                            decrement_outstanding(&self.persistence_outstanding);
+                            decrement_outstanding(&self.persistence_outstanding, &self.metrics);
                         }
                     })
                     .await;
@@ -1225,6 +1850,12 @@ impl LoggingService {
             let lost = self.persistence_outstanding.swap(0, Ordering::AcqRel);
             self.persistence_shutdown_losses
                 .fetch_add(lost, Ordering::Relaxed);
+            if lost != 0 {
+                self.metrics
+                    .record(LoggingMetric::PersistenceShutdownLoss { count: lost });
+            }
+            self.metrics
+                .record(LoggingMetric::PersistenceOutstanding { current: 0 });
         }
         self.set_delivery_stopped();
         true
@@ -1238,6 +1869,20 @@ impl LoggingService {
     fn set_delivery_stopped(&self) {
         let mut delivery = self.delivery.lock().expect("delivery mutex poisoned");
         *delivery = DeliveryMode::Stopped;
+    }
+
+    /// Permanently prevent this concrete service from starting another worker.
+    ///
+    /// The owning [`LoggingRuntimeState`](super::runtime_state::LoggingRuntimeState)
+    /// calls this before it begins asynchronous cleanup. This narrow atomic
+    /// boundary makes an already-captured service handle safe while replacement
+    /// releases global locks and awaits bounded worker shutdown.
+    pub(crate) fn retire(&self) {
+        self.startable.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn is_startable(&self) -> bool {
+        self.startable.load(Ordering::Acquire)
     }
 
     #[cfg(test)]

@@ -67,12 +67,17 @@ impl CanonicalEnvelope {
             LifecycleEvent::Completed {
                 status_code,
                 duration_ms,
+                ..
             } => append_duration(
                 append_status("request completed".to_string(), status_code),
                 duration_ms,
             ),
-            LifecycleEvent::Failed { .. } => "request failed".to_string(),
-            LifecycleEvent::Rejected { .. } => "request rejected".to_string(),
+            LifecycleEvent::Failed { status_code, .. } => {
+                append_status("request failed".to_string(), status_code)
+            }
+            LifecycleEvent::Rejected { status_code, .. } => {
+                append_status("request rejected".to_string(), status_code)
+            }
             LifecycleEvent::Cancelled { .. } => "request cancelled".to_string(),
             LifecycleEvent::Dropped { .. } => "request dropped".to_string(),
         }
@@ -110,9 +115,8 @@ impl CanonicalEnvelope {
     /// content is never represented by canonical lifecycle events.
     pub fn presentation_token_count(&self) -> Option<u64> {
         match self.event {
-            LifecycleEvent::StreamChunk { tokens } | LifecycleEvent::StreamCompleted { tokens } => {
-                tokens
-            }
+            LifecycleEvent::StreamChunk { tokens }
+            | LifecycleEvent::StreamCompleted { tokens, .. } => tokens,
             LifecycleEvent::Admitted { .. }
             | LifecycleEvent::RouteSelected { .. }
             | LifecycleEvent::AttemptStarted { .. }

@@ -26,6 +26,7 @@ fn configured_summary_limit_bounds_the_safe_presentation_projection() {
             ReplayChannel::Requests,
             serde_json::to_string(&LifecycleEvent::Failed {
                 error: "Bearer secret-token-must-never-reach-presentation".into(),
+                status_code: None,
             })
             .expect("lifecycle event serializes"),
         )

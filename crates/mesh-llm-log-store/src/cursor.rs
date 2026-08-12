@@ -1,6 +1,7 @@
 //! Versioned opaque cursors for keyset pagination.
 
 use crate::error::LogStoreError;
+use crate::timestamps::canonical_cursor_timestamp;
 
 /// Cursor version tag (must be bumped when encoding changes).
 const CURSOR_VERSION: u8 = 1;
@@ -52,4 +53,14 @@ pub fn decode_cursor(cursor: &str) -> Result<(String, String), LogStoreError> {
     }
 
     Ok((pipe_parts[0].to_string(), pipe_parts[1].to_string()))
+}
+
+/// Decode an opaque cursor and canonicalize its timestamp ordering key.
+///
+/// The public wire format remains unchanged. Canonicalization happens only
+/// after decoding so cursors issued with whole-second, fractional, or offset
+/// RFC 3339 payloads all resume against the same durable instant.
+pub(crate) fn decode_ordering_cursor(cursor: &str) -> Result<(String, String), LogStoreError> {
+    let (timestamp, id) = decode_cursor(cursor)?;
+    Ok((canonical_cursor_timestamp(&timestamp)?, id))
 }

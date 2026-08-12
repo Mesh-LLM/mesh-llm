@@ -14,6 +14,7 @@ use crate::{
     chat::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse},
     completions::{CompletionChunk, CompletionRequest, CompletionResponse},
     errors::OpenAiError,
+    lifecycle::RequestId,
     models::ModelObject,
 };
 
@@ -64,11 +65,25 @@ impl CancellationToken {
 #[derive(Debug, Clone, Default)]
 pub struct OpenAiRequestContext {
     cancellation: CancellationToken,
+    request_id: Option<RequestId>,
 }
 
 impl OpenAiRequestContext {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a backend context correlated to a frontend request identifier.
+    pub fn with_request_id(request_id: RequestId) -> Self {
+        Self {
+            cancellation: CancellationToken::new(),
+            request_id: Some(request_id),
+        }
+    }
+
+    /// Return the frontend request identifier when the caller supplied one.
+    pub fn request_id(&self) -> Option<RequestId> {
+        self.request_id
     }
 
     pub fn cancellation_token(&self) -> CancellationToken {

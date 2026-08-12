@@ -5,13 +5,15 @@ use crate::artifact_privacy::{
     ArtifactPrivacy, PlatformArtifactPrivacy, create_private_directory_tree,
 };
 use crate::error::LogStoreError;
+use crate::maintenance::MaintenanceExecutionControl;
 use crate::repositories::CascadeArtifactPointer;
 use crate::store::{Clock, LogStore};
+use crate::timestamps::canonical_persisted_timestamp;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Redaction hook applied before every artifact write.
 ///
@@ -20,6 +22,9 @@ use std::sync::Arc;
 /// boundary, so production callers cannot accidentally persist bytes without
 /// passing them through their canonical redactor.
 pub type ArtifactRedactor = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
+
+#[cfg(test)]
+type ArtifactFileRemover = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
 
 /// Receipt returned after a successful artifact write (no filesystem paths exposed).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +68,49 @@ pub struct ArtifactFileStore {
     store: Arc<LogStore>, // shared DB connection (guarded by Mutex inside)
     redact: ArtifactRedactor,
     privacy: Arc<dyn ArtifactPrivacy>,
+    maintenance_lock: Mutex<()>,
+    #[cfg(test)]
+    remove_file_for_test: ArtifactFileRemover,
+}
+
+/// Stable, path-free classification for a failed maintenance file removal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CascadeArtifactDeleteFailure {
+    Io,
+    UnsafePath,
+}
+
+/// One transaction-selected artifact deletion outcome. This remains internal
+/// to the maintenance layer so raw filesystem paths never become API data.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CascadeArtifactDeleteResult {
+    Removed(CascadeArtifactPointer),
+    Missing(CascadeArtifactPointer),
+    Failed {
+        pointer: CascadeArtifactPointer,
+        class: CascadeArtifactDeleteFailure,
+    },
+}
+
+impl CascadeArtifactDeleteResult {
+    pub(crate) const fn succeeded(&self) -> bool {
+        matches!(self, Self::Removed(_) | Self::Missing(_))
+    }
+
+    pub(crate) fn pointer(&self) -> &CascadeArtifactPointer {
+        match self {
+            Self::Removed(pointer) | Self::Missing(pointer) | Self::Failed { pointer, .. } => {
+                pointer
+            }
+        }
+    }
+
+    pub(crate) const fn failure_class(&self) -> Option<CascadeArtifactDeleteFailure> {
+        match self {
+            Self::Failed { class, .. } => Some(*class),
+            Self::Removed(_) | Self::Missing(_) => None,
+        }
+    }
 }
 
 // ─── Path helpers ──────────────────────
@@ -231,6 +279,9 @@ impl ArtifactFileStore {
             store,
             redact,
             privacy,
+            maintenance_lock: Mutex::new(()),
+            #[cfg(test)]
+            remove_file_for_test: Arc::new(|path: &Path| fs::remove_file(path)),
         };
         s.recover_startup();
         Ok(s)
@@ -250,6 +301,17 @@ impl ArtifactFileStore {
             Arc::new(|content| content.to_vec()),
             privacy,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_remove_file_for_test(&mut self, remove_file: ArtifactFileRemover) {
+        self.remove_file_for_test = remove_file;
+    }
+
+    pub(crate) fn maintenance_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.maintenance_lock
+            .lock()
+            .expect("maintenance mutex poisoned")
     }
 
     // ─── Write ──────────────
@@ -274,6 +336,7 @@ impl ArtifactFileStore {
         // Validate IDs.
         sanitize_segment(artifact_id)?;
         sanitize_segment(request_id)?;
+        let occurred_at = canonical_persisted_timestamp(occurred_at)?;
 
         // Check for existing pointer before any disk work.
         let exists: bool = self
@@ -516,12 +579,10 @@ impl ArtifactFileStore {
         let _ = safe_metadata(&path)?;
 
         // Remove the backing file before its durable pointer. A failed
-        // filesystem deletion must leave the pointer intact so the operator
-        // can retry rather than silently orphaning retained content.
+        // filesystem deletion leaves the pointer available for a retry.
         if safe_metadata(&path)?.is_some() {
             fs::remove_file(&path).map_err(LogStoreError::IoError)?;
         }
-
         self.store.delete_artifact_pointer_row(artifact_id)?;
 
         Ok(())
@@ -681,6 +742,9 @@ impl ArtifactFileStore {
                 Ok(page) if page.items.is_empty() => break,
                 Ok(page) => {
                     for row in &page.items {
+                        if row.unavailable_reason.is_some() {
+                            continue;
+                        }
                         let path = artifact_path(&self.root, &row.request_id, &row.artifact_id);
                         if let Ok(p) = path
                             && let Ok(None) = safe_metadata(&p)
@@ -703,10 +767,8 @@ impl ArtifactFileStore {
         }
     }
 
-    /// Delete files named by pointer ownership retained during cascade cleanup.
-    ///
-    /// Callers must surface this error and retry failed cleanup; ignoring it
-    /// would silently leave untracked retained content on disk.
+    /// Delete files named by durable post-commit work and acknowledge each
+    /// queue row only after removal or missing-file reconciliation succeeds.
     pub fn delete_artifact_files(
         &self,
         pointers: &[CascadeArtifactPointer],
@@ -722,7 +784,6 @@ impl ArtifactFileStore {
             }
 
             self.store.acknowledge_artifact_deletion(pointer)?;
-
             if let Some(parent) = path.parent() {
                 clean_empty_dir_up(parent, &self.root).map_err(LogStoreError::IoError)?;
             }
@@ -730,6 +791,70 @@ impl ArtifactFileStore {
 
         // Also check request dirs are empty after deletion.
         self.cleanup_empty_request_dirs()
+    }
+
+    /// Remove transaction-selected files and return one typed outcome per
+    /// pointer. Failed entries retain their database pointers for a later
+    /// same-operation retry; neither this result nor its failure class carries
+    /// a filesystem path. Cancellation is checked around each potentially
+    /// blocking removal so a timed-out operation never starts later files or
+    /// reaches its durable reconciliation phase.
+    pub(crate) fn delete_artifact_files_for_maintenance(
+        &self,
+        pointers: &[CascadeArtifactPointer],
+        control: &dyn MaintenanceExecutionControl,
+    ) -> Result<Vec<CascadeArtifactDeleteResult>, LogStoreError> {
+        let mut results = Vec::with_capacity(pointers.len());
+        for pointer in pointers {
+            ensure_maintenance_active(control)?;
+            let result = match artifact_path(&self.root, &pointer.request_id, &pointer.artifact_id)
+            {
+                Ok(path) => match safe_metadata(&path) {
+                    Ok(None) => CascadeArtifactDeleteResult::Missing(pointer.clone()),
+                    Ok(Some(metadata)) if metadata.is_file() => {
+                        match self.remove_file_for_maintenance(&path) {
+                            Ok(()) => CascadeArtifactDeleteResult::Removed(pointer.clone()),
+                            Err(_) => CascadeArtifactDeleteResult::Failed {
+                                pointer: pointer.clone(),
+                                class: CascadeArtifactDeleteFailure::Io,
+                            },
+                        }
+                    }
+                    Ok(Some(_)) | Err(LogStoreError::PathUnsafe { .. }) => {
+                        CascadeArtifactDeleteResult::Failed {
+                            pointer: pointer.clone(),
+                            class: CascadeArtifactDeleteFailure::UnsafePath,
+                        }
+                    }
+                    Err(_) => CascadeArtifactDeleteResult::Failed {
+                        pointer: pointer.clone(),
+                        class: CascadeArtifactDeleteFailure::Io,
+                    },
+                },
+                Err(LogStoreError::PathUnsafe { .. }) => CascadeArtifactDeleteResult::Failed {
+                    pointer: pointer.clone(),
+                    class: CascadeArtifactDeleteFailure::UnsafePath,
+                },
+                Err(_) => CascadeArtifactDeleteResult::Failed {
+                    pointer: pointer.clone(),
+                    class: CascadeArtifactDeleteFailure::Io,
+                },
+            };
+            ensure_maintenance_active(control)?;
+            results.push(result);
+        }
+        Ok(results)
+    }
+
+    fn remove_file_for_maintenance(&self, path: &Path) -> io::Result<()> {
+        #[cfg(test)]
+        {
+            (self.remove_file_for_test)(path)
+        }
+        #[cfg(not(test))]
+        {
+            fs::remove_file(path)
+        }
     }
 
     fn cleanup_empty_request_dirs(&self) -> Result<(), LogStoreError> {
@@ -778,9 +903,18 @@ impl ArtifactFileStore {
     }
 
     /// Get the LogStore reference (for test access).
-    #[cfg(test)]
-    pub fn store_ref(&self) -> &LogStore {
+    pub(crate) fn store_ref(&self) -> &LogStore {
         self.store.as_ref()
+    }
+}
+
+fn ensure_maintenance_active(
+    control: &dyn MaintenanceExecutionControl,
+) -> Result<(), LogStoreError> {
+    if control.is_cancelled() {
+        Err(LogStoreError::MaintenanceExecutionCancelled)
+    } else {
+        Ok(())
     }
 }
 

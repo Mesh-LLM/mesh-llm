@@ -5,11 +5,12 @@ use super::{
     ModelTargetReconciliationCapacityState, ModelTargetReconciliationInput,
     ModelTargetReconciliationPolicy, ModelTargetReconciliationState, RunAutoRuntimeLoopContext,
     RunAutoRuntimeState, RuntimeCapacityReservation, RuntimeEvent, RuntimeInstanceRegistry,
-    RuntimeOptions, RuntimeUnloadCandidate, RuntimeUnloadOwner, ShutdownRuntimeLoadedModelsContext,
-    StartupModelSpec, StartupReadyReporter, add_runtime_local_target, add_serving_assignment,
-    find_remote_catalog_model_exact_blocking, local_process_payload, next_runtime_instance_id,
-    plan_model_target_reconciliation, publish_runtime_llama_slots,
-    publish_runtime_llama_unavailable, refresh_dashboard_context_usage, register_runtime_instance,
+    RuntimeOperationalEvent, RuntimeOptions, RuntimeUnloadCandidate, RuntimeUnloadOwner,
+    ShutdownRuntimeLoadedModelsContext, StartupModelSpec, StartupReadyReporter,
+    add_runtime_local_target, add_serving_assignment, find_remote_catalog_model_exact_blocking,
+    local_process_payload, next_runtime_instance_id, plan_model_target_reconciliation,
+    publish_runtime_llama_slots, publish_runtime_llama_unavailable,
+    record_runtime_operational_event, refresh_dashboard_context_usage, register_runtime_instance,
     remove_dashboard_context_usage, remove_dashboard_process, remove_runtime_local_target,
     remove_serving_assignment, reserve_runtime_capacity_for_model, resolve_model,
     runtime_model_ctx_size_override, runtime_model_planning_bytes,
@@ -304,6 +305,7 @@ pub(super) async fn shutdown_runtime_loaded_models(
         let _ = emit_event(OutputEvent::ModelUnloaded {
             model: name.clone(),
         });
+        record_runtime_operational_event(RuntimeOperationalEvent::ModelUnloaded);
         upsert_dashboard_process(dashboard_processes, stopped_payload.clone()).await;
         if let Some(cs) = console_state {
             cs.upsert_local_process(stopped_payload).await;
@@ -333,6 +335,7 @@ pub(super) async fn shutdown_runtime_managed_models(
         let _ = emit_event(OutputEvent::ModelUnloaded {
             model: controller.model_name,
         });
+        record_runtime_operational_event(RuntimeOperationalEvent::ModelUnloaded);
     }
 }
 

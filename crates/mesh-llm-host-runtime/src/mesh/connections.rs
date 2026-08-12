@@ -608,6 +608,36 @@ pub(crate) fn control_endpoint_addr(
     addr
 }
 
+fn control_alpn_is_valid(alpn: &[u8], record: impl FnOnce(MeshOperationalEvent)) -> bool {
+    if alpn == ALPN_CONTROL_V1 {
+        return true;
+    }
+    record(MeshOperationalEvent::ControlAlpnRejected);
+    false
+}
+
+#[cfg(test)]
+mod control_alpn_tests {
+    use super::control_alpn_is_valid;
+    use crate::logging::{LoggingService, ServiceConfig};
+    use crate::mesh::operational_logging::record_mesh_operational_event_with_service;
+
+    #[test]
+    fn invalid_control_alpn_emits_exactly_one_rejection_audit() {
+        let service = LoggingService::new_disabled(ServiceConfig::default());
+
+        assert!(!control_alpn_is_valid(b"invalid-control-alpn", |event| {
+            record_mesh_operational_event_with_service(&service, event);
+        }));
+
+        let audits = service.bus_ref().drain();
+        assert_eq!(audits.len(), 1);
+        let audit: serde_json::Value =
+            serde_json::from_str(&audits[0].payload).expect("audit payload");
+        assert_eq!(audit["code"], "mesh_control_alpn_rejected");
+    }
+}
+
 impl Node {
     /// Open an HTTP tunnel bi-stream to a peer (tagged STREAM_TUNNEL_HTTP).
     /// If no connection exists, tries to connect on-demand (for passive nodes
@@ -655,6 +685,7 @@ impl Node {
             let node = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = node.handle_incoming(incoming).await {
+                    record_mesh_operational_event(MeshOperationalEvent::QuicHandlerFailed);
                     tracing::warn!("Incoming connection error: {e}");
                 }
             });
@@ -680,6 +711,7 @@ impl Node {
                     let node = self.clone();
                     tokio::spawn(Box::pin(async move {
                         if let Err(error) = node.handle_control_incoming(incoming).await {
+                            record_mesh_operational_event(MeshOperationalEvent::ControlHandlerFailed);
                             tracing::debug!("Control-plane incoming connection error: {error}");
                         }
                     }));
@@ -751,6 +783,7 @@ impl Node {
         if self.handle_stage_alpn(&alpn, conn.clone(), remote).await {
             return Ok(());
         }
+        record_mesh_operational_event(MeshOperationalEvent::QuicInboundAccepted);
         tracing::info!("Inbound connection from {}", remote.fmt_short());
 
         // Store connection for stream dispatch (tunneling, route requests, etc.)
@@ -803,13 +836,21 @@ impl Node {
     ) -> Result<()> {
         let mut accepting = incoming.accept()?;
         let alpn = accepting.alpn().await?;
-        anyhow::ensure!(
-            alpn.as_slice() == ALPN_CONTROL_V1,
-            "unexpected control-plane ALPN {:?}",
-            String::from_utf8_lossy(&alpn)
-        );
+        if !control_alpn_is_valid(&alpn, record_mesh_operational_event) {
+            tracing::debug!(
+                alpn = ?String::from_utf8_lossy(&alpn),
+                "Rejected unexpected control-plane ALPN"
+            );
+            return Ok(());
+        }
         let conn = accepting.await?;
         let remote = conn.remote_id();
+        record_mesh_operational_event(MeshOperationalEvent::ControlConnectionAccepted);
+        self.dispatch_control_streams(conn, remote).await;
+        Ok(())
+    }
+
+    async fn dispatch_control_streams(&self, conn: Connection, remote: EndpointId) {
         let permits = control_stream_semaphore();
         loop {
             let permit = match permits.clone().acquire_owned().await {
@@ -840,7 +881,6 @@ impl Node {
                 }
             }));
         }
-        Ok(())
     }
 }
 impl Node {

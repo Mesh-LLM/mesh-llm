@@ -1,10 +1,8 @@
-use std::sync::Arc;
+use super::*;
 
-use crate::error::LogStoreError;
-use crate::migrations::CURRENT_VERSION;
-use crate::{Clock as ClockTrait, LogStore, RealClock as SystemClock};
-
-use super::store_setup::{TestClock, open_store};
+// ════════════════════════════════════
+//  MIGRATION TESTS
+// ════════════════════════════════════
 
 #[test]
 fn fresh_db_migrates_to_latest() {
@@ -13,13 +11,13 @@ fn fresh_db_migrates_to_latest() {
 }
 
 #[test]
-fn system_clock_uses_fixed_width_milliseconds() {
+fn system_clock_uses_fixed_width_nanoseconds() {
     let timestamp = SystemClock.now();
 
-    assert_eq!(timestamp.len(), 24);
+    assert_eq!(timestamp.len(), 30);
     assert_eq!(&timestamp[19..20], ".");
-    assert_eq!(&timestamp[23..24], "Z");
-    assert!(timestamp[20..23].bytes().all(|byte| byte.is_ascii_digit()));
+    assert_eq!(&timestamp[29..30], "Z");
+    assert!(timestamp[20..29].bytes().all(|byte| byte.is_ascii_digit()));
 }
 
 #[cfg(unix)]
@@ -143,6 +141,7 @@ fn reopen_preserves_data_and_skips_migrations() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let clock: Arc<dyn ClockTrait> = Arc::new(TestClock::default());
 
+    // Insert data.
     let store1 = LogStore::open(tmp.path(), clock.clone()).expect("open v1");
     store1
         .insert_summary(
@@ -159,6 +158,7 @@ fn reopen_preserves_data_and_skips_migrations() {
         .unwrap();
     drop(store1);
 
+    // Reopen at same path — migrations should be skipped, data preserved.
     let (store2, _, _tmp) = {
         let s = LogStore::reopen_at(tmp.path(), clock.clone()).expect("reopen");
         (s, clock.clone(), tmp)
@@ -184,9 +184,14 @@ fn migrations_are_idempotent_on_reopen() {
     }
 }
 
+// ════════════════════════════════════
+//  TERMINAL EVENT TRANSACTION TESTS
+// ════════════════════════════════════
+
 #[test]
 fn terminal_event_and_summary_are_one_transaction() {
     let (store, clock, _tmp) = open_store();
+
     store
         .insert_summary(
             "txn-s1",
@@ -200,12 +205,15 @@ fn terminal_event_and_summary_are_one_transaction() {
             None,
         )
         .unwrap();
+
+    let payload = r#"{"type":"completed","status_code":200}"#;
     store
         .write_terminal_event(
             "txn-s1",
             "evt-1",
-            r#"{"type":"completed","status_code":200}"#,
+            payload,
             "completed",
+            Some(200),
             &clock.now(),
         )
         .expect("write terminal succeeds");
@@ -215,11 +223,13 @@ fn terminal_event_and_summary_are_one_transaction() {
         .unwrap()
         .expect("summary exists");
     assert_eq!(row.state, "completed");
+    assert_eq!(row.status_code, Some(200));
 }
 
 #[test]
 fn duplicate_terminal_write_returns_typed_conflict() {
     let (store, clock, _tmp) = open_store();
+
     store
         .insert_summary(
             "dup-s1",
@@ -233,12 +243,15 @@ fn duplicate_terminal_write_returns_typed_conflict() {
             None,
         )
         .unwrap();
+
+    let payload1 = r#"{"type":"completed","status_code":200}"#;
     store
         .write_terminal_event(
             "dup-s1",
             "evt-1",
-            r#"{"type":"completed","status_code":200}"#,
+            payload1,
             "completed",
+            Some(200),
             &clock.now(),
         )
         .expect("first write succeeds");
@@ -249,6 +262,7 @@ fn duplicate_terminal_write_returns_typed_conflict() {
             "evt-2",
             r#"{"type":"failed","error":"boom"}"#,
             "failed",
+            None,
             &clock.now(),
         )
         .unwrap_err();
@@ -256,8 +270,101 @@ fn duplicate_terminal_write_returns_typed_conflict() {
 }
 
 #[test]
+fn duplicate_terminal_error_keeps_payload_out_of_the_error() {
+    let (store, clock, _tmp) = open_store();
+    let secret = "supersecret-terminal-payload";
+    store
+        .insert_summary(
+            "duplicate-safe",
+            None,
+            None,
+            None,
+            None,
+            &clock.now(),
+            None,
+            None,
+            None,
+        )
+        .expect("insert summary");
+    store
+        .write_terminal_event(
+            "duplicate-safe",
+            "first-terminal",
+            r#"{"type":"completed"}"#,
+            "completed",
+            None,
+            &clock.now(),
+        )
+        .expect("first terminal");
+
+    let error = store
+        .write_terminal_event(
+            "duplicate-safe",
+            "second-terminal",
+            &format!(r#"{{"type":"failed","error":"{secret}"}}"#),
+            "failed",
+            None,
+            &clock.now(),
+        )
+        .expect_err("duplicate terminal should fail");
+
+    assert!(matches!(
+        error,
+        LogStoreError::DuplicateTerminalEvent { ref event_type, .. } if event_type == "failed"
+    ));
+    assert!(!error.to_string().contains(secret));
+}
+
+#[test]
+fn terminal_detection_uses_the_typed_top_level_event_type() {
+    let (store, clock, _tmp) = open_store();
+    store
+        .insert_summary(
+            "typed-terminal",
+            None,
+            None,
+            None,
+            None,
+            &clock.now(),
+            None,
+            None,
+            None,
+        )
+        .expect("insert summary");
+
+    store
+        .insert_lifecycle_event(
+            "typed-terminal",
+            "nested-terminal-text",
+            r#"{"type":"admitted","context":{"type":"completed"}}"#,
+            &clock.now(),
+        )
+        .expect("nested terminal text is not terminal");
+    assert!(
+        !store
+            .has_terminal_event("typed-terminal")
+            .expect("terminal state")
+    );
+
+    store
+        .insert_lifecycle_event(
+            "typed-terminal",
+            "actual-terminal",
+            r#"{"type":"completed"}"#,
+            &clock.now(),
+        )
+        .expect("actual terminal event");
+    assert!(
+        store
+            .has_terminal_event("typed-terminal")
+            .expect("terminal state")
+    );
+}
+
+#[test]
 fn duplicate_non_terminal_same_type_events_allowed() {
     let (store, clock, _tmp) = open_store();
+
     store
         .insert_summary(
             "multi-s1",
@@ -271,13 +378,17 @@ fn duplicate_non_terminal_same_type_events_allowed() {
             None,
         )
         .unwrap();
+
+    // Insert two non-terminal events with different event_ids — both should succeed.
     let payload = r#"{"type":"admitted","model":"llama3"}"#;
     store
         .insert_lifecycle_event("multi-s1", "evt-started-1", payload, &clock.now())
         .expect("first started succeeds");
     store
         .insert_lifecycle_event("multi-s1", "evt-stream-2", payload, &clock.now())
-        .expect("second admitted also succeeds");
+        .expect("second admitted also succeeds — no unique(summary,event_type) constraint");
 
-    assert_eq!(store.count_table("lifecycle_events").unwrap(), 2);
+    // Verify both events exist.
+    let count = store.count_table("lifecycle_events").unwrap();
+    assert_eq!(count, 2);
 }

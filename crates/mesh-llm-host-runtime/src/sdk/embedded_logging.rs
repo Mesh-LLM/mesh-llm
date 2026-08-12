@@ -17,9 +17,9 @@ pub(crate) fn validate_embedded_config(config_path: Option<&Path>) -> Result<()>
 /// non-embedded path. `initialize_logging_foundation` replaces the
 /// process-local handles, so a later embedded start cannot retain logging
 /// resources resolved from an earlier configuration.
-pub(crate) fn initialize_embedded_logging(config_path: Option<&Path>) -> Result<()> {
+pub(crate) async fn initialize_embedded_logging(config_path: Option<&Path>) -> Result<()> {
     let config = crate::plugin::load_config(config_path)?;
-    crate::initialize_logging_foundation(&config.logging);
+    crate::initialize_logging_foundation(&config.logging).await;
     Ok(())
 }
 
@@ -41,15 +41,17 @@ mod tests {
         .expect("write embedded logging config");
     }
 
-    #[test]
+    #[tokio::test]
     #[serial_test::serial]
-    fn embedded_entrypoint_migrates_configured_logging_store() {
+    async fn embedded_entrypoint_migrates_configured_logging_store() {
         let temporary_directory = tempfile::tempdir().expect("temporary config directory");
         let config_path = temporary_directory.path().join("mesh-llm.toml");
         let configured_root = temporary_directory.path().join("embedded-logging");
         write_logging_config(&config_path, true, &configured_root);
 
-        initialize_embedded_logging(Some(&config_path)).expect("initialize embedded logging");
+        initialize_embedded_logging(Some(&config_path))
+            .await
+            .expect("initialize embedded logging");
 
         let foundation = crate::logging_foundation().expect("installed foundation");
         assert!(foundation.is_healthy());
@@ -63,15 +65,17 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     #[serial_test::serial]
-    fn embedded_entrypoint_honors_disabled_logging_without_creating_files() {
+    async fn embedded_entrypoint_honors_disabled_logging_without_creating_files() {
         let temporary_directory = tempfile::tempdir().expect("temporary config directory");
         let config_path = temporary_directory.path().join("mesh-llm.toml");
         let configured_root: PathBuf = temporary_directory.path().join("disabled-logging");
         write_logging_config(&config_path, false, &configured_root);
 
-        initialize_embedded_logging(Some(&config_path)).expect("initialize disabled logging");
+        initialize_embedded_logging(Some(&config_path))
+            .await
+            .expect("initialize disabled logging");
 
         assert!(
             !configured_root.exists(),
@@ -88,5 +92,49 @@ mod tests {
                 .health()
                 .metadata_available
         );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn embedded_replacement_retires_a_captured_runtime_state_before_reinstalling() {
+        let temporary_directory = tempfile::tempdir().expect("temporary config directory");
+        let first_path = temporary_directory.path().join("first.toml");
+        let second_path = temporary_directory.path().join("second.toml");
+        let first_root = temporary_directory.path().join("first-logging");
+        let second_root = temporary_directory.path().join("second-logging");
+        write_logging_config(&first_path, true, &first_root);
+        write_logging_config(&second_path, true, &second_root);
+
+        initialize_embedded_logging(Some(&first_path))
+            .await
+            .expect("initialize first embedded logging");
+        let retired_state = crate::logging_runtime_state().expect("first runtime state");
+        let retired_service = retired_state
+            .start_persistence_worker()
+            .await
+            .expect("start first worker");
+        assert!(retired_service.is_spawned());
+
+        initialize_embedded_logging(Some(&second_path))
+            .await
+            .expect("replace embedded logging");
+
+        assert!(retired_state.is_retired());
+        assert!(retired_state.start_persistence_worker().await.is_none());
+        assert!(!retired_service.is_startable());
+        assert!(!retired_service.spawn());
+        assert!(!retired_service.is_spawned());
+        assert_eq!(
+            crate::logging_foundation()
+                .expect("replacement foundation")
+                .app_state_root(),
+            second_root
+        );
+
+        crate::initialize_logging_foundation(&mesh_llm_config::LoggingConfig {
+            enabled: false,
+            ..Default::default()
+        })
+        .await;
     }
 }

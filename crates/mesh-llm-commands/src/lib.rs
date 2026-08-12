@@ -6,6 +6,7 @@ pub mod benchmark;
 pub mod config;
 pub mod gpus;
 pub mod model_package;
+pub mod operational_logging;
 pub mod plugin;
 pub mod runtime_native;
 pub mod setup;

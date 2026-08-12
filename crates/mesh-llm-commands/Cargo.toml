@@ -26,6 +26,7 @@ nix = { version = "0.29.0", default-features = false, features = ["signal"] }
 mesh-llm-build-info.workspace = true
 mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.72.1" }
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.72.1" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.72.1" }
 mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.72.1" }
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.72.1" }
 mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.72.1", features = ["host-io"] }

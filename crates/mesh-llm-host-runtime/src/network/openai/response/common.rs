@@ -1,17 +1,32 @@
 use crate::inference::election;
+use crate::logging::OpenAiRouteObserver;
+use crate::network::openai::request_normalize::ResponseAdapter;
 use crate::network::openai::response_quality::{self, ResponseQualityFailure};
 use crate::network::target_health::TargetHealthOutcome;
+use mesh_llm_events::logging::events::TokenUsage;
+use mesh_llm_events::logging::identifiers::RequestId;
+
+#[derive(Clone, Copy)]
+pub(in crate::network::openai) struct RouteAttemptLoggingContext<'a> {
+    pub(in crate::network::openai) request_id: RequestId,
+    pub(in crate::network::openai) retry_policy: ResponseRetryPolicy,
+    pub(in crate::network::openai) response_adapter: ResponseAdapter,
+    pub(in crate::network::openai) route_observer: OpenAiRouteObserver<'a>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::network::openai) enum RouteAttemptResult {
     Delivered {
         status_code: u16,
-        completion_tokens: Option<u64>,
+        usage: Option<TokenUsage>,
     },
     RetryableTimeout,
     RetryableUnavailable,
     RetryableContextOverflow,
     RetryableResponseQuality(ResponseQualityFailure),
+    CommittedStreamFailure {
+        status_code: u16,
+    },
     ClientDisconnected,
 }
 
@@ -39,6 +54,7 @@ pub(in crate::network::openai) fn route_attempt_result_label(
         RouteAttemptResult::RetryableUnavailable => "retryable_unavailable",
         RouteAttemptResult::RetryableContextOverflow => "retryable_context_overflow",
         RouteAttemptResult::RetryableResponseQuality(_) => "retryable_response_quality",
+        RouteAttemptResult::CommittedStreamFailure { .. } => "committed_stream_failure",
         RouteAttemptResult::ClientDisconnected => "client_disconnected",
     }
 }
@@ -58,6 +74,7 @@ pub(in crate::network::openai) fn target_health_outcome_for_attempt(
         RouteAttemptResult::RetryableUnavailable => TargetHealthOutcome::Unavailable,
         RouteAttemptResult::RetryableContextOverflow => TargetHealthOutcome::ContextOverflow,
         RouteAttemptResult::RetryableResponseQuality(_) => TargetHealthOutcome::Rejected,
+        RouteAttemptResult::CommittedStreamFailure { .. } => TargetHealthOutcome::Unavailable,
         RouteAttemptResult::ClientDisconnected => TargetHealthOutcome::ClientDisconnected,
     }
 }
@@ -139,15 +156,27 @@ pub(in crate::network::openai::response) fn is_retryable_context_overflow_respon
     mentions_context && mentions_limit
 }
 
-pub(in crate::network::openai::response) fn parse_completion_tokens_from_json_body(
+/// Parse only upstream-reported token usage. Chat Completions and Responses
+/// use different names for prompt and completion counts; both map into the
+/// shared contract without deriving or estimating missing values.
+pub(in crate::network::openai) fn parse_token_usage_from_json_body(
     body: &[u8],
-) -> Option<u64> {
+) -> Option<TokenUsage> {
     let json = serde_json::from_slice::<serde_json::Value>(body).ok()?;
     let usage = json.get("usage")?;
-    usage
-        .get("completion_tokens")
-        .or_else(|| usage.get("output_tokens"))
-        .and_then(|value| value.as_u64())
+    TokenUsage::from_counts(
+        usage
+            .get("prompt_tokens")
+            .or_else(|| usage.get("input_tokens"))
+            .and_then(serde_json::Value::as_u64),
+        usage
+            .get("completion_tokens")
+            .or_else(|| usage.get("output_tokens"))
+            .and_then(serde_json::Value::as_u64),
+        usage
+            .get("total_tokens")
+            .and_then(serde_json::Value::as_u64),
+    )
 }
 
 pub(in crate::network::openai::response) fn retryable_quality_result(
@@ -211,6 +240,9 @@ pub(in crate::network::openai) fn attempt_outcome_for_result(
         RouteAttemptResult::RetryableResponseQuality(_) => {
             crate::network::metrics::AttemptOutcome::Rejected
         }
+        RouteAttemptResult::CommittedStreamFailure { .. } => {
+            crate::network::metrics::AttemptOutcome::Unavailable
+        }
         RouteAttemptResult::ClientDisconnected => {
             crate::network::metrics::AttemptOutcome::Unavailable
         }
@@ -221,9 +253,9 @@ pub(in crate::network::openai) fn completion_tokens_for_result(
     result: &RouteAttemptResult,
 ) -> Option<u64> {
     match result {
-        RouteAttemptResult::Delivered {
-            completion_tokens, ..
-        } => *completion_tokens,
+        RouteAttemptResult::Delivered { usage, .. } => {
+            usage.and_then(|usage| usage.completion_tokens)
+        }
         _ => None,
     }
 }
@@ -250,7 +282,7 @@ mod tests {
         assert_eq!(
             route_attempt_result_label(&RouteAttemptResult::Delivered {
                 status_code: 200,
-                completion_tokens: None,
+                usage: None,
             }),
             "delivered"
         );
@@ -283,21 +315,21 @@ mod tests {
         assert_eq!(
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 200,
-                completion_tokens: None,
+                usage: None,
             }),
             TargetHealthOutcome::Success
         );
         assert_eq!(
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 503,
-                completion_tokens: None,
+                usage: None,
             }),
             TargetHealthOutcome::Unavailable
         );
         assert_eq!(
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 400,
-                completion_tokens: None,
+                usage: None,
             }),
             TargetHealthOutcome::Rejected
         );
@@ -317,7 +349,7 @@ mod tests {
         );
     }
     #[test]
-    fn test_parse_completion_tokens_from_json_body_supports_chat_and_responses_shapes() {
+    fn token_usage_parser_supports_chat_responses_and_absence() {
         let chat = serde_json::json!({
             "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
         });
@@ -326,13 +358,32 @@ mod tests {
         });
 
         assert_eq!(
-            parse_completion_tokens_from_json_body(chat.to_string().as_bytes()),
-            Some(3)
+            parse_token_usage_from_json_body(chat.to_string().as_bytes()),
+            Some(TokenUsage {
+                prompt_tokens: Some(5),
+                completion_tokens: Some(3),
+                total_tokens: Some(8),
+            })
         );
         assert_eq!(
-            parse_completion_tokens_from_json_body(responses.to_string().as_bytes()),
-            Some(4)
+            parse_token_usage_from_json_body(responses.to_string().as_bytes()),
+            Some(TokenUsage {
+                prompt_tokens: Some(5),
+                completion_tokens: Some(4),
+                total_tokens: Some(9),
+            })
         );
+        assert_eq!(
+            parse_token_usage_from_json_body(br#"{"usage":{"prompt_tokens":"five"}}"#),
+            None
+        );
+        assert_eq!(
+            parse_token_usage_from_json_body(
+                br#"{"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":7}}"#
+            ),
+            None
+        );
+        assert_eq!(parse_token_usage_from_json_body(br#"{"usage":{"prompt_tokens":18446744073709551615,"completion_tokens":1,"total_tokens":0}}"#), None);
     }
     #[tokio::test]
     async fn test_is_timeout_error_accepts_concrete_timeout_types_only() {

@@ -13,11 +13,13 @@ axum = "0.8"
 futures-core = "0.3"
 futures-util = "0.3"
 mesh-llm-guardrails = { path = "../mesh-llm-guardrails", version = "0.72.1"  }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.72.1" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["time"] }
 tokio-stream = "0.1"
 tracing = "0.1"
+uuid = "1"
 
 [dev-dependencies]
 http-body-util = "0.1"

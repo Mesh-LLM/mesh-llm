@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{CommandFactory, Parser};
@@ -31,12 +32,39 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     );
     let explicit_surface = normalized_args.explicit_surface.map(map_runtime_surface);
 
-    if commands::dispatch(&cli).await? {
-        return Ok(());
+    if cli.command.is_some() {
+        // Install the durable audit bridge before command dispatch. This
+        // performs only config-backed logging setup; one-shot commands do not
+        // need a native runtime, a model, or serving infrastructure.
+        let logging_initialized =
+            mesh_llm_host_runtime::initialize_logging_for_cli(cli.config.as_deref())
+                .await
+                .is_ok();
+        if logging_initialized {
+            install_cli_operational_audit_bridge();
+        } else {
+            // Logging is fail-open for one-shot commands. A missing or invalid
+            // logging config must not turn an otherwise independent command
+            // such as `gpus` into a startup failure.
+            mesh_llm_commands::operational_logging::clear_cli_operational_audit_bridge();
+        }
+
+        // Drain whether the one-shot command succeeds or fails: the
+        // dispatcher has already emitted its static terminal audit outcome in
+        // either case.
+        let command_dispatch = commands::dispatch(&cli).await;
+        if logging_initialized {
+            let _ = mesh_llm_host_runtime::shutdown_logging_for_one_shot_cli().await;
+        }
+        mesh_llm_commands::operational_logging::clear_cli_operational_audit_bridge();
+        if command_dispatch? {
+            return Ok(());
+        }
     }
 
     let options = runtime_options_from_cli(cli);
     mesh_llm_host_runtime::initialize_host_runtime_for_options(&options).await?;
+    install_cli_operational_audit_bridge();
     mesh_llm_tui::output::OutputManager::init_global(
         options.log_format,
         mesh_llm_host_runtime::console_session_mode_for_runtime_surface(explicit_surface),
@@ -44,6 +72,34 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     mesh_llm_tui::install_terminal_panic_hook();
 
     mesh_llm_host_runtime::run_runtime_initialized(options, explicit_surface, warning).await
+}
+
+/// Bridge command boundary emissions to the installed logging runtime so the
+/// static command outcome codes become durable audit records. Callers install
+/// it after either logging-only one-shot initialization or normal host/client
+/// initialization, before any command/runtime surface can emit boundaries.
+fn install_cli_operational_audit_bridge() {
+    use mesh_llm_host_runtime::{OperationalAuditRecord, OperationalAuditSeverity};
+
+    let bridge: mesh_llm_commands::operational_logging::CliOperationalAuditBridge = Arc::new(
+        |family: mesh_llm_events::CliCommandFamily, outcome: mesh_llm_events::CliCommandOutcome| {
+            let Some(state) = mesh_llm_host_runtime::logging_runtime_state() else {
+                return;
+            };
+            let severity = match outcome {
+                mesh_llm_events::CliCommandOutcome::Started
+                | mesh_llm_events::CliCommandOutcome::Completed => OperationalAuditSeverity::Info,
+                mesh_llm_events::CliCommandOutcome::Failed
+                | mesh_llm_events::CliCommandOutcome::Rejected => OperationalAuditSeverity::Warning,
+            };
+            let record = OperationalAuditRecord::builder("cli", outcome.code())
+                .severity(severity)
+                .resource(family.as_str())
+                .build();
+            let _ = state.write_operational_audit(record);
+        },
+    );
+    mesh_llm_commands::operational_logging::install_cli_operational_audit_bridge(bridge);
 }
 
 fn maybe_print_binary_help_and_exit() {

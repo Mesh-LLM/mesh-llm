@@ -5,6 +5,7 @@ use std::result::Result as StdResult;
 use anyhow::{Context, Result, bail};
 use iroh::{EndpointId, SecretKey};
 use mesh_llm_cli::{AuthCommand, TrustCommand};
+use mesh_llm_events::audit::{audit_events, emit_audit};
 use mesh_llm_identity::{
     KEYCHAIN_SERVICE, OwnerKeychainLoadError, OwnerKeypair, SignedNodeOwnership, TrustPolicy,
     TrustStore, default_keystore_path, default_node_key_path, default_node_ownership_path,
@@ -332,6 +333,14 @@ pub(crate) fn run_init(
     };
     let encrypted = !matches!(source, PassphraseSource::None);
 
+    let _ = emit_audit(audit_events::admin_action(
+        Some(owner_id.clone()),
+        "auth_init",
+        Some("owner_keystore"),
+        true,
+        None,
+    ));
+
     eprintln!();
     eprintln!("Owner keystore created.");
     eprintln!("Owner ID:        {owner_id}");
@@ -533,6 +542,14 @@ pub(crate) fn run_sign_node(
     )?;
     save_node_ownership(&output_path, &ownership)?;
 
+    let _ = emit_audit(audit_events::admin_action(
+        Some(owner.owner_id().to_string()),
+        "auth_sign_node",
+        Some(&ownership.claim.node_endpoint_id),
+        true,
+        None,
+    ));
+
     eprintln!(
         "Signed node certificate written to {}",
         output_path.display()
@@ -664,6 +681,13 @@ pub(crate) const RUN_ROTATE_NODE: RunRotateNodeFn =
 
         let owner_key_path = resolve_owner_key_path(owner_key)?;
         if !owner_key_path.exists() {
+            let _ = emit_audit(audit_events::admin_action(
+                Some("system".to_string()),
+                "auth_rotate_node",
+                Some(&new_node_id),
+                true,
+                None,
+            ));
             eprintln!("No owner keystore found at {}", owner_key_path.display());
             eprintln!(
                 "Run `mesh-llm auth init` or `mesh-llm auth sign-node` later to attest this node."
@@ -680,6 +704,15 @@ pub(crate) const RUN_ROTATE_NODE: RunRotateNodeFn =
             hostname_hint,
         )?;
         save_node_ownership(&certificate_path, &ownership)?;
+
+        let _ = emit_audit(audit_events::admin_action(
+            Some(owner.owner_id().to_string()),
+            "auth_rotate_node",
+            Some(&new_node_id),
+            true,
+            None,
+        ));
+
         eprintln!("New node certificate: {}", certificate_path.display());
         eprintln!("New cert ID:      {}", ownership.claim.cert_id);
 
@@ -699,6 +732,14 @@ pub(crate) fn run_revoke_owner(
     trust_store.revoke_owner(owner_id.clone(), reason);
     save_trust_store(&trust_store_path, &trust_store)?;
 
+    let _ = emit_audit(audit_events::admin_action(
+        Some("system".to_string()),
+        "auth_revoke_owner",
+        Some(&owner_id),
+        true,
+        None,
+    ));
+
     eprintln!("Revoked owner {owner_id} in {}", trust_store_path.display());
     Ok(())
 }
@@ -716,17 +757,45 @@ pub(crate) fn run_revoke_node(
     let trust_store_path = resolve_trust_store_path(trust_store)?;
     let mut trust_store = load_effective_trust_store(&trust_store_path)?;
 
-    if let Some(cert_id) = cert_id {
+    // Validate every requested identifier before mutating the in-memory store.
+    // Mixed cert/node revocation is all-or-nothing.
+    let normalized_node_id = node_id
+        .as_deref()
+        .map(parse_node_id_hex)
+        .transpose()?
+        .map(hex::encode);
+
+    if let Some(cert_id) = cert_id.as_ref() {
         trust_store.revoke_node_cert(cert_id.clone(), reason.clone());
-        eprintln!("Revoked cert ID {cert_id}");
     }
-    if let Some(node_id) = node_id {
-        let normalized = hex::encode(parse_node_id_hex(&node_id)?);
+    if let Some(normalized) = normalized_node_id.as_ref() {
         trust_store.revoke_node_id(normalized.clone(), reason);
-        eprintln!("Revoked node ID {normalized}");
     }
 
+    // Persistence is the commit point. Emit success output and audit records
+    // only after every requested revocation is durable.
     save_trust_store(&trust_store_path, &trust_store)?;
+
+    if let Some(cert_id) = cert_id.as_ref() {
+        let _ = emit_audit(audit_events::admin_action(
+            Some("system".to_string()),
+            "auth_revoke_node_cert",
+            Some(cert_id),
+            true,
+            None,
+        ));
+        eprintln!("Revoked cert ID {cert_id}");
+    }
+    if let Some(normalized) = normalized_node_id.as_ref() {
+        let _ = emit_audit(audit_events::admin_action(
+            Some("system".to_string()),
+            "auth_revoke_node_id",
+            Some(normalized),
+            true,
+            None,
+        ));
+        eprintln!("Revoked node ID {normalized}");
+    }
     eprintln!("Updated trust store {}", trust_store_path.display());
     Ok(())
 }
@@ -765,6 +834,14 @@ pub(crate) fn run_rotate_owner(
         passphrase.as_deref().map(|value| value.as_str()),
         true,
     )?;
+
+    let _ = emit_audit(audit_events::admin_action(
+        Some(new_keypair.owner_id().to_string()),
+        "auth_rotate_owner",
+        Some("owner_keystore"),
+        true,
+        None,
+    ));
 
     eprintln!("Rotated owner keystore at {}", owner_key_path.display());
     eprintln!("New owner ID:    {}", new_keypair.owner_id());

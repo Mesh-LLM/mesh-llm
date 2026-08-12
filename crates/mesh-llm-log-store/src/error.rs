@@ -7,11 +7,22 @@ pub enum LogStoreError {
     /// SQLite-level failure (connection, schema, etc.)
     Sqlite(rusqlite::Error),
 
+    /// The store connection lock was poisoned by a panicking holder.
+    ConnectionPoisoned,
+
     /// Schema migration failed to apply cleanly.
     MigrationFailed(String),
 
     /// Cursor decode/encode error.
     CursorMalformed(String),
+
+    /// A syntactically valid cursor does not identify a row in the requested
+    /// durable query scope. This includes an expired cursor and a forged
+    /// timestamp/identifier pair.
+    CursorInvalid,
+
+    /// Caller supplied an invalid or unbounded durable query.
+    InvalidQuery(String),
 
     /// Insert failed due to a conflict.
     InsertFailed(String),
@@ -52,14 +63,33 @@ pub enum LogStoreError {
 
     /// Platform privacy cannot be guaranteed for an artifact path.
     PrivacyNotGuaranteed,
+
+    /// A maintenance cleanup scope, reason, or bounded request limit is invalid.
+    MaintenanceScopeInvalid { field: &'static str },
+
+    /// A maintenance operation ID was reused with different immutable intent.
+    MaintenanceOperationConflict,
+
+    /// The requested maintenance operation receipt does not exist.
+    MaintenanceOperationNotFound,
+
+    /// The caller cancelled a maintenance operation before it committed.
+    MaintenanceExecutionCancelled,
+
+    /// A request owns artifact pointers, but no trusted artifact-file owner is
+    /// available to delete their backing content.
+    ArtifactDeletionUnavailable,
 }
 
 impl fmt::Display for LogStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Sqlite(e) => write!(f, "sqlite error: {}", e),
+            Self::ConnectionPoisoned => write!(f, "log store connection lock was poisoned"),
             Self::MigrationFailed(msg) => write!(f, "migration failed: {}", msg),
             Self::CursorMalformed(msg) => write!(f, "cursor malformed: {}", msg),
+            Self::CursorInvalid => write!(f, "cursor is invalid or expired"),
+            Self::InvalidQuery(msg) => write!(f, "invalid log query: {}", msg),
             Self::InsertFailed(msg) => write!(f, "insert failed: {}", msg),
             Self::DuplicateTerminalEvent {
                 summary_id,
@@ -109,6 +139,20 @@ impl fmt::Display for LogStoreError {
                 write!(
                     f,
                     "platform privacy cannot be guaranteed for artifact storage"
+                )
+            }
+            Self::MaintenanceScopeInvalid { field } => {
+                write!(f, "invalid maintenance scope field: {field}")
+            }
+            Self::MaintenanceOperationConflict => {
+                write!(f, "maintenance operation conflicts with prior intent")
+            }
+            Self::MaintenanceOperationNotFound => write!(f, "maintenance operation was not found"),
+            Self::MaintenanceExecutionCancelled => write!(f, "maintenance execution was cancelled"),
+            Self::ArtifactDeletionUnavailable => {
+                write!(
+                    f,
+                    "artifact deletion requires an unavailable trusted artifact owner"
                 )
             }
         }

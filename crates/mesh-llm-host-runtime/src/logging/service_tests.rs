@@ -4,10 +4,12 @@ use crate::logging::{
     BusEntry, Clock, FailOpenWriter, LoggingDynamicLimits, PersistSink, RegistryConfig,
     TerminalOutcome,
 };
-use crate::logging::{ReplayBus, RequestRegistry, RequestSummaryEntry};
+use crate::logging::{OperationalAuditRecord, ReplayBus, RequestRegistry, RequestSummaryEntry};
 use mesh_llm_events::logging::events::LifecycleEvent;
-use mesh_llm_events::logging::identifiers::{EventId, RequestId};
+use mesh_llm_events::logging::identifiers::{AttemptId, EventId, RequestId};
+use mesh_llm_events::logging::proxy::ProxyRecord;
 use mesh_llm_events::logging::replay::ReplayChannel;
+use mesh_llm_events::{OutputEvent, OutputSink, clear_output_sink, set_output_sink};
 
 // Re-import service.rs types. These are private to the logging module but accessible via super.
 #[allow(unused_imports)]
@@ -20,6 +22,41 @@ use tokio::sync::{Notify, mpsc};
 
 mod configuration;
 mod delivery_shutdown;
+mod lifecycle_registry;
+
+#[derive(Default)]
+struct RecordingOutputSink {
+    events: std::sync::Mutex<Vec<OutputEvent>>,
+}
+
+impl RecordingOutputSink {
+    fn take_events(&self) -> Vec<OutputEvent> {
+        std::mem::take(
+            &mut *self
+                .events
+                .lock()
+                .expect("recording output sink mutex poisoned"),
+        )
+    }
+}
+
+impl OutputSink for RecordingOutputSink {
+    fn emit_event(&self, event: OutputEvent) -> std::io::Result<()> {
+        self.events
+            .lock()
+            .expect("recording output sink mutex poisoned")
+            .push(event);
+        Ok(())
+    }
+}
+
+struct OutputSinkResetGuard;
+
+impl Drop for OutputSinkResetGuard {
+    fn drop(&mut self) {
+        clear_output_sink();
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Test infrastructure: Vec-backed sink + deterministic clock
@@ -42,6 +79,8 @@ enum TestRecord {
     AuditEntry {
         level: String,
         message: String,
+        entry_id: Option<String>,
+        occurred_at: Option<String>,
     },
     WebhookDelivery {
         request_id: Option<String>,
@@ -123,10 +162,14 @@ impl PersistSink for TestSink {
         if self.fail_flag.load(AtomicOrdering::Acquire) > 0 {
             return Err("sink failing".into());
         }
-        self.records
-            .lock()
-            .unwrap()
-            .push(TestRecord::Summary(entry));
+        let mut records = self.records.lock().unwrap();
+        if let Some(TestRecord::Summary(existing)) = records.iter_mut().find(|record| {
+            matches!(record, TestRecord::Summary(existing) if existing.request_id == entry.request_id)
+        }) {
+            *existing = entry;
+        } else {
+            records.push(TestRecord::Summary(entry));
+        }
         Ok(())
     }
 
@@ -172,6 +215,9 @@ impl PersistSink for TestSink {
     }
 
     async fn persist_proxy_record(&self, proxy_json: String) -> Result<(), String> {
+        if let Some(tx) = &self.audit_attempt_notifications {
+            let _ = tx.send(());
+        }
         if self.fail_flag.load(AtomicOrdering::Acquire) > 0 {
             return Err("sink failing".into());
         }
@@ -182,7 +228,7 @@ impl PersistSink for TestSink {
         Ok(())
     }
 
-    async fn persist_audit_entry(&self, level: String, message: String) -> Result<(), String> {
+    async fn persist_audit_entry(&self, record: OperationalAuditRecord) -> Result<(), String> {
         if let Some(tx) = &self.audit_attempt_notifications {
             let _ = tx.send(());
         }
@@ -190,12 +236,29 @@ impl PersistSink for TestSink {
             return Err("sink failing".into());
         }
         if let Some(tx) = &self.audit_notifications {
-            let _ = tx.send((level.clone(), message.clone()));
+            let _ = tx.send((
+                record
+                    .severity()
+                    .map_or("none", crate::logging::OperationalAuditSeverity::as_str)
+                    .to_string(),
+                record
+                    .detail_json()
+                    .unwrap_or_else(|| record.code())
+                    .to_string(),
+            ));
         }
-        self.records
-            .lock()
-            .unwrap()
-            .push(TestRecord::AuditEntry { level, message });
+        self.records.lock().unwrap().push(TestRecord::AuditEntry {
+            level: record
+                .severity()
+                .map_or("none", crate::logging::OperationalAuditSeverity::as_str)
+                .to_string(),
+            message: record
+                .detail_json()
+                .unwrap_or_else(|| record.code())
+                .to_string(),
+            entry_id: record.entry_id().map(str::to_owned),
+            occurred_at: record.occurred_at().map(str::to_owned),
+        });
         Ok(())
     }
 
@@ -295,12 +358,17 @@ impl PersistSink for BlockingAuditSink {
         Ok(())
     }
 
-    async fn persist_audit_entry(&self, _level: String, message: String) -> Result<(), String> {
+    async fn persist_audit_entry(&self, record: OperationalAuditRecord) -> Result<(), String> {
         if self.first_write.swap(false, AtomicOrdering::AcqRel) {
             let _ = self.started.send(());
             self.release.notified().await;
         }
-        let _ = self.completed.send(message);
+        let _ = self.completed.send(
+            record
+                .detail_json()
+                .unwrap_or_else(|| record.code())
+                .to_string(),
+        );
         Ok(())
     }
 
@@ -341,7 +409,7 @@ impl Clock for TestClock {
                 |current| current.checked_add(1),
             )
             .expect("test clock counter overflow");
-        format!("2025-01-01T00:00:00.{n:020}Z")
+        format!("2025-01-01T00:00:00.{n:09}Z")
     }
 }
 
@@ -354,8 +422,8 @@ fn test_clock_timestamps_remain_unique_past_a_minute() {
     }
     let sixty_first = clock.now();
 
-    assert_eq!(first, "2025-01-01T00:00:00.00000000000000000000Z");
-    assert_eq!(sixty_first, "2025-01-01T00:00:00.00000000000000000060Z");
+    assert_eq!(first, "2025-01-01T00:00:00.000000000Z");
+    assert_eq!(sixty_first, "2025-01-01T00:00:00.000000060Z");
     assert_ne!(first, sixty_first);
 }
 
@@ -365,6 +433,7 @@ fn make_service() -> LoggingService {
     let config = ServiceConfig {
         queue_capacity: 128,
         event_buffer_size: 128,
+        artifact_command_max_bytes: ServiceConfig::default().artifact_command_max_bytes,
         registry_config: RegistryConfig {
             max_active: 50,
             max_recent: 100,
@@ -422,154 +491,77 @@ fn canonical_persistence_failure_fallbacks(service: &LoggingService) -> usize {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_one_terminal_per_outcome() {
-    use crate::logging::lifecycle::TerminalOutcome;
+#[serial_test::serial]
+fn canonical_events_reach_the_output_sink_once_with_safe_local_projection() {
+    let sink = Arc::new(RecordingOutputSink::default());
+    let _reset_guard = OutputSinkResetGuard;
+    set_output_sink(sink.clone());
 
-    let svc = make_service();
-
-    let outcomes = [
-        TerminalOutcome::Completed,
-        TerminalOutcome::Failed("timeout".into()),
-        TerminalOutcome::Rejected(Some("invalid model".into())),
-        TerminalOutcome::Cancelled(None),
-        TerminalOutcome::Dropped(Some("queue full".into())),
-    ];
-
-    for outcome in &outcomes {
-        let rid = RequestId::new();
-        let (guard, _) = svc.register_request(rid);
-
-        // First terminal transition should succeed.
-        assert!(
-            svc.transition_terminal(rid, &guard, outcome.clone())
-                .is_ok()
-        );
-
-        assert!(
-            svc.transition_terminal(rid, &guard, outcome.clone())
-                .is_err(),
-            "a second terminal transition must not emit another record"
-        );
-    }
-
-    let events = recorded_lifecycle_events(&svc);
-    assert_eq!(events.len(), outcomes.len());
-    assert!(events.iter().all(|(_, event)| {
-        matches!(
-            event,
-            LifecycleEvent::Completed { .. }
-                | LifecycleEvent::Failed { .. }
-                | LifecycleEvent::Rejected { .. }
-                | LifecycleEvent::Cancelled { .. }
-                | LifecycleEvent::Dropped { .. }
-        )
-    }));
-    assert_eq!(svc.registry_ref().active_count(), 0);
-    assert_eq!(svc.registry_ref().recent_count(), outcomes.len());
-}
-
-#[test]
-fn test_duplicate_terminal_rejected() {
-    use crate::logging::lifecycle::TerminalOutcome;
-
-    let svc = make_service();
-
-    let rid = RequestId::new();
-    let (guard, _) = svc.register_request(rid);
-
-    assert!(
-        svc.transition_terminal(rid, &guard, TerminalOutcome::Completed)
-            .is_ok()
-    );
-
-    // Second terminal → DuplicateTerminalError.
-    let err = svc
-        .transition_terminal(rid, &guard, TerminalOutcome::Failed("x".into()))
-        .unwrap_err();
-    assert_eq!(err.existing, TerminalOutcome::Completed);
-}
-
-// ---------------------------------------------------------------------------
-// Test Scenario 2: One summary with multiple retry attempts (parent not terminated by per-attempt)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_retry_attempts_under_one_summary() {
-    let svc = make_service();
-
-    let rid = RequestId::new();
-    let (guard, _) = svc.register_request(rid);
-
-    // Simulate 3 retry attempts — each is typed and does NOT terminate the parent.
-    let mut attempt_ids = Vec::new();
-    for (index, status_code) in [502, 503, 200].into_iter().enumerate() {
-        let attempt_id = svc.start_attempt(rid, &guard);
-        svc.complete_attempt(rid, attempt_id, Some(status_code));
-        attempt_ids.push(attempt_id);
-
-        // Guard still active after each attempt.
-        assert!(
-            guard.is_active(),
-            "guard should remain active during retry {}",
-            index
-        );
-    }
-
-    // Now terminate the parent request — exactly one terminal transition.
-    assert!(
-        svc.transition_terminal(rid, &guard, TerminalOutcome::Completed)
-            .is_ok()
-    );
-    assert!(!guard.is_active());
-
-    let events = recorded_lifecycle_events(&svc);
-    assert_eq!(events.len(), 7);
-    for (index, attempt_id) in attempt_ids.iter().enumerate() {
-        assert_eq!(events[index * 2].0["request_id"], rid.as_uuid().to_string());
-        assert_eq!(
-            events[index * 2].1,
-            LifecycleEvent::AttemptStarted {
-                attempt_id: Some(*attempt_id)
-            }
-        );
-        assert_eq!(
-            events[index * 2 + 1].0["request_id"],
-            rid.as_uuid().to_string()
-        );
-    }
-    assert!(matches!(
-        events.last().unwrap().1,
-        LifecycleEvent::Completed { .. }
-    ));
-}
-
-#[test]
-fn retry_failure_then_success_does_not_terminalize_parent() {
-    let svc = make_service();
+    let service = make_service();
     let request_id = RequestId::new();
-    let (guard, _) = svc.register_request(request_id);
+    service
+        .enqueue_event(
+            request_id,
+            ReplayChannel::Requests,
+            serde_json::to_string(&LifecycleEvent::Failed {
+                error: "prompt=private Bearer secret-token".to_string(),
+                status_code: None,
+            })
+            .expect("lifecycle event serializes"),
+        )
+        .expect("canonical event enqueue is fail-open");
 
-    let failed_attempt = svc.start_attempt(request_id, &guard);
-    svc.fail_attempt(request_id, failed_attempt, "upstream timeout".into());
-    assert!(guard.is_active());
-    assert_eq!(svc.registry_ref().active_count(), 1);
-    assert_eq!(svc.registry_ref().recent_count(), 0);
+    let events = sink.take_events();
+    let matching_envelopes = events
+        .iter()
+        .filter_map(|event| match event {
+            OutputEvent::CanonicalLog(envelope) if envelope.request_id == request_id => {
+                Some(envelope.as_ref())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [envelope] = matching_envelopes.as_slice() else {
+        panic!("expected one canonical output event for {request_id:?}, got {events:?}");
+    };
+    assert_eq!(envelope.request_id, request_id);
+    assert!(matches!(envelope.event, LifecycleEvent::Failed { .. }));
+    assert_eq!(envelope.presentation_event_name(), "request_failed");
+    assert_eq!(envelope.presentation_message(), "request failed");
+    let local_summary = envelope.presentation_local_summary();
+    assert!(local_summary.contains(&request_id.as_uuid().to_string()));
+    assert!(local_summary.contains(&envelope.event_id.as_uuid().to_string()));
+    assert!(!local_summary.contains("private"));
+    assert!(!local_summary.contains("secret-token"));
 
-    let successful_attempt = svc.start_attempt(request_id, &guard);
-    svc.complete_attempt(request_id, successful_attempt, Some(200));
-    assert!(guard.is_active());
+    let (guard, _) = service.register_request(request_id);
+    service
+        .transition_terminal(request_id, &guard, TerminalOutcome::Completed)
+        .expect("first terminal transition succeeds");
+    assert!(
+        service
+            .transition_terminal(
+                request_id,
+                &guard,
+                TerminalOutcome::Failed("ignored".into())
+            )
+            .is_err()
+    );
 
-    svc.transition_terminal(request_id, &guard, TerminalOutcome::Completed)
-        .unwrap();
-    let events = recorded_lifecycle_events(&svc);
-    assert!(matches!(events[1].1, LifecycleEvent::AttemptFailed { .. }));
-    assert!(matches!(
-        events[3].1,
-        LifecycleEvent::AttemptCompleted { .. }
-    ));
-    assert!(matches!(events[4].1, LifecycleEvent::Completed { .. }));
-    assert_eq!(svc.registry_ref().active_count(), 0);
-    assert_eq!(svc.registry_ref().recent_count(), 1);
+    let terminal_events = sink.take_events();
+    assert_eq!(
+        terminal_events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                OutputEvent::CanonicalLog(envelope)
+                    if envelope.request_id == request_id
+                        && envelope.presentation_outcome().is_some()
+            ))
+            .count(),
+        1,
+        "terminal lifecycle ownership must still dedupe at the presentation sink"
+    );
 }
 
 #[tokio::test]
@@ -631,6 +623,7 @@ async fn attempt_records_are_delivered_under_the_parent_request() {
             LifecycleEvent::Completed {
                 status_code: None,
                 duration_ms: None,
+                usage: None,
             },
         ]
     );
@@ -644,8 +637,171 @@ async fn attempt_records_are_delivered_under_the_parent_request() {
     );
 }
 
+fn proxy_record(request_id: RequestId, attempt_id: AttemptId) -> ProxyRecord {
+    ProxyRecord {
+        attempt_id,
+        request_id,
+        target: "remote".to_string(),
+        provider: Some("openai_frontend".to_string()),
+        engine: Some("responses".to_string()),
+        started_at: "2026-08-04T12:00:00Z".to_string(),
+        completed_at: Some("2026-08-04T12:00:01Z".to_string()),
+        status_code: Some(502),
+        error: Some("timeout".to_string()),
+    }
+}
+
 #[tokio::test]
-async fn worker_delivery_keeps_summary_then_admitted_then_terminal_in_fifo_order() {
+async fn proxy_record_delivery_is_bounded_and_does_not_own_a_terminal() {
+    let sink = Arc::new(TestSink::new());
+    let service = LoggingService::new(
+        ServiceConfig::default(),
+        Arc::clone(&sink) as Arc<dyn PersistSink>,
+        Box::new(TestClock::new()),
+    );
+    let request_id = RequestId::new();
+    let attempt_id = AttemptId::new();
+
+    assert!(
+        service
+            .enqueue_proxy_record(proxy_record(request_id, attempt_id))
+            .is_ok()
+    );
+    assert_eq!(service.pump_sync().await, 1);
+    assert_eq!(service.registry_ref().active_count(), 0);
+    assert_eq!(service.registry_ref().recent_count(), 0);
+    assert_eq!(service.bus_ref().len(), 0);
+
+    let records = sink.records();
+    let proxy_json = records
+        .into_iter()
+        .find_map(|record| match record {
+            TestRecord::ProxyRecord(proxy_json) => Some(proxy_json),
+            _ => None,
+        })
+        .expect("one proxy record persists");
+    let persisted: ProxyRecord = serde_json::from_str(&proxy_json).expect("bounded proxy JSON");
+    assert_eq!(persisted.attempt_id, attempt_id);
+    assert_eq!(persisted.request_id, request_id);
+    assert_eq!(persisted.target, "remote");
+    assert_eq!(persisted.provider.as_deref(), Some("openai_frontend"));
+    assert_eq!(persisted.engine.as_deref(), Some("responses"));
+    assert_eq!(persisted.error.as_deref(), Some("timeout"));
+    assert_eq!(persisted.status_code, Some(502));
+    assert_eq!(persisted.started_at, "2026-08-04T12:00:00Z");
+    assert_eq!(
+        persisted.completed_at.as_deref(),
+        Some("2026-08-04T12:00:01Z")
+    );
+}
+
+#[tokio::test]
+async fn proxy_record_drops_unknown_target_and_strips_untrusted_metadata() {
+    let sink = Arc::new(TestSink::new());
+    let service = LoggingService::new(
+        ServiceConfig::default(),
+        Arc::clone(&sink) as Arc<dyn PersistSink>,
+        Box::new(TestClock::new()),
+    );
+    let request_id = RequestId::new();
+    let attempt_id = AttemptId::new();
+    let rejected = ProxyRecord {
+        target: "https://host.invalid/path".to_string(),
+        ..proxy_record(request_id, attempt_id)
+    };
+
+    assert!(service.enqueue_proxy_record(rejected).is_ok());
+    assert_eq!(service.persistence_queue_drops(), 1);
+    assert_eq!(service.pump_sync().await, 0);
+    assert!(sink.records().is_empty());
+
+    let stripped = ProxyRecord {
+        provider: Some("untrusted_provider".to_string()),
+        engine: Some("untrusted_engine".to_string()),
+        error: Some("untrusted_error_text".to_string()),
+        ..proxy_record(request_id, AttemptId::new())
+    };
+    assert!(service.enqueue_proxy_record(stripped).is_ok());
+    assert_eq!(service.pump_sync().await, 1);
+    let proxy_json = sink
+        .records()
+        .into_iter()
+        .find_map(|record| match record {
+            TestRecord::ProxyRecord(proxy_json) => Some(proxy_json),
+            _ => None,
+        })
+        .expect("sanitized proxy record persists");
+    assert!(!proxy_json.contains("untrusted_provider"));
+    assert!(!proxy_json.contains("untrusted_engine"));
+    assert!(!proxy_json.contains("untrusted_error_text"));
+    let persisted: ProxyRecord = serde_json::from_str(&proxy_json).expect("sanitized proxy JSON");
+    assert_eq!(persisted.target, "remote");
+    assert!(persisted.provider.is_none());
+    assert!(persisted.engine.is_none());
+    assert!(persisted.error.is_none());
+}
+
+#[tokio::test]
+async fn proxy_record_queue_saturation_stays_fail_open() {
+    let sink = Arc::new(TestSink::new());
+    let service = LoggingService::new(
+        ServiceConfig {
+            queue_capacity: 64,
+            ..ServiceConfig::default()
+        },
+        Arc::clone(&sink) as Arc<dyn PersistSink>,
+        Box::new(TestClock::new()),
+    );
+    let request_id = RequestId::new();
+
+    for _ in 0..65 {
+        assert!(
+            service
+                .enqueue_proxy_record(proxy_record(request_id, AttemptId::new()))
+                .is_ok()
+        );
+    }
+    assert_eq!(service.persistence_queue_drops(), 1);
+    assert_eq!(service.pump_sync().await, 64);
+    assert_eq!(
+        sink.records()
+            .iter()
+            .filter(|record| matches!(record, TestRecord::ProxyRecord(_)))
+            .count(),
+        64
+    );
+}
+
+#[tokio::test]
+async fn proxy_record_sink_failure_stays_fail_open() {
+    let (sink, mut attempts) = TestSink::failing_with_attempt_notifications();
+    let service = LoggingService::new(
+        ServiceConfig::default(),
+        Arc::new(sink),
+        Box::new(TestClock::new()),
+    );
+    assert!(service.spawn());
+
+    assert!(
+        service
+            .enqueue_proxy_record(proxy_record(RequestId::new(), AttemptId::new()))
+            .is_ok()
+    );
+    attempts
+        .recv()
+        .await
+        .expect("proxy persistence is attempted");
+    attempts
+        .recv()
+        .await
+        .expect("fallback audit persistence is attempted");
+    assert_eq!(service.persistence_failures(), 2);
+    assert_eq!(service.persistence_queue_drops(), 0);
+    assert!(service.shutdown().await);
+}
+
+#[tokio::test]
+async fn worker_delivery_preserves_admission_when_terminal_uses_the_priority_lane() {
     let sink = Arc::new(TestSink::new());
     let service = LoggingService::new(
         ServiceConfig::default(),
@@ -682,19 +838,19 @@ async fn worker_delivery_keeps_summary_then_admitted_then_terminal_in_fifo_order
         })
         .collect::<Vec<_>>();
     assert_eq!(event_records.len(), 2);
-    assert_eq!(event_records[0].0, admitted_event_id.as_uuid().to_string());
-    assert!(matches!(
-        event_records[0].1,
-        LifecycleEvent::Admitted { .. }
-    ));
-    assert!(matches!(
-        event_records[1].1,
-        LifecycleEvent::Completed { .. }
-    ));
+    assert!(event_records.iter().any(|(event_id, event)| {
+        event_id == &admitted_event_id.as_uuid().to_string()
+            && matches!(event, LifecycleEvent::Admitted { .. })
+    }));
+    assert!(
+        event_records
+            .iter()
+            .any(|(_, event)| matches!(event, LifecycleEvent::Completed { .. }))
+    );
 }
 
 #[tokio::test]
-async fn terminal_after_its_evicted_summary_is_counted_as_a_persistence_failure() {
+async fn terminal_after_its_evicted_summary_is_durably_recovered() {
     let root = tempfile::tempdir().expect("temporary log-store root");
     let store = Arc::new(
         mesh_llm_log_store::LogStore::open(root.path(), Arc::new(mesh_llm_log_store::RealClock))
@@ -713,9 +869,8 @@ async fn terminal_after_its_evicted_summary_is_counted_as_a_persistence_failure(
     let (guard, _) = service.register_request(request_id);
 
     // The bounded persistence queue intentionally evicts the summary and then
-    // its admitted event. The accepted terminal remains deliverable but its
-    // typed store FK cannot resolve; this remains fail-open and is counted as
-    // one persistence failure rather than being retried out of order.
+    // its admitted event. The terminal carries the authoritative summary so
+    // its durable write cannot be stranded by those observational evictions.
     for index in 0..63 {
         assert!(service.write_error_audit(format!("fill-{index}")));
     }
@@ -726,10 +881,10 @@ async fn terminal_after_its_evicted_summary_is_counted_as_a_persistence_failure(
     assert_eq!(service.pump_sync().await, 64);
     assert_eq!(
         service.persistence_queue_drops(),
-        3,
-        "summary and admitted eviction plus the unhanded-off failure audit are counted"
+        2,
+        "the evicted summary and admitted record are counted"
     );
-    assert_eq!(service.persistence_failures(), 1);
+    assert_eq!(service.persistence_failures(), 0);
 }
 
 #[tokio::test]
@@ -834,6 +989,7 @@ async fn durable_sink_reopens_one_summary_with_ordered_retry_events() {
             LifecycleEvent::Completed {
                 status_code: None,
                 duration_ms: None,
+                usage: None,
             },
         ]
     );
@@ -906,378 +1062,6 @@ async fn durable_sink_persists_a_dropped_terminal_with_its_summary() {
         2
     );
 }
-
-#[test]
-fn dropping_intermediate_guard_clone_does_not_terminalize_request() {
-    let svc = make_service();
-    let request_id = RequestId::new();
-    let (guard, _) = svc.register_request(request_id);
-    let intermediate = guard.clone();
-
-    drop(intermediate);
-
-    assert!(guard.is_active());
-    assert!(recorded_lifecycle_events(&svc).is_empty());
-    assert_eq!(svc.registry_ref().active_count(), 1);
-    assert_eq!(svc.registry_ref().recent_count(), 0);
-    svc.transition_terminal(request_id, &guard, TerminalOutcome::Completed)
-        .unwrap();
-}
-
-#[test]
-fn dropping_final_guard_emits_one_dropped_terminal_record() {
-    let svc = make_service();
-    let request_id = RequestId::new();
-    let (guard, _) = svc.register_request(request_id);
-
-    drop(guard);
-
-    let events = recorded_lifecycle_events(&svc);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].0["request_id"], request_id.as_uuid().to_string());
-    assert!(matches!(events[0].1, LifecycleEvent::Dropped { .. }));
-    assert_eq!(svc.registry_ref().active_count(), 0);
-    assert_eq!(svc.registry_ref().recent_count(), 1);
-}
-
-#[test]
-fn concurrent_terminal_and_final_drop_emit_exactly_one_terminal_record() {
-    let service = Arc::new(make_service());
-    let request_id = RequestId::new();
-    let (guard, _) = service.register_request(request_id);
-    let thread_guard = guard.clone();
-    let barrier = Arc::new(std::sync::Barrier::new(2));
-    let thread_service = Arc::clone(&service);
-    let thread_barrier = Arc::clone(&barrier);
-
-    let worker = std::thread::spawn(move || {
-        thread_barrier.wait();
-        let _ = thread_service.transition_terminal(
-            request_id,
-            &thread_guard,
-            TerminalOutcome::Completed,
-        );
-        drop(thread_guard);
-    });
-
-    barrier.wait();
-    drop(guard);
-    worker.join().expect("terminal worker must join");
-
-    let events = recorded_lifecycle_events(&service);
-    assert_eq!(events.len(), 1);
-    assert!(matches!(
-        events[0].1,
-        LifecycleEvent::Completed { .. } | LifecycleEvent::Dropped { .. }
-    ));
-    assert_eq!(service.registry_ref().active_count(), 0);
-    assert_eq!(service.registry_ref().recent_count(), 1);
-}
-
-#[tokio::test]
-async fn failed_recorder_during_final_drop_is_fail_open_and_counted() {
-    let (sink, mut attempts) = TestSink::failing_with_attempt_notifications();
-    let service = LoggingService::new(
-        ServiceConfig::default(),
-        Arc::new(sink),
-        Box::new(TestClock::new()),
-    );
-    assert!(service.spawn());
-    let request_id = RequestId::new();
-    let (guard, _) = service.register_request(request_id);
-
-    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(guard)));
-    assert!(dropped.is_ok(), "Drop must not propagate recorder failures");
-    for _ in 0..3 {
-        attempts
-            .recv()
-            .await
-            .expect("original or fallback persistence attempt");
-    }
-    assert!(service.shutdown().await);
-    assert_eq!(
-        service.persistence_failures(),
-        6,
-        "each failed summary/admitted/terminal delivery produces one failed fallback, never a loop"
-    );
-    assert_eq!(service.registry_ref().active_count(), 0);
-    assert_eq!(service.registry_ref().recent_count(), 1);
-}
-
-// ---------------------------------------------------------------------------
-// Test Scenario 3: Monotonic channel sequences across many events
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_monotonic_channel_sequences() {
-    let svc = make_service();
-
-    let rid = RequestId::new();
-    let _guard = svc.register_request(rid);
-
-    // Emit 100 events on each channel. Sequences must be strictly increasing
-    // per channel and leave every other channel unchanged.
-    for ch in [
-        ReplayChannel::Requests,
-        ReplayChannel::Operations,
-        ReplayChannel::System,
-    ] {
-        let before = [
-            (
-                ReplayChannel::Requests,
-                svc.sequences_ref().current(ReplayChannel::Requests),
-            ),
-            (
-                ReplayChannel::Operations,
-                svc.sequences_ref().current(ReplayChannel::Operations),
-            ),
-            (
-                ReplayChannel::System,
-                svc.sequences_ref().current(ReplayChannel::System),
-            ),
-        ];
-        let mut prev_seq = svc.sequences_ref().current(ch);
-        for _i in 0..100 {
-            svc.enqueue_event(rid, ch, "test".into()).unwrap();
-            // The sequence generator is internal to the service — verify via sequences_ref.
-            let current = svc.sequences_ref().current(ch);
-            assert!(
-                current > prev_seq,
-                "sequence must be strictly increasing on {:?}",
-                ch
-            );
-            prev_seq = current;
-        }
-
-        for (other_ch, other_before) in before {
-            let other_current = svc.sequences_ref().current(other_ch);
-            let expected = if other_ch == ch {
-                other_before + 100
-            } else {
-                other_before
-            };
-            assert_eq!(
-                other_current, expected,
-                "events on {:?} must not change {:?}",
-                ch, other_ch
-            );
-        }
-    }
-
-    // Verify sequences survive guard cloning.
-}
-
-#[test]
-fn test_sequences_survive_guard_clone() {
-    let svc = make_service();
-
-    let rid = RequestId::new();
-    let (guard1, _) = svc.register_request(rid);
-    let _guard2 = guard1.clone(); // Clone the guard — sequences are independent of guards.
-
-    // Emit events via service after cloning.
-    for i in 0..5 {
-        let _payload = serde_json::json!({ "i": i }).to_string();
-        svc.enqueue_event(rid, ReplayChannel::Requests, _payload)
-            .unwrap();
-    }
-
-    assert_eq!(svc.sequences_ref().current(ReplayChannel::Requests), 6);
-}
-
-// ---------------------------------------------------------------------------
-// Test Scenario 4: Bounded replay eviction (overflow drops + counter increments)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_bounded_replay_eviction() {
-    let svc = make_service();
-
-    let rid = RequestId::new();
-    let _guard = svc.register_request(rid);
-
-    // Emit more events than the bus capacity (128). This triggers drop-oldest evictions.
-    for i in 0..200 {
-        let payload = serde_json::json!({ "i": i }).to_string();
-        assert!(
-            svc.enqueue_event(rid, ReplayChannel::Requests, payload)
-                .is_ok()
-        );
-    }
-
-    // Bus should be at capacity.
-    assert_eq!(svc.bus_ref().len(), 128);
-
-    // The admitted event is present before the 200 explicit events, so 73 old
-    // replay entries were evicted; all 200 new events were accepted.
-    let evictions = svc.bus_ref().evictions.load(AtomicOrdering::Relaxed);
-    assert_eq!(evictions, 73);
-    assert_eq!(svc.bus_ref().drops.load(AtomicOrdering::Relaxed), 0);
-    assert_eq!(svc.total_drops(), 0);
-
-    // Queue never exceeds capacity.
-}
-
-#[test]
-fn test_queue_never_exceeds_capacity() {
-    let svc = make_service();
-    let rid = RequestId::new();
-    let _guard = svc.register_request(rid);
-
-    for i in 0..10_000 {
-        let payload = serde_json::json!({ "i": i }).to_string();
-        assert!(
-            svc.enqueue_event(rid, ReplayChannel::Requests, payload)
-                .is_ok()
-        );
-        // Invariant: bus never exceeds capacity.
-        assert!(
-            svc.bus_ref().len() <= 128,
-            "bus exceeded capacity at iteration {}",
-            i
-        );
-    }
-
-    // Request path completes despite overflow — no blocking or panic.
-}
-
-// ---------------------------------------------------------------------------
-// Test Scenario 5: Active → recent movement on terminal transition
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_active_to_recent_movement() {
-    use crate::logging::lifecycle::TerminalOutcome;
-
-    let svc = make_service();
-
-    let rid = RequestId::new();
-    let (guard, _) = svc.register_request(rid);
-
-    assert_eq!(svc.registry_ref().active_count(), 1);
-    assert_eq!(svc.registry_ref().recent_count(), 0);
-
-    // Transition to terminal → moves from active to recent.
-    svc.transition_terminal(rid, &guard, TerminalOutcome::Completed)
-        .unwrap();
-
-    assert_eq!(svc.registry_ref().active_count(), 0);
-    assert_eq!(svc.registry_ref().recent_count(), 1);
-}
-
-#[test]
-fn test_active_to_recent_preserves_created_at() {
-    use crate::logging::lifecycle::TerminalOutcome;
-
-    let svc = make_service();
-
-    let rid = RequestId::new();
-    let (guard, _) = svc.register_request(rid);
-
-    // Get the active entry's created_at.
-    let rid_str = rid.as_uuid().to_string();
-    let active_entry = svc.registry_ref().get_active(&rid_str).unwrap();
-    let original_created_at = active_entry.created_at.clone();
-
-    // Transition to terminal.
-    svc.transition_terminal(rid, &guard, TerminalOutcome::Failed("err".into()))
-        .unwrap();
-
-    // Recent entry should preserve created_at.
-    let recent_entry = svc.registry_ref().get_recent(&rid_str).unwrap();
-    assert_eq!(recent_entry.created_at, original_created_at);
-}
-
-// ---------------------------------------------------------------------------
-// Test Scenario 6: No registry leak (registry empties when all entries evict)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_no_registry_leak() {
-    use crate::logging::lifecycle::TerminalOutcome;
-
-    let config = ServiceConfig {
-        queue_capacity: 10,
-        event_buffer_size: 10,
-        registry_config: RegistryConfig {
-            max_active: 2,
-            max_recent: 3,
-        },
-        ..ServiceConfig::default()
-    };
-
-    let svc = LoggingService::new(
-        config.clone(),
-        Arc::new(TestSink::new()),
-        Box::new(TestClock::new()),
-    );
-
-    // Register many requests — all should eventually evict from both sets.
-    for i in 0..50 {
-        let rid = RequestId::new();
-        let (guard, _) = svc.register_request(rid);
-
-        if i % 2 == 0 {
-            // Every other request transitions to terminal → moves active→recent.
-            svc.transition_terminal(rid, &guard, TerminalOutcome::Completed)
-                .unwrap();
-        }
-    }
-
-    assert!(svc.registry_ref().active_count() <= config.registry_config.max_active);
-    assert!(svc.registry_ref().recent_count() <= config.registry_config.max_recent);
-
-    // Clear the registry — should become empty.
-    svc.registry_ref().clear();
-    assert!(svc.registry_ref().is_empty());
-}
-
-#[test]
-fn test_registry_eviction_counters_increment() {
-    use crate::logging::lifecycle::TerminalOutcome;
-
-    let config = ServiceConfig {
-        queue_capacity: 10,
-        event_buffer_size: 10,
-        registry_config: RegistryConfig {
-            max_active: 2,
-            max_recent: 2,
-        },
-        ..ServiceConfig::default()
-    };
-
-    let svc = LoggingService::new(
-        config.clone(),
-        Arc::new(TestSink::new()),
-        Box::new(TestClock::new()),
-    );
-
-    for i in 0..20 {
-        let rid = RequestId::new();
-        let (guard, _) = svc.register_request(rid);
-        if i % 3 == 0 {
-            svc.transition_terminal(rid, &guard, TerminalOutcome::Completed)
-                .unwrap();
-        }
-    }
-
-    // Every loop-local guard now terminalizes as Dropped when it is the final
-    // handle, so bounded pressure can land in recent rather than active.
-    assert!(
-        svc.registry_ref()
-            .active_evictions
-            .load(AtomicOrdering::Relaxed)
-            + svc
-                .registry_ref()
-                .recent_evictions
-                .load(AtomicOrdering::Relaxed)
-            > 0
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Test Scenario 7: Bounded shutdown (drain + stop completes; restart-safe)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_bounded_shutdown() {
@@ -1415,6 +1199,7 @@ fn test_request_path_completion_despite_full_queue() {
     let config = ServiceConfig {
         queue_capacity: 5, // Very small to force overflow quickly.
         event_buffer_size: 5,
+        artifact_command_max_bytes: ServiceConfig::default().artifact_command_max_bytes,
         registry_config: RegistryConfig::default(),
         ..ServiceConfig::default()
     };
@@ -1462,6 +1247,7 @@ fn test_zero_capacity_service_records_rejection_without_eviction() {
     let config = ServiceConfig {
         queue_capacity: 0,
         event_buffer_size: 0,
+        artifact_command_max_bytes: ServiceConfig::default().artifact_command_max_bytes,
         registry_config: RegistryConfig::default(),
         ..ServiceConfig::default()
     };
@@ -1493,6 +1279,7 @@ async fn test_zero_queue_capacity_is_clamped_for_manual_delivery() {
         ServiceConfig {
             queue_capacity: 0,
             event_buffer_size: 1,
+            artifact_command_max_bytes: ServiceConfig::default().artifact_command_max_bytes,
             registry_config: RegistryConfig::default(),
             ..ServiceConfig::default()
         },
@@ -1524,6 +1311,7 @@ async fn test_zero_capacity_service_can_spawn_without_panicking() {
         ServiceConfig {
             queue_capacity: 0,
             event_buffer_size: 0,
+            artifact_command_max_bytes: ServiceConfig::default().artifact_command_max_bytes,
             registry_config: RegistryConfig::default(),
             ..ServiceConfig::default()
         },
@@ -1641,7 +1429,7 @@ async fn test_manual_pump_persists_exact_entry_without_consuming_replay() {
         "request_id": request_id.as_uuid(),
         "channel": ReplayChannel::Operations,
         "sequence": 1,
-        "occurred_at": "2025-01-01T00:00:00.00000000000000000000Z",
+        "occurred_at": "2025-01-01T00:00:00.000000000Z",
         "payload": payload,
     })
     .to_string();
@@ -1826,7 +1614,7 @@ async fn noncanonical_lifecycle_payload_is_sanitized_before_operational_audit_pe
     let records = sink.records();
     assert!(matches!(
         records.as_slice(),
-        [TestRecord::AuditEntry { level, message }]
+        [TestRecord::AuditEntry { level, message, .. }]
             if level == "info"
                 && message.contains("[REDACTED]")
                 && !message.contains("sk-test-secret")
@@ -1879,6 +1667,63 @@ async fn test_worker_channel_saturation_is_nonblocking_and_counted_once() {
     }
     assert!(completed.try_recv().is_err());
     assert!(svc.shutdown().await);
+}
+
+#[tokio::test]
+async fn terminal_handoff_survives_normal_worker_queue_saturation() {
+    let (sink, mut started, _completed, release) = BlockingAuditSink::new();
+    let svc = LoggingService::new(
+        ServiceConfig {
+            queue_capacity: 64,
+            ..ServiceConfig::default()
+        },
+        Arc::new(sink),
+        Box::new(TestClock::new()),
+    );
+    assert!(svc.spawn());
+
+    // Block the worker, then fill its normal lane. Registering before the
+    // saturation gives the terminal a real lifecycle parent while the test
+    // verifies that only the extra normal entry is rejected.
+    svc.enqueue_event(
+        RequestId::new(),
+        ReplayChannel::System,
+        "{\"event\":0}".into(),
+    )
+    .expect("first normal entry is accepted");
+    started
+        .recv()
+        .await
+        .expect("worker started first normal persistence");
+    let request_id = RequestId::new();
+    let (guard, _) = svc.register_request(request_id);
+    for index in 1..=62 {
+        svc.enqueue_event(
+            RequestId::new(),
+            ReplayChannel::System,
+            format!("{{\"event\":{index}}}"),
+        )
+        .expect("normal queue fill remains fail-open");
+    }
+    svc.enqueue_event(
+        RequestId::new(),
+        ReplayChannel::System,
+        "{\"event\":65}".into(),
+    )
+    .expect("overflowing request path remains fail-open");
+    assert_eq!(svc.persistence_queue_drops(), 1);
+
+    svc.transition_terminal(request_id, &guard, TerminalOutcome::Completed)
+        .expect("terminal transition is accepted on the reserved lane");
+    assert_eq!(
+        svc.persistence_queue_drops(),
+        1,
+        "a terminal transition is not dropped behind saturated normal traffic"
+    );
+
+    release.notify_one();
+    assert!(svc.shutdown().await);
+    assert_eq!(svc.persistence_outstanding(), 0);
 }
 
 #[tokio::test]
@@ -1978,4 +1823,66 @@ fn test_drop_oldest_preserves_recent() {
     assert_eq!(entries[2].payload, "entry_9");
 
     // Oldest entries (0-6) were evicted.
+}
+
+// ---------------------------------------------------------------------------
+// Audit identity sharing: live bus frame and durable row share entry_id/occurred_at
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn audit_enqueue_shares_identity_with_durable_row() {
+    let sink = Arc::new(TestSink::new());
+    let service = LoggingService::new(
+        ServiceConfig::default(),
+        Arc::clone(&sink) as Arc<dyn PersistSink>,
+        Box::new(TestClock::new()),
+    );
+
+    let record = OperationalAuditRecord::builder("runtime", "startup_complete").build();
+    assert!(service.write_operational_audit(record));
+
+    assert_eq!(service.pump_sync().await, 1);
+
+    let audit_records: Vec<_> = sink
+        .records()
+        .into_iter()
+        .filter_map(|r| match r {
+            TestRecord::AuditEntry {
+                level,
+                message,
+                entry_id,
+                occurred_at,
+            } => Some((level, message, entry_id, occurred_at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(audit_records.len(), 1);
+    let (_, _, durable_entry_id, durable_occurred_at) = &audit_records[0];
+
+    let bus_entries = service.bus_ref().audit_replay_window();
+    assert_eq!(bus_entries.records.len(), 1);
+    let live_payload: serde_json::Value =
+        serde_json::from_str(&bus_entries.records[0].entry.payload).expect("parse live payload");
+    let live_entry_id = live_payload
+        .get("entry_id")
+        .and_then(|v| v.as_str())
+        .expect("entry_id");
+    let live_occurred_at = live_payload
+        .get("occurred_at")
+        .and_then(|v| v.as_str())
+        .expect("occurred_at");
+
+    assert!(!live_entry_id.is_empty());
+    assert_eq!(live_occurred_at, "2025-01-01T00:00:00.000000000Z");
+    assert_eq!(
+        live_payload.get("source").and_then(|v| v.as_str()),
+        Some("runtime")
+    );
+    assert_eq!(
+        live_payload.get("code").and_then(|v| v.as_str()),
+        Some("startup_complete")
+    );
+
+    assert_eq!(durable_entry_id.as_deref(), Some(live_entry_id));
+    assert_eq!(durable_occurred_at.as_deref(), Some(live_occurred_at));
 }

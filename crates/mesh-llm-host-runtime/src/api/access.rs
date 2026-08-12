@@ -1,6 +1,12 @@
 use std::net::{IpAddr, SocketAddr};
 
 pub(crate) fn requires_trusted_local_access(method: &str, path: &str) -> bool {
+    // Log history is local operator data. Keep this broad path classification
+    // at the server boundary so all current and future `/api/logs/**` routes
+    // are rejected before dispatch can touch the query facade or store.
+    if path == "/api/logs" || path.starts_with("/api/logs/") {
+        return true;
+    }
     if path == "/mcp"
         || path.starts_with("/api/plugins")
         || (method == "POST"
@@ -61,7 +67,7 @@ pub(crate) fn request_host(raw_request: &[u8]) -> Result<Option<&str>, ()> {
     request_header(raw_request, "host")
 }
 
-fn request_header<'a>(raw_request: &'a [u8], name: &str) -> Result<Option<&'a str>, ()> {
+pub(crate) fn request_header<'a>(raw_request: &'a [u8], name: &str) -> Result<Option<&'a str>, ()> {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut request = httparse::Request::new(&mut headers);
     match request.parse(raw_request).map_err(|_| ())? {
@@ -121,6 +127,8 @@ mod tests {
     #[test]
     fn sensitive_management_routes_require_trusted_local_access() {
         for (method, path) in [
+            ("GET", "/api/logs/requests"),
+            ("POST", "/api/logs/requests/export"),
             ("POST", "/mcp"),
             ("GET", "/api/plugins"),
             ("POST", "/api/plugins/agents/tools/run"),

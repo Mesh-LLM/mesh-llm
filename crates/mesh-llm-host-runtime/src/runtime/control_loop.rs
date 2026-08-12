@@ -4,10 +4,11 @@ use super::{
     DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL, IntentSource, MODEL_TARGET_RECONCILIATION_INTERVAL,
     ModelIntent, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
     RunAutoRuntimeLifecycleContext, RunAutoRuntimeLoopContext, RunAutoShutdownContext,
-    RunAutoStartupTasksContext, RuntimeEvent, ShutdownRuntimeLoadedModelsContext, UnloadTarget,
-    advertise_run_auto_models, apply_startup_model_load_finished, cleanup_run_auto_runtime_dir,
-    current_time_secs, dashboard_context_usage_source, emit_shutdown,
-    model_target_reconciliation_policy, publish_runtime_llama_slots,
+    RunAutoStartupTasksContext, RuntimeEvent, RuntimeOperationalEvent,
+    ShutdownRuntimeLoadedModelsContext, UnloadTarget, advertise_run_auto_models,
+    apply_startup_model_load_finished, cleanup_run_auto_runtime_dir, current_time_secs,
+    dashboard_context_usage_source, emit_shutdown, model_target_reconciliation_policy,
+    publish_runtime_llama_slots, record_runtime_operational_event,
     refresh_dashboard_context_usage_batch, resolve_eager_startup_models,
     resolve_runtime_unload_target, run_auto_handle_model_target_reconciliation_result,
     run_auto_handle_runtime_exit, run_auto_load_runtime_model, run_auto_model_identity,
@@ -295,6 +296,30 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
     if !shutdown_requested {
         run_auto_runtime_event_loop(&mut loop_ctx, control_rx, runtime_event_rx, model_intent_rx)
             .await;
+    }
+
+    // This audit must precede the cleanup-worker stop and service drain below,
+    // so normal shutdown retains the same durable boundary as other lifecycle
+    // records without delaying teardown.
+    record_runtime_operational_event(RuntimeOperationalEvent::ShutdownStarted);
+
+    // Stop scheduled cleanup before draining persistence so the scheduler
+    // cannot enqueue a late audit after the durable delivery boundary closes.
+    if let Some(logging_runtime) = crate::logging_runtime_state() {
+        logging_runtime.shutdown_cleanup_worker().await;
+    }
+
+    // Stop terminal webhook dispatch before closing the persistence hand-off.
+    // Its bounded scheduler leaves unfinished durable rows restart-reclaimable.
+    if let Some(logging_runtime) = crate::logging_runtime_state() {
+        logging_runtime.shutdown_webhook_delivery_worker().await;
+    }
+
+    // The logging worker owns only best-effort durable delivery. Drain and
+    // join it at the normal runtime boundary before dependent process state is
+    // torn down; its own fixed timeout records any bounded loss fail-open.
+    if let Some(logging_service) = runtime_state.logging_service.take() {
+        let _ = logging_service.shutdown().await;
     }
 
     shutdown_run_auto_runtime(RunAutoShutdownContext {
