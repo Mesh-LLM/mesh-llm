@@ -134,7 +134,8 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
   }
 
   private func modelObject(_ model: AppleModelStatus, id: String) -> [String: Any] {
-    var object = [
+    var object =
+      [
         "id": model.modelID,
         "object": "model",
         "owned_by": "apple",
@@ -147,6 +148,10 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     object["model_version"] = model.modelVersion
     object["version_source"] = model.versionSource
     object["versioned_model_id"] = model.versionedModelID
+    object["unavailable_reason"] = model.unavailableReason
+    object["max_concurrent_requests"] = model.load.maxConcurrentRequests
+    object["active_requests"] = model.load.activeRequests
+    object["queued_requests"] = model.load.queuedRequests
     return object
   }
 

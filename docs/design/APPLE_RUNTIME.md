@@ -1,8 +1,9 @@
 # Experimental Apple runtime
 
-Status: Milestone 0, the local REST vertical slice, executable-provider
-artifact contract, and experimental Rust host supervisor completed on
-2026-08-12; SDK distribution and mesh routing remain gated. Tracking issue:
+Status: Milestones 0–3 have experimental implementations as of 2026-08-12:
+the system-model spike, local REST vertical slice, shared SDK carrier contract,
+and private-mesh whole-model routing. Release promotion and public-mesh
+advertisement remain gated. Tracking issue:
 [#1246](https://github.com/mesh-llm/mesh-llm/issues/1246).
 
 ## Outcome
@@ -19,8 +20,9 @@ path uses Apple's native accelerator stack; it is not a CPU-only Swift wrapper.
 
 The experimental sidecar exposes a loopback OpenAI-shaped REST surface. The
 Rust host can now resolve and supervise the packaged process and route
-`apple/system` through MeshLLM's normal local OpenAI frontend. It does not yet
-ship in release products or gossip `apple/system` to peers.
+`apple/system` through MeshLLM's normal local OpenAI frontend. Private meshes
+gossip its observed availability, version, context, and one-slot load; the
+provider does not ship in release products or advertise on public meshes.
 
 ## Why this is valuable to Apple silicon users
 
@@ -105,6 +107,8 @@ The provider currently implements:
 
 - availability and explicit unavailability reasons;
 - context size, languages, and capability discovery;
+- exact input token preflight for prompts, instructions, tool definitions, and
+  guided-generation schemas, including requested response-token headroom;
 - session prewarming;
 - snapshot-to-delta streaming;
 - elapsed time and time to first token;
@@ -155,9 +159,18 @@ The supervisor:
   `SIGTERM`, waits up to five seconds, and force-kills a child that does not
   exit.
 
-This phase deliberately advertises no provider state through gossip. The
-supervised model is local-only until the additive Phase 3 capability and
-availability fields, routing semantics, and mixed-version behavior are proven.
+On private meshes, the supervisor advertises both `apple/system` and its
+resolved generation as ordinary whole-model routes. Additive runtime fields
+carry provider kind, generation, maximum concurrency, active requests, and
+queued requests. Health loss or process exit withdraws the routes and triggers
+fresh gossip; public meshes suppress the advertisement entirely.
+
+Routing prefers an idle provider, then peers without load metadata, then busy
+or queued providers. Existing request affinity keeps a session on the selected
+Mac while it remains healthy. Failover is allowed only before response headers
+or the first stream event; MeshLLM never attempts to splice a generation across
+providers. `apple/system` and `apple/system@<generation>` are explicit-only:
+they are excluded from `auto`, the virtual `mesh` model, and MoA worker pools.
 
 ## Runtime packaging and SDK ownership
 
@@ -224,6 +237,7 @@ just apple::build
 just apple::test
 just apple::live
 just apple::mesh
+just apple::private-mesh
 just apple::product 0.72.1 target/apple-runtime/product
 just apple::product-qa 0.72.1 target/apple-runtime/product
 just apple::rust-sdk
@@ -253,6 +267,7 @@ Observed live results:
 | REST tool execution | pass |
 | REST client-disconnect cancellation | pass |
 | MeshLLM `/v1` completion, SSE, tool, and cancellation | pass |
+| Two-node private mesh provider gossip and completion | pass; 2 replicas / 2 total slots |
 | Version-resolved `apple/system@27.0` completion | pass |
 | Management API provider PID, health, port, and context | pass |
 | Unexpected provider exit and supervised restart | pass |
@@ -281,6 +296,24 @@ Public evidence should contain only aggregate timings, token counts, and
 accelerator classification.
 
 ### Quality and context findings
+
+[Apple TN3193](https://developer.apple.com/documentation/technotes/tn3193-managing-the-on-device-foundation-model-s-context-window)
+confirms that each language-model session has a 4,096-token context and that
+instructions, prompts, tool schemas/inputs/outputs, `Generable` schemas,
+transcript entries, and model responses all consume it. The sidecar therefore
+uses Apple's `tokenCount(for:)` APIs before generation. It sums the applicable
+prompt, instruction, tool, and schema counts, reserves an explicitly requested
+response-token limit, and returns `context_exceeded` before starting work when
+the request cannot fit. The framework error remains a final safety net because
+tool outputs and an unconstrained response can grow after preflight.
+
+TN3193 also changes the product guidance for longer tasks: do not imply that
+request routing creates a larger logical context. Use concise instructions,
+small tool schemas (Apple recommends offering at most 3–5 tools), retrieval of
+only relevant snippets, or application-level chunk/summarize/compact flows that
+start a new Apple language-model session. A strict response-token maximum is a
+runaway-generation guard, not a general truncation strategy, because it may
+produce malformed or incomplete output.
 
 The guided-generation API returned a valid `@Generable` value and usage, but it
 misclassified the simple phrase “choose a warm mesh replica” as unrelated with
@@ -370,12 +403,17 @@ before composition. Remaining promotion work is release-channel publication
 of the one signed artifact plus app-sandbox and quarantine validation in a
 signed Swift app and packaged Electron app.
 
-### 3. Private-mesh system-model routing
+### 3. Private-mesh system-model routing — experimental implementation complete
 
-Extend the local supervisor's availability and withdrawal state into additive
-gossip, then add load and queue reporting, whole-model placement, pre-stream
-failover, request affinity, mixed-version behavior, and two-node validation.
-Keep `apple/system` explicit and private-mesh-only.
+Private peers now exchange additive provider runtime descriptors and route the
+rolling or versioned system-model ID as one whole request. The Apple sidecar
+owns a one-request FIFO scheduler and reports capacity, active work, and queue
+depth. Routing is load-aware, honors normal session/prefix affinity, retries a
+different healthy Mac only before streaming begins, and withdraws a provider
+after health or process failure. Older peers safely ignore the new fields; a
+new peer treats an older provider's missing load as unknown. The management API,
+OpenAI model metadata, and console expose the observed provider generation and
+load. Public meshes, `auto`, virtual `mesh`, and MoA do not select this model.
 
 ### 4. Core AI model providers and workload certification
 

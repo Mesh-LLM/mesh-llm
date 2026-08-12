@@ -50,7 +50,7 @@ public actor SystemModelProvider {
     model = .default
   }
 
-  public func status() -> AppleModelStatus? {
+  public func status(load: AppleProviderLoad) -> AppleModelStatus? {
     let availability = availabilityFields(model.availability)
     guard let modelVersion = AppleRuntimeIdentifiers.systemModelVersion,
       let versionedModelID = AppleRuntimeIdentifiers.versionedSystemModelID
@@ -83,7 +83,8 @@ public actor SystemModelProvider {
       modelVersion: modelVersion,
       versionSource: AppleRuntimeIdentifiers.systemModelVersionSource,
       versionedModelID: versionedModelID,
-      capabilities: capabilities.sorted()
+      capabilities: capabilities.sorted(),
+      load: load
     )
   }
 
@@ -99,6 +100,11 @@ public actor SystemModelProvider {
     onEvent: @Sendable (AppleRuntimeEvent) -> Void
   ) async throws -> AppleGenerationResult {
     try requireAvailable()
+    try await validateContextBudget(
+      prompt: request.prompt,
+      instructions: request.instructions,
+      maximumResponseTokens: request.maximumResponseTokens
+    )
     let session: LanguageModelSession
     if let preparedSession, request.instructions == nil {
       session = preparedSession
@@ -173,10 +179,17 @@ public actor SystemModelProvider {
 
   public func generateStructured(prompt: String) async throws -> AppleStructuredResult {
     try requireAvailable()
+    let instructions =
+      "Classify the supplied text. Keep the explanation short. Confidence is 0 through 100."
+    try await validateContextBudget(
+      prompt: prompt,
+      instructions: instructions,
+      schema: SpikeClassification.generationSchema,
+      maximumResponseTokens: 128
+    )
     let session = LanguageModelSession(
       model: model,
-      instructions:
-        "Classify the supplied text. Keep the explanation short. Confidence is 0 through 100."
+      instructions: instructions
     )
     do {
       let response = try await session.respond(
@@ -200,14 +213,22 @@ public actor SystemModelProvider {
     try requireAvailable()
     let recorder = FixtureInvocationRecorder()
     let tool = FixtureLookupTool(recorder: recorder)
+    let instructions = "Call mesh_fixture_lookup once. Reply with only its output."
+    let prompt = "Fixture key: \(key)"
+    try await validateContextBudget(
+      prompt: prompt,
+      instructions: instructions,
+      tools: [tool],
+      maximumResponseTokens: 32
+    )
     let session = LanguageModelSession(
       model: model,
       tools: [tool],
-      instructions: "Call mesh_fixture_lookup once. Reply with only its output."
+      instructions: instructions
     )
     do {
       let response = try await session.respond(
-        to: "Fixture key: \(key)",
+        to: prompt,
         options: GenerationOptions(
           temperature: 0,
           maximumResponseTokens: 32,
@@ -234,6 +255,55 @@ public actor SystemModelProvider {
         retryable: fields.reason == "model_not_ready"
       )
     }
+  }
+
+  private func validateContextBudget(
+    prompt: String,
+    instructions: String?,
+    tools: [any Tool] = [],
+    schema: GenerationSchema? = nil,
+    maximumResponseTokens: Int?
+  ) async throws {
+    var inputTokens = try await model.tokenCount(for: Prompt(prompt))
+    if let instructions, !instructions.isEmpty {
+      inputTokens += try await model.tokenCount(for: Instructions(instructions))
+    }
+    if !tools.isEmpty {
+      inputTokens += try await model.tokenCount(for: tools)
+    }
+    if let schema {
+      inputTokens += try await model.tokenCount(for: schema)
+    }
+
+    try validateAppleContextBudget(
+      contextSize: model.contextSize,
+      inputTokens: inputTokens,
+      maximumResponseTokens: maximumResponseTokens
+    )
+  }
+}
+
+func validateAppleContextBudget(
+  contextSize: Int,
+  inputTokens: Int,
+  maximumResponseTokens: Int?
+) throws {
+  let outputTokens = maximumResponseTokens ?? 0
+  guard outputTokens >= 0 else {
+    throw AppleRuntimeFailure(
+      code: "invalid_maximum_response_tokens",
+      message: "maximum response tokens cannot be negative",
+      retryable: false
+    )
+  }
+  guard inputTokens < contextSize, inputTokens + outputTokens <= contextSize else {
+    throw AppleRuntimeFailure(
+      code: "context_exceeded",
+      message:
+        "Apple system model context limit is \(contextSize) tokens; "
+        + "request input uses \(inputTokens) and reserves \(outputTokens) response tokens",
+      retryable: false
+    )
   }
 }
 
@@ -290,6 +360,9 @@ private func milliseconds(
 }
 
 private func mapProviderError(_ error: any Error) -> AppleRuntimeFailure {
+  if let failure = error as? AppleRuntimeFailure {
+    return failure
+  }
   if error is CancellationError {
     return AppleRuntimeFailure(
       code: "cancelled",

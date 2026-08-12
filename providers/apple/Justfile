@@ -60,6 +60,11 @@ mesh: package
     @just --justfile "{{ apple_root }}/../../Justfile" build
     @"{{ apple_root }}/QA/mesh.sh"
 
+# Route apple/system through two private-mesh nodes and verify additive load gossip.
+private-mesh: package
+    @just --justfile "{{ apple_root }}/../../Justfile" build
+    @"{{ apple_root }}/QA/private-mesh.sh"
+
 # Prove packaged-product auto-discovery with no provider bundle/index override.
 product-smoke mesh_version output="target/apple-runtime/product":
     @MESH_APPLE_RUNTIME_PRODUCT_VERSION="{{ mesh_version }}" \
@@ -102,4 +107,4 @@ orphan: package
     @"{{ apple_root }}/QA/orphan.sh"
 
 # Run the complete experimental Apple runtime validation suite.
-qa: test live rest mesh carriers sdk-carriers launchd instruments orphan
+qa: test live rest mesh private-mesh carriers sdk-carriers launchd instruments orphan

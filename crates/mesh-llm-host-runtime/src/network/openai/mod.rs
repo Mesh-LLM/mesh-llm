@@ -4,6 +4,7 @@ mod forwarded_request;
 pub(crate) mod ingress;
 pub(crate) mod moa_gateway;
 mod parse_failure;
+mod provider_policy;
 mod request_normalize;
 pub(crate) mod request_parse;
 mod response;

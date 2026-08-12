@@ -304,6 +304,16 @@ pub struct ModelRuntimeDescriptor {
     pub context_length: ::core::option::Option<u32>,
     #[prost(bool, tag = "4")]
     pub ready: bool,
+    #[prost(string, optional, tag = "5")]
+    pub provider_kind: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub model_version: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint32, optional, tag = "7")]
+    pub max_concurrent_requests: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "8")]
+    pub active_requests: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "9")]
+    pub queued_requests: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ModelMoeInfo {

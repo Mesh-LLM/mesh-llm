@@ -275,7 +275,10 @@ pub(super) async fn assemble_worker_pool(
         .models_being_served()
         .await
         .into_iter()
-        .filter(|n| n != moa::VIRTUAL_MODEL_NAME)
+        .filter(|n| {
+            n != moa::VIRTUAL_MODEL_NAME
+                && !crate::network::openai::provider_policy::is_explicit_only_model(n)
+        })
         .collect();
 
     // Verified sizes gossiped by peers (metadata.parameter_count_b). The

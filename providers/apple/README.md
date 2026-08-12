@@ -300,12 +300,21 @@ select artifacts and policy with:
 - `MESH_LLM_PROVIDER_RUNTIME_CACHE_DIR` for an isolated immutable cache; and
 - `MESH_LLM_APPLE_PROVIDER_ALLOW_AD_HOC=1` only for local development.
 
+`just apple::private-mesh` starts two identity-isolated MeshLLM nodes on the
+Golden Gate Mac, joins them with a private invite, and verifies that additive
+provider runtime gossip produces two `apple/system` replicas, two aggregate
+request slots, peer-visible provider generation/load, a routed completion, and
+dispatch of concurrent work from a busy local provider to the idle peer.
+Use the two-physical-Mac procedure in `docs/design/TESTING.md` for release
+confidence, withdrawal, affinity, and failover checks.
+
 ## Other validation commands
 
 ```bash
 just apple::live
 just apple::contract
 just apple::mesh
+just apple::private-mesh
 just apple::rust-sdk
 just apple::carriers
 just apple::launchd

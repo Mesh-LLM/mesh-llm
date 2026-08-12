@@ -125,6 +125,44 @@ describe('adaptStatusToDashboard', () => {
     expect(dashboard.peers[1]).toEqual(expect.objectContaining({ id: 'aeac0d8e53', owner: 'unsigned' }))
   })
 
+  it('derives Apple provider load from additive runtime capacity', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      runtime: {
+        models: [
+          {
+            name: 'apple/system',
+            status: 'ready',
+            provider_kind: 'apple',
+            max_concurrent_requests: 1,
+            active_requests: 1,
+            queued_requests: 2
+          }
+        ]
+      },
+      peers: [
+        {
+          id: 'apple-peer',
+          role: 'Host',
+          state: 'serving',
+          models: ['apple/system'],
+          provider_runtimes: [
+            {
+              model_name: 'apple/system',
+              provider_kind: 'apple',
+              max_concurrent_requests: 1,
+              active_requests: 0,
+              queued_requests: 0
+            }
+          ]
+        }
+      ]
+    })
+
+    expect(dashboard.peers.find((peer) => peer.role === 'you')?.loadPct).toBe(100)
+    expect(dashboard.peers.find((peer) => peer.id === 'apple-peer')?.loadPct).toBe(0)
+  })
+
   it('adapts live status into the six-cell dashboard metrics bar', () => {
     const dashboard = adaptStatusToDashboard({
       ...PUBLIC_STATUS_PAYLOAD,

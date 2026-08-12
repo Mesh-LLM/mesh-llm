@@ -166,6 +166,30 @@ fn model_metadata_json(
             );
         }
     }
+    if let Some(provider) = provider_runtime_metadata_for_model(model_name, runtimes) {
+        metadata.insert("provider".to_string(), serde_json::json!(provider.kind));
+        metadata.insert(
+            "provider_model_versions".to_string(),
+            serde_json::json!(provider.model_versions),
+        );
+        metadata.insert("replicas".to_string(), serde_json::json!(provider.replicas));
+        metadata.insert(
+            "max_concurrent_requests".to_string(),
+            serde_json::json!(provider.max_concurrent_requests),
+        );
+        metadata.insert(
+            "active_requests".to_string(),
+            serde_json::json!(provider.active_requests),
+        );
+        metadata.insert(
+            "queued_requests".to_string(),
+            serde_json::json!(provider.queued_requests),
+        );
+        metadata.insert(
+            "available_slots".to_string(),
+            serde_json::json!(provider.available_slots),
+        );
+    }
     if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.native_context_length) {
         metadata.insert(
             "native_context_length".to_string(),
@@ -199,6 +223,55 @@ fn model_metadata_json(
 struct RuntimeContextLengths {
     min: u32,
     max: u32,
+}
+
+struct ProviderRuntimeMetadata {
+    kind: String,
+    model_versions: Vec<String>,
+    replicas: usize,
+    max_concurrent_requests: u32,
+    active_requests: u32,
+    queued_requests: u32,
+    available_slots: u32,
+}
+
+fn provider_runtime_metadata_for_model(
+    model_name: &str,
+    runtimes: &[mesh::ModelRuntimeDescriptor],
+) -> Option<ProviderRuntimeMetadata> {
+    let provider_runtimes = runtimes
+        .iter()
+        .filter(|runtime| runtime.model_name == model_name && runtime.ready)
+        .filter_map(|runtime| runtime.provider_kind.as_deref().map(|kind| (kind, runtime)))
+        .collect::<Vec<_>>();
+    let (kind, _) = provider_runtimes.first()?;
+    let mut model_versions = provider_runtimes
+        .iter()
+        .filter_map(|(_, runtime)| runtime.model_version.clone())
+        .collect::<Vec<_>>();
+    model_versions.sort();
+    model_versions.dedup();
+    let max_concurrent_requests = provider_runtimes
+        .iter()
+        .filter_map(|(_, runtime)| runtime.max_concurrent_requests)
+        .sum();
+    let active_requests = provider_runtimes
+        .iter()
+        .filter_map(|(_, runtime)| runtime.active_requests)
+        .sum();
+    let queued_requests = provider_runtimes
+        .iter()
+        .filter_map(|(_, runtime)| runtime.queued_requests)
+        .sum();
+    Some(ProviderRuntimeMetadata {
+        kind: (*kind).to_string(),
+        model_versions,
+        replicas: provider_runtimes.len(),
+        max_concurrent_requests,
+        active_requests,
+        queued_requests,
+        available_slots: max_concurrent_requests.saturating_sub(active_requests),
+    })
 }
 
 fn runtime_context_lengths_for_model(
@@ -393,6 +466,7 @@ mod tests {
             identity_hash: None,
             context_length: Some(65_536),
             ready: true,
+            ..Default::default()
         }];
 
         let body = models_list_json(&models, &[descriptor], &runtimes);
@@ -422,12 +496,14 @@ mod tests {
                 identity_hash: None,
                 context_length: Some(32_768),
                 ready: true,
+                ..Default::default()
             },
             mesh::ModelRuntimeDescriptor {
                 model_name: models[0].clone(),
                 identity_hash: None,
                 context_length: Some(131_072),
                 ready: true,
+                ..Default::default()
             },
         ];
 
@@ -439,6 +515,49 @@ mod tests {
     }
 
     #[test]
+    fn models_list_reports_aggregate_provider_capacity() {
+        let models = vec!["apple/system".to_string()];
+        let runtimes = vec![
+            mesh::ModelRuntimeDescriptor {
+                model_name: models[0].clone(),
+                context_length: Some(4096),
+                ready: true,
+                provider_kind: Some("apple".to_string()),
+                model_version: Some("27.0".to_string()),
+                max_concurrent_requests: Some(1),
+                active_requests: Some(0),
+                queued_requests: Some(0),
+                ..Default::default()
+            },
+            mesh::ModelRuntimeDescriptor {
+                model_name: models[0].clone(),
+                context_length: Some(4096),
+                ready: true,
+                provider_kind: Some("apple".to_string()),
+                model_version: Some("27.0".to_string()),
+                max_concurrent_requests: Some(1),
+                active_requests: Some(1),
+                queued_requests: Some(2),
+                ..Default::default()
+            },
+        ];
+
+        let body = models_list_json(&models, &[], &runtimes);
+        let metadata = &body["data"][0]["metadata"];
+
+        assert_eq!(metadata["provider"], "apple");
+        assert_eq!(
+            metadata["provider_model_versions"],
+            serde_json::json!(["27.0"])
+        );
+        assert_eq!(metadata["replicas"], 2);
+        assert_eq!(metadata["max_concurrent_requests"], 2);
+        assert_eq!(metadata["active_requests"], 1);
+        assert_eq!(metadata["queued_requests"], 2);
+        assert_eq!(metadata["available_slots"], 1);
+    }
+
+    #[test]
     fn models_list_advertises_virtual_mesh_when_moa_has_two_models() {
         let models = vec!["fast-8b".to_string(), "strong-32b".to_string()];
         let runtimes = vec![
@@ -447,12 +566,14 @@ mod tests {
                 identity_hash: None,
                 context_length: Some(16_384),
                 ready: true,
+                ..Default::default()
             },
             mesh::ModelRuntimeDescriptor {
                 model_name: "strong-32b".to_string(),
                 identity_hash: None,
                 context_length: Some(65_536),
                 ready: true,
+                ..Default::default()
             },
         ];
 

@@ -10,6 +10,7 @@ use crate::runtime_data;
 use crate::system::hardware::expand_gpu_names;
 mod runtime;
 
+use mesh_llm_types::mesh::ModelRuntimeDescriptor;
 pub(crate) use runtime::*;
 use serde::Serialize;
 use skippy_server::OpenAiGuardrailsStatus;
@@ -512,6 +513,8 @@ pub(crate) struct PeerPayload {
     pub(crate) hosted_models_known: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) advertised_model_throughput: Vec<metrics::ModelThroughputHint>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) provider_runtimes: Vec<ModelRuntimeDescriptor>,
     pub(crate) version: Option<String>,
     pub(crate) rtt_ms: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -743,6 +746,11 @@ pub(crate) fn build_runtime_status_payload(
             status: process.status,
             port: Some(process.port),
             context_length: process.context_length,
+            provider_kind: None,
+            model_version: None,
+            max_concurrent_requests: None,
+            active_requests: None,
+            queued_requests: None,
         })
         .collect();
 
@@ -758,6 +766,11 @@ pub(crate) fn build_runtime_status_payload(
                 status: "starting".into(),
                 port: llama_port,
                 context_length: None,
+                provider_kind: None,
+                model_version: None,
+                max_concurrent_requests: None,
+                active_requests: None,
+                queued_requests: None,
             },
         );
     }
@@ -771,6 +784,24 @@ pub(crate) fn build_runtime_status_payload(
         capabilities: None,
         lifecycle_instances: vec![],
         intent_summary: None,
+    }
+}
+
+pub(crate) fn enrich_provider_runtime_models(
+    models: &mut [RuntimeModelPayload],
+    descriptors: &[ModelRuntimeDescriptor],
+) {
+    for model in models {
+        let Some(descriptor) = descriptors.iter().find(|descriptor| {
+            descriptor.model_name == model.name && descriptor.provider_kind.is_some()
+        }) else {
+            continue;
+        };
+        model.provider_kind.clone_from(&descriptor.provider_kind);
+        model.model_version.clone_from(&descriptor.model_version);
+        model.max_concurrent_requests = descriptor.max_concurrent_requests;
+        model.active_requests = descriptor.active_requests;
+        model.queued_requests = descriptor.queued_requests;
     }
 }
 
@@ -1098,6 +1129,7 @@ mod tests {
             hosted_models: vec![],
             hosted_models_known: false,
             advertised_model_throughput: vec![],
+            provider_runtimes: vec![],
             version: Some("0.56.0".to_string()),
             rtt_ms: None,
             latency_ms: None,
@@ -1131,6 +1163,7 @@ mod tests {
             hosted_models: vec![],
             hosted_models_known: false,
             advertised_model_throughput: vec![],
+            provider_runtimes: vec![],
             version: None,
             rtt_ms: None,
             latency_ms: None,
@@ -1442,6 +1475,7 @@ mod tests {
             hosted_models: vec!["Qwen".to_string()],
             hosted_models_known: true,
             advertised_model_throughput: vec![],
+            provider_runtimes: vec![],
             version: Some("0.60.2".to_string()),
             rtt_ms: Some(12),
             latency_ms: None,

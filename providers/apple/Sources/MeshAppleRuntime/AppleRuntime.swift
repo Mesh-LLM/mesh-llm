@@ -2,13 +2,16 @@ import Foundation
 
 public actor AppleRuntime {
   private let systemModel: SystemModelProvider
+  private let scheduler: ProviderRequestScheduler
 
   public init() {
     systemModel = SystemModelProvider()
+    scheduler = ProviderRequestScheduler()
   }
 
   public func status() async -> AppleRuntimeStatus {
-    let systemModelStatus = await systemModel.status()
+    let load = await scheduler.snapshot()
+    let systemModelStatus = await systemModel.status(load: load)
     return AppleRuntimeStatus(
       runtimeID: AppleRuntimeIdentifiers.runtimeID,
       protocolVersion: AppleRuntimeIdentifiers.protocolVersion,
@@ -19,7 +22,9 @@ public actor AppleRuntime {
 
   public func prewarm(modelID: String, promptPrefix: String? = nil) async throws {
     try requireSystemModel(modelID)
-    try await systemModel.prewarm(promptPrefix: promptPrefix)
+    try await scheduler.withPermit {
+      try await self.systemModel.prewarm(promptPrefix: promptPrefix)
+    }
   }
 
   public func generate(
@@ -27,7 +32,9 @@ public actor AppleRuntime {
     onEvent: @Sendable (AppleRuntimeEvent) -> Void
   ) async throws -> AppleGenerationResult {
     try requireSystemModel(request.modelID)
-    return try await systemModel.generate(request: request, onEvent: onEvent)
+    return try await scheduler.withPermit {
+      try await self.systemModel.generate(request: request, onEvent: onEvent)
+    }
   }
 
   public func generateStructured(
@@ -35,12 +42,16 @@ public actor AppleRuntime {
     prompt: String
   ) async throws -> AppleStructuredResult {
     try requireSystemModel(modelID)
-    return try await systemModel.generateStructured(prompt: prompt)
+    return try await scheduler.withPermit {
+      try await self.systemModel.generateStructured(prompt: prompt)
+    }
   }
 
   public func exerciseTool(modelID: String, key: String) async throws -> AppleToolResult {
     try requireSystemModel(modelID)
-    return try await systemModel.exerciseTool(key: key)
+    return try await scheduler.withPermit {
+      try await self.systemModel.exerciseTool(key: key)
+    }
   }
 
   private func requireSystemModel(_ modelID: String) throws {

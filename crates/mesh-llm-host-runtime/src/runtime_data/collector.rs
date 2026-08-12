@@ -1107,6 +1107,12 @@ fn build_peer_payload(peer: &mesh::PeerInfo) -> PeerPayload {
         hosted_models: peer.hosted_models.clone(),
         hosted_models_known: peer.hosted_models_known,
         advertised_model_throughput: peer.advertised_model_throughput.clone(),
+        provider_runtimes: peer
+            .served_model_runtime
+            .iter()
+            .filter(|runtime| runtime.provider_kind.is_some())
+            .cloned()
+            .collect(),
         version: peer.version.clone(),
         rtt_ms: peer.rtt_ms,
         latency_ms: display_latency.latency_ms,

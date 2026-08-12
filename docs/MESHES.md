@@ -110,6 +110,28 @@ Join from an API-only client:
 mesh-llm client --join <token>
 ```
 
+### Apple system models on a private mesh (experimental)
+
+On an Apple silicon Mac running macOS Golden Gate with the signed Apple
+provider runtime installed, `mesh-llm serve` can advertise `apple/system` and
+its resolved generation, for example `apple/system@27.0`, to peers that joined
+the same private mesh. Requests are sent to one Mac for their entire lifetime;
+the opaque Apple model is never split into Skippy pipeline stages.
+
+The advertisement includes runtime-observed context, capability, generation,
+one-request capacity, active work, and queue depth. MeshLLM prefers an idle Mac,
+preserves normal request affinity, retries another provider only if failure
+happens before streaming begins, and withdraws the route when its sidecar is no
+longer healthy. Missing additive load fields from an older peer are treated as
+unknown capacity, preserving mixed-version operation.
+
+This provider is intentionally explicit-only. Call `apple/system` or an exact
+versioned ID; `auto`, `mesh`, and MoA will not select it. Nodes started with
+`--publish` do not advertise Apple system models. This keeps the experimental
+system-model route inside an invite-gated trust boundary while licensing,
+quality, privacy, signing, and release-distribution gates remain open. See
+[Experimental Apple runtime](design/APPLE_RUNTIME.md) for packaging and setup.
+
 ### Multi-interface Linux and Docker hosts
 
 On Linux hosts with several kernel-visible interfaces, especially

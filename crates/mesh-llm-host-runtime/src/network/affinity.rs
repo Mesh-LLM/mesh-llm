@@ -304,6 +304,8 @@ pub struct TargetSelection {
     pub target: election::InferenceTarget,
     pub learn_prefix_hash: Option<u64>,
     pub cached_target: Option<election::InferenceTarget>,
+    /// True when an explicit/stored affinity decision must outrank live load.
+    pub affinity_selected: bool,
 }
 
 pub struct PreparedTargets {
@@ -525,6 +527,7 @@ pub fn select_model_target_from_candidates(
             target: election::ModelTargets::pick_sticky_from(candidates, session_hash),
             learn_prefix_hash: None,
             cached_target: None,
+            affinity_selected: true,
         };
     }
 
@@ -534,6 +537,7 @@ pub fn select_model_target_from_candidates(
                 target: target.clone(),
                 learn_prefix_hash: Some(prefix_hash),
                 cached_target: Some(target),
+                affinity_selected: true,
             };
         }
 
@@ -542,6 +546,7 @@ pub fn select_model_target_from_candidates(
                 target: election::ModelTargets::pick_sticky_from(candidates, prefix_hash),
                 learn_prefix_hash: Some(prefix_hash),
                 cached_target: None,
+                affinity_selected: true,
             };
         }
 
@@ -551,6 +556,7 @@ pub fn select_model_target_from_candidates(
                 target: election::ModelTargets::pick_sticky_from(candidates, sticky_hash),
                 learn_prefix_hash: Some(prefix_hash),
                 cached_target: None,
+                affinity_selected: true,
             };
         }
 
@@ -558,6 +564,7 @@ pub fn select_model_target_from_candidates(
             target: targets.pick_from(candidates),
             learn_prefix_hash: Some(prefix_hash),
             cached_target: None,
+            affinity_selected: false,
         };
     }
 
@@ -567,6 +574,7 @@ pub fn select_model_target_from_candidates(
             target: election::ModelTargets::pick_sticky_from(candidates, sticky_hash),
             learn_prefix_hash: None,
             cached_target: None,
+            affinity_selected: true,
         };
     }
 
@@ -574,6 +582,7 @@ pub fn select_model_target_from_candidates(
         target: targets.pick_from(candidates),
         learn_prefix_hash: None,
         cached_target: None,
+        affinity_selected: false,
     }
 }
 

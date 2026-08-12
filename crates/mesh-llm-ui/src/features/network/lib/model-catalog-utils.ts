@@ -8,6 +8,7 @@ type ModelFamilyRule = { label: string; patterns: RegExp[] }
 type ModelLicenseRule = { label: string; patterns: RegExp[] }
 
 const MODEL_PROVIDER_RULES: ModelProviderRule[] = [
+  { label: 'Apple', prefixes: ['apple'] },
   { label: 'Cohere', prefixes: ['command', 'cohere'] },
   { label: 'Z.ai', prefixes: ['glm', 'zai', 'z.ai', 'zhipu'] },
   { label: 'OpenAI', prefixes: ['gpt-oss'] },

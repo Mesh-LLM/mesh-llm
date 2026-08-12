@@ -66,6 +66,7 @@ public struct AppleModelStatus: Codable, Equatable, Sendable {
   public let versionSource: String
   public let versionedModelID: String
   public let capabilities: [String]
+  public let load: AppleProviderLoad
 
   public init(
     modelID: String,
@@ -78,7 +79,8 @@ public struct AppleModelStatus: Codable, Equatable, Sendable {
     modelVersion: String,
     versionSource: String,
     versionedModelID: String,
-    capabilities: [String]
+    capabilities: [String],
+    load: AppleProviderLoad
   ) {
     self.modelID = modelID
     self.providerKind = providerKind
@@ -91,6 +93,29 @@ public struct AppleModelStatus: Codable, Equatable, Sendable {
     self.versionSource = versionSource
     self.versionedModelID = versionedModelID
     self.capabilities = capabilities
+    self.load = load
+  }
+}
+
+public struct AppleProviderLoad: Codable, Equatable, Sendable {
+  public let maxConcurrentRequests: Int
+  public let activeRequests: Int
+  public let queuedRequests: Int
+
+  public init(
+    maxConcurrentRequests: Int,
+    activeRequests: Int,
+    queuedRequests: Int
+  ) {
+    self.maxConcurrentRequests = maxConcurrentRequests
+    self.activeRequests = activeRequests
+    self.queuedRequests = queuedRequests
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case maxConcurrentRequests = "max_concurrent_requests"
+    case activeRequests = "active_requests"
+    case queuedRequests = "queued_requests"
   }
 }
 

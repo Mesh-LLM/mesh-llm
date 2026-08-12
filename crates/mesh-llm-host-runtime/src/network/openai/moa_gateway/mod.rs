@@ -67,10 +67,10 @@ async fn degrade_to_single_model(
     if candidates.is_empty() {
         candidates = node.serving_models().await;
     }
-    let Some(target) = candidates
-        .into_iter()
-        .find(|m| m != moa::VIRTUAL_MODEL_NAME)
-    else {
+    let Some(target) = candidates.into_iter().find(|m| {
+        m != moa::VIRTUAL_MODEL_NAME
+            && !crate::network::openai::provider_policy::is_explicit_only_model(m)
+    }) else {
         return match proxy::send_503_observed(
             tcp_stream,
             "no models available in the mesh",

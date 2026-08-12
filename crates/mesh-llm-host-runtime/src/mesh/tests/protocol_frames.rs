@@ -720,6 +720,29 @@ fn worker_only_legacy_models_are_excluded_from_http_routes() {
 }
 
 #[test]
+fn provider_runtime_makes_zero_model_worker_http_routable() {
+    let provider_id = EndpointId::from(iroh::SecretKey::from_bytes(&[0xD4; 32]).public());
+    let mut provider = make_test_peer_info(provider_id);
+    provider.role = super::NodeRole::Worker;
+    provider.serving_models = vec!["apple/system".to_string()];
+    provider.hosted_models = vec!["apple/system".to_string()];
+    provider.hosted_models_known = true;
+    provider.served_model_runtime = vec![mesh_llm_types::mesh::ModelRuntimeDescriptor {
+        model_name: "apple/system".to_string(),
+        ready: true,
+        provider_kind: Some("apple".to_string()),
+        ..Default::default()
+    }];
+
+    assert!(provider.accepts_http_inference());
+    assert_eq!(
+        provider.http_routable_models(),
+        vec!["apple/system".to_string()]
+    );
+    assert!(provider.routes_http_model("apple/system"));
+}
+
+#[test]
 #[serial_test::serial]
 fn canonical_demand_model_ref_uses_loaded_catalog_without_refreshing() {
     use crate::models::remote_catalog::{

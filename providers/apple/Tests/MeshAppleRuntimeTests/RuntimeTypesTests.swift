@@ -23,7 +23,12 @@ import Testing
     modelVersion: "27.0",
     versionSource: "apple_os_release_band",
     versionedModelID: "apple/system@27.0",
-    capabilities: ["tool_calling"]
+    capabilities: ["tool_calling"],
+    load: AppleProviderLoad(
+      maxConcurrentRequests: 1,
+      activeRequests: 0,
+      queuedRequests: 0
+    )
   )
   let status = AppleRuntimeStatus(
     runtimeID: AppleRuntimeIdentifiers.runtimeID,
@@ -34,6 +39,76 @@ import Testing
   let data = try JSONEncoder().encode(status)
   let decoded = try JSONDecoder().decode(AppleRuntimeStatus.self, from: data)
   #expect(decoded == status)
+}
+
+@Test func providerSchedulerAdvertisesOneSlot() async {
+  let load = await ProviderRequestScheduler().snapshot()
+  #expect(load.maxConcurrentRequests == 1)
+  #expect(load.activeRequests == 0)
+  #expect(load.queuedRequests == 0)
+}
+
+private actor SchedulerGate {
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    await withCheckedContinuation { continuation = $0 }
+  }
+
+  func open() {
+    continuation?.resume()
+    continuation = nil
+  }
+}
+
+@Test func providerSchedulerSerializesAndCancelsQueuedWork() async throws {
+  let scheduler = ProviderRequestScheduler()
+  let gate = SchedulerGate()
+  let first = Task {
+    try await scheduler.withPermit {
+      await gate.wait()
+      return 1
+    }
+  }
+  while await scheduler.snapshot().activeRequests == 0 {
+    await Task.yield()
+  }
+  let second = Task { try await scheduler.withPermit { 2 } }
+  while await scheduler.snapshot().queuedRequests == 0 {
+    await Task.yield()
+  }
+
+  second.cancel()
+  do {
+    _ = try await second.value
+    Issue.record("cancelled queued work unexpectedly ran")
+  } catch is CancellationError {
+    // Expected: cancellation removes the waiter without waiting for the active request.
+  }
+  #expect(await scheduler.snapshot().queuedRequests == 0)
+
+  await gate.open()
+  #expect(try await first.value == 1)
+  #expect(await scheduler.snapshot().activeRequests == 0)
+}
+
+@Test func appleContextBudgetReservesRequestedOutputTokens() throws {
+  try validateAppleContextBudget(
+    contextSize: 4_096,
+    inputTokens: 3_584,
+    maximumResponseTokens: 512
+  )
+
+  do {
+    try validateAppleContextBudget(
+      contextSize: 4_096,
+      inputTokens: 3_585,
+      maximumResponseTokens: 512
+    )
+    Issue.record("over-budget request unexpectedly passed")
+  } catch let failure as AppleRuntimeFailure {
+    #expect(failure.code == "context_exceeded")
+  }
 }
 
 @Test func generationDefaultsToSystemModel() {

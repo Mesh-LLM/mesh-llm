@@ -430,6 +430,10 @@ impl PeerInfo {
 
     pub fn accepts_http_inference(&self) -> bool {
         matches!(self.role, NodeRole::Host { .. })
+            || self
+                .served_model_runtime
+                .iter()
+                .any(|runtime| runtime.ready && runtime.provider_kind.is_some())
     }
 
     pub fn http_routable_models(&self) -> Vec<String> {

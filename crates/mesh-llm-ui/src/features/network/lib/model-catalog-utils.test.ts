@@ -73,6 +73,7 @@ describe('model catalog filter utilities', () => {
   })
 
   it('uses normalized family labels for provider detection', () => {
+    expect(modelProviderLabel(model({ name: 'apple/system' }))).toBe('Apple')
     expect(modelProviderLabel(model({ name: 'Hermes-2-Pro-Mistral-7B-Q4_K_M' }))).toBe('Mistral AI')
     expect(modelProviderLabel(model({ name: 'gpt-oss-120b', fullId: 'openai/gpt-oss-120b' }))).toBe('OpenAI')
     expect(modelProviderLabel(model({ name: 'command-a-03-2025' }))).toBe('Cohere')

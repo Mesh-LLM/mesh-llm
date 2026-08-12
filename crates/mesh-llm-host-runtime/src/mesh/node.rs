@@ -1213,15 +1213,17 @@ impl Node {
         }
     }
 
-    pub async fn remove_served_model_descriptor(&self, model_name: &str) {
-        self.served_model_descriptors
-            .lock()
-            .await
-            .retain(|descriptor| descriptor.identity.model_name != model_name);
+    pub async fn remove_served_model_descriptor(&self, model_name: &str) -> bool {
+        let mut descriptors = self.served_model_descriptors.lock().await;
+        let old_len = descriptors.len();
+        descriptors.retain(|descriptor| descriptor.identity.model_name != model_name);
+        let removed = descriptors.len() != old_len;
+        drop(descriptors);
         self.model_runtime_descriptors
             .lock()
             .await
             .retain(|runtime| runtime.model_name != model_name);
+        removed
     }
 
     pub async fn set_model_runtime_context_length(
@@ -1251,11 +1253,42 @@ impl Node {
                     identity_hash,
                     context_length: Some(context_length),
                     ready: true,
+                    provider_kind: None,
+                    model_version: None,
+                    max_concurrent_requests: None,
+                    active_requests: None,
+                    queued_requests: None,
                 });
             }
         } else {
             runtimes.retain(|runtime| runtime.model_name != model_name);
         }
+    }
+
+    pub(crate) async fn upsert_model_runtime_descriptor(
+        &self,
+        descriptor: ModelRuntimeDescriptor,
+    ) -> bool {
+        let mut runtimes = self.model_runtime_descriptors.lock().await;
+        if let Some(existing) = runtimes
+            .iter_mut()
+            .find(|runtime| runtime.model_name == descriptor.model_name)
+        {
+            if *existing == descriptor {
+                return false;
+            }
+            *existing = descriptor;
+        } else {
+            runtimes.push(descriptor);
+        }
+        true
+    }
+
+    pub(crate) async fn remove_model_runtime_descriptor(&self, model_name: &str) -> bool {
+        let mut runtimes = self.model_runtime_descriptors.lock().await;
+        let old_len = runtimes.len();
+        runtimes.retain(|runtime| runtime.model_name != model_name);
+        runtimes.len() != old_len
     }
 
     pub async fn local_model_context_length(&self, model_name: &str) -> Option<u32> {
@@ -1278,6 +1311,36 @@ impl Node {
             .peers
             .get(&peer_id)
             .and_then(|peer| peer.advertised_context_length(model_name))
+    }
+
+    pub(crate) async fn local_model_runtime_load(
+        &self,
+        model_name: &str,
+    ) -> Option<mesh_llm_types::mesh::ModelRuntimeLoad> {
+        self.model_runtime_descriptors
+            .lock()
+            .await
+            .iter()
+            .find(|runtime| runtime.model_name == model_name)
+            .and_then(ModelRuntimeDescriptor::provider_load)
+    }
+
+    pub(crate) async fn peer_model_runtime_load(
+        &self,
+        peer_id: EndpointId,
+        model_name: &str,
+    ) -> Option<mesh_llm_types::mesh::ModelRuntimeLoad> {
+        self.state
+            .lock()
+            .await
+            .peers
+            .get(&peer_id)
+            .and_then(|peer| {
+                peer.served_model_runtime
+                    .iter()
+                    .find(|runtime| runtime.model_name == model_name)
+            })
+            .and_then(ModelRuntimeDescriptor::provider_load)
     }
 
     pub(crate) async fn peer_model_throughput_hint(
@@ -1324,6 +1387,10 @@ impl Node {
         };
         runtimes.extend(peer_runtimes);
         runtimes
+    }
+
+    pub(crate) async fn local_model_runtime_descriptors(&self) -> Vec<ModelRuntimeDescriptor> {
+        self.model_runtime_descriptors.lock().await.clone()
     }
 
     pub async fn serving_models(&self) -> Vec<String> {
