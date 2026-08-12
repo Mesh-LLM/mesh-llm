@@ -75,11 +75,11 @@ running that documented generation; MeshLLM cannot install, pin, or roll back
 Apple's system model. Unknown future OS generations remain unversioned until
 Apple documents their mapping.
 
-The protocol addition is backward-compatible. The three version fields are
-optional: an older host ignores them, while the new host continues to accept an
-older sidecar and registers only the rolling alias. It registers a versioned
-route only when `model_version`, `version_source`, and `versioned_model_id` are
-all present and mutually consistent.
+There is intentionally no compatibility lane for an unversioned Apple system
+provider. `model_version`, `version_source`, and `versioned_model_id` are
+mandatory and must be mutually consistent. The host rejects a sidecar that
+omits or contradicts them. An OS generation without a documented mapping
+exposes no `apple/system` model rather than guessing an identity.
 
 See [Apple's SystemLanguageModel documentation](https://developer.apple.com/documentation/FoundationModels/SystemLanguageModel)
 and [Foundation Models updates](https://developer.apple.com/documentation/updates/foundationmodels).

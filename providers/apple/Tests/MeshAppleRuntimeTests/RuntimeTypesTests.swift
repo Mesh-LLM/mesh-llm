@@ -20,6 +20,9 @@ import Testing
     contextSize: 4_096,
     supportedLanguages: ["en"],
     variant: "test",
+    modelVersion: "27.0",
+    versionSource: "apple_os_release_band",
+    versionedModelID: "apple/system@27.0",
     capabilities: ["tool_calling"]
   )
   let status = AppleRuntimeStatus(

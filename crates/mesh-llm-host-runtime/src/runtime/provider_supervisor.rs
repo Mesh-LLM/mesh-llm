@@ -61,8 +61,8 @@ enum ProviderRunOutcome {
 struct ProviderAvailability {
     available: bool,
     context_length: Option<u32>,
-    model_version: Option<String>,
-    versioned_model_id: Option<String>,
+    model_version: String,
+    versioned_model_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,12 +77,9 @@ struct ProviderModelEntry {
     availability: Option<String>,
     #[serde(default)]
     context_length: Option<u32>,
-    #[serde(default)]
-    model_version: Option<String>,
-    #[serde(default)]
-    version_source: Option<String>,
-    #[serde(default)]
-    versioned_model_id: Option<String>,
+    model_version: String,
+    version_source: String,
+    versioned_model_id: String,
 }
 
 impl ProviderSupervisorHandle {
@@ -544,24 +541,18 @@ async fn probe_provider(
     })
 }
 
-fn validated_versioned_model_id(model: &ProviderModelEntry) -> Result<Option<String>> {
-    match (
-        model.model_version.as_deref(),
-        model.version_source.as_deref(),
-        model.versioned_model_id.as_deref(),
-    ) {
-        (None, None, None) => Ok(None),
-        (Some(version), Some("apple_os_release_band"), Some(versioned_model_id)) => {
-            let expected = format!("{}@{version}", model.id);
-            if versioned_model_id != expected {
-                bail!(
-                    "provider versioned model id mismatch: expected {expected}, got {versioned_model_id}"
-                );
-            }
-            Ok(Some(versioned_model_id.to_string()))
-        }
-        _ => bail!("provider returned incomplete or unsupported system-model version metadata"),
+fn validated_versioned_model_id(model: &ProviderModelEntry) -> Result<String> {
+    if model.version_source != "apple_os_release_band" {
+        bail!("provider returned unsupported system-model version source");
     }
+    let expected = format!("{}@{}", model.id, model.model_version);
+    if model.versioned_model_id != expected {
+        bail!(
+            "provider versioned model id mismatch: expected {expected}, got {}",
+            model.versioned_model_id
+        );
+    }
+    Ok(model.versioned_model_id.clone())
 }
 
 fn desired_provider_routes(model_id: &str, availability: &ProviderAvailability) -> Vec<String> {
@@ -569,9 +560,7 @@ fn desired_provider_routes(model_id: &str, availability: &ProviderAvailability) 
         return Vec::new();
     }
     let mut routes = vec![model_id.to_string()];
-    if let Some(versioned_model_id) = &availability.versioned_model_id {
-        routes.push(versioned_model_id.clone());
-    }
+    routes.push(availability.versioned_model_id.clone());
     routes
 }
 
@@ -683,7 +672,7 @@ fn emit_provider_ready(
             "provider={} version={} model_generation={} pid={pid} port={port}",
             runtime.runtime.manifest.runtime.id,
             runtime.runtime.manifest.runtime.version,
-            availability.model_version.as_deref().unwrap_or("unknown")
+            availability.model_version
         )),
     });
 }
@@ -987,9 +976,9 @@ mod tests {
             id: APPLE_MODEL_ID.to_string(),
             availability: Some("available".to_string()),
             context_length: Some(4_096),
-            model_version: Some("27.0".to_string()),
-            version_source: Some("apple_os_release_band".to_string()),
-            versioned_model_id: Some("apple/system@27.0".to_string()),
+            model_version: "27.0".to_string(),
+            version_source: "apple_os_release_band".to_string(),
+            versioned_model_id: "apple/system@27.0".to_string(),
         };
         let versioned_model_id = validated_versioned_model_id(&entry).unwrap();
         let availability = ProviderAvailability {
@@ -1005,21 +994,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_incomplete_or_mismatched_version_metadata() {
-        let incomplete = ProviderModelEntry {
+    fn rejects_unsupported_or_mismatched_version_metadata() {
+        let unsupported = ProviderModelEntry {
             id: APPLE_MODEL_ID.to_string(),
             availability: Some("available".to_string()),
             context_length: Some(4_096),
-            model_version: Some("27.0".to_string()),
-            version_source: None,
-            versioned_model_id: Some("apple/system@27.0".to_string()),
+            model_version: "27.0".to_string(),
+            version_source: "unknown".to_string(),
+            versioned_model_id: "apple/system@27.0".to_string(),
         };
-        assert!(validated_versioned_model_id(&incomplete).is_err());
+        assert!(validated_versioned_model_id(&unsupported).is_err());
 
         let mismatched = ProviderModelEntry {
-            version_source: Some("apple_os_release_band".to_string()),
-            versioned_model_id: Some("apple/system@26.4".to_string()),
-            ..incomplete
+            version_source: "apple_os_release_band".to_string(),
+            versioned_model_id: "apple/system@26.4".to_string(),
+            ..unsupported
         };
         assert!(validated_versioned_model_id(&mismatched).is_err());
     }

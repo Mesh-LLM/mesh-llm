@@ -125,13 +125,10 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     let status = await runtime.status()
     let models = status.models.flatMap { model -> [[String: Any]] in
       var alias = modelObject(model, id: model.modelID)
-      if let versionedModelID = model.versionedModelID {
-        alias["resolved_model"] = versionedModelID
-        var versioned = modelObject(model, id: versionedModelID)
-        versioned["alias_of"] = model.modelID
-        return [alias, versioned]
-      }
-      return [alias]
+      alias["resolved_model"] = model.versionedModelID
+      var versioned = modelObject(model, id: model.versionedModelID)
+      versioned["alias_of"] = model.modelID
+      return [alias, versioned]
     }
     try sendJSON(["object": "list", "data": models], over: connection)
   }

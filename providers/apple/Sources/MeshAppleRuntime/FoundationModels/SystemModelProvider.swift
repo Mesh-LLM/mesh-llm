@@ -50,9 +50,13 @@ public actor SystemModelProvider {
     model = .default
   }
 
-  public func status() -> AppleModelStatus {
+  public func status() -> AppleModelStatus? {
     let availability = availabilityFields(model.availability)
-    let modelVersion = AppleRuntimeIdentifiers.systemModelVersion
+    guard let modelVersion = AppleRuntimeIdentifiers.systemModelVersion,
+      let versionedModelID = AppleRuntimeIdentifiers.versionedSystemModelID
+    else {
+      return nil
+    }
     var capabilities: [String] = []
     if model.capabilities.contains(.guidedGeneration) {
       capabilities.append("guided_generation")
@@ -75,10 +79,10 @@ public actor SystemModelProvider {
       supportedLanguages: model.supportedLanguages
         .map(languageIdentifier)
         .sorted(),
-      variant: modelVersion.map { "system-default-\($0)" } ?? "system-default-unversioned",
+      variant: "system-default-\(modelVersion)",
       modelVersion: modelVersion,
-      versionSource: modelVersion.map { _ in AppleRuntimeIdentifiers.systemModelVersionSource },
-      versionedModelID: AppleRuntimeIdentifiers.versionedSystemModelID,
+      versionSource: AppleRuntimeIdentifiers.systemModelVersionSource,
+      versionedModelID: versionedModelID,
       capabilities: capabilities.sorted()
     )
   }

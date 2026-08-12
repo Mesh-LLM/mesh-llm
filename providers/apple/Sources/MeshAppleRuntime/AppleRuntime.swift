@@ -8,11 +8,12 @@ public actor AppleRuntime {
   }
 
   public func status() async -> AppleRuntimeStatus {
-    AppleRuntimeStatus(
+    let systemModelStatus = await systemModel.status()
+    return AppleRuntimeStatus(
       runtimeID: AppleRuntimeIdentifiers.runtimeID,
       protocolVersion: AppleRuntimeIdentifiers.protocolVersion,
       operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
-      models: [await systemModel.status()]
+      models: systemModelStatus.map { [$0] } ?? []
     )
   }
 

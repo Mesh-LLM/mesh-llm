@@ -15,7 +15,8 @@ public enum AppleRuntimeIdentifiers {
   }
 
   public static func isSystemModelID(_ modelID: String) -> Bool {
-    modelID == systemModelID || modelID == versionedSystemModelID
+    guard let versionedSystemModelID else { return false }
+    return modelID == systemModelID || modelID == versionedSystemModelID
   }
 
   public static func documentedSystemModelVersion(
@@ -61,9 +62,9 @@ public struct AppleModelStatus: Codable, Equatable, Sendable {
   public let contextSize: Int
   public let supportedLanguages: [String]
   public let variant: String
-  public let modelVersion: String?
-  public let versionSource: String?
-  public let versionedModelID: String?
+  public let modelVersion: String
+  public let versionSource: String
+  public let versionedModelID: String
   public let capabilities: [String]
 
   public init(
@@ -74,9 +75,9 @@ public struct AppleModelStatus: Codable, Equatable, Sendable {
     contextSize: Int,
     supportedLanguages: [String],
     variant: String,
-    modelVersion: String? = nil,
-    versionSource: String? = nil,
-    versionedModelID: String? = nil,
+    modelVersion: String,
+    versionSource: String,
+    versionedModelID: String,
     capabilities: [String]
   ) {
     self.modelID = modelID
