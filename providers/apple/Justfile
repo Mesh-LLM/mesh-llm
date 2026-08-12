@@ -24,6 +24,10 @@ live: build
 package:
     @"{{ apple_root }}/Packaging/package.sh"
 
+# Prepare a pinned Hugging Face SafeTensors model as a verified Core AI bundle.
+prepare *ARGS:
+    @cd "{{ apple_root }}/../.." && python3 scripts/apple-coreai-prepare.py {{ ARGS }}
+
 # Build a Developer ID signed and notarized provider artifact. The caller must
 # supply MESH_APPLE_RUNTIME_CODESIGN_IDENTITY and MESH_APPLE_RUNTIME_NOTARY_PROFILE.
 release-package runtime_version archive_url:

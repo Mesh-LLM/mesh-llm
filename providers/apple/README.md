@@ -15,6 +15,32 @@ targets. It is not enabled in published releases. It implements the Milestone
 product-packaging layer, and the first published Core AI artifact lane from
 [issue #1246](https://github.com/Mesh-LLM/mesh-llm/issues/1246).
 
+## Prepare a pinned SafeTensors model locally
+
+Phase 5 adds an explicit target-local preparation command. It resolves an
+immutable Hugging Face commit, runs Apple's pinned `coreai-models` exporter,
+records source/artifact hashes and toolchain provenance, and atomically
+publishes one `.aimodel` resource directory. Conversion is never performed in
+the serving or request path, and Python/Xcode remain preparation-time tools;
+they are not SDK runtime dependencies.
+
+On Golden Gate with full Xcode selected:
+
+```bash
+just apple::prepare Qwen/Qwen3-0.6B \
+  --revision c1899de289a04d12100db370d81485cdf75e47ca \
+  --output target/apple-runtime/models/qwen3-0.6b-prepared \
+  --context 8192
+```
+
+Use `--dry-run` to inspect the resolved paths without downloading or exporting.
+The published directory contains `mesh-coreai-preparation.json`, including the
+Hugging Face revision, exporter revision, compression, context limit, Xcode and
+macOS versions, and SHA-256 inventories. Pass `--overwrite` to replace an
+existing output. The current Qwen3 0.6B example is Apache-2.0-licensed and is
+small enough for a local Golden Gate smoke test; any public redistribution must
+still preserve the upstream model card and license notices.
+
 ## Requirements
 
 You must have all of the following:
