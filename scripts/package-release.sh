@@ -10,10 +10,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RELEASE_BIN_DIR="${MESH_LLM_RELEASE_BIN_DIR:-$REPO_ROOT/target/release}"
 NATIVE_RUNTIME_ROOT="${MESH_LLM_NATIVE_RUNTIME_ROOT:-$REPO_ROOT/dist/native-runtimes}"
+PROVIDER_RUNTIME_ROOT="${MESH_LLM_PROVIDER_RUNTIME_ROOT:-}"
+ALLOW_UNNOTARIZED_PROVIDER_RUNTIME="${MESH_RELEASE_ALLOW_UNNOTARIZED_PROVIDER_RUNTIME:-0}"
 ATTESTATION_SIGNING_KEY_FILE="${MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE:-}"
 ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
 PRECOMPOSED_PRODUCT_DIR="${MESH_LLM_PRECOMPOSED_PRODUCT_DIR:-}"
 ATTESTATION_PREVERIFIED="${MESH_RELEASE_ATTESTATION_PREVERIFIED:-0}"
+PROVIDER_RUNTIME_BUNDLES=()
 
 python_bin() {
     if command -v python3 >/dev/null 2>&1; then
@@ -187,12 +190,158 @@ write_product_manifest() {
     local version="$4"
     local flavor="$5"
 
+    local provider_args=()
+    local provider_runtime
+    for provider_runtime in "${PROVIDER_RUNTIME_BUNDLES[@]}"; do
+        provider_args+=(--provider-runtime "$provider_runtime")
+    done
+
     "$(python_bin)" "$SCRIPT_DIR/compose-product-bundle.py" \
         --bundle "$bundle_dir" \
         --host "$host_path" \
         --runtime "$runtime_path" \
         --version "$version" \
-        --backend "$flavor"
+        --backend "$flavor" \
+        "${provider_args[@]}"
+}
+
+provider_runtime_coordinates() {
+    local manifest="$1"
+    "$(python_bin)" - "$manifest" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    document = json.load(handle)
+runtime = document["runtime"]
+values = (runtime["provider_kind"], runtime["id"])
+if any(not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", value) for value in values):
+    raise SystemExit("provider kind and runtime id must be safe package path components")
+print("\t".join(values))
+PY
+}
+
+verify_provider_runtime_contract() {
+    local bundle="$1"
+    just --justfile "$REPO_ROOT/Justfile" with-lld \
+        cargo run --quiet -p mesh-llm-provider-runtime --example inspect -- "$bundle"
+}
+
+verify_apple_provider_release_policy() {
+    local bundle="$1"
+    local manifest="$bundle/provider-runtime.json"
+    local entrypoint
+    local declared_notarized
+    local declared_team
+    local declared_identifier
+    local codesign_details
+    local actual_team
+    local actual_identifier
+
+    read -r entrypoint declared_notarized declared_team declared_identifier < <(
+        "$(python_bin)" - "$manifest" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    runtime = json.load(handle)["runtime"]
+signature = runtime.get("signature") or {}
+print(
+    runtime["entrypoint"],
+    str(signature.get("notarized") is True).lower(),
+    signature.get("team_identifier") or "-",
+    signature.get("signing_identifier") or "-",
+)
+PY
+    )
+    local executable="$bundle/$entrypoint"
+    codesign --verify --strict --verbose=2 "$executable"
+    codesign_details="$(codesign -dv --verbose=4 "$executable" 2>&1)"
+    actual_team="$(printf '%s\n' "$codesign_details" | awk -F= '/^TeamIdentifier=/ {print $2; exit}')"
+    actual_identifier="$(printf '%s\n' "$codesign_details" | awk -F= '/^Identifier=/ {print $2; exit}')"
+
+    if [[ "$ALLOW_UNNOTARIZED_PROVIDER_RUNTIME" == "1" ]]; then
+        echo "Apple provider release policy: local-development exception (not release eligible)"
+        return 0
+    fi
+    if [[ "$ALLOW_UNNOTARIZED_PROVIDER_RUNTIME" != "0" ]]; then
+        echo "MESH_RELEASE_ALLOW_UNNOTARIZED_PROVIDER_RUNTIME must be 0 or 1" >&2
+        exit 1
+    fi
+    if [[ "$declared_notarized" != "true" || "$declared_team" == "-" ]]; then
+        echo "release products require a Developer ID signed and notarized Apple provider runtime" >&2
+        exit 1
+    fi
+    if [[ "$declared_team" != "$actual_team" || "$declared_identifier" != "$actual_identifier" ]]; then
+        echo "Apple provider manifest signing identity does not match the executable" >&2
+        exit 1
+    fi
+    spctl --assess --type execute --verbose=2 "$executable"
+}
+
+verify_provider_runtime_release_policy() {
+    local bundle="$1"
+    local provider_kind="$2"
+    case "$provider_kind" in
+        apple)
+            if [[ "$(normalized_release_platform)" != "macos/aarch64" ]]; then
+                echo "Apple provider runtimes may only be composed into macOS arm64 products" >&2
+                exit 1
+            fi
+            verify_apple_provider_release_policy "$bundle"
+            ;;
+    esac
+}
+
+copy_provider_runtimes() {
+    local source_root="$1"
+    local bundle_dir="$2"
+    local manifest
+    local source_bundle
+    local coordinates
+    local provider_kind
+    local runtime_id
+    local destination
+    local found=0
+
+    [[ -d "$source_root" ]] || {
+        echo "Provider runtime root does not exist: $source_root" >&2
+        exit 1
+    }
+    while IFS= read -r manifest; do
+        found=$((found + 1))
+        source_bundle="$(dirname "$manifest")"
+        verify_provider_runtime_contract "$source_bundle"
+        coordinates="$(provider_runtime_coordinates "$manifest")"
+        IFS=$'\t' read -r provider_kind runtime_id <<<"$coordinates"
+        verify_provider_runtime_release_policy "$source_bundle" "$provider_kind"
+        destination="$bundle_dir/provider-runtimes/$provider_kind/$runtime_id"
+        [[ ! -e "$destination" ]] || {
+            echo "Duplicate provider runtime destination: $destination" >&2
+            exit 1
+        }
+        mkdir -p "$(dirname "$destination")"
+        cp -R "$source_bundle" "$destination"
+        PROVIDER_RUNTIME_BUNDLES+=("$destination")
+    done < <(find "$source_root" -maxdepth 2 -type f -name provider-runtime.json -print | sort)
+    if [[ "$found" -eq 0 ]]; then
+        echo "Provider runtime root contains no provider-runtime.json: $source_root" >&2
+        exit 1
+    fi
+}
+
+discover_bundled_provider_runtimes() {
+    local bundle_dir="$1"
+    local manifest
+    PROVIDER_RUNTIME_BUNDLES=()
+    [[ -d "$bundle_dir/provider-runtimes" ]] || return 0
+    while IFS= read -r manifest; do
+        PROVIDER_RUNTIME_BUNDLES+=("$(dirname "$manifest")")
+    done < <(
+        find "$bundle_dir/provider-runtimes" \
+            -mindepth 3 -maxdepth 3 -type f -name provider-runtime.json -print | sort
+    )
 }
 
 validate_attestation_env() {
@@ -528,12 +677,25 @@ copy_and_verify_precomposed_product() {
         exit 1
     fi
     "$SCRIPT_DIR/verify-native-runtime-package.sh" "$runtime_dir"
+    discover_bundled_provider_runtimes "$bundle_dir"
+    local provider_runtime
+    local provider_kind
+    for provider_runtime in "${PROVIDER_RUNTIME_BUNDLES[@]}"; do
+        verify_provider_runtime_contract "$provider_runtime"
+        provider_kind="$(provider_runtime_coordinates "$provider_runtime/provider-runtime.json" | cut -f1)"
+        verify_provider_runtime_release_policy "$provider_runtime" "$provider_kind"
+    done
+    local provider_args=()
+    for provider_runtime in "${PROVIDER_RUNTIME_BUNDLES[@]}"; do
+        provider_args+=(--provider-runtime "$provider_runtime")
+    done
     "$(python_bin)" "$SCRIPT_DIR/compose-product-bundle.py" \
         --bundle "$bundle_dir" \
         --host "$bundle_binary" \
         --runtime "$runtime_dir" \
         --version "$version" \
         --backend "$flavor" \
+        "${provider_args[@]}" \
         --check
 }
 
@@ -592,6 +754,9 @@ main() {
         bundled_runtime="$bundle_dir/native-runtimes/$(basename "$runtime_dir")"
         mkdir -p "$(dirname "$bundled_runtime")"
         cp -R "$runtime_dir" "$bundled_runtime"
+        if [[ -n "$PROVIDER_RUNTIME_ROOT" ]]; then
+            copy_provider_runtimes "$PROVIDER_RUNTIME_ROOT" "$bundle_dir"
+        fi
         write_product_manifest \
             "$bundle_dir" \
             "$bundle_binary" \

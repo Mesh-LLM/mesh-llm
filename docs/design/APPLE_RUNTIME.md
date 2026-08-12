@@ -194,9 +194,14 @@ This establishes the intended SDK contract:
 - the Swift SDK may additionally embed the provider library in an app, but its
   behavior must remain protocol-conformant with the process form.
 
-The current QA proves the carrier layouts, not final npm/JAR/XCFramework
-publication. Those release jobs should consume one already-signed runtime artifact rather
-than rebuild it independently.
+The CLI release composer now embeds that artifact at
+`provider-runtimes/apple/<runtime-id>`, records its tree and manifest digests in
+`product-manifest.json`, and preserves it through Unix installation. The host's
+adjacent-product discovery requires no provider bundle or index override.
+
+The current QA proves the CLI product and representative carrier layouts, not
+final npm/JAR/XCFramework publication. Those release jobs should consume one
+already-signed runtime artifact rather than rebuild it independently.
 
 ## Validation evidence
 
@@ -207,6 +212,8 @@ just apple::build
 just apple::test
 just apple::live
 just apple::mesh
+just apple::product 0.72.1 target/apple-runtime/product
+just apple::product-qa 0.72.1 target/apple-runtime/product
 MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Mesh-LLM Local Codesign" \
   just apple::rest
 MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Mesh-LLM Local Codesign" \
@@ -244,6 +251,7 @@ Observed live results:
 | Foundation Models Instruments trace | pass |
 | Core AI Instruments accelerator trace | pass; ANE load/prediction observed |
 | Supervisor SIGKILL/orphan prevention | pass; provider child exited |
+| Release-shaped CLI product auto-discovery | pass; no bundle/index override |
 
 A representative deterministic text request completed in 2.30 seconds with a
 1.81-second time to first token, 73 input tokens, and 25 output tokens. A
@@ -337,12 +345,14 @@ MeshLLM's normal local OpenAI frontend and runtime-process management surface.
 ### 2. All host-capable macOS SDKs
 
 The shared executable-provider manifest, resolver, verified downloader,
-immutable cache contract, and Rust host supervisor are implemented. Next,
-publish one signed macOS arm64 runtime artifact and bind the Rust, Swift,
-Node/Electron, and Kotlin/JVM SDK surfaces to the same installation and host
-lifecycle contract. Validate Swift app embedding, sandboxing, notarization,
-quarantine, and launchd/service lifecycles, then certify every SDK against one
-protocol test suite.
+immutable cache contract, Rust host supervisor, CLI product composition, and
+adjacent-product auto-discovery are implemented. The release lane requires a
+Developer ID Application signature, secure timestamp, accepted notarization,
+and `spctl` assessment before composition. Next, publish that one signed macOS
+arm64 artifact and bind the Rust, Swift, Node/Electron, and Kotlin/JVM SDK
+surfaces to the same installation and host lifecycle contract. Validate Swift
+app embedding, sandboxing, quarantine, and launchd/service lifecycles, then
+certify every SDK against one protocol test suite.
 
 ### 3. Private-mesh system-model routing
 

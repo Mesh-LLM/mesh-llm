@@ -4,8 +4,9 @@ set -euo pipefail
 APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$APPLE_ROOT/../.." && pwd)"
 PACKAGE_ROOT="$REPO_ROOT/target/apple-runtime/package/meshllm-apple-runtime-darwin-arm64"
-HOST_BINARY="$REPO_ROOT/target/debug/mesh-llm"
-OUTPUT_DIR="$REPO_ROOT/target/apple-runtime/mesh"
+HOST_BINARY="${MESH_APPLE_RUNTIME_MESH_HOST_BINARY:-$REPO_ROOT/target/debug/mesh-llm}"
+OUTPUT_DIR="${MESH_APPLE_RUNTIME_MESH_OUTPUT_DIR:-$REPO_ROOT/target/apple-runtime/mesh}"
+AUTO_DISCOVERY="${MESH_APPLE_RUNTIME_MESH_AUTO_DISCOVERY:-0}"
 HOST_LOG="$OUTPUT_DIR/host.jsonl"
 HOST_ERR="$OUTPUT_DIR/host.stderr"
 HOST_PID=""
@@ -15,10 +16,14 @@ PROVIDER_PID=""
     echo "missing MeshLLM debug product; run just build" >&2
     exit 2
 }
-[[ -f "$PACKAGE_ROOT/provider-runtime.json" ]] || {
+if [[ "$AUTO_DISCOVERY" != "0" && "$AUTO_DISCOVERY" != "1" ]]; then
+    echo "MESH_APPLE_RUNTIME_MESH_AUTO_DISCOVERY must be 0 or 1" >&2
+    exit 2
+fi
+if [[ "$AUTO_DISCOVERY" == "0" && ! -f "$PACKAGE_ROOT/provider-runtime.json" ]]; then
     echo "missing packaged Apple provider; run just apple::package" >&2
     exit 2
-}
+fi
 
 cleanup() {
     if [[ "$HOST_PID" =~ ^[0-9]+$ ]] && kill -0 "$HOST_PID" 2>/dev/null; then
@@ -44,10 +49,17 @@ print(*ports)
 PY
 )
 
-MESH_LLM_CONFIG="$OUTPUT_DIR/empty-config.toml" \
-MESH_LLM_PROVIDER_RUNTIME_BUNDLE_DIR="$PACKAGE_ROOT" \
-MESH_LLM_PROVIDER_RUNTIME_CACHE_DIR="$OUTPUT_DIR/provider-cache" \
-MESH_LLM_APPLE_PROVIDER_ALLOW_AD_HOC=1 \
+provider_discovery_env=()
+if [[ "$AUTO_DISCOVERY" == "0" ]]; then
+    provider_discovery_env+=(MESH_LLM_PROVIDER_RUNTIME_BUNDLE_DIR="$PACKAGE_ROOT")
+fi
+env \
+    -u MESH_LLM_PROVIDER_RUNTIME_INDEX \
+    -u MESH_LLM_PROVIDER_RUNTIME_BUNDLE_DIR \
+    ${provider_discovery_env[@]+"${provider_discovery_env[@]}"} \
+    MESH_LLM_CONFIG="$OUTPUT_DIR/empty-config.toml" \
+    MESH_LLM_PROVIDER_RUNTIME_CACHE_DIR="$OUTPUT_DIR/provider-cache" \
+    MESH_LLM_APPLE_PROVIDER_ALLOW_AD_HOC=1 \
     "$HOST_BINARY" --log-format json serve \
         --port "$API_PORT" \
         --console "$CONSOLE_PORT" \

@@ -6,10 +6,11 @@ exposed as `apple/system`. Named Core AI models will be added to the same
 runtime and protocol rather than shipped as a second sidecar.
 
 This work is **experimental**. A macOS `mesh-llm serve` host can supervise the
-runtime and expose `apple/system` through its normal local OpenAI frontend. The
-provider is not included in release products, model gossip, or private-mesh
+runtime and expose `apple/system` through its normal local OpenAI frontend. A
+release-shaped macOS product can now embed and auto-discover the provider; the
+provider is not enabled in published releases, model gossip, or private-mesh
 routing yet. It implements the Milestone 0 evidence, local REST vertical slice,
-and Rust host-supervision layer from
+Rust host-supervision layer, and CLI product-packaging layer from
 [issue #1246](https://github.com/Mesh-LLM/mesh-llm/issues/1246).
 
 ## Requirements
@@ -327,6 +328,45 @@ MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Mesh-LLM Local Codesign" \
   just apple::package
 ```
 
+Build and exercise a release-shaped CLI product on Golden Gate:
+
+```bash
+just apple::product-qa 0.72.1 target/apple-runtime/product
+```
+
+Use `just apple::product 0.72.1 target/apple-runtime/product` when only the
+composed archives are needed; `product-qa` already performs that build before
+running the smoke.
+
+The product contains the host, one native Metal runtime, and the same Apple
+sidecar under
+`provider-runtimes/apple/meshllm-apple-runtime-darwin-arm64`. Product QA runs
+the host from that layout with both provider bundle and provider index
+overrides unset, then repeats the completion, streaming, tool, cancellation,
+restart, and shutdown checks. The resulting
+`target/apple-runtime/product-qa/summary.json` records
+`provider_discovery=adjacent_product_bundle` and
+`provider_bundle_override_used=false`.
+
+The public release lane is intentionally stricter:
+
+```bash
+MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
+MESH_APPLE_RUNTIME_NOTARY_PROFILE=mesh-llm-notary \
+  just apple::release-product \
+    v0.72.1 0.1.0 \
+    https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.72.1/meshllm-apple-runtime-darwin-arm64.zip \
+    dist
+```
+
+This signs with hardened runtime and a secure timestamp, submits the exact ZIP
+to Apple's notary service, requires an `Accepted` result, checks it with
+`spctl`, and only then composes the provider into the product. It requires a
+Developer ID Application certificate and a `notarytool` keychain profile. The
+notarization submission ID/status are written to
+`target/apple-runtime/package/notarization.json`; credentials are never written
+to the artifact.
+
 The background continued-processing inference entitlement is included as a
 review artifact. Packaging refuses to apply it unless provisioning has been
 independently validated. A locally created certificate is not sufficient:
@@ -342,7 +382,7 @@ caveats, and rollout gates.
 |---|---|---|
 | 0 | Policy, entitlement, packaging, signing, launchd, and accelerator spike | complete |
 | 1 | Local `apple/system` REST vertical slice | experimental implementation complete |
-| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | provider artifact and Rust host supervisor implemented; SDK packaging and bindings pending |
+| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | CLI release packaging and auto-discovery implemented; SDK carrier publication and bindings pending |
 | 3 | Private-mesh routing, load, failover, affinity, and withdrawal | not implemented |
 
 This runtime does not alter the Skippy ABI or use Skippy stage execution.

@@ -74,6 +74,37 @@ An SDK may carry the bundle in its own resource layout, but it must hand that
 directory to the shared resolver. It must not reinterpret or recreate the
 manifest in language-specific code.
 
+## Composed product contract
+
+A macOS arm64 MeshLLM product can carry provider runtimes beside the neutral
+host and native runtime:
+
+```text
+mesh-bundle/
+├── mesh-llm
+├── product-manifest.json
+├── native-runtimes/<native-runtime-id>/
+└── provider-runtimes/
+    └── apple/<provider-runtime-id>/
+```
+
+`product-manifest.json` attests every embedded provider runtime by ID, semantic
+version, provider kind, protocol version, canonical relative path, complete
+tree SHA-256, and provider-manifest SHA-256. The Unix installer moves the whole
+`provider-runtimes/` tree atomically with the host and native runtime. Because
+the Apple supervisor searches `provider-runtimes/apple` adjacent to its own
+executable, both an unpacked release and an installed release discover the
+provider without `MESH_LLM_PROVIDER_RUNTIME_BUNDLE_DIR` or
+`MESH_LLM_PROVIDER_RUNTIME_INDEX`.
+
+Embedding is explicit at product-composition time. Other platforms and normal
+MeshLLM products remain unchanged when no provider runtime root is supplied.
+An Apple provider may enter a public product only when its executable passes
+strict code-signature verification, its manifest declares a real team and
+successful notarization, and `spctl` accepts the executable. The local Golden
+Gate QA lane has a deliberately named unnotarized exception; that exception is
+not release eligible.
+
 ## Installation and cache
 
 The shared cache layout is:

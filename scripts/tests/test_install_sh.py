@@ -494,6 +494,41 @@ class InstallScriptTests(unittest.TestCase):
             )
             self.assertFalse(existing_runtime.exists())
 
+    def test_install_bundle_preserves_adjacent_provider_runtime_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            bundle_dir = self._write_installable_bundle(tmp_path, "new")
+            provider = (
+                bundle_dir
+                / "provider-runtimes"
+                / "apple"
+                / "meshllm-apple-runtime-darwin-arm64"
+            )
+            (provider / "bin").mkdir(parents=True)
+            (provider / "provider-runtime.json").write_text(
+                '{"schema_version":1}\n', encoding="utf-8"
+            )
+            executable = provider / "bin" / "mesh-apple-runtime"
+            executable.write_text("provider\n", encoding="utf-8")
+            executable.chmod(0o755)
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"install_bundle {shlex_quote(str(bundle_dir))}",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            installed = (
+                install_dir
+                / "provider-runtimes"
+                / "apple"
+                / "meshllm-apple-runtime-darwin-arm64"
+            )
+            self.assertTrue((installed / "provider-runtime.json").is_file())
+            self.assertTrue((installed / "bin" / "mesh-apple-runtime").is_file())
+
     def test_install_bundle_rolls_back_when_a_staged_move_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

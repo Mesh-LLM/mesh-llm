@@ -4,7 +4,7 @@ set -euo pipefail
 APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$APPLE_ROOT/../.." && pwd)"
 PACKAGE_PATH="$APPLE_ROOT"
-OUTPUT_ROOT="$REPO_ROOT/target/apple-runtime/package"
+OUTPUT_ROOT="${MESH_APPLE_RUNTIME_OUTPUT_ROOT:-$REPO_ROOT/target/apple-runtime/package}"
 BUNDLE_ID="meshllm-apple-runtime-darwin-arm64"
 BUNDLE_DIR="$OUTPUT_ROOT/$BUNDLE_ID"
 IDENTITY="${MESH_APPLE_RUNTIME_CODESIGN_IDENTITY:--}"
@@ -12,6 +12,27 @@ ENTITLEMENTS="${MESH_APPLE_RUNTIME_ENTITLEMENTS:-}"
 ENTITLEMENT_PROVISIONING_VALIDATED="${MESH_APPLE_RUNTIME_ENTITLEMENT_PROVISIONING_VALIDATED:-0}"
 RUNTIME_VERSION="${MESH_APPLE_RUNTIME_VERSION:-0.1.0}"
 ARCHIVE_URL="${MESH_APPLE_RUNTIME_ARCHIVE_URL:-}"
+RELEASE_MODE="${MESH_APPLE_RUNTIME_RELEASE:-0}"
+NOTARY_PROFILE="${MESH_APPLE_RUNTIME_NOTARY_PROFILE:-}"
+
+if [[ "$RELEASE_MODE" != "0" && "$RELEASE_MODE" != "1" ]]; then
+    echo "MESH_APPLE_RUNTIME_RELEASE must be 0 or 1" >&2
+    exit 2
+fi
+if [[ "$RELEASE_MODE" == "1" ]]; then
+    [[ "$IDENTITY" != "-" ]] || {
+        echo "release packaging requires a Developer ID Application signing identity" >&2
+        exit 2
+    }
+    [[ -n "$NOTARY_PROFILE" ]] || {
+        echo "release packaging requires MESH_APPLE_RUNTIME_NOTARY_PROFILE" >&2
+        exit 2
+    }
+    [[ -n "$ARCHIVE_URL" ]] || {
+        echo "release packaging requires MESH_APPLE_RUNTIME_ARCHIVE_URL" >&2
+        exit 2
+    }
+fi
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
     echo "Apple runtime packaging requires Apple silicon macOS" >&2
@@ -38,7 +59,14 @@ SOURCE_BINARY="$BIN_DIR/mesh-apple-runtime"
     exit 2
 }
 
-rm -rf "$OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT"
+rm -rf "$BUNDLE_DIR"
+rm -f \
+    "$OUTPUT_ROOT/$BUNDLE_ID.zip" \
+    "$OUTPUT_ROOT/$BUNDLE_ID.zip.sha256" \
+    "$OUTPUT_ROOT/provider-runtimes.json" \
+    "$OUTPUT_ROOT/provider-runtimes.json.sha256" \
+    "$OUTPUT_ROOT/notarization.json"
 mkdir -p "$BUNDLE_DIR/bin" "$BUNDLE_DIR/Resources"
 cp "$SOURCE_BINARY" "$BUNDLE_DIR/bin/mesh-apple-runtime"
 cp "$PACKAGE_PATH/README.md" "$BUNDLE_DIR/README.md"
@@ -46,7 +74,9 @@ cp "$PACKAGE_PATH/Packaging/Entitlements/background-inference.entitlements" \
     "$BUNDLE_DIR/Resources/background-inference.entitlements"
 
 codesign_args=(--force --sign "$IDENTITY")
-if [[ "$IDENTITY" != "-" ]]; then
+if [[ "$RELEASE_MODE" == "1" ]]; then
+    codesign_args+=(--options runtime --timestamp)
+elif [[ "$IDENTITY" != "-" ]]; then
     codesign_args+=(--options runtime --timestamp=none)
 fi
 if [[ -n "$ENTITLEMENTS" ]]; then
@@ -72,6 +102,12 @@ SIGNING_IDENTIFIER="$(printf '%s\n' "$CODESIGN_DETAILS" | awk -F= '/^Identifier=
 if [[ "$TEAM_IDENTIFIER" == "not set" ]]; then
     TEAM_IDENTIFIER=""
 fi
+if [[ "$RELEASE_MODE" == "1" ]]; then
+    [[ "$SIGNING_IDENTITY" == "Developer ID Application:"* && -n "$TEAM_IDENTIFIER" ]] || {
+        echo "release signature is not a Developer ID Application signature" >&2
+        exit 2
+    }
+fi
 ENTITLEMENT_KEYS_JSON="[]"
 if [[ -n "$ENTITLEMENTS" ]]; then
     ENTITLEMENT_KEYS_JSON="$(plutil -convert json -o - "$ENTITLEMENTS" | python3 -c \
@@ -92,7 +128,8 @@ python3 - \
     "$SIGNING_IDENTITY" \
     "$TEAM_IDENTIFIER" \
     "$SIGNING_IDENTIFIER" \
-    "$ENTITLEMENT_KEYS_JSON" <<'PY'
+    "$ENTITLEMENT_KEYS_JSON" \
+    "$RELEASE_MODE" <<'PY'
 import json
 import sys
 
@@ -111,6 +148,7 @@ import sys
     team_identifier,
     signing_identifier,
     entitlement_keys_json,
+    release_mode,
 ) = sys.argv[1:]
 
 manifest = {
@@ -153,7 +191,7 @@ manifest = {
             "team_identifier": team_identifier or None,
             "signing_identifier": signing_identifier or None,
             "entitlements": json.loads(entitlement_keys_json),
-            "notarized": False,
+            "notarized": release_mode == "1",
         },
     }
 }
@@ -168,6 +206,26 @@ just --justfile "$REPO_ROOT/Justfile" with-lld \
 
 ARCHIVE="$OUTPUT_ROOT/$BUNDLE_ID.zip"
 ditto -c -k --keepParent "$BUNDLE_DIR" "$ARCHIVE"
+
+if [[ "$RELEASE_MODE" == "1" ]]; then
+    xcrun notarytool submit "$ARCHIVE" \
+        --keychain-profile "$NOTARY_PROFILE" \
+        --wait \
+        --output-format json \
+        >"$OUTPUT_ROOT/notarization.json"
+    python3 - "$OUTPUT_ROOT/notarization.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    result = json.load(handle)
+if result.get("status") != "Accepted":
+    raise SystemExit(f"notarization failed: {result.get('status', 'unknown status')}")
+print(f"notarization accepted: {result.get('id', 'submission id unavailable')}")
+PY
+    spctl --assess --type execute --verbose=2 "$BUNDLE_DIR/bin/mesh-apple-runtime"
+fi
+
 ARCHIVE_SHA="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
 printf '%s  %s\n' "$ARCHIVE_SHA" "$(basename "$ARCHIVE")" > "$ARCHIVE.sha256"
 
@@ -209,3 +267,4 @@ echo "  bundle: $BUNDLE_DIR"
 echo "  archive: $ARCHIVE"
 echo "  release manifest: $RELEASE_MANIFEST"
 echo "  signing: $SIGNING_IDENTITY"
+echo "  release eligible: $RELEASE_MODE"
