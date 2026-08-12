@@ -25,6 +25,19 @@ public enum AppleRuntimeIdentifiers {
     modelID.hasPrefix(coreAIModelIDPrefix)
   }
 
+  public static func isArtifactModelID(_ modelID: String) -> Bool {
+    isCoreAIModelID(modelID) || isHuggingFaceModelID(modelID)
+  }
+
+  public static func isHuggingFaceModelID(_ modelID: String) -> Bool {
+    let parts = modelID.split(separator: "/", omittingEmptySubsequences: true)
+    return parts.count == 2 && parts.allSatisfy { part in
+      part.allSatisfy {
+        $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_"
+      }
+    }
+  }
+
   public static func documentedSystemModelVersion(
     for operatingSystemVersion: OperatingSystemVersion
   ) -> String? {

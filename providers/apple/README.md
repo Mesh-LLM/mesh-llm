@@ -64,9 +64,10 @@ The expected Xcode path ends in `Xcode.app/Contents/Developer` or
 
 ## Try the Core AI artifact locally
 
-Core AI model bundles are explicit artifacts. The runtime does not discover or
-download arbitrary checkpoints. Set all three values to serve one published
-`.aimodel` resource directory:
+Core AI model bundles are explicit artifacts. The normal Mesh experience is a
+model reference, just like any other Hugging Face-backed Mesh model. Users do
+not need to know or configure the `MESH_APPLE_*` variables below; those are
+packaging and developer-test controls only.
 
 Apple's `coreai-models` repository currently publishes export recipes rather
 than binary model files. The smallest official macOS language model is Qwen3
@@ -82,41 +83,31 @@ uv run coreai.llm.export Qwen/Qwen3-0.6B \
 
 The generated macOS resource folder is
 `qwen3_0_6b_4bit_dynamic/`, containing the `.aimodel` and tokenizer resources.
-Use that folder as `MESH_APPLE_COREAI_MODEL_ROOT` below. The registry also
-lists Qwen3 4B, 8B, Qwen3 Coder 30B-A3B, Gemma 3, Mistral, Mixtral, and GPT-OSS
-macOS recipes.
+The registry also lists Qwen3 4B, 8B, Qwen3 Coder 30B-A3B, Gemma 3, Mistral,
+Mixtral, and GPT-OSS macOS recipes. Maintainers publish the resulting resource
+folder to the Mesh HF artifact repository; end users select that artifact by
+its normal HF model identity.
 
 ```bash
-export MESH_APPLE_COREAI_MODEL_ROOT="$PWD/path/to/Qwen3-4B.aimodel"
-export MESH_APPLE_COREAI_MODEL_ID="apple/coreai/qwen3-4b"
-export MESH_APPLE_COREAI_MODEL_VERSION="qwen3-4b-2026-08-01"
-export MESH_APPLE_COREAI_CONTEXT_SIZE=4096
-export MESH_APPLE_COREAI_LANGUAGES=en
-just apple::run status
-just apple::run serve --port 11435
+mesh-llm serve --model meshllm/qwen3-0.6b-4bit-aimodel
 ```
 
-The status response uses `versionSource=coreai_model_artifact` and exposes both
-`apple/coreai/qwen3-4b` and its exact versioned alias. The model is loaded
-lazily on first request and remains resident for subsequent requests. The
-Core AI adapter uses a conservative byte-based token estimate for context
-admission; the artifact's declared context size should therefore be set to the
-published model limit.
+The Apple provider runtime package carries the published HF identity and
+revision, downloads the preparation manifest and verified files into the
+per-user cache on first use, and advertises the same HF identity to Mesh. The
+model is loaded lazily on first request and remains resident for subsequent
+requests. The Core AI adapter uses a conservative byte-based token estimate for
+context admission from the artifact's declared context limit.
 
-To make a self-contained provider bundle (including the model resources):
+The provider package declares the Core AI model identity, pinned artifact
+revision, and SHA-256 digests for every downloaded model file. A package
+containing a Core AI artifact selects that artifact as its provider target; a
+package without one remains the `apple/system` package.
 
-```bash
-MESH_APPLE_COREAI_MODEL_ROOT="$PWD/path/to/Qwen3-4B.aimodel" \
-MESH_APPLE_COREAI_MODEL_ID="apple/coreai/qwen3-4b" \
-MESH_APPLE_COREAI_MODEL_VERSION="qwen3-4b-2026-08-01" \
-just apple::package
-just apple::contract
-```
-
-The package manifest declares the Core AI model identity and SHA-256 digests
-for every copied model file. A package containing a Core AI artifact selects
-that artifact as its provider target; a package without one remains the
-`apple/system` package.
+The default cache is
+`~/Library/Caches/mesh-llm/apple/coreai/`. Artifact downloads are pinned by the
+provider package and verified against the repository's preparation manifest;
+there is no model-root or cache setting in the user workflow.
 
 ## Try it locally
 

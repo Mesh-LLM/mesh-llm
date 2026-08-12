@@ -152,3 +152,11 @@ private actor SchedulerGate {
   #expect(AppleRuntimeIdentifiers.isCoreAIModelID("apple/coreai/qwen3-4b@2026-08-01"))
   #expect(!AppleRuntimeIdentifiers.isCoreAIModelID("apple/system"))
 }
+
+@Test func publishedHFArtifactIDsAreAcceptedByTheProvider() {
+  #expect(AppleRuntimeIdentifiers.isArtifactModelID("meshllm/qwen3-0.6b-4bit-aimodel"))
+  #expect(AppleRuntimeIdentifiers.isHuggingFaceModelID("meshllm/qwen3-0.6b-4bit-aimodel"))
+  #expect(!AppleRuntimeIdentifiers.isHuggingFaceModelID("meshllm/qwen3-0.6b-4bit-aimodel@main"))
+  #expect(!AppleRuntimeIdentifiers.isArtifactModelID("meshllm/qwen3/0.6b"))
+  #expect(!AppleRuntimeIdentifiers.isArtifactModelID("qwen3-0.6b-4bit-aimodel"))
+}

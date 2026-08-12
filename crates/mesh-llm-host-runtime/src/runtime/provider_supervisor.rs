@@ -57,6 +57,7 @@ pub(crate) struct ProviderRuntimeDiscoveryOptions {
 pub(crate) struct ProviderSupervisorHandle {
     shutdown_tx: watch::Sender<bool>,
     task: JoinHandle<()>,
+    pub(super) model_id: String,
 }
 
 #[derive(Clone)]
@@ -125,8 +126,10 @@ impl ProviderSupervisorHandle {
 pub(crate) async fn start_apple_provider_supervisor(
     context: ProviderSupervisorContext,
     discovery_options: Option<&ProviderRuntimeDiscoveryOptions>,
+    requested_model_id: Option<&str>,
 ) -> Option<ProviderSupervisorHandle> {
-    let resolved = match resolve_apple_provider_runtime(discovery_options).await {
+    let resolved = match resolve_apple_provider_runtime(discovery_options, requested_model_id).await
+    {
         Ok(Some(runtime)) => runtime,
         Ok(None) => return None,
         Err(error) => {
@@ -150,15 +153,20 @@ pub(crate) async fn start_apple_provider_supervisor(
         .unwrap_or_else(|| APPLE_MODEL_ID.to_string());
     let runtime = ProviderRuntimeContext {
         runtime: resolved,
-        model_id,
+        model_id: model_id.clone(),
     };
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let task = tokio::spawn(supervise_provider_runtime(runtime, context, shutdown_rx));
-    Some(ProviderSupervisorHandle { shutdown_tx, task })
+    Some(ProviderSupervisorHandle {
+        shutdown_tx,
+        task,
+        model_id,
+    })
 }
 
 async fn resolve_apple_provider_runtime(
     options: Option<&ProviderRuntimeDiscoveryOptions>,
+    requested_model_id: Option<&str>,
 ) -> Result<Option<InstalledProviderRuntime>> {
     let discovery = ProviderDiscovery::from_options(options)?;
     if !discovery.has_candidates()? {
@@ -170,7 +178,9 @@ async fn resolve_apple_provider_runtime(
             provider_kind: Some(APPLE_PROVIDER_KIND.to_string()),
             // The selected Apple artifact owns the model identity. Filtering
             // on apple/system would make packaged Core AI artifacts invisible.
-            model_id: None,
+            model_id: requested_model_id
+                .filter(|model| model.starts_with("apple/") || model.contains('/'))
+                .map(str::to_string),
             protocol_version: Some(APPLE_PROVIDER_PROTOCOL.to_string()),
             ..ProviderRuntimeRequest::default()
         },

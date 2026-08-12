@@ -15,22 +15,35 @@ ARCHIVE_URL="${MESH_APPLE_RUNTIME_ARCHIVE_URL:-}"
 RELEASE_MODE="${MESH_APPLE_RUNTIME_RELEASE:-0}"
 NOTARY_PROFILE="${MESH_APPLE_RUNTIME_NOTARY_PROFILE:-}"
 COREAI_MODEL_ROOT="${MESH_APPLE_COREAI_MODEL_ROOT:-}"
+COREAI_MODEL_REF="${MESH_APPLE_COREAI_MODEL_REF:-}"
 COREAI_MODEL_ID="${MESH_APPLE_COREAI_MODEL_ID:-}"
 COREAI_MODEL_VERSION="${MESH_APPLE_COREAI_MODEL_VERSION:-}"
 COREAI_CONTEXT_SIZE="${MESH_APPLE_COREAI_CONTEXT_SIZE:-4096}"
 COREAI_LANGUAGES="${MESH_APPLE_COREAI_LANGUAGES:-en}"
 
-if [[ -n "$COREAI_MODEL_ROOT" || -n "$COREAI_MODEL_ID" || -n "$COREAI_MODEL_VERSION" ]]; then
-    [[ -d "$COREAI_MODEL_ROOT" ]] || {
-        echo "MESH_APPLE_COREAI_MODEL_ROOT must point to a published .aimodel resource directory" >&2
+if [[ -n "$COREAI_MODEL_ROOT" || -n "$COREAI_MODEL_REF" || -n "$COREAI_MODEL_ID" || -n "$COREAI_MODEL_VERSION" ]]; then
+    [[ -n "$COREAI_MODEL_ROOT" || -n "$COREAI_MODEL_REF" ]] || {
+        echo "configure MESH_APPLE_COREAI_MODEL_ROOT or MESH_APPLE_COREAI_MODEL_REF" >&2
         exit 2
     }
-    [[ -z "$(find "$COREAI_MODEL_ROOT" -type l -print -quit)" ]] || {
+    if [[ -n "$COREAI_MODEL_ROOT" ]]; then
+        [[ -d "$COREAI_MODEL_ROOT" ]] || {
+            echo "MESH_APPLE_COREAI_MODEL_ROOT must point to a published .aimodel resource directory" >&2
+            exit 2
+        }
+    fi
+    [[ -z "$COREAI_MODEL_ROOT" || -z "$(find "$COREAI_MODEL_ROOT" -type l -print -quit)" ]] || {
         echo "Core AI model resources must not contain symlinks" >&2
         exit 2
     }
-    [[ "$COREAI_MODEL_ID" == apple/coreai/* ]] || {
-        echo "MESH_APPLE_COREAI_MODEL_ID must use the apple/coreai/<name> namespace" >&2
+    if [[ -z "$COREAI_MODEL_ID" && -n "$COREAI_MODEL_REF" ]]; then
+        COREAI_MODEL_ID="${COREAI_MODEL_REF%@*}"
+    fi
+    if [[ -z "$COREAI_MODEL_VERSION" && "$COREAI_MODEL_REF" == *@* ]]; then
+        COREAI_MODEL_VERSION="${COREAI_MODEL_REF##*@}"
+    fi
+    [[ "$COREAI_MODEL_ID" == apple/coreai/* || "$COREAI_MODEL_ID" == */* ]] || {
+        echo "MESH_APPLE_COREAI_MODEL_ID must be apple/coreai/<name> or an owner/repository HF identity" >&2
         exit 2
     }
     [[ -n "$COREAI_MODEL_VERSION" ]] || {
@@ -98,28 +111,30 @@ cp "$SOURCE_BINARY" "$BUNDLE_DIR/bin/mesh-apple-runtime"
 cp "$PACKAGE_PATH/README.md" "$BUNDLE_DIR/README.md"
 cp "$PACKAGE_PATH/Packaging/Entitlements/background-inference.entitlements" \
     "$BUNDLE_DIR/Resources/background-inference.entitlements"
-if [[ -n "$COREAI_MODEL_ROOT" ]]; then
-    mkdir -p "$BUNDLE_DIR/Models"
-    cp -R "$COREAI_MODEL_ROOT" "$BUNDLE_DIR/Models/coreai-model"
+if [[ -n "$COREAI_MODEL_ROOT" || -n "$COREAI_MODEL_REF" ]]; then
+    if [[ -n "$COREAI_MODEL_ROOT" ]]; then
+        mkdir -p "$BUNDLE_DIR/Models"
+        cp -R "$COREAI_MODEL_ROOT" "$BUNDLE_DIR/Models/coreai-model"
+    fi
     python3 - "$BUNDLE_DIR/Resources/coreai-model.json" "$COREAI_MODEL_ID" \
-        "$COREAI_MODEL_VERSION" "$COREAI_CONTEXT_SIZE" "$COREAI_LANGUAGES" <<'PY'
+        "$COREAI_MODEL_VERSION" "$COREAI_CONTEXT_SIZE" "$COREAI_LANGUAGES" \
+        "$COREAI_MODEL_ROOT" "$COREAI_MODEL_REF" <<'PY'
 import json
 import sys
 
-output, model_id, version, context_size, languages = sys.argv[1:]
+output, model_id, version, context_size, languages, model_root, model_ref = sys.argv[1:]
+configuration = {
+    "id": model_id,
+    "version": version,
+    "contextSize": int(context_size),
+    "languages": [item for item in languages.split(",") if item],
+}
+if model_root:
+    configuration["path"] = "Models/coreai-model"
+if model_ref:
+    configuration["reference"] = model_ref
 with open(output, "w", encoding="utf-8") as handle:
-    json.dump(
-        {
-            "id": model_id,
-            "version": version,
-            "path": "Models/coreai-model",
-            "contextSize": int(context_size),
-            "languages": [item for item in languages.split(",") if item],
-        },
-        handle,
-        indent=2,
-        sort_keys=True,
-    )
+    json.dump(configuration, handle, indent=2, sort_keys=True)
     handle.write("\n")
 PY
 fi

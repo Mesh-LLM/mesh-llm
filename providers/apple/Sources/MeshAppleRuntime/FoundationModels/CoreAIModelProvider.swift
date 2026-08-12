@@ -3,9 +3,10 @@ import Foundation
 import FoundationModels
 
 private struct CoreAIArtifactConfiguration: Decodable {
-  let id: String
-  let version: String
-  let path: String
+  let id: String?
+  let version: String?
+  let path: String?
+  let reference: String?
   let contextSize: Int?
   let languages: [String]?
 }
@@ -16,21 +17,34 @@ private struct CoreAIArtifactConfiguration: Decodable {
 /// stream across nodes.
 public actor CoreAIModelProvider {
   private let modelRoot: URL?
+  private let artifactReference: CoreAIArtifactReference?
+  private let artifactCacheDirectory: URL?
   private let modelID: String?
   private let modelVersion: String?
   private let contextSize: Int
   private let supportedLanguages: [String]
   private var model: CoreAILanguageModel?
   private var loadTask: Task<CoreAILanguageModel, Error>?
+  private var artifactRoot: URL?
+  private var artifactTask: Task<URL, Error>?
 
   public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
     let artifact = Self.packageArtifactConfiguration()
     let configuredRoot = environment["MESH_APPLE_COREAI_MODEL_ROOT"]
       .map(URL.init(fileURLWithPath:))
-    let packageRoot = artifact.map { Self.packageRoot().appendingPathComponent($0.path) }
+    let packageRoot = artifact?.path.map { Self.packageRoot().appendingPathComponent($0) }
     modelRoot = configuredRoot ?? packageRoot
-    modelID = environment["MESH_APPLE_COREAI_MODEL_ID"] ?? artifact?.id
-    modelVersion = environment["MESH_APPLE_COREAI_MODEL_VERSION"] ?? artifact?.version
+    artifactReference = environment["MESH_APPLE_COREAI_MODEL_REF"]
+      .flatMap(CoreAIArtifactReference.init)
+      ?? artifact?.reference.flatMap(CoreAIArtifactReference.init)
+    artifactCacheDirectory = environment["MESH_APPLE_COREAI_MODEL_CACHE_DIR"]
+      .map(URL.init(fileURLWithPath:))
+    modelID = environment["MESH_APPLE_COREAI_MODEL_ID"]
+      ?? artifact?.id
+      ?? artifactReference?.repository
+    modelVersion = environment["MESH_APPLE_COREAI_MODEL_VERSION"]
+      ?? artifact?.version
+      ?? artifactReference?.revision
     contextSize = Int(environment["MESH_APPLE_COREAI_CONTEXT_SIZE"] ?? "")
       ?? artifact?.contextSize
       ?? 4096
@@ -43,7 +57,8 @@ public actor CoreAIModelProvider {
   }
 
   public var isConfigured: Bool {
-    modelRoot != nil && modelID.map(AppleRuntimeIdentifiers.isCoreAIModelID) == true
+    (modelRoot != nil || artifactReference != nil)
+      && modelID.map(AppleRuntimeIdentifiers.isArtifactModelID) == true
   }
 
   public func accepts(_ requestedModelID: String) -> Bool {
@@ -230,13 +245,7 @@ public actor CoreAIModelProvider {
   private func loadModel() async throws -> CoreAILanguageModel {
     if let model { return model }
     if let loadTask { return try await loadTask.value }
-    guard let modelRoot else {
-      throw AppleRuntimeFailure(
-        code: "coreai_model_not_configured",
-        message: "MESH_APPLE_COREAI_MODEL_ROOT is not configured",
-        retryable: false
-      )
-    }
+    let modelRoot = try await resolvedModelRoot()
     let task = Task { try await CoreAILanguageModel(resourcesAt: modelRoot) }
     loadTask = task
     do {
@@ -246,6 +255,35 @@ public actor CoreAIModelProvider {
       return loaded
     } catch {
       loadTask = nil
+      throw mapCoreAIError(error)
+    }
+  }
+
+  private func resolvedModelRoot() async throws -> URL {
+    if let modelRoot { return modelRoot }
+    if let artifactRoot { return artifactRoot }
+    if let artifactTask { return try await artifactTask.value }
+    guard let artifactReference else {
+      throw AppleRuntimeFailure(
+        code: "coreai_model_not_configured",
+        message: "Configure MESH_APPLE_COREAI_MODEL_ROOT or MESH_APPLE_COREAI_MODEL_REF",
+        retryable: false
+      )
+    }
+    let task = Task {
+      try await CoreAIArtifactCache(
+        reference: artifactReference,
+        cacheDirectory: artifactCacheDirectory
+      ).materialize()
+    }
+    artifactTask = task
+    do {
+      let root = try await task.value
+      artifactRoot = root
+      artifactTask = nil
+      return root
+    } catch {
+      artifactTask = nil
       throw mapCoreAIError(error)
     }
   }
