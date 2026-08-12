@@ -136,11 +136,13 @@ ungraceful host crash.
 ### Rust host supervision
 
 Host-capable `mesh-llm serve` processes on macOS now start one experimental
-supervisor for `apple/system`; `mesh-llm client` never starts a local provider.
+supervisor for the model selected by the packaged Apple provider runtime;
+`mesh-llm client` never starts a local provider.
 The supervisor:
 
-- resolves a `kind=apple`, `model=apple/system`, protocol `0.1` artifact from a
-  product bundle, immutable cache, or explicitly enabled release index;
+- resolves a `kind=apple`, protocol `0.1` artifact from a product bundle,
+  immutable cache, or explicitly enabled release index, filtering by the
+  requested model identity when one is supplied;
 - revalidates manifest hashes and executable policy, then verifies the macOS
   code signature, declared signing identity/team, declared entitlements, and
   notarization policy before execution;
@@ -159,18 +161,18 @@ The supervisor:
   `SIGTERM`, waits up to five seconds, and force-kills a child that does not
   exit.
 
-On private meshes, the supervisor advertises both `apple/system` and its
-resolved generation as ordinary whole-model routes. Additive runtime fields
-carry provider kind, generation, maximum concurrency, active requests, and
-queued requests. Health loss or process exit withdraws the routes and triggers
-fresh gossip; public meshes suppress the advertisement entirely.
+On private meshes, the supervisor advertises both the packaged model identity
+and its resolved generation as ordinary whole-model routes. Additive runtime
+fields carry provider kind, generation, maximum concurrency, active requests,
+and queued requests. Health loss or process exit withdraws the routes and
+triggers fresh gossip; public meshes suppress the advertisement entirely.
 
 Routing prefers an idle provider, then peers without load metadata, then busy
 or queued providers. Existing request affinity keeps a session on the selected
 Mac while it remains healthy. Failover is allowed only before response headers
 or the first stream event; MeshLLM never attempts to splice a generation across
-providers. `apple/system` and `apple/system@<generation>` are explicit-only:
-they are excluded from `auto`, the virtual `mesh` model, and MoA worker pools.
+providers. Apple provider identities are explicit-only: they are excluded from
+`auto`, the virtual `mesh` model, and MoA worker pools.
 
 ## Runtime packaging and SDK ownership
 

@@ -29,7 +29,7 @@ use tokio::{
 const APPLE_MODEL_ID: &str = "apple/system";
 const APPLE_PROVIDER_KIND: &str = "apple";
 const APPLE_PROVIDER_PROTOCOL: &str = "0.1";
-const PROVIDER_INSTANCE_ID: &str = "provider:apple/system";
+const PROVIDER_INSTANCE_PREFIX: &str = "provider:";
 // Provider load changes at request timescale. Poll fast enough for another Mac
 // to avoid a one-slot runtime while retaining a three-second health grace.
 const PROVIDER_HEALTH_INTERVAL: Duration = Duration::from_millis(250);
@@ -357,7 +357,7 @@ async fn supervise_provider_runtime(
         match run_provider_process(&runtime, &context, &mut shutdown_rx).await {
             ProviderRunOutcome::Shutdown => break,
             ProviderRunOutcome::Restart(detail) => {
-                remove_provider_process(&context).await;
+                remove_provider_process(&context, &runtime.model_id).await;
                 restart_count = restart_count.saturating_add(1);
                 let delay = restart_backoff(restart_count);
                 let _ = emit_event(OutputEvent::Warning {
@@ -370,7 +370,7 @@ async fn supervise_provider_runtime(
             }
         }
     }
-    remove_provider_process(&context).await;
+    remove_provider_process(&context, &runtime.model_id).await;
 }
 
 async fn wait_for_restart_or_shutdown(
@@ -543,7 +543,7 @@ async fn monitor_provider_process(
                 if changed.is_err() || *shutdown_rx.borrow() {
                     withdraw_provider_routes(&mut state.routed_model_ids, port, context);
                     withdraw_provider_advertisement(&mut state.advertised_model_ids, context).await;
-                    remove_provider_process(context).await;
+                    remove_provider_process(context, &runtime.model_id).await;
                     let _ = terminate_provider_process(child).await;
                     return ProviderRunOutcome::Shutdown;
                 }
@@ -551,7 +551,7 @@ async fn monitor_provider_process(
             status = child.wait() => {
                 withdraw_provider_routes(&mut state.routed_model_ids, port, context);
                 withdraw_provider_advertisement(&mut state.advertised_model_ids, context).await;
-                remove_provider_process(context).await;
+                remove_provider_process(context, &runtime.model_id).await;
                 return ProviderRunOutcome::Restart(match status {
                     Ok(status) => format!("provider process exited with {status}"),
                     Err(error) => format!("provider process wait failed: {error}"),
@@ -952,6 +952,35 @@ mod tests {
         assert_eq!(
             validated_versioned_model_id(&coreai).unwrap(),
             "apple/coreai/qwen3-4b@qwen3-4b-2026-08-01"
+        );
+
+        let hf_artifact = ProviderModelEntry {
+            id: "meshllm/qwen3-0.6b-4bit-aimodel".to_string(),
+            model_version: "88064c009da71a9e5488c5db044fbfcf07703e42".to_string(),
+            version_source: "coreai_model_artifact".to_string(),
+            versioned_model_id:
+                "meshllm/qwen3-0.6b-4bit-aimodel@88064c009da71a9e5488c5db044fbfcf07703e42"
+                    .to_string(),
+            ..coreai
+        };
+        let hf_availability = ProviderAvailability {
+            available: true,
+            unavailable_reason: None,
+            context_length: hf_artifact.context_length,
+            model_version: hf_artifact.model_version.clone(),
+            versioned_model_id: validated_versioned_model_id(&hf_artifact).unwrap(),
+            capabilities: hf_artifact.capabilities.clone(),
+            max_concurrent_requests: hf_artifact.max_concurrent_requests,
+            active_requests: hf_artifact.active_requests,
+            queued_requests: hf_artifact.queued_requests,
+        };
+        assert_eq!(
+            desired_provider_routes(&hf_artifact.id, &hf_availability),
+            vec![
+                "meshllm/qwen3-0.6b-4bit-aimodel".to_string(),
+                "meshllm/qwen3-0.6b-4bit-aimodel@88064c009da71a9e5488c5db044fbfcf07703e42"
+                    .to_string(),
+            ]
         );
     }
 

@@ -43,7 +43,7 @@ pub(super) async fn publish_provider_state(
                 .unavailable_reason
                 .as_deref()
                 .unwrap_or("unknown"),
-            "Apple system model is currently unavailable"
+            "Apple provider model is currently unavailable"
         );
     }
     let status = if availability.available {
@@ -81,7 +81,7 @@ async fn upsert_provider_process(
 ) {
     let process = api::RuntimeProcessPayload {
         name: runtime.model_id.clone(),
-        instance_id: Some(PROVIDER_INSTANCE_ID.to_string()),
+        instance_id: Some(provider_instance_id(&runtime.model_id)),
         profile: String::new(),
         backend: runtime.runtime.manifest.runtime.provider_kind.clone(),
         status: status.to_string(),
@@ -252,12 +252,14 @@ pub(super) async fn withdraw_provider_advertisement(
     context.node.regossip().await;
 }
 
-pub(super) async fn remove_provider_process(context: &ProviderSupervisorContext) {
-    super::super::remove_dashboard_process(&context.dashboard_processes, PROVIDER_INSTANCE_ID)
-        .await;
+pub(super) async fn remove_provider_process(context: &ProviderSupervisorContext, model_id: &str) {
+    let instance_id = provider_instance_id(model_id);
+    super::super::remove_dashboard_process(&context.dashboard_processes, &instance_id).await;
     if let Some(console_state) = &context.console_state {
-        console_state
-            .remove_local_process(PROVIDER_INSTANCE_ID)
-            .await;
+        console_state.remove_local_process(&instance_id).await;
     }
+}
+
+fn provider_instance_id(model_id: &str) -> String {
+    format!("{PROVIDER_INSTANCE_PREFIX}{model_id}")
 }

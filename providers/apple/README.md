@@ -376,12 +376,13 @@ select artifacts and policy with:
 - `MESH_LLM_APPLE_PROVIDER_ALLOW_AD_HOC=1` only for local development.
 
 `just apple::private-mesh` starts two identity-isolated MeshLLM nodes on the
-Golden Gate Mac, joins them with a private invite, and verifies that additive
-provider runtime gossip produces two `apple/system` replicas, two aggregate
-request slots, peer-visible provider generation/load, a routed completion, and
-dispatch of concurrent work from a busy local provider to the idle peer.
-Use the two-physical-Mac procedure in `docs/design/TESTING.md` for release
-confidence, withdrawal, affinity, and failover checks.
+Golden Gate Mac, joins them with a private invite, and derives the model ID
+from the packaged provider manifest. It verifies additive provider-runtime
+gossip, two replicas, aggregate request slots, peer-visible generation/load, a
+routed completion, load-aware dispatch, provider withdrawal, and completion
+failover. With a Core AI package, the same check runs against the published HF
+identity rather than `apple/system`. Use the two-physical-Mac procedure in
+`docs/design/TESTING.md` for release confidence and cross-machine affinity.
 
 ## Other validation commands
 

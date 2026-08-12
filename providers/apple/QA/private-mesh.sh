@@ -6,6 +6,18 @@ REPO_ROOT="$(cd "$APPLE_ROOT/../.." && pwd)"
 PACKAGE_ROOT="$REPO_ROOT/target/apple-runtime/package/meshllm-apple-runtime-darwin-arm64"
 HOST_BINARY="${MESH_APPLE_RUNTIME_MESH_HOST_BINARY:-$REPO_ROOT/target/debug/mesh-llm}"
 OUTPUT_DIR="${MESH_APPLE_RUNTIME_PRIVATE_MESH_OUTPUT_DIR:-$REPO_ROOT/target/apple-runtime/private-mesh}"
+APPLE_MODEL_ID="$(python3 - "$PACKAGE_ROOT/provider-runtime.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    models = json.load(handle)["runtime"]["models"]
+if len(models) != 1:
+    raise SystemExit("Apple private-mesh QA requires exactly one packaged provider model")
+print(models[0]["id"])
+PY
+)"
+export APPLE_MODEL_ID
 NODE_A_PID=""
 NODE_B_PID=""
 LOAD_A_PID=""
@@ -85,7 +97,7 @@ PY
     if [[ -n "$INVITE_TOKEN" ]] \
         && curl --silent --show-error "http://127.0.0.1:$API_A/v1/models" \
             >"$OUTPUT_DIR/node-a-models.json" 2>/dev/null \
-        && grep -q 'apple/system' "$OUTPUT_DIR/node-a-models.json"; then
+        && grep -q "$APPLE_MODEL_ID" "$OUTPUT_DIR/node-a-models.json"; then
         break
     fi
     kill -0 "$NODE_A_PID" 2>/dev/null || {
@@ -129,15 +141,17 @@ status_b = json.loads((root / "node-b-status.json").read_text())
 models = json.loads((root / "mesh-models.json").read_text())
 
 def peer_has_apple(status):
+    model_id = __import__("os").environ["APPLE_MODEL_ID"]
     return any(
-        runtime.get("model_name") == "apple/system"
+        runtime.get("model_name") == model_id
         and runtime.get("provider_kind") == "apple"
         and runtime.get("max_concurrent_requests") == 1
         for peer in status.get("peers", [])
         for runtime in peer.get("provider_runtimes", [])
     )
 
-apple = next((model for model in models.get("data", []) if model.get("id") == "apple/system"), None)
+model_id = __import__("os").environ["APPLE_MODEL_ID"]
+apple = next((model for model in models.get("data", []) if model.get("id") == model_id), None)
 metadata = apple.get("metadata", {}) if apple else {}
 assert peer_has_apple(status_a)
 assert peer_has_apple(status_b)
@@ -163,18 +177,19 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 models = json.loads((root / "mesh-models.json").read_text())
-apple = next(model for model in models["data"] if model["id"] == "apple/system")
+model_id = __import__("os").environ["APPLE_MODEL_ID"]
+apple = next(model for model in models["data"] if model["id"] == model_id)
 assert apple["metadata"]["replicas"] == 2, apple
 PY
 
 curl --fail --silent --show-error "http://127.0.0.1:$API_A/v1/chat/completions" \
     -H 'content-type: application/json' \
-    -d '{"model":"apple/system","messages":[{"role":"user","content":"Reply with exactly: private mesh ready"}],"max_tokens":32}' \
+    -d "{\"model\":\"$APPLE_MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: private mesh ready\"}],\"max_tokens\":32}" \
     >"$OUTPUT_DIR/completion.json"
 
 curl --fail --silent --show-error "http://127.0.0.1:$API_A/v1/chat/completions" \
     -H 'content-type: application/json' \
-    -d '{"model":"apple/system","messages":[{"role":"user","content":"Write exactly 100 numbered lines, with four words on each line."}],"max_tokens":256}' \
+    -d "{\"model\":\"$APPLE_MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Write exactly 100 numbered lines, with four words on each line.\"}],\"max_tokens\":256}" \
     >"$OUTPUT_DIR/load-a-completion.json" &
 LOAD_A_PID=$!
 
@@ -188,10 +203,11 @@ import pathlib
 import sys
 
 status = json.loads(pathlib.Path(sys.argv[1]).read_text())
+model_id = __import__("os").environ["APPLE_MODEL_ID"]
 assert any(
-    model.get("name") == "apple/system" and model.get("active_requests") == 1
+    model.get("name") == model_id and model.get("active_requests") == 1
     for model in status.get("runtime", {}).get("models", [])
-    )
+)
 PY
     then
         LOAD_A_OBSERVED=1
@@ -210,7 +226,7 @@ done
 
 curl --fail --silent --show-error "http://127.0.0.1:$API_A/v1/chat/completions" \
     -H 'content-type: application/json' \
-    -d '{"model":"apple/system","messages":[{"role":"user","content":"Write exactly 100 numbered lines, with five words on each line."}],"max_tokens":256}' \
+    -d "{\"model\":\"$APPLE_MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Write exactly 100 numbered lines, with five words on each line.\"}],\"max_tokens\":256}" \
     >"$OUTPUT_DIR/load-b-completion.json" &
 LOAD_B_PID=$!
 
@@ -224,10 +240,11 @@ import pathlib
 import sys
 
 status = json.loads(pathlib.Path(sys.argv[1]).read_text())
+model_id = __import__("os").environ["APPLE_MODEL_ID"]
 assert any(
-    model.get("name") == "apple/system" and model.get("active_requests") == 1
+    model.get("name") == model_id and model.get("active_requests") == 1
     for model in status.get("runtime", {}).get("models", [])
-    )
+)
 PY
     then
         LOAD_B_OBSERVED=1
@@ -249,24 +266,93 @@ LOAD_A_PID=""
 wait "$LOAD_B_PID"
 LOAD_B_PID=""
 
+PROVIDER_PORT_A="$(python3 - "$OUTPUT_DIR/node-a-status.json" <<'PY'
+import json
+import os
+import sys
+
+status = json.load(open(sys.argv[1], encoding="utf-8"))
+model_id = os.environ["APPLE_MODEL_ID"]
+for model in status.get("runtime", {}).get("models", []):
+    if model.get("name") == model_id and model.get("port"):
+        print(model["port"])
+        break
+else:
+    raise SystemExit("provider port was not present in node A status")
+PY
+)"
+PROVIDER_PID_A="$(lsof -ti "tcp:$PROVIDER_PORT_A" | head -n 1)"
+[[ "$PROVIDER_PID_A" =~ ^[0-9]+$ ]] || {
+    echo "could not identify node A Apple provider process" >&2
+    exit 1
+}
+kill -KILL "$PROVIDER_PID_A"
+
+WITHDRAW_OBSERVED=0
+for _ in $(seq 1 200); do
+    if curl --silent --show-error "http://127.0.0.1:$CONSOLE_B/api/status" \
+        >"$OUTPUT_DIR/node-b-withdrawn-status.json" 2>/dev/null \
+        && curl --silent --show-error "http://127.0.0.1:$API_A/v1/models" \
+            >"$OUTPUT_DIR/mesh-models-after-withdraw.json" 2>/dev/null \
+        && python3 - "$OUTPUT_DIR" 2>/dev/null <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+model_id = os.environ["APPLE_MODEL_ID"]
+status = json.loads((root / "node-b-withdrawn-status.json").read_text())
+models = json.loads((root / "mesh-models-after-withdraw.json").read_text())
+provider = next((model for model in models["data"] if model["id"] == model_id), None)
+assert provider is not None
+assert provider["metadata"]["replicas"] == 1, provider
+assert any(
+    runtime.get("model_name") == model_id
+    for peer in status.get("peers", [])
+    for runtime in peer.get("provider_runtimes", [])
+), status
+PY
+    then
+        WITHDRAW_OBSERVED=1
+        break
+    fi
+    sleep 0.1
+done
+
+[[ "$WITHDRAW_OBSERVED" == "1" ]] || {
+    echo "node A provider withdrawal was not observed on the private mesh" >&2
+    exit 1
+}
+
+curl --fail --silent --show-error "http://127.0.0.1:$API_A/v1/chat/completions" \
+    -H 'content-type: application/json' \
+    -d "{\"model\":\"$APPLE_MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: failover ready\"}],\"max_tokens\":32}" \
+    >"$OUTPUT_DIR/failover-completion.json"
+
 python3 - "$OUTPUT_DIR" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
 models = json.loads((root / "mesh-models.json").read_text())
 completion = json.loads((root / "completion.json").read_text())
-apple = next(model for model in models["data"] if model["id"] == "apple/system")
+failover = json.loads((root / "failover-completion.json").read_text())
+model_id = os.environ["APPLE_MODEL_ID"]
+apple = next(model for model in models["data"] if model["id"] == model_id)
 summary = {
     "status": "pass",
-    "model": "apple/system",
+    "model": model_id,
     "replicas": apple["metadata"]["replicas"],
     "max_concurrent_requests": apple["metadata"]["max_concurrent_requests"],
     "provider_model_versions": apple["metadata"]["provider_model_versions"],
     "completion_content": completion["choices"][0]["message"]["content"],
     "private_peer_provider_runtime_visible": True,
     "load_aware_remote_dispatch": True,
+    "provider_withdrawal_and_failover": True,
+    "failover_completion_content": failover["choices"][0]["message"]["content"],
 }
 (root / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 print(json.dumps(summary, indent=2, sort_keys=True))
