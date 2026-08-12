@@ -1,3 +1,4 @@
+use super::model_lifecycle::runtime_model_audit_context;
 use super::startup_retry::is_retryable_split_start_failure;
 use super::status::current_time_unix_ms;
 use super::status::single_quote_shell_arg;
@@ -10,9 +11,10 @@ use super::{
     SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart, StartupPinnedGpuTarget,
     StartupRuntimePlan, add_runtime_local_target, local_process_payload,
     publish_runtime_llama_slots, publish_runtime_llama_unavailable,
-    record_runtime_operational_event, refresh_dashboard_context_usage, register_runtime_instance,
-    remove_dashboard_context_usage, remove_dashboard_process, remove_runtime_local_target,
-    reserve_runtime_capacity_for_model, runtime_model_planning_bytes, runtime_model_required_bytes,
+    record_runtime_operational_event, record_runtime_operational_event_with_context,
+    refresh_dashboard_context_usage, register_runtime_instance, remove_dashboard_context_usage,
+    remove_dashboard_process, remove_runtime_local_target, reserve_runtime_capacity_for_model,
+    runtime_model_planning_bytes, runtime_model_required_bytes,
     runtime_process_payload_with_status, start_runtime_local_model, start_runtime_split_model,
     startup_runtime_plan, stop_split_generation_cleanup, unregister_runtime_instance,
     update_pi_models_json, upsert_dashboard_process,
@@ -1218,7 +1220,11 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
     let mut stop_rx = params.stop_rx.clone();
     loop {
         reset_startup_lifecycle(&params.lifecycle).await;
-        record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadStarted);
+        record_runtime_operational_event_with_context(
+            RuntimeOperationalEvent::ModelLoadStarted,
+            runtime_model_audit_context(Some(&params.model_name), &params.instance_id)
+                .outcome("started"),
+        );
         let Some((launch_handles, launch_started)) =
             launch_startup_local_model_task(&params, &mut stop_rx, &prepared).await
         else {
@@ -1258,7 +1264,14 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
             runtime_data_producer.as_ref(),
             prepared.launch_kind,
         );
-        publish_startup_local_model(&params, &ctx, &loaded_name, &handle).await;
+        publish_startup_local_model(
+            &params,
+            &ctx,
+            &loaded_name,
+            &handle,
+            launch_started.elapsed(),
+        )
+        .await;
 
         let mut state = StartupLoopState {
             loaded_name,
@@ -1413,8 +1426,16 @@ async fn publish_startup_local_model(
     ctx: &StartupLoopContext<'_>,
     loaded_name: &str,
     handle: &LocalRuntimeModelHandle,
+    load_duration: Duration,
 ) {
-    startup_publish_loaded_runtime(ctx, loaded_name, handle, &params.startup_ready_reporter).await;
+    startup_publish_loaded_runtime(
+        ctx,
+        loaded_name,
+        handle,
+        &params.startup_ready_reporter,
+        load_duration,
+    )
+    .await;
     let response = api::RuntimeLoadResponse {
         model_ref: params.model_ref.clone(),
         model: loaded_name.to_string(),
@@ -1449,6 +1470,7 @@ async fn record_startup_task_failure(params: &StartupLocalModelTask, detail: &st
         &params.model_ref,
         &params.profile,
         &params.model_name,
+        &params.instance_id,
         detail,
     )
     .await;
@@ -1466,6 +1488,7 @@ async fn record_startup_terminal_failure(
     model_ref: &str,
     profile: &str,
     model_name: &str,
+    instance_id: &str,
     detail: &str,
 ) {
     let mut record = lifecycle.lock().await;
@@ -1479,7 +1502,10 @@ async fn record_startup_terminal_failure(
 
     if transitioned_to_failure {
         record_runtime_operational_event(RuntimeOperationalEvent::StartupFailed);
-        record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadFailed);
+        record_runtime_operational_event_with_context(
+            RuntimeOperationalEvent::ModelLoadFailed,
+            runtime_model_audit_context(Some(model_name), instance_id).outcome("failed"),
+        );
     }
 
     let _ = runtime_event_tx.send(super::RuntimeEvent::StartupModelLoadFinished {
@@ -1532,6 +1558,7 @@ pub(super) async fn startup_publish_loaded_runtime(
     loaded_name: &str,
     handle: &LocalRuntimeModelHandle,
     startup_ready_reporter: &StartupReadyReporter,
+    load_duration: Duration,
 ) {
     let payload = startup_register_loaded_runtime(ctx, loaded_name, handle).await;
     ctx.node
@@ -1559,7 +1586,12 @@ pub(super) async fn startup_publish_loaded_runtime(
         message: format!("Startup-loaded model '{}' on :{}", loaded_name, handle.port),
         context: None,
     });
-    record_runtime_operational_event(RuntimeOperationalEvent::ModelReady);
+    record_runtime_operational_event_with_context(
+        RuntimeOperationalEvent::ModelReady,
+        runtime_model_audit_context(Some(loaded_name), ctx.instance_id)
+            .outcome("ready")
+            .duration_ms(u64::try_from(load_duration.as_millis()).unwrap_or(u64::MAX)),
+    );
 }
 
 pub(super) async fn startup_run_local_model_event_loop(
@@ -1584,6 +1616,12 @@ pub(super) async fn startup_run_local_model_event_loop(
             _ = &mut state.death_rx => {
                 state.survey_exited_unexpectedly = true;
                 ctx.survey_telemetry.record_unexpected_exit(&state.survey_loaded_model);
+                record_runtime_operational_event_with_context(
+                    RuntimeOperationalEvent::ModelExited,
+                    runtime_model_audit_context(Some(&state.loaded_name), ctx.instance_id)
+                        .reason_code("runtime_process_exited")
+                        .outcome("failed"),
+                );
                 let port = state.handle.as_ref().map(|handle| handle.port).unwrap_or_default();
                 let _ = emit_event(OutputEvent::Warning {
                     message: format!("Startup model '{}' exited unexpectedly", state.loaded_name),

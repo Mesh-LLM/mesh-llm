@@ -85,7 +85,7 @@ pub use self::discovery::nostr_relays;
 use self::model_lifecycle::*;
 pub(crate) use self::operational_logging::{
     NativeSkippyOperationalEvent, RuntimeOperationalEvent, record_native_skippy_operational_event,
-    record_runtime_operational_event,
+    record_runtime_operational_event, record_runtime_operational_event_with_context,
 };
 use self::publication::*;
 pub use self::run_auto::load_resolved_plugins;

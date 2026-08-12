@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use super::{apply_redaction, sanitize_json_body, sanitize_paths_in_text};
+use super::{apply_artifact_redaction, sanitize_json_body, sanitize_paths_in_text};
 
 const SENSITIVE_JSON_KEYS: &[&str] = &[
     "access_token",
@@ -48,7 +48,7 @@ pub fn redact_artifact_bytes(content: &[u8]) -> Vec<u8> {
     }
     let sanitized = sanitize_json_body(text);
     let path_safe = sanitize_paths_in_text(&sanitized);
-    apply_redaction(&path_safe).0.into_bytes()
+    apply_artifact_redaction(&path_safe).into_bytes()
 }
 
 fn contains_sensitive_json_key_syntax(text: &str) -> bool {
@@ -91,7 +91,7 @@ fn redact_json_value(value: &mut Value) -> bool {
         }
         Value::String(text) => {
             let path_safe = sanitize_paths_in_text(text);
-            let redacted = apply_redaction(&path_safe).0;
+            let redacted = apply_artifact_redaction(&path_safe);
             if *text == redacted {
                 false
             } else {
@@ -202,5 +202,22 @@ mod tests {
         assert_eq!(value["id"], "chatcmpl-safe");
         assert_eq!(value["usage"], serde_json::json!([1, 2]));
         assert_eq!(value["ok"], true);
+    }
+
+    #[test]
+    fn bounded_safe_event_stream_is_not_clipped_by_log_presentation_limits() {
+        let mut content = String::new();
+        for index in 0..24 {
+            content.push_str(&format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"content\":\"chunk-{index}\"}}}}]}}\n\n"
+            ));
+        }
+        content.push_str("data: [DONE]\n\n");
+        assert!(content.len() > super::super::MAX_LOG_STRING_LEN);
+
+        assert_eq!(
+            redact_artifact_bytes(content.as_bytes()),
+            content.as_bytes()
+        );
     }
 }

@@ -141,14 +141,22 @@ function InspectorContent({
 }
 
 function AuditMetadata({ audit }: { readonly audit: LogAuditEntry }) {
-  const fields = [
+  const fields: Array<readonly [string, string]> = [
     ['Entry ID', audit.entryId],
     ['Occurred', audit.occurredAt],
     ['Source', audit.source],
     ['Code', audit.code],
     ['Severity', audit.severity ?? 'Not provided'],
-    ['Sequence', String(audit.sequence)]
-  ] as const
+    ['Sequence', String(audit.sequence)],
+    ...(audit.subjectKind ? ([['Subject kind', audit.subjectKind]] as const) : []),
+    ...(audit.subjectId ? ([['Subject ID', audit.subjectId]] as const) : []),
+    ...(audit.operationId ? ([['Operation ID', audit.operationId]] as const) : []),
+    ...(audit.requestId ? ([['Request ID', audit.requestId]] as const) : []),
+    ...(audit.reasonCode ? ([['Reason', audit.reasonCode]] as const) : []),
+    ...(audit.outcome ? ([['Outcome', audit.outcome]] as const) : []),
+    ...(audit.durationMs !== undefined ? ([['Duration', `${audit.durationMs} ms`]] as const) : []),
+    ...Object.entries(audit.numericSummaries ?? {}).map(([key, value]) => [`Summary · ${key}`, String(value)] as const)
+  ]
 
   return (
     <dl className="grid gap-x-[var(--shell-normal)] gap-y-4 sm:grid-cols-2 lg:grid-cols-3">

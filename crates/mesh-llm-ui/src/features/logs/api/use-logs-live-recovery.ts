@@ -155,11 +155,13 @@ export function useLogsLiveRecovery({
   const requestIdsRef = useRef(new Set<string>())
   const hydrateInFlightRef = useRef(false)
   const hydratePendingRef = useRef(false)
+  const hydratePendingClearGapRef = useRef(false)
   const latestCursorRef = useRef<LogReplayCursor | LogAuditCursor | undefined>(undefined)
   const latestAuditCursorRef = useRef<LogAuditCursor | undefined>(undefined)
   const auditSequenceRef = useRef<bigint>(0n)
   const auditHydrateInFlightRef = useRef(false)
   const auditHydratePendingRef = useRef(false)
+  const auditHydratePendingClearGapRef = useRef(false)
   const hydrateAuditRef = useRef(hydrateAudit)
   const restoredCursorValueRef = useRef<string | undefined>(undefined)
 
@@ -269,6 +271,7 @@ export function useLogsLiveRecovery({
       if (disposed) return
       if (hydrateInFlightRef.current) {
         hydratePendingRef.current = true
+        hydratePendingClearGapRef.current ||= clearGap
         return
       }
       hydrateInFlightRef.current = true
@@ -283,7 +286,9 @@ export function useLogsLiveRecovery({
           hydrateInFlightRef.current = false
           if (!disposed && hydratePendingRef.current) {
             hydratePendingRef.current = false
-            hydrateAuthoritatively(false)
+            const pendingClearGap = hydratePendingClearGapRef.current
+            hydratePendingClearGapRef.current = false
+            hydrateAuthoritatively(pendingClearGap)
           }
         })
     }
@@ -384,13 +389,13 @@ export function useLogsLiveRecovery({
 
     let disposed = false
     let source: LogsEventSource | undefined
-    let pollingTimer: number | undefined
+    let reconciliationTimer: number | undefined
     let fallbackTimer: number | undefined
 
-    const clearPolling = () => {
-      if (pollingTimer === undefined) return
-      window.clearInterval(pollingTimer)
-      pollingTimer = undefined
+    const clearReconciliation = () => {
+      if (reconciliationTimer === undefined) return
+      window.clearInterval(reconciliationTimer)
+      reconciliationTimer = undefined
     }
     const clearFallback = () => {
       if (fallbackTimer === undefined) return
@@ -408,6 +413,7 @@ export function useLogsLiveRecovery({
       if (disposed) return
       if (auditHydrateInFlightRef.current) {
         auditHydratePendingRef.current = true
+        auditHydratePendingClearGapRef.current ||= clearGap
         return
       }
       auditHydrateInFlightRef.current = true
@@ -422,16 +428,21 @@ export function useLogsLiveRecovery({
           auditHydrateInFlightRef.current = false
           if (!disposed && auditHydratePendingRef.current) {
             auditHydratePendingRef.current = false
-            hydrateAuditAuthoritatively(false)
+            const pendingClearGap = auditHydratePendingClearGapRef.current
+            auditHydratePendingClearGapRef.current = false
+            hydrateAuditAuthoritatively(pendingClearGap)
           }
         })
     }
-    const startPolling = () => {
-      if (pollingTimer !== undefined) return
-      setAuditState('polling')
-      pollingTimer = window.setInterval(() => {
+    const startReconciliation = () => {
+      if (reconciliationTimer !== undefined) return
+      reconciliationTimer = window.setInterval(() => {
         if (pollingEnabledRef.current) hydrateAuditAuthoritatively(false)
       }, POLL_INTERVAL_MS)
+    }
+    const startPolling = () => {
+      setAuditState('polling')
+      startReconciliation()
     }
     const queuePollingFallback = () => {
       if (fallbackTimer !== undefined) return
@@ -473,13 +484,16 @@ export function useLogsLiveRecovery({
       audit: { cursor: latestAuditCursorRef.current }
     })
     hydrateAuditAuthoritatively(false)
+    // A healthy SSE stream only observes this daemon's in-memory bus. Keep a
+    // bounded authoritative reconciliation active so rows committed by a
+    // separate one-shot CLI process appear without a manual reload.
+    startReconciliation()
     try {
       const connectedSource = createEventSource(url)
       source = connectedSource
       connectedSource.onopen = () => {
         if (disposed) return
         clearFallback()
-        clearPolling()
         setAuditState('connected')
       }
       connectedSource.onerror = () => {
@@ -495,7 +509,7 @@ export function useLogsLiveRecovery({
     return () => {
       disposed = true
       clearFallback()
-      clearPolling()
+      clearReconciliation()
       closeSource()
     }
   }, [auditEnabled, createEventSource])

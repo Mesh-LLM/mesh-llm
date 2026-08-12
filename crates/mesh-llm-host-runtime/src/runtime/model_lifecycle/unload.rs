@@ -11,10 +11,26 @@ pub(crate) async fn run_auto_unload_runtime_model(
     target: UnloadTarget,
     options: UnloadOptions,
 ) -> Result<api::RuntimeUnloadResponse> {
-    let unload = resolve_runtime_unload_target(
+    let unload = match resolve_runtime_unload_target(
         target.as_runtime_target(),
         runtime_unload_candidates(ctx.runtime_models, ctx.managed_models),
-    )?;
+    ) {
+        Ok(unload) => unload,
+        Err(error) => {
+            record_runtime_operational_event_with_context(
+                RuntimeOperationalEvent::ModelUnloadFailed,
+                OperationalAuditContext::new()
+                    .reason_code("target_not_resolved")
+                    .outcome("failed"),
+            );
+            return Err(error);
+        }
+    };
+    record_runtime_operational_event_with_context(
+        RuntimeOperationalEvent::ModelUnloadStarted,
+        runtime_model_audit_context(Some(&unload.model_name), &unload.instance_id)
+            .outcome("started"),
+    );
     let drain_delay = if options.force {
         Duration::ZERO
     } else {
@@ -26,6 +42,12 @@ pub(crate) async fn run_auto_unload_runtime_model(
         }
         RuntimeUnloadOwner::Managed => {
             let Some(controller) = ctx.managed_models.remove(&unload.instance_id) else {
+                record_runtime_operational_event_with_context(
+                    RuntimeOperationalEvent::ModelUnloadFailed,
+                    runtime_model_audit_context(Some(&unload.model_name), &unload.instance_id)
+                        .reason_code("instance_missing")
+                        .outcome("failed"),
+                );
                 anyhow::bail!(
                     "model or runtime instance '{}' is not loaded",
                     unload.instance_id
@@ -111,7 +133,10 @@ pub(crate) async fn run_auto_unload_runtime_model(
                 message: format!("Unloaded managed model '{}'", model),
                 context: None,
             });
-            record_runtime_operational_event(RuntimeOperationalEvent::ModelUnloaded);
+            record_runtime_operational_event_with_context(
+                RuntimeOperationalEvent::ModelUnloaded,
+                runtime_model_audit_context(Some(&model), &unload.instance_id).outcome("completed"),
+            );
             Ok(api::RuntimeUnloadResponse {
                 model,
                 instance_id: unload.instance_id,
@@ -161,6 +186,12 @@ pub(crate) async fn run_auto_unload_runtime_entry(
     drain_delay: Duration,
 ) -> Result<api::RuntimeUnloadResponse> {
     let Some(entry) = ctx.runtime_models.remove(&unload.instance_id) else {
+        record_runtime_operational_event_with_context(
+            RuntimeOperationalEvent::ModelUnloadFailed,
+            runtime_model_audit_context(Some(&unload.model_name), &unload.instance_id)
+                .reason_code("instance_missing")
+                .outcome("failed"),
+        );
         anyhow::bail!(
             "model or runtime instance '{}' is not loaded",
             unload.instance_id
@@ -271,7 +302,10 @@ pub(crate) async fn run_auto_unload_runtime_entry(
         message: format!("Unloaded local model '{}' from :{}", model, port),
         context: None,
     });
-    record_runtime_operational_event(RuntimeOperationalEvent::ModelUnloaded);
+    record_runtime_operational_event_with_context(
+        RuntimeOperationalEvent::ModelUnloaded,
+        runtime_model_audit_context(Some(&model), &unload.instance_id).outcome("completed"),
+    );
     Ok(api::RuntimeUnloadResponse {
         model,
         instance_id: unload.instance_id,
@@ -346,4 +380,10 @@ pub(crate) async fn run_auto_handle_runtime_exit(
         message: format!("Runtime model '{model}' exited unexpectedly"),
         context: Some(format!("model={model} port={port}")),
     });
+    record_runtime_operational_event_with_context(
+        RuntimeOperationalEvent::ModelExited,
+        runtime_model_audit_context(Some(&model), &instance_id)
+            .reason_code("unexpected_exit")
+            .outcome("failed"),
+    );
 }

@@ -26,7 +26,8 @@ pub use artifact_persistence::{ArtifactCaptureEntry, ArtifactPersistenceStatus};
 
 mod operational_audit;
 pub use operational_audit::{
-    OperationalAuditRecord, OperationalAuditRecordBuilder, OperationalAuditSeverity,
+    OperationalAuditContext, OperationalAuditRecord, OperationalAuditRecordBuilder,
+    OperationalAuditSeverity, OperationalAuditSubjectKind,
 };
 
 pub use super::bus::{BusEntry, ReplayBus};
@@ -452,6 +453,12 @@ impl EventDelivery {
                 .as_object_mut()
                 .expect("audit payload is always an object")
                 .insert("severity".into(), serde_json::json!(severity.as_str()));
+        }
+        if let Some(context) = record.context() {
+            payload
+                .as_object_mut()
+                .expect("audit payload is always an object")
+                .extend(context.fields());
         }
         let entry = BusEntry {
             payload: payload.to_string(),
@@ -891,6 +898,10 @@ fn record_persistence_failure(
 }
 
 impl LoggingService {
+    pub(crate) const fn artifact_command_max_bytes(&self) -> usize {
+        self.config.artifact_command_max_bytes
+    }
+
     /// Return a logging-owned timestamp for bounded persistence metadata.
     ///
     /// Request-path callers reach this only through lifecycle owners, so an

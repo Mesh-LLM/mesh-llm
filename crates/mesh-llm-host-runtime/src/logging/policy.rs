@@ -94,6 +94,19 @@ pub fn apply_redaction(value: &str) -> (String, RedactMode) {
     (value.to_string(), RedactMode::PassThrough)
 }
 
+/// Apply credential redaction to an explicitly captured artifact string
+/// without the presentation-oriented 1 KiB log-value truncation. Artifact
+/// bytes already have configured per-item and aggregate bounds; clipping here
+/// would silently corrupt an otherwise available payload and leave its
+/// `truncated` metadata false.
+fn apply_artifact_redaction(value: &str) -> String {
+    if contains_credential_marker(value) || looks_like_credential_value(value) {
+        "[REDACTED]".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 /// Sanitize every free-form string carried by a canonical lifecycle event.
 ///
 /// This is deliberately exhaustive: adding a string-bearing lifecycle variant

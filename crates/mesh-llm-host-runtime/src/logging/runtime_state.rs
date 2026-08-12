@@ -63,6 +63,7 @@ pub struct LoggingRuntimeHealth {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LoggingRuntimeStatus {
     pub(crate) metadata_available: bool,
+    pub(crate) capture_mode: &'static str,
     pub(crate) artifact_capture_available: bool,
     pub(crate) artifact_capture_ready: bool,
     pub(crate) artifact_capture_degradation: Option<&'static str>,
@@ -134,6 +135,12 @@ struct RuntimeOpenAiArtifactCapture {
 }
 
 impl OpenAiArtifactCapture for RuntimeOpenAiArtifactCapture {
+    fn body_limit_bytes(&self) -> usize {
+        self.service
+            .upgrade()
+            .map_or(0, |service| service.artifact_command_max_bytes())
+    }
+
     fn capture_body(
         &self,
         request_id: mesh_llm_events::logging::identifiers::RequestId,
@@ -167,6 +174,7 @@ pub struct LoggingRuntimeState {
     #[cfg(test)]
     artifact_limits: Option<(usize, usize)>,
     artifact_export_enabled: bool,
+    capture_mode: &'static str,
     export_limit_bytes: usize,
     health: Mutex<LoggingRuntimeHealth>,
     health_audit_writer: FailOpenWriter,
@@ -379,6 +387,10 @@ impl LoggingRuntimeState {
                 config.artifact.capture_mode,
                 mesh_llm_config::CaptureMode::RedactedArtifacts
             ) && artifact_capture_available,
+            capture_mode: match config.artifact.capture_mode {
+                mesh_llm_config::CaptureMode::MetadataOnly => "metadata_only",
+                mesh_llm_config::CaptureMode::RedactedArtifacts => "redacted_artifacts",
+            },
             export_limit_bytes: config.export_limit_bytes as usize,
             health: Mutex::new(LoggingRuntimeHealth {
                 metadata_available: true,
@@ -420,6 +432,7 @@ impl LoggingRuntimeState {
             #[cfg(test)]
             artifact_limits: None,
             artifact_export_enabled: false,
+            capture_mode: "unavailable",
             export_limit_bytes: mesh_llm_config::LoggingConfig::default().export_limit_bytes
                 as usize,
             health: Mutex::new(LoggingRuntimeHealth::unavailable()),
@@ -500,6 +513,7 @@ impl LoggingRuntimeState {
 
         LoggingRuntimeStatus {
             metadata_available: health.metadata_available,
+            capture_mode: self.capture_mode,
             artifact_capture_available: health.artifact_capture_available,
             artifact_capture_ready: health.artifact_capture_ready,
             artifact_capture_degradation: health.artifact_capture_degradation,

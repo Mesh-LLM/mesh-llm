@@ -1,6 +1,7 @@
 use mesh_llm_events::logging::envelope::CanonicalEnvelope;
 use mesh_llm_events::logging::replay::ReplayChannel;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 use super::super::event_kind;
 use super::query::{AuditCursor, Cursor};
@@ -151,7 +152,7 @@ fn frame<T: Serialize>(event: &str, id: &str, data: &T) -> Result<String, ()> {
 }
 
 /// Audit entry frame: privacy-safe projection of an audit replay record.
-/// Never contains `canonical_envelope`, request IDs, or `detail_json`.
+/// Never contains `canonical_envelope` or arbitrary `detail_json`.
 pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()> {
     let payload: serde_json::Value = serde_json::from_str(&record.entry.payload).map_err(|_| ())?;
     let entry_id = payload
@@ -178,6 +179,30 @@ pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()
         .get("severity")
         .and_then(|v| v.as_str())
         .map(str::to_owned);
+    let context_version = payload
+        .get("context_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|value| *value == 1);
+    let context_string = |key: &str| {
+        context_version.and_then(|_| {
+            payload
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty() && value.chars().count() <= 256)
+                .map(str::to_owned)
+        })
+    };
+    let numeric_summaries = context_version.map_or_else(BTreeMap::new, |_| {
+        payload
+            .get("numeric_summaries")
+            .and_then(serde_json::Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| value.as_u64().map(|value| (key.clone(), value)))
+            .take(8)
+            .collect()
+    });
 
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -188,6 +213,24 @@ pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()
         code: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         severity: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        context_version: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subject_kind: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subject_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason_code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+        numeric_summaries: BTreeMap<String, u64>,
         sequence: u64,
     }
 
@@ -197,6 +240,19 @@ pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()
         source,
         code,
         severity,
+        context_version,
+        subject_kind: context_string("subject_kind"),
+        subject_id: context_string("subject_id"),
+        operation_id: context_string("operation_id"),
+        request_id: context_string("request_id"),
+        reason_code: context_string("reason_code"),
+        outcome: context_string("outcome"),
+        duration_ms: context_version.and_then(|_| {
+            payload
+                .get("duration_ms")
+                .and_then(serde_json::Value::as_u64)
+        }),
+        numeric_summaries,
         sequence: record.sequence,
     };
     frame(

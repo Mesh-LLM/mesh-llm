@@ -553,6 +553,38 @@ async fn audit_filters_by_severity() {
 }
 
 #[tokio::test]
+async fn audit_list_exposes_typed_context_without_arbitrary_detail() {
+    let (_temp, state) = runtime();
+    state
+        .store()
+        .expect("store")
+        .insert_audit_entry(
+            "00000000-0000-4000-8000-000000000022",
+            None,
+            "2026-08-12T12:00:00Z",
+            "runtime",
+            "runtime_model_ready",
+            Some(
+                r#"{"severity":"info","context_version":1,"subject_kind":"model","subject_id":"local-gguf/sha256-safe","operation_id":"runtime-7","outcome":"ready","duration_ms":42,"secret":"SENTINEL-AUDIT-SECRET"}"#,
+            ),
+        )
+        .expect("seed typed audit row");
+
+    let page = list_audits(&state, "/api/logs/audit?limit=10")
+        .await
+        .expect("list typed audit row");
+    let json = serde_json::to_value(page).expect("serialize page");
+    let row = &json["items"][0];
+    assert_eq!(row["contextVersion"], 1);
+    assert_eq!(row["subjectKind"], "model");
+    assert_eq!(row["subjectId"], "local-gguf/sha256-safe");
+    assert_eq!(row["operationId"], "runtime-7");
+    assert_eq!(row["outcome"], "ready");
+    assert_eq!(row["durationMs"], 42);
+    assert!(!json.to_string().contains("SENTINEL-AUDIT-SECRET"));
+}
+
+#[tokio::test]
 async fn audit_filters_by_inclusive_canonical_time_bounds_before_pagination() {
     let (_temp, state) = runtime();
     let store = state.store().expect("store");

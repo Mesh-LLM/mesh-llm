@@ -593,6 +593,11 @@ fn every_runtime_operational_event_emits_exactly_its_allowed_code() {
             "runtime_shutdown_started",
         ),
         (
+            RuntimeOperationalEvent::ShutdownCompleted,
+            "info",
+            "runtime_shutdown_completed",
+        ),
+        (
             RuntimeOperationalEvent::ModelLoadStarted,
             "info",
             "runtime_model_load_started",
@@ -608,9 +613,24 @@ fn every_runtime_operational_event_emits_exactly_its_allowed_code() {
             "runtime_model_load_failed",
         ),
         (
+            RuntimeOperationalEvent::ModelUnloadStarted,
+            "info",
+            "runtime_model_unload_started",
+        ),
+        (
+            RuntimeOperationalEvent::ModelUnloadFailed,
+            "warning",
+            "runtime_model_unload_failed",
+        ),
+        (
             RuntimeOperationalEvent::ModelUnloaded,
             "info",
             "runtime_model_unloaded",
+        ),
+        (
+            RuntimeOperationalEvent::ModelExited,
+            "warning",
+            "runtime_model_exited",
         ),
     ];
 
