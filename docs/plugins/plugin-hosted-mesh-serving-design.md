@@ -76,13 +76,13 @@ completing.
 - **Tunnel port**: since `run_auto()` already unconditionally constructs
   `tunnel::Manager` and binds the real API proxy before any model
   resolution happens, set `tunnel_mgr.set_http_port(api_port)`
-  immediately after construction, unconditionally. The three call sites
-  in `startup_handles.rs` remain and become redundant-but-harmless (same
-  node, same `api_port`, for the process's lifetime) rather than
-  conflicting.
-- **Host role**: add `spawn_plugin_host_role_watcher`, a small background
-  task started alongside the tunnel manager (skipped for `--client`
-  nodes) that polls `plugin_manager.inference_models()` on a short
+  immediately after construction, for any node that can serve. The three
+  call sites in `startup_handles.rs` remain and become
+  redundant-but-harmless (same node, same `api_port`, for the process's
+  lifetime) rather than conflicting.
+- **Host role**: add `plugin_host_role::spawn`, a small background
+  task started alongside the tunnel manager that polls
+  `plugin_manager.inference_models()` on a short
   interval and claims `NodeRole::Host { http_port: api_port }` when the
   successful result is non-empty, releasing that claim when it becomes
   empty again. Errors are logged and leave the previous role state intact
@@ -95,14 +95,45 @@ completing.
   failure-threshold logic) rather than probing anything itself, so the
   short poll interval doesn't add flapping risk beyond that debouncing.
 
-The tunnel-port fix is an unconditional addition in `run_auto()`'s existing
-startup path. The host-role watcher is new (if small) background machinery,
-started conditionally (skipped for `--client` nodes, which have no compute to
-offer regardless of plugin state). Neither threads through the
+The tunnel-port fix is a small addition in `run_auto()`'s existing startup
+path. The host-role watcher is new (if small) background machinery. Neither
+threads through the
 passive-listener/model-selection context that an earlier version of this
 fix (written against an older fork base, before the
 daemon-lifecycle-reconciliation refactor landed upstream) needed and that
 would have been dead weight added to an already-dead code path.
+
+## Client nodes
+
+Both changes are gated behind `!is_client`, together, at the same call site:
+
+```rust
+if !is_client {
+    tunnel_mgr.set_http_port(api_port);
+    plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
+}
+```
+
+A `--client` node has no compute to offer regardless of plugin state, so the
+host-role watcher is pointless there. The tunnel port is gated for a separate
+and more important reason: setting it is what makes a node's inbound QUIC HTTP
+tunnel terminate at the local API proxy instead of at `tunnel.rs`'s
+`port == 0` early-return.
+
+If a client set it, an inbound tunnel from any admitted peer would relay into
+the local proxy, find no local model, and route back out to another peer
+through `hosts_for_model()` — making the client a mesh-internal request relay.
+Nothing would *select* a client that way (clients never advertise `Host`), but
+any peer that deliberately dialed one could use it, which on a public mesh
+means any member. The same ingress also carries the `/mesh/load` and
+`/mesh/drop` control paths, which are dispatched ahead of the inference
+admission check; `/mesh/load` is refused for clients by the runtime control
+loop, and `/mesh/drop` is inert only because a client has nothing loaded.
+
+Gating keeps a client exactly as reachable as it was before this change — not
+at all — and avoids widening a surface that issue #1190 exists to narrow.
+Plugin-only nodes, the case this document is about, are never `--client`, so
+the gate does not affect them.
 
 ## Deliberately deferred
 

@@ -1244,20 +1244,31 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
 
     let tunnel_mgr =
         tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
-    // Set unconditionally, not only as a side effect of a local model
-    // finishing load (see `startup_handles.rs`'s three call sites, which
-    // remain and are now redundant-but-harmless — same node, same
-    // `api_port`, for the lifetime of the process). The api proxy this
-    // points at is already bound and already answers correctly with no
-    // models loaded, so an inbound tunneled request arriving before any
-    // model is ready gets a normal "not available" response instead of
-    // being silently dropped (the previous behavior whenever this was
-    // still 0 — see `network/tunnel.rs`'s `port == 0` early-return). This
-    // is what lets a plugin-only node (no local model ever loads) accept
-    // inbound requests at all; see `spawn_plugin_host_role_watcher` below
-    // for the other half — whether peers actually route here.
-    tunnel_mgr.set_http_port(api_port);
+    // Both halves of inbound reachability are established here for any node
+    // that can serve, rather than only as a side effect of a local model
+    // finishing load.
+    //
+    // `set_http_port` is what lets a plugin-only node (no local model ever
+    // loads) accept inbound requests at all: the api proxy it points at is
+    // already bound and already answers correctly with no models loaded, so a
+    // tunneled request arriving before any model is ready gets a normal "not
+    // available" response instead of being silently dropped (the previous
+    // behavior whenever this was still 0 — see `network/tunnel.rs`'s
+    // `port == 0` early-return). The three call sites in `startup_handles.rs`
+    // remain and are now redundant-but-harmless — same node, same `api_port`,
+    // for the lifetime of the process.
+    //
+    // `plugin_host_role::spawn` is the other half: whether peers actually
+    // route here.
+    //
+    // Both are gated on `!is_client`. A client node has no compute to offer
+    // and never advertises `Host`, so nothing selects it as a route target;
+    // leaving its inbound HTTP tunnel terminated at the `port == 0` check
+    // keeps it exactly as reachable as it was before this change — not at
+    // all — instead of turning it into a mesh-internal request relay for any
+    // admitted peer that dials it.
     if !is_client {
+        tunnel_mgr.set_http_port(api_port);
         plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
     }
 
