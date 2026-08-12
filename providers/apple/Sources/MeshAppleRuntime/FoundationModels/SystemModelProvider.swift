@@ -308,14 +308,14 @@ func validateAppleContextBudget(
 }
 
 extension AppleUsage {
-  fileprivate static let zero = AppleUsage(
+  static let zero = AppleUsage(
     inputTokens: 0,
     cachedInputTokens: 0,
     outputTokens: 0,
     reasoningTokens: 0
   )
 
-  fileprivate init(_ usage: LanguageModelSession.Usage) {
+  init(_ usage: LanguageModelSession.Usage) {
     self.init(
       inputTokens: usage.input.totalTokenCount,
       cachedInputTokens: usage.input.cachedTokenCount,

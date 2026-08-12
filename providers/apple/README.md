@@ -2,15 +2,17 @@
 
 This directory contains one macOS Swift sidecar for MeshLLM's Apple-native
 model integrations. Its first logical model is Apple's on-device system model,
-exposed as `apple/system`. Named Core AI models will be added to the same
-runtime and protocol rather than shipped as a second sidecar.
+exposed as `apple/system`, plus an optional published Core AI `.aimodel`
+artifact exposed as `apple/coreai/<name>`. Both providers share the same
+runtime, REST contract, scheduler, and host lifecycle.
 
 This work is **experimental**. A macOS `mesh-llm serve` host can supervise the
-runtime and expose `apple/system` through its normal local OpenAI frontend. A
-release-shaped macOS product can now embed and auto-discover the provider; the
-provider is not enabled in published releases, model gossip, or private-mesh
-routing yet. It implements the Milestone 0 evidence, local REST vertical slice,
-Rust host-supervision layer, and CLI product-packaging layer from
+runtime and expose `apple/system` or a packaged Core AI artifact through its
+normal local OpenAI frontend. A release-shaped macOS product can embed and
+auto-discover the provider, and private meshes can route its advertised model
+targets. It is not enabled in published releases. It implements the Milestone
+0 evidence, local REST vertical slice, Rust host-supervision layer, CLI
+product-packaging layer, and the first published Core AI artifact lane from
 [issue #1246](https://github.com/Mesh-LLM/mesh-llm/issues/1246).
 
 ## Requirements
@@ -33,6 +35,44 @@ xcrun --sdk macosx --show-sdk-version
 
 The expected Xcode path ends in `Xcode.app/Contents/Developer` or
 `Xcode-beta.app/Contents/Developer`, and the SDK must be 27.x.
+
+## Try the Core AI artifact locally
+
+Core AI model bundles are explicit artifacts. The runtime does not discover or
+download arbitrary checkpoints. Set all three values to serve one published
+`.aimodel` resource directory:
+
+```bash
+export MESH_APPLE_COREAI_MODEL_ROOT="$PWD/path/to/Qwen3-4B.aimodel"
+export MESH_APPLE_COREAI_MODEL_ID="apple/coreai/qwen3-4b"
+export MESH_APPLE_COREAI_MODEL_VERSION="qwen3-4b-2026-08-01"
+export MESH_APPLE_COREAI_CONTEXT_SIZE=4096
+export MESH_APPLE_COREAI_LANGUAGES=en
+just apple::run status
+just apple::run serve --port 11435
+```
+
+The status response uses `versionSource=coreai_model_artifact` and exposes both
+`apple/coreai/qwen3-4b` and its exact versioned alias. The model is loaded
+lazily on first request and remains resident for subsequent requests. The
+Core AI adapter uses a conservative byte-based token estimate for context
+admission; the artifact's declared context size should therefore be set to the
+published model limit.
+
+To make a self-contained provider bundle (including the model resources):
+
+```bash
+MESH_APPLE_COREAI_MODEL_ROOT="$PWD/path/to/Qwen3-4B.aimodel" \
+MESH_APPLE_COREAI_MODEL_ID="apple/coreai/qwen3-4b" \
+MESH_APPLE_COREAI_MODEL_VERSION="qwen3-4b-2026-08-01" \
+just apple::package
+just apple::contract
+```
+
+The package manifest declares the Core AI model identity and SHA-256 digests
+for every copied model file. A package containing a Core AI artifact selects
+that artifact as its provider target; a package without one remains the
+`apple/system` package.
 
 ## Try it locally
 

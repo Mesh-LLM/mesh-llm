@@ -17,9 +17,18 @@ let package = Package(
       targets: ["MeshAppleRuntimeCLI"]
     ),
   ],
+  dependencies: [
+    .package(
+      url: "https://github.com/apple/coreai-models.git",
+      revision: "25a093b9fb05c99d90bd2d4ddbca44d95cbc6af8"
+    )
+  ],
   targets: [
     .target(
-      name: "MeshAppleRuntime"
+      name: "MeshAppleRuntime",
+      dependencies: [
+        .product(name: "CoreAILM", package: "coreai-models")
+      ]
     ),
     .executableTarget(
       name: "MeshAppleRuntimeCLI",

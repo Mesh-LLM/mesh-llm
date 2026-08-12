@@ -162,7 +162,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     } catch {
       throw HTTPFailure(status: 400, code: "invalid_json", message: String(describing: error))
     }
-    guard AppleRuntimeIdentifiers.isSystemModelID(request.model) else {
+    guard await runtime.supports(modelID: request.model) else {
       throw HTTPFailure(
         status: 404,
         code: "model_not_found",

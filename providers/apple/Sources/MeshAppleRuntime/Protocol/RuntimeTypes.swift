@@ -5,6 +5,8 @@ public enum AppleRuntimeIdentifiers {
   public static let protocolVersion = "0.1"
   public static let systemModelID = "apple/system"
   public static let systemModelVersionSource = "apple_os_release_band"
+  public static let coreAIModelVersionSource = "coreai_model_artifact"
+  public static let coreAIModelIDPrefix = "apple/coreai/"
 
   public static var systemModelVersion: String? {
     documentedSystemModelVersion(for: ProcessInfo.processInfo.operatingSystemVersion)
@@ -17,6 +19,10 @@ public enum AppleRuntimeIdentifiers {
   public static func isSystemModelID(_ modelID: String) -> Bool {
     guard let versionedSystemModelID else { return false }
     return modelID == systemModelID || modelID == versionedSystemModelID
+  }
+
+  public static func isCoreAIModelID(_ modelID: String) -> Bool {
+    modelID.hasPrefix(coreAIModelIDPrefix)
   }
 
   public static func documentedSystemModelVersion(

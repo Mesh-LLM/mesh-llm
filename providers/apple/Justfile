@@ -2,10 +2,14 @@ apple_root := justfile_directory() / "providers/apple"
 
 # Build the experimental Apple runtime.
 build:
+    @swift package resolve --package-path "{{ apple_root }}"
+    @"{{ apple_root }}/Packaging/prepare-coreai.sh"
     @swift build --package-path "{{ apple_root }}"
 
 # Run deterministic Apple runtime unit tests.
 test:
+    @swift package resolve --package-path "{{ apple_root }}"
+    @"{{ apple_root }}/Packaging/prepare-coreai.sh"
     @swift test --package-path "{{ apple_root }}"
 
 # Run one Apple runtime CLI command.

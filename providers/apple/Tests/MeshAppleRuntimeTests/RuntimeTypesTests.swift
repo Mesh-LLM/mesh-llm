@@ -146,3 +146,9 @@ private actor SchedulerGate {
   }
   #expect(!AppleRuntimeIdentifiers.isSystemModelID("apple/system@999.0"))
 }
+
+@Test func coreAIModelIDsUseAnExplicitArtifactNamespace() {
+  #expect(AppleRuntimeIdentifiers.isCoreAIModelID("apple/coreai/qwen3-4b"))
+  #expect(AppleRuntimeIdentifiers.isCoreAIModelID("apple/coreai/qwen3-4b@2026-08-01"))
+  #expect(!AppleRuntimeIdentifiers.isCoreAIModelID("apple/system"))
+}

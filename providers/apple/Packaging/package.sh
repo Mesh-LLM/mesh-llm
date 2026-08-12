@@ -14,6 +14,30 @@ RUNTIME_VERSION="${MESH_APPLE_RUNTIME_VERSION:-0.1.0}"
 ARCHIVE_URL="${MESH_APPLE_RUNTIME_ARCHIVE_URL:-}"
 RELEASE_MODE="${MESH_APPLE_RUNTIME_RELEASE:-0}"
 NOTARY_PROFILE="${MESH_APPLE_RUNTIME_NOTARY_PROFILE:-}"
+COREAI_MODEL_ROOT="${MESH_APPLE_COREAI_MODEL_ROOT:-}"
+COREAI_MODEL_ID="${MESH_APPLE_COREAI_MODEL_ID:-}"
+COREAI_MODEL_VERSION="${MESH_APPLE_COREAI_MODEL_VERSION:-}"
+COREAI_CONTEXT_SIZE="${MESH_APPLE_COREAI_CONTEXT_SIZE:-4096}"
+COREAI_LANGUAGES="${MESH_APPLE_COREAI_LANGUAGES:-en}"
+
+if [[ -n "$COREAI_MODEL_ROOT" || -n "$COREAI_MODEL_ID" || -n "$COREAI_MODEL_VERSION" ]]; then
+    [[ -d "$COREAI_MODEL_ROOT" ]] || {
+        echo "MESH_APPLE_COREAI_MODEL_ROOT must point to a published .aimodel resource directory" >&2
+        exit 2
+    }
+    [[ -z "$(find "$COREAI_MODEL_ROOT" -type l -print -quit)" ]] || {
+        echo "Core AI model resources must not contain symlinks" >&2
+        exit 2
+    }
+    [[ "$COREAI_MODEL_ID" == apple/coreai/* ]] || {
+        echo "MESH_APPLE_COREAI_MODEL_ID must use the apple/coreai/<name> namespace" >&2
+        exit 2
+    }
+    [[ -n "$COREAI_MODEL_VERSION" ]] || {
+        echo "MESH_APPLE_COREAI_MODEL_VERSION is required for a Core AI artifact" >&2
+        exit 2
+    }
+fi
 
 if [[ "$RELEASE_MODE" != "0" && "$RELEASE_MODE" != "1" ]]; then
     echo "MESH_APPLE_RUNTIME_RELEASE must be 0 or 1" >&2
@@ -51,6 +75,8 @@ if [[ -n "$ENTITLEMENTS" ]]; then
     fi
 fi
 
+swift package resolve --package-path "$PACKAGE_PATH"
+"$PACKAGE_PATH/Packaging/prepare-coreai.sh"
 swift build -c release --package-path "$PACKAGE_PATH"
 BIN_DIR="$(swift build -c release --show-bin-path --package-path "$PACKAGE_PATH")"
 SOURCE_BINARY="$BIN_DIR/mesh-apple-runtime"
@@ -72,6 +98,31 @@ cp "$SOURCE_BINARY" "$BUNDLE_DIR/bin/mesh-apple-runtime"
 cp "$PACKAGE_PATH/README.md" "$BUNDLE_DIR/README.md"
 cp "$PACKAGE_PATH/Packaging/Entitlements/background-inference.entitlements" \
     "$BUNDLE_DIR/Resources/background-inference.entitlements"
+if [[ -n "$COREAI_MODEL_ROOT" ]]; then
+    mkdir -p "$BUNDLE_DIR/Models"
+    cp -R "$COREAI_MODEL_ROOT" "$BUNDLE_DIR/Models/coreai-model"
+    python3 - "$BUNDLE_DIR/Resources/coreai-model.json" "$COREAI_MODEL_ID" \
+        "$COREAI_MODEL_VERSION" "$COREAI_CONTEXT_SIZE" "$COREAI_LANGUAGES" <<'PY'
+import json
+import sys
+
+output, model_id, version, context_size, languages = sys.argv[1:]
+with open(output, "w", encoding="utf-8") as handle:
+    json.dump(
+        {
+            "id": model_id,
+            "version": version,
+            "path": "Models/coreai-model",
+            "contextSize": int(context_size),
+            "languages": [item for item in languages.split(",") if item],
+        },
+        handle,
+        indent=2,
+        sort_keys=True,
+    )
+    handle.write("\n")
+PY
+fi
 
 codesign_args=(--force --sign "$IDENTITY")
 if [[ "$RELEASE_MODE" == "1" ]]; then
@@ -129,8 +180,13 @@ python3 - \
     "$TEAM_IDENTIFIER" \
     "$SIGNING_IDENTIFIER" \
     "$ENTITLEMENT_KEYS_JSON" \
-    "$RELEASE_MODE" <<'PY'
+    "$RELEASE_MODE" \
+    "$BUNDLE_DIR" \
+    "$COREAI_MODEL_ID" \
+    "$COREAI_MODEL_VERSION" <<'PY'
 import json
+import hashlib
+from pathlib import Path
 import sys
 
 (
@@ -149,7 +205,33 @@ import sys
     signing_identifier,
     entitlement_keys_json,
     release_mode,
+    bundle_dir,
+    coreai_model_id,
+    coreai_model_version,
 ) = sys.argv[1:]
+
+files = {
+    "bin/mesh-apple-runtime": f"sha256:{binary_sha}",
+    "README.md": f"sha256:{readme_sha}",
+    "Resources/background-inference.entitlements": f"sha256:{entitlement_sha}",
+}
+bundle_path = Path(bundle_dir)
+if coreai_model_id:
+    config_path = bundle_path / "Resources/coreai-model.json"
+    files["Resources/coreai-model.json"] = "sha256:" + hashlib.sha256(
+        config_path.read_bytes()
+    ).hexdigest()
+    for path in sorted((bundle_path / "Models/coreai-model").rglob("*")):
+        if path.is_file():
+            relative = path.relative_to(bundle_path).as_posix()
+            files[relative] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+models = [{"id": "apple/system", "kind": "system"}]
+if coreai_model_id:
+    models = [{
+        "id": coreai_model_id,
+        "kind": "coreai",
+    }]
 
 manifest = {
     "schema_version": 1,
@@ -165,7 +247,7 @@ manifest = {
             "minimum_os_version": "27.0",
         },
         "entrypoint": "bin/mesh-apple-runtime",
-        "models": [{"id": "apple/system", "kind": "system"}],
+        "models": models,
         "features": [
             "availability",
             "streaming",
@@ -175,11 +257,7 @@ manifest = {
             "tool_calling",
             "loopback_rest",
         ],
-        "files": {
-            "bin/mesh-apple-runtime": f"sha256:{binary_sha}",
-            "README.md": f"sha256:{readme_sha}",
-            "Resources/background-inference.entitlements": f"sha256:{entitlement_sha}",
-        },
+        "files": files,
         "build": {
             "macos": os_version,
             "macos_build": os_build,

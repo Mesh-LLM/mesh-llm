@@ -89,7 +89,7 @@ struct ProviderModelsResponse {
     data: Vec<ProviderModelEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct ProviderModelEntry {
     id: String,
     #[serde(default)]
@@ -141,9 +141,16 @@ pub(crate) async fn start_apple_provider_supervisor(
         emit_provider_warning("Apple provider runtime failed platform policy", &error);
         return None;
     }
+    let model_id = resolved
+        .manifest
+        .runtime
+        .models
+        .first()
+        .map(|model| model.id.clone())
+        .unwrap_or_else(|| APPLE_MODEL_ID.to_string());
     let runtime = ProviderRuntimeContext {
         runtime: resolved,
-        model_id: APPLE_MODEL_ID.to_string(),
+        model_id,
     };
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let task = tokio::spawn(supervise_provider_runtime(runtime, context, shutdown_rx));
@@ -161,7 +168,9 @@ async fn resolve_apple_provider_runtime(
         host: ProviderRuntimeHost::current(),
         request: ProviderRuntimeRequest {
             provider_kind: Some(APPLE_PROVIDER_KIND.to_string()),
-            model_id: Some(APPLE_MODEL_ID.to_string()),
+            // The selected Apple artifact owns the model identity. Filtering
+            // on apple/system would make packaged Core AI artifacts invisible.
+            model_id: None,
             protocol_version: Some(APPLE_PROVIDER_PROTOCOL.to_string()),
             ..ProviderRuntimeRequest::default()
         },
@@ -658,8 +667,11 @@ async fn probe_provider(
 }
 
 fn validated_versioned_model_id(model: &ProviderModelEntry) -> Result<String> {
-    if model.version_source != "apple_os_release_band" {
-        bail!("provider returned unsupported system-model version source");
+    if !matches!(
+        model.version_source.as_str(),
+        "apple_os_release_band" | "coreai_model_artifact"
+    ) {
+        bail!("provider returned unsupported Apple model version source");
     }
     let expected = format!("{}@{}", model.id, model.model_version);
     if model.versioned_model_id != expected {
@@ -903,6 +915,7 @@ mod tests {
             queued_requests: 0,
         };
         let versioned_model_id = validated_versioned_model_id(&entry).unwrap();
+        let coreai_base = entry.clone();
         let availability = ProviderAvailability {
             available: true,
             unavailable_reason: None,
@@ -917,6 +930,18 @@ mod tests {
         assert_eq!(
             desired_provider_routes(APPLE_MODEL_ID, &availability),
             vec!["apple/system".to_string(), "apple/system@27.0".to_string()]
+        );
+
+        let coreai = ProviderModelEntry {
+            id: "apple/coreai/qwen3-4b".to_string(),
+            model_version: "qwen3-4b-2026-08-01".to_string(),
+            version_source: "coreai_model_artifact".to_string(),
+            versioned_model_id: "apple/coreai/qwen3-4b@qwen3-4b-2026-08-01".to_string(),
+            ..coreai_base
+        };
+        assert_eq!(
+            validated_versioned_model_id(&coreai).unwrap(),
+            "apple/coreai/qwen3-4b@qwen3-4b-2026-08-01"
         );
     }
 
