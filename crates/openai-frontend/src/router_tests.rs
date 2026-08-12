@@ -39,6 +39,7 @@ use crate::{
     completions::{CompletionPrompt, CompletionResponse},
     errors::{OpenAiErrorKind, already_openai_error, map_upstream_error_body},
     guardrails::{GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy},
+    lifecycle::{OpenAiFailure, OpenAiTerminalResult},
     models::ModelObject,
 };
 
@@ -635,10 +636,19 @@ async fn timeout_observer_records_failed_terminal() {
         [
             OpenAiLifecycleEvent::Admitted { context },
             OpenAiLifecycleEvent::BackendDispatched { context: dispatched_context, operation: OpenAiBackendOperation::Models },
+            OpenAiLifecycleEvent::BackendTerminal {
+                context: backend_terminal_context,
+                operation: OpenAiBackendOperation::Models,
+                result: OpenAiTerminalResult::Failed {
+                    status_code: 504,
+                    failure: OpenAiFailure::Timeout,
+                },
+            },
             OpenAiLifecycleEvent::NonStreamTerminal { context: terminal_context, result: OpenAiTerminalResult::Failed { status_code: 504, failure: OpenAiFailure::Timeout } },
         ] if context.route == OpenAiFrontendRoute::Readyz
             && context.method == OpenAiRequestMethod::Get
             && context == dispatched_context
+            && context == backend_terminal_context
             && context == terminal_context
     ));
 }

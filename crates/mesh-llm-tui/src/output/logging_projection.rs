@@ -105,10 +105,22 @@ fn canonical_fields(envelope: &CanonicalEnvelope) -> Map<String, Value> {
         | LifecycleEvent::Rejected { status_code, .. } => {
             json!({ "status_code": status_code })
         }
+        LifecycleEvent::UsageRecorded {
+            prompt_tokens,
+            cached_prompt_tokens,
+            completion_tokens,
+            total_tokens,
+        } => json!({
+            "prompt_tokens": prompt_tokens,
+            "cached_prompt_tokens": cached_prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }),
         LifecycleEvent::Admitted { .. }
         | LifecycleEvent::RouteSelected { .. }
         | LifecycleEvent::AttemptStarted { .. }
         | LifecycleEvent::AttemptFailed { .. }
+        | LifecycleEvent::BackendStreamFirstItem
         | LifecycleEvent::StreamStarted { .. }
         | LifecycleEvent::StreamChunk { .. }
         | LifecycleEvent::StreamCompleted { .. }

@@ -7,10 +7,11 @@ import { describe, expect, it } from 'vitest'
 import { LogEventId, LogRequestId } from '@/features/logs/api/ids'
 import type { LogLifecycleEvent, LogProxyAttempt } from '@/features/logs/api/schemas'
 import { LogRequestEvidenceTimeline } from '@/features/logs/components/LogRequestEvidenceTimeline'
+import { tokenUsageEntries } from '@/features/logs/lib/log-token-usage'
 
 const REQUEST_ID = LogRequestId.parse('00000000-0000-4000-8000-000000000001')
 
-function event(occurredAt: string): LogLifecycleEvent {
+function event(occurredAt: string, overrides: Partial<LogLifecycleEvent> = {}): LogLifecycleEvent {
   return {
     eventId: LogEventId.parse('00000000-0000-4000-8000-000000000001'),
     requestId: REQUEST_ID,
@@ -22,7 +23,8 @@ function event(occurredAt: string): LogLifecycleEvent {
     attemptId: undefined,
     statusCode: undefined,
     durationMs: undefined,
-    tokens: undefined
+    tokens: undefined,
+    ...overrides
   }
 }
 
@@ -86,5 +88,57 @@ describe('LogRequestEvidenceTimeline', () => {
     const targetCode = screen.getByText(target, { exact: true })
     expect(targetCode).toHaveClass('break-words')
     expect(targetCode).not.toHaveClass('break-all')
+  })
+
+  it('renders prompt, cached prompt, completion, and total token usage', () => {
+    render(
+      <LogRequestEvidenceTimeline
+        ariaLabel="Usage evidence"
+        attemptEmptyMessage={undefined}
+        attempts={[]}
+        eventEmptyMessage={undefined}
+        events={[
+          event('2026-08-04T11:00:00Z', {
+            kind: 'usage_recorded',
+            promptTokens: 21,
+            cachedPromptTokens: 13,
+            completionTokens: 8,
+            totalTokens: 29
+          })
+        ]}
+      />
+    )
+
+    expect(
+      screen.getByText('Prompt tokens: 21 · Cached prompt tokens: 13 · Completion tokens: 8 · Total tokens: 29')
+    ).toBeInTheDocument()
+  })
+
+  it('omits missing cached prompt usage', () => {
+    expect(
+      tokenUsageEntries(
+        event('2026-08-04T11:00:00Z', {
+          kind: 'usage_recorded',
+          promptTokens: 21,
+          completionTokens: 8,
+          totalTokens: 29
+        })
+      )
+    ).toEqual([
+      { label: 'Prompt tokens', value: 21 },
+      { label: 'Completion tokens', value: 8 },
+      { label: 'Total tokens', value: 29 }
+    ])
+  })
+
+  it('uses legacy tokens as the completion count', () => {
+    expect(
+      tokenUsageEntries(
+        event('2026-08-04T11:00:00Z', {
+          kind: 'stream_completed',
+          tokens: 8
+        })
+      )
+    ).toEqual([{ label: 'Completion tokens', value: 8 }])
   })
 })

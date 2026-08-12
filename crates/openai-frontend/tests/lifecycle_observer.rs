@@ -12,7 +12,7 @@ use openai_frontend::{
     CancellationToken, ChatCompletionResponse, ChatCompletionStream, CompletionResponse,
     CompletionStream, ModelObject, OpenAiBackend, OpenAiBackendOperation, OpenAiFailure,
     OpenAiFrontendConfig, OpenAiFrontendRoute, OpenAiLifecycleEvent, OpenAiLifecycleObserver,
-    OpenAiRejection, OpenAiRequestContext, OpenAiResult, OpenAiTerminalResult, Usage,
+    OpenAiRejection, OpenAiRequestContext, OpenAiResult, OpenAiTerminalResult, OpenAiUsage, Usage,
     router_for_with_config,
 };
 use serde_json::json;
@@ -61,6 +61,7 @@ impl OpenAiLifecycleObserver for RecordingObserver {
 struct TestBackend {
     stream_cancellation: Arc<Mutex<Option<CancellationToken>>>,
     stream_request_ids: Arc<Mutex<Vec<String>>>,
+    stream_context_flags: Arc<Mutex<Vec<(bool, bool)>>>,
 }
 
 #[async_trait]
@@ -79,7 +80,7 @@ impl OpenAiBackend for TestBackend {
         Ok(ChatCompletionResponse::new(
             request.model,
             "ok",
-            Usage::new(2, 1),
+            Usage::new(2, 1).with_cached_tokens(1),
         ))
     }
 
@@ -98,6 +99,13 @@ impl OpenAiBackend for TestBackend {
                     .as_ref()
                     .to_string(),
             );
+        self.stream_context_flags
+            .lock()
+            .expect("test stream-context lock poisoned")
+            .push((
+                context.observes_stream_usage(),
+                context.has_trusted_agent_session(),
+            ));
         if request.model == "stream-error" {
             return Ok(Box::pin(stream::iter(vec![Err(
                 openai_frontend::OpenAiError::backend("stream failed"),
@@ -111,9 +119,13 @@ impl OpenAiBackend for TestBackend {
             return Ok(Box::pin(stream::pending()));
         }
 
-        Ok(Box::pin(stream::iter(vec![Ok(
-            openai_frontend::ChatCompletionChunk::done(request.model),
-        )])))
+        Ok(Box::pin(stream::iter(vec![
+            Ok(openai_frontend::ChatCompletionChunk::usage(
+                request.model.clone(),
+                Usage::new(8, 2).with_cached_tokens(5),
+            )),
+            Ok(openai_frontend::ChatCompletionChunk::done(request.model)),
+        ])))
     }
 
     async fn completion(
@@ -273,6 +285,23 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
     ] {
         assert_admitted_and_has_one_terminal(&events, request_id);
     }
+    assert_backend_dispatches_have_one_terminal(&events);
+    let chat_usage = events_for(&events, CHAT_ID)
+        .into_iter()
+        .filter_map(|event| match event {
+            OpenAiLifecycleEvent::ResponseCompleted { usage, .. } => Some(*usage),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chat_usage,
+        vec![OpenAiUsage {
+            prompt_tokens: 2,
+            cached_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 3,
+        }]
+    );
     assert_admitted_route(&events, HEALTH_ID, OpenAiFrontendRoute::Health);
     assert_admitted_route(&events, READY_ID, OpenAiFrontendRoute::Readyz);
     assert_admitted_route(&events, MODELS_ID, OpenAiFrontendRoute::Models);
@@ -424,13 +453,29 @@ async fn observer_tracks_stream_completion_error_drop_and_cancel_once() {
     for request_id in [STREAM_ID, STREAM_ERROR_ID, STREAM_DROP_ID, STREAM_CANCEL_ID] {
         assert_admitted_and_has_one_terminal(&events, request_id);
     }
+    assert_backend_dispatches_have_one_terminal(&events);
+    for request_id in [STREAM_ID, STREAM_ERROR_ID] {
+        assert_eq!(
+            events_for(&events, request_id)
+                .into_iter()
+                .filter(|event| matches!(event, OpenAiLifecycleEvent::StreamFirstItem { .. }))
+                .count(),
+            1,
+            "a non-empty backend stream emits one first-item event"
+        );
+    }
     assert_terminal_matches(&events, STREAM_ID, |event| {
         matches!(
             event,
             OpenAiLifecycleEvent::StreamTerminal {
-                result: OpenAiTerminalResult::Completed { status_code: 200 },
+                result: OpenAiTerminalResult::CompletedWithUsage {
+                    status_code: 200,
+                    usage,
+                },
                 ..
-            }
+            } if usage.prompt_tokens == Some(8)
+                && usage.completion_tokens == Some(2)
+                && usage.total_tokens == Some(10)
         )
     });
     assert_terminal_matches(&events, STREAM_ERROR_ID, |event| {
@@ -484,6 +529,36 @@ async fn observer_tracks_stream_completion_error_drop_and_cancel_once() {
             STREAM_CANCEL_ID.to_string(),
         ]
     );
+    assert_eq!(
+        *backend
+            .stream_context_flags
+            .lock()
+            .expect("test stream-context lock poisoned"),
+        vec![(true, false), (true, false), (true, false), (true, false)]
+    );
+    let completed_usage =
+        events_for(&events, STREAM_ID)
+            .into_iter()
+            .find_map(|event| match event {
+                OpenAiLifecycleEvent::ResponseCompleted { usage, .. } => Some(*usage),
+                _ => None,
+            });
+    assert_eq!(
+        completed_usage,
+        Some(OpenAiUsage {
+            prompt_tokens: 8,
+            cached_tokens: 5,
+            completion_tokens: 2,
+            total_tokens: 10,
+        })
+    );
+    for request_id in [STREAM_ERROR_ID, STREAM_DROP_ID, STREAM_CANCEL_ID] {
+        assert!(
+            events_for(&events, request_id)
+                .into_iter()
+                .all(|event| { !matches!(event, OpenAiLifecycleEvent::ResponseCompleted { .. }) })
+        );
+    }
 }
 
 fn observed_app(backend: Arc<TestBackend>, observer: Arc<RecordingObserver>) -> axum::Router {
@@ -575,6 +650,31 @@ fn backend_operations(events: &[OpenAiLifecycleEvent]) -> Vec<(String, OpenAiBac
         .collect()
 }
 
+fn assert_backend_dispatches_have_one_terminal(events: &[OpenAiLifecycleEvent]) {
+    for event in events {
+        let OpenAiLifecycleEvent::BackendDispatched { context, operation } = event else {
+            continue;
+        };
+        let matching = events
+            .iter()
+            .filter(|candidate| {
+                matches!(
+                    candidate,
+                    OpenAiLifecycleEvent::BackendTerminal {
+                        context: terminal_context,
+                        operation: terminal_operation,
+                        ..
+                    } if terminal_context == context && terminal_operation == operation
+                )
+            })
+            .count();
+        assert_eq!(
+            matching, 1,
+            "every backend dispatch must have exactly one correlated terminal"
+        );
+    }
+}
+
 fn events_for<'a>(
     events: &'a [OpenAiLifecycleEvent],
     request_id: &str,
@@ -594,8 +694,12 @@ fn event_context(event: &OpenAiLifecycleEvent) -> &openai_frontend::OpenAiLifecy
         OpenAiLifecycleEvent::Admitted { context }
         | OpenAiLifecycleEvent::StreamDropped { context }
         | OpenAiLifecycleEvent::StreamCancelled { context }
+        | OpenAiLifecycleEvent::RequestCancelled { context }
         | OpenAiLifecycleEvent::Rejected { context, .. }
         | OpenAiLifecycleEvent::BackendDispatched { context, .. }
+        | OpenAiLifecycleEvent::BackendTerminal { context, .. }
+        | OpenAiLifecycleEvent::StreamFirstItem { context, .. }
+        | OpenAiLifecycleEvent::ResponseCompleted { context, .. }
         | OpenAiLifecycleEvent::NonStreamTerminal { context, .. }
         | OpenAiLifecycleEvent::StreamTerminal { context, .. } => context,
     }
@@ -609,5 +713,6 @@ fn is_terminal(event: &OpenAiLifecycleEvent) -> bool {
             | OpenAiLifecycleEvent::StreamTerminal { .. }
             | OpenAiLifecycleEvent::StreamDropped { .. }
             | OpenAiLifecycleEvent::StreamCancelled { .. }
+            | OpenAiLifecycleEvent::RequestCancelled { .. }
     )
 }

@@ -7,7 +7,7 @@ use mesh_llm_log_store::{
 };
 use serde::Serialize;
 
-use super::LogsError;
+use super::{LogsError, event_kind};
 use crate::logging::RequestSummaryEntry;
 
 #[derive(Serialize)]
@@ -98,6 +98,7 @@ pub(crate) struct EventDto {
     duration_ms: Option<u64>,
     tokens: Option<u64>,
     prompt_tokens: Option<u64>,
+    cached_prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
 }
@@ -127,6 +128,7 @@ impl TryFrom<EventRecord> for EventDto {
             duration_ms: None,
             tokens: None,
             prompt_tokens: None,
+            cached_prompt_tokens: None,
             completion_tokens: None,
             total_tokens: None,
         };
@@ -161,6 +163,17 @@ impl TryFrom<EventRecord> for EventDto {
                 dto.tokens = tokens;
                 dto.set_usage(usage);
             }
+            LifecycleEvent::UsageRecorded {
+                prompt_tokens,
+                cached_prompt_tokens,
+                completion_tokens,
+                total_tokens,
+            } => {
+                dto.prompt_tokens = prompt_tokens;
+                dto.cached_prompt_tokens = cached_prompt_tokens;
+                dto.completion_tokens = completion_tokens;
+                dto.total_tokens = total_tokens;
+            }
             LifecycleEvent::Completed {
                 status_code,
                 duration_ms,
@@ -171,6 +184,7 @@ impl TryFrom<EventRecord> for EventDto {
                 dto.set_usage(usage);
             }
             LifecycleEvent::StreamError { .. }
+            | LifecycleEvent::BackendStreamFirstItem
             | LifecycleEvent::AuditError { .. }
             | LifecycleEvent::Cancelled { .. }
             | LifecycleEvent::Dropped { .. } => {}
@@ -325,26 +339,6 @@ pub(super) fn artifact_state(record: &ArtifactRecord) -> &'static str {
     }
 }
 
-fn event_kind(event: &LifecycleEvent) -> &'static str {
-    match event {
-        LifecycleEvent::Admitted { .. } => "admitted",
-        LifecycleEvent::RouteSelected { .. } => "route_selected",
-        LifecycleEvent::AttemptStarted { .. } => "attempt_started",
-        LifecycleEvent::AttemptCompleted { .. } => "attempt_completed",
-        LifecycleEvent::AttemptFailed { .. } => "attempt_failed",
-        LifecycleEvent::StreamStarted { .. } => "stream_started",
-        LifecycleEvent::StreamChunk { .. } => "stream_chunk",
-        LifecycleEvent::StreamCompleted { .. } => "stream_completed",
-        LifecycleEvent::StreamError { .. } => "stream_error",
-        LifecycleEvent::AuditError { .. } => "audit_error",
-        LifecycleEvent::Completed { .. } => "completed",
-        LifecycleEvent::Failed { .. } => "failed",
-        LifecycleEvent::Rejected { .. } => "rejected",
-        LifecycleEvent::Cancelled { .. } => "cancelled",
-        LifecycleEvent::Dropped { .. } => "dropped",
-    }
-}
-
 fn safe_target(target: &str) -> String {
     let Ok(url) = url::Url::parse(target) else {
         return "opaque".to_string();
@@ -355,6 +349,52 @@ fn safe_target(target: &str) -> String {
     match url.port() {
         Some(port) => format!("{}://{host}:{port}", url.scheme()),
         None => format!("{}://{host}", url.scheme()),
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use mesh_llm_events::logging::{
+        envelope::CanonicalEnvelope,
+        events::LifecycleEvent,
+        identifiers::{EventId, RequestId},
+        replay::ReplayChannel,
+    };
+
+    use super::*;
+
+    #[test]
+    fn usage_event_projects_numeric_counters() {
+        let event_id = EventId::new();
+        let request_id = RequestId::new();
+        let occurred_at = "2026-08-12T12:00:00Z".to_string();
+        let envelope = CanonicalEnvelope::new(
+            event_id,
+            request_id,
+            ReplayChannel::Requests,
+            1,
+            occurred_at.clone(),
+            LifecycleEvent::UsageRecorded {
+                prompt_tokens: Some(21),
+                cached_prompt_tokens: Some(13),
+                completion_tokens: Some(8),
+                total_tokens: Some(29),
+            },
+        );
+        let dto = EventDto::try_from(EventRecord {
+            event_id: event_id.as_uuid().to_string(),
+            request_id: request_id.as_uuid().to_string(),
+            occurred_at,
+            payload_json: serde_json::to_string(&envelope).unwrap(),
+        })
+        .unwrap();
+        let wire = serde_json::to_value(dto).unwrap();
+
+        assert_eq!(wire["kind"], "usage_recorded");
+        assert_eq!(wire["promptTokens"], 21);
+        assert_eq!(wire["cachedPromptTokens"], 13);
+        assert_eq!(wire["completionTokens"], 8);
+        assert_eq!(wire["totalTokens"], 29);
     }
 }
 

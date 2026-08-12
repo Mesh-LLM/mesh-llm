@@ -17,9 +17,11 @@ impl CanonicalEnvelope {
             LifecycleEvent::AttemptStarted { .. } => "request_attempt_started",
             LifecycleEvent::AttemptCompleted { .. } => "request_attempt_completed",
             LifecycleEvent::AttemptFailed { .. } => "request_attempt_failed",
+            LifecycleEvent::BackendStreamFirstItem => "request_backend_stream_first_item",
             LifecycleEvent::StreamStarted { .. } => "request_stream_started",
             LifecycleEvent::StreamChunk { .. } => "request_stream_chunk",
             LifecycleEvent::StreamCompleted { .. } => "request_stream_completed",
+            LifecycleEvent::UsageRecorded { .. } => "request_usage_recorded",
             LifecycleEvent::StreamError { .. } => "request_stream_error",
             LifecycleEvent::AuditError { .. } => "logging_audit_error",
             LifecycleEvent::Completed { .. } => "request_completed",
@@ -43,9 +45,11 @@ impl CanonicalEnvelope {
             | LifecycleEvent::RouteSelected { .. }
             | LifecycleEvent::AttemptStarted { .. }
             | LifecycleEvent::AttemptCompleted { .. }
+            | LifecycleEvent::BackendStreamFirstItem
             | LifecycleEvent::StreamStarted { .. }
             | LifecycleEvent::StreamChunk { .. }
             | LifecycleEvent::StreamCompleted { .. }
+            | LifecycleEvent::UsageRecorded { .. }
             | LifecycleEvent::Completed { .. } => OutputLevel::Info,
         }
     }
@@ -59,9 +63,13 @@ impl CanonicalEnvelope {
                 append_status("request attempt completed".to_string(), status_code)
             }
             LifecycleEvent::AttemptFailed { .. } => "request attempt failed".to_string(),
+            LifecycleEvent::BackendStreamFirstItem => {
+                "request backend stream first item".to_string()
+            }
             LifecycleEvent::StreamStarted { .. } => "request stream started".to_string(),
             LifecycleEvent::StreamChunk { .. } => "request stream chunk".to_string(),
             LifecycleEvent::StreamCompleted { .. } => "request stream completed".to_string(),
+            LifecycleEvent::UsageRecorded { .. } => "request usage recorded".to_string(),
             LifecycleEvent::StreamError { .. } => "request stream failed".to_string(),
             LifecycleEvent::AuditError { .. } => "logging audit warning".to_string(),
             LifecycleEvent::Completed {
@@ -113,11 +121,13 @@ impl CanonicalEnvelope {
         match self.event {
             LifecycleEvent::StreamChunk { tokens }
             | LifecycleEvent::StreamCompleted { tokens, .. } => tokens,
+            LifecycleEvent::UsageRecorded { total_tokens, .. } => total_tokens,
             LifecycleEvent::Admitted { .. }
             | LifecycleEvent::RouteSelected { .. }
             | LifecycleEvent::AttemptStarted { .. }
             | LifecycleEvent::AttemptCompleted { .. }
             | LifecycleEvent::AttemptFailed { .. }
+            | LifecycleEvent::BackendStreamFirstItem
             | LifecycleEvent::StreamStarted { .. }
             | LifecycleEvent::StreamError { .. }
             | LifecycleEvent::AuditError { .. }
@@ -141,10 +151,12 @@ impl CanonicalEnvelope {
             | LifecycleEvent::AttemptStarted { .. }
             | LifecycleEvent::AttemptCompleted { .. }
             | LifecycleEvent::AttemptFailed { .. }
+            | LifecycleEvent::BackendStreamFirstItem
             | LifecycleEvent::StreamStarted { .. }
             | LifecycleEvent::StreamChunk { .. }
             | LifecycleEvent::StreamCompleted { .. }
             | LifecycleEvent::StreamError { .. }
+            | LifecycleEvent::UsageRecorded { .. }
             | LifecycleEvent::AuditError { .. } => None,
         }
     }

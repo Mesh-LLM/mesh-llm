@@ -35,9 +35,11 @@ const EXPECTED_EVENT_KINDS = [
   'attempt_started',
   'attempt_completed',
   'attempt_failed',
+  'backend_stream_first_item',
   'stream_started',
   'stream_chunk',
   'stream_completed',
+  'usage_recorded',
   'stream_error',
   'audit_error',
   'completed',
@@ -81,7 +83,11 @@ function eventWire(event: LogLifecycleEvent) {
     attemptId: event.attemptId ?? null,
     statusCode: event.statusCode ?? null,
     durationMs: event.durationMs ?? null,
-    tokens: event.tokens ?? null
+    tokens: event.tokens ?? null,
+    promptTokens: event.promptTokens ?? null,
+    cachedPromptTokens: event.cachedPromptTokens ?? null,
+    completionTokens: event.completionTokens ?? null,
+    totalTokens: event.totalTokens ?? null
   }
 }
 

@@ -33,9 +33,11 @@ export type LogEventKind =
   | 'attempt_started'
   | 'attempt_completed'
   | 'attempt_failed'
+  | 'backend_stream_first_item'
   | 'stream_started'
   | 'stream_chunk'
   | 'stream_completed'
+  | 'usage_recorded'
   | 'stream_error'
   | 'audit_error'
   | 'completed'
@@ -80,6 +82,7 @@ export type LogLifecycleEvent = {
   /** Legacy completion-token count. */
   readonly tokens: number | undefined
   readonly promptTokens?: number
+  readonly cachedPromptTokens?: number
   readonly completionTokens?: number
   readonly totalTokens?: number
 }
@@ -214,9 +217,11 @@ const eventKindSchema = v.picklist([
   'attempt_started',
   'attempt_completed',
   'attempt_failed',
+  'backend_stream_first_item',
   'stream_started',
   'stream_chunk',
   'stream_completed',
+  'usage_recorded',
   'stream_error',
   'audit_error',
   'completed',
@@ -311,6 +316,7 @@ const lifecycleEventSchema = v.object({
   durationMs: v.nullable(nonNegativeIntegerSchema),
   tokens: v.nullable(nonNegativeIntegerSchema),
   promptTokens: v.optional(v.nullable(nonNegativeIntegerSchema)),
+  cachedPromptTokens: v.optional(v.nullable(nonNegativeIntegerSchema)),
   completionTokens: v.optional(v.nullable(nonNegativeIntegerSchema)),
   totalTokens: v.optional(v.nullable(nonNegativeIntegerSchema))
 })
@@ -557,6 +563,7 @@ function toLogLifecycleEvent(value: ReturnType<typeof parseLifecycleEventWire>):
     durationMs: value.durationMs ?? undefined,
     tokens: value.tokens ?? undefined,
     promptTokens: value.promptTokens ?? undefined,
+    cachedPromptTokens: value.cachedPromptTokens ?? undefined,
     completionTokens: value.completionTokens ?? undefined,
     totalTokens: value.totalTokens ?? undefined
   }

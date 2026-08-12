@@ -14,11 +14,13 @@ export function eventTone(kind: LogEventKind): StatusBadgeTone {
       return 'muted'
     case 'route_selected':
     case 'attempt_started':
+    case 'backend_stream_first_item':
     case 'stream_started':
     case 'stream_chunk':
       return 'accent'
     case 'attempt_completed':
     case 'stream_completed':
+    case 'usage_recorded':
     case 'completed':
       return 'good'
     case 'cancelled':

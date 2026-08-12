@@ -1,9 +1,12 @@
 import type { LogLifecycleEvent } from '@/features/logs/api/schemas'
 
-type TokenUsageEvent = Pick<LogLifecycleEvent, 'tokens' | 'promptTokens' | 'completionTokens' | 'totalTokens'>
+type TokenUsageEvent = Pick<
+  LogLifecycleEvent,
+  'tokens' | 'promptTokens' | 'cachedPromptTokens' | 'completionTokens' | 'totalTokens'
+>
 
 export type TokenUsageEntry = {
-  readonly label: 'Prompt tokens' | 'Completion tokens' | 'Total tokens'
+  readonly label: 'Prompt tokens' | 'Cached prompt tokens' | 'Completion tokens' | 'Total tokens'
   readonly value: number
 }
 
@@ -12,6 +15,9 @@ export function tokenUsageEntries(event: TokenUsageEvent): readonly TokenUsageEn
   const completionTokens = event.completionTokens ?? event.tokens
   return [
     ...(event.promptTokens === undefined ? [] : [{ label: 'Prompt tokens' as const, value: event.promptTokens }]),
+    ...(event.cachedPromptTokens === undefined
+      ? []
+      : [{ label: 'Cached prompt tokens' as const, value: event.cachedPromptTokens }]),
     ...(completionTokens === undefined ? [] : [{ label: 'Completion tokens' as const, value: completionTokens }]),
     ...(event.totalTokens === undefined ? [] : [{ label: 'Total tokens' as const, value: event.totalTokens }])
   ]

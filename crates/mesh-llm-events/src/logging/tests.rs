@@ -62,6 +62,27 @@ fn test_serde_roundtrip_preserves_fields() {
 }
 
 #[test]
+fn test_usage_event_is_numeric_only_and_roundtrips() {
+    let event = LifecycleEvent::UsageRecorded {
+        prompt_tokens: Some(21),
+        cached_prompt_tokens: Some(13),
+        completion_tokens: Some(8),
+        total_tokens: Some(29),
+    };
+    let wire = serde_json::to_value(&event).unwrap();
+
+    assert_eq!(wire["type"], "usage_recorded");
+    assert_eq!(wire["prompt_tokens"], 21);
+    assert_eq!(wire["cached_prompt_tokens"], 13);
+    assert_eq!(wire["completion_tokens"], 8);
+    assert_eq!(wire["total_tokens"], 29);
+    assert_eq!(
+        serde_json::from_value::<LifecycleEvent>(wire).unwrap(),
+        event
+    );
+}
+
+#[test]
 fn test_attempt_events_use_branded_ids_without_changing_uuid_wire_shape() {
     let uuid = uuid::Uuid::parse_str("4ba6be8e-11c7-4aac-9688-b7bf920d190a").unwrap();
     let attempt_id = AttemptId::from(uuid);

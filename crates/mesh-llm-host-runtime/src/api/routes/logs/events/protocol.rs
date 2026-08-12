@@ -1,8 +1,8 @@
 use mesh_llm_events::logging::envelope::CanonicalEnvelope;
-use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_events::logging::replay::ReplayChannel;
 use serde::Serialize;
 
+use super::super::event_kind;
 use super::query::{AuditCursor, Cursor};
 use crate::logging::{AuditReplayRecord, ReplayRecord};
 
@@ -142,26 +142,6 @@ fn cursor_id(cursor: crate::logging::ReplayCursor) -> String {
         cursor.sequence(ReplayChannel::System),
     )
     .event_id()
-}
-
-fn event_kind(event: &LifecycleEvent) -> &'static str {
-    match event {
-        LifecycleEvent::Admitted { .. } => "admitted",
-        LifecycleEvent::RouteSelected { .. } => "route_selected",
-        LifecycleEvent::AttemptStarted { .. } => "attempt_started",
-        LifecycleEvent::AttemptCompleted { .. } => "attempt_completed",
-        LifecycleEvent::AttemptFailed { .. } => "attempt_failed",
-        LifecycleEvent::StreamStarted { .. } => "stream_started",
-        LifecycleEvent::StreamChunk { .. } => "stream_chunk",
-        LifecycleEvent::StreamCompleted { .. } => "stream_completed",
-        LifecycleEvent::StreamError { .. } => "stream_error",
-        LifecycleEvent::AuditError { .. } => "audit_error",
-        LifecycleEvent::Completed { .. } => "completed",
-        LifecycleEvent::Failed { .. } => "failed",
-        LifecycleEvent::Rejected { .. } => "rejected",
-        LifecycleEvent::Cancelled { .. } => "cancelled",
-        LifecycleEvent::Dropped { .. } => "dropped",
-    }
 }
 
 fn frame<T: Serialize>(event: &str, id: &str, data: &T) -> Result<String, ()> {

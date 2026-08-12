@@ -4,11 +4,13 @@
 //! runtimes provide an observer that persists or forwards the metadata. These
 //! types intentionally have no request or response payload fields.
 
-use axum::http::{HeaderMap, HeaderValue, header::HeaderName};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header::HeaderName};
 use mesh_llm_events::logging::events::TokenUsage;
 pub use mesh_llm_events::logging::identifiers::RequestId;
 use mesh_llm_events::logging::lifecycle::LifecycleState;
 use uuid::Uuid;
+
+use crate::{common::Usage, errors::OpenAiError};
 
 /// The canonical request correlation header used by the OpenAI frontend.
 pub static REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
@@ -84,6 +86,33 @@ pub enum OpenAiFailure {
     Backend,
     Timeout,
     Internal,
+    Cancelled,
+}
+
+/// Numeric-only token accounting attached to a completed response.
+///
+/// This intentionally cannot retain prompts, completions, model labels, or
+/// arbitrary backend metadata.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OpenAiUsage {
+    pub prompt_tokens: u32,
+    pub cached_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+impl From<&Usage> for OpenAiUsage {
+    fn from(usage: &Usage) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_tokens,
+            cached_tokens: usage
+                .prompt_tokens_details
+                .as_ref()
+                .map_or(0, |details| details.cached_tokens),
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+        }
+    }
 }
 
 /// A typed terminal outcome for non-streaming execution and stream completion.
@@ -127,6 +156,20 @@ pub enum OpenAiLifecycleEvent {
         context: OpenAiLifecycleContext,
         operation: OpenAiBackendOperation,
     },
+    BackendTerminal {
+        context: OpenAiLifecycleContext,
+        operation: OpenAiBackendOperation,
+        result: OpenAiTerminalResult,
+    },
+    StreamFirstItem {
+        context: OpenAiLifecycleContext,
+        operation: OpenAiBackendOperation,
+    },
+    ResponseCompleted {
+        context: OpenAiLifecycleContext,
+        operation: OpenAiBackendOperation,
+        usage: OpenAiUsage,
+    },
     NonStreamTerminal {
         context: OpenAiLifecycleContext,
         result: OpenAiTerminalResult,
@@ -139,6 +182,9 @@ pub enum OpenAiLifecycleEvent {
         context: OpenAiLifecycleContext,
     },
     StreamCancelled {
+        context: OpenAiLifecycleContext,
+    },
+    RequestCancelled {
         context: OpenAiLifecycleContext,
     },
 }
@@ -179,6 +225,32 @@ pub fn request_id_response_header(request_id: &RequestId) -> (HeaderName, Header
     let value = HeaderValue::from_str(&request_id.as_ref().hyphenated().to_string())
         .expect("a UUID is always a valid x-request-id header value");
     (REQUEST_ID_HEADER.clone(), value)
+}
+
+pub(crate) const CLIENT_CLOSED_REQUEST_STATUS: u16 = 499;
+
+pub(crate) fn client_closed_request_status() -> StatusCode {
+    StatusCode::from_u16(CLIENT_CLOSED_REQUEST_STATUS)
+        .expect("the client-closed status is a valid HTTP status")
+}
+
+pub(crate) fn failure_for_status(status: StatusCode) -> OpenAiFailure {
+    match status {
+        StatusCode::GATEWAY_TIMEOUT => OpenAiFailure::Timeout,
+        StatusCode::INTERNAL_SERVER_ERROR => OpenAiFailure::Internal,
+        _ => OpenAiFailure::Backend,
+    }
+}
+
+pub(crate) fn terminal_result_for_error(error: &OpenAiError) -> OpenAiTerminalResult {
+    OpenAiTerminalResult::Failed {
+        status_code: error.status().as_u16(),
+        failure: if error.status().as_u16() == CLIENT_CLOSED_REQUEST_STATUS {
+            OpenAiFailure::Cancelled
+        } else {
+            failure_for_status(error.status())
+        },
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +334,21 @@ mod tests {
             LifecycleState::Failed
         );
         assert_eq!(context.request_id.as_ref().to_string(), REQUEST_ID);
+    }
+
+    #[test]
+    fn usage_projection_contains_only_numeric_counts_and_cached_tokens() {
+        let usage = OpenAiUsage::from(&Usage::new(17, 4).with_cached_tokens(11));
+
+        assert_eq!(
+            usage,
+            OpenAiUsage {
+                prompt_tokens: 17,
+                cached_tokens: 11,
+                completion_tokens: 4,
+                total_tokens: 21,
+            }
+        );
     }
 
     #[test]

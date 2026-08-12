@@ -15,6 +15,10 @@ type EventFixtureInput = {
   readonly statusCode?: number
   readonly durationMs?: number
   readonly tokens?: number
+  readonly promptTokens?: number
+  readonly cachedPromptTokens?: number
+  readonly completionTokens?: number
+  readonly totalTokens?: number
 }
 
 function eventFixture(input: EventFixtureInput): LogLifecycleEvent {
@@ -29,7 +33,11 @@ function eventFixture(input: EventFixtureInput): LogLifecycleEvent {
     attemptId: input.attemptId,
     statusCode: input.statusCode,
     durationMs: input.durationMs,
-    tokens: input.tokens
+    tokens: input.tokens,
+    promptTokens: input.promptTokens,
+    cachedPromptTokens: input.cachedPromptTokens,
+    completionTokens: input.completionTokens,
+    totalTokens: input.totalTokens
   }
 }
 
@@ -103,6 +111,23 @@ const SCENARIO_EVENTS = new Map<string, readonly LogLifecycleEvent[]>([
         statusCode: 200,
         durationMs: 56_000,
         tokens: 612
+      }),
+      eventFixture({
+        requestId: HARNESS_LOG_SCENARIO_IDS.completedMesh,
+        ordinal: 10,
+        occurredMinutesAgo: 1.7,
+        kind: 'backend_stream_first_item',
+        attemptId: 'mesh-primary'
+      }),
+      eventFixture({
+        requestId: HARNESS_LOG_SCENARIO_IDS.completedMesh,
+        ordinal: 11,
+        occurredMinutesAgo: 1.15,
+        kind: 'usage_recorded',
+        promptTokens: 384,
+        cachedPromptTokens: 256,
+        completionTokens: 612,
+        totalTokens: 996
       })
     ]
   ],

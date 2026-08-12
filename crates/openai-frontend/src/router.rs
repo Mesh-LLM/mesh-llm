@@ -1,6 +1,5 @@
 use std::{
     convert::Infallible,
-    future::Future,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -21,16 +20,18 @@ use serde_json::Value;
 
 use crate::{
     backend::{OpenAiBackend, OpenAiRequestContext, OpenAiResult, SharedBackend},
+    backend_lifecycle::{call_backend, call_backend_with_context},
     chat::{ChatCompletionChunk, ChatCompletionRequest},
     common::{AgentSessionIdentity, AgentSessionSource, Usage},
     completions::CompletionRequest,
     errors::OpenAiError,
     lifecycle::{
-        OpenAiBackendOperation, OpenAiFailure, OpenAiFrontendRoute, OpenAiLifecycleContext,
-        OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRejection, OpenAiRequestMethod,
-        OpenAiTerminalResult, request_id_from_headers_or_generate, request_id_response_header,
+        OpenAiBackendOperation, OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent,
+        OpenAiLifecycleObserver, OpenAiRequestMethod, OpenAiUsage,
+        request_id_from_headers_or_generate, request_id_response_header,
     },
     models::ModelsResponse,
+    request_lifecycle::RequestLifecycle,
     responses::{
         ResponseAdapterMode, ResponseSseState, chunk_delta_text, normalize_openai_compat_request,
         responses_stream_completed_event_with_sequence, responses_stream_content_part_added_event,
@@ -41,10 +42,10 @@ use crate::{
         translate_chat_completion_response_to_responses, usage_to_responses_usage,
     },
     sse::{done_event, json_event},
+    stream_lifecycle::{
+        StreamLifecycle, is_streaming_response, observe_backend_stream, sse_response,
+    },
 };
-
-mod stream_lifecycle;
-use stream_lifecycle::{StreamLifecycle, StreamingResponse, sse_response};
 
 const AGENT_SESSION_HEADER_ENV: &str = "MESH_AGENT_SESSION_HEADER";
 
@@ -92,8 +93,25 @@ impl FrontendState {
         }
     }
 
-    fn stream_lifecycle(&self, context: OpenAiLifecycleContext) -> StreamLifecycle {
-        StreamLifecycle::new(self.config.lifecycle_observer.clone(), context)
+    fn stream_lifecycle(
+        &self,
+        context: OpenAiLifecycleContext,
+        operation: OpenAiBackendOperation,
+    ) -> StreamLifecycle {
+        StreamLifecycle::new(self.config.lifecycle_observer.clone(), context, operation)
+    }
+
+    fn response_completed(
+        &self,
+        context: &OpenAiLifecycleContext,
+        operation: OpenAiBackendOperation,
+        usage: &crate::Usage,
+    ) {
+        self.observe(OpenAiLifecycleEvent::ResponseCompleted {
+            context: context.clone(),
+            operation,
+            usage: OpenAiUsage::from(usage),
+        });
     }
 }
 
@@ -215,11 +233,12 @@ async fn ready(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
 ) -> Result<Json<HealthResponse>, OpenAiError> {
-    backend_call(
-        &state,
+    call_backend(
+        state.config.lifecycle_observer.clone(),
         &context,
         OpenAiBackendOperation::Models,
         "models",
+        state.config.backend_timeout,
         state.backend.models(),
     )
     .await?;
@@ -230,11 +249,12 @@ async fn models(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
 ) -> Result<Json<ModelsResponse>, OpenAiError> {
-    let data = backend_call(
-        &state,
+    let data = call_backend(
+        state.config.lifecycle_observer.clone(),
         &context,
         OpenAiBackendOperation::Models,
         "models",
+        state.config.backend_timeout,
         state.backend.models(),
     )
     .await?;
@@ -251,63 +271,78 @@ async fn chat_completions(
     payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
     let Json(mut request) = json_payload(payload)?;
-    request.set_agent_session(agent_session_from_header(&state.config, &headers)?);
+    let header_session = agent_session_from_header(&state.config, &headers)?;
+    let trusted_agent_session = header_session.is_some();
+    request.set_agent_session(header_session);
     request.validate()?;
     if request.stream {
         let include_usage = request.include_usage();
         let model = request.model.clone();
-        let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+        let backend_context = request_context(context.request_id, trusted_agent_session, true);
         let cancellation = backend_context.cancellation_token();
-        let stream = backend_call_with_cancellation(
-            &state,
+        let stream = call_backend_with_context(
+            state.config.lifecycle_observer.clone(),
             &context,
             OpenAiBackendOperation::ChatCompletionStream,
             "chat_completion_stream",
+            state.config.backend_timeout,
             &backend_context,
             state
                 .backend
                 .chat_completion_stream(request, backend_context.clone()),
         )
         .await?;
+        let lifecycle =
+            state.stream_lifecycle(context, OpenAiBackendOperation::ChatCompletionStream);
+        let stream = observe_backend_stream(stream, lifecycle.clone());
         let prelude = stream::once(async move { json_event(&ChatCompletionChunk::role(model)) });
-        let lifecycle = state.stream_lifecycle(context);
-        let error_lifecycle = lifecycle.clone();
         let usage_lifecycle = lifecycle.clone();
+        let completion_lifecycle = lifecycle.clone();
         let events = prelude
             .chain(stream.filter_map(move |item| {
-                let error_lifecycle = error_lifecycle.clone();
                 let usage_lifecycle = usage_lifecycle.clone();
                 async move {
                     match item {
                         Ok(chunk) => {
                             if let Some(usage) = chunk.usage.as_ref() {
-                                usage_lifecycle.observe_usage(usage);
+                                usage_lifecycle.capture_usage(usage);
                             }
-                            (include_usage || chunk.usage.is_none()).then(|| json_event(&chunk))
+                            if !include_usage && chunk.usage.is_some() {
+                                None
+                            } else {
+                                Some(json_event(&chunk))
+                            }
                         }
-                        Err(error) => {
-                            error_lifecycle.failed(&error);
-                            Some(json_event(&error.body()))
-                        }
+                        Err(error) => Some(json_event(&error.body())),
                     }
                 }
             }))
-            .chain(stream::once(async { done_event() }));
+            .chain(stream::once(async move {
+                completion_lifecycle.mark_protocol_complete();
+                done_event()
+            }));
         Ok(sse_response(events, cancellation, lifecycle))
     } else {
-        let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
-        let response = backend_call_with_cancellation(
-            &state,
+        let backend_context = request_context(context.request_id, trusted_agent_session, false);
+        let response = call_backend_with_context(
+            state.config.lifecycle_observer.clone(),
             &context,
             OpenAiBackendOperation::ChatCompletion,
             "chat_completion",
+            state.config.backend_timeout,
             &backend_context,
             state
                 .backend
                 .chat_completion_with_context(request, backend_context.clone()),
         )
         .await?;
-        Ok(json_response_with_usage(response.clone(), &response.usage))
+        state.response_completed(
+            &context,
+            OpenAiBackendOperation::ChatCompletion,
+            &response.usage,
+        );
+        let usage = response.usage.clone();
+        Ok(json_response_with_usage(response, &usage))
     }
 }
 
@@ -323,6 +358,7 @@ async fn responses(
         OpenAiError::invalid_request(format!("invalid Responses request: {error}"))
     })?;
     let header_session = agent_session_from_header(&state.config, &headers)?;
+    let trusted_agent_session = header_session.is_some();
     let responses_session = normalization
         .agent_session_id
         .map(|id| AgentSessionIdentity::new(id, AgentSessionSource::ResponsesConversation))
@@ -331,133 +367,111 @@ async fn responses(
     request.validate()?;
     match normalization.response_adapter {
         ResponseAdapterMode::OpenAiResponsesStream => {
-            let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
-            let cancellation = backend_context.cancellation_token();
-            let state_machine = Arc::new(Mutex::new(ResponseSseState::new(request.model.clone())));
-            let stream = backend_call_with_cancellation(
-                &state,
-                &context,
-                OpenAiBackendOperation::ResponsesStream,
-                "responses_stream",
-                &backend_context,
-                state
-                    .backend
-                    .chat_completion_stream(request, backend_context.clone()),
-            )
-            .await?;
-            let body_state = state_machine.clone();
-            let lifecycle = state.stream_lifecycle(context);
-            let error_lifecycle = lifecycle.clone();
-            let usage_lifecycle = lifecycle.clone();
-            let body_events = stream.flat_map(move |item| {
-                let mut out = Vec::new();
-                let mut state_machine = body_state
-                    .lock()
-                    .expect("responses stream state lock poisoned");
-                if state_machine.failed {
-                    return stream::iter(out.into_iter().map(Ok::<_, Infallible>));
-                }
-                match item {
-                    Ok(chunk) => {
-                        if !state_machine.created_emitted {
-                            state_machine.model = chunk.model.clone();
-                            let sequence_number = state_machine.next_sequence_number();
-                            out.push(
-                                Event::default()
-                                    .event("response.created")
-                                    .json_data(responses_stream_created_event_with_sequence(
-                                        &state_machine.model,
-                                        state_machine.created_at,
-                                        sequence_number,
-                                    ))
-                                    .unwrap_or_else(|_| Event::default().data("{}")),
-                            );
-                            state_machine.created_emitted = true;
-                        }
-                        if let Some(delta) = chunk_delta_text(&chunk) {
-                            if !state_machine.output_item_emitted {
-                                let sequence_number = state_machine.next_sequence_number();
-                                out.push(
-                                    Event::default()
-                                        .event("response.output_item.added")
-                                        .json_data(responses_stream_output_item_added_event(
-                                            &state_machine.item_id,
-                                            sequence_number,
-                                        ))
-                                        .unwrap_or_else(|_| Event::default().data("{}")),
-                                );
-                                let sequence_number = state_machine.next_sequence_number();
-                                out.push(
-                                    Event::default()
-                                        .event("response.content_part.added")
-                                        .json_data(responses_stream_content_part_added_event(
-                                            &state_machine.item_id,
-                                            sequence_number,
-                                        ))
-                                        .unwrap_or_else(|_| Event::default().data("{}")),
-                                );
-                                state_machine.output_item_emitted = true;
-                            }
-                            let logprobs = chunk
-                                .choices
-                                .first()
-                                .and_then(|choice| choice.logprobs.clone());
-                            state_machine.output_text.push_str(&delta);
-                            let sequence_number = state_machine.next_sequence_number();
-                            out.push(
-                                Event::default()
-                                    .event("response.output_text.delta")
-                                    .json_data(
-                                        responses_stream_delta_event_with_logprobs_and_sequence(
-                                            &state_machine.item_id,
-                                            &delta,
-                                            logprobs,
-                                            sequence_number,
-                                        ),
-                                    )
-                                    .unwrap_or_else(|_| Event::default().data("{}")),
-                            );
-                        }
-                        if let Some(usage) = chunk.usage.as_ref() {
-                            state_machine.usage = Some(usage_to_responses_usage(usage));
-                            usage_lifecycle.observe_usage(usage);
-                        }
-                    }
-                    Err(error) => {
-                        error_lifecycle.failed(&error);
-                        state_machine.failed = true;
-                        out.push(
-                            Event::default()
-                                .event("error")
-                                .json_data(error.body())
-                                .unwrap_or_else(|_| Event::default().data("{}")),
-                        );
-                    }
-                }
-                stream::iter(out.into_iter().map(Ok::<_, Infallible>))
-            });
-            let tail_events = stream::once(async move {
-                let mut state_machine = state_machine
-                    .lock()
-                    .expect("responses stream state lock poisoned");
-                let mut out = Vec::new();
-                if state_machine.failed {
-                    return out;
-                }
-                if !state_machine.created_emitted {
-                    let sequence_number = state_machine.next_sequence_number();
-                    out.push(
-                        Event::default()
-                            .event("response.created")
-                            .json_data(responses_stream_created_event_with_sequence(
-                                &state_machine.model,
-                                state_machine.created_at,
-                                sequence_number,
-                            ))
-                            .unwrap_or_else(|_| Event::default().data("{}")),
-                    );
-                    state_machine.created_emitted = true;
-                }
+            stream_responses(&state, &context, request, trusted_agent_session).await
+        }
+        _ => non_streaming_responses(&state, &context, request, trusted_agent_session).await,
+    }
+}
+
+async fn stream_responses(
+    state: &FrontendState,
+    context: &OpenAiLifecycleContext,
+    request: ChatCompletionRequest,
+    trusted_agent_session: bool,
+) -> Result<Response, OpenAiError> {
+    let include_usage = request.include_usage();
+    let backend_context = request_context(context.request_id, trusted_agent_session, true);
+    let cancellation = backend_context.cancellation_token();
+    let state_machine = Arc::new(Mutex::new(ResponseSseState::new(request.model.clone())));
+    let stream = call_backend_with_context(
+        state.config.lifecycle_observer.clone(),
+        context,
+        OpenAiBackendOperation::ResponsesStream,
+        "responses_stream",
+        state.config.backend_timeout,
+        &backend_context,
+        state
+            .backend
+            .chat_completion_stream(request, backend_context.clone()),
+    )
+    .await?;
+    let lifecycle =
+        state.stream_lifecycle(context.clone(), OpenAiBackendOperation::ResponsesStream);
+    let stream = observe_backend_stream(stream, lifecycle.clone());
+    let body_state = state_machine.clone();
+    let usage_lifecycle = lifecycle.clone();
+    let body_events = stream.flat_map(move |item| {
+        let out = responses_stream_body_events(&body_state, &usage_lifecycle, item);
+        stream::iter(out.into_iter().map(Ok::<_, Infallible>))
+    });
+    let tail_events =
+        stream::once(async move { responses_stream_tail_events(&state_machine, include_usage) })
+            .flat_map(|out| stream::iter(out.into_iter().map(Ok::<_, Infallible>)));
+    let completion_lifecycle = lifecycle.clone();
+    let events = body_events
+        .chain(tail_events)
+        .chain(stream::once(async move {
+            completion_lifecycle.mark_protocol_complete();
+            done_event()
+        }));
+    Ok(sse_response(events, cancellation, lifecycle))
+}
+
+async fn non_streaming_responses(
+    state: &FrontendState,
+    context: &OpenAiLifecycleContext,
+    request: ChatCompletionRequest,
+    trusted_agent_session: bool,
+) -> Result<Response, OpenAiError> {
+    let backend_context = request_context(context.request_id, trusted_agent_session, false);
+    let response = call_backend_with_context(
+        state.config.lifecycle_observer.clone(),
+        context,
+        OpenAiBackendOperation::Responses,
+        "responses",
+        state.config.backend_timeout,
+        &backend_context,
+        state
+            .backend
+            .chat_completion_with_context(request, backend_context.clone()),
+    )
+    .await?;
+    state.response_completed(context, OpenAiBackendOperation::Responses, &response.usage);
+    let usage = response.usage.clone();
+    let translated = translate_chat_completion_response_to_responses(&response)?;
+    Ok(json_response_with_usage(translated, &usage))
+}
+
+fn responses_stream_body_events(
+    state_machine: &Mutex<ResponseSseState>,
+    usage_lifecycle: &StreamLifecycle,
+    item: OpenAiResult<ChatCompletionChunk>,
+) -> Vec<Event> {
+    let mut state_machine = state_machine
+        .lock()
+        .expect("responses stream state lock poisoned");
+    if state_machine.failed {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    match item {
+        Ok(chunk) => {
+            if !state_machine.created_emitted {
+                state_machine.model = chunk.model.clone();
+                let sequence_number = state_machine.next_sequence_number();
+                out.push(
+                    Event::default()
+                        .event("response.created")
+                        .json_data(responses_stream_created_event_with_sequence(
+                            &state_machine.model,
+                            state_machine.created_at,
+                            sequence_number,
+                        ))
+                        .unwrap_or_else(|_| Event::default().data("{}")),
+                );
+                state_machine.created_emitted = true;
+            }
+            if let Some(delta) = chunk_delta_text(&chunk) {
                 if !state_machine.output_item_emitted {
                     let sequence_number = state_machine.next_sequence_number();
                     out.push(
@@ -481,79 +495,143 @@ async fn responses(
                     );
                     state_machine.output_item_emitted = true;
                 }
+                let logprobs = chunk
+                    .choices
+                    .first()
+                    .and_then(|choice| choice.logprobs.clone());
+                state_machine.output_text.push_str(&delta);
                 let sequence_number = state_machine.next_sequence_number();
                 out.push(
                     Event::default()
-                        .event("response.output_text.done")
-                        .json_data(responses_stream_text_done_event_with_sequence(
+                        .event("response.output_text.delta")
+                        .json_data(responses_stream_delta_event_with_logprobs_and_sequence(
                             &state_machine.item_id,
-                            &state_machine.output_text,
+                            &delta,
+                            logprobs,
                             sequence_number,
                         ))
                         .unwrap_or_else(|_| Event::default().data("{}")),
                 );
-                let sequence_number = state_machine.next_sequence_number();
-                out.push(
-                    Event::default()
-                        .event("response.content_part.done")
-                        .json_data(responses_stream_content_part_done_event(
-                            &state_machine.item_id,
-                            &state_machine.output_text,
-                            sequence_number,
-                        ))
-                        .unwrap_or_else(|_| Event::default().data("{}")),
-                );
-                let sequence_number = state_machine.next_sequence_number();
-                out.push(
-                    Event::default()
-                        .event("response.output_item.done")
-                        .json_data(responses_stream_output_item_done_event(
-                            &state_machine.item_id,
-                            &state_machine.output_text,
-                            sequence_number,
-                        ))
-                        .unwrap_or_else(|_| Event::default().data("{}")),
-                );
-                let sequence_number = state_machine.next_sequence_number();
-                out.push(
-                    Event::default()
-                        .event("response.completed")
-                        .json_data(responses_stream_completed_event_with_sequence(
-                            &state_machine.response_id,
-                            state_machine.created_at,
-                            &state_machine.model,
-                            &state_machine.item_id,
-                            &state_machine.output_text,
-                            state_machine.usage.clone(),
-                            sequence_number,
-                        ))
-                        .unwrap_or_else(|_| Event::default().data("{}")),
-                );
-                out
-            })
-            .flat_map(|out| stream::iter(out.into_iter().map(Ok::<_, Infallible>)));
-            let events = body_events
-                .chain(tail_events)
-                .chain(stream::once(async { done_event() }));
-            Ok(sse_response(events, cancellation, lifecycle))
+            }
+            if let Some(usage) = chunk.usage.as_ref() {
+                usage_lifecycle.capture_usage(usage);
+                state_machine.usage = Some(usage_to_responses_usage(usage));
+            }
         }
-        _ => {
-            let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
-            let response = backend_call_with_cancellation(
-                &state,
-                &context,
-                OpenAiBackendOperation::Responses,
-                "responses",
-                &backend_context,
-                state
-                    .backend
-                    .chat_completion_with_context(request, backend_context.clone()),
-            )
-            .await?;
-            let translated = translate_chat_completion_response_to_responses(&response)?;
-            Ok(json_response_with_usage(translated, &response.usage))
+        Err(error) => {
+            state_machine.failed = true;
+            out.push(
+                Event::default()
+                    .event("error")
+                    .json_data(error.body())
+                    .unwrap_or_else(|_| Event::default().data("{}")),
+            );
         }
     }
+    out
+}
+
+fn responses_stream_tail_events(
+    state_machine: &Mutex<ResponseSseState>,
+    include_usage: bool,
+) -> Vec<Event> {
+    let mut state_machine = state_machine
+        .lock()
+        .expect("responses stream state lock poisoned");
+    let mut out = Vec::new();
+    if state_machine.failed {
+        return out;
+    }
+    if !state_machine.created_emitted {
+        let sequence_number = state_machine.next_sequence_number();
+        out.push(
+            Event::default()
+                .event("response.created")
+                .json_data(responses_stream_created_event_with_sequence(
+                    &state_machine.model,
+                    state_machine.created_at,
+                    sequence_number,
+                ))
+                .unwrap_or_else(|_| Event::default().data("{}")),
+        );
+        state_machine.created_emitted = true;
+    }
+    if !state_machine.output_item_emitted {
+        let sequence_number = state_machine.next_sequence_number();
+        out.push(
+            Event::default()
+                .event("response.output_item.added")
+                .json_data(responses_stream_output_item_added_event(
+                    &state_machine.item_id,
+                    sequence_number,
+                ))
+                .unwrap_or_else(|_| Event::default().data("{}")),
+        );
+        let sequence_number = state_machine.next_sequence_number();
+        out.push(
+            Event::default()
+                .event("response.content_part.added")
+                .json_data(responses_stream_content_part_added_event(
+                    &state_machine.item_id,
+                    sequence_number,
+                ))
+                .unwrap_or_else(|_| Event::default().data("{}")),
+        );
+        state_machine.output_item_emitted = true;
+    }
+    let sequence_number = state_machine.next_sequence_number();
+    out.push(
+        Event::default()
+            .event("response.output_text.done")
+            .json_data(responses_stream_text_done_event_with_sequence(
+                &state_machine.item_id,
+                &state_machine.output_text,
+                sequence_number,
+            ))
+            .unwrap_or_else(|_| Event::default().data("{}")),
+    );
+    let sequence_number = state_machine.next_sequence_number();
+    out.push(
+        Event::default()
+            .event("response.content_part.done")
+            .json_data(responses_stream_content_part_done_event(
+                &state_machine.item_id,
+                &state_machine.output_text,
+                sequence_number,
+            ))
+            .unwrap_or_else(|_| Event::default().data("{}")),
+    );
+    let sequence_number = state_machine.next_sequence_number();
+    out.push(
+        Event::default()
+            .event("response.output_item.done")
+            .json_data(responses_stream_output_item_done_event(
+                &state_machine.item_id,
+                &state_machine.output_text,
+                sequence_number,
+            ))
+            .unwrap_or_else(|_| Event::default().data("{}")),
+    );
+    let sequence_number = state_machine.next_sequence_number();
+    out.push(
+        Event::default()
+            .event("response.completed")
+            .json_data(responses_stream_completed_event_with_sequence(
+                &state_machine.response_id,
+                state_machine.created_at,
+                &state_machine.model,
+                &state_machine.item_id,
+                &state_machine.output_text,
+                if include_usage {
+                    state_machine.usage.clone()
+                } else {
+                    None
+                },
+                sequence_number,
+            ))
+            .unwrap_or_else(|_| Event::default().data("{}")),
+    );
+    out
 }
 
 async fn completions(
@@ -563,61 +641,75 @@ async fn completions(
     payload: Result<Json<CompletionRequest>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
     let Json(mut request) = json_payload(payload)?;
-    request.set_agent_session(agent_session_from_header(&state.config, &headers)?);
+    let header_session = agent_session_from_header(&state.config, &headers)?;
+    let trusted_agent_session = header_session.is_some();
+    request.set_agent_session(header_session);
     request.validate()?;
     if request.stream {
         let include_usage = request.include_usage();
-        let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+        let backend_context = request_context(context.request_id, trusted_agent_session, true);
         let cancellation = backend_context.cancellation_token();
-        let stream = backend_call_with_cancellation(
-            &state,
+        let stream = call_backend_with_context(
+            state.config.lifecycle_observer.clone(),
             &context,
             OpenAiBackendOperation::CompletionStream,
             "completion_stream",
+            state.config.backend_timeout,
             &backend_context,
             state
                 .backend
                 .completion_stream(request, backend_context.clone()),
         )
         .await?;
-        let lifecycle = state.stream_lifecycle(context);
-        let error_lifecycle = lifecycle.clone();
+        let lifecycle = state.stream_lifecycle(context, OpenAiBackendOperation::CompletionStream);
+        let stream = observe_backend_stream(stream, lifecycle.clone());
         let usage_lifecycle = lifecycle.clone();
+        let completion_lifecycle = lifecycle.clone();
         let events = stream
             .filter_map(move |item| {
-                let error_lifecycle = error_lifecycle.clone();
                 let usage_lifecycle = usage_lifecycle.clone();
                 async move {
                     match item {
                         Ok(chunk) => {
                             if let Some(usage) = chunk.usage.as_ref() {
-                                usage_lifecycle.observe_usage(usage);
+                                usage_lifecycle.capture_usage(usage);
                             }
-                            (include_usage || chunk.usage.is_none()).then(|| json_event(&chunk))
+                            if !include_usage && chunk.usage.is_some() {
+                                None
+                            } else {
+                                Some(json_event(&chunk))
+                            }
                         }
-                        Err(error) => {
-                            error_lifecycle.failed(&error);
-                            Some(json_event(&error.body()))
-                        }
+                        Err(error) => Some(json_event(&error.body())),
                     }
                 }
             })
-            .chain(stream::once(async { done_event() }));
+            .chain(stream::once(async move {
+                completion_lifecycle.mark_protocol_complete();
+                done_event()
+            }));
         Ok(sse_response(events, cancellation, lifecycle))
     } else {
-        let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
-        let response = backend_call_with_cancellation(
-            &state,
+        let backend_context = request_context(context.request_id, trusted_agent_session, false);
+        let response = call_backend_with_context(
+            state.config.lifecycle_observer.clone(),
             &context,
             OpenAiBackendOperation::Completion,
             "completion",
+            state.config.backend_timeout,
             &backend_context,
             state
                 .backend
                 .completion_with_context(request, backend_context.clone()),
         )
         .await?;
-        Ok(json_response_with_usage(response.clone(), &response.usage))
+        state.response_completed(
+            &context,
+            OpenAiBackendOperation::Completion,
+            &response.usage,
+        );
+        let usage = response.usage.clone();
+        Ok(json_response_with_usage(response, &usage))
     }
 }
 
@@ -675,88 +767,19 @@ fn resolve_agent_session(
     }
 }
 
-async fn backend_call<T, F>(
-    state: &FrontendState,
-    context: &OpenAiLifecycleContext,
-    backend_operation: OpenAiBackendOperation,
-    operation_name: &'static str,
-    future: F,
-) -> OpenAiResult<T>
-where
-    F: Future<Output = OpenAiResult<T>>,
-{
-    state.observe(OpenAiLifecycleEvent::BackendDispatched {
-        context: context.clone(),
-        operation: backend_operation,
-    });
-    match state.config.backend_timeout {
-        Some(timeout) => tokio::time::timeout(timeout, future).await.map_err(|_| {
-            OpenAiError::timeout(format!(
-                "{operation_name} timed out after {} ms",
-                timeout.as_millis()
-            ))
-        })?,
-        None => future.await,
+fn request_context(
+    request_id: RequestId,
+    trusted_agent_session: bool,
+    observe_stream_usage: bool,
+) -> OpenAiRequestContext {
+    let mut context = OpenAiRequestContext::with_request_id(request_id);
+    if trusted_agent_session {
+        context = context.with_trusted_agent_session();
     }
-}
-
-struct CancelOnDrop {
-    context: OpenAiRequestContext,
-    armed: bool,
-}
-
-impl CancelOnDrop {
-    fn new(context: &OpenAiRequestContext) -> Self {
-        Self {
-            context: context.clone(),
-            armed: true,
-        }
+    if observe_stream_usage {
+        context = context.with_stream_usage_observation();
     }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        if self.armed {
-            self.context.cancel();
-        }
-    }
-}
-
-async fn backend_call_with_cancellation<T, F>(
-    state: &FrontendState,
-    lifecycle_context: &OpenAiLifecycleContext,
-    backend_operation: OpenAiBackendOperation,
-    operation_name: &'static str,
-    request_context: &OpenAiRequestContext,
-    future: F,
-) -> OpenAiResult<T>
-where
-    F: Future<Output = OpenAiResult<T>>,
-{
-    state.observe(OpenAiLifecycleEvent::BackendDispatched {
-        context: lifecycle_context.clone(),
-        operation: backend_operation,
-    });
-    let mut cancel_on_drop = CancelOnDrop::new(request_context);
-    let result = match state.config.backend_timeout {
-        Some(timeout) => match tokio::time::timeout(timeout, future).await {
-            Ok(result) => result,
-            Err(_) => {
-                request_context.cancel();
-                return Err(OpenAiError::timeout(format!(
-                    "{operation_name} timed out after {} ms",
-                    timeout.as_millis()
-                )));
-            }
-        },
-        None => future.await,
-    };
-    cancel_on_drop.disarm();
-    result
+    context
 }
 
 fn json_payload<T>(payload: Result<Json<T>, JsonRejection>) -> Result<Json<T>, OpenAiError> {
@@ -788,24 +811,25 @@ async fn frontend_lifecycle_middleware(
         OpenAiLifecycleContext::new(request_id, lifecycle_method(&method), lifecycle_route(&uri));
     request.extensions_mut().insert(request_id);
     request.extensions_mut().insert(context.clone());
-    state.observe(OpenAiLifecycleEvent::Admitted {
-        context: context.clone(),
-    });
+    let mut lifecycle =
+        RequestLifecycle::admit(state.config.lifecycle_observer.clone(), context.clone());
 
     let mut response = next.run(request).await;
     let (header_name, header_value) = request_id_response_header(&request_id);
     response.headers_mut().insert(header_name, header_value);
-    if response.extensions().get::<StreamingResponse>().is_none() {
+    if is_streaming_response(&response) {
+        lifecycle.transfer_to_stream();
+    } else {
         let usage = response
             .extensions()
             .get::<TerminalUsage>()
             .map(|usage| usage.0);
-        observe_non_stream_terminal(&state, context.clone(), response.status(), usage);
+        lifecycle.finish_with_usage(response.status(), usage);
     }
     tracing::info!(
         request_id = %request_id.as_ref(),
-        method = %method,
-        uri = %uri,
+        method = ?context.method,
+        route = ?context.route,
         status = %response.status(),
         "openai frontend request"
     );
@@ -830,57 +854,6 @@ fn lifecycle_route(uri: &Uri) -> OpenAiFrontendRoute {
         "/v1/completions" => OpenAiFrontendRoute::Completions,
         "/v1/responses" => OpenAiFrontendRoute::Responses,
         _ => OpenAiFrontendRoute::Unknown,
-    }
-}
-
-fn observe_non_stream_terminal(
-    state: &FrontendState,
-    context: OpenAiLifecycleContext,
-    status: StatusCode,
-    usage: Option<TokenUsage>,
-) {
-    if status.is_client_error() {
-        state.observe(OpenAiLifecycleEvent::Rejected {
-            context,
-            status_code: status.as_u16(),
-            rejection: rejection_for_status(status),
-        });
-        return;
-    }
-
-    let result = if status.is_server_error() {
-        OpenAiTerminalResult::Failed {
-            status_code: status.as_u16(),
-            failure: failure_for_status(status),
-        }
-    } else if let Some(usage) = usage {
-        OpenAiTerminalResult::CompletedWithUsage {
-            status_code: status.as_u16(),
-            usage,
-        }
-    } else {
-        OpenAiTerminalResult::Completed {
-            status_code: status.as_u16(),
-        }
-    };
-    state.observe(OpenAiLifecycleEvent::NonStreamTerminal { context, result });
-}
-
-fn rejection_for_status(status: StatusCode) -> OpenAiRejection {
-    match status {
-        StatusCode::PAYLOAD_TOO_LARGE => OpenAiRejection::PayloadTooLarge,
-        StatusCode::METHOD_NOT_ALLOWED => OpenAiRejection::MethodNotAllowed,
-        StatusCode::NOT_FOUND => OpenAiRejection::NotFound,
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => OpenAiRejection::AdmissionDenied,
-        _ => OpenAiRejection::InvalidRequest,
-    }
-}
-
-fn failure_for_status(status: StatusCode) -> OpenAiFailure {
-    match status {
-        StatusCode::GATEWAY_TIMEOUT => OpenAiFailure::Timeout,
-        StatusCode::INTERNAL_SERVER_ERROR => OpenAiFailure::Internal,
-        _ => OpenAiFailure::Backend,
     }
 }
 

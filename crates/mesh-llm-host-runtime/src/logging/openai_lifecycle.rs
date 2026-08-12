@@ -9,13 +9,13 @@ use std::{
 };
 
 use mesh_llm_events::logging::{
-    events::LifecycleEvent,
+    events::{LifecycleEvent, TokenUsage},
     identifiers::{AttemptId, RequestId},
     replay::ReplayChannel,
 };
 use openai_frontend::{
     OpenAiBackendOperation, OpenAiFailure, OpenAiLifecycleContext, OpenAiLifecycleEvent,
-    OpenAiLifecycleObserver, OpenAiRejection, OpenAiTerminalResult,
+    OpenAiLifecycleObserver, OpenAiRejection, OpenAiTerminalResult, OpenAiUsage,
 };
 
 use super::{
@@ -294,8 +294,26 @@ struct TrackedRequests {
 }
 
 enum TrackedRequest {
-    Active(LifecycleGuard),
+    Active(ActiveRequest),
     Terminal,
+}
+
+struct ActiveRequest {
+    guard: LifecycleGuard,
+    backend_attempt: Option<(OpenAiBackendOperation, AttemptId)>,
+    backend_stream_first_item: bool,
+    usage: Option<OpenAiUsage>,
+}
+
+impl ActiveRequest {
+    fn new(guard: LifecycleGuard) -> Self {
+        Self {
+            guard,
+            backend_attempt: None,
+            backend_stream_first_item: false,
+            usage: None,
+        }
+    }
 }
 
 impl OpenAiLifecycleLoggingAdapter {
@@ -327,16 +345,21 @@ impl OpenAiLifecycleLoggingAdapter {
             request_id,
             RequestSummaryMetadata::from_openai_frontend_route(context.route),
         );
-        tracked
-            .requests
-            .insert(request_id, TrackedRequest::Active(guard));
+        tracked.requests.insert(
+            request_id,
+            TrackedRequest::Active(ActiveRequest::new(guard)),
+        );
         tracked.insertion_order.push_back(request_id);
     }
 
-    fn route_selected(&self, request_id: RequestId, operation: OpenAiBackendOperation) {
-        if !lock_recover(&self.tracked).is_active(request_id) {
-            return;
-        }
+    fn backend_dispatched(&self, request_id: RequestId, operation: OpenAiBackendOperation) {
+        let guard = {
+            let tracked = lock_recover(&self.tracked);
+            let Some(TrackedRequest::Active(active)) = tracked.requests.get(&request_id) else {
+                return;
+            };
+            active.guard.clone()
+        };
 
         let metadata = RequestSummaryMetadata::from_parts(
             None,
@@ -351,6 +374,153 @@ impl OpenAiLifecycleLoggingAdapter {
             provider: metadata.provider().map(str::to_owned),
             engine: metadata.engine().map(str::to_owned),
         };
+        self.enqueue_operation_event(request_id, event);
+        let attempt_id = self.service.start_attempt(request_id, &guard);
+        let mut tracked = lock_recover(&self.tracked);
+        if let Some(TrackedRequest::Active(active)) = tracked.requests.get_mut(&request_id) {
+            active.backend_attempt = Some((operation, attempt_id));
+        }
+    }
+
+    fn backend_terminal(
+        &self,
+        request_id: RequestId,
+        operation: OpenAiBackendOperation,
+        result: OpenAiTerminalResult,
+    ) {
+        let attempt_id = {
+            let mut tracked = lock_recover(&self.tracked);
+            let Some(TrackedRequest::Active(active)) = tracked.requests.get_mut(&request_id) else {
+                return;
+            };
+            match active.backend_attempt {
+                Some((attempt_operation, attempt_id)) if attempt_operation == operation => {
+                    active.backend_attempt = None;
+                    Some(attempt_id)
+                }
+                _ => None,
+            }
+        };
+        let Some(attempt_id) = attempt_id else {
+            return;
+        };
+        match result {
+            OpenAiTerminalResult::Completed { status_code }
+            | OpenAiTerminalResult::CompletedWithUsage { status_code, .. } => {
+                self.service
+                    .complete_attempt(request_id, attempt_id, Some(status_code));
+            }
+            OpenAiTerminalResult::Failed { failure, .. } => {
+                self.service.fail_attempt(
+                    request_id,
+                    attempt_id,
+                    failure_label(failure).to_owned(),
+                );
+            }
+        }
+    }
+
+    fn backend_stream_first_item(&self, request_id: RequestId) {
+        let should_emit = {
+            let mut tracked = lock_recover(&self.tracked);
+            let Some(TrackedRequest::Active(active)) = tracked.requests.get_mut(&request_id) else {
+                return;
+            };
+            if active.backend_stream_first_item {
+                false
+            } else {
+                active.backend_stream_first_item = true;
+                true
+            }
+        };
+        if should_emit {
+            self.enqueue_operation_event(request_id, LifecycleEvent::BackendStreamFirstItem);
+        }
+    }
+
+    fn response_completed(&self, request_id: RequestId, usage: OpenAiUsage) {
+        let should_emit = {
+            let mut tracked = lock_recover(&self.tracked);
+            let Some(TrackedRequest::Active(active)) = tracked.requests.get_mut(&request_id) else {
+                return;
+            };
+            if active.usage.is_some() {
+                false
+            } else {
+                active.usage = Some(usage);
+                true
+            }
+        };
+        if should_emit {
+            self.enqueue_operation_event(
+                request_id,
+                LifecycleEvent::UsageRecorded {
+                    prompt_tokens: Some(u64::from(usage.prompt_tokens)),
+                    cached_prompt_tokens: Some(u64::from(usage.cached_tokens)),
+                    completion_tokens: Some(u64::from(usage.completion_tokens)),
+                    total_tokens: Some(u64::from(usage.total_tokens)),
+                },
+            );
+        }
+    }
+
+    fn stream_terminal(&self, request_id: RequestId, result: OpenAiTerminalResult) {
+        let usage = {
+            let tracked = lock_recover(&self.tracked);
+            let Some(TrackedRequest::Active(active)) = tracked.requests.get(&request_id) else {
+                return;
+            };
+            active.usage
+        };
+        match result {
+            OpenAiTerminalResult::Completed { .. } => {
+                let terminal_usage = usage.and_then(|value| {
+                    TokenUsage::from_counts(
+                        Some(u64::from(value.prompt_tokens)),
+                        Some(u64::from(value.completion_tokens)),
+                        Some(u64::from(value.total_tokens)),
+                    )
+                });
+                self.enqueue_operation_event(
+                    request_id,
+                    LifecycleEvent::StreamCompleted {
+                        tokens: usage.map(|value| u64::from(value.completion_tokens)),
+                        usage: terminal_usage,
+                    },
+                );
+            }
+            OpenAiTerminalResult::CompletedWithUsage { usage, .. } => {
+                self.enqueue_operation_event(
+                    request_id,
+                    LifecycleEvent::StreamCompleted {
+                        tokens: usage.completion_tokens,
+                        usage: Some(usage),
+                    },
+                );
+            }
+            OpenAiTerminalResult::Failed { failure, .. } => {
+                self.enqueue_operation_event(
+                    request_id,
+                    LifecycleEvent::StreamError {
+                        error: Some(failure_label(failure).to_owned()),
+                    },
+                );
+            }
+        }
+    }
+
+    fn stream_interrupted(&self, request_id: RequestId, label: &'static str) {
+        if lock_recover(&self.tracked).is_active(request_id) {
+            self.enqueue_operation_event(
+                request_id,
+                LifecycleEvent::StreamError {
+                    error: Some(label.to_owned()),
+                },
+            );
+        }
+    }
+
+    fn enqueue_operation_event(&self, request_id: RequestId, event: LifecycleEvent) {
         if let Ok(payload) = serde_json::to_string(&event) {
             let _ = self
                 .service
@@ -364,10 +534,10 @@ impl OpenAiLifecycleLoggingAdapter {
             let Some(entry) = tracked.requests.get_mut(&request_id) else {
                 return;
             };
-            let TrackedRequest::Active(guard) = entry else {
+            let TrackedRequest::Active(active) = entry else {
                 return;
             };
-            let guard = guard.clone();
+            let guard = active.guard.clone();
             *entry = TrackedRequest::Terminal;
             guard
         };
@@ -414,7 +584,18 @@ impl OpenAiLifecycleObserver for OpenAiLifecycleLoggingAdapter {
         match event {
             OpenAiLifecycleEvent::Admitted { context } => self.admit(context),
             OpenAiLifecycleEvent::BackendDispatched { context, operation } => {
-                self.route_selected(context.request_id, *operation)
+                self.backend_dispatched(context.request_id, *operation)
+            }
+            OpenAiLifecycleEvent::BackendTerminal {
+                context,
+                operation,
+                result,
+            } => self.backend_terminal(context.request_id, *operation, *result),
+            OpenAiLifecycleEvent::StreamFirstItem { context, .. } => {
+                self.backend_stream_first_item(context.request_id)
+            }
+            OpenAiLifecycleEvent::ResponseCompleted { context, usage, .. } => {
+                self.response_completed(context.request_id, *usage)
             }
             OpenAiLifecycleEvent::Rejected {
                 context, rejection, ..
@@ -422,17 +603,30 @@ impl OpenAiLifecycleObserver for OpenAiLifecycleLoggingAdapter {
                 context.request_id,
                 TerminalOutcome::Rejected(Some(rejection_label(*rejection).into())),
             ),
-            OpenAiLifecycleEvent::NonStreamTerminal { context, result }
-            | OpenAiLifecycleEvent::StreamTerminal { context, result } => {
+            OpenAiLifecycleEvent::NonStreamTerminal { context, result } => {
                 self.terminal(context.request_id, terminal_outcome(*result))
             }
-            OpenAiLifecycleEvent::StreamCancelled { context } => self.terminal(
+            OpenAiLifecycleEvent::StreamTerminal { context, result } => {
+                self.stream_terminal(context.request_id, *result);
+                self.terminal(context.request_id, terminal_outcome(*result));
+            }
+            OpenAiLifecycleEvent::StreamCancelled { context } => {
+                self.stream_interrupted(context.request_id, "stream_cancelled");
+                self.terminal(
+                    context.request_id,
+                    TerminalOutcome::Cancelled(Some("stream_cancelled".into())),
+                );
+            }
+            OpenAiLifecycleEvent::StreamDropped { context } => {
+                self.stream_interrupted(context.request_id, "stream_dropped");
+                self.terminal(
+                    context.request_id,
+                    TerminalOutcome::Dropped(Some("stream_dropped".into())),
+                );
+            }
+            OpenAiLifecycleEvent::RequestCancelled { context } => self.terminal(
                 context.request_id,
-                TerminalOutcome::Cancelled(Some("stream_cancelled".into())),
-            ),
-            OpenAiLifecycleEvent::StreamDropped { context } => self.terminal(
-                context.request_id,
-                TerminalOutcome::Dropped(Some("stream_dropped".into())),
+                TerminalOutcome::Cancelled(Some("request_cancelled".into())),
             ),
         }
     }
@@ -446,6 +640,10 @@ fn terminal_outcome(result: OpenAiTerminalResult) -> TerminalOutcome {
         OpenAiTerminalResult::CompletedWithUsage { status_code, usage } => {
             TerminalOutcome::CompletedWithUsage { status_code, usage }
         }
+        OpenAiTerminalResult::Failed {
+            failure: OpenAiFailure::Cancelled,
+            ..
+        } => TerminalOutcome::Cancelled(Some("request_cancelled".into())),
         OpenAiTerminalResult::Failed {
             status_code,
             failure,
@@ -483,6 +681,7 @@ const fn failure_label(failure: OpenAiFailure) -> &'static str {
         OpenAiFailure::Backend => "backend",
         OpenAiFailure::Timeout => "timeout",
         OpenAiFailure::Internal => "internal",
+        OpenAiFailure::Cancelled => "cancelled",
     }
 }
 
@@ -499,7 +698,7 @@ mod tests {
     use mesh_llm_events::logging::{events::LifecycleEvent, identifiers::RequestId};
     use openai_frontend::{
         OpenAiBackendOperation, OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent,
-        OpenAiRequestMethod, OpenAiTerminalResult,
+        OpenAiRequestMethod, OpenAiTerminalResult, OpenAiUsage,
     };
 
     use super::*;
@@ -575,6 +774,127 @@ mod tests {
             1
         );
         assert_eq!(adapter.tracked_len(), 1);
+    }
+
+    #[test]
+    fn backend_stream_and_usage_events_map_to_canonical_children_once() {
+        let (service, adapter) = adapter();
+        let request_id = RequestId::new();
+        let context = context(request_id);
+        let operation = OpenAiBackendOperation::ChatCompletionStream;
+        let usage = OpenAiUsage {
+            prompt_tokens: 21,
+            cached_tokens: 13,
+            completion_tokens: 8,
+            total_tokens: 29,
+        };
+
+        adapter.observe(&OpenAiLifecycleEvent::Admitted {
+            context: context.clone(),
+        });
+        adapter.observe(&OpenAiLifecycleEvent::BackendDispatched {
+            context: context.clone(),
+            operation,
+        });
+        adapter.observe(&OpenAiLifecycleEvent::BackendTerminal {
+            context: context.clone(),
+            operation,
+            result: OpenAiTerminalResult::Completed { status_code: 200 },
+        });
+        adapter.observe(&OpenAiLifecycleEvent::StreamFirstItem {
+            context: context.clone(),
+            operation,
+        });
+        adapter.observe(&OpenAiLifecycleEvent::StreamFirstItem {
+            context: context.clone(),
+            operation,
+        });
+        adapter.observe(&OpenAiLifecycleEvent::ResponseCompleted {
+            context: context.clone(),
+            operation,
+            usage,
+        });
+        adapter.observe(&OpenAiLifecycleEvent::ResponseCompleted {
+            context: context.clone(),
+            operation,
+            usage,
+        });
+        adapter.observe(&OpenAiLifecycleEvent::StreamTerminal {
+            context,
+            result: OpenAiTerminalResult::Completed { status_code: 200 },
+        });
+
+        let events = canonical_events(&service);
+        assert_eq!(
+            count_events(&events, |event| matches!(
+                event,
+                LifecycleEvent::AttemptStarted { .. }
+            )),
+            1
+        );
+        assert_eq!(
+            count_events(&events, |event| matches!(
+                event,
+                LifecycleEvent::AttemptCompleted { .. }
+            )),
+            1
+        );
+        assert_eq!(
+            count_events(&events, |event| matches!(
+                event,
+                LifecycleEvent::BackendStreamFirstItem
+            )),
+            1
+        );
+        assert_eq!(
+            count_events(&events, |event| matches!(
+                event,
+                LifecycleEvent::UsageRecorded { .. }
+            )),
+            1
+        );
+        assert_eq!(
+            count_events(&events, |event| matches!(
+                event,
+                LifecycleEvent::StreamCompleted {
+                    tokens: Some(8),
+                    usage: Some(TokenUsage {
+                        prompt_tokens: Some(21),
+                        completion_tokens: Some(8),
+                        total_tokens: Some(29),
+                    }),
+                }
+            )),
+            1
+        );
+        assert_eq!(
+            count_events(&events, |event| matches!(
+                event,
+                LifecycleEvent::Completed { .. }
+            )),
+            1
+        );
+    }
+
+    fn canonical_events(service: &LoggingService) -> Vec<LifecycleEvent> {
+        service
+            .bus_ref()
+            .replay_window()
+            .records
+            .into_iter()
+            .filter_map(|record| {
+                let envelope =
+                    serde_json::from_str::<serde_json::Value>(&record.entry.payload).ok()?;
+                serde_json::from_str(envelope.get("payload")?.as_str()?).ok()
+            })
+            .collect()
+    }
+
+    fn count_events(
+        events: &[LifecycleEvent],
+        predicate: impl Fn(&LifecycleEvent) -> bool,
+    ) -> usize {
+        events.iter().filter(|event| predicate(event)).count()
     }
 
     #[test]
@@ -736,6 +1056,13 @@ mod tests {
                 error: "timeout".into(),
                 status_code: 504,
             }
+        );
+        assert_eq!(
+            terminal_outcome(OpenAiTerminalResult::Failed {
+                status_code: 499,
+                failure: OpenAiFailure::Cancelled,
+            }),
+            TerminalOutcome::Cancelled(Some("request_cancelled".into()))
         );
         assert_eq!(
             serde_json::to_string(&LifecycleEvent::RouteSelected {

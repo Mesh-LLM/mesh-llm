@@ -82,6 +82,11 @@ pub enum LifecycleEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// The first item became available from a streaming backend.
+    ///
+    /// This is not a first-token event: the item may be usage-only or an
+    /// error, and it remains distinct from client-visible stream chunks.
+    BackendStreamFirstItem,
     /// A streaming response started.
     StreamStarted {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,6 +104,17 @@ pub enum LifecycleEvent {
         tokens: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<TokenUsage>,
+    },
+    /// Bounded token accounting reported by an OpenAI-compatible backend.
+    UsageRecorded {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cached_prompt_tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        completion_tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total_tokens: Option<u64>,
     },
     /// A stream errored.
     StreamError {

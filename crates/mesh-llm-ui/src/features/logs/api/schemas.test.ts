@@ -140,6 +140,47 @@ describe('logs DTO boundary parsers', () => {
     expect(parseLogArtifact(artifactDto('corrupt', false, null)).contentState).toBe('corrupt')
   })
 
+  it('parses bounded token usage while accepting older event DTOs without it', () => {
+    const usage = parseLogLifecycleEvent({
+      eventId: EVENT_ID,
+      requestId: REQUEST_ID,
+      occurredAt: TIMESTAMP,
+      kind: 'usage_recorded',
+      model: null,
+      provider: null,
+      engine: null,
+      attemptId: null,
+      statusCode: null,
+      durationMs: null,
+      tokens: null,
+      promptTokens: 21,
+      cachedPromptTokens: 13,
+      completionTokens: 8,
+      totalTokens: 29
+    })
+    const legacy = parseLogLifecycleEvent({
+      eventId: EVENT_ID,
+      requestId: REQUEST_ID,
+      occurredAt: TIMESTAMP,
+      kind: 'completed',
+      model: null,
+      provider: null,
+      engine: null,
+      attemptId: null,
+      statusCode: 200,
+      durationMs: 12,
+      tokens: null
+    })
+
+    expect(usage).toMatchObject({
+      promptTokens: 21,
+      cachedPromptTokens: 13,
+      completionTokens: 8,
+      totalTokens: 29
+    })
+    expect(legacy.totalTokens).toBeUndefined()
+  })
+
   it('rejects unknown event versions, malformed cursors, unsafe proxy URLs, and inconsistent artifacts', () => {
     expect(() => LogReplayCursor.parse('v2:1.2.3')).toThrow()
     expect(() => LogReplayCursor.parse('v1:1.not-a-number.3')).toThrow()

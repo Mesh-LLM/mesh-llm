@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 
 pub(crate) use dto::{ArtifactDto, AuditDto, EventDto, PageDto, ProxyDto, RequestDto};
 pub(crate) use error::LogsError;
+use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_log_store::{ArtifactRecord, LogStoreError, QuerySort, RequestRecord};
 
 use self::dto::artifact_state;
@@ -29,6 +30,28 @@ use crate::logging::{LoggingQueryFacade, LoggingRuntimeState, RequestSummaryEntr
 
 pub(super) fn is_route(path: &str) -> bool {
     path == "/api/logs" || path.starts_with("/api/logs/")
+}
+
+fn event_kind(event: &LifecycleEvent) -> &'static str {
+    match event {
+        LifecycleEvent::Admitted { .. } => "admitted",
+        LifecycleEvent::RouteSelected { .. } => "route_selected",
+        LifecycleEvent::AttemptStarted { .. } => "attempt_started",
+        LifecycleEvent::AttemptCompleted { .. } => "attempt_completed",
+        LifecycleEvent::AttemptFailed { .. } => "attempt_failed",
+        LifecycleEvent::BackendStreamFirstItem => "backend_stream_first_item",
+        LifecycleEvent::StreamStarted { .. } => "stream_started",
+        LifecycleEvent::StreamChunk { .. } => "stream_chunk",
+        LifecycleEvent::StreamCompleted { .. } => "stream_completed",
+        LifecycleEvent::UsageRecorded { .. } => "usage_recorded",
+        LifecycleEvent::StreamError { .. } => "stream_error",
+        LifecycleEvent::AuditError { .. } => "audit_error",
+        LifecycleEvent::Completed { .. } => "completed",
+        LifecycleEvent::Failed { .. } => "failed",
+        LifecycleEvent::Rejected { .. } => "rejected",
+        LifecycleEvent::Cancelled { .. } => "cancelled",
+        LifecycleEvent::Dropped { .. } => "dropped",
+    }
 }
 
 /// Dispatch a bounded trusted-local log query. The management server has

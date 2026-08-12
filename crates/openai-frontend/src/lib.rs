@@ -1,4 +1,5 @@
 pub mod backend;
+mod backend_lifecycle;
 pub mod chat;
 pub mod common;
 pub mod completions;
@@ -7,9 +8,11 @@ mod guardrails;
 pub mod hooks;
 pub mod lifecycle;
 pub mod models;
+mod request_lifecycle;
 pub mod responses;
 pub mod router;
 pub mod sse;
+mod stream_lifecycle;
 
 pub use backend::{
     CancellationToken, ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext,
@@ -46,8 +49,9 @@ pub use hooks::{
 pub use lifecycle::{
     OpenAiBackendOperation, OpenAiFailure, OpenAiFrontendRoute, OpenAiLifecycleContext,
     OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRejection, OpenAiRequestMethod,
-    OpenAiTerminalResult, REQUEST_ID_HEADER, RequestId, generate_request_id, parse_request_id,
-    parse_request_id_header, request_id_from_headers_or_generate, request_id_response_header,
+    OpenAiTerminalResult, OpenAiUsage, REQUEST_ID_HEADER, RequestId, generate_request_id,
+    parse_request_id, parse_request_id_header, request_id_from_headers_or_generate,
+    request_id_response_header,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
 pub use responses::{
