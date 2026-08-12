@@ -1,0 +1,44 @@
+apple_root := justfile_directory() / "providers/apple"
+
+# Build the experimental Apple runtime.
+build:
+    @swift build --package-path "{{ apple_root }}"
+
+# Run deterministic Apple runtime unit tests.
+test:
+    @swift test --package-path "{{ apple_root }}"
+
+# Run one Apple runtime CLI command.
+run *ARGS: build
+    @swift run --skip-build --package-path "{{ apple_root }}" mesh-apple-runtime {{ ARGS }}
+
+# Exercise live model availability, generation, tools, and cancellation.
+live: build
+    @"{{ apple_root }}/QA/live.sh"
+
+# Build and sign the carrier-neutral Apple runtime package.
+package:
+    @"{{ apple_root }}/Packaging/package.sh"
+
+# Exercise models, completion, streaming, tools, and disconnect cancellation over REST.
+rest: package
+    @"{{ apple_root }}/QA/rest.sh"
+
+# Verify one signed runtime from CLI, Swift, Node, and JVM carrier layouts.
+carriers: package
+    @"{{ apple_root }}/QA/carriers.sh"
+
+# Run generation from a transient per-user launchd agent.
+launchd: package
+    @"{{ apple_root }}/QA/launchd.sh"
+
+# Capture Foundation Models and Core AI traces and assert ANE activity.
+instruments: package
+    @"{{ apple_root }}/QA/instruments.sh"
+
+# Kill a supervisor mid-generation and prove the runtime exits.
+orphan: package
+    @"{{ apple_root }}/QA/orphan.sh"
+
+# Run the complete experimental Apple runtime validation suite.
+qa: test live rest carriers launchd instruments orphan
