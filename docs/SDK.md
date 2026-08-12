@@ -208,6 +208,37 @@ path-based native boundary exists so SwiftPM resources, Node package files, JVM
 resources, and Rust app resources can all pass the packaged console directory
 to the same console server.
 
+## Apple system provider carriers
+
+On Apple silicon running macOS Golden Gate, every host-capable SDK can expose
+the system model through the same provider-only lifecycle:
+
+| SDK | Entry point |
+|---|---|
+| Rust | `ProviderHost::start(ProviderHostConfig)` |
+| Swift | `ProviderHost.start(.packagedAppleSystem())` |
+| Node/Electron | `ProviderHost.start(packagedAppleSystemProvider())` |
+| Kotlin/JVM | `ProviderHost.start(ProviderRuntimeOptions.packagedAppleSystem())` |
+
+All four return an OpenAI-compatible loopback base URL. The language process
+supervises one shared `mesh-apple-runtime` sidecar; it does not embed separate
+Foundation Models logic or use Skippy pipeline parallelism. Release packaging
+copies the exact signed and notarized artifact with
+`scripts/package-sdk-provider-runtime.sh --sdk all`. Electron must unpack the
+optional Darwin-arm64 provider package from ASAR, while Kotlin/JVM extracts the
+separate macOS-arm64 resource JAR before launch. Swift uses a macOS-only
+resource target. Non-macOS SDK artifacts do not carry the executable.
+
+Golden Gate conformance is one command:
+
+```bash
+just apple::sdk-carriers
+```
+
+It runs the Swift, Node/Electron, and Kotlin/JVM wrappers through identical
+model listing, completion, streaming, tool, usage, cancellation, and error
+assertions. Rust has the companion `just apple::rust-sdk` typed-carrier test.
+
 ## Native Runtime Artifacts
 
 The accepted packaging direction is documented in

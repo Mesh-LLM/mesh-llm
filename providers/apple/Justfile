@@ -77,6 +77,14 @@ product-qa mesh_version output="target/apple-runtime/product":
 rust-sdk: package
     @"{{ apple_root }}/QA/rust-sdk.sh"
 
+# Copy the exact signed sidecar into SwiftPM, npm, and JVM package resources.
+sdk-package: package
+    @"{{ apple_root }}/../../scripts/package-sdk-provider-runtime.sh" --sdk all
+
+# Run Swift, Node/Electron, and Kotlin/JVM through one REST conformance suite.
+sdk-carriers: package
+    @"{{ apple_root }}/QA/sdk-carriers.sh"
+
 # Verify one signed runtime from CLI, Swift, Node, and JVM carrier layouts.
 carriers: package
     @"{{ apple_root }}/QA/carriers.sh"
@@ -94,4 +102,4 @@ orphan: package
     @"{{ apple_root }}/QA/orphan.sh"
 
 # Run the complete experimental Apple runtime validation suite.
-qa: test live rest mesh carriers launchd instruments orphan
+qa: test live rest mesh carriers sdk-carriers launchd instruments orphan

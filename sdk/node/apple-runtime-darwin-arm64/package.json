@@ -1,0 +1,23 @@
+{
+  "name": "@mesh-llm/apple-runtime-darwin-arm64",
+  "version": "0.72.1",
+  "description": "Signed MeshLLM Apple provider sidecar for Apple silicon macOS",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "runtime/",
+    "README.md"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "license": "MIT OR Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  }
+}

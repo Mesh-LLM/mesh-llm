@@ -151,6 +151,27 @@ The generated XCFramework is built with embedded serving support for Apple
 targets. `build-host-macos-xcframework.sh` remains as a faster macOS-only smoke
 artifact for local development; it is not the platform SDK contract.
 
+## Apple system model on macOS Golden Gate
+
+Package the one signed provider sidecar into the macOS-only
+`MeshLLMAppleProviderResources` SwiftPM target, then start its provider-only
+host:
+
+```bash
+scripts/package-sdk-provider-runtime.sh --sdk swift
+```
+
+```swift
+let host = try await ProviderHost.start(.packagedAppleSystem())
+print(host.apiBaseURL) // http://127.0.0.1:<port>/v1
+print(try await host.statusJSON())
+try await host.stop()
+```
+
+This is an experimental macOS Golden Gate surface. Swift owns the host
+lifecycle and resource URL; the shared signed `mesh-apple-runtime` process owns
+Foundation Models and accelerator access.
+
 ## Optional Console Assets
 
 Published Swift packages include the built console as SwiftPM resources under

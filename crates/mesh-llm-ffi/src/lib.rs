@@ -8,6 +8,8 @@ use mesh_llm_sdk::node::{
     UnloadModelOptions as ApiUnloadModelOptions, UnloadTarget as ApiUnloadTarget,
     create_auto_node as sdk_create_auto_node,
 };
+#[cfg(feature = "embedded-runtime")]
+use mesh_llm_sdk::provider_host::{ProviderHost, ProviderHostConfig};
 use mesh_llm_sdk::{
     ChatMessage, ChatRequest, ClientBuilder, InviteToken, MeshApiError, MeshClient, OwnerKeypair,
     PublicMeshQuery as ApiPublicMeshQuery, RequestId, ResponsesRequest,
@@ -89,6 +91,15 @@ pub struct ConsoleOptionsNative {
     pub asset_dir: String,
     pub port: Option<u16>,
     pub listen_all: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct ProviderRuntimeOptionsNative {
+    pub bundle_roots: Vec<String>,
+    pub release_manifest: Option<String>,
+    pub cache_dir: Option<String>,
+    pub allow_download: bool,
+    pub startup_timeout_ms: u64,
 }
 
 #[derive(uniffi::Record)]
@@ -433,6 +444,13 @@ pub struct ConsoleHandle {
     url: String,
 }
 
+#[derive(uniffi::Object)]
+pub struct ProviderHostHandle {
+    #[cfg(feature = "embedded-runtime")]
+    host: tokio::sync::Mutex<Option<ProviderHost>>,
+    api_base_url: String,
+}
+
 /// Generate a fresh owner keypair, returning its hex-encoded form.
 ///
 /// Callers should persist this value on first run and pass it back to
@@ -544,6 +562,71 @@ pub fn create_auto_node(
             })
         })
         .map_err(map_mesh_api_error)
+}
+
+#[uniffi::export]
+pub fn start_provider_host(
+    options: ProviderRuntimeOptionsNative,
+) -> Result<Arc<ProviderHostHandle>, FfiError> {
+    #[cfg(not(feature = "embedded-runtime"))]
+    {
+        let _ = options;
+        return Err(FfiError::ServingUnsupported(
+            "this native library was built without embedded-runtime support".to_string(),
+        ));
+    }
+    #[cfg(feature = "embedded-runtime")]
+    {
+        let host = block_on(ProviderHost::start(provider_host_config(options)))
+            .map_err(|error| FfiError::HostUnavailable(error.to_string()))?;
+        let api_base_url = host.api_base_url().to_string();
+        Ok(Arc::new(ProviderHostHandle {
+            host: tokio::sync::Mutex::new(Some(host)),
+            api_base_url,
+        }))
+    }
+}
+
+#[uniffi::export]
+impl ProviderHostHandle {
+    pub fn api_base_url(&self) -> String {
+        self.api_base_url.clone()
+    }
+
+    pub fn status_json(&self) -> Result<String, FfiError> {
+        #[cfg(not(feature = "embedded-runtime"))]
+        return Err(FfiError::ServingUnsupported(
+            "this native library was built without embedded-runtime support".to_string(),
+        ));
+        #[cfg(feature = "embedded-runtime")]
+        block_on(async {
+            let host = self.host.lock().await;
+            let host = host
+                .as_ref()
+                .ok_or_else(|| FfiError::HostUnavailable("provider host is stopped".to_string()))?;
+            host.status()
+                .await
+                .map(|status| status.to_string())
+                .map_err(|error| FfiError::HostUnavailable(error.to_string()))
+        })
+    }
+
+    pub fn stop(&self) -> Result<(), FfiError> {
+        #[cfg(not(feature = "embedded-runtime"))]
+        return Err(FfiError::ServingUnsupported(
+            "this native library was built without embedded-runtime support".to_string(),
+        ));
+        #[cfg(feature = "embedded-runtime")]
+        block_on(async {
+            let host = self.host.lock().await.take();
+            if let Some(host) = host {
+                host.stop()
+                    .await
+                    .map_err(|error| FfiError::HostUnavailable(error.to_string()))?;
+            }
+            Ok(())
+        })
+    }
 }
 
 #[uniffi::export]
@@ -1008,6 +1091,22 @@ fn non_empty_path(value: Option<String>) -> Option<String> {
         let trimmed = path.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
+}
+
+#[cfg(feature = "embedded-runtime")]
+fn provider_host_config(options: ProviderRuntimeOptionsNative) -> ProviderHostConfig {
+    ProviderHostConfig {
+        bundle_roots: options
+            .bundle_roots
+            .into_iter()
+            .filter_map(|path| non_empty_path(Some(path)))
+            .map(PathBuf::from)
+            .collect(),
+        release_manifest: non_empty_path(options.release_manifest).map(PathBuf::from),
+        cache_dir: non_empty_path(options.cache_dir).map(PathBuf::from),
+        allow_download: options.allow_download,
+        startup_timeout: Duration::from_millis(options.startup_timeout_ms.max(1)),
+    }
 }
 
 fn runtime_install_options(

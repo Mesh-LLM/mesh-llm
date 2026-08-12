@@ -180,9 +180,9 @@ identity in these representative layouts:
 | Carrier | Representative location | Result |
 |---|---|---|
 | CLI | `runtimes/apple/` | pass |
-| Swift | `MeshLLMAppleRuntime.bundle/Contents/Resources/runtime/` | pass |
-| Node.js | `@mesh-llm/apple-runtime-darwin-arm64/runtime/` | pass |
-| JVM | `ai/meshllm/apple-runtime/macos-arm64/runtime/` | pass |
+| Swift | macOS-only SwiftPM resource target | pass |
+| Node.js | `@mesh-llm/apple-runtime-darwin-arm64` outside Electron ASAR | pass |
+| JVM | `meshllm-apple-runtime-macos-arm64` resource JAR | pass |
 
 This establishes the intended SDK contract:
 
@@ -199,9 +199,21 @@ The CLI release composer now embeds that artifact at
 `product-manifest.json`, and preserves it through Unix installation. The host's
 adjacent-product discovery requires no provider bundle or index override.
 
-The current QA proves the CLI product and representative carrier layouts, not
-final npm/JAR/XCFramework publication. Those release jobs should consume one
-already-signed runtime artifact rather than rebuild it independently.
+`scripts/package-sdk-provider-runtime.sh` copies one already-signed artifact
+into all three platform-gated package-resource layouts. It never rebuilds the
+sidecar per SDK, and non-macOS npm, Maven, iOS, and Android artifacts do not
+carry the macOS executable.
+Swift, Node/Electron, and Kotlin/JVM then enter the same Rust `ProviderHost`
+lifecycle through the UniFFI or N-API boundary and expose the same loopback
+OpenAI-compatible URL. The accelerator-entitled process remains
+`mesh-apple-runtime`; the host-language process supervises it but does not call
+Foundation Models directly.
+
+`just apple::sdk-carriers` starts each real language carrier and runs the same
+REST assertions for model listing, the rolling and versioned IDs, buffered and
+streaming completions, tools, usage, disconnect cancellation, slot release,
+and structured errors. Final npm/JAR/XCFramework release publication must
+consume the same notarized artifact used by CLI product composition.
 
 ## Validation evidence
 
@@ -215,6 +227,7 @@ just apple::mesh
 just apple::product 0.72.1 target/apple-runtime/product
 just apple::product-qa 0.72.1 target/apple-runtime/product
 just apple::rust-sdk
+just apple::sdk-carriers
 MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Mesh-LLM Local Codesign" \
   just apple::rest
 MESH_APPLE_RUNTIME_CODESIGN_IDENTITY="Mesh-LLM Local Codesign" \
@@ -349,13 +362,13 @@ MeshLLM's normal local OpenAI frontend and runtime-process management surface.
 The shared executable-provider manifest, resolver, verified downloader,
 immutable cache contract, Rust host supervisor, CLI product composition,
 adjacent-product auto-discovery, and typed Rust SDK carrier configuration are
-implemented. Provider-only Rust SDK hosts do not load Skippy. The release lane requires a
-Developer ID Application signature, secure timestamp, accepted notarization,
-and `spctl` assessment before composition. Next, publish that one signed macOS
-arm64 artifact and bind the Swift, Node/Electron, and Kotlin/JVM SDK surfaces
-to the same installation and host lifecycle contract. Validate Swift
-app embedding, sandboxing, quarantine, and launchd/service lifecycles, then
-certify every SDK against one protocol test suite.
+implemented. Swift, Node/Electron, and Kotlin/JVM now bind the same provider-only
+host and are certified by one live protocol suite. Provider-only SDK hosts do
+not load Skippy. The release lane requires a Developer ID Application
+signature, secure timestamp, accepted notarization, and `spctl` assessment
+before composition. Remaining promotion work is release-channel publication
+of the one signed artifact plus app-sandbox and quarantine validation in a
+signed Swift app and packaged Electron app.
 
 ### 3. Private-mesh system-model routing
 

@@ -4,7 +4,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SWIFT_DIR="$REPO_ROOT/sdk/swift"
 FFI_DIR="$SWIFT_DIR/Generated/FFI"
-TARGET_DIR="$REPO_ROOT/target"
+TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+if [[ "$TARGET_DIR" != /* ]]; then
+  TARGET_DIR="$REPO_ROOT/$TARGET_DIR"
+fi
 XCFRAMEWORK_DIR="$SWIFT_DIR/Generated"
 FRAMEWORK_NAME="MeshLLMFFI"
 GENERATED_SWIFT="$SWIFT_DIR/Sources/MeshLLM/Generated/mesh_ffi.swift"
@@ -43,16 +46,34 @@ echo "Preparing embedded llama.cpp ABI libraries..."
 "$REPO_ROOT/scripts/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
 LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" "$REPO_ROOT/scripts/build-llama.sh"
 
-RUSTUP_RUSTC="$(rustup run stable which rustc)"
+RUSTUP_RUSTC="$(rustup which --toolchain stable rustc)"
+RUSTUP_CARGO="$(rustup which --toolchain stable cargo)"
 echo "Using rustc: $RUSTUP_RUSTC"
+echo "Using cargo: $RUSTUP_CARGO"
 echo "Building for $RUST_TARGET..."
 echo "macOS deployment target: $MACOSX_DEPLOYMENT_TARGET"
 echo "llama.cpp backend: $LLAMA_STAGE_BACKEND"
 echo "llama.cpp build dir: $LLAMA_STAGE_BUILD_DIR"
+FFI_PROFILE="${MESH_SWIFT_FFI_PROFILE:-release}"
+case "$FFI_PROFILE" in
+  release)
+    PROFILE_ARGS=(--release)
+    PROFILE_DIR=release
+    ;;
+  debug)
+    PROFILE_ARGS=()
+    PROFILE_DIR=debug
+    ;;
+  *)
+    echo "Unsupported MESH_SWIFT_FFI_PROFILE: $FFI_PROFILE" >&2
+    exit 2
+    ;;
+esac
+echo "Rust profile: $FFI_PROFILE"
 RUSTC="$RUSTUP_RUSTC" \
-  cargo build --release -p mesh-llm-ffi --target "$RUST_TARGET" --no-default-features --features host,embedded-runtime
+  "$RUSTUP_CARGO" build "${PROFILE_ARGS[@]}" -p mesh-llm-ffi --no-default-features --features host,embedded-runtime
 
-LIB_PATH="$TARGET_DIR/$RUST_TARGET/release/libmeshllm_ffi.a"
+LIB_PATH="$TARGET_DIR/$PROFILE_DIR/libmeshllm_ffi.a"
 
 echo "Syncing UniFFI API checksums into generated Swift bindings..."
 python3 - "$LIB_PATH" "$GENERATED_SWIFT" <<'PY'

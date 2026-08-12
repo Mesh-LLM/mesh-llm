@@ -20,6 +20,23 @@ let package = Package(
                 .linkedFramework("Accelerate"),
                 .linkedFramework("AppKit"),
                 .linkedFramework("CoreGraphics"),
+                .linkedFramework("CoreWLAN"),
+                .linkedFramework("Metal"),
+                .linkedFramework("SystemConfiguration"),
+                .linkedLibrary("c++"),
+            ]
+        ),
+        .executableTarget(
+            name: "AppleSystemHost",
+            dependencies: [
+                .product(name: "MeshLLM", package: "mesh-llm"),
+            ],
+            path: "Sources/AppleSystemHost",
+            linkerSettings: [
+                .linkedFramework("Accelerate"),
+                .linkedFramework("AppKit"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("CoreWLAN"),
                 .linkedFramework("Metal"),
                 .linkedFramework("SystemConfiguration"),
                 .linkedLibrary("c++"),

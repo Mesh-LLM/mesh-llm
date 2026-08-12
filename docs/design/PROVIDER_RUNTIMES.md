@@ -155,12 +155,25 @@ APIs. The host runtime now consumes the contract through its experimental Apple
 provider supervisor, which owns platform policy, process lifecycle, health, and
 local route registration.
 
-The next stacked layer packages that same artifact and lifecycle for every
-host-capable macOS SDK. The Rust SDK now accepts carrier bundle roots, an
-optional release index/cache, and explicit download permission through its
-embedded-node builder. The typed configuration flows into the same resolver
-without mutating or inheriting process-global provider discovery environment.
-Provider-only Rust hosts also skip the unrelated Skippy native-runtime load.
-Swift, Node/Electron, and Kotlin/JVM should map their resource locations into
-this contract rather than reimplement Foundation Models semantics or create
-divergent sidecars.
+Every host-capable macOS SDK packages that same artifact and lifecycle. The
+Rust SDK accepts carrier bundle roots, an optional release index/cache, and
+explicit download permission through `ProviderHostConfig`. Swift and
+Kotlin/JVM call it through UniFFI; Node/Electron calls it through N-API. The
+typed configuration flows into the same resolver without mutating or
+inheriting process-global provider-discovery environment. Provider-only hosts
+also skip the unrelated Skippy native-runtime load.
+
+Carrier resources are deliberately mechanical:
+
+| SDK | Packaged location | Runtime handling |
+|---|---|---|
+| SwiftPM | macOS-only `MeshLLMAppleProviderResources` target | use the resource directory in place |
+| npm / Electron | optional `@mesh-llm/apple-runtime-darwin-arm64` package | ship outside ASAR so the executable remains a file |
+| Kotlin/JVM | `meshllm-apple-runtime-macos-arm64` resource JAR | extract the manifest-listed files to an empty private directory and restore the executable bit |
+
+`scripts/package-sdk-provider-runtime.sh` copies the exact signed bytes into
+these layouts. `just apple::sdk-carriers` then certifies every wrapper with one
+REST suite. SDKs must not reinterpret Foundation Models semantics, fork the
+sidecar, or silently fall back to a different model. Platform resource packages
+remain separate so Linux/Windows npm installs and iOS/Android artifacts never
+carry a macOS executable.

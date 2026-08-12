@@ -8,6 +8,7 @@ use mesh_llm_sdk::node::{
     ChatMessage, ChatRequest, DevicePolicy, DownloadOptions, InviteToken, LoadModelOptions,
     MeshNode, OwnerKeypair, ResponsesRequest, UnloadModelOptions, UnloadTarget,
 };
+use mesh_llm_sdk::provider_host::{ProviderHost as SdkProviderHost, ProviderHostConfig};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
@@ -101,6 +102,54 @@ pub struct Node {
 pub struct ConsoleHandle {
     inner: Arc<Mutex<Option<mesh_llm_sdk::console::ConsoleServerHandle>>>,
     url: String,
+}
+
+#[napi]
+pub struct ProviderHost {
+    host: tokio::sync::Mutex<Option<SdkProviderHost>>,
+    api_base_url: String,
+}
+
+#[napi]
+impl ProviderHost {
+    #[napi(factory)]
+    pub async fn start(options_json: String) -> Result<Self> {
+        let config = parse_provider_host_config(&options_json)?;
+        let host = SdkProviderHost::start(config)
+            .await
+            .map_err(to_napi_error)?;
+        let api_base_url = host.api_base_url().to_string();
+        Ok(Self {
+            host: tokio::sync::Mutex::new(Some(host)),
+            api_base_url,
+        })
+    }
+
+    #[napi(getter)]
+    pub fn api_base_url(&self) -> String {
+        self.api_base_url.clone()
+    }
+
+    #[napi(js_name = "statusJson")]
+    pub async fn status_json(&self) -> Result<String> {
+        let host = self.host.lock().await;
+        let host = host
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("provider host is stopped"))?;
+        host.status()
+            .await
+            .map(|status| status.to_string())
+            .map_err(to_napi_error)
+    }
+
+    #[napi]
+    pub async fn stop(&self) -> Result<()> {
+        let host = self.host.lock().await.take();
+        if let Some(host) = host {
+            host.stop().await.map_err(to_napi_error)?;
+        }
+        Ok(())
+    }
 }
 
 #[napi]
@@ -736,6 +785,29 @@ fn parse_native_runtime_install_options(
     })
 }
 
+fn parse_provider_host_config(source: &str) -> Result<ProviderHostConfig> {
+    let value = parse_json(source)?;
+    Ok(ProviderHostConfig {
+        bundle_roots: string_array(&value, "bundleRoots")
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+        release_manifest: optional_string(&value, "releaseManifest").map(PathBuf::from),
+        cache_dir: optional_string(&value, "cacheDir").map(PathBuf::from),
+        allow_download: value
+            .get("allowDownload")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        startup_timeout: Duration::from_millis(
+            value
+                .get("startupTimeoutMs")
+                .and_then(Value::as_u64)
+                .unwrap_or(30_000)
+                .max(1),
+        ),
+    })
+}
+
 fn optional_string(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
@@ -923,4 +995,35 @@ fn new_request_id() -> String {
         "node-local-{}",
         NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_host_json_maps_typed_carrier_configuration() {
+        let config = parse_provider_host_config(
+            r#"{
+                "bundleRoots":["/app/provider-runtimes/apple"],
+                "releaseManifest":"/app/provider-runtimes.json",
+                "cacheDir":"/cache/providers",
+                "allowDownload":true,
+                "startupTimeoutMs":45000
+            }"#,
+        )
+        .expect("provider host config");
+
+        assert_eq!(
+            config.bundle_roots,
+            vec![PathBuf::from("/app/provider-runtimes/apple")]
+        );
+        assert_eq!(
+            config.release_manifest,
+            Some(PathBuf::from("/app/provider-runtimes.json"))
+        );
+        assert_eq!(config.cache_dir, Some(PathBuf::from("/cache/providers")));
+        assert!(config.allow_download);
+        assert_eq!(config.startup_timeout, Duration::from_secs(45));
+    }
 }

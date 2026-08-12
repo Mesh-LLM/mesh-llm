@@ -389,7 +389,34 @@ caveats, and rollout gates.
 |---|---|---|
 | 0 | Policy, entitlement, packaging, signing, launchd, and accelerator spike | complete |
 | 1 | Local `apple/system` REST vertical slice | experimental implementation complete |
-| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | CLI and Rust SDK carriers implemented; Swift, Node/Electron, and Kotlin/JVM pending |
+| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | implemented experimentally for Rust, Swift, Node/Electron, and Kotlin/JVM; release publication and signed-app sandbox certification remain |
 | 3 | Private-mesh routing, load, failover, affinity, and withdrawal | not implemented |
 
 This runtime does not alter the Skippy ABI or use Skippy stage execution.
+
+## SDK carrier conformance
+
+Every macOS carrier supervises the same `mesh-apple-runtime` executable and
+receives an OpenAI-compatible loopback base URL. No language SDK implements
+Foundation Models prompts, tools, model identity, or cancellation itself.
+
+On Apple silicon running macOS Golden Gate with Xcode and JDK 21 installed:
+
+```bash
+just apple::sdk-carriers
+```
+
+The command builds the Swift, Node/Electron, and Kotlin/JVM native bridges,
+starts each carrier in turn, and runs the shared REST suite. Evidence is written
+to `target/apple-runtime/sdk-carriers/summary.json`, including completion text
+and tool executions for every carrier.
+
+To prepare publishable SDK source trees from an already signed provider bundle:
+
+```bash
+just apple::sdk-package
+```
+
+Release automation must run that packaging step with the already notarized
+artifact. It must not rebuild or re-sign the sidecar independently for npm,
+SwiftPM, or Maven.

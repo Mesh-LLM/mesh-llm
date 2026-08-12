@@ -135,6 +135,32 @@ MESH_SDK_MODEL_REF=Qwen2.5-3B-Instruct-Q4_K_M \
 ./gradlew --no-daemon run -p sdk/kotlin/example/example-jvm
 ```
 
+## Apple system model on macOS Golden Gate
+
+Add the platform resource JAR beside the normal Kotlin/JVM SDK:
+
+```kotlin
+runtimeOnly("ai.meshllm:meshllm-apple-runtime-macos-arm64:0.72.1")
+```
+
+Release preparation copies the shared sidecar into that JAR's resources:
+
+```bash
+scripts/package-sdk-provider-runtime.sh --sdk kotlin
+```
+
+```kotlin
+val host = ProviderHost.start(ProviderRuntimeOptions.packagedAppleSystem())
+println(host.apiBaseUrl) // http://127.0.0.1:<port>/v1
+println(host.statusJson())
+host.stop()
+```
+
+The wrapper extracts only manifest-listed files to an empty private directory,
+restores the sidecar executable bit, and removes its transient extraction after
+the host stops. Android packages do not depend on or advertise this macOS-only
+runtime.
+
 ## Optional Console Assets
 
 Published Kotlin/JVM and Android packages include the built console resources

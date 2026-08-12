@@ -154,6 +154,29 @@ export type NodeOptions = {
   servingEnabled?: boolean
 }
 
+export type ProviderRuntimeOptions = {
+  bundleRoots: string[]
+  releaseManifest?: string
+  cacheDir?: string
+  allowDownload?: boolean
+  startupTimeoutMs?: number
+}
+
+export declare class ProviderHost {
+  static start(options: ProviderRuntimeOptions): Promise<ProviderHost>
+  readonly apiBaseUrl: string
+  status(): Promise<unknown>
+  stop(): Promise<void>
+}
+
+export declare function packagedAppleSystemProvider(options?: {
+  rootDir?: string
+  releaseManifest?: string
+  cacheDir?: string
+  allowDownload?: boolean
+  startupTimeoutMs?: number
+}): ProviderRuntimeOptions
+
 export type ConsoleOptions = {
   assetDir?: string
   port?: number

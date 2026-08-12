@@ -39,9 +39,11 @@ RUSTUP_RUSTC="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc"
 if [ ! -x "$RUSTUP_RUSTC" ]; then
   # Fallback: find any stable toolchain
   STABLE_TOOLCHAIN=$(rustup toolchain list | grep stable | head -1 | awk '{print $1}')
-  RUSTUP_RUSTC="$(rustup run "$STABLE_TOOLCHAIN" which rustc)"
+  RUSTUP_RUSTC="$(rustup which --toolchain "$STABLE_TOOLCHAIN" rustc)"
 fi
 echo "Using rustc: $RUSTUP_RUSTC"
+RUSTUP_CARGO="$(dirname "$RUSTUP_RUSTC")/cargo"
+echo "Using cargo: $RUSTUP_CARGO"
 
 build_llama_for_target() {
   local RUST_TARGET="$1"
@@ -83,7 +85,7 @@ build_rust_target() {
   esac
 
   env "${CARGO_ENV[@]}" \
-    cargo build --release -p mesh-llm-ffi --target "$RUST_TARGET" --no-default-features --features "$RUST_FEATURES"
+    "$RUSTUP_CARGO" build --release -p mesh-llm-ffi --target "$RUST_TARGET" --no-default-features --features "$RUST_FEATURES"
 }
 
 build_apple_target() {

@@ -28,6 +28,9 @@ pub mod node {
 pub mod embedded_node;
 
 #[cfg(feature = "serving")]
+pub mod provider_host;
+
+#[cfg(feature = "serving")]
 pub use embedded_node::{MeshNode, MeshNodeBuilder, MeshNodeStatus, OpenAiClient};
 
 #[cfg(feature = "serving")]

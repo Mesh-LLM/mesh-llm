@@ -1234,6 +1234,141 @@ public func FfiConverterTypeMeshNodeHandle_lower(_ value: MeshNodeHandle) -> UIn
 
 
 
+
+
+public protocol ProviderHostHandleProtocol: AnyObject, Sendable {
+
+    func apiBaseUrl()  -> String
+
+    func statusJson() throws  -> String
+
+    func stop() throws
+
+}
+open class ProviderHostHandle: ProviderHostHandleProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_meshllm_ffi_fn_clone_providerhosthandle(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_meshllm_ffi_fn_free_providerhosthandle(handle, $0) }
+    }
+
+
+
+
+open func apiBaseUrl() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_meshllm_ffi_fn_method_providerhosthandle_api_base_url(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+
+open func statusJson()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_meshllm_ffi_fn_method_providerhosthandle_status_json(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+
+open func stop()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_meshllm_ffi_fn_method_providerhosthandle_stop(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProviderHostHandle: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = ProviderHostHandle
+
+    public static func lift(_ handle: UInt64) throws -> ProviderHostHandle {
+        return ProviderHostHandle(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: ProviderHostHandle) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProviderHostHandle {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: ProviderHostHandle, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProviderHostHandle_lift(_ handle: UInt64) throws -> ProviderHostHandle {
+    return try FfiConverterTypeProviderHostHandle.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProviderHostHandle_lower(_ value: ProviderHostHandle) -> UInt64 {
+    return FfiConverterTypeProviderHostHandle.lower(value)
+}
+
+
+
+
 public struct ChatMessageNative: Equatable, Hashable {
     public var role: String
     public var content: String
@@ -2555,6 +2690,72 @@ public func FfiConverterTypeNativeRuntimePruneResultNative_lift(_ buf: RustBuffe
 #endif
 public func FfiConverterTypeNativeRuntimePruneResultNative_lower(_ value: NativeRuntimePruneResultNative) -> RustBuffer {
     return FfiConverterTypeNativeRuntimePruneResultNative.lower(value)
+}
+
+
+public struct ProviderRuntimeOptionsNative: Equatable, Hashable {
+    public var bundleRoots: [String]
+    public var releaseManifest: String?
+    public var cacheDir: String?
+    public var allowDownload: Bool
+    public var startupTimeoutMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(bundleRoots: [String], releaseManifest: String?, cacheDir: String?, allowDownload: Bool, startupTimeoutMs: UInt64) {
+        self.bundleRoots = bundleRoots
+        self.releaseManifest = releaseManifest
+        self.cacheDir = cacheDir
+        self.allowDownload = allowDownload
+        self.startupTimeoutMs = startupTimeoutMs
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ProviderRuntimeOptionsNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProviderRuntimeOptionsNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProviderRuntimeOptionsNative {
+        return
+            try ProviderRuntimeOptionsNative(
+                bundleRoots: FfiConverterSequenceString.read(from: &buf),
+                releaseManifest: FfiConverterOptionString.read(from: &buf),
+                cacheDir: FfiConverterOptionString.read(from: &buf),
+                allowDownload: FfiConverterBool.read(from: &buf),
+                startupTimeoutMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProviderRuntimeOptionsNative, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.bundleRoots, into: &buf)
+        FfiConverterOptionString.write(value.releaseManifest, into: &buf)
+        FfiConverterOptionString.write(value.cacheDir, into: &buf)
+        FfiConverterBool.write(value.allowDownload, into: &buf)
+        FfiConverterUInt64.write(value.startupTimeoutMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProviderRuntimeOptionsNative_lift(_ buf: RustBuffer) throws -> ProviderRuntimeOptionsNative {
+    return try FfiConverterTypeProviderRuntimeOptionsNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProviderRuntimeOptionsNative_lower(_ value: ProviderRuntimeOptionsNative) -> RustBuffer {
+    return FfiConverterTypeProviderRuntimeOptionsNative.lower(value)
 }
 
 
@@ -4688,6 +4889,13 @@ public func removeNativeRuntime(cacheDir: String?, meshVersion: String, nativeRu
     )
 })
 }
+public func startProviderHost(options: ProviderRuntimeOptionsNative)throws  -> ProviderHostHandle  {
+    return try  FfiConverterTypeProviderHostHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_meshllm_ffi_fn_func_start_provider_host(
+        FfiConverterTypeProviderRuntimeOptionsNative_lower(options),$0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -4738,6 +4946,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 48639) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_func_start_provider_host() != 55013) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 13931) {
@@ -4843,6 +5054,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id() != 21862) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_providerhosthandle_api_base_url() != 2817) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_providerhosthandle_status_json() != 3874) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_providerhosthandle_stop() != 23768) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_eventlistener_on_event() != 56769) {

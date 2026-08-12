@@ -13,7 +13,12 @@ let hasRemoteFFIXCFramework =
     !remoteFFIXCFrameworkURL.contains("__MESH_SWIFT_RELEASE_TAG__")
     && !remoteFFIXCFrameworkChecksum.contains("__MESH_SWIFT_RELEASE_CHECKSUM__")
 
-var meshLLMDependencies: [Target.Dependency] = []
+var meshLLMDependencies: [Target.Dependency] = [
+    .target(
+        name: "MeshLLMAppleProviderResources",
+        condition: .when(platforms: [.macOS])
+    ),
+]
 var packageTargets: [Target] = []
 
 if hasLocalFFIXCFramework {
@@ -62,6 +67,7 @@ let package = Package(
                 .linkedFramework("Accelerate"),
                 .linkedFramework("AppKit", .when(platforms: [.macOS])),
                 .linkedFramework("CoreGraphics"),
+                .linkedFramework("CoreWLAN", .when(platforms: [.macOS])),
                 .linkedFramework("Foundation"),
                 .linkedFramework("Metal"),
                 .linkedFramework("MetalKit"),
@@ -73,6 +79,11 @@ let package = Package(
             name: "MeshLLMTests",
             dependencies: ["MeshLLM"],
             path: "sdk/swift/Tests/MeshLLMTests"
+        ),
+        .target(
+            name: "MeshLLMAppleProviderResources",
+            path: "sdk/swift/Sources/MeshLLMAppleProviderResources",
+            resources: [.copy("Resources/apple")]
         ),
     ] + packageTargets
 )

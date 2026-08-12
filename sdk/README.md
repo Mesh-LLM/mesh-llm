@@ -53,5 +53,11 @@ Generated UniFFI source bindings are refreshed from
 `crates/mesh-llm-ffi/src/mesh_ffi.udl`. Apple binary artifacts such as
 `MeshLLMFFI.xcframework` are build outputs and should not be checked in.
 
+The experimental Golden Gate provider is one signed Swift sidecar shared by
+Rust, Swift, Node/Electron, and Kotlin/JVM. Language SDKs only package its path
+and bind the shared Rust `ProviderHost` lifecycle. Prepare carrier resources
+with `scripts/package-sdk-provider-runtime.sh`; certify all macOS wrappers with
+`just apple::sdk-carriers`.
+
 If you add another top-level SDK here, include a `README.md` in that SDK
 directory explaining its packaging and public surface.

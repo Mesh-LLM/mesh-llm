@@ -87,9 +87,35 @@ In an Electron app, package both:
 - `native/<platform>-<arch>/mesh_llm_nodejs.node`
 - the selected `meshllm-native-runtime-*` runtime artifact directory
 - optional `console/` assets when using `node.startConsole()`
+- the optional `@mesh-llm/apple-runtime-darwin-arm64` package when exposing
+  `apple/system` on Golden Gate
 
 Then pass the packaged artifact directory to `resolveNativeRuntime()` before
 creating a serving-enabled node.
+
+## Apple system model on macOS Golden Gate
+
+The experimental provider host starts the packaged Apple sidecar and returns
+the normal OpenAI-compatible loopback URL:
+
+```js
+const {
+  ProviderHost,
+  packagedAppleSystemProvider
+} = require('@mesh-llm/sdk')
+
+const host = await ProviderHost.start(packagedAppleSystemProvider())
+console.log(host.apiBaseUrl) // http://127.0.0.1:<port>/v1
+console.log(await host.status())
+await host.stop()
+```
+
+Run `scripts/package-sdk-provider-runtime.sh --sdk node` before publishing the
+platform package. It is an optional dependency of `@mesh-llm/sdk` and is
+installed only on Darwin arm64. Electron packagers must keep the package's
+`runtime/**` outside ASAR (for example with `asarUnpack`) because macOS must
+execute and verify the real signed file. The Node process owns lifecycle;
+`mesh-apple-runtime` is the one process that receives Apple accelerator access.
 
 ## Optional Console
 
