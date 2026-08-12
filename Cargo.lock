@@ -4170,6 +4170,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-provider-runtime"
+version = "0.72.1"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "futures-util",
+ "reqwest 0.12.28",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "zip",
+]
+
+[[package]]
 name = "mesh-llm-release-footer"
 version = "0.76.0-rc7"
 dependencies = [

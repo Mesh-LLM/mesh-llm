@@ -238,6 +238,7 @@ tool, client-disconnect cancellation, and slot reuse after cancellation.
 
 ```bash
 just apple::live
+just apple::contract
 just apple::carriers
 just apple::launchd
 just apple::instruments
@@ -247,6 +248,9 @@ just apple::orphan
 `just apple::instruments` writes unencrypted prompts and responses into ignored
 files under `target/apple-runtime/instruments/`. Only its aggregate
 `summary.json` is suitable for sharing.
+
+`just apple::contract` verifies `provider-runtime.json`, every declared file
+digest, and the executable bit through the shared Rust provider-runtime crate.
 
 ## Packaging and signing
 
@@ -272,7 +276,7 @@ caveats, and rollout gates.
 |---|---|---|
 | 0 | Policy, entitlement, packaging, signing, launchd, and accelerator spike | complete |
 | 1 | Local `apple/system` REST vertical slice | experimental implementation complete |
-| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | not implemented |
+| 2 | All host-capable macOS SDKs drive the same runtime lifecycle | provider artifact contract implemented; supervisor and SDK lifecycle pending |
 | 3 | Private-mesh routing, load, failover, affinity, and withdrawal | not implemented |
 
 This runtime does not alter the Skippy ABI or use Skippy stage execution.

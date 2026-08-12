@@ -12,7 +12,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ -f "$PACKAGE_ROOT/manifest.json" ]] || {
+[[ -f "$PACKAGE_ROOT/provider-runtime.json" ]] || {
     echo "missing Apple runtime package; run just apple::package" >&2
     exit 2
 }
@@ -38,7 +38,7 @@ for layout in "${layouts[@]}"; do
     "$binary" status > "$OUTPUT_DIR/$name.json"
 done
 
-python3 - "$PACKAGE_ROOT/manifest.json" "$OUTPUT_DIR" <<'PY'
+python3 - "$PACKAGE_ROOT/provider-runtime.json" "$OUTPUT_DIR" <<'PY'
 import hashlib
 import json
 import pathlib

@@ -118,7 +118,7 @@ The package output is a carrier-neutral directory:
 
 ```text
 meshllm-apple-runtime-darwin-arm64/
-├── manifest.json
+├── provider-runtime.json
 ├── README.md
 ├── Resources/background-inference.entitlements
 └── bin/mesh-apple-runtime
@@ -283,7 +283,9 @@ supervisor and conformance mapping into MeshLLM's public OpenAI frontend.
 
 ### 2. All host-capable macOS SDKs
 
-Publish one signed macOS arm64 runtime artifact; teach CLI/Swift/npm/JVM
+The shared executable-provider manifest, resolver, verified downloader, and
+immutable cache contract now live in `mesh-llm-provider-runtime`. Next, publish
+one signed macOS arm64 runtime artifact and teach CLI/Swift/npm/JVM
 resolvers to install, locate, launch, monitor, upgrade, and terminate it; add
 checksum policy; validate Swift app embedding, sandboxing, notarization,
 quarantine, and launchd/service lifecycles; then certify all SDKs against one

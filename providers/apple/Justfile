@@ -20,6 +20,11 @@ live: build
 package:
     @"{{ apple_root }}/Packaging/package.sh"
 
+# Validate the packaged executable-provider manifest with the shared Rust contract.
+contract: package
+    @just with-lld cargo run --quiet -p mesh-llm-provider-runtime --example inspect -- \
+      "{{ apple_root }}/../../target/apple-runtime/package/meshllm-apple-runtime-darwin-arm64"
+
 # Exercise models, completion, streaming, tools, and disconnect cancellation over REST.
 rest: package
     @"{{ apple_root }}/QA/rest.sh"
