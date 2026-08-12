@@ -186,7 +186,8 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         smoke = (
             ROOT / ".github" / "workflows" / "smoke.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("runs-on: ubuntu-24.04", smoke)
+        self.assertIn("default: 'ubuntu-24.04'", smoke)
+        self.assertIn("|| 'ubuntu-24.04'", smoke)
 
     def test_swift_release_reuses_full_typed_producer(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")

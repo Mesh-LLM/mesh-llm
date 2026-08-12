@@ -3,6 +3,11 @@ name: Reusable Swift SDK Artifact
 on:
   workflow_call:
     inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
       mode:
         description: "XCFramework coverage: host-only for PR iteration or full for main/release."
         required: true
@@ -57,10 +62,11 @@ jobs:
       LLAMA_STAGE_BACKEND: metal
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'READ_ONLY' || 'READ_WRITE' }}
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'READ_ONLY' || 'READ_WRITE' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Validate typed producer inputs

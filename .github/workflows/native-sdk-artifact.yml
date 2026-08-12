@@ -3,6 +3,11 @@ name: Reusable Native SDK Artifact
 on:
   workflow_call:
     inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
       backend:
         description: Native SDK backend.
         required: true
@@ -64,6 +69,11 @@ on:
         required: false
         default: 60
         type: number
+      use_depot:
+        description: Opt into the guarded main-only Depot canary.
+        required: false
+        default: false
+        type: boolean
 
 env:
   CARGO_INCREMENTAL: "0"
@@ -89,9 +99,9 @@ jobs:
         env:
           POLICY_REPOSITORY: ${{ github.repository }}
           POLICY_REF: ${{ github.ref }}
-          POLICY_EVENT_NAME: ${{ github.event_name }}
+          POLICY_EVENT_NAME: ${{ github.event.inputs.original_event_name || github.event_name }}
           POLICY_DEPOT_ENABLED: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
-          POLICY_MANUAL_USE_DEPOT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.use_depot == 'true' }}
+          POLICY_MANUAL_USE_DEPOT: ${{ inputs.use_depot }}
           POLICY_TARGET: ${{ inputs.target }}
           POLICY_RUNNER_SIZE: ${{ inputs.runner_size }}
         run: |
@@ -162,6 +172,7 @@ jobs:
       runner_size: ${{ inputs.runner_size }}
       retention_days: ${{ inputs.retention_days }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
+      use_depot: ${{ inputs.use_depot }}
 
   linux_native_sdk_artifact:
     needs: [runner_policy, produce_linux_static_abi]
@@ -185,6 +196,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Trust checkout directory
@@ -285,6 +297,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Validate release preparation inputs

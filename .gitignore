@@ -12,7 +12,10 @@ mesh-bundle.tar.gz
 crates/mesh-llm-ui/dist/
 evals/results/
 .sisyphus/
-.omo/
+.omo/*
+!.omo/specs/
+.omo/specs/*
+!.omo/specs/pr-ci-optimization.md
 .playwright-mcp/
 .envrc
 .moe-cache/

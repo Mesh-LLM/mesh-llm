@@ -57,6 +57,7 @@ runs:
       shell: bash
       env:
         INPUT_EVENT_NAME: ${{ inputs.event_name }}
+        DISPATCH_ORIGINAL_EVENT_NAME: ${{ github.event.inputs.original_event_name || '' }}
         INPUT_REF: ${{ inputs.ref }}
         INPUT_DEPOT_MAIN_ENABLED: ${{ inputs.depot_main_enabled }}
         INPUT_MANUAL_USE_DEPOT: ${{ inputs.manual_use_depot }}
@@ -75,7 +76,14 @@ runs:
         done
 
         depot_enabled=false
-        case "$INPUT_EVENT_NAME" in
+        effective_event_name="$INPUT_EVENT_NAME"
+        if [[ "$INPUT_EVENT_NAME" == "workflow_dispatch" ]]; then
+          case "${DISPATCH_ORIGINAL_EVENT_NAME:-}" in
+            pull_request|pull_request_target) effective_event_name=pull_request ;;
+            push) effective_event_name=push ;;
+          esac
+        fi
+        case "$effective_event_name" in
           pull_request|pull_request_target)
             # Current PR workflows and local actions are evaluated from
             # PR-controlled code. A repository variable or same-repo check

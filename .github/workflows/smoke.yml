@@ -3,6 +3,11 @@ name: Reusable Smoke Tests
 on:
   workflow_call:
     inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
       artifact_name:
         required: true
         type: string
@@ -24,6 +29,10 @@ on:
         required: false
         default: 'ci-artifacts/linux'
         type: string
+      timeout_minutes:
+        required: false
+        default: 30
+        type: number
     secrets:
       HF_TOKEN:
         required: false
@@ -40,14 +49,17 @@ jobs:
   smoke_tests:
     name: Skippy Inference Smoke Tests
     if: inputs.runner != 'macos-15'
-    # Model credentials stay on an isolated GitHub-hosted runner.
-    runs-on: ubuntu-24.04
+    # gpu-nvidia is the approved ephemeral, repository-scoped exception for
+    # uncredentialed PR CUDA smoke. Other credential-bearing smoke stays hosted.
+    runs-on: ${{ inputs.runner == 'gpu-nvidia' && fromJSON('["self-hosted","Linux","X64","amd64","gpu-nvidia","mesh-llm-amd64","mesh-llm"]') || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Prepare dispatched release version
@@ -74,6 +86,15 @@ jobs:
           python -m pip install --upgrade pip -r ci/requirements-ci-python.txt
           npm install --global openai
 
+      - name: Install CUDA smoke runtime libraries
+        if: inputs.runner == 'gpu-nvidia'
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            cuda-cudart-12-9 \
+            libcublas-12-9
+          nvidia-smi --query-gpu=name,compute_cap,driver_version \
+            --format=csv,noheader
+
       - uses: ./.github/actions/restore-smoke-inputs
         with:
           artifact_name: ${{ inputs.artifact_name }}
@@ -83,7 +104,7 @@ jobs:
           model_file: ${{ env.MODEL_FILE }}
           model_cache_scope: inference-smoke-model
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
-          save_model_cache: ${{ github.ref == 'refs/heads/main' }}
+          save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
 
       - name: Smoke test real skippy inference
         run: |
@@ -122,12 +143,14 @@ jobs:
     if: inputs.runner == 'macos-15'
     # Model credentials stay on an isolated GitHub-hosted runner.
     runs-on: macos-15
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Prepare dispatched release version
@@ -161,7 +184,7 @@ jobs:
           model_file: ${{ env.MODEL_FILE }}
           model_cache_scope: inference-smoke-model
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
-          save_model_cache: ${{ github.ref == 'refs/heads/main' }}
+          save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
 
       - name: Smoke test real skippy inference
         run: |

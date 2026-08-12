@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "pr-draft": {
+      "base_slices": ["quality"],
+      "control_slices": ["quality", "runner-contract"],
+      "all_rows": false,
+      "budgets": {
+        "linux_max_parallel": 7,
+        "macos_max_parallel": 2,
+        "windows_max_parallel": 1,
+        "total_max_workers": 10
+      }
+    },
+    "pr-ready": {
+      "base_slices": ["quality"],
+      "control_slices": [
+        "quality",
+        "web",
+        "ui-artifact",
+        "static-abi",
+        "rust-tests",
+        "runtime-product",
+        "platform-checks",
+        "product-smoke",
+        "model-download",
+        "sdk",
+        "runner-contract"
+      ],
+      "all_rows": false,
+      "budgets": {
+        "linux_max_parallel": 7,
+        "macos_max_parallel": 2,
+        "windows_max_parallel": 1,
+        "total_max_workers": 10
+      }
+    },
+    "main": {
+      "base_slices": [
+        "quality",
+        "web",
+        "ui-artifact",
+        "static-abi",
+        "rust-tests",
+        "runtime-product",
+        "platform-checks",
+        "product-smoke",
+        "model-download",
+        "sdk",
+        "runner-contract"
+      ],
+      "control_slices": [
+        "quality",
+        "web",
+        "ui-artifact",
+        "static-abi",
+        "rust-tests",
+        "runtime-product",
+        "platform-checks",
+        "product-smoke",
+        "model-download",
+        "sdk",
+        "runner-contract"
+      ],
+      "all_rows": true,
+      "budgets": {
+        "linux_max_parallel": 12,
+        "macos_max_parallel": 4,
+        "windows_max_parallel": 2,
+        "total_max_workers": 18
+      }
+    },
+    "manual-full": {
+      "base_slices": [
+        "quality",
+        "web",
+        "ui-artifact",
+        "static-abi",
+        "rust-tests",
+        "runtime-product",
+        "platform-checks",
+        "product-smoke",
+        "model-download",
+        "sdk",
+        "runner-contract"
+      ],
+      "control_slices": [
+        "quality",
+        "web",
+        "ui-artifact",
+        "static-abi",
+        "rust-tests",
+        "runtime-product",
+        "platform-checks",
+        "product-smoke",
+        "model-download",
+        "sdk",
+        "runner-contract"
+      ],
+      "all_rows": true,
+      "budgets": {
+        "linux_max_parallel": 12,
+        "macos_max_parallel": 4,
+        "windows_max_parallel": 2,
+        "total_max_workers": 18
+      }
+    }
+  },
+  "domain_rules": [
+    {"domain": "ci-control", "slices": ["runner-contract"]},
+    {"domain": "docs", "slices": []},
+    {"domain": "tooling", "slices": ["quality"]},
+    {"domain": "cli", "slices": ["quality"]},
+    {"domain": "rust", "slices": ["rust-tests"]},
+    {
+      "domain": "ui",
+      "slices": ["web", "ui-artifact", "runtime-product", "product-smoke"]
+    },
+    {"domain": "website", "slices": ["web"]},
+    {
+      "domain": "runtime-product",
+      "slices": ["runtime-product", "product-smoke", "rust-tests"]
+    },
+    {
+      "domain": "native-abi",
+      "slices": ["static-abi", "runtime-product", "product-smoke", "rust-tests"]
+    },
+    {
+      "domain": "protocol",
+      "slices": ["rust-tests", "runtime-product", "product-smoke"]
+    },
+    {
+      "domain": "split-serving",
+      "slices": ["rust-tests", "runtime-product", "product-smoke"]
+    },
+    {
+      "domain": "model-download",
+      "slices": ["model-download", "runtime-product", "product-smoke"]
+    },
+    {"domain": "sdk-rust", "slices": ["sdk", "runtime-product"]},
+    {"domain": "sdk-kotlin", "slices": ["sdk", "static-abi", "runtime-product"]},
+    {"domain": "sdk-swift", "slices": ["sdk", "runtime-product"]},
+    {
+      "domain": "platform-macos",
+      "slices": ["platform-checks", "runtime-product", "product-smoke"]
+    },
+    {
+      "domain": "platform-windows",
+      "slices": ["platform-checks", "runtime-product", "product-smoke"]
+    },
+    {
+      "domain": "platform-windows-storage",
+      "slices": ["platform-checks"]
+    },
+    {"domain": "backend-cuda", "slices": ["runtime-product", "product-smoke"]},
+    {"domain": "backend-rocm", "slices": ["runtime-product", "product-smoke"]},
+    {"domain": "backend-vulkan", "slices": ["runtime-product", "product-smoke"]},
+    {"domain": "runner-infra", "slices": ["runner-contract"]}
+  ],
+  "domain_rows": {
+    "runtime-product": ["linux-cpu"],
+    "ui": ["linux-cpu"],
+    "native-abi": ["linux-cpu"],
+    "protocol": ["linux-cpu"],
+    "split-serving": ["linux-cpu"],
+    "model-download": ["linux-cpu"],
+    "sdk-rust": ["linux-cpu"],
+    "sdk-kotlin": ["linux-cpu"],
+    "sdk-swift": ["macos-metal"],
+    "platform-macos": ["macos-metal"],
+    "platform-windows": ["windows-cpu"],
+    "backend-cuda": ["linux-cuda", "windows-cuda"],
+    "backend-rocm": ["linux-rocm", "windows-rocm"],
+    "backend-vulkan": ["linux-vulkan", "windows-vulkan"]
+  },
+  "smoke_domain_rows": {
+    "runtime-product": ["core", "two-node-client", "two-node-split"],
+    "ui": ["core"],
+    "native-abi": ["core"],
+    "protocol": ["two-node-client"],
+    "split-serving": ["two-node-split"],
+    "model-download": ["model-download"],
+    "platform-macos": ["metal-model-load"],
+    "platform-windows": ["core"],
+    "backend-cuda": ["core-cuda"],
+    "backend-rocm": ["core"],
+    "backend-vulkan": ["core"]
+  },
+  "platform_domain_rows": {
+  "platform-macos": ["macos-portable", "macos-unit"],
+    "platform-windows": ["windows-portable"],
+    "platform-windows-storage": ["windows-log-store"]
+  },
+  "sdk_domain_rows": {
+    "sdk-rust": ["rust"],
+    "sdk-kotlin": ["kotlin"],
+    "sdk-swift": ["swift"]
+  },
+  "runtime_rows": [
+    {"id": "linux-cpu", "platform": "linux", "architecture": "amd64", "backend": "cpu", "target": "x86_64-unknown-linux-gnu", "build_dir": ".deps/llama.cpp/build-stage-abi-dynamic-cpu", "container_image": "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d", "toolchain_epoch": "mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d", "verify_backend": "public", "runner_role": "linux-build-8", "profile": "ci"},
+    {"id": "linux-cuda", "platform": "linux", "architecture": "amd64", "backend": "cuda", "target": "x86_64-unknown-linux-gnu", "build_dir": ".deps/llama-build/build-stage-abi-dynamic-cuda-sm86-sm120", "container_image": "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd", "toolchain_epoch": "mesh-llm-cuda-runner-sha256-c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd", "verify_backend": "public cuda", "cuda_architectures": "86;120", "cuda_version": "12.9.2", "runner_role": "linux-native-16", "profile": "ci"},
+    {"id": "linux-rocm", "platform": "linux", "architecture": "amd64", "backend": "rocm", "target": "x86_64-unknown-linux-gnu", "build_dir": ".deps/llama-build/build-stage-abi-dynamic-rocm-gfx1100", "container_image": "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b88ca9371ada2c507d6e36b71f0e0538fee378c6a5e2b39c17249b4b7e5088a", "toolchain_epoch": "mesh-llm-cuda-runner-sha256-6b88ca9371ada2c507d6e36b71f0e0538fee378c6a5e2b39c17249b4b7e5088a", "verify_backend": "public rocm", "rocm_architectures": "gfx1100", "runner_role": "linux-native-16", "profile": "ci"},
+    {"id": "linux-vulkan", "platform": "linux", "architecture": "amd64", "backend": "vulkan", "target": "x86_64-unknown-linux-gnu", "build_dir": ".deps/llama-build/build-stage-abi-dynamic-vulkan", "container_image": "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80", "toolchain_epoch": "mesh-llm-cuda-runner-sha256-ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80", "verify_backend": "public vulkan", "runner_role": "linux-native-16", "profile": "ci"},
+    {"id": "macos-metal", "platform": "macos", "architecture": "arm64", "backend": "metal", "target": "aarch64-apple-darwin", "build_dir": ".deps/llama-build/build-stage-abi-dynamic-metal", "runner_role": "macos-build", "profile": "ci"},
+    {"id": "windows-cpu", "platform": "windows", "architecture": "amd64", "backend": "cpu", "target": "x86_64-pc-windows-msvc", "build_dir": ".deps/llama-build/windows/build-stage-abi-cpu", "runner_role": "windows-build", "profile": "ci"},
+    {"id": "windows-cuda", "platform": "windows", "architecture": "amd64", "backend": "cuda", "target": "x86_64-pc-windows-msvc", "build_dir": ".deps/llama-build/windows/build-stage-abi-cuda", "cuda_architectures": "75", "runner_role": "windows-build", "profile": "ci"},
+    {"id": "windows-rocm", "platform": "windows", "architecture": "amd64", "backend": "rocm", "target": "x86_64-pc-windows-msvc", "build_dir": ".deps/llama-build/windows/build-stage-abi-rocm", "rocm_architectures": "gfx1100", "runner_role": "windows-build", "profile": "ci"},
+    {"id": "windows-vulkan", "platform": "windows", "architecture": "amd64", "backend": "vulkan", "target": "x86_64-pc-windows-msvc", "build_dir": ".deps/llama-build/windows/build-stage-abi-vulkan", "runner_role": "windows-build", "profile": "ci"}
+  ],
+  "platform_rows": [
+  {"id": "macos-portable", "platform": "macos", "architecture": "arm64", "runner_role": "macos-build", "kind": "portable"},
+  {"id": "macos-unit", "platform": "macos", "architecture": "arm64", "runner_role": "macos-build", "kind": "unit"},
+    {"id": "windows-portable", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "portable"},
+    {"id": "windows-log-store", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "log-store"}
+  ],
+  "sdk_rows": [
+    {"id": "rust", "language": "rust", "platform": "linux", "architecture": "amd64", "runner_role": "linux-build-4"},
+    {"id": "kotlin", "language": "kotlin", "platform": "linux", "architecture": "amd64", "runner_role": "linux-build-8"},
+    {"id": "swift", "language": "swift", "platform": "macos", "architecture": "arm64", "runner_role": "macos-build"}
+  ],
+  "smoke_rows": [
+    {"id": "core", "kind": "core", "platform": "linux", "backend": "cpu", "runner_role": "linux-build-4"},
+    {"id": "core-cuda", "kind": "core", "platform": "linux", "backend": "cuda", "runner_role": "gpu-nvidia"},
+    {"id": "two-node-client", "kind": "two-node-client", "runner_role": "linux-build-4"},
+    {"id": "two-node-split", "kind": "two-node-split", "runner_role": "linux-build-8"},
+    {"id": "model-download", "kind": "model-download", "runner_role": "linux-build-4"},
+    {"id": "metal-model-load", "kind": "metal-model-load", "runner_role": "macos-build"}
+  ],
+  "batch_limits": {"clippy": 3, "rust_tests": 4},
+  "slices": [
+    {"id": "quality", "kind": "quality", "depends_on": [], "runner_role": "linux-plan", "cache_mode": "none"},
+    {"id": "web", "kind": "web", "depends_on": [], "runner_role": "linux-plan", "cache_mode": "pr-isolated"},
+    {"id": "ui-artifact", "kind": "ui-artifact", "depends_on": [], "runner_role": "linux-build-4", "cache_mode": "pr-isolated"},
+    {"id": "static-abi", "kind": "static-abi", "depends_on": [], "runner_role": "linux-native-16", "cache_mode": "pr-isolated"},
+    {"id": "rust-tests", "kind": "rust-tests", "depends_on": ["static-abi"], "runner_role": "linux-build-8", "cache_mode": "pr-isolated"},
+    {"id": "runtime-product", "kind": "runtime-product", "depends_on": ["ui-artifact"], "runner_role": "linux-native-16", "cache_mode": "pr-isolated"},
+    {"id": "platform-checks", "kind": "platform-checks", "depends_on": [], "runner_role": "platform-build", "cache_mode": "none"},
+    {"id": "product-smoke", "kind": "product-smoke", "depends_on": ["runtime-product"], "runner_role": "linux-build-4", "cache_mode": "none"},
+    {"id": "model-download", "kind": "model-download", "depends_on": [], "runner_role": "linux-build-4", "cache_mode": "none"},
+    {"id": "sdk", "kind": "sdk", "depends_on": ["runtime-product"], "runner_role": "platform-build", "cache_mode": "none"},
+    {"id": "runner-contract", "kind": "runner-contract", "depends_on": [], "runner_role": "linux-plan", "cache_mode": "none"}
+  ]
+}

@@ -1,0 +1,76 @@
+name: CI UI Artifact Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
+      artifact_name:
+        description: Immutable UI distribution artifact consumed by host builders.
+        required: true
+        type: string
+      retention_days:
+        description: Short retention for the per-run producer artifact.
+        required: false
+        default: 1
+        type: number
+
+permissions:
+  contents: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+
+jobs:
+  ui_artifact:
+    name: Build immutable console UI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: crates/mesh-llm-ui
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Configure isolated pnpm store
+        run: pnpm config set store-dir ~/.pnpm-store
+      - name: Restore pnpm store
+        id: pnpm_cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.pnpm-store
+          key: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
+          restore-keys: |
+            ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-
+      - name: Install UI dependencies
+        run: pnpm i --frozen-lockfile
+      - name: Save pnpm store
+        if: ${{ steps.pnpm_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.pnpm-store
+          key: ${{ steps.pnpm_cache.outputs.cache-primary-key }}
+      - name: Build console distribution
+        run: pnpm run build
+      - name: Verify console distribution
+        run: test -s dist/index.html
+      - name: Upload immutable console distribution
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: crates/mesh-llm-ui/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}

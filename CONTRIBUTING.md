@@ -138,12 +138,23 @@ On native Windows, `just check-release` runs the host-safe Rust/doc invariant su
 
 ## CI / GitHub Actions
 
-CI uses [`dorny/paths-filter`](https://github.com/dorny/paths-filter) to skip jobs when unchanged areas of the repo are modified. A `changes` detection job runs first on every push and PR, then each build job gates on its output.
+For the current PR and main topology, read [`ci/ci.md`](ci/ci.md), the
+[optimization spec](.omo/specs/pr-ci-optimization.md), and the canonical
+[`manage-ci` skill](.agents/skills/manage-ci/SKILL.md) before editing CI.
+`.github/AGENTS.md` enforces that sequence.
 
-For the current PR build topology, see [`ci/ci.md`](ci/ci.md). Agents must start
-every CI edit with the canonical
-[`manage-ci` skill](.agents/skills/manage-ci/SKILL.md); `.github/AGENTS.md`
-routes all GitHub workflow work there.
+`pr_builds.yml` and `ci.yml` are thin event entrypoints. On protected main,
+`ci-control.yml` computes one versioned plan from `ci/ownership.yml` and
+`ci/slices.yml`, then dispatches separate Quality, Website, Linux, macOS and
+Windows workflow graphs with bounded native inputs. The bootstrap orchestrator
+provides the same planned slices in one monolithic graph for forks, manual runs
+and the controller migration.
+A PR selects representative rows from the same catalog that `main` runs; it
+does not maintain a second build graph. GitHub-hosted runners are the PR
+provider.
+Trusted main Linux jobs may use Depot only through the checked runner policy;
+PR Depot execution and cache isolation are future work documented in
+[`ci/DEPOT_MIGRATION.md`](ci/DEPOT_MIGRATION.md).
 
 Linux CI uses prebuilt public and self-hosted images from
 [`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).
@@ -159,29 +170,48 @@ and pin its OCI digest. Do not add a one-off `apt-get`, `pip`, global `npm`,
 workflow. Existing workflow-local setup is migration debt, not a pattern for
 new jobs.
 
-### What triggers what
+### Routing and profiles
 
-| Changed paths | `PR Quality Checks` | `PR Builds` CPU/artifact rows | Backend target rows |
-| --- | --- | --- | --- |
-| Runtime-facing Rust crates | ✅ fmt/clippy | ✅ Linux/macOS artifacts and Windows routing as needed | ⏭ skipped unless backend inputs changed |
-| Rust tooling crates such as `tools/xtask/**` | ✅ fmt/clippy | ⏭ skipped unless another runtime/backend input changed | ⏭ skipped |
-| `third_party/llama.cpp/**`, `crates/skippy-ffi/**`, backend build scripts, cache-version, backend-relevant `Justfile` hunks | ✅ fmt/clippy when Rust is affected | ✅ runs | ✅ CUDA/ROCm/Vulkan rows run where supported |
-| Public website inputs (`website/**`, root install scripts, generated website paths) | ✅ website build canary | ⏭ skipped | ⏭ skipped |
-| `crates/mesh-llm-ui/**` | ✅ React console UI quality | ✅ Linux/macOS UI artifact paths | ⏭ skipped |
-| `**/*.md`, authored `docs/**`, anything docs-only | ✅ changes summary only | ⏭ skipped | ⏭ skipped |
-| Manual `workflow_dispatch` | ✅ runs | ✅ runs | ✅ runs |
+| Change class | PR profile | Main profile |
+| --- | --- | --- |
+| Draft pull request | `pr-draft`: quality plus the smallest affected signal and core smoke | n/a |
+| Ready pull request | `pr-ready`: complete targeted rows and affected Rust dependents | n/a |
+| Push to `main` | n/a | `main`: every workspace crate and supported product/platform/backend/SDK row |
+| Manual dispatch | `manual-full` when invoked from the PR entrypoint | `main`-equivalent full validation from `ci.yml` |
 
-### Verifying path filtering works
+Docs-only changes select the quality contract slice. UI, website, Rust,
+protocol, split-serving, model, backend, platform and SDK ownership selects the
+corresponding typed rows. CI-control and runner-infrastructure changes fail
+open to the control rows and supported product rows. Paths mapping only to
+documentation plus `ci-control` retain limited documentation routing instead
+of forcing all product rows. Unknown paths fail closed.
 
-To confirm builds are skipped on a docs-only change, open a PR and push a commit that touches only a `.md` file (e.g. add a blank line to `README.md`). All build jobs should appear as **Skipped** in the Actions tab — only the `changes` job runs.
+### Local validation and extensions
 
-To confirm UI-only changes skip backend jobs, push a commit touching only `crates/mesh-llm-ui/**`. UI quality and the CPU producer rows run, while Linux/Windows CUDA, ROCm, and Vulkan backend rows stay skipped.
+Run the narrow checks that match the change, plus the full contract suite for
+workflow changes:
 
-To confirm public website changes stay separate from Rust artifacts, push a commit touching only `website/**` or public website passthrough inputs. `PR Quality Checks` should run the website build canary, while `PR Builds` should skip Linux/macOS inference artifacts and Windows backend builds unless the same PR also changes runtime/backend inputs.
+```bash
+just ci-validate
+```
 
-### Adding new paths
+The canonical complete local gate is `just test-all`; it includes repository
+consistency, Rust formatting, Clippy, Rust tests, UI/docs builds, and E2E smoke.
+Use `just ci-shellcheck <changed-script>...` for changed shell scripts and
+`just check-release` when release-target consistency is in scope. These are the
+complete CI-definition and worktree checks; narrow checks do not replace
+`just test-all` when full repository validation is required.
 
-If you add a new Rust crate, build script, or test directory, update `.github/actions/compute-changes`, `scripts/affected-crates.sh`, and the relevant `pr_*.yml` path filters so PR and main routing agree.
+Planner fixtures and the CI repository-consistency recipes are included in
+`just ci-validate`. Use `just ci-crate-lists`, `just check-release`, or
+`just publish-crates` when iterating on the corresponding narrower contract.
+
+To add coverage, extend one typed reusable slice or local action, update the
+ownership/dependency/row catalog and planner fixtures, preserve immutable
+producer-to-consumer reachability, and add the slice to its lane's stable
+summary. Keep the controller's bounded projection and aggregate check contract
+in sync. Never copy a PR job into an entrypoint or accept a raw runner label.
+Validate the GitHub fallback before any provider rollout.
 
 ## GPU benchmark execution
 

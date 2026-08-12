@@ -1,0 +1,90 @@
+name: CI Web Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
+      ui_changed:
+        description: Whether the console UI source changed.
+        required: true
+        type: boolean
+      website_changed:
+        description: Whether the public website source changed.
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+
+jobs:
+  ui_quality:
+    name: Console UI quality
+    if: ${{ inputs.ui_changed }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: crates/mesh-llm-ui
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Configure isolated pnpm store
+        run: pnpm config set store-dir ~/.pnpm-store
+      - name: Restore pnpm store
+        id: pnpm_cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.pnpm-store
+          key: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
+          restore-keys: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-
+      - name: Install UI dependencies
+        run: pnpm i --frozen-lockfile
+      - name: Save pnpm store
+        if: ${{ steps.pnpm_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.pnpm-store
+          key: ${{ steps.pnpm_cache.outputs.cache-primary-key }}
+      - name: Lint UI
+        run: pnpm run lint
+      - name: Type-check UI
+        run: pnpm run typecheck
+      - name: Test UI
+        run: pnpm test
+
+  website:
+    name: Public website build
+    if: ${{ inputs.website_changed }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
+      - name: Install website dependencies
+        working-directory: website
+        run: npm ci
+      - name: Build public website
+        run: just website-build
