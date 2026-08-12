@@ -91,6 +91,8 @@ CONSUMER_DIR="$TMP_ROOT/consumer"
 mkdir -p "$CONSUMER_DIR/Sources" "$CONSUMER_DIR/Sources/Consumer"
 cp "$ARTIFACT_ZIP" "$CONSUMER_DIR/MeshLLMFFI.xcframework.zip"
 ln -s "$REPO_ROOT/sdk/swift/Sources/MeshLLM" "$CONSUMER_DIR/Sources/MeshLLM"
+ln -s "$REPO_ROOT/sdk/swift/Sources/MeshLLMAppleProviderResources" \
+  "$CONSUMER_DIR/Sources/MeshLLMAppleProviderResources"
 
 cat > "$CONSUMER_DIR/Package.swift" <<'EOF'
 // swift-tools-version: 5.9
@@ -108,7 +110,10 @@ let package = Package(
         ),
         .target(
             name: "MeshLLM",
-            dependencies: ["MeshLLMFFI"],
+            dependencies: [
+                "MeshLLMFFI",
+                "MeshLLMAppleProviderResources",
+            ],
             path: "Sources/MeshLLM",
             resources: [
                 .copy("Resources/Console"),
@@ -123,6 +128,11 @@ let package = Package(
                 .linkedFramework("SystemConfiguration"),
                 .linkedLibrary("c++"),
             ]
+        ),
+        .target(
+            name: "MeshLLMAppleProviderResources",
+            path: "Sources/MeshLLMAppleProviderResources",
+            resources: [.copy("Resources/apple")]
         ),
         .executableTarget(
             name: "Consumer",

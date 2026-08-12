@@ -571,9 +571,9 @@ pub fn start_provider_host(
     #[cfg(not(feature = "embedded-runtime"))]
     {
         let _ = options;
-        return Err(FfiError::ServingUnsupported(
+        Err(FfiError::ServingUnsupported(
             "this native library was built without embedded-runtime support".to_string(),
-        ));
+        ))
     }
     #[cfg(feature = "embedded-runtime")]
     {
