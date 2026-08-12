@@ -42,6 +42,24 @@ Core AI model bundles are explicit artifacts. The runtime does not discover or
 download arbitrary checkpoints. Set all three values to serve one published
 `.aimodel` resource directory:
 
+Apple's `coreai-models` repository currently publishes export recipes rather
+than binary model files. The smallest official macOS language model is Qwen3
+0.6B. Generate its 4-bit resource folder with the documented recipe:
+
+```bash
+git clone --depth 1 https://github.com/apple/coreai-models.git /tmp/coreai-models
+cd /tmp/coreai-models
+uv run coreai.model.registry --list-models
+uv run coreai.llm.export Qwen/Qwen3-0.6B \
+  --output-dir "$OLDPWD/target/apple-runtime/models/qwen3-0.6b"
+```
+
+The generated macOS resource folder is
+`qwen3_0_6b_4bit_dynamic/`, containing the `.aimodel` and tokenizer resources.
+Use that folder as `MESH_APPLE_COREAI_MODEL_ROOT` below. The registry also
+lists Qwen3 4B, 8B, Qwen3 Coder 30B-A3B, Gemma 3, Mistral, Mixtral, and GPT-OSS
+macOS recipes.
+
 ```bash
 export MESH_APPLE_COREAI_MODEL_ROOT="$PWD/path/to/Qwen3-4B.aimodel"
 export MESH_APPLE_COREAI_MODEL_ID="apple/coreai/qwen3-4b"
