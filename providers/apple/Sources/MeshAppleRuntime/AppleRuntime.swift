@@ -43,7 +43,7 @@ public actor AppleRuntime {
   }
 
   private func requireSystemModel(_ modelID: String) throws {
-    guard modelID == AppleRuntimeIdentifiers.systemModelID else {
+    guard AppleRuntimeIdentifiers.isSystemModelID(modelID) else {
       throw AppleRuntimeFailure(
         code: "model_not_found",
         message: "Apple runtime does not provide model '\(modelID)'",

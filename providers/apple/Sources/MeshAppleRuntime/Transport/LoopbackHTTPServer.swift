@@ -123,8 +123,21 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
 
   private func sendModels(over connection: NWConnection) async throws {
     let status = await runtime.status()
-    let models = status.models.map { model in
-      [
+    let models = status.models.flatMap { model -> [[String: Any]] in
+      var alias = modelObject(model, id: model.modelID)
+      if let versionedModelID = model.versionedModelID {
+        alias["resolved_model"] = versionedModelID
+        var versioned = modelObject(model, id: versionedModelID)
+        versioned["alias_of"] = model.modelID
+        return [alias, versioned]
+      }
+      return [alias]
+    }
+    try sendJSON(["object": "list", "data": models], over: connection)
+  }
+
+  private func modelObject(_ model: AppleModelStatus, id: String) -> [String: Any] {
+    var object = [
         "id": model.modelID,
         "object": "model",
         "owned_by": "apple",
@@ -133,8 +146,11 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
         "capabilities": model.capabilities,
         "variant": model.variant,
       ] as [String: Any]
-    }
-    try sendJSON(["object": "list", "data": models], over: connection)
+    object["id"] = id
+    object["model_version"] = model.modelVersion
+    object["version_source"] = model.versionSource
+    object["versioned_model_id"] = model.versionedModelID
+    return object
   }
 
   private func handleChat(_ body: Data, connection: NWConnection) async throws {
@@ -144,7 +160,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     } catch {
       throw HTTPFailure(status: 400, code: "invalid_json", message: String(describing: error))
     }
-    guard request.model == AppleRuntimeIdentifiers.systemModelID else {
+    guard AppleRuntimeIdentifiers.isSystemModelID(request.model) else {
       throw HTTPFailure(
         status: 404,
         code: "model_not_found",

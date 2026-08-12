@@ -62,6 +62,9 @@ assert status["runtimeID"] == "apple/runtime", status
 system_model = next(model for model in status["models"] if model["modelID"] == "apple/system")
 assert system_model["availability"] == "available", system_model
 assert system_model["contextSize"] > 0, system_model
+assert system_model["modelVersion"] == "27.0", system_model
+assert system_model["versionSource"] == "apple_os_release_band", system_model
+assert system_model["versionedModelID"] == "apple/system@27.0", system_model
 
 generated = events("generate")
 assert any(event.get("type") == "delta" for event in generated), generated
@@ -85,6 +88,9 @@ summary = {
     "runtime": status["runtimeID"],
     "model": system_model["modelID"],
     "variant": system_model["variant"],
+    "model_version": system_model["modelVersion"],
+    "version_source": system_model["versionSource"],
+    "versioned_model": system_model["versionedModelID"],
     "context_size": system_model["contextSize"],
     "capabilities": system_model["capabilities"],
     "generation": {

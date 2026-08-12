@@ -52,6 +52,7 @@ public actor SystemModelProvider {
 
   public func status() -> AppleModelStatus {
     let availability = availabilityFields(model.availability)
+    let modelVersion = AppleRuntimeIdentifiers.systemModelVersion
     var capabilities: [String] = []
     if model.capabilities.contains(.guidedGeneration) {
       capabilities.append("guided_generation")
@@ -74,10 +75,10 @@ public actor SystemModelProvider {
       supportedLanguages: model.supportedLanguages
         .map(languageIdentifier)
         .sorted(),
-      // Xcode 27 beta's public arm64 module does not currently expose a
-      // stable system-model build identifier. Keep this explicit rather
-      // than deriving a false identity from the OS version.
-      variant: "system-default-unversioned",
+      variant: modelVersion.map { "system-default-\($0)" } ?? "system-default-unversioned",
+      modelVersion: modelVersion,
+      versionSource: modelVersion.map { _ in AppleRuntimeIdentifiers.systemModelVersionSource },
+      versionedModelID: AppleRuntimeIdentifiers.versionedSystemModelID,
       capabilities: capabilities.sorted()
     )
   }

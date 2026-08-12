@@ -59,6 +59,9 @@ for path in sorted(output_dir.glob("*.json")):
     assert status["runtimeID"] == "apple/runtime", status
     system_model = next(model for model in status["models"] if model["modelID"] == "apple/system")
     assert system_model["availability"] == "available", system_model
+    assert system_model["modelVersion"] == "27.0", system_model
+    assert system_model["versionSource"] == "apple_os_release_band", system_model
+    assert system_model["versionedModelID"] == "apple/system@27.0", system_model
     results.append(path.stem)
 
 for digest_path in sorted(output_dir.glob("*.sha256")):

@@ -71,10 +71,27 @@ fi
 
 curl --fail --silent --show-error "$BASE_URL/v1/models" >"$OUTPUT_DIR/models.json"
 
+VERSIONED_MODEL_ID="$(python3 - "$OUTPUT_DIR/models.json" <<'PY'
+import json
+import pathlib
+import sys
+
+models = json.loads(pathlib.Path(sys.argv[1]).read_text())
+matches = [model["id"] for model in models["data"] if model["id"].startswith("apple/system@")]
+assert len(matches) == 1, models
+print(matches[0])
+PY
+)"
+
 curl --fail --silent --show-error \
     -H 'content-type: application/json' \
     --data-binary '{"model":"apple/system","messages":[{"role":"user","content":"Reply with exactly: apple runtime REST ready"}],"temperature":0,"max_tokens":32}' \
     "$BASE_URL/v1/chat/completions" >"$OUTPUT_DIR/completion.json"
+
+curl --fail --silent --show-error \
+    -H 'content-type: application/json' \
+    --data-binary "{\"model\":\"$VERSIONED_MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: versioned Apple model ready\"}],\"temperature\":0,\"max_tokens\":32}" \
+    "$BASE_URL/v1/chat/completions" >"$OUTPUT_DIR/versioned-completion.json"
 
 curl --fail --silent --show-error --no-buffer \
     -H 'content-type: application/json' \
@@ -127,15 +144,20 @@ import sys
 root = pathlib.Path(sys.argv[1])
 models = json.loads((root / "models.json").read_text())
 completion = json.loads((root / "completion.json").read_text())
+versioned_completion = json.loads((root / "versioned-completion.json").read_text())
 tool = json.loads((root / "tool.json").read_text())
 after_cancel = json.loads((root / "after-cancel.json").read_text())
 model_not_found = json.loads((root / "model-not-found.json").read_text())
 stream = (root / "stream.txt").read_text()
 
 assert any(model["id"] == "apple/system" for model in models["data"]), models
+versioned_models = [model for model in models["data"] if model["id"].startswith("apple/system@")]
+assert len(versioned_models) == 1, models
 assert completion["model"] == "apple/system", completion
 assert completion["choices"][0]["message"]["content"], completion
 assert completion["usage"]["completion_tokens"] > 0, completion
+assert versioned_completion["model"] == versioned_models[0]["id"], versioned_completion
+assert versioned_completion["choices"][0]["message"]["content"], versioned_completion
 assert "data: [DONE]" in stream, stream
 assert "chat.completion.chunk" in stream, stream
 assert tool["mesh_tool_executions"] == [{
@@ -151,7 +173,9 @@ assert model_not_found["error"].get("code") or model_not_found["error"].get("typ
 summary = {
     "status": "pass",
     "model": "apple/system",
+    "versioned_model": versioned_models[0]["id"],
     "completion": completion,
+    "versioned_completion": versioned_completion,
     "tool": tool,
     "stream_done": True,
     "loopback_only": True,
@@ -163,6 +187,7 @@ summary = {
 print(json.dumps({
     "status": summary["status"],
     "model": summary["model"],
+    "versioned_model": summary["versioned_model"],
     "completion_content": completion["choices"][0]["message"]["content"],
     "tool_executions": tool["mesh_tool_executions"],
     "stream_done": summary["stream_done"],

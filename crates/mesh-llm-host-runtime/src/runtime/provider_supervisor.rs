@@ -61,6 +61,8 @@ enum ProviderRunOutcome {
 struct ProviderAvailability {
     available: bool,
     context_length: Option<u32>,
+    model_version: Option<String>,
+    versioned_model_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +77,12 @@ struct ProviderModelEntry {
     availability: Option<String>,
     #[serde(default)]
     context_length: Option<u32>,
+    #[serde(default)]
+    model_version: Option<String>,
+    #[serde(default)]
+    version_source: Option<String>,
+    #[serde(default)]
+    versioned_model_id: Option<String>,
 }
 
 impl ProviderSupervisorHandle {
@@ -443,18 +451,20 @@ async fn monitor_provider_process(
     let mut health_tick = tokio::time::interval(PROVIDER_HEALTH_INTERVAL);
     health_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut failures = 0_u8;
-    let mut routed = false;
+    let mut routed_model_ids = Vec::new();
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
                 if changed.is_err() || *shutdown_rx.borrow() {
-                    withdraw_provider(&runtime.model_id, port, context).await;
+                    withdraw_provider_routes(&mut routed_model_ids, port, context);
+                    remove_provider_process(context).await;
                     let _ = terminate_provider_process(child).await;
                     return ProviderRunOutcome::Shutdown;
                 }
             }
             status = child.wait() => {
-                withdraw_provider(&runtime.model_id, port, context).await;
+                withdraw_provider_routes(&mut routed_model_ids, port, context);
+                remove_provider_process(context).await;
                 return ProviderRunOutcome::Restart(match status {
                     Ok(status) => format!("provider process exited with {status}"),
                     Err(error) => format!("provider process wait failed: {error}"),
@@ -465,22 +475,22 @@ async fn monitor_provider_process(
                     Ok(availability) => {
                         failures = 0;
                         publish_provider_state(runtime, context, pid, port, &availability).await;
-                        if availability.available && !routed {
-                            add_runtime_local_target(&context.target_tx, &runtime.model_id, port);
-                            routed = true;
-                            emit_provider_ready(runtime, port, pid);
-                        } else if !availability.available && routed {
-                            remove_runtime_local_target(&context.target_tx, &runtime.model_id, port);
-                            routed = false;
+                        let was_unrouted = routed_model_ids.is_empty();
+                        reconcile_provider_routes(
+                            runtime,
+                            &availability,
+                            &mut routed_model_ids,
+                            port,
+                            context,
+                        );
+                        if was_unrouted && !routed_model_ids.is_empty() {
+                            emit_provider_ready(runtime, &availability, port, pid);
                         }
                     }
                     Err(error) => {
                         failures = failures.saturating_add(1);
                         publish_provider_unhealthy(runtime, context, pid, port).await;
-                        if routed {
-                            remove_runtime_local_target(&context.target_tx, &runtime.model_id, port);
-                            routed = false;
-                        }
+                        withdraw_provider_routes(&mut routed_model_ids, port, context);
                         if failures >= PROVIDER_MAX_HEALTH_FAILURES {
                             let _ = terminate_provider_process(child).await;
                             return ProviderRunOutcome::Restart(format!(
@@ -522,13 +532,64 @@ async fn probe_provider(
         .into_iter()
         .find(|candidate| candidate.id == model_id)
         .with_context(|| format!("provider does not report requested model {model_id}"))?;
+    let versioned_model_id = validated_versioned_model_id(&model)?;
     Ok(ProviderAvailability {
         available: model
             .availability
             .as_deref()
             .is_none_or(|status| status.eq_ignore_ascii_case("available")),
         context_length: model.context_length,
+        model_version: model.model_version,
+        versioned_model_id,
     })
+}
+
+fn validated_versioned_model_id(model: &ProviderModelEntry) -> Result<Option<String>> {
+    match (
+        model.model_version.as_deref(),
+        model.version_source.as_deref(),
+        model.versioned_model_id.as_deref(),
+    ) {
+        (None, None, None) => Ok(None),
+        (Some(version), Some("apple_os_release_band"), Some(versioned_model_id)) => {
+            let expected = format!("{}@{version}", model.id);
+            if versioned_model_id != expected {
+                bail!(
+                    "provider versioned model id mismatch: expected {expected}, got {versioned_model_id}"
+                );
+            }
+            Ok(Some(versioned_model_id.to_string()))
+        }
+        _ => bail!("provider returned incomplete or unsupported system-model version metadata"),
+    }
+}
+
+fn desired_provider_routes(model_id: &str, availability: &ProviderAvailability) -> Vec<String> {
+    if !availability.available {
+        return Vec::new();
+    }
+    let mut routes = vec![model_id.to_string()];
+    if let Some(versioned_model_id) = &availability.versioned_model_id {
+        routes.push(versioned_model_id.clone());
+    }
+    routes
+}
+
+fn reconcile_provider_routes(
+    runtime: &ProviderRuntimeContext,
+    availability: &ProviderAvailability,
+    routed_model_ids: &mut Vec<String>,
+    port: u16,
+    context: &ProviderSupervisorContext,
+) {
+    let desired = desired_provider_routes(&runtime.model_id, availability);
+    for model_id in routed_model_ids.iter().filter(|id| !desired.contains(id)) {
+        remove_runtime_local_target(&context.target_tx, model_id, port);
+    }
+    for model_id in desired.iter().filter(|id| !routed_model_ids.contains(id)) {
+        add_runtime_local_target(&context.target_tx, model_id, port);
+    }
+    *routed_model_ids = desired;
 }
 
 async fn publish_provider_state(
@@ -588,9 +649,14 @@ async fn upsert_provider_process(
     }
 }
 
-async fn withdraw_provider(model_id: &str, port: u16, context: &ProviderSupervisorContext) {
-    remove_runtime_local_target(&context.target_tx, model_id, port);
-    remove_provider_process(context).await;
+fn withdraw_provider_routes(
+    routed_model_ids: &mut Vec<String>,
+    port: u16,
+    context: &ProviderSupervisorContext,
+) {
+    for model_id in routed_model_ids.drain(..) {
+        remove_runtime_local_target(&context.target_tx, &model_id, port);
+    }
 }
 
 async fn remove_provider_process(context: &ProviderSupervisorContext) {
@@ -602,15 +668,22 @@ async fn remove_provider_process(context: &ProviderSupervisorContext) {
     }
 }
 
-fn emit_provider_ready(runtime: &ProviderRuntimeContext, port: u16, pid: u32) {
+fn emit_provider_ready(
+    runtime: &ProviderRuntimeContext,
+    availability: &ProviderAvailability,
+    port: u16,
+    pid: u32,
+) {
     let _ = emit_event(OutputEvent::Info {
         message: format!(
             "Apple system model is available through the MeshLLM OpenAI API ({})",
             runtime.model_id
         ),
         context: Some(format!(
-            "provider={} version={} pid={pid} port={port}",
-            runtime.runtime.manifest.runtime.id, runtime.runtime.manifest.runtime.version
+            "provider={} version={} model_generation={} pid={pid} port={port}",
+            runtime.runtime.manifest.runtime.id,
+            runtime.runtime.manifest.runtime.version,
+            availability.model_version.as_deref().unwrap_or("unknown")
         )),
     });
 }
@@ -876,6 +949,10 @@ mod tests {
             "other/model".to_string(),
             vec![election::InferenceTarget::Local(12_345)],
         );
+        targets.targets.insert(
+            "apple/system@27.0".to_string(),
+            vec![election::InferenceTarget::Local(11_435)],
+        );
         let (target_tx, _target_rx) = watch::channel(targets);
         let context = ProviderSupervisorContext {
             target_tx: Arc::new(target_tx),
@@ -883,7 +960,9 @@ mod tests {
             console_state: None,
         };
 
-        withdraw_provider(APPLE_MODEL_ID, 11_435, &context).await;
+        let mut routed_model_ids =
+            vec![APPLE_MODEL_ID.to_string(), "apple/system@27.0".to_string()];
+        withdraw_provider_routes(&mut routed_model_ids, 11_435, &context);
 
         assert_eq!(
             context.target_tx.borrow().candidates(APPLE_MODEL_ID),
@@ -893,5 +972,55 @@ mod tests {
             context.target_tx.borrow().candidates("other/model"),
             vec![election::InferenceTarget::Local(12_345)]
         );
+        assert!(
+            context
+                .target_tx
+                .borrow()
+                .candidates("apple/system@27.0")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn validates_documented_version_metadata_and_builds_both_routes() {
+        let entry = ProviderModelEntry {
+            id: APPLE_MODEL_ID.to_string(),
+            availability: Some("available".to_string()),
+            context_length: Some(4_096),
+            model_version: Some("27.0".to_string()),
+            version_source: Some("apple_os_release_band".to_string()),
+            versioned_model_id: Some("apple/system@27.0".to_string()),
+        };
+        let versioned_model_id = validated_versioned_model_id(&entry).unwrap();
+        let availability = ProviderAvailability {
+            available: true,
+            context_length: entry.context_length,
+            model_version: entry.model_version,
+            versioned_model_id,
+        };
+        assert_eq!(
+            desired_provider_routes(APPLE_MODEL_ID, &availability),
+            vec!["apple/system".to_string(), "apple/system@27.0".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_or_mismatched_version_metadata() {
+        let incomplete = ProviderModelEntry {
+            id: APPLE_MODEL_ID.to_string(),
+            availability: Some("available".to_string()),
+            context_length: Some(4_096),
+            model_version: Some("27.0".to_string()),
+            version_source: None,
+            versioned_model_id: Some("apple/system@27.0".to_string()),
+        };
+        assert!(validated_versioned_model_id(&incomplete).is_err());
+
+        let mismatched = ProviderModelEntry {
+            version_source: Some("apple_os_release_band".to_string()),
+            versioned_model_id: Some("apple/system@26.4".to_string()),
+            ..incomplete
+        };
+        assert!(validated_versioned_model_id(&mismatched).is_err());
     }
 }

@@ -4,6 +4,34 @@ public enum AppleRuntimeIdentifiers {
   public static let runtimeID = "apple/runtime"
   public static let protocolVersion = "0.1"
   public static let systemModelID = "apple/system"
+  public static let systemModelVersionSource = "apple_os_release_band"
+
+  public static var systemModelVersion: String? {
+    documentedSystemModelVersion(for: ProcessInfo.processInfo.operatingSystemVersion)
+  }
+
+  public static var versionedSystemModelID: String? {
+    systemModelVersion.map { "\(systemModelID)@\($0)" }
+  }
+
+  public static func isSystemModelID(_ modelID: String) -> Bool {
+    modelID == systemModelID || modelID == versionedSystemModelID
+  }
+
+  public static func documentedSystemModelVersion(
+    for operatingSystemVersion: OperatingSystemVersion
+  ) -> String? {
+    switch (operatingSystemVersion.majorVersion, operatingSystemVersion.minorVersion) {
+    case (26, 0...3):
+      return "26.0"
+    case (26, 4...):
+      return "26.4"
+    case (27, _):
+      return "27.0"
+    default:
+      return nil
+    }
+  }
 }
 
 public struct AppleRuntimeStatus: Codable, Equatable, Sendable {
@@ -33,6 +61,9 @@ public struct AppleModelStatus: Codable, Equatable, Sendable {
   public let contextSize: Int
   public let supportedLanguages: [String]
   public let variant: String
+  public let modelVersion: String?
+  public let versionSource: String?
+  public let versionedModelID: String?
   public let capabilities: [String]
 
   public init(
@@ -43,6 +74,9 @@ public struct AppleModelStatus: Codable, Equatable, Sendable {
     contextSize: Int,
     supportedLanguages: [String],
     variant: String,
+    modelVersion: String? = nil,
+    versionSource: String? = nil,
+    versionedModelID: String? = nil,
     capabilities: [String]
   ) {
     self.modelID = modelID
@@ -52,6 +86,9 @@ public struct AppleModelStatus: Codable, Equatable, Sendable {
     self.contextSize = contextSize
     self.supportedLanguages = supportedLanguages
     self.variant = variant
+    self.modelVersion = modelVersion
+    self.versionSource = versionSource
+    self.versionedModelID = versionedModelID
     self.capabilities = capabilities
   }
 }

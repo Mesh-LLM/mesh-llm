@@ -174,6 +174,7 @@ rest = json.loads((root / "rest" / "summary.json").read_text())
 summary = {
     "status": "pass",
     "model": "apple/system",
+    "versioned_model": rest["versioned_model"],
     "mesh_api_port": int(sys.argv[2]),
     "management_port": int(sys.argv[3]),
     "provider_pid": int(sys.argv[4]),
@@ -191,6 +192,7 @@ summary = {
 print(json.dumps({
     "status": summary["status"],
     "model": summary["model"],
+    "versioned_model": summary["versioned_model"],
     "completion_content": summary["completion"]["choices"][0]["message"]["content"],
     "tool_executions": summary["tool"]["mesh_tool_executions"],
     "stream_done": summary["stream_done"],

@@ -37,3 +37,34 @@ import Testing
   let request = AppleGenerationRequest(prompt: "hello")
   #expect(request.modelID == AppleRuntimeIdentifiers.systemModelID)
 }
+
+@Test func documentedSystemModelVersionsFollowAppleReleaseBands() {
+  #expect(
+    AppleRuntimeIdentifiers.documentedSystemModelVersion(
+      for: OperatingSystemVersion(majorVersion: 26, minorVersion: 3, patchVersion: 1)
+    ) == "26.0"
+  )
+  #expect(
+    AppleRuntimeIdentifiers.documentedSystemModelVersion(
+      for: OperatingSystemVersion(majorVersion: 26, minorVersion: 4, patchVersion: 0)
+    ) == "26.4"
+  )
+  #expect(
+    AppleRuntimeIdentifiers.documentedSystemModelVersion(
+      for: OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0)
+    ) == "27.0"
+  )
+  #expect(
+    AppleRuntimeIdentifiers.documentedSystemModelVersion(
+      for: OperatingSystemVersion(majorVersion: 28, minorVersion: 0, patchVersion: 0)
+    ) == nil
+  )
+}
+
+@Test func systemModelIDsAcceptOnlyTheInstalledDocumentedGeneration() {
+  #expect(AppleRuntimeIdentifiers.isSystemModelID("apple/system"))
+  if let versioned = AppleRuntimeIdentifiers.versionedSystemModelID {
+    #expect(AppleRuntimeIdentifiers.isSystemModelID(versioned))
+  }
+  #expect(!AppleRuntimeIdentifiers.isSystemModelID("apple/system@999.0"))
+}

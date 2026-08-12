@@ -61,7 +61,10 @@ An eligible machine reports one logical model inside the shared runtime:
     "providerKind": "system",
     "availability": "available",
     "contextSize": 4096,
-    "variant": "system-default-unversioned",
+    "variant": "system-default-27.0",
+    "modelVersion": "27.0",
+    "versionSource": "apple_os_release_band",
+    "versionedModelID": "apple/system@27.0",
     "capabilities": ["guided_generation", "tool_calling", "vision"]
   }]
 }
@@ -99,11 +102,27 @@ Example:
     "owned_by": "apple",
     "availability": "available",
     "context_length": 4096,
-    "variant": "system-default-unversioned",
+    "variant": "system-default-27.0",
+    "model_version": "27.0",
+    "version_source": "apple_os_release_band",
+    "resolved_model": "apple/system@27.0",
     "capabilities": ["guided_generation", "tool_calling", "vision"]
+  }, {
+    "id": "apple/system@27.0",
+    "object": "model",
+    "owned_by": "apple",
+    "alias_of": "apple/system",
+    "model_version": "27.0",
+    "version_source": "apple_os_release_band"
   }]
 }
 ```
+
+`apple/system` follows the system model installed by Apple. The versioned ID
+matches only the documented 27.0 generation; it is not an immutable checkpoint
+and MeshLLM cannot install or roll back it. Apple exposes no public checkpoint
+or model-build identifier. Unknown future OS generations remain unversioned
+until Apple publishes their release-band mapping.
 
 ### 5. Run a completion over REST
 
@@ -234,7 +253,8 @@ just apple::rest
 ```
 
 This verifies model listing, buffered completion, SSE streaming, the fixture
-tool, client-disconnect cancellation, and slot reuse after cancellation.
+tool, client-disconnect cancellation, slot reuse after cancellation, and a
+completion addressed specifically to the resolved model generation.
 
 ### 9. Exercise the MeshLLM host supervisor
 
@@ -255,6 +275,7 @@ Captured from the Golden Gate host through MeshLLM's REST API:
 {
   "status": "pass",
   "model": "apple/system",
+  "versioned_model": "apple/system@27.0",
   "completion_content": "apple runtime REST ready",
   "tool_executions": [{
     "name": "mesh_fixture_lookup",

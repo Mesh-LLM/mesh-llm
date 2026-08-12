@@ -62,12 +62,29 @@ pipeline parallelism for Apple's opaque system model.
 | Context size | 4,096 tokens |
 | Capabilities | guided generation, tool calling, vision |
 | Languages | 24 advertised locales |
-| Stable model identity | not exposed by the public arm64 beta module |
+| Apple-documented model generation | 27.0 |
+| Stable checkpoint/build identity | not exposed by the public arm64 beta module |
 
-The runtime reports the model as `apple/system` with variant
-`system-default-unversioned`. It does not invent a version from the OS build.
-Production cache identity and reproducibility policy must account for the fact
-that Apple can update the system model independently of MeshLLM.
+Apple documents system-model generations aligned with OS release bands: 26.0
+through 26.3, 26.4, and 27.0. The runtime therefore exposes `apple/system` as a
+rolling alias and `apple/system@27.0` as the resolved route on the tested host,
+with `model_version=27.0` and
+`version_source=apple_os_release_band`. It does not derive a checkpoint identity
+from the OS build. A request for the versioned ID only matches a host currently
+running that documented generation; MeshLLM cannot install, pin, or roll back
+Apple's system model. Unknown future OS generations remain unversioned until
+Apple documents their mapping.
+
+The protocol addition is backward-compatible. The three version fields are
+optional: an older host ignores them, while the new host continues to accept an
+older sidecar and registers only the rolling alias. It registers a versioned
+route only when `model_version`, `version_source`, and `versioned_model_id` are
+all present and mutually consistent.
+
+See [Apple's SystemLanguageModel documentation](https://developer.apple.com/documentation/FoundationModels/SystemLanguageModel)
+and [Foundation Models updates](https://developer.apple.com/documentation/updates/foundationmodels).
+Production cache identity and reproducibility policy must still account for
+Apple updating the system model independently of MeshLLM.
 
 ## Implementation shape
 
@@ -127,6 +144,9 @@ The supervisor:
   with an ephemeral loopback port and the host's real parent PID;
 - waits for the structured readiness record and probes both `/health` and
   `/v1/models` before registering the normal local inference target;
+- registers both the rolling `apple/system` alias and the validated resolved
+  generation ID, such as `apple/system@27.0`, against the same whole-model
+  provider process;
 - exposes PID, port, status, backend, context length, and restart state through
   the existing runtime-process dashboard and management API;
 - withdraws the target immediately on unavailability, repeated health failure,
@@ -212,6 +232,7 @@ Observed live results:
 | REST tool execution | pass |
 | REST client-disconnect cancellation | pass |
 | MeshLLM `/v1` completion, SSE, tool, and cancellation | pass |
+| Version-resolved `apple/system@27.0` completion | pass |
 | Management API provider PID, health, port, and context | pass |
 | Unexpected provider exit and supervised restart | pass |
 | MeshLLM shutdown and provider-child cleanup | pass |
