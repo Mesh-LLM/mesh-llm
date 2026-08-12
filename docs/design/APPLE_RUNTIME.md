@@ -10,7 +10,7 @@ advertisement remain gated. Tracking issue:
 
 MeshLLM can invoke Apple's on-device system language model from one native Swift
 sidecar on Apple silicon, stream generated text, report first-party token usage,
-cancel work, use guided generation, and execute tools. The same signed runtime
+cancel work, use guided or validated JSON structured output, and execute tools. The same signed runtime
 can be carried unchanged by the CLI and every SDK distribution that can run on
 macOS. A per-user `launchd` background process also completed inference.
 
@@ -113,7 +113,9 @@ The provider currently implements:
 - snapshot-to-delta streaming;
 - elapsed time and time to first token;
 - input, cached-input, output, and reasoning token accounting;
-- guided `@Generable` output;
+- guided `@Generable` output when the selected engine supports constrained
+  decoding, with a validated JSON prompt/retry fallback for Core AI engines
+  that do not expose per-token logits;
 - a deterministic `Tool` invocation with an auditable recorder;
 - cancellation, including Foundation Models' empty-stream cancellation edge;
 - normalized retryable/non-retryable error codes.
@@ -317,11 +319,13 @@ start a new Apple language-model session. A strict response-token maximum is a
 runaway-generation guard, not a general truncation strategy, because it may
 produce malformed or incomplete output.
 
-The guided-generation API returned a valid `@Generable` value and usage, but it
-misclassified the simple phrase “choose a warm mesh replica” as unrelated with
-zero confidence. API conformance is therefore proven; task quality is not.
-Routing policy must gate this provider by evaluated workloads rather than by API
-availability alone.
+The system-model guided-generation API returned a valid `@Generable` value and
+usage, but it misclassified the simple phrase “choose a warm mesh replica” as
+unrelated with zero confidence. Core AI engines may reject constrained decoding;
+the sidecar then asks for a strict JSON object, validates `label`, `confidence`,
+and `explanation`, and retries once with a corrective prompt. API conformance is
+therefore proven; task quality is not. Routing policy must gate this provider by
+evaluated workloads rather than by API availability alone.
 
 Tool schemas consume a material part of the 4,096-token context. The first
 verbose tool probe exceeded context at 4,154 tokens. A narrow schema and concise

@@ -192,29 +192,92 @@ public actor CoreAIModelProvider {
       modelIsReasoning: model.capabilities.contains(.reasoning),
       prompt: prompt
     )
-    try await validateContextBudget(
-      prompt: prompt,
-      instructions: instructions,
-      schema: SpikeClassification.generationSchema,
-      maximumResponseTokens: 128
-    )
-    do {
-      let response = try await LanguageModelSession(model: model, instructions: instructions)
-        .respond(
-          to: prompt,
-          generating: SpikeClassification.self,
-          options: GenerationOptions(temperature: 0, maximumResponseTokens: 128)
+    if model.capabilities.contains(.guidedGeneration) {
+      do {
+        try await validateContextBudget(
+          prompt: prompt,
+          instructions: instructions,
+          schema: SpikeClassification.generationSchema,
+          maximumResponseTokens: 128
         )
-      return AppleStructuredResult(
-        modelID: modelID,
-        label: response.content.label,
-        confidence: response.content.confidence,
-        explanation: response.content.explanation,
-        usage: AppleUsage(response.usage)
-      )
-    } catch {
-      throw mapCoreAIError(error)
+        let response = try await LanguageModelSession(model: model, instructions: instructions)
+          .respond(
+            to: prompt,
+            generating: SpikeClassification.self,
+            options: GenerationOptions(temperature: 0, maximumResponseTokens: 128)
+          )
+        return AppleStructuredResult(
+          modelID: modelID,
+          label: response.content.label,
+          confidence: response.content.confidence,
+          explanation: response.content.explanation,
+          usage: AppleUsage(response.usage)
+        )
+      } catch {
+        guard isGuidedGenerationUnsupported(error) else {
+          throw mapCoreAIError(error)
+        }
+      }
     }
+
+    return try await generateStructuredAsJSON(
+      modelID: modelID,
+      prompt: prompt,
+      instructions: instructions
+    )
+  }
+
+  private func generateStructuredAsJSON(
+    modelID: String,
+    prompt: String,
+    instructions: String
+  ) async throws -> AppleStructuredResult {
+    let jsonInstructions = """
+      \(instructions)
+      Return only one valid JSON object with exactly these fields: "label" (string), "confidence" (integer from 0 to 100), and "explanation" (string). Do not use Markdown fences or any other text.
+      """
+    var requestPrompt = "Return the classification as JSON.\n\(prompt)"
+    var lastContent = ""
+
+    for attempt in 0..<2 {
+      let preparedPrompt = coreAIInputPrompt(
+        modelIsReasoning: false,
+        prompt: requestPrompt
+      )
+      try await validateContextBudget(
+        prompt: preparedPrompt,
+        instructions: jsonInstructions,
+        maximumResponseTokens: 256
+      )
+      do {
+        let response = try await LanguageModelSession(
+          model: try await loadModel(),
+          instructions: jsonInstructions
+        ).respond(
+          to: preparedPrompt,
+          options: GenerationOptions(temperature: 0, maximumResponseTokens: 256)
+        )
+        lastContent = response.content
+        if let parsed = parseStructuredClassification(response.content) {
+          return AppleStructuredResult(
+            modelID: modelID,
+            label: parsed.label,
+            confidence: parsed.confidence,
+            explanation: parsed.explanation,
+            usage: AppleUsage(response.usage)
+          )
+        }
+      } catch {
+        throw mapCoreAIError(error)
+      }
+      requestPrompt = "The previous response was not valid for the requested schema. Return only JSON with string label, integer confidence from 0 to 100, and string explanation.\n\(prompt)"
+      if attempt == 1 { break }
+    }
+    throw AppleRuntimeFailure(
+      code: "structured_output_invalid",
+      message: "Core AI returned invalid structured output: \(lastContent)",
+      retryable: false
+    )
   }
 
   public func exerciseTool(modelID: String, key: String) async throws -> AppleToolResult {
@@ -367,6 +430,40 @@ func fixtureToolKey(from content: String) -> String? {
     let arguments = value["arguments"] as? [String: Any]
   else { return nil }
   return arguments["key"] as? String
+}
+
+private struct StructuredClassificationPayload: Decodable {
+  let label: String
+  let confidence: Int
+  let explanation: String
+}
+
+struct ParsedStructuredClassification: Equatable {
+  let label: String
+  let confidence: Int
+  let explanation: String
+}
+
+func parseStructuredClassification(_ content: String) -> ParsedStructuredClassification? {
+  guard let start = content.firstIndex(of: "{"),
+    let end = content.lastIndex(of: "}"),
+    start <= end,
+    let data = String(content[start...end]).data(using: .utf8),
+    let payload = try? JSONDecoder().decode(StructuredClassificationPayload.self, from: data),
+    !payload.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+    (0...100).contains(payload.confidence)
+  else { return nil }
+  return ParsedStructuredClassification(
+    label: payload.label,
+    confidence: payload.confidence,
+    explanation: payload.explanation
+  )
+}
+
+private func isGuidedGenerationUnsupported(_ error: any Error) -> Bool {
+  let description = String(describing: error).lowercased()
+  return description.contains("guided generation")
+    || description.contains("constrained decoding")
 }
 
 private func estimatedTokenCount(_ text: String) -> Int {

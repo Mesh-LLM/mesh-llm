@@ -187,3 +187,20 @@ private actor SchedulerGate {
       == nil
   )
 }
+
+@Test func structuredJSONFallbackParsesAndValidatesTheSchema() {
+  #expect(
+    parseStructuredClassification(
+      "```json\n{\"label\":\"routing\",\"confidence\":87,\"explanation\":\"It selects a mesh replica.\"}\n```"
+    ) == ParsedStructuredClassification(
+      label: "routing",
+      confidence: 87,
+      explanation: "It selects a mesh replica."
+    )
+  )
+  #expect(
+    parseStructuredClassification("{\"label\":\"routing\",\"confidence\":101,\"explanation\":\"bad\"}")
+      == nil
+  )
+  #expect(parseStructuredClassification("not json") == nil)
+}
