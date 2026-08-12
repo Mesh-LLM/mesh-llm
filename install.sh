@@ -336,11 +336,12 @@ recommended_flavor() {
 detect_cuda_major() {
     local ver=""
     if command -v nvcc >/dev/null 2>&1; then
-        ver="$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+' | awk '{print $2}' | head -n 1)"
+        ver="$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+' | awk '{print $2}' | head -n 1 || true)"
     fi
     if [[ -z "$ver" ]]; then
         local lib
-        for lib in /usr/local/cuda*/targets/*/lib/libcudart.so.* /usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
+        local probe_root="${MESH_LLM_TEST_CUDA_PROBE_ROOT:-}"
+        for lib in "$probe_root"/usr/local/cuda*/targets/*/lib/libcudart.so.* "$probe_root"/usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
             if [[ -f "$lib" ]]; then
                 ver="$(basename "$lib" | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | head -n 1)"
                 break
@@ -348,7 +349,17 @@ detect_cuda_major() {
         done
     fi
     if [[ -z "$ver" ]]; then
-        ver="$(ldconfig -p 2>/dev/null | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | sort -rn | head -n 1)"
+        ver="$(ldconfig -p 2>/dev/null | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | sort -rn | head -n 1 || true)"
+    fi
+    # Inference-only hosts carry an NVIDIA driver but no CUDA toolkit, so none of
+    # the probes above find anything. The driver still advertises the highest CUDA
+    # it supports in the nvidia-smi header ("CUDA Version: 13.0"); use that as an
+    # upper bound and clamp it to a CUDA lane we actually publish.
+    if [[ -z "$ver" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+        ver="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: *[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)"
+        if [[ -n "$ver" ]] && (( ver > 13 )); then
+            ver=13
+        fi
     fi
     case "$ver" in
         12|13) printf '%s\n' "$ver" ;;
@@ -368,11 +379,12 @@ asset_name() {
                         cuda)
                             local cuda_major
                             cuda_major="$(detect_cuda_major)"
-                            if [[ -n "$cuda_major" ]]; then
-                                printf 'mesh-llm-aarch64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
-                            else
-                                printf 'mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz\n'
+                            if [[ -z "$cuda_major" ]]; then
+                                echo "error: detected an NVIDIA GPU but could not determine a supported CUDA major version (expected 12 or 13)." >&2
+                                echo "       install a CUDA toolkit, or re-run with --flavor cpu to use a non-CUDA build." >&2
+                                return 1
                             fi
+                            printf 'mesh-llm-aarch64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
                             ;;
                         *) echo "error: unsupported aarch64 flavor '$flavor'" >&2; return 1 ;;
                     esac
@@ -383,11 +395,12 @@ asset_name() {
                         cuda)
                             local cuda_major
                             cuda_major="$(detect_cuda_major)"
-                            if [[ -n "$cuda_major" ]]; then
-                                printf 'mesh-llm-x86_64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
-                            else
-                                printf 'mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz\n'
+                            if [[ -z "$cuda_major" ]]; then
+                                echo "error: detected an NVIDIA GPU but could not determine a supported CUDA major version (expected 12 or 13)." >&2
+                                echo "       install a CUDA toolkit, or re-run with --flavor cpu (or --flavor vulkan) to use a non-CUDA build." >&2
+                                return 1
                             fi
+                            printf 'mesh-llm-x86_64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
                             ;;
                         rocm) printf 'mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz\n' ;;
                         vulkan) printf 'mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz\n' ;;

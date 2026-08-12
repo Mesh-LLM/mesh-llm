@@ -78,11 +78,13 @@ class InstallScriptTests(unittest.TestCase):
                 """
                 export MESH_LLM_TEST_UNAME_S=Linux
                 export MESH_LLM_TEST_UNAME_M=aarch64
+                # No CUDA evidence of any kind on this host.
+                detect_cuda_major() { printf '\\n'; }
                 printf 'support=%s\\n' "$(platform_support_status)"
                 printf 'flavors=%s\\n' "$(supported_flavors)"
                 printf 'recommended=%s\\n' "$(recommended_flavor)"
                 printf 'cpu=%s\\n' "$(asset_name cpu)"
-                printf 'cuda=%s\\n' "$(asset_name cuda)"
+                printf 'cuda=%s\\n' "$(asset_name cuda || true)"
                 """,
             )
 
@@ -91,7 +93,86 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn("flavors=cuda cpu", result.stdout)
             self.assertIn("recommended=cpu", result.stdout)
             self.assertIn("cpu=mesh-llm-aarch64-unknown-linux-gnu.tar.gz", result.stdout)
-            self.assertIn("cuda=mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz", result.stdout)
+            # With no CUDA evidence at all there is no publishable cuda asset name.
+            # Releases stopped publishing the legacy bare -cuda archive when the
+            # lanes split into -cuda-12/-cuda-13, so asset_name must refuse rather
+            # than emit a name that always 404s.
+            self.assertIn("cuda=\n", result.stdout)
+            self.assertNotIn("mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz", result.stdout)
+            self.assertIn("could not determine a supported CUDA major version", result.stderr)
+            self.assertIn("--flavor cpu", result.stderr)
+            self.assertNotIn("--flavor vulkan", result.stderr)
+
+    def test_asset_name_uses_detected_cuda_major_lane(self) -> None:
+        for arch in ("aarch64", "x86_64"):
+            with self.subTest(arch=arch):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = Path(tmp)
+                    install_dir = tmp_path / "bin"
+                    install_dir.mkdir()
+
+                    result = self._run_helper(
+                        tmp_path,
+                        install_dir,
+                        f"""
+                        export MESH_LLM_TEST_UNAME_S=Linux
+                        export MESH_LLM_TEST_UNAME_M={arch}
+                        detect_cuda_major() {{ printf '13\\n'; }}
+                        asset_name cuda
+                        """,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        result.stdout.strip(),
+                        f"mesh-llm-{arch}-unknown-linux-gnu-cuda-13.tar.gz",
+                    )
+
+    def test_detect_cuda_major_falls_back_to_nvidia_smi_driver_version(self) -> None:
+        # Inference-only hosts have a driver but no toolkit, so every toolkit
+        # probe comes up empty and only the nvidia-smi header carries a version.
+        cases = (
+            ("CUDA Version: 13.0", "13"),
+            ("CUDA Version: 12.4", "12"),
+            # A driver newer than any lane we publish clamps to the newest lane.
+            ("CUDA Version: 14.2", "13"),
+            # A driver too old for any published lane yields nothing.
+            ("CUDA Version: 11.8", ""),
+        )
+        for header, expected in cases:
+            with self.subTest(header=header):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = Path(tmp)
+                    install_dir = tmp_path / "bin"
+                    install_dir.mkdir()
+                    probe_root = tmp_path / "cuda-probe-root"
+                    probe_root.mkdir()
+                    wrappers = tmp_path / "wrappers"
+                    wrappers.mkdir()
+                    for absent in ("nvcc", "ldconfig"):
+                        stub = wrappers / absent
+                        stub.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+                        stub.chmod(0o755)
+                    nvidia_smi = wrappers / "nvidia-smi"
+                    nvidia_smi.write_text(
+                        "#!/usr/bin/env bash\n"
+                        f"printf '%s\\n' '| NVIDIA-SMI 595.84  Driver Version: 595.84  {header} |'\n",
+                        encoding="utf-8",
+                    )
+                    nvidia_smi.chmod(0o755)
+
+                    result = self._run_helper(
+                        tmp_path,
+                        install_dir,
+                        f"""
+                        export PATH={shlex_quote(str(wrappers))}:$PATH
+                        export MESH_LLM_TEST_CUDA_PROBE_ROOT={shlex_quote(str(probe_root))}
+                        detect_cuda_major
+                        """,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), expected)
 
     def test_release_target_helpers_recommend_cuda_on_jetson_orin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -151,6 +232,8 @@ class InstallScriptTests(unittest.TestCase):
             install_dir.mkdir()
             wrappers = tmp_path / "wrappers"
             wrappers.mkdir()
+            probe_root = tmp_path / "cuda-probe-root"
+            probe_root.mkdir()
             ldconfig = wrappers / "ldconfig"
             ldconfig.write_text(
                 "#!/usr/bin/env bash\n"
@@ -164,6 +247,7 @@ class InstallScriptTests(unittest.TestCase):
                 install_dir,
                 f"""
                 export PATH={shlex_quote(str(wrappers))}:$PATH
+                export MESH_LLM_TEST_CUDA_PROBE_ROOT={shlex_quote(str(probe_root))}
                 detect_cuda_major
                 """,
             )
