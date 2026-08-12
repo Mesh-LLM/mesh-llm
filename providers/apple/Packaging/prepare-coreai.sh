@@ -11,9 +11,9 @@ COREAI_ROOT="$APPLE_ROOT/.build/checkouts/coreai-models/swift"
 
 chmod -R u+w "$COREAI_ROOT"
 
-# The pinned Core AI package currently targets an earlier Foundation Models
-# beta. Keep the compatibility delta explicit and local until Apple publishes
-# a revision that builds against the Golden Gate SDK shipped with this repo.
+# Keep the small Swift 6.4 mutable-view compatibility delta explicit and local.
+# The pinned Core AI revision is kept current with the Golden Gate SDK; its
+# Foundation Models capability initializers must not be rewritten here.
 python3 - "$COREAI_ROOT" <<'PY'
 from pathlib import Path
 import re
@@ -24,14 +24,6 @@ replacements = {
     root / "Sources/CoreAIShared/Runtime/NDArray+Helpers.swift": (
         "    let view = array.mutableView(as: type)\n",
         "    var view = array.mutableView(as: type)\n",
-    ),
-    root / "Sources/CoreAILanguageModels/LanguageModel/CoreAILanguageModel.swift": (
-        "LanguageModelCapabilities(caps)",
-        "LanguageModelCapabilities(capabilities: caps)",
-    ),
-    root / "Sources/CoreAILanguageModels/VLM/CoreAIVisionLanguageModel.swift": (
-        "LanguageModelCapabilities([.vision])",
-        "LanguageModelCapabilities(capabilities: [.vision])",
     ),
 }
 
