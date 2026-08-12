@@ -608,36 +608,6 @@ pub(crate) fn control_endpoint_addr(
     addr
 }
 
-fn control_alpn_is_valid(alpn: &[u8], record: impl FnOnce(MeshOperationalEvent)) -> bool {
-    if alpn == ALPN_CONTROL_V1 {
-        return true;
-    }
-    record(MeshOperationalEvent::ControlAlpnRejected);
-    false
-}
-
-#[cfg(test)]
-mod control_alpn_tests {
-    use super::control_alpn_is_valid;
-    use crate::logging::{LoggingService, ServiceConfig};
-    use crate::mesh::operational_logging::record_mesh_operational_event_with_service;
-
-    #[test]
-    fn invalid_control_alpn_emits_exactly_one_rejection_audit() {
-        let service = LoggingService::new_disabled(ServiceConfig::default());
-
-        assert!(!control_alpn_is_valid(b"invalid-control-alpn", |event| {
-            record_mesh_operational_event_with_service(&service, event);
-        }));
-
-        let audits = service.bus_ref().drain();
-        assert_eq!(audits.len(), 1);
-        let audit: serde_json::Value =
-            serde_json::from_str(&audits[0].payload).expect("audit payload");
-        assert_eq!(audit["code"], "mesh_control_alpn_rejected");
-    }
-}
-
 impl Node {
     /// Open an HTTP tunnel bi-stream to a peer (tagged STREAM_TUNNEL_HTTP).
     /// If no connection exists, tries to connect on-demand (for passive nodes
@@ -836,21 +806,16 @@ impl Node {
     ) -> Result<()> {
         let mut accepting = incoming.accept()?;
         let alpn = accepting.alpn().await?;
-        if !control_alpn_is_valid(&alpn, record_mesh_operational_event) {
-            tracing::debug!(
-                alpn = ?String::from_utf8_lossy(&alpn),
-                "Rejected unexpected control-plane ALPN"
+        if alpn.as_slice() != ALPN_CONTROL_V1 {
+            record_mesh_operational_event(MeshOperationalEvent::ControlAlpnRejected);
+            anyhow::bail!(
+                "unexpected control-plane ALPN {:?}",
+                String::from_utf8_lossy(&alpn)
             );
-            return Ok(());
         }
         let conn = accepting.await?;
         let remote = conn.remote_id();
         record_mesh_operational_event(MeshOperationalEvent::ControlConnectionAccepted);
-        self.dispatch_control_streams(conn, remote).await;
-        Ok(())
-    }
-
-    async fn dispatch_control_streams(&self, conn: Connection, remote: EndpointId) {
         let permits = control_stream_semaphore();
         loop {
             let permit = match permits.clone().acquire_owned().await {
@@ -881,6 +846,7 @@ impl Node {
                 }
             }));
         }
+        Ok(())
     }
 }
 impl Node {

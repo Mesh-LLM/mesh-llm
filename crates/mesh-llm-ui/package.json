@@ -13,6 +13,7 @@
     "format:check": "prettier . --check",
     "test": "vitest run",
     "test:e2e": "node scripts/run-playwright.mjs",
+    "test:e2e:real-logs": "../../scripts/qa-logging-console-e2e.sh --current-binary ../../target/debug/mesh-llm",
     "validate": "pnpm run lint && pnpm run typecheck && pnpm test && pnpm run build"
   },
   "dependencies": {
@@ -39,6 +40,7 @@
     "@tanstack/ai-react": "^0.16.0",
     "@tanstack/react-query": "^5.101.2",
     "@tanstack/react-router": "^1.170.16",
+    "@tanstack/react-table": "^8.21.3",
     "animejs": "^4.5.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
@@ -52,6 +54,7 @@
     "react-diff-viewer-continued": "^4.2.2",
     "react-dom": "19.2.7",
     "react-markdown": "^10.1.0",
+    "recharts": "^3.10.1",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",

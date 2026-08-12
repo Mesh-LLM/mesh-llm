@@ -231,7 +231,7 @@ impl FailOpenArtifactCapture {
     ) -> Result<MaintenanceReceipt, LogStoreError> {
         let state = self.state.lock().expect("capture state mutex poisoned");
         let CaptureState::Available(store) = &*state else {
-            return Err(LogStoreError::ArtifactDeletionUnavailable);
+            return Err(LogStoreError::MaintenanceExecutionCancelled);
         };
         store.execute_cleanup(operation_id, reason, control)
     }
@@ -246,7 +246,7 @@ impl FailOpenArtifactCapture {
     ) -> Result<MaintenanceReceipt, LogStoreError> {
         let state = self.state.lock().expect("capture state mutex poisoned");
         let CaptureState::Available(store) = &*state else {
-            return Err(LogStoreError::ArtifactDeletionUnavailable);
+            return Err(LogStoreError::MaintenanceExecutionCancelled);
         };
         store.delete_request_cascade(request, control)
     }
@@ -259,7 +259,7 @@ impl FailOpenArtifactCapture {
     ) -> Result<MaintenanceReceipt, LogStoreError> {
         let state = self.state.lock().expect("capture state mutex poisoned");
         let CaptureState::Available(store) = &*state else {
-            return Err(LogStoreError::ArtifactDeletionUnavailable);
+            return Err(LogStoreError::MaintenanceExecutionCancelled);
         };
         store.prepare_delete_request(request, control)
     }
@@ -273,7 +273,7 @@ impl FailOpenArtifactCapture {
     ) -> Result<MaintenanceReceipt, LogStoreError> {
         let state = self.state.lock().expect("capture state mutex poisoned");
         let CaptureState::Available(store) = &*state else {
-            return Err(LogStoreError::ArtifactDeletionUnavailable);
+            return Err(LogStoreError::MaintenanceExecutionCancelled);
         };
         store.execute_prepared_delete_request(request, control)
     }

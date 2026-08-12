@@ -219,13 +219,7 @@ impl LoggingRuntimeState {
         // Cleanup may emit an audit entry, so it must be joined before the
         // persistence drain closes its delivery boundary.
         self.shutdown_cleanup_worker().await;
-        let cleanup_timed_out = self
-            .cleanup_status
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .state
-            == CleanupWorkerState::TimedOut;
-        if cleanup_timed_out {
+        if self.status().cleanup_worker_state == "timed_out" {
             self.shutdown_webhook_delivery_worker().await;
             return false;
         }

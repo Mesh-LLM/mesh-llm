@@ -120,9 +120,8 @@ impl LoggingService {
         content: &[u8],
         media_kind: Option<&str>,
     ) {
-        let oversized = content.len() > self.config.artifact_command_max_bytes;
-        let media_kind = validated_media_kind(media_kind, (!oversized).then_some(content));
-        let (content, memory_permit) = if oversized {
+        let media_kind = validated_media_kind(media_kind, Some(content));
+        let (content, memory_permit) = if content.len() > self.config.artifact_command_max_bytes {
             (
                 ArtifactCaptureContent::Unavailable(
                     ArtifactUnavailableReason::CaptureContentLimitExceeded,
@@ -455,21 +454,14 @@ mod tests {
         );
         let request_id = RequestId::new();
         let (_guard, _) = service.register_request(request_id);
-        service.enqueue_openai_artifact_body(
-            request_id,
-            "response",
-            b"not-json-but-oversized",
-            Some("application/json"),
-        );
+        service.enqueue_openai_artifact_body(request_id, "response", b"12345", None);
         assert_eq!(service.pump_sync().await, 3);
         assert!(sink.records().iter().any(|record| matches!(
             record,
             Recorded::Artifact {
                 content: "limit_unavailable",
-                media_kind,
                 ..
             }
-            if media_kind == "application/json"
         )));
     }
 

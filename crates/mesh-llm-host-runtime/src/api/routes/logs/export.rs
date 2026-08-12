@@ -108,7 +108,6 @@ fn build_export(
     };
     let mut remaining_rows = super::parse::MAX_EXPORT_ROWS;
     let mut item_lengths = Vec::new();
-    let mut artifact_content_truncated = false;
     let page_has_more = page.next_cursor.is_some();
     let page_len = page.items.len();
     let item_options = ExportItemOptions {
@@ -120,9 +119,7 @@ fn build_export(
     for (index, record) in page.items.into_iter().enumerate() {
         if remaining_rows == 0 {
             export.truncated = true;
-            if !artifact_content_truncated {
-                set_resume_cursor(&mut export);
-            }
+            set_resume_cursor(&mut export);
             break;
         }
         let request_id = record.request_id.clone();
@@ -153,20 +150,15 @@ fn build_export(
         // was cleared by the first item with a later sibling and never
         // restored, so an exact final multi-item page lied with
         // `truncated: true, nextCursor: null`.
-        export.truncated = artifact_content_truncated || built.child_truncated || request_has_later;
+        export.truncated = built.child_truncated || request_has_later;
         export.retry_required |= built.child_truncated;
         export.next_cursor =
-            (!artifact_content_truncated && !built.child_truncated && request_has_later)
-                .then(|| cursor_for_last(&export));
+            (!built.child_truncated && request_has_later).then(|| cursor_for_last(&export));
         if estimated_export_len(&export, &item_lengths)? > byte_limit {
             export.items.pop();
             item_lengths.pop();
             export.truncated = true;
-            if !artifact_content_truncated {
-                set_resume_cursor(&mut export);
-            } else {
-                export.next_cursor = None;
-            }
+            set_resume_cursor(&mut export);
             if export.next_cursor.is_none() {
                 export.retry_required = true;
             }
@@ -193,8 +185,6 @@ fn build_export(
                     .expect("export item size was recorded") = serialized_len(item)?;
                 export.truncated = true;
                 export.retry_required = true;
-                artifact_content_truncated = true;
-                export.next_cursor = None;
             } else {
                 export.artifact_content_included = true;
             }

@@ -1181,15 +1181,11 @@ if body.get("disposition") not in {"executed", "coalesced"}:
 inventory = body.get("inventory")
 if not isinstance(inventory, list):
     raise SystemExit("scan-refresh did not return an inventory list")
-if not all(isinstance(entry, dict) for entry in inventory):
-    raise SystemExit("inventory entries must be objects")
 refs = [entry.get("canonical_model_ref") for entry in inventory]
-if not all(isinstance(ref, str) and ref for ref in refs):
-    raise SystemExit("inventory entries require canonical model refs")
-if not all(isinstance(entry.get("metadata"), dict) for entry in inventory):
-    raise SystemExit("inventory did not include typed model metadata")
 if refs != sorted(refs):
     raise SystemExit("inventory is not sorted by canonical model ref")
+if inventory and not all(isinstance(entry.get("metadata"), dict) for entry in inventory):
+    raise SystemExit("inventory did not include typed model metadata")
 if not body.get("target_node_id"):
     raise SystemExit("target node id is missing")
 PY

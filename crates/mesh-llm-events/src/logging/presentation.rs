@@ -72,12 +72,8 @@ impl CanonicalEnvelope {
                 append_status("request completed".to_string(), status_code),
                 duration_ms,
             ),
-            LifecycleEvent::Failed { status_code, .. } => {
-                append_status("request failed".to_string(), status_code)
-            }
-            LifecycleEvent::Rejected { status_code, .. } => {
-                append_status("request rejected".to_string(), status_code)
-            }
+            LifecycleEvent::Failed { .. } => "request failed".to_string(),
+            LifecycleEvent::Rejected { .. } => "request rejected".to_string(),
             LifecycleEvent::Cancelled { .. } => "request cancelled".to_string(),
             LifecycleEvent::Dropped { .. } => "request dropped".to_string(),
         }

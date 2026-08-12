@@ -1693,10 +1693,7 @@ impl LoggingService {
     /// Snapshot the delivery owner's state for trusted-local diagnostics.
     #[allow(dead_code)]
     pub(crate) fn persistence_worker_state(&self) -> PersistenceWorkerState {
-        let delivery = self
-            .delivery
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let delivery = self.delivery.lock().expect("delivery mutex poisoned");
         match &*delivery {
             DeliveryMode::Manual { .. } => PersistenceWorkerState::NotStarted,
             DeliveryMode::ManualPumping(_) | DeliveryMode::Worker(_) => {

@@ -9,6 +9,18 @@
 - `ready` is the aggregate runtime-ready event. Multi-model startup emits it only after every declared startup model reaches readiness, then queues the first `>` prompt.
 - Interactive pretty mode is only used when stdin and stderr are TTYs. The fallback line renderer still honors `h` for help, `i` for an info snapshot, and `q` for clean shutdown.
 
+### Request logging projection
+
+Canonical lifecycle events use the production `OutputEvent` projection. Pretty
+and TUI output expose bounded local request/event IDs, replay channel/sequence,
+terminal outcome, status, duration, and numeric token counts when present; they
+never expose prompts, completions, artifact bodies, credentials, URLs, or
+free-form error detail. These IDs remain outside mesh/network and OTLP
+telemetry. The terminal stream is still not the request ledger. Operators use
+the embedded Logs page for scoped history, details, retention, export, and audit
+receipts; see
+[`docs/LOGGING.md`](../../../../docs/LOGGING.md).
+
 ## TUI rewrite maintenance notes
 
 Keep these details current when changing `OutputEvent` or dashboard state:

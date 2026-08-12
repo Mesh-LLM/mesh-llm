@@ -61,12 +61,14 @@ vi.mock('@/features/shell/hooks/useUiPreferences', () => ({
   })
 }))
 
+const featureFlagState = vi.hoisted(() => ({ logsPage: true }))
+
 vi.mock('@/lib/feature-flags', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/feature-flags')>()
 
   return {
     ...actual,
-    useBooleanFeatureFlag: () => true
+    useBooleanFeatureFlag: (path: string) => (path === 'global/logsPage' ? featureFlagState.logsPage : true)
   }
 })
 
@@ -105,6 +107,28 @@ describe('RootLayout', () => {
     renderRootLayout('live', new QueryClient())
 
     expect(useStatusStreamSpy).toHaveBeenCalledWith({ enabled: true })
+  })
+
+  it('selects the Logs tab for the logs route', () => {
+    routerState.pathname = '/logs'
+    featureFlagState.logsPage = true
+
+    renderRootLayout('harness')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ tab: 'logs', tabHrefs: expect.objectContaining({ logs: '/logs' }) })
+    )
+  })
+
+  it('hides the Logs tab when the logs feature flag is disabled', () => {
+    routerState.pathname = '/logs'
+    featureFlagState.logsPage = false
+
+    renderRootLayout('harness')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ tab: null, enabledTabs: expect.objectContaining({ logs: false }) })
+    )
   })
 
   it('passes privacy-safe private-mesh invitation rows while keeping the configured API target', () => {

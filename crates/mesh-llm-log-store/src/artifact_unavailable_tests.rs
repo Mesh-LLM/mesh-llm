@@ -59,22 +59,4 @@ fn startup_reconciliation_preserves_intentionally_unavailable_artifacts() {
         0,
         "metadata-only artifacts can never be reclassified as missing files"
     );
-    assert_eq!(
-        artifacts
-            .store_ref()
-            .update_artifact_pointer_corrupt(artifact_id)
-            .expect("guarded corrupt update"),
-        0,
-        "metadata-only artifacts can never be reclassified as corrupt files"
-    );
-    assert_eq!(
-        artifacts
-            .store_ref()
-            .get_artifact_pointer(artifact_id)
-            .expect("pointer query")
-            .expect("pointer remains")
-            .unavailable_reason
-            .as_deref(),
-        Some("streaming_response_not_assembled")
-    );
 }

@@ -17,6 +17,7 @@ pub use fatal::{emit_fatal_error, emit_fatal_panic};
 
 mod dashboard;
 mod formatting;
+mod logging_projection;
 mod merging;
 pub(in crate::output) mod rendering;
 mod state;

@@ -307,8 +307,7 @@ impl LogStore {
     ) -> Result<usize, LogStoreError> {
         let conn = self.conn();
         conn.execute(
-            "UPDATE artifact_pointers SET corrupt = 1 \
-             WHERE artifact_id = ? AND unavailable_reason IS NULL",
+            "UPDATE artifact_pointers SET corrupt = 1 WHERE artifact_id = ?",
             rusqlite::params![artifact_id],
         )
         .map_err(LogStoreError::Sqlite)

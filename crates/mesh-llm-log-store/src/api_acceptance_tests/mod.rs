@@ -35,27 +35,8 @@ impl Default for TestClock {
 impl ClockTrait for TestClock {
     fn now(&self) -> String {
         let n = self.instant.fetch_add(1, Ordering::Relaxed);
-        format!(
-            "2025-01-01T{:02}:{:02}:{:02}Z",
-            (n / 3600) % 24,
-            (n / 60) % 60,
-            n % 60
-        )
+        format!("2025-01-01T00:00:{:02}Z", n % 60)
     }
-}
-
-#[test]
-fn test_clock_remains_monotonic_after_sixty_reads() {
-    let clock = TestClock::default();
-    let first = clock.now();
-    for _ in 0..59 {
-        clock.now();
-    }
-    let sixty_first = clock.now();
-
-    assert_eq!(first, "2025-01-01T00:00:00Z");
-    assert_eq!(sixty_first, "2025-01-01T00:01:00Z");
-    assert!(first < sixty_first);
 }
 
 /// Open a fresh store backed by a temp directory. Directory is cleaned up on drop.

@@ -6,7 +6,6 @@ pub struct OperationalAuditRecord {
     source: &'static str,
     code: &'static str,
     severity: Option<OperationalAuditSeverity>,
-    resource: Option<&'static str>,
     detail_json: Option<String>,
     entry_id: Option<String>,
     occurred_at: Option<String>,
@@ -21,7 +20,6 @@ impl OperationalAuditRecord {
             source,
             code,
             severity: None,
-            resource: None,
         }
     }
 
@@ -37,11 +35,7 @@ impl OperationalAuditRecord {
         self.severity
     }
 
-    pub const fn resource(&self) -> Option<&'static str> {
-        self.resource
-    }
-
-    pub(crate) fn with_internal_detail(mut self, detail_json: String) -> Self {
+    pub(super) fn with_internal_detail(mut self, detail_json: String) -> Self {
         self.detail_json = Some(detail_json);
         self
     }
@@ -77,7 +71,6 @@ pub struct OperationalAuditRecordBuilder {
     source: &'static str,
     code: &'static str,
     severity: Option<OperationalAuditSeverity>,
-    resource: Option<&'static str>,
 }
 
 impl OperationalAuditRecordBuilder {
@@ -86,17 +79,11 @@ impl OperationalAuditRecordBuilder {
         self
     }
 
-    pub const fn resource(mut self, resource: &'static str) -> Self {
-        self.resource = Some(resource);
-        self
-    }
-
     pub const fn build(self) -> OperationalAuditRecord {
         OperationalAuditRecord {
             source: self.source,
             code: self.code,
             severity: self.severity,
-            resource: self.resource,
             detail_json: None,
             entry_id: None,
             occurred_at: None,

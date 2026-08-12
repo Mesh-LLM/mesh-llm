@@ -12,11 +12,10 @@ pub(super) async fn handle(
     state: &MeshApi,
     path: &str,
 ) -> anyhow::Result<()> {
-    let route = path.split_once('?').map_or(path, |(route, _)| route);
-    if route == "/api/diagnostics/split-readiness" {
+    if path.starts_with("/api/diagnostics/split-readiness") {
         return handle_split_readiness(stream, state, path).await;
     }
-    if route == "/api/diagnostics" {
+    if path == "/api/diagnostics" {
         return handle_general_diagnostics(stream, state).await;
     }
     respond_error(stream, 404, "Not found").await
@@ -109,13 +108,7 @@ fn get_audit_logging_status(_inner: &crate::api::state::ApiInner) -> serde_json:
         return serde_json::json!({ "enabled": false });
     }
 
-    let Some(sink) = audit_sink() else {
-        return serde_json::json!({
-            "enabled": false,
-            "degraded": true,
-            "reason": "sink_unavailable",
-        });
-    };
+    let sink = audit_sink().expect("audit enabled but no sink");
     let format = match sink.format() {
         AuditLogFormat::JsonLines => "json_lines",
     };

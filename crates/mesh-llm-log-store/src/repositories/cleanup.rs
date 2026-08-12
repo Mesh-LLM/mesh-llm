@@ -845,12 +845,7 @@ impl LogStore {
     ) -> Result<Vec<CascadeArtifactPointer>, LogStoreError> {
         let mut statement = tx
             .prepare(
-                "SELECT pending.artifact_id, pending.request_id \
-                 FROM pending_artifact_deletions AS pending \
-                 WHERE NOT EXISTS (\
-                     SELECT 1 FROM summaries \
-                     WHERE summaries.request_id = pending.request_id\
-                 ) \
+                "SELECT artifact_id, request_id FROM pending_artifact_deletions \
                  ORDER BY artifact_id ASC, request_id ASC LIMIT ?1",
             )
             .map_err(LogStoreError::Sqlite)?;

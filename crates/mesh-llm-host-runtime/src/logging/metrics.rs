@@ -169,12 +169,10 @@ impl LoggingMetrics {
     /// poisoned handles are dropped instead of waiting, and any sink panic is
     /// contained at this boundary.
     pub(crate) fn record(&self, metric: LoggingMetric) {
-        let sink = {
-            let Ok(sink) = self.sink.try_read() else {
-                return;
-            };
-            sink.clone()
+        let Ok(sink) = self.sink.try_read() else {
+            return;
         };
+        let sink = sink.clone();
         let Some(sink) = sink else {
             return;
         };

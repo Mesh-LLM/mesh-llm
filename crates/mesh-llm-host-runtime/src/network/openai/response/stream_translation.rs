@@ -62,6 +62,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     }
 
     if !(200..300).contains(&probe.status_code) {
+        route_observer.stream_error("upstream_status");
         return relay_error_response(tcp_stream, reader, probe, route_observer).await;
     }
 
@@ -111,9 +112,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
                 break;
             }
 
-            if data.contains("\"usage\"")
-                && let Some(usage) = parse_token_usage_from_json_body(data.as_bytes())
-            {
+            if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
                 observed_usage = Some(usage);
             }
             let normalized = state.normalize_data(&data);
@@ -145,12 +144,12 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         }
     }
 
+    let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
+    let _ = tcp_stream.shutdown().await;
     if !done_seen {
         route_observer.stream_error("upstream_stream_incomplete");
         return Err(anyhow!("upstream chat stream ended before [DONE]"));
     }
-    let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
-    let _ = tcp_stream.shutdown().await;
     route_observer.stream_completed(observed_usage);
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
@@ -181,6 +180,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     }
 
     if !(200..300).contains(&probe.status_code) {
+        route_observer.stream_error("upstream_status");
         return relay_error_response(tcp_stream, reader, probe, route_observer).await;
     }
 

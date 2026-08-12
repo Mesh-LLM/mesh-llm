@@ -24,6 +24,17 @@ mesh-llm models <subcommand> --help
 most common serving and client-only options. Use `--help-advanced` when you need
 the complete runtime option surface.
 
+### Logging and local capture
+
+`mesh-llm --help-advanced` also documents the node-local logging store, capture
+modes, retention setting, and terminal-event navigation. `--log-format pretty`
+is the default operator view; `--log-format json` emits one stable operational
+event per stdout line. The local ledger remains the source of truth for request
+details and artifacts; CLI output is a bounded, privacy-safe process view.
+
+For the trusted-local ledger, retention, and capture guidance, see
+[Operator request logging](/docs/LOGGING/).
+
 ## Check the running version
 
 ```bash

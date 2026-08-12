@@ -120,6 +120,10 @@ queue gauge, and the closed lifecycle/cleanup/webhook/artifact outcome labels
 listed below. Logging metrics never include event payloads, prompts,
 completions, request or delivery IDs, URLs, local paths, raw identifiers,
 tokens, or hashes. Replay eviction, gap, and drop metrics have no attributes.
+It is not a log transport: request history, lifecycle details, artifact
+metadata, and maintenance receipts remain on the trusted-local logging service
+and are never mirrored into OTLP. See [the operator logging guide](../LOGGING.md)
+for that local workflow.
 
 Guardrail v1 validates native runtime output, not hard constrained decoding. Streaming is
 pass-through, no tool execution happens inside the guardrail layer, and real

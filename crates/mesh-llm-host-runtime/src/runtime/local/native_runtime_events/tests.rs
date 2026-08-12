@@ -111,6 +111,7 @@ fn native_model_open_handled_failure_translates_to_warning_without_readiness_eve
 }
 
 #[test]
+#[serial_test::serial]
 fn native_model_open_reporter_emits_visibility_only_events() {
     let sink = Arc::new(RecordingOutputSink::default());
     let _reset_guard = OutputSinkResetGuard;
@@ -285,16 +286,13 @@ async fn native_reporter_keeps_rich_presentation_while_audit_stays_static() {
         );
     }
 
-    let raw_audit_payloads = service
+    let audits = service
         .bus_ref()
         .drain()
         .into_iter()
-        .map(|entry| entry.payload)
-        .collect::<Vec<_>>();
-    let audits = raw_audit_payloads
-        .iter()
-        .map(|payload| {
-            let audit: serde_json::Value = serde_json::from_str(payload).expect("audit payload");
+        .map(|entry| {
+            let audit: serde_json::Value =
+                serde_json::from_str(&entry.payload).expect("audit payload");
             serde_json::json!({
                 "kind": "audit",
                 "level": audit["severity"],
@@ -322,7 +320,7 @@ async fn native_reporter_keeps_rich_presentation_while_audit_stays_static() {
             }),
         ]
     );
-    let serialized_audits = raw_audit_payloads.join("\n");
+    let serialized_audits = format!("{audits:?}");
     for raw_value in [
         "model-a.gguf",
         "prompt=private native detail",

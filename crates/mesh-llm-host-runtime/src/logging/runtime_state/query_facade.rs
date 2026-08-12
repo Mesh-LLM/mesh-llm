@@ -194,14 +194,6 @@ impl LoggingQueryFacade {
         Err(LogStoreError::MaintenanceExecutionCancelled)
     }
 
-    pub(crate) fn cleanup_receipt(
-        &self,
-        operation_id: mesh_llm_log_store::MaintenanceOperationId,
-        reason: &mesh_llm_log_store::MaintenanceReason,
-    ) -> Result<mesh_llm_log_store::MaintenanceReceipt, LogStoreError> {
-        self.store.cleanup_receipt(operation_id, reason)
-    }
-
     /// Delete exactly one terminal durable request through the confined
     /// artifact owner. The API layer never receives filesystem paths.
     pub(crate) fn delete_request_cascade(

@@ -336,7 +336,13 @@ impl PersistSink for LogStoreSink {
             .occurred_at()
             .map(str::to_owned)
             .unwrap_or_else(|| self.store.now());
-        let detail_json = operational_audit_detail(&record);
+        let detail_json = if let Some(detail_json) = record.detail_json() {
+            Some(apply_redaction(&sanitize_paths_in_text(detail_json)).0)
+        } else {
+            record
+                .severity()
+                .map(|severity| serde_json::json!({ "severity": severity.as_str() }).to_string())
+        };
         self.run_blocking(move |store| {
             store.insert_audit_entry(
                 &entry_id,
@@ -364,34 +370,6 @@ impl PersistSink for LogStoreSink {
     }
 }
 
-fn operational_audit_detail(record: &OperationalAuditRecord) -> Option<String> {
-    let mut details = match record.detail_json() {
-        Some(detail_json) => {
-            let sanitized = apply_redaction(&sanitize_paths_in_text(detail_json)).0;
-            match serde_json::from_str::<serde_json::Value>(&sanitized) {
-                Ok(serde_json::Value::Object(details)) => details,
-                Ok(detail) => serde_json::Map::from_iter([("detail".to_string(), detail)]),
-                Err(_) => serde_json::Map::from_iter([(
-                    "detail".to_string(),
-                    serde_json::Value::String(sanitized),
-                )]),
-            }
-        }
-        None => serde_json::Map::new(),
-    };
-    if let Some(severity) = record.severity() {
-        details
-            .entry("severity".to_string())
-            .or_insert_with(|| serde_json::Value::String(severity.as_str().to_string()));
-    }
-    if let Some(resource) = record.resource() {
-        details
-            .entry("resource".to_string())
-            .or_insert_with(|| serde_json::Value::String(resource.to_string()));
-    }
-    (!details.is_empty()).then(|| serde_json::Value::Object(details).to_string())
-}
-
 fn webhook_delivery_id(event_id: &str) -> String {
     format!("webhook:{event_id}")
 }
@@ -415,28 +393,8 @@ mod tests {
 
     use super::*;
     use crate::logging::{
-        LoggingService, OperationalAuditSeverity, PersistSink, ServiceConfig, SystemClock,
-        TerminalOutcome,
+        LoggingService, PersistSink, ServiceConfig, SystemClock, TerminalOutcome,
     };
-
-    #[test]
-    fn operational_audit_detail_preserves_detail_severity_and_resource() {
-        let record = OperationalAuditRecord::builder("cli", "cli_command_completed")
-            .severity(OperationalAuditSeverity::Info)
-            .resource("models")
-            .build()
-            .with_internal_detail(r#"{"result":"completed"}"#.to_string());
-
-        let detail: serde_json::Value = serde_json::from_str(
-            operational_audit_detail(&record)
-                .expect("audit detail")
-                .as_str(),
-        )
-        .expect("valid detail JSON");
-        assert_eq!(detail["result"], "completed");
-        assert_eq!(detail["severity"], "info");
-        assert_eq!(detail["resource"], "models");
-    }
 
     const OCCURRED_AT: &str = "2026-08-04T12:00:00Z";
 

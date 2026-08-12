@@ -347,16 +347,16 @@ fn gap_frames(
         .filter_map(|channel| {
             let requested = subscription.cursor.sequence(*channel);
             let channel_evicted_through = evicted_through.sequence(*channel);
-            if requested >= channel_evicted_through {
-                return None;
-            }
-            let gap = GapData::new(
-                *channel,
-                requested.saturating_add(1),
-                channel_evicted_through,
-                recovery_cursor.clone(),
-            );
-            gap_frame(cursor_from_replay(latest), &gap).ok()
+            (requested < channel_evicted_through).then(|| {
+                let gap = GapData::new(
+                    *channel,
+                    requested.saturating_add(1),
+                    channel_evicted_through,
+                    recovery_cursor.clone(),
+                );
+                gap_frame(cursor_from_replay(latest), &gap)
+                    .expect("bounded replay-gap data fits the SSE frame cap")
+            })
         })
         .collect()
 }

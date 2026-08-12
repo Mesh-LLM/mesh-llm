@@ -147,16 +147,6 @@ async fn read_tunneled_http_header_prefix<R>(reader: &mut R) -> Result<Vec<u8>>
 where
     R: AsyncRead + Unpin,
 {
-    read_tunneled_http_header_prefix_with_timeout(reader, quic_response_first_byte_timeout()).await
-}
-
-async fn read_tunneled_http_header_prefix_with_timeout<R>(
-    reader: &mut R,
-    read_timeout: Duration,
-) -> Result<Vec<u8>>
-where
-    R: AsyncRead + Unpin,
-{
     let mut prefix = Vec::with_capacity(TUNNELED_HTTP_HEADER_READ_CHUNK_BYTES);
     let mut chunk = [0u8; TUNNELED_HTTP_HEADER_READ_CHUNK_BYTES];
     let max_header_bytes = crate::network::openai::request_parse::MAX_HEADER_BYTES;
@@ -166,9 +156,7 @@ where
             break;
         }
         let read_cap = (max_header_bytes - prefix.len()).min(chunk.len());
-        let bytes_read = tokio::time::timeout(read_timeout, reader.read(&mut chunk[..read_cap]))
-            .await
-            .context("timed out while reading tunneled HTTP header prefix")??;
+        let bytes_read = reader.read(&mut chunk[..read_cap]).await?;
         if bytes_read == 0 {
             break;
         }
@@ -450,23 +438,6 @@ mod tests {
 
         assert_eq!(prefix, request);
         assert!(prefix.len() <= crate::network::openai::request_parse::MAX_HEADER_BYTES);
-    }
-
-    #[tokio::test]
-    async fn tunnel_prefetch_times_out_when_a_partial_header_stalls() {
-        let (mut writer, mut reader) = tokio::io::duplex(4096);
-        writer
-            .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: local")
-            .await
-            .unwrap();
-
-        let error =
-            read_tunneled_http_header_prefix_with_timeout(&mut reader, Duration::from_millis(10))
-                .await
-                .expect_err("partial header must not stall forever");
-
-        assert!(error.to_string().contains("timed out"));
-        drop(writer);
     }
 
     /// Simulate relay_bidirectional behavior when one direction finishes

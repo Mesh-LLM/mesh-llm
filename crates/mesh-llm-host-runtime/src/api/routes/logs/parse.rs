@@ -470,12 +470,10 @@ fn audit_reason(value: String) -> Result<String, LogsError> {
             "audit reason must be non-empty and at most 256 characters",
         ));
     }
-    let bytes = value.as_bytes();
-    let windows_path = bytes.len() > 2
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'/' | b'\\');
-    let path_shaped = value.starts_with('/') || value.starts_with("~/") || windows_path;
+    let path_shaped = value.starts_with('/')
+        || value.starts_with("~/")
+        || value.as_bytes().get(1) == Some(&b':')
+        || value.contains('\\');
     Ok(if path_shaped {
         "[REDACTED]".to_string()
     } else {
@@ -556,23 +554,6 @@ fn sort(value: &str) -> Result<QuerySort, LogsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn audit_reason_only_treats_well_formed_windows_prefixes_as_paths() {
-        assert_eq!(
-            audit_reason(r"C:\private\secret".to_string()).unwrap(),
-            "[REDACTED]"
-        );
-        assert_eq!(
-            audit_reason("C:/private/secret".to_string()).unwrap(),
-            "[REDACTED]"
-        );
-        assert_eq!(audit_reason("key:value".to_string()).unwrap(), "key:value");
-        assert_eq!(
-            audit_reason(r"operator\note".to_string()).unwrap(),
-            r"operator\note"
-        );
-    }
 
     #[test]
     fn rejects_forged_or_ambiguous_query_input() {

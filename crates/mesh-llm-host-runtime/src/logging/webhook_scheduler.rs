@@ -5,7 +5,7 @@
 //! after terminal records are durable, then bounds shutdown so an interrupted
 //! attempt remains recoverable through the store's stale-lease claim rules.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::sync::watch;
@@ -20,22 +20,17 @@ const WEBHOOK_DELIVERY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) struct WebhookDeliveryScheduler {
     shutdown_tx: watch::Sender<bool>,
     task: Mutex<Option<JoinHandle<()>>>,
-    shutdown_timeout: Arc<Mutex<Duration>>,
+    shutdown_timeout: Duration,
 }
 
 impl WebhookDeliveryScheduler {
     pub(crate) fn start(worker: WebhookDeliveryWorker) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let shutdown_timeout = Arc::new(Mutex::new(WEBHOOK_DELIVERY_SHUTDOWN_TIMEOUT));
-        let task = tokio::spawn(run_scheduler(
-            worker,
-            shutdown_rx,
-            Arc::clone(&shutdown_timeout),
-        ));
+        let task = tokio::spawn(run_scheduler(worker, shutdown_rx));
         Self {
             shutdown_tx,
             task: Mutex::new(Some(task)),
-            shutdown_timeout,
+            shutdown_timeout: WEBHOOK_DELIVERY_SHUTDOWN_TIMEOUT,
         }
     }
 
@@ -53,11 +48,7 @@ impl WebhookDeliveryScheduler {
         else {
             return;
         };
-        let shutdown_timeout = *self
-            .shutdown_timeout
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if tokio::time::timeout(shutdown_timeout, &mut task)
+        if tokio::time::timeout(self.shutdown_timeout, &mut task)
             .await
             .is_err()
         {
@@ -67,11 +58,8 @@ impl WebhookDeliveryScheduler {
     }
 
     #[cfg(test)]
-    fn with_shutdown_timeout_for_test(self, timeout: Duration) -> Self {
-        *self
-            .shutdown_timeout
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = timeout;
+    fn with_shutdown_timeout_for_test(mut self, timeout: Duration) -> Self {
+        self.shutdown_timeout = timeout;
         self
     }
 }
@@ -90,11 +78,7 @@ impl Drop for WebhookDeliveryScheduler {
     }
 }
 
-async fn run_scheduler(
-    worker: WebhookDeliveryWorker,
-    mut shutdown_rx: watch::Receiver<bool>,
-    shutdown_timeout: Arc<Mutex<Duration>>,
-) {
+async fn run_scheduler(worker: WebhookDeliveryWorker, mut shutdown_rx: watch::Receiver<bool>) {
     let mut ticker =
         tokio::time::interval_at(tokio::time::Instant::now(), WEBHOOK_DELIVERY_CADENCE);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -103,10 +87,7 @@ async fn run_scheduler(
             biased;
             changed = shutdown_rx.changed() => {
                 if changed.is_err() || *shutdown_rx.borrow() {
-                    let timeout = *shutdown_timeout
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    drain_eligible_deliveries(&worker, timeout).await;
+                    drain_eligible_deliveries(&worker, WEBHOOK_DELIVERY_SHUTDOWN_TIMEOUT).await;
                     return;
                 }
             }

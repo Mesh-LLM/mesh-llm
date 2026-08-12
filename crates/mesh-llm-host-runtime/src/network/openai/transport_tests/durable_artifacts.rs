@@ -81,11 +81,7 @@ async fn passive_missing_model_error_persists_the_client_visible_response_artifa
         .expect("artifact reader")
         .read_artifact(&response.artifact_id)
         .expect("response artifact content");
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&content.bytes).expect("stored JSON response"),
-        serde_json::from_slice::<serde_json::Value>(&wire[body_start..])
-            .expect("wire JSON response")
-    );
+    assert_eq!(content.bytes, wire[body_start..]);
     let response_json = String::from_utf8(content.bytes).expect("JSON response artifact");
     assert!(response_json.contains("not-served"));
     assert!(response_json.contains("rate_limit_exceeded"));
@@ -169,9 +165,5 @@ async fn passive_body_parse_error_persists_a_response_only_after_complete_header
         .expect("artifact reader")
         .read_artifact(&response.artifact_id)
         .expect("response artifact content");
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&content.bytes).expect("stored JSON response"),
-        serde_json::from_slice::<serde_json::Value>(&wire[body_start..])
-            .expect("wire JSON response")
-    );
+    assert_eq!(content.bytes, wire[body_start..]);
 }

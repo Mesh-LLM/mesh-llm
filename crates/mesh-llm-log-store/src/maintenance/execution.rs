@@ -191,6 +191,11 @@ impl ArtifactFileStore {
             let scope = delete_one_scope()?;
             let targets = vec![request.request_id.clone()];
             let planned = count_terminal_request_owner(transaction, &request.request_id)?;
+            // Keep the queue durable with the receipt. This never performs
+            // file I/O and a retry may safely rebuild it from current pointers.
+            let pointers = terminal_request_artifacts(transaction, &request.request_id)?;
+            ensure_maintenance_active(control)?;
+            LogStore::queue_artifact_deletions(transaction, &pointers)?;
             let fingerprint = selection_fingerprint(MaintenanceAction::DeleteOne, &scope, &targets);
             let receipt = MaintenanceReceipt {
                 operation_id: request.operation_id,

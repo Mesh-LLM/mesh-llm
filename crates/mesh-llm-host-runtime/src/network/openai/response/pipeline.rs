@@ -155,10 +155,11 @@ async fn relay_pipeline_streaming_response(
             }
         }
     }
-    if client_stream.write_all(b"0\r\n\r\n").await.is_err() {
+    if client_stream.write_all(b"0\r\n\r\n").await.is_err()
+        || client_stream.shutdown().await.is_err()
+    {
         return PipelineProxyResult::Dropped;
     }
-    let _ = client_stream.shutdown().await;
     completed_pipeline_response(status, usage_parser.usage)
 }
 
@@ -232,10 +233,10 @@ async fn relay_pipeline_non_streaming_response(
             );
             if client_stream.write_all(header.as_bytes()).await.is_err()
                 || client_stream.write_all(&resp_bytes).await.is_err()
+                || client_stream.shutdown().await.is_err()
             {
                 PipelineProxyResult::Dropped
             } else {
-                let _ = client_stream.shutdown().await;
                 completed_pipeline_response(status, usage)
             }
         }

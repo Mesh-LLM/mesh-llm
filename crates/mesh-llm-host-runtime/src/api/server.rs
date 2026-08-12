@@ -173,6 +173,8 @@ pub(crate) fn is_console_index_route(path: &str) -> bool {
         path,
         "/" | "/dashboard"
             | "/dashboard/"
+            | "/logs"
+            | "/logs/"
             | "/chat"
             | "/chat/"
             | "/configuration"
@@ -182,6 +184,7 @@ pub(crate) fn is_console_index_route(path: &str) -> bool {
             | "/__meshviz-perf"
     ) || path.starts_with("/chat/")
         || path.starts_with("/configuration/")
+        || path.starts_with("/logs/")
         || path.starts_with("/plugins/")
 }
 

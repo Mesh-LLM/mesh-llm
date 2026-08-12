@@ -147,7 +147,7 @@ async fn handle_with_time_caps(
     let audit_facade = facade.clone();
     let reason = request.reason.as_str().to_owned();
     let started = Instant::now();
-    let control = MaintenanceDeadline::new(prepare_time_cap.max(execution_time_cap));
+    let control = MaintenanceDeadline::new(DELETE_TIME_CAP);
     let prepare_control = control.clone();
     let prepare_facade = facade.clone();
     let prepared = timeout_maintenance(

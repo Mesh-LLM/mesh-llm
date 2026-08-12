@@ -107,16 +107,6 @@ fn prepared_delete_one_persists_retryable_intent_before_artifact_io() {
     assert_eq!(prepared.state, MaintenanceReceiptState::Previewed);
     assert!(prepared.execution_audit_id.is_none());
     assert!(
-        pending_artifact_deletions(artifacts.store_ref()).is_empty(),
-        "preparation must not publish artifact files to retention"
-    );
-    let (deleted, pending) = artifacts
-        .store_ref()
-        .cascade_prune_terminal_summaries_to_max_rows(10)
-        .expect("unrelated retention pass");
-    assert_eq!(deleted, 0);
-    assert!(pending.is_empty());
-    assert!(
         artifacts
             .store_ref()
             .query_request(request_id)

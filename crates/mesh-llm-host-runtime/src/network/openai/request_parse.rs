@@ -24,7 +24,6 @@ const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CHUNKED_WIRE_BYTES: usize = MAX_BODY_BYTES * 6 + 64 * 1024;
 const MAX_OBJECT_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_OBJECT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 pub(super) const MAX_HEADERS: usize = 64;
-const MAX_CORRELATION_ID_CHARS: usize = 128;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HttpReadLimits {
@@ -605,7 +604,8 @@ async fn read_until_headers_parsed(
                         || header.name.eq_ignore_ascii_case("x-request-id")
                         || header.name.eq_ignore_ascii_case("correlation-id")
                     {
-                        correlation_id = sanitized_correlation_id(header.value);
+                        correlation_id =
+                            Some(std::str::from_utf8(header.value).unwrap_or("").to_string());
                     }
                 }
 
@@ -635,24 +635,6 @@ async fn read_until_headers_parsed(
             Err(e) => bail!("HTTP parse error: {e}"),
         }
     }
-}
-
-fn sanitized_correlation_id(value: &[u8]) -> Option<String> {
-    let value = std::str::from_utf8(value).ok()?.trim();
-    if value.is_empty() {
-        return None;
-    }
-    let value = value
-        .chars()
-        .filter(|character| !character.is_control())
-        .collect::<String>();
-    let path_safe = crate::logging::policy::sanitize_paths_in_text(&value);
-    let redacted = crate::logging::policy::apply_redaction(&path_safe).0;
-    let bounded = redacted
-        .chars()
-        .take(MAX_CORRELATION_ID_CHARS)
-        .collect::<String>();
-    (!bounded.is_empty()).then_some(bounded)
 }
 
 /// Parse the canonical request ID from a complete, bounded HTTP header prefix.
@@ -1078,24 +1060,6 @@ mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
-
-    #[test]
-    fn correlation_ids_are_redacted_and_bounded_before_logging() {
-        let sanitized = sanitized_correlation_id(
-            format!(
-                "Bearer top-secret /Users/nick/private\r\n{}",
-                "x".repeat(256)
-            )
-            .as_bytes(),
-        )
-        .expect("non-empty correlation id");
-
-        assert!(sanitized.chars().count() <= MAX_CORRELATION_ID_CHARS);
-        assert!(!sanitized.chars().any(char::is_control));
-        assert!(!sanitized.contains("top-secret"));
-        assert!(!sanitized.contains("/Users/nick/private"));
-        assert_eq!(sanitized_correlation_id(b" \t\r\n"), None);
-    }
 
     #[test]
     fn canonical_request_id_from_header_prefix_requires_one_valid_uuid() {

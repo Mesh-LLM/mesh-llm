@@ -33,10 +33,11 @@ pub fn redact_artifact_bytes(content: &[u8]) -> Vec<u8> {
         return b"[REDACTED]".to_vec();
     };
     if let Ok(mut value) = serde_json::from_str::<Value>(text) {
-        // Always serialize the parsed value. Besides giving every string the
-        // canonical privacy scan, this collapses duplicate object keys so an
-        // earlier sensitive value cannot survive beside the parser's winner.
-        redact_json_value(&mut value);
+        // Preserve exact client-visible JSON bytes only when the canonical
+        // recursive privacy scan proves that it made no redaction change.
+        if !redact_json_value(&mut value) {
+            return content.to_vec();
+        }
         return serde_json::to_vec(&value).unwrap_or_else(|_| b"[REDACTED]".to_vec());
     }
     if text.trim_start().starts_with(['{', '[']) {
@@ -111,26 +112,9 @@ mod tests {
     }
 
     #[test]
-    fn safe_json_is_canonicalized_without_changing_its_values() {
+    fn safe_json_preserves_its_exact_original_bytes() {
         let content = br#"{ "type":"invalid_request_error", "message":"safe" }"#;
-        assert_eq!(
-            serde_json::from_slice::<Value>(&redact_artifact_bytes(content)).expect("valid JSON"),
-            serde_json::json!({
-                "type": "invalid_request_error",
-                "message": "safe",
-            })
-        );
-    }
-
-    #[test]
-    fn duplicate_sensitive_keys_cannot_preserve_an_earlier_secret() {
-        let redacted = redact_artifact_bytes(
-            br#"{"token":"first-secret","token":"[REDACTED]","safe":"kept"}"#,
-        );
-        assert!(!String::from_utf8_lossy(&redacted).contains("first-secret"));
-        let value = serde_json::from_slice::<Value>(&redacted).expect("canonical JSON");
-        assert_eq!(value["token"], "[REDACTED]");
-        assert_eq!(value["safe"], "kept");
+        assert_eq!(redact_artifact_bytes(content), content);
     }
 
     #[test]

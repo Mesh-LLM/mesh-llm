@@ -88,7 +88,7 @@ pub(crate) fn record_mesh_operational_event(event: MeshOperationalEvent) {
 }
 
 #[cfg(test)]
-pub(super) fn record_mesh_operational_event_with_service(
+fn record_mesh_operational_event_with_service(
     service: &LoggingService,
     event: MeshOperationalEvent,
 ) {

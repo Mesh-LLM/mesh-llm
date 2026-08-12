@@ -12,6 +12,7 @@ import {
   Monitor,
   Moon,
   Network,
+  ScrollText,
   Settings,
   Share2,
   Sun,
@@ -54,11 +55,12 @@ export type ApiTargetLiveness = 'checking' | 'live' | 'unavailable'
 const tabs: {
   value: AppTab
   href: string
-  labelKey: 'tabs.network' | 'tabs.reserves' | 'tabs.chat' | 'tabs.configuration'
+  labelKey: 'tabs.network' | 'tabs.reserves' | 'tabs.logs' | 'tabs.chat' | 'tabs.configuration'
 }[] = [
   { value: 'network', href: '/', labelKey: 'tabs.network' },
   { value: 'reserves', href: '/reserves', labelKey: 'tabs.reserves' },
   { value: 'chat', href: '/chat', labelKey: 'tabs.chat' },
+  { value: 'logs', href: '/logs', labelKey: 'tabs.logs' },
   { value: 'configuration', href: '/configuration', labelKey: 'tabs.configuration' }
 ]
 
@@ -71,6 +73,7 @@ const themeOptions: { value: Theme; label: string; description: string; Icon: Lu
 const tabIcons: Record<AppTab, LucideIcon> = {
   network: Network,
   reserves: BatteryCharging,
+  logs: ScrollText,
   chat: BotMessageSquare,
   configuration: Settings
 }

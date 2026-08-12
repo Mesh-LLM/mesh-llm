@@ -1,3 +1,4 @@
+use super::logging_projection::{canonical_terminal_request_id, projected_summary_line};
 use super::merging::*;
 use super::rendering::*;
 use super::state::*;
@@ -6,7 +7,7 @@ use super::{
     LlamaInstanceKind, OutputEvent, PRETTY_TUI_STARTUP_PROGRESS_MIN_STEPS, RuntimeStatus,
     TuiControlFlow, TuiEvent, TuiEventListRenderer, TuiKeyEvent, format_invite_mesh_label,
 };
-use crate::output::formatting::{OutputEventPresentation, dashboard_layout_for_terminal_size};
+use crate::output::formatting::dashboard_layout_for_terminal_size;
 use chrono::Local;
 use ratatui::layout::Rect;
 
@@ -1493,10 +1494,19 @@ impl DashboardState {
     }
 
     pub(super) fn record_mesh_event(&mut self, event: &OutputEvent) {
+        if let Some(request_id) = canonical_terminal_request_id(event) {
+            if self.terminal_request_ids.contains(&request_id) {
+                return;
+            }
+            self.terminal_request_ids.push_back(request_id);
+            while self.terminal_request_ids.len() > self.mesh_event_limit {
+                self.terminal_request_ids.pop_front();
+            }
+        }
         self.mesh_events.push_back(MeshEventState {
             timestamp: Local::now().format("%H:%M:%S").to_string(),
             level: event.level(),
-            summary: event.summary_line(),
+            summary: projected_summary_line(event),
         });
         while self.mesh_events.len() > self.mesh_event_limit {
             self.mesh_events.pop_front();

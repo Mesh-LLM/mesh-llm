@@ -681,13 +681,6 @@ pub(crate) const RUN_ROTATE_NODE: RunRotateNodeFn =
 
         let owner_key_path = resolve_owner_key_path(owner_key)?;
         if !owner_key_path.exists() {
-            let _ = emit_audit(audit_events::admin_action(
-                Some("system".to_string()),
-                "auth_rotate_node",
-                Some(&new_node_id),
-                true,
-                None,
-            ));
             eprintln!("No owner keystore found at {}", owner_key_path.display());
             eprintln!(
                 "Run `mesh-llm auth init` or `mesh-llm auth sign-node` later to attest this node."

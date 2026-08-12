@@ -300,7 +300,13 @@ const CATEGORY_ICON_BY_ID: Record<string, ConfigurationDefaultsSetting['icon']> 
   'request-defaults': 'filter',
   'skippy-transport': 'binary',
   multimodal: 'image',
-  'advanced-server': 'server'
+  'advanced-server': 'server',
+  'logs-general': 'layers',
+  'logs-retention': 'gauge',
+  'logs-buffers': 'server',
+  'logs-artifacts': 'folder',
+  'logs-webhooks': 'zap',
+  'logs-audit': 'shield'
 }
 
 const FALLBACK_DEFAULTS_CATEGORY: ConfigurationDefaultsCategory = {
@@ -329,6 +335,30 @@ const DEFAULTS_CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory>
     tomlSection: 'telemetry',
     order: 20
   },
+  'logs-general': {
+    id: 'logs-general',
+    label: 'General',
+    summary: 'Master enable, summary, and export controls',
+    help: 'General request-log settings written to the local config file',
+    tomlSection: 'logging',
+    order: 10
+  },
+  'logs-retention': {
+    id: 'logs-retention',
+    label: 'Retention',
+    summary: 'How long request logs are kept and when cleanup runs',
+    help: 'Retention settings written to the local config file',
+    tomlSection: 'logging',
+    order: 20
+  },
+  'logs-buffers': {
+    id: 'logs-buffers',
+    label: 'Buffers & Replay',
+    summary: 'In-memory event buffers and the replay window',
+    help: 'Buffer settings written to the local config file',
+    tomlSection: 'logging',
+    order: 30
+  },
   'runtime-policy': {
     id: 'runtime-policy',
     label: 'Runtime Policy',
@@ -352,6 +382,30 @@ const DEFAULTS_CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory>
     help: 'Creation-time mesh requirement settings',
     tomlSection: 'mesh_requirements',
     order: 10
+  },
+  'logs-artifacts': {
+    id: 'logs-artifacts',
+    label: 'Artifacts & Storage',
+    summary: 'On-disk artifact capture and byte limits',
+    help: 'Artifact settings written to the local config file',
+    tomlSection: 'logging',
+    order: 40
+  },
+  'logs-webhooks': {
+    id: 'logs-webhooks',
+    label: 'Webhooks',
+    summary: 'Outbound webhook delivery of log events',
+    help: 'Webhook settings written to the local config file',
+    tomlSection: 'logging',
+    order: 50
+  },
+  'logs-audit': {
+    id: 'logs-audit',
+    label: 'Security Audit',
+    summary: 'Independent security event log with automatic redaction',
+    help: 'Security audit settings written to the local config file',
+    tomlSection: 'logging.audit',
+    order: 60
   },
   runtime: {
     id: 'runtime',
@@ -444,6 +498,24 @@ function configSectionForPath(canonicalPath: string) {
 
 function categoryForDefaultsPath(canonicalPath: string) {
   if (canonicalPath.startsWith('gpu.')) return 'runtime'
+  if (canonicalPath.startsWith('logging.audit.')) return 'logs-audit'
+  if (canonicalPath.startsWith('logging.webhook.')) return 'logs-webhooks'
+  if (canonicalPath.startsWith('logging.artifact.')) return 'logs-artifacts'
+  if (
+    canonicalPath === 'logging.retention_ttl_secs' ||
+    canonicalPath === 'logging.retention_max_rows' ||
+    canonicalPath === 'logging.cleanup_cadence_secs'
+  ) {
+    return 'logs-retention'
+  }
+  if (
+    canonicalPath === 'logging.queue_capacity' ||
+    canonicalPath === 'logging.event_buffer_size' ||
+    canonicalPath === 'logging.replay_capacity'
+  ) {
+    return 'logs-buffers'
+  }
+  if (canonicalPath.startsWith('logging.')) return 'logs-general'
   if (canonicalPath.startsWith('telemetry.')) return 'telemetry'
   if (canonicalPath === 'runtime.debug') return 'meshllm'
   if (canonicalPath === 'runtime.listen_all') return 'network'
@@ -563,8 +635,26 @@ type SchemaSettingFromEntryInput = {
   controlState?: ConfigurationRuntimeControlStateEntry
 }
 
+function resolvedVisibilityForPath(
+  canonicalPath: string,
+  schemaVisibility: RuntimeConfigSchemaEntry['visibility']
+): 'standard' | 'advanced' {
+  // Promote logging.* from advanced to standard so they render without "Show advanced"
+  if (canonicalPath.startsWith('logging.')) return 'standard'
+  return schemaVisibility === 'advanced' ? 'advanced' : 'standard'
+}
+
 function schemaMutability(entry: RuntimeConfigSchemaEntry): ConfigurationDefaultsSetting['mutability'] {
   return entry.apply_mode === 'dynamic_apply' && entry.restart_scope === 'none' ? 'runtime' : 'restart-required'
+}
+
+const ENABLED_SETTING_ORDER = 10
+
+function settingOrderForEntry(entry: RuntimeConfigSchemaEntry) {
+  if (entry.presentation?.setting_order !== undefined) return entry.presentation.setting_order
+  // Keep enablement toggles at the top of their category group.
+  if (lastPathSegment(entry.canonical_path) === 'enabled') return ENABLED_SETTING_ORDER
+  return DEFAULT_SETTING_ORDER
 }
 
 function categoryFromEntry(
@@ -598,6 +688,13 @@ function categoryFromEntry(
   }
 }
 
+function hasCategoryPresentation(entry: RuntimeConfigSchemaEntry) {
+  const presentation = entry.presentation
+  return Boolean(
+    presentation?.category_label || presentation?.category_summary || presentation?.category_order !== undefined
+  )
+}
+
 function schemaSettingFromEntry(input: SchemaSettingFromEntryInput): ConfigurationDefaultsSetting {
   const { entry, context, categoryId, controlState } = input
   const key = controlNameForPath(entry.canonical_path)
@@ -618,7 +715,7 @@ function schemaSettingFromEntry(input: SchemaSettingFromEntryInput): Configurati
     tomlKey: key,
     rendererId,
     controlHint: entry.presentation?.control_hint,
-    settingOrder: entry.presentation?.setting_order ?? DEFAULT_SETTING_ORDER,
+    settingOrder: settingOrderForEntry(entry),
     icon: CATEGORY_ICON_BY_ID[String(resolvedCategoryId)] ?? 'cog',
     label: entry.presentation?.label ?? titleCaseIdentifier(key),
     description:
@@ -634,8 +731,10 @@ function schemaSettingFromEntry(input: SchemaSettingFromEntryInput): Configurati
     control: fallbackControlForSchema(entry, controlState),
     controlBehavior: entry.control_behavior,
     controlState,
-    visibility: entry.visibility === 'advanced' ? 'advanced' : 'standard',
+    visibility: resolvedVisibilityForPath(entry.canonical_path, entry.visibility),
     mutability: schemaMutability(entry),
+    applyMode: entry.apply_mode,
+    restartScope: entry.restart_scope,
     validationConstraints: entry.constraints,
     categoryOrder: category.order ?? DEFAULT_CATEGORY_ORDER
   }
@@ -676,7 +775,8 @@ function createConfigurationSettingsFromSchema(
   for (const entry of schema?.settings ?? []) {
     if (!isEditableSchemaEntry(entry) || !includeEntry(entry)) continue
     const category = categoryFromEntry(entry, 'settings')
-    categoryById.set(String(category.id), category)
+    const categoryId = String(category.id)
+    if (!categoryById.has(categoryId) || hasCategoryPresentation(entry)) categoryById.set(categoryId, category)
   }
 
   return {
@@ -759,6 +859,20 @@ export function createConfigurationAttestationSettingsFromSchema(
     'Generated attestation settings',
     controlState
   )
+}
+
+export function createConfigurationAuditSettingsFromSchema(
+  schema: RuntimeConfigSchemaReference | undefined,
+  controlState?: RuntimeConfigControlStatePayload
+): ConfigurationSettingsHarnessData {
+  const result = createConfigurationSettingsFromSchema(
+    schema,
+    (entry) => entry.canonical_path.startsWith('logging.'),
+    'Generated logs settings',
+    controlState
+  )
+
+  return result
 }
 
 function pluginNameFromSchemaEntry(entry: RuntimeConfigSchemaEntry) {
@@ -1582,7 +1696,8 @@ function builtInSettingsFromSchema(
     createConfigurationRuntimeSettingsFromSchema(schema, controlState),
     createConfigurationModelSettingsFromSchema(schema, controlState),
     createConfigurationNetworkSettingsFromSchema(schema, controlState),
-    createConfigurationAttestationSettingsFromSchema(schema, controlState)
+    createConfigurationAttestationSettingsFromSchema(schema, controlState),
+    createConfigurationAuditSettingsFromSchema(schema, controlState)
   ]) {
     for (const setting of group.settings) byId.set(setting.id, setting)
   }
@@ -2027,6 +2142,7 @@ export function adaptStatusToConfiguration(
   const modelSettings = createConfigurationModelSettingsFromSchema(schema, controlState)
   const network = createConfigurationNetworkSettingsFromSchema(schema, controlState)
   const attestation = createConfigurationAttestationSettingsFromSchema(schema, controlState)
+  const auditSettings = createConfigurationAuditSettingsFromSchema(schema, controlState)
   const schemaIntegrations = createConfigurationIntegrationsFromSchema(schema, controlState)
   const overlay = (settings: ConfigurationSettingsHarnessData) =>
     defaultsValues ? overlayDefaultsValues(settings, defaultsValues) : settings
@@ -2035,7 +2151,7 @@ export function adaptStatusToConfiguration(
       ? overlayDefaultsValues(schemaIntegrations, defaultsValues)
       : schemaIntegrations
   const legacyDefaults = overlay(
-    combineSettingsHarnessData(meshllmSettings, runtimeSettings, modelSettings, network, attestation)
+    combineSettingsHarnessData(meshllmSettings, runtimeSettings, modelSettings, network, attestation, auditSettings)
   )
 
   return {
@@ -2048,6 +2164,7 @@ export function adaptStatusToConfiguration(
     modelSettings: overlay(modelSettings),
     network: overlay(network),
     attestation: overlay(attestation),
+    audit: overlay(auditSettings),
     plugins,
     integrations: plugins,
     validationWarnings: undefined,

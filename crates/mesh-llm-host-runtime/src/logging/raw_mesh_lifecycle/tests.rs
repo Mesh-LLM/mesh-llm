@@ -389,8 +389,9 @@ fn claimed_plan_failure_terminalizes_without_route_selected_event() {
 #[test]
 fn bounded_owner_registry_drops_overflow_without_partial_lifecycle() {
     let service = Arc::new(LoggingService::new_disabled(ServiceConfig {
-        replay_capacity: MAX_RAW_MESH_LIFECYCLE_OWNERS + 1,
-        ..Default::default()
+        event_buffer_size: MAX_RAW_MESH_LIFECYCLE_OWNERS,
+        replay_capacity: MAX_RAW_MESH_LIFECYCLE_OWNERS,
+        ..ServiceConfig::default()
     }));
     let owners = Arc::new(RawMeshLifecycleOwners::default());
     let mut lifecycles = Vec::with_capacity(MAX_RAW_MESH_LIFECYCLE_OWNERS);

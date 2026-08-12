@@ -93,20 +93,37 @@ pub(super) fn record_moa_stream_lifecycle(
 
 impl RouteDispatchOutcome {
     pub(crate) const fn response_written(self) -> bool {
-        matches!(
-            self,
-            Self::Responded(_) | Self::RespondedWithUsage { .. } | Self::FailedWithStatus { .. }
-        )
+        matches!(self, Self::Responded(_) | Self::RespondedWithUsage { .. })
     }
 
     pub(crate) fn terminal_outcome(self) -> crate::logging::TerminalOutcome {
         match self {
-            Self::Responded(status_code) => {
-                terminal_outcome_for_http_status(status_code, None, "http_status")
+            Self::Responded(status @ 200..=299) => {
+                crate::logging::TerminalOutcome::CompletedWithStatus(status)
             }
-            Self::RespondedWithUsage { status_code, usage } => {
-                terminal_outcome_for_http_status(status_code, Some(usage), "http_status")
+            Self::RespondedWithUsage { status_code, usage } => match status_code {
+                200..=299 => {
+                    crate::logging::TerminalOutcome::CompletedWithUsage { status_code, usage }
+                }
+                400..=499 => crate::logging::TerminalOutcome::RejectedWithStatus {
+                    reason: Some(format!("http_status_{status_code}")),
+                    status_code,
+                },
+                _ => crate::logging::TerminalOutcome::FailedWithStatus {
+                    error: format!("http_status_{status_code}"),
+                    status_code,
+                },
+            },
+            Self::Responded(status @ 400..=499) => {
+                crate::logging::TerminalOutcome::RejectedWithStatus {
+                    reason: Some(format!("http_status_{status}")),
+                    status_code: status,
+                }
             }
+            Self::Responded(status) => crate::logging::TerminalOutcome::FailedWithStatus {
+                error: format!("http_status_{status}"),
+                status_code: status,
+            },
             Self::Failed(reason) => crate::logging::TerminalOutcome::Failed(reason.into()),
             Self::FailedWithStatus {
                 status_code,
@@ -117,27 +134,6 @@ impl RouteDispatchOutcome {
             },
             Self::Dropped(reason) => crate::logging::TerminalOutcome::Dropped(Some(reason.into())),
         }
-    }
-}
-
-fn terminal_outcome_for_http_status(
-    status_code: u16,
-    usage: Option<TokenUsage>,
-    detail_prefix: &str,
-) -> crate::logging::TerminalOutcome {
-    match (status_code, usage) {
-        (200..=299, Some(usage)) => {
-            crate::logging::TerminalOutcome::CompletedWithUsage { status_code, usage }
-        }
-        (200..=299, None) => crate::logging::TerminalOutcome::CompletedWithStatus(status_code),
-        (400..=499, _) => crate::logging::TerminalOutcome::RejectedWithStatus {
-            reason: Some(format!("{detail_prefix}_{status_code}")),
-            status_code,
-        },
-        _ => crate::logging::TerminalOutcome::FailedWithStatus {
-            error: format!("{detail_prefix}_{status_code}"),
-            status_code,
-        },
     }
 }
 
@@ -734,7 +730,7 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
     match result {
         RouteAttemptResult::Delivered { status_code, .. } => (
             Some(*status_code),
-            (!(200..300).contains(status_code)).then_some("upstream_status"),
+            (!(200..400).contains(status_code)).then_some("upstream_status"),
         ),
         RouteAttemptResult::RetryableTimeout => (None, Some("timeout")),
         RouteAttemptResult::RetryableUnavailable => (None, Some("unavailable")),
@@ -836,8 +832,26 @@ fn terminal_outcome_for_mesh_route_result(
     result: RouteAttemptResult,
 ) -> crate::logging::TerminalOutcome {
     match result {
-        RouteAttemptResult::Delivered { status_code, usage } => {
-            terminal_outcome_for_http_status(status_code, usage, "upstream_status")
+        RouteAttemptResult::Delivered {
+            status_code,
+            usage: Some(usage),
+        } if (200..400).contains(&status_code) => {
+            crate::logging::TerminalOutcome::CompletedWithUsage { status_code, usage }
+        }
+        RouteAttemptResult::Delivered { status_code, .. } if (200..400).contains(&status_code) => {
+            crate::logging::TerminalOutcome::CompletedWithStatus(status_code)
+        }
+        RouteAttemptResult::Delivered { status_code, .. } if (400..500).contains(&status_code) => {
+            crate::logging::TerminalOutcome::RejectedWithStatus {
+                reason: Some(format!("upstream_status_{status_code}")),
+                status_code,
+            }
+        }
+        RouteAttemptResult::Delivered { status_code, .. } => {
+            crate::logging::TerminalOutcome::FailedWithStatus {
+                error: format!("upstream_status_{status_code}"),
+                status_code,
+            }
         }
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
             crate::logging::TerminalOutcome::FailedWithStatus {
@@ -862,21 +876,14 @@ fn terminal_outcome_for_mesh_request_failure(
 ) -> crate::logging::TerminalOutcome {
     match failure {
         MeshRequestFailure::UnsupportedMedia => {
-            crate::logging::TerminalOutcome::RejectedWithStatus {
-                reason: Some("unsupported_media".into()),
-                status_code: 422,
-            }
+            crate::logging::TerminalOutcome::Rejected(Some("unsupported_media".into()))
         }
         MeshRequestFailure::ModelUnavailable(_) => {
-            crate::logging::TerminalOutcome::RejectedWithStatus {
-                reason: Some("model_unavailable".into()),
-                status_code: 429,
-            }
+            crate::logging::TerminalOutcome::Failed("model_unavailable".into())
         }
-        MeshRequestFailure::NoHostsAvailable => crate::logging::TerminalOutcome::FailedWithStatus {
-            error: "no_hosts_available".into(),
-            status_code: 503,
-        },
+        MeshRequestFailure::NoHostsAvailable => {
+            crate::logging::TerminalOutcome::Failed("no_hosts_available".into())
+        }
     }
 }
 

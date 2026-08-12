@@ -599,11 +599,6 @@ async fn try_route_plugin_model(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
     // Admission check for plugin dispatch ingress.
-    route_observer.route_selected_with_metadata(
-        Some(model_name),
-        Some("plugin"),
-        Some("admission"),
-    );
     match check_activity_admission(
         tcp_stream,
         &ctx.node.activity_policy_guard,
@@ -613,7 +608,14 @@ async fn try_route_plugin_model(
     .await
     {
         Ok(stream) => tcp_stream = stream,
-        Err(outcome) => return outcome,
+        Err(outcome) => {
+            route_observer.route_selected_with_metadata(
+                Some(model_name),
+                Some("plugin"),
+                Some("admission"),
+            );
+            return outcome;
+        }
     }
 
     let plugin_manager = ctx

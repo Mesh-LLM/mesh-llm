@@ -119,17 +119,6 @@ impl CleanupReceiptDto {
         Ok(Self::from_receipt(value, audit_id))
     }
 
-    fn pending_from_receipt(value: MaintenanceReceipt) -> Result<Self, LogsError> {
-        let audit_id = value
-            .execution_audit_id
-            .clone()
-            .or_else(|| value.preview_audit_id.clone())
-            .ok_or(LogsError::StoreUnavailable)?;
-        let mut response = Self::from_receipt(value, audit_id);
-        response.state = "pending";
-        Ok(response)
-    }
-
     fn from_receipt(value: MaintenanceReceipt, audit_id: String) -> Self {
         Self {
             operation_id: value.operation_id.to_string(),
@@ -204,9 +193,6 @@ pub(super) async fn run(
     let request = super::parse::cleanup_run_request(path, body)?;
     let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
     let audit_facade = facade.clone();
-    let pending_facade = facade.clone();
-    let pending_operation_id = request.operation_id;
-    let pending_reason = request.reason.clone();
     let reason = request.reason.as_str().to_owned();
     let control = MaintenanceDeadline::new(CLEANUP_TIME_CAP);
     let worker_control = control.clone();
@@ -220,20 +206,9 @@ pub(super) async fn run(
         }),
     )
     .await;
-    let (status, response) = match result {
-        Ok(response) => (200, response),
-        Err(LogsError::MaintenanceCancelled) => {
-            let pending = CleanupReceiptDto::pending_from_receipt(
-                pending_facade.cleanup_receipt(pending_operation_id, &pending_reason)?,
-            )?;
-            (202, pending)
-        }
-        Err(error) => {
-            let _ = audit_facade.write_operator_audit("log_cleanup_run", reason, "failed");
-            return Err(error);
-        }
-    };
-    crate::api::http::respond_json(stream, status, &response)
+    write_failure_audit(&audit_facade, "log_cleanup_run", reason, &result);
+    let response = result?;
+    crate::api::http::respond_json(stream, 200, &response)
         .await
         .map_err(|_| LogsError::StoreUnavailable)
 }

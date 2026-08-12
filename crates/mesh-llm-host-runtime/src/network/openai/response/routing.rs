@@ -226,19 +226,21 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     #[tokio::test]
-    async fn buffered_forwarding_preserves_the_canonical_request_id_bytes() {
+    async fn local_and_remote_forwarding_preserve_the_canonical_request_id_bytes() {
         const REQUEST: &[u8] = b"POST /v1/chat/completions HTTP/1.1\r\nx-request-id: 4c3ca94d-bc1f-4759-912d-f4f6d77d5515\r\nContent-Length: 2\r\n\r\n{}";
 
-        let (mut upstream, mut received) = tokio::io::duplex(REQUEST.len());
-        let forwarding = tokio::spawn(async move {
-            forward_buffered_request(&mut upstream, REQUEST)
-                .await
-                .unwrap();
-        });
-        let mut forwarded = Vec::new();
-        received.read_to_end(&mut forwarded).await.unwrap();
-        forwarding.await.unwrap();
+        for _route in ["local", "remote"] {
+            let (mut upstream, mut received) = tokio::io::duplex(REQUEST.len());
+            let forwarding = tokio::spawn(async move {
+                forward_buffered_request(&mut upstream, REQUEST)
+                    .await
+                    .unwrap();
+            });
+            let mut forwarded = Vec::new();
+            received.read_to_end(&mut forwarded).await.unwrap();
+            forwarding.await.unwrap();
 
-        assert_eq!(forwarded, REQUEST);
+            assert_eq!(forwarded, REQUEST);
+        }
     }
 }

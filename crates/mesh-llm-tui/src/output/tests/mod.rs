@@ -20,6 +20,7 @@ use std::{
 
 mod dashboard;
 mod formatting;
+mod logging_projection;
 mod merging;
 mod native_visibility;
 mod rendering;

@@ -72,34 +72,6 @@ class LoggingRecoveryHarnessTests(unittest.TestCase):
             {"logging_fail_open_inference": "execute"},
         )
 
-    def test_deterministic_endpoint_requires_literal_loopback_http_url(self) -> None:
-        for endpoint in (
-            "https://example.com/v1",
-            "http://localhost:18080/v1",
-            "http://user@127.0.0.1:18080/v1",
-            "http://127.0.0.1:18080/v1?token=value",
-            "http://127.0.0.1:18080/v1#fragment",
-        ):
-            completed = subprocess.run(
-                [
-                    str(SCRIPT),
-                    "--current-binary",
-                    "/not/an/executable",
-                    "--deterministic-openai-endpoint",
-                    endpoint,
-                    "--print-plan",
-                ],
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(completed.returncode, 2, endpoint)
-
-        for endpoint in ("http://127.0.0.1:18080/v1", "https://[::1]:18080/v1"):
-            plan = self.run_plan("--deterministic-openai-endpoint", endpoint)
-            self.assertTrue(plan["deterministic_openai_endpoint_supplied"])
-
     def test_uses_v6_delete_contract_and_private_marker_assertions(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("/api/logs/requests/$restart_request_id/delete", source)

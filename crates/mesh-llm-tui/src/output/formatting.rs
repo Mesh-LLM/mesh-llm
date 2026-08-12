@@ -1,3 +1,4 @@
+use super::logging_projection::{projected_json_fields, projected_message, projected_pretty_text};
 use super::{
     ConsoleSessionMode, DashboardAction, DashboardLayoutState, DashboardSnapshot,
     DashboardSnapshotProvider, DashboardState, LogFormat, ModelProgressStatus, OutputEvent,
@@ -447,11 +448,7 @@ impl OutputEventPresentation for OutputEvent {
             OutputEvent::ShutdownRequested { signal } => json!({ "signal": signal }),
             OutputEvent::Shutdown { reason } => json!({ "reason": reason }),
             OutputEvent::LlamaNativeLog { params, .. } => {
-                let mut map = Map::new();
-                for (key, value) in params {
-                    map.insert(key.clone(), value.clone());
-                }
-                Value::Object(map)
+                Value::Object(native_log_json_fields(params))
             }
             OutputEvent::CanonicalLog(_) => Value::Object(Map::new()),
         };
@@ -469,6 +466,10 @@ pub(super) fn classified_error_json(field: &str, message: &str, context: Option<
         "context": context,
         "error_type": classify_error_type(message, context),
     })
+}
+
+fn native_log_json_fields(params: &[(String, Value)]) -> Map<String, Value> {
+    params.iter().cloned().collect()
 }
 
 pub(super) fn format_message_with_params(message: &str, params: &[(String, Value)]) -> String {
@@ -672,7 +673,7 @@ impl InteractiveDashboardFormatter {
             self.dirty = true;
             Ok(None)
         } else {
-            Ok(Some(format!("{}\n", event.pretty_text())))
+            Ok(Some(format!("{}\n", projected_pretty_text(event))))
         }
     }
 
@@ -773,7 +774,10 @@ impl Formatter for JsonFormatter {
         let mut record = Map::new();
         record.insert(
             "timestamp".to_string(),
-            Value::String(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)),
+            Value::String(event.occurred_at().map_or_else(
+                || Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                ToOwned::to_owned,
+            )),
         );
         record.insert(
             "level".to_string(),
@@ -783,8 +787,11 @@ impl Formatter for JsonFormatter {
             "event".to_string(),
             Value::String(event.event_name().to_string()),
         );
-        record.extend(event.json_fields());
-        record.insert("message".to_string(), Value::String(event.message()));
+        record.extend(projected_json_fields(event));
+        record.insert(
+            "message".to_string(),
+            Value::String(projected_message(event)),
+        );
         serde_json::to_string(&Value::Object(record))
             .map(|line| format!("{line}\n"))
             .map_err(io::Error::other)
@@ -795,7 +802,7 @@ pub struct PrettyFormatter;
 
 impl Formatter for PrettyFormatter {
     fn format(&mut self, event: &OutputEvent) -> io::Result<String> {
-        Ok(format!("{}\n", event.pretty_text()))
+        Ok(format!("{}\n", projected_pretty_text(event)))
     }
 }
 
