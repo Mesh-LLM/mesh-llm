@@ -169,7 +169,7 @@ pub fn sanitize_lifecycle_event(event: LifecycleEvent) -> LifecycleEvent {
     }
 }
 
-fn redact_urls_in_text(text: &str) -> String {
+pub(crate) fn redact_urls_in_text(text: &str) -> String {
     text.split_whitespace()
         .map(|word| {
             if word.starts_with("http://") || word.starts_with("https://") {
@@ -200,14 +200,11 @@ pub fn redact_headers<'a>(
 
 /// Redact sensitive query parameters from a URL. Returns the cleaned URL string.
 pub fn redact_url_query(url: &str) -> String {
-    if !url.contains('?') {
-        return url.to_string();
+    let (base, query_part) = url.split_once('?').unwrap_or((url, ""));
+    let base = redact_url_userinfo(base);
+    if query_part.is_empty() {
+        return base;
     }
-
-    let (base, query_part) = match url.split_once('?') {
-        Some(parts) => parts,
-        None => return url.to_string(),
-    };
 
     // Handle fragments.
     let (query_only, fragment) = match query_part.split_once('#') {
@@ -251,6 +248,26 @@ pub fn redact_url_query(url: &str) -> String {
     } else {
         format!("{}?{}{}", base, cleaned_params.join("&"), fragment)
     }
+}
+
+fn redact_url_userinfo(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let authority_start = scheme_end + 3;
+    let authority_end = url[authority_start..]
+        .find(['/', '#'])
+        .map_or(url.len(), |offset| authority_start + offset);
+    let authority = &url[authority_start..authority_end];
+    let Some(user_info_end) = authority.rfind('@') else {
+        return url.to_string();
+    };
+    format!(
+        "{}[REDACTED]@{}{}",
+        &url[..authority_start],
+        &authority[user_info_end + 1..],
+        &url[authority_end..]
+    )
 }
 
 /// Truncate a multi-line string (stack trace, error output) to MAX_STACK_LINES.

@@ -11,6 +11,7 @@ pub(crate) async fn run_auto_unload_runtime_model(
     target: UnloadTarget,
     options: UnloadOptions,
 ) -> Result<api::RuntimeUnloadResponse> {
+    let unload_started = Instant::now();
     let unload = match resolve_runtime_unload_target(
         target.as_runtime_target(),
         runtime_unload_candidates(ctx.runtime_models, ctx.managed_models),
@@ -21,7 +22,10 @@ pub(crate) async fn run_auto_unload_runtime_model(
                 RuntimeOperationalEvent::ModelUnloadFailed,
                 OperationalAuditContext::new()
                     .reason_code("target_not_resolved")
-                    .outcome("failed"),
+                    .outcome("failed")
+                    .duration_ms(
+                        u64::try_from(unload_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    ),
             );
             return Err(error);
         }
@@ -38,7 +42,7 @@ pub(crate) async fn run_auto_unload_runtime_model(
     };
     match unload.owner {
         RuntimeUnloadOwner::Runtime => {
-            run_auto_unload_runtime_entry(ctx, unload, drain_delay).await
+            run_auto_unload_runtime_entry(ctx, unload, drain_delay, unload_started).await
         }
         RuntimeUnloadOwner::Managed => {
             let Some(controller) = ctx.managed_models.remove(&unload.instance_id) else {
@@ -46,7 +50,10 @@ pub(crate) async fn run_auto_unload_runtime_model(
                     RuntimeOperationalEvent::ModelUnloadFailed,
                     runtime_model_audit_context(Some(&unload.model_name), &unload.instance_id)
                         .reason_code("instance_missing")
-                        .outcome("failed"),
+                        .outcome("failed")
+                        .duration_ms(
+                            u64::try_from(unload_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        ),
                 );
                 anyhow::bail!(
                     "model or runtime instance '{}' is not loaded",
@@ -135,7 +142,11 @@ pub(crate) async fn run_auto_unload_runtime_model(
             });
             record_runtime_operational_event_with_context(
                 RuntimeOperationalEvent::ModelUnloaded,
-                runtime_model_audit_context(Some(&model), &unload.instance_id).outcome("completed"),
+                runtime_model_audit_context(Some(&model), &unload.instance_id)
+                    .outcome("completed")
+                    .duration_ms(
+                        u64::try_from(unload_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    ),
             );
             Ok(api::RuntimeUnloadResponse {
                 model,
@@ -184,13 +195,17 @@ pub(crate) async fn run_auto_unload_runtime_entry(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     unload: RuntimeUnloadCandidate,
     drain_delay: Duration,
+    unload_started: Instant,
 ) -> Result<api::RuntimeUnloadResponse> {
     let Some(entry) = ctx.runtime_models.remove(&unload.instance_id) else {
         record_runtime_operational_event_with_context(
             RuntimeOperationalEvent::ModelUnloadFailed,
             runtime_model_audit_context(Some(&unload.model_name), &unload.instance_id)
                 .reason_code("instance_missing")
-                .outcome("failed"),
+                .outcome("failed")
+                .duration_ms(
+                    u64::try_from(unload_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                ),
         );
         anyhow::bail!(
             "model or runtime instance '{}' is not loaded",
@@ -304,7 +319,9 @@ pub(crate) async fn run_auto_unload_runtime_entry(
     });
     record_runtime_operational_event_with_context(
         RuntimeOperationalEvent::ModelUnloaded,
-        runtime_model_audit_context(Some(&model), &unload.instance_id).outcome("completed"),
+        runtime_model_audit_context(Some(&model), &unload.instance_id)
+            .outcome("completed")
+            .duration_ms(u64::try_from(unload_started.elapsed().as_millis()).unwrap_or(u64::MAX)),
     );
     Ok(api::RuntimeUnloadResponse {
         model,

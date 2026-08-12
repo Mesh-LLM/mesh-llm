@@ -273,6 +273,7 @@ pub(super) async fn shutdown_runtime_loaded_models(
     } = ctx;
 
     for (instance_id, entry) in runtime_models.drain() {
+        let unload_started = Instant::now();
         let RuntimeModelHandleEntry {
             model_name: name,
             handle,
@@ -325,7 +326,11 @@ pub(super) async fn shutdown_runtime_loaded_models(
         });
         record_runtime_operational_event_with_context(
             RuntimeOperationalEvent::ModelUnloaded,
-            runtime_model_audit_context(Some(&name), &instance_id).outcome("completed"),
+            runtime_model_audit_context(Some(&name), &instance_id)
+                .outcome("completed")
+                .duration_ms(
+                    u64::try_from(unload_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                ),
         );
         upsert_dashboard_process(dashboard_processes, stopped_payload.clone()).await;
         if let Some(cs) = console_state {
@@ -338,6 +343,7 @@ pub(super) async fn shutdown_runtime_managed_models(
     managed_models: &mut HashMap<String, ManagedModelController>,
 ) {
     for (instance_id, controller) in managed_models.drain() {
+        let unload_started = Instant::now();
         let _ = emit_event(OutputEvent::ModelUnloading {
             model: controller.model_name.clone(),
         });
@@ -364,7 +370,10 @@ pub(super) async fn shutdown_runtime_managed_models(
         record_runtime_operational_event_with_context(
             RuntimeOperationalEvent::ModelUnloaded,
             runtime_model_audit_context(Some(&controller.model_name), &instance_id)
-                .outcome("completed"),
+                .outcome("completed")
+                .duration_ms(
+                    u64::try_from(unload_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                ),
         );
     }
 }

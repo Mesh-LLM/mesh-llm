@@ -22,6 +22,7 @@ use crate::api;
 use crate::inference::skippy;
 use anyhow::Result;
 use mesh_llm_events::{OutputEvent, emit_event, flush_output};
+use std::time::Instant;
 
 pub(super) async fn wait_shutdown_signal() -> &'static str {
     #[cfg(unix)]
@@ -301,6 +302,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
     // This audit must precede the cleanup-worker stop and service drain below,
     // so normal shutdown retains the same durable boundary as other lifecycle
     // records without delaying teardown.
+    let shutdown_started = Instant::now();
     record_runtime_operational_event_with_context(
         RuntimeOperationalEvent::ShutdownStarted,
         crate::logging::OperationalAuditContext::new()
@@ -350,7 +352,8 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         RuntimeOperationalEvent::ShutdownCompleted,
         crate::logging::OperationalAuditContext::new()
             .subject(crate::logging::OperationalAuditSubjectKind::Runtime, "host")
-            .outcome("completed"),
+            .outcome("completed")
+            .duration_ms(u64::try_from(shutdown_started.elapsed().as_millis()).unwrap_or(u64::MAX)),
     );
 
     // Drain and join only after the final authoritative runtime boundary.

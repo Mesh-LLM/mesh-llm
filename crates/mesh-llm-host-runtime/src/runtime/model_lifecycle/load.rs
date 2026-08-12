@@ -4,11 +4,14 @@ use std::path::{Path, PathBuf};
 fn audit_runtime_model_load_result<T>(
     result: Result<T>,
     context: OperationalAuditContext,
+    load_started: Instant,
 ) -> Result<T> {
     result.inspect_err(|_| {
         record_runtime_operational_event_with_context(
             RuntimeOperationalEvent::ModelLoadFailed,
-            context.outcome("failed"),
+            context
+                .outcome("failed")
+                .duration_ms(u64::try_from(load_started.elapsed().as_millis()).unwrap_or(u64::MAX)),
         );
     })
 }
@@ -81,6 +84,7 @@ pub(crate) async fn run_auto_load_runtime_model(
     let model_path = audit_runtime_model_load_result(
         resolve_model(&PathBuf::from(&spec)).await,
         runtime_model_audit_context(None, &instance_id),
+        load_started,
     )?;
     let runtime_model_name = find_remote_catalog_model_exact_blocking(spec.clone())
         .await
@@ -108,6 +112,7 @@ pub(crate) async fn run_auto_load_runtime_model(
             model_bytes,
         ),
         runtime_model_audit_context(Some(&runtime_model_name), &instance_id),
+        load_started,
     )?;
     add_serving_assignment(ctx.node, ctx.primary_model_name, &runtime_model_name).await;
     let launch_started = Instant::now();

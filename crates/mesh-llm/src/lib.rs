@@ -207,7 +207,42 @@ fn parse_failure_family(
     if explicit_surface.is_some() {
         return CliCommandFamily::Runtime;
     }
+    let value_taking_options: Vec<String> = mesh_llm_cli::Cli::command()
+        .get_arguments()
+        .filter(|argument| {
+            matches!(
+                argument.get_action(),
+                clap::ArgAction::Set | clap::ArgAction::Append
+            )
+        })
+        .flat_map(|argument| {
+            argument
+                .get_long()
+                .map(|long| format!("--{long}"))
+                .into_iter()
+                .chain(argument.get_short().map(|short| format!("-{short}")))
+        })
+        .collect();
+    let is_value_taking_option =
+        |argument: &str| value_taking_options.iter().any(|option| option == argument);
+    let mut skip_next = false;
     for argument in args.iter().skip(1).filter_map(|argument| argument.to_str()) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if let Some((option, _value)) = argument.split_once('=')
+            && is_value_taking_option(option)
+        {
+            continue;
+        }
+        if is_value_taking_option(argument) {
+            skip_next = true;
+            continue;
+        }
+        if argument.starts_with('-') {
+            continue;
+        }
         let family = match argument {
             "models" | "download" | "model-prepare" | "model-package" => {
                 Some(CliCommandFamily::Models)
@@ -569,6 +604,18 @@ mod cli_entrypoint_tests {
                 &[
                     OsString::from("mesh-llm"),
                     OsString::from("definitely-not-a-command")
+                ],
+                None,
+            ),
+            CliCommandFamily::Unknown
+        );
+        assert_eq!(
+            super::parse_failure_family(
+                &[
+                    OsString::from("mesh-llm"),
+                    OsString::from("--config"),
+                    OsString::from("runtime"),
+                    OsString::from("--bad-flag"),
                 ],
                 None,
             ),

@@ -172,7 +172,7 @@ function eventLabel(row: LogEventLedgerRow): string {
 function contextLabel(row: LogEventLedgerRow): string {
   return row.type === 'request'
     ? `${row.request.model ?? ''} ${row.request.route ?? ''}`
-    : `${row.audit.subjectId ?? ''} ${row.audit.operationId ?? ''} ${row.audit.requestId ?? ''} ${row.audit.sequence}`
+    : `${row.audit.subjectId ?? ''} ${row.audit.operationId ?? ''} ${row.audit.requestId ?? ''} ${row.audit.sequence} ${row.audit.entryId}`
 }
 
 function subjectLabel(kind: LogAuditEntry['subjectKind']): string {

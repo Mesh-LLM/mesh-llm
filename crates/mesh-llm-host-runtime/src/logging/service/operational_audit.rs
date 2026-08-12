@@ -24,6 +24,16 @@ impl OperationalAuditSubjectKind {
             Self::CliCommand => "cli_command",
         }
     }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "runtime" => Some(Self::Runtime),
+            "model" => Some(Self::Model),
+            "runtime_instance" => Some(Self::RuntimeInstance),
+            "cli_command" => Some(Self::CliCommand),
+            _ => None,
+        }
+    }
 }
 
 /// Versioned, bounded context shared by audit replay and durable storage.
@@ -64,14 +74,14 @@ impl OperationalAuditContext {
     }
 
     pub const fn reason_code(mut self, reason_code: &'static str) -> Self {
-        if valid_static_code(reason_code) {
+        if Self::valid_static_code(reason_code) {
             self.reason_code = Some(reason_code);
         }
         self
     }
 
     pub const fn outcome(mut self, outcome: &'static str) -> Self {
-        if valid_static_code(outcome) {
+        if Self::valid_static_code(outcome) {
             self.outcome = Some(outcome);
         }
         self
@@ -83,10 +93,14 @@ impl OperationalAuditContext {
     }
 
     pub fn numeric_summary(mut self, key: &'static str, value: u64) -> Self {
-        if self.numeric_summaries.len() < MAX_NUMERIC_SUMMARIES && valid_static_code(key) {
+        if self.numeric_summaries.len() < MAX_NUMERIC_SUMMARIES && Self::valid_static_code(key) {
             self.numeric_summaries.insert(key, value);
         }
         self
+    }
+
+    pub(crate) const fn valid_static_code(value: &str) -> bool {
+        valid_static_code(value)
     }
 
     pub(crate) fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
@@ -144,6 +158,7 @@ const fn valid_static_code(value: &str) -> bool {
 
 fn bounded_context_value(value: &str) -> Option<String> {
     let sanitized = crate::logging::policy::sanitize_paths_in_text(value);
+    let sanitized = crate::logging::policy::redact_urls_in_text(&sanitized);
     let sanitized = crate::logging::policy::apply_redaction(&sanitized).0;
     let trimmed = sanitized.trim();
     if trimmed.is_empty() {
@@ -325,5 +340,23 @@ mod tests {
         assert!(fields.get("reason_code").is_none());
         assert!(fields.get("outcome").is_none());
         assert!(fields.get("numeric_summaries").is_none());
+    }
+
+    #[test]
+    fn context_values_redact_url_credentials_and_query_secrets() {
+        let fields = OperationalAuditContext::new()
+            .subject(
+                OperationalAuditSubjectKind::Model,
+                "https://alice:top-secret@example.test/model?api_key=query-secret&safe=1",
+            )
+            .fields();
+        let subject_id = fields["subject_id"].as_str().expect("subject id");
+
+        assert!(!subject_id.contains("alice"));
+        assert!(!subject_id.contains("top-secret"));
+        assert!(!subject_id.contains("query-secret"));
+        assert!(subject_id.contains("[REDACTED]@example.test"));
+        assert!(subject_id.contains("api_key=[REDACTED]"));
+        assert!(subject_id.contains("safe=1"));
     }
 }
