@@ -49,10 +49,12 @@ jobs:
               per_page: 100,
             });
             const bootstrapped = jobs.some((job) =>
-              job.name === 'Bootstrap PR CI' ||
-              job.name === 'Bootstrap main CI' ||
-              job.name.startsWith('Bootstrap PR CI / ') ||
-              job.name.startsWith('Bootstrap main CI / ')
+              job.conclusion !== 'skipped' && (
+                job.name === 'Bootstrap PR CI' ||
+                job.name === 'Bootstrap main CI' ||
+                job.name.startsWith('Bootstrap PR CI / ') ||
+                job.name.startsWith('Bootstrap main CI / ')
+              )
             );
             core.setOutput('should_dispatch', String(!bootstrapped));
             if (bootstrapped) return;

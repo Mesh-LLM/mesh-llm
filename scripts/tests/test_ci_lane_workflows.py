@@ -37,6 +37,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
         self.assertIn("job.name === 'Bootstrap PR CI'", workflow)
         self.assertIn("job.name.startsWith('Bootstrap PR CI / ')", workflow)
         self.assertIn("job.name.startsWith('Bootstrap main CI / ')", workflow)
+        self.assertIn("job.conclusion !== 'skipped'", workflow)
         self.assertIn("head_repository.full_name == github.repository", workflow)
         self.assertIn("should_dispatch", workflow)
 
