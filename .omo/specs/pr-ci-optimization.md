@@ -47,6 +47,10 @@ or cache identity.
 - `pr_builds.yml` remains reusable-only and inert during the migration so the
   pre-merge protected runner contract can find its legacy filename; it has no
   PR trigger and cannot expand a graph.
+- `ci-orchestrator.yml` likewise remains as a reusable-only, no-op filename
+  shim for the protected pre-merge contract. It has no event trigger or lane
+  calls and must not regain orchestration behavior. Both shims are removable
+  after this branch's runner contract reaches protected main.
 
 This branch does not change branch rulesets, required checks, Depot settings,
 runner groups, secrets or external capacity.

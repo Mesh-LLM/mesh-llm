@@ -35,11 +35,14 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.assertNotIn("actions.createWorkflowDispatch", workflow)
             self.assertNotIn("prepare-host-input", workflow)
 
-    def test_legacy_pr_entrypoint_is_an_inert_migration_shim(self):
-        workflow = self.workflow("pr_builds.yml")
-        self.assertIn("workflow_call:", workflow)
-        self.assertNotIn("pull_request:", workflow)
-        self.assertNotIn("ci-orchestrator.yml", workflow)
+    def test_legacy_entrypoints_are_inert_migration_shims(self):
+        for filename in ("pr_builds.yml", "ci-orchestrator.yml"):
+            with self.subTest(filename=filename):
+                workflow = self.workflow(filename)
+                self.assertIn("workflow_call:", workflow)
+                self.assertNotIn("pull_request:", workflow)
+                self.assertNotIn("uses: ./.github/workflows/ci-", workflow)
+                self.assertNotIn("Mesh-LLM/mesh-llm/.github/workflows/ci-", workflow)
 
     def test_pr_validation_has_exactly_five_focused_entrypoints(self):
         expected = {
@@ -55,7 +58,9 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             if "\n  pull_request:\n" in path.read_text()
         }
         self.assertEqual(set(expected), actual)
-        self.assertFalse((WORKFLOWS / "ci-orchestrator.yml").exists())
+        orchestrator = self.workflow("ci-orchestrator.yml")
+        self.assertNotIn("pull_request:", orchestrator)
+        self.assertNotIn("lane_plan_json", orchestrator)
 
         for filename, lane in expected.items():
             workflow = self.workflow(filename)

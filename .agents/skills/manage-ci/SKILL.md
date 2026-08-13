@@ -92,6 +92,11 @@ owning source, and update the inventory and topology in the same change.
   all five lanes in one run. Do not replace the five entrypoints with one
   matrix, one giant dependency graph, or one aggregate workflow whose only
   visible PR result is a dispatch/controller job.
+- A reusable-only, no-op filename shim is temporarily allowed when the
+  protected pre-migration runner contract requires a deleted entrypoint to be
+  present while the migration PR is open. It must have no event trigger, call
+  no lane or producer, be documented as removable after merge, and must never
+  regain the behavior implied by its legacy filename.
 - Do not add `paths` filters to the five PR entrypoints. All five stable results
   must be created for every relevant PR synchronization; the checked planner
   makes an unselected lane skip its expensive work and lets its stable result

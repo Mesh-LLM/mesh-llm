@@ -14,6 +14,7 @@ before editing CI.
 | `pr_macos.yml` (`PR · macOS`) | PR lifecycle | Canonical PR planning plus the protected reusable macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | PR lifecycle | Canonical PR planning plus the protected reusable Windows lane |
 | `pr_builds.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger |
+| `ci-orchestrator.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger or lane calls |
 | `ci.yml` | main push | One-job ingress for protected main planning |
 | `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Protected source resolution, one canonical plan, bounded main/manual lane dispatch and correlated required checks |
 | `release.yml` | release tags, dispatch | Release-only signing, assets and publication |
@@ -27,7 +28,9 @@ workflows are independent of required PR readiness.
 The five PR lifecycle rows above are the complete allowed PR validation entry
 set. Their separation and direct GitHub log visibility are contractual, not a
 presentation preference. `pr_builds.yml` is reusable-only migration scaffolding
-and must never regain a PR event trigger or call the five lanes.
+and must never regain a PR event trigger or call the five lanes. The same is
+true of the temporary `ci-orchestrator.yml` filename shim. Both are removable
+after this branch's runner contract is active on protected main.
 
 ## Reusable workflows and slices
 

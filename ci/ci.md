@@ -15,6 +15,7 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `pr_macos.yml` (`PR · macOS`) | `pull_request` | Plans and calls the protected macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | `pull_request` | Plans and calls the protected Windows lane |
 | `pr_builds.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
+| `ci-orchestrator.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
 | `ci.yml` | push to `main` | One-job ingress that requests protected planning for main |
 | `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Resolves main/manual source identity, computes one plan, dispatches selected lanes, and owns correlated checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
@@ -45,7 +46,10 @@ platform/topic boundary unusable in review.
 Do not add path filters to these entrypoints. They all start for each relevant
 PR synchronization so their stable results exist; the canonical plan suppresses
 unselected expensive work inside each run. Do not reintroduce
-`ci-orchestrator.yml` or another all-lanes PR composer.
+`ci-orchestrator.yml` as an orchestrator or add another all-lanes PR composer.
+Its temporary reusable-only migration shim has no event trigger or lane calls
+and should be deleted with `pr_builds.yml` after the post-merge runner contract
+is active on the protected default branch.
 
 Main and explicit manual-full validation retain protected separate-run lane
 dispatch. `CI · Plan` computes their canonical shape once and passes each lane
