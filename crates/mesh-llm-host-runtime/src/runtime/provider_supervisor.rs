@@ -1058,9 +1058,8 @@ mod tests {
         };
         let mut advertised = Vec::new();
 
-        reconcile_provider_advertisement(
-            APPLE_MODEL_ID,
-            &available_provider(),
+        reconcile_provider_advertisements(
+            &[(APPLE_MODEL_ID.to_string(), available_provider())],
             &mut advertised,
             &context,
         )
@@ -1101,9 +1100,8 @@ mod tests {
         };
         let mut advertised = Vec::new();
 
-        reconcile_provider_advertisement(
-            APPLE_MODEL_ID,
-            &available_provider(),
+        reconcile_provider_advertisements(
+            &[(APPLE_MODEL_ID.to_string(), available_provider())],
             &mut advertised,
             &context,
         )

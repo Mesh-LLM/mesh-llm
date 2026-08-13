@@ -158,16 +158,6 @@ pub(super) async fn reconcile_provider_advertisements(
     }
 }
 
-pub(super) async fn reconcile_provider_advertisement(
-    model_id: &str,
-    availability: &ProviderAvailability,
-    advertised_model_ids: &mut Vec<String>,
-    context: &ProviderSupervisorContext,
-) {
-    let availabilities = vec![(model_id.to_string(), availability.clone())];
-    reconcile_provider_advertisements(&availabilities, advertised_model_ids, context).await;
-}
-
 async fn reconcile_provider_model_names(
     node: &mesh::Node,
     previous: &[String],
