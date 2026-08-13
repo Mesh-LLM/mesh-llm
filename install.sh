@@ -335,30 +335,36 @@ recommended_flavor() {
 
 detect_cuda_major() {
     local ver=""
-    if command -v nvcc >/dev/null 2>&1; then
-        ver="$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+' | awk '{print $2}' | head -n 1 || true)"
-    fi
-    if [[ -z "$ver" ]]; then
-        local lib
-        local probe_root="${MESH_LLM_TEST_CUDA_PROBE_ROOT:-}"
-        for lib in "$probe_root"/usr/local/cuda*/targets/*/lib/libcudart.so.* "$probe_root"/usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
-            if [[ -f "$lib" ]]; then
-                ver="$(basename "$lib" | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | head -n 1)"
-                break
+    if [[ "${MESH_LLM_TEST_CUDA_MAJOR+x}" == x ]]; then
+        # Platform fixtures must not depend on the CUDA installation of the host
+        # running the test.
+        ver="$MESH_LLM_TEST_CUDA_MAJOR"
+    else
+        if command -v nvcc >/dev/null 2>&1; then
+            ver="$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+' | awk '{print $2}' | head -n 1 || true)"
+        fi
+        if [[ -z "$ver" ]]; then
+            local lib
+            local probe_root="${MESH_LLM_TEST_CUDA_PROBE_ROOT:-}"
+            for lib in "$probe_root"/usr/local/cuda*/targets/*/lib/libcudart.so.* "$probe_root"/usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
+                if [[ -f "$lib" ]]; then
+                    ver="$(basename "$lib" | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | head -n 1)"
+                    break
+                fi
+            done
+        fi
+        if [[ -z "$ver" ]]; then
+            ver="$(ldconfig -p 2>/dev/null | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | sort -rn | head -n 1 || true)"
+        fi
+        # Inference-only hosts carry an NVIDIA driver but no CUDA toolkit, so none of
+        # the probes above find anything. The driver still advertises the highest CUDA
+        # it supports in the nvidia-smi header ("CUDA Version: 13.0"); use that as an
+        # upper bound and clamp it to a CUDA lane we actually publish.
+        if [[ -z "$ver" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+            ver="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: *[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)"
+            if [[ -n "$ver" ]] && (( ver > 13 )); then
+                ver=13
             fi
-        done
-    fi
-    if [[ -z "$ver" ]]; then
-        ver="$(ldconfig -p 2>/dev/null | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | sort -rn | head -n 1 || true)"
-    fi
-    # Inference-only hosts carry an NVIDIA driver but no CUDA toolkit, so none of
-    # the probes above find anything. The driver still advertises the highest CUDA
-    # it supports in the nvidia-smi header ("CUDA Version: 13.0"); use that as an
-    # upper bound and clamp it to a CUDA lane we actually publish.
-    if [[ -z "$ver" ]] && command -v nvidia-smi >/dev/null 2>&1; then
-        ver="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: *[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)"
-        if [[ -n "$ver" ]] && (( ver > 13 )); then
-            ver=13
         fi
     fi
     case "$ver" in

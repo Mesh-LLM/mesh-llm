@@ -128,6 +128,29 @@ class InstallScriptTests(unittest.TestCase):
                         f"mesh-llm-{arch}-unknown-linux-gnu-cuda-13.tar.gz",
                     )
 
+    def test_asset_name_uses_test_cuda_major_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                """
+                export MESH_LLM_TEST_UNAME_S=Linux
+                export MESH_LLM_TEST_UNAME_M=aarch64
+                export MESH_LLM_TEST_CUDA_MAJOR=13
+                asset_name cuda
+                """,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.strip(),
+                "mesh-llm-aarch64-unknown-linux-gnu-cuda-13.tar.gz",
+            )
+
     def test_detect_cuda_major_falls_back_to_nvidia_smi_driver_version(self) -> None:
         # Inference-only hosts have a driver but no toolkit, so every toolkit
         # probe comes up empty and only the nvidia-smi header carries a version.
