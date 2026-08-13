@@ -107,6 +107,20 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
         )
         self.assertNotIn("2>/dev/null", workflow)
 
+    def test_runner_contract_scans_only_pr_validation_entrypoints(self) -> None:
+        workflow = self.workflow("ci-runner-contract-slice.yml")
+        for name in (
+            "pr_quality.yml",
+            "pr_website.yml",
+            "pr_linux.yml",
+            "pr_macos.yml",
+            "pr_windows.yml",
+        ):
+            self.assertIn(f".github/workflows/{name}", workflow)
+        self.assertNotIn(".github/workflows/pr_*.yml", workflow)
+        self.assertNotIn(".github/workflows/pr_auto_assign.yml", workflow)
+        self.assertNotIn(".github/workflows/pr_cleanup.yml", workflow)
+
     def test_sdk_slice_matches_parsed_row_ids(self) -> None:
         linux = self.workflow("ci-linux-sdk-slice.yml")
         macos = self.workflow("ci-macos-sdk-slice.yml")
