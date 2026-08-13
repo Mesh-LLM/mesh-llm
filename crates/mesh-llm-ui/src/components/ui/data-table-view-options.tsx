@@ -1,6 +1,7 @@
-import type { Table } from '@tanstack/react-table'
+import type { RowData } from '@tanstack/react-table'
 import { Columns3 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import type { TanStackTable } from '@/components/ui/data-table-features'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -10,12 +11,12 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/DropdownMenu'
 
-type DataTableViewOptionsProps<TData> = {
-  readonly table: Table<TData>
+type DataTableViewOptionsProps<TData extends RowData> = {
+  readonly table: TanStackTable<TData>
   readonly columnLabels?: Readonly<Record<string, string>>
 }
 
-export function DataTableViewOptions<TData>({ table, columnLabels }: DataTableViewOptionsProps<TData>) {
+export function DataTableViewOptions<TData extends RowData>({ table, columnLabels }: DataTableViewOptionsProps<TData>) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

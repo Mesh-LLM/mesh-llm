@@ -1,7 +1,7 @@
-import type { ColumnDef } from '@tanstack/react-table'
 import { CircleCheckBig, CircleSlash, CircleX, Info, LoaderCircle, TriangleAlert } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header'
+import type { ColumnDef } from '@/components/ui/data-table'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
 import type { LogAuditSeverity, LogOutcome } from '@/features/logs/api/schemas'
 import {

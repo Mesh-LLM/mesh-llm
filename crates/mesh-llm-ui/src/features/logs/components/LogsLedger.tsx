@@ -83,9 +83,12 @@ function activeFilterGroupCount(search: LogsLedgerSearch) {
   ].filter(Boolean).length
 }
 
-function selectedCategories(search: LogsLedgerSearch, options: readonly FilterValueOption[]): Set<LogEventCategory> {
-  if (search.categories === 'none') return new Set()
-  if (search.categories) return new Set(search.categories)
+function selectedCategories(
+  categories: LogsLedgerSearch['categories'],
+  options: readonly FilterValueOption[]
+): Set<LogEventCategory> {
+  if (categories === 'none') return new Set()
+  if (categories) return new Set(categories)
   return new Set(options.map((option) => option.value).filter(isLogEventCategory))
 }
 
@@ -132,6 +135,10 @@ function eventRowAriaLabel(row: LogEventLedgerRow): string {
   return row.type === 'request'
     ? `Inspect request ${row.request.requestId.toString()}`
     : `Inspect operational event ${row.audit.code}`
+}
+
+function eventRowId(row: LogEventLedgerRow): string {
+  return row.id
 }
 
 function liveStateLabel(state: LogsLiveConnectionState) {
@@ -388,7 +395,10 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
     [filteredAuditEntries, requestRows]
   )
   const categoryOptions = useMemo<FilterValueOption[]>(() => logEventCategoryOptions(mergedRows), [mergedRows])
-  const selectedCategoryValues = useMemo(() => selectedCategories(search, categoryOptions), [categoryOptions, search])
+  const selectedCategoryValues = useMemo(
+    () => selectedCategories(search.categories, categoryOptions),
+    [categoryOptions, search.categories]
+  )
   const optionsByCategory = useMemo<Record<LedgerFilterKey, FilterValueOption[]>>(
     () => ({ category: categoryOptions }),
     [categoryOptions]
@@ -755,7 +765,7 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
               enablePagination
               footerClassName=""
               getRowAriaLabel={eventRowAriaLabel}
-              getRowId={(row) => row.id}
+              getRowId={eventRowId}
               onRowActivate={handleEventOpen}
               tableClassName="min-w-[780px] text-[length:var(--density-type-caption-lg)] [&_td]:py-3 [&_thead]:bg-transparent"
             >
