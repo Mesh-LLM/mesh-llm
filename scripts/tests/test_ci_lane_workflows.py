@@ -201,6 +201,23 @@ class CiLaneWorkflowTests(unittest.TestCase):
             workflow = self.workflow(name)
             self.assertIn("inputs.original_event_name == 'push'", workflow)
 
+    def test_product_smoke_jobs_parse_formatted_matrix_json(self) -> None:
+        workflow = self.workflow("ci-product-smoke-slice.yml")
+        for smoke_id in (
+            "core",
+            "core-cuda",
+            "two-node-client",
+            "two-node-split",
+            "metal-model-load",
+            "model-download",
+        ):
+            with self.subTest(smoke_id=smoke_id):
+                self.assertIn(
+                    f"contains(fromJson(inputs.smoke_matrix).*.id, '{smoke_id}')",
+                    workflow,
+                )
+        self.assertNotIn("contains(inputs.smoke_matrix,", workflow)
+
     def test_dispatched_main_preserves_trusted_runner_policy(self) -> None:
         selector = (ROOT / ".github/actions/select-ci-runners/action.yml").read_text(
             encoding="utf-8"
