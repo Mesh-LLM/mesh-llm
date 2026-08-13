@@ -1335,7 +1335,6 @@ mod tests {
             vec![election::InferenceTarget::Local(1)],
         );
         let affinity = affinity::AffinityRouter::new();
-        let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Real connected TcpStream pair; the degrade path hands it back unused.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1385,7 +1384,6 @@ mod tests {
                 affinity: &affinity,
                 plugin_manager: None,
             },
-            control_tx: &control_tx,
         };
         let lifecycle = OpenAiLifecycleAttachment::unowned();
 
