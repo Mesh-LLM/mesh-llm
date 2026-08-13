@@ -1,4 +1,3 @@
-use crate::api;
 use crate::inference::{election, pipeline};
 use crate::logging::{OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
@@ -8,7 +7,6 @@ use crate::network::openai::transport as proxy;
 use crate::network::router;
 use mesh_llm_events::audit::{audit_events, emit_audit};
 use mesh_llm_events::{OutputEvent, emit_event};
-use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
 use mesh_mixture_of_agents as moa;
 
 enum AutoRouteResolution {
@@ -28,7 +26,6 @@ struct IngressRouteContext<'a> {
 
 struct ProxyConnectionContext<'a> {
     route: IngressRouteContext<'a>,
-    control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
 }
 
 struct AutoRouteDecision {
@@ -126,105 +123,6 @@ async fn bind_api_proxy_listener(
                 }
             }
         }
-    }
-}
-
-async fn send_runtime_control_response<T, F>(
-    tcp_stream: tokio::net::TcpStream,
-    response: Result<Result<T, anyhow::Error>, tokio::sync::oneshot::error::RecvError>,
-    closed_reason: &str,
-    route_observer: OpenAiRouteObserver<'_>,
-    ok_response: F,
-) -> proxy::RouteDispatchOutcome
-where
-    F: FnOnce(T) -> serde_json::Value,
-{
-    match response {
-        Ok(Ok(value)) => response_outcome(
-            200,
-            proxy::send_json_ok(tcp_stream, &ok_response(value)).await,
-        ),
-        Ok(Err(error)) => {
-            let message = error.to_string();
-            let code = api::classify_runtime_error(&message);
-            response_outcome(
-                code,
-                proxy::send_error_observed(tcp_stream, code, &message, route_observer).await,
-            )
-        }
-        Err(_) => response_outcome(
-            503,
-            proxy::send_503_observed(tcp_stream, closed_reason, route_observer).await,
-        ),
-    }
-}
-
-async fn handle_mesh_load_request(
-    tcp_stream: tokio::net::TcpStream,
-    request: &proxy::BufferedHttpRequest,
-    control_tx: &tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> proxy::RouteDispatchOutcome {
-    if let Some(spec) = request.model_name.as_ref() {
-        let (model_ref, profile) = parse_model_with_profile(spec);
-        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        let _ = control_tx.send(api::RuntimeControlRequest::Load {
-            spec: model_ref.to_string(),
-            profile: profile.to_string(),
-            resp: resp_tx,
-        });
-        send_runtime_control_response(
-            tcp_stream,
-            resp_rx.await,
-            "runtime load channel closed",
-            route_observer,
-            |loaded| {
-                serde_json::json!({
-                    "loaded": loaded.model,
-                    "instance_id": loaded.instance_id,
-                })
-            },
-        )
-        .await
-    } else {
-        response_outcome(
-            400,
-            proxy::send_400_observed(tcp_stream, "missing 'model' field", route_observer).await,
-        )
-    }
-}
-
-async fn handle_mesh_unload_request(
-    tcp_stream: tokio::net::TcpStream,
-    request: &proxy::BufferedHttpRequest,
-    control_tx: &tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> proxy::RouteDispatchOutcome {
-    if let Some(name) = request.model_name.as_ref() {
-        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        let _ = control_tx.send(api::RuntimeControlRequest::Unload {
-            target: UnloadTarget::Model(name.clone()),
-            options: UnloadOptions::default(),
-            resp: resp_tx,
-        });
-        send_runtime_control_response(
-            tcp_stream,
-            resp_rx.await,
-            "runtime unload channel closed",
-            route_observer,
-            |dropped| {
-                serde_json::json!({
-                    "dropped": dropped.model,
-                    "instance_id": dropped.instance_id,
-                })
-            },
-        )
-        .await
-    } else {
-        response_outcome(
-            400,
-            proxy::send_400_observed(tcp_stream, "missing 'model' field", route_observer).await,
-        )
     }
 }
 
@@ -829,6 +727,10 @@ async fn maybe_handle_control_request(
     ctx: &ProxyConnectionContext<'_>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<proxy::RouteDispatchOutcome, tokio::net::TcpStream> {
+    if proxy::is_legacy_lifecycle_path(&request.path) {
+        return Ok(proxy::reject_legacy_lifecycle_request(tcp_stream, route_observer).await);
+    }
+
     if proxy::is_models_list_request(&request.method, &request.path) {
         let outcome = handle_models_list_request(
             tcp_stream,
@@ -837,13 +739,6 @@ async fn maybe_handle_control_request(
             ctx.route.plugin_manager,
         )
         .await;
-        return Ok(outcome);
-    }
-
-    let path = request.path.split('?').next().unwrap_or(&request.path);
-    if request.method == "POST" && path == "/mesh/load" {
-        let outcome =
-            handle_mesh_load_request(tcp_stream, request, ctx.control_tx, route_observer).await;
         return Ok(outcome);
     }
 
@@ -998,20 +893,7 @@ async fn handle_buffered_api_request(
     let descriptors = ctx.route.node.all_served_model_descriptors().await;
     proxy::rewrite_public_model_alias(&mut request, &callable, &descriptors);
 
-    if proxy::is_drop_request(&request.method, &request.path) {
-        let outcome = handle_mesh_unload_request(
-            tcp_stream,
-            &request,
-            ctx.control_tx,
-            lifecycle.route_observer(),
-        )
-        .await;
-        lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
-        return;
-    }
-
-    // Admission applies only to new inference work. Control and unload requests
-    // remain available while host activity pauses inference.
+    // Admission applies to inference work after control-path rejection.
     let tcp_stream = match check_activity_admission(
         tcp_stream,
         &ctx.route.node.activity_policy_guard,
@@ -1101,7 +983,6 @@ async fn handle_api_proxy_connection(
     node: mesh::Node,
     mut tcp_stream: tokio::net::TcpStream,
     targets: election::ModelTargets,
-    control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
     affinity: affinity::AffinityRouter,
 ) {
     let plugin_manager = node.plugin_manager().await;
@@ -1118,15 +999,8 @@ async fn handle_api_proxy_connection(
                 affinity: &affinity,
                 plugin_manager: plugin_manager.as_ref(),
             };
-            handle_buffered_api_request(
-                tcp_stream,
-                request,
-                ProxyConnectionContext {
-                    route,
-                    control_tx: &control_tx,
-                },
-            )
-            .await;
+            handle_buffered_api_request(tcp_stream, request, ProxyConnectionContext { route })
+                .await;
         }
         Err(error) => {
             let _ = super::parse_failure::send_read_failure(tcp_stream, &error).await;
@@ -1141,7 +1015,6 @@ pub(crate) async fn api_proxy(
     node: mesh::Node,
     port: u16,
     target_rx: tokio::sync::watch::Receiver<election::ModelTargets>,
-    control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
     existing_listener: Option<tokio::net::TcpListener>,
     listen_all: bool,
     affinity: affinity::AffinityRouter,
@@ -1160,9 +1033,8 @@ pub(crate) async fn api_proxy(
         let targets = target_rx.borrow().clone();
         let node = node.clone();
         let affinity = affinity.clone();
-        let control_tx = control_tx.clone();
         tokio::spawn(async move {
-            handle_api_proxy_connection(node, tcp_stream, targets, control_tx, affinity).await;
+            handle_api_proxy_connection(node, tcp_stream, targets, affinity).await;
         });
     }
 }

@@ -889,9 +889,12 @@ pub fn is_models_list_request(method: &str, path: &str) -> bool {
     method == "GET" && (path == "/v1/models" || path == "/models")
 }
 
-pub fn is_drop_request(method: &str, path: &str) -> bool {
+/// Legacy lifecycle paths formerly handled by the peer-reachable OpenAI
+/// ingress. They remain recognizable only so callers can return an explicit
+/// compatibility response instead of routing them as inference.
+pub fn is_legacy_lifecycle_path(path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
-    method == "POST" && path == "/mesh/drop"
+    matches!(path, "/mesh/load" | "/mesh/drop")
 }
 
 fn is_tokenize_request(method: &str, path: &str) -> bool {
@@ -1498,6 +1501,24 @@ mod tests {
         let body = serde_json::json!({"input":"hi"});
         assert!(!pipeline_request_supported("/v1/chat/completions", &body));
     }
+
+    #[test]
+    fn legacy_lifecycle_paths_are_rejected_even_with_query_strings() {
+        for path in [
+            "/mesh/load",
+            "/mesh/load?model=ignored",
+            "/mesh/drop",
+            "/mesh/drop?model=ignored",
+        ] {
+            assert!(
+                is_legacy_lifecycle_path(path),
+                "expected legacy path: {path}"
+            );
+        }
+        assert!(!is_legacy_lifecycle_path("/v1/chat/completions"));
+        assert!(!is_legacy_lifecycle_path("/mesh/load/"));
+    }
+
     #[tokio::test]
     async fn test_read_http_request_fragmented_post_body() {
         let body =

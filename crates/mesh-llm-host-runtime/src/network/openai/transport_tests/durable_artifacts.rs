@@ -1,5 +1,59 @@
 use super::{AffinityRouter, RequestId, handle_mesh_request};
 
+async fn assert_passive_legacy_lifecycle_path_is_rejected(path: &str) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind passive lifecycle test listener");
+    let address = listener
+        .local_addr()
+        .expect("passive lifecycle listener address");
+    let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept passive client");
+        handle_mesh_request(node, stream, true, AffinityRouter::new()).await;
+    });
+
+    let body = r#"{"model":"test"}"#;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len(),
+    );
+    let mut client = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("connect passive client");
+    client
+        .write_all(request.as_bytes())
+        .await
+        .expect("write passive lifecycle request");
+    let mut wire = Vec::new();
+    client
+        .read_to_end(&mut wire)
+        .await
+        .expect("read passive lifecycle response");
+    server.await.expect("passive handler joins");
+
+    let response = String::from_utf8(wire).expect("HTTP response should be UTF-8");
+    assert!(
+        response.starts_with("HTTP/1.1 410 Gone"),
+        "response: {response}"
+    );
+    assert!(
+        response.contains("legacy_route_gone"),
+        "response: {response}"
+    );
+}
+
+#[tokio::test]
+async fn passive_legacy_lifecycle_paths_are_rejected_before_mesh_routing() {
+    for path in ["/mesh/load", "/mesh/drop?model=test"] {
+        assert_passive_legacy_lifecycle_path_is_rejected(path).await;
+    }
+}
+
 #[tokio::test]
 #[serial_test::serial]
 async fn passive_missing_model_error_persists_the_client_visible_response_artifact() {

@@ -1,4 +1,3 @@
-use crate::api;
 use crate::inference::election;
 use crate::mesh;
 use crate::network::affinity;
@@ -7,7 +6,6 @@ pub(super) async fn api_proxy(
     node: mesh::Node,
     port: u16,
     target_rx: tokio::sync::watch::Receiver<election::ModelTargets>,
-    control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
     existing_listener: Option<tokio::net::TcpListener>,
     listen_all: bool,
     affinity: affinity::AffinityRouter,
@@ -16,7 +14,6 @@ pub(super) async fn api_proxy(
         node,
         port,
         target_rx,
-        control_tx,
         existing_listener,
         listen_all,
         affinity,

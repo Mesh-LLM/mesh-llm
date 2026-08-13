@@ -20,12 +20,12 @@ use tokio::net::TcpStream;
 pub use super::request_normalize::{ResponseAdapter, release_request_objects};
 pub(crate) use super::request_parse::read_http_request_with_plugin_manager_with_context;
 pub use super::request_parse::{
-    BufferedHttpRequest, inject_mesh_hooks_flag, is_drop_request, is_models_list_request,
+    BufferedHttpRequest, inject_mesh_hooks_flag, is_legacy_lifecycle_path, is_models_list_request,
     read_http_request, rewrite_model_field, rewrite_public_model_alias,
 };
 pub(crate) use super::response::{
     PipelineProxyResult, append_safe_header, pipeline_proxy_local, send_400_observed,
-    send_503_observed, send_error_observed, send_json_ok, send_json_ok_with_headers,
+    send_503_observed, send_error_observed, send_json_ok_with_headers,
     send_json_with_status_and_headers_observed, send_models_list_with_descriptors,
 };
 pub(crate) use super::routing_rank::{
@@ -144,6 +144,25 @@ fn response_outcome(status_code: u16, result: std::io::Result<()>) -> RouteDispa
     }
 }
 
+const LEGACY_LIFECYCLE_ROUTE_MESSAGE: &str =
+    "model lifecycle routes moved to the trusted local management API at :3131/api/runtime/models";
+
+pub(crate) async fn reject_legacy_lifecycle_request(
+    tcp_stream: TcpStream,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> RouteDispatchOutcome {
+    response_outcome(
+        410,
+        send_error_observed(
+            tcp_stream,
+            410,
+            LEGACY_LIFECYCLE_ROUTE_MESSAGE,
+            route_observer,
+        )
+        .await,
+    )
+}
+
 /// Generation context is a property of decode requests, not capability RPCs.
 /// A tokenizer request may carry a megabyte of source text while using no
 /// target KV context at all.
@@ -225,6 +244,34 @@ fn attach_request_logging(request: &mut BufferedHttpRequest) -> OpenAiLifecycleA
     lifecycle
 }
 
+async fn handle_mesh_control_request(
+    node: &mesh::Node,
+    tcp_stream: TcpStream,
+    request: &BufferedHttpRequest,
+    lifecycle: &mut OpenAiLifecycleAttachment,
+) -> Option<TcpStream> {
+    if is_legacy_lifecycle_path(&request.path) {
+        let outcome = reject_legacy_lifecycle_request(tcp_stream, lifecycle.route_observer()).await;
+        lifecycle.terminal(outcome.terminal_outcome());
+        release_request_objects(node, &request.request_object_request_ids).await;
+        return None;
+    }
+
+    if is_models_list_request(&request.method, &request.path) {
+        let served = node.models_being_served().await;
+        let descriptors = node.all_served_model_descriptors().await;
+        let runtimes = node.all_model_runtime_descriptors().await;
+        let outcome = response_outcome(
+            200,
+            send_models_list_with_descriptors(tcp_stream, &served, &descriptors, &runtimes).await,
+        );
+        lifecycle.terminal(outcome.terminal_outcome());
+        return None;
+    }
+
+    Some(tcp_stream)
+}
+
 // ── Model-aware tunnel routing ──
 
 /// The common request-handling path used by idle proxy, passive proxy, and bootstrap proxy.
@@ -270,18 +317,11 @@ pub async fn handle_mesh_request(
         });
     }
 
-    // Handle /v1/models
-    if is_models_list_request(&request.method, &request.path) {
-        let served = node.models_being_served().await;
-        let descriptors = node.all_served_model_descriptors().await;
-        let runtimes = node.all_model_runtime_descriptors().await;
-        let outcome = response_outcome(
-            200,
-            send_models_list_with_descriptors(tcp_stream, &served, &descriptors, &runtimes).await,
-        );
-        lifecycle.terminal(outcome.terminal_outcome());
+    let Some(tcp_stream) =
+        handle_mesh_control_request(&node, tcp_stream, &request, &mut lifecycle).await
+    else {
         return;
-    }
+    };
 
     // MoA routing directive: `model: "mesh"` triggers mixture-of-agents
     // fan-out. Orchestration happens here, regardless of whether this node

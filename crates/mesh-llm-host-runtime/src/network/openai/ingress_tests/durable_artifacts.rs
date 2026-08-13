@@ -23,14 +23,12 @@ async fn parsed_missing_model_error_persists_the_client_visible_response_artifac
     let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
         .await
         .expect("test node");
-    let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept ingress client");
         handle_api_proxy_connection(
             node,
             stream,
             election::ModelTargets::default(),
-            control_tx,
             affinity::AffinityRouter::new(),
         )
         .await;
@@ -119,14 +117,12 @@ async fn ingress_body_parse_error_persists_a_response_only_after_complete_header
     let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
         .await
         .expect("test node");
-    let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept ingress client");
         handle_api_proxy_connection(
             node,
             stream,
             election::ModelTargets::default(),
-            control_tx,
             affinity::AffinityRouter::new(),
         )
         .await;

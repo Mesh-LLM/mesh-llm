@@ -125,10 +125,14 @@ the local proxy, find no local model, and route back out to another peer
 through `hosts_for_model()` — making the client a mesh-internal request relay.
 Nothing would *select* a client that way (clients never advertise `Host`), but
 any peer that deliberately dialed one could use it, which on a public mesh
-means any member. The same ingress also carries the `/mesh/load` and
-`/mesh/drop` control paths, which are dispatched ahead of the inference
-admission check; `/mesh/load` is refused for clients by the runtime control
-loop, and `/mesh/drop` is inert only because a client has nothing loaded.
+means any member. The OpenAI ingress is inference/discovery-only. The former
+`/mesh/load` and `/mesh/drop` paths are rejected with `410 Gone` before model
+routing, including when they arrive through an inbound HTTP tunnel, so they
+cannot mutate local runtime state or fall through as inference. Local lifecycle
+administration uses the trusted management API on `:3131`; remote lifecycle
+administration uses the authenticated owner-control plane. Topology-scoped
+Skippy stage control remains available on its separate cooperative-inference
+transport.
 
 Gating keeps a client exactly as reachable as it was before this change — not
 at all — and avoids widening a surface that issue #1190 exists to narrow.
