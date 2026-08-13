@@ -489,7 +489,7 @@ fn check_protected_reusable_runner_policy(workflow: &str, context: &str) -> DynR
             "immutable repository context",
         ),
         (
-            "head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}",
+            "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
             "same-repository PR head context",
         ),
         ("ref: ${{ github.ref }}", "immutable ref context"),
@@ -509,7 +509,10 @@ fn check_protected_reusable_runner_policy(workflow: &str, context: &str) -> DynR
             "manual_use_depot: ${{ inputs.use_depot }}",
             "typed main-dispatch canary flag",
         ),
-        ("runner_size must be one of: default, 4, 8, 16", "bounded runner-size validation"),
+        (
+            "runner_size must be one of: default, 4, 8, 16",
+            "bounded runner-size validation",
+        ),
         (
             "runs-on: ${{ needs.runner_policy.outputs.runner }}",
             "derived producer runner",
