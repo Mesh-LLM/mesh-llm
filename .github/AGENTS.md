@@ -21,16 +21,20 @@ Strict extension pattern:
 - preserve immutable producer/consumer artifacts and a stable unique summary;
 - validate GitHub fallback before any provider rollout.
 
-The five `pr_{quality,website,linux,macos,windows}.yml` entry workflows,
-`ci-control.yml` main/manual planner, and separate protected Quality, Website,
-Linux, macOS and Windows lane workflows are authoritative for assembly. Each
-PR entry calls one nested reusable lane so its jobs and logs remain visible in
-a focused native PR run; main/manual lanes are separately dispatched.
+The five `pr_{quality,website,linux,macos,windows}.yml` and five
+`main_{quality,website,linux,macos,windows}.yml` entry workflows, the
+manual-only `ci-control.yml` dispatcher, and separate Quality, Website, Linux,
+macOS and Windows lane workflows are authoritative for assembly. Each PR/main
+entry calls one nested reusable lane so its jobs and logs remain visible in a
+focused native run; only an explicit manual-full run uses detached dispatch.
 Platform lanes must call platform-pure host/runtime/product/smoke/SDK reusables
-without empty platform placeholders. Current PR code is GitHub-hosted. Depot PR execution is
-prohibited until the cache and runner-group isolation gates in
-`ci/DEPOT_MIGRATION.md` pass. Do not change Depot settings or runner groups as
-part of an ordinary CI refactor.
+without empty platform placeholders. Ordinary PR code is GitHub-hosted. The
+approved uncredentialed CUDA smoke may use the ephemeral `gpu-nvidia` scale
+set through the protected default-branch workflow; this narrow exception does
+not allow Depot, secrets, shared cache authority, or broader runner-group
+access. Depot PR execution is prohibited until the cache and runner-group
+isolation gates in `ci/DEPOT_MIGRATION.md` pass. Do not change Depot settings
+or runner groups as part of an ordinary CI refactor.
 
 Preserve the five-entry PR shape exactly. Do not create an all-platform PR
 workflow, an all-lanes reusable composer, or a PR controller whose visible job
@@ -38,6 +42,12 @@ only dispatches detached runs. Quality, Website, Linux, macOS, and Windows must
 remain separate PR-associated workflows with directly drillable nested jobs
 and one stable `PR / <lane>` result each. Do not add path filters; planning owns
 skips so every stable result exists.
+
+Preserve the five-entry main shape as well. Routine pushes to `main` must use
+five focused native workflows with one stable `Main / <lane>` result each.
+They must not use path filters, cancel older main revisions, call detached
+dispatch, or compose all lanes into one graph. `ci-control.yml` must remain
+`workflow_dispatch`-only.
 
 The manage-ci skill is normative. The inventory and `ci/ci.md` describe current
 implementation; the optimization specification records design, status and

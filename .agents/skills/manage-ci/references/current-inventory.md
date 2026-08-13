@@ -15,8 +15,13 @@ before editing CI.
 | `pr_windows.yml` (`PR · Windows`) | PR lifecycle | Canonical PR planning plus the protected reusable Windows lane |
 | `pr_builds.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger |
 | `ci-orchestrator.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger or lane calls |
-| `ci.yml` | main push | One-job ingress for protected main planning |
-| `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Protected source resolution, one canonical plan, bounded main/manual lane dispatch and correlated required checks |
+| `main_quality.yml` (`Main · Quality`) | push to `main` | Exhaustive main planning plus the same-commit reusable Quality lane |
+| `main_website.yml` (`Main · Website`) | push to `main` | Exhaustive main planning plus the same-commit reusable Website lane |
+| `main_linux.yml` (`Main · Linux`) | push to `main` | Exhaustive main planning plus the same-commit reusable Linux lane |
+| `main_macos.yml` (`Main · macOS`) | push to `main` | Exhaustive main planning plus the same-commit reusable macOS lane |
+| `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
+| `ci.yml` | `workflow_call` only | Inert migration shim for the former main ingress filename; no push trigger or dispatch |
+| `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
 | `release.yml` | release tags, dispatch | Release-only signing, assets and publication |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
@@ -25,12 +30,12 @@ before editing CI.
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
 
-The five PR lifecycle rows above are the complete allowed PR validation entry
-set. Their separation and direct GitHub log visibility are contractual, not a
-presentation preference. `pr_builds.yml` is reusable-only migration scaffolding
-and must never regain a PR event trigger or call the five lanes. The same is
-true of the temporary `ci-orchestrator.yml` filename shim. Both are removable
-after this branch's runner contract is active on protected main.
+The five PR lifecycle rows and five main push rows above are the complete
+allowed routine validation entry sets. Their separation and direct GitHub log
+visibility are contractual, not a presentation preference. `pr_builds.yml`,
+`ci-orchestrator.yml`, and `ci.yml` are reusable-only migration scaffolding;
+they must never regain event triggers or call the five lanes. They are
+removable after this branch's runner contract is active on protected main.
 
 ## Reusable workflows and slices
 
@@ -79,9 +84,13 @@ repository secrets. The trusted main entrypoint may pass the optional
   projects one bounded lane, and calls its matching default-branch lane as a
   nested reusable workflow. Jobs and logs remain attached to five focused PR
   runs rather than one monolithic graph.
-- `ci-control.yml` calls the planner once for main pushes and explicit
-  manual-full runs, then dispatches bounded JSON lane projections as native
-  inputs. Planner and lane definitions remain protected in both paths.
+- Each `main_*.yml` workflow plans the exhaustive main profile at the pushed
+  SHA, projects one bounded lane, and calls its matching same-commit lane as a
+  nested reusable workflow. Routine main jobs and logs therefore remain
+  attached to five focused main runs.
+- `ci-control.yml` is manual-full only. It calls the planner once and dispatches
+  bounded JSON lane projections as native inputs for explicit operator
+  diagnostics; it cannot receive a push, PR, or workflow-run event.
 
 Main/manual profiles enumerate every workspace crate exactly once and all
 supported product/SDK rows. PR profiles select affected or directly owned rows

@@ -1,21 +1,17 @@
-name: Main CI
+name: Main CI migration compatibility
 
+# Routine main validation is owned by the five main_<lane>.yml workflows. This
+# reusable-only shim preserves the legacy filename during the migration; it has
+# no event trigger and cannot dispatch or compose a main graph.
 on:
-  push:
-    branches: [main]
+  workflow_call:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  request_plan:
-    name: Request protected CI plan
+  compatibility:
+    name: Split main entrypoints active
     runs-on: ubuntu-24.04
+    permissions: {}
     steps:
-      - name: Queue the protected planner
-        run: |
-          {
-            echo "## CI plan requested"
-            echo
-            echo "The protected CI · Plan workflow will classify this revision and dispatch only selected topic/platform workflows."
-          } >> "$GITHUB_STEP_SUMMARY"
+      - run: echo "Main validation is owned by the five main_<lane>.yml workflows."

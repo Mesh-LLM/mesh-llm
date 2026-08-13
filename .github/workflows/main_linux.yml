@@ -1,0 +1,96 @@
+name: Main · Linux
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  checks: write
+  contents: read
+  packages: read
+
+jobs:
+  plan:
+    name: Plan Linux
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      plan_digest: ${{ steps.plan.outputs.plan_digest }}
+      lane_plan: ${{ steps.plan.outputs.linux_lane_plan }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate immutable main identity
+        id: identity
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "main source identity is malformed" >&2
+            exit 1
+          fi
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Compute changed files and affected crates
+        id: changes
+        uses: ./.github/actions/compute-changes
+        with:
+          event_name: push
+          base_sha: ${{ github.event.before }}
+          head_sha: ${{ steps.identity.outputs.source_sha }}
+      - name: Build canonical plan
+        id: plan
+        uses: ./.github/actions/plan-ci
+        with:
+          event_name: push
+          source_sha: ${{ steps.identity.outputs.source_sha }}
+          base_sha: ${{ github.event.before }}
+          draft: false
+          changed_files: ${{ steps.changes.outputs.changed_files }}
+          affected_crates: ${{ steps.changes.outputs.affected_crates }}
+
+  lane:
+    name: Linux
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && fromJson(needs.plan.outputs.lane_plan).required }}
+    permissions:
+      checks: write
+      contents: read
+      packages: read
+    uses: ./.github/workflows/ci-linux-lane.yml
+    with:
+      lane_plan_json: ${{ needs.plan.outputs.lane_plan }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+      original_event_name: push
+      supersession_key: main-${{ github.sha }}
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  required:
+    name: Main / Linux
+    needs: [plan, lane]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Enforce Linux result
+        env:
+          LANE_PLAN: ${{ needs.plan.outputs.lane_plan }}
+          LANE_RESULT: ${{ needs.lane.result }}
+          PLAN_DIGEST: ${{ needs.plan.outputs.plan_digest }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+        run: |
+          set -euo pipefail
+          [[ "$PLAN_RESULT" == "success" ]]
+          required=$(jq -r '.required' <<<"$LANE_PLAN")
+          [[ "$required" == "true" ]]
+          [[ "$LANE_RESULT" == "success" ]]
+          echo "Plan digest: \`$PLAN_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"

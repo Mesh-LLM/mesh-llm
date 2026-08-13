@@ -16,14 +16,23 @@ class RequiredSummaryTests(unittest.TestCase):
             self.assertIn("needs: [plan, lane]", workflow)
             self.assertNotIn("checks.create", workflow)
 
-    def test_main_plan_owns_stable_correlated_checks(self):
+    def test_manual_plan_owns_stable_correlated_checks(self):
         workflow = (WORKFLOWS / "ci-control.yml").read_text()
-        self.assertIn("name: CI · Plan", workflow)
-        self.assertIn("workflows: [Main CI]", workflow)
+        self.assertIn("name: CI · Manual Full", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("workflow_run:", workflow)
         self.assertIn("name: 'CI Required'", workflow)
         for lane in ("Quality", "Website", "Linux", "macOS", "Windows"):
             self.assertIn(f"'CI / {lane}'", workflow)
         self.assertIn("external_id: process.env.CORRELATION_ID", workflow)
+
+    def test_each_main_entry_owns_a_native_required_job(self):
+        labels = {"quality": "Quality", "website": "Website", "linux": "Linux", "macos": "macOS", "windows": "Windows"}
+        for lane, label in labels.items():
+            workflow = (WORKFLOWS / f"main_{lane}.yml").read_text()
+            self.assertIn(f"name: Main / {label}", workflow)
+            self.assertIn("needs: [plan, lane]", workflow)
+            self.assertNotIn("checks.create", workflow)
 
     def test_each_lane_has_one_cancellation_safe_summary(self):
         checks = {
@@ -46,6 +55,7 @@ class RequiredSummaryTests(unittest.TestCase):
             "macos": (
                 "CI / macOS",
                 (
+                    "validate_plan",
                     "ui_artifact",
                     "hosts",
                     "native_runtimes",

@@ -50,6 +50,22 @@ concurrency:
   cancel-in-progress: ${{ inputs.original_event_name == 'pull_request' }}
 
 jobs:
+  validate_plan:
+    name: Validate macOS lane plan
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Enforce one consumer architecture
+        env:
+          LANE_PLAN: ${{ inputs.lane_plan_json }}
+        run: |
+          set -euo pipefail
+          jq -e '
+            .lane == "macos" and
+            (.matrices.runtime_products | type == "array") and
+            ([.matrices.runtime_products[].architecture] | unique | length) <= 1
+          ' <<<"$LANE_PLAN" >/dev/null
+
   ui_artifact:
     name: Console artifact
     if: ${{ fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
@@ -118,8 +134,8 @@ jobs:
 
   sdk:
     name: Swift SDK smoke
-    needs: [runtime_product, swift_sdk_input]
-    if: ${{ !cancelled() && needs.runtime_product.result == 'success' && needs.swift_sdk_input.result == 'success' && contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift') }}
+    needs: [validate_plan, runtime_product, swift_sdk_input]
+    if: ${{ !cancelled() && needs.validate_plan.result == 'success' && needs.runtime_product.result == 'success' && needs.swift_sdk_input.result == 'success' && contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift') }}
     uses: ./.github/workflows/ci-macos-sdk-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -132,8 +148,8 @@ jobs:
 
   product_smoke:
     name: Metal product smoke
-    needs: [runtime_product]
-    if: ${{ !cancelled() && needs.runtime_product.result == 'success' && fromJson(inputs.lane_plan_json).matrices.smoke[0] != null }}
+    needs: [validate_plan, runtime_product]
+    if: ${{ !cancelled() && needs.validate_plan.result == 'success' && needs.runtime_product.result == 'success' && fromJson(inputs.lane_plan_json).matrices.smoke[0] != null }}
     uses: ./.github/workflows/ci-macos-product-smoke-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -145,6 +161,7 @@ jobs:
   summary:
     name: CI / macOS
     needs:
+      - validate_plan
       - ui_artifact
       - hosts
       - native_runtimes

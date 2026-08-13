@@ -153,6 +153,7 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
             "docker-precheck.yml",
             "ci-control.yml",
             "static-abi-artifact.yml",
+            *sorted(path.name for path in WORKFLOWS.glob("main_*.yml")),
             *sorted(path.name for path in WORKFLOWS.glob("pr_*.yml")),
             *sorted(
                 path.name

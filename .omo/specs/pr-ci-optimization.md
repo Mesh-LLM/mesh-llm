@@ -1,7 +1,7 @@
 # PR and main CI composition plan
 
-Status: implemented on this branch. The shared planner, focused PR entrypoints,
-main/manual controller, topic/platform lane workflows, platform-pure reusable
+Status: implemented on this branch. The shared planner, focused PR and main
+entrypoints, manual controller, topic/platform lane workflows, platform-pure reusable
 graphs, contracts and documentation are checked in. Ruleset migration and
 Depot PR execution remain separate future work.
 
@@ -23,10 +23,11 @@ or cache identity.
 ## Implemented on this branch
 
 - Five `pr_*.yml` entrypoints independently plan and call their matching
-  protected default-branch reusable lane, while ci.yml wakes the protected
-  ci-control.yml planner. Same-repository and fork PRs keep nested reusable
-  jobs in focused native PR runs; main and explicit
-  manual-full runs use separate protected lane dispatch.
+  protected default-branch reusable lane. Five `main_*.yml` entrypoints
+  independently plan the exhaustive profile and call their matching
+  same-commit reusable lane. PRs and routine main pushes therefore keep nested
+  jobs in focused native topic/platform runs; only explicit manual-full runs
+  use protected detached lane dispatch.
 - ci/ownership.yml and ci/slices.yml define the checked ownership, dependency,
   row, runner-role, cache-mode and worker-budget catalog.
 - scripts/plan-ci.py emits the versioned plan described by
@@ -35,9 +36,9 @@ or cache identity.
 - Separate Quality, Website, Linux, macOS and Windows workflows receive bounded
   native inputs from one plan and own typed platform-local static slice
   supersets without unrelated platform placeholders. They support native
-  reusable PR calls and protected main/manual dispatch.
-- PRs expose native lane jobs and five stable topic/platform results; dispatched
-  main/manual lanes retain correlated checks.
+  reusable PR/main calls and protected manual dispatch.
+- PRs and routine main pushes expose native lane jobs and five stable
+  topic/platform results; dispatched manual-full lanes retain correlated checks.
 - Existing static ABI, native SDK, Swift, smoke and HF workflows remain
   lower-level reusable producers/consumers.
 - Current PR routing is GitHub-hosted except for the documented uncredentialed
@@ -51,6 +52,9 @@ or cache identity.
   shim for the protected pre-merge contract. It has no event trigger or lane
   calls and must not regain orchestration behavior. Both shims are removable
   after this branch's runner contract reaches protected main.
+- `ci.yml` is also a reusable-only, no-op filename shim now that routine main
+  pushes enter through the five `main_*.yml` files. It must not regain a push
+  trigger, dispatch behavior, or lane calls.
 
 This branch does not change branch rulesets, required checks, Depot settings,
 runner groups, secrets or external capacity.
@@ -60,6 +64,9 @@ show distinct Quality, Website, Linux, macOS, and Windows runs with direct job
 and log drill-down. A single all-lanes PR graph or detached dispatch-only check
 is a regression even if its jobs execute successfully. Future work belongs in
 the matching reusable lane and must preserve these five entry boundaries.
+Routine main validation has the same acceptance invariant and exposes
+`Main / Quality`, `Main / Website`, `Main / Linux`, `Main / macOS`, and
+`Main / Windows` from five focused native runs.
 
 ## Graph
 
@@ -69,11 +76,13 @@ the matching reusable lane and must preserve these five entry boundaries.
   PR macOS entry --> plan --> protected macOS lane --> PR / macOS
   PR Windows entry --> plan --> protected Windows lane --> PR / Windows
 
-  Main/manual entry --> protected controller --> the same five dispatched lanes
+  Main Quality/Website/Linux/macOS/Windows entries --> same-commit matching lanes
+  Explicit manual-full entry --> protected controller --> five dispatched lanes
 
 Each PR entry calls one protected default-branch workflow as a nested reusable
-job, preserving native PR run/log visibility without a monolithic graph. The
-main/manual controller dispatches the same list with bounded JSON inputs. Both pass the
+job, and each main entry calls its same-commit workflow. Both preserve native
+run/log visibility without a monolithic graph. The manual-only controller
+dispatches the same list with bounded JSON inputs. All paths pass the
 immutable source SHA only to product checkouts; each lane contains a
 platform-local static superset of typed reusable calls. Workflow YAML is never
 generated, and lanes do not download a planner artifact or allocate a planner.
@@ -201,7 +210,8 @@ Each lane owns one stable non-matrix summary that directly needs its complete
 static job superset and validates required work against its bounded plan.
 Each PR entry owns one native non-matrix `PR / <lane>` job that directly needs
 its reusable lane call and validates required success or an unplanned skip.
-ci-control.yml creates correlated lane checks for dispatched main/manual runs;
+Each main entry owns one native non-matrix `Main / <lane>` job. ci-control.yml
+creates correlated lane checks only for explicit manual-full runs;
 the final lane completes that aggregate only when all expected checks are
 terminal. Existing branch-protection rules are not edited by this
 implementation.

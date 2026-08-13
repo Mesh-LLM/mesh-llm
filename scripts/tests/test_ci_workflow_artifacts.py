@@ -5,19 +5,24 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
-MAIN = ROOT / ".github/workflows/ci.yml"
 SLICES = ROOT / "ci/slices.yml"
 PLAN_ACTION = ROOT / ".github/actions/plan-ci/action.yml"
 
 
 class CiWorkflowArtifactTests(unittest.TestCase):
-    def test_main_entrypoint_is_thin(self):
-        workflow = MAIN.read_text()
-        self.assertIn("push:", workflow)
-        self.assertIn("branches: [main]", workflow)
-        self.assertIn("Request protected CI plan", workflow)
-        self.assertNotIn("uses: ./.github/workflows/ci-orchestrator.yml", workflow)
-        self.assertNotIn("linux_host_input:", workflow)
+    def test_main_entrypoints_are_focused(self):
+        for lane in ("quality", "website", "linux", "macos", "windows"):
+            workflow = (WORKFLOWS / f"main_{lane}.yml").read_text()
+            self.assertIn("push:", workflow)
+            self.assertIn("branches: [main]", workflow)
+            self.assertIn(f"uses: ./.github/workflows/ci-{lane}-lane.yml", workflow)
+            self.assertNotIn("github.rest.actions.createWorkflowDispatch", workflow)
+            self.assertNotIn("linux_host_input:", workflow)
+
+        compatibility = (WORKFLOWS / "ci.yml").read_text()
+        self.assertIn("workflow_call:", compatibility)
+        self.assertNotIn("\n  push:\n", compatibility)
+        self.assertNotIn("uses: ./.github/workflows/ci-", compatibility)
 
     def test_main_plan_uses_all_rows_and_bounded_budgets(self):
         profile = json.loads(SLICES.read_text())["profiles"]["main"]
@@ -78,7 +83,10 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("needs:", swift)
         self.assertNotIn("runtime_product", swift)
         self.assertIn("needs: [runtime_product, kotlin_sdk_input]", linux)
-        self.assertIn("needs: [runtime_product, swift_sdk_input]", macos)
+        self.assertIn(
+            "needs: [validate_plan, runtime_product, swift_sdk_input]",
+            macos,
+        )
 
     def test_static_abi_toolchain_epoch_flows_to_rust_test_consumer(self):
         orchestrator = (WORKFLOWS / "ci-linux-lane.yml").read_text()

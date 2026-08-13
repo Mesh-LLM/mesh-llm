@@ -448,6 +448,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("package-release", gpu_routing)
         for workflow in (
             "ci",
+            "main_[a-z]+",
             "pr_[a-z]+",
             "release",
             "windows-warm-caches",
@@ -725,6 +726,7 @@ class CiArtifactActionTests(unittest.TestCase):
             with self.subTest(contract_path=contract_path):
                 self.assertRegex(contract_path, direct_sdk_pattern)
         self.assertIn("pr_[a-z]+", action)
+        self.assertIn("main_[a-z]+", action)
         smoke_scripts = (
             ROOT / "scripts" / "ci-rust-sdk-smoke.sh",
             ROOT / "scripts" / "ci-kotlin-sdk-smoke.sh",

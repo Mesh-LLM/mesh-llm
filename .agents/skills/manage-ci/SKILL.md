@@ -45,12 +45,12 @@ owning source, and update the inventory and topology in the same change.
 
 - Event entrypoints own triggers, concurrency, and top-level permissions.
   Pull requests use separate Quality, Website, Linux, macOS, and Windows
-  workflows. Each entry computes the canonical plan against a default-branch
-  checkout, then calls only its protected default-branch reusable lane so jobs
-  remain attached to a small topic/platform PR run. Main and manual runs use
-  the protected default-branch controller for source resolution, profile
-  selection, one canonical plan, bounded lane dispatch, and the stable overall
-  required check. Neither path owns duplicated build implementations.
+  workflows. Each entry computes the canonical plan, then calls only its
+  matching reusable lane so jobs remain attached to a small topic/platform
+  run. PR callers use the protected default-branch lane definition; main
+  callers use the same-commit local lane definition. Explicit manual-full
+  diagnostics alone may use the protected default-branch dispatch controller.
+  No path owns duplicated build implementations.
 - New PR and main behavior must be implemented in a typed reusable workflow or
   local action consumed by both entrypoints. Do not copy a job between PR and
   main and do not add a third implementation to release.
@@ -102,14 +102,35 @@ owning source, and update the inventory and topology in the same change.
   makes an unselected lane skip its expensive work and lets its stable result
   succeed. This prevents required checks from remaining absent or pending.
 
+### Main workflow visibility and split invariant
+
+- Routine main validation has exactly five push entrypoints:
+  `main_quality.yml`, `main_website.yml`, `main_linux.yml`, `main_macos.yml`,
+  and `main_windows.yml`. Each calls only its matching same-commit reusable
+  lane and owns one stable `Main / <lane>` result.
+- Native main visibility is an operability requirement. A maintainer must be
+  able to open a main push run for one topic/platform and drill directly into
+  its jobs and logs. Do not route routine main pushes through a dispatch-only
+  controller, synthetic check graph, monolithic matrix, or all-lanes composer.
+- The five main workflows must not use path filters or cancel one another or
+  older main revisions. Main is exhaustive evidence; supersession cancellation
+  remains PR-only. Planner-owned skips and matrix fail-fast behavior must not
+  make the top-level main result disappear.
+- `ci-control.yml` is reserved for an explicit default-branch manual-full run.
+  It may dispatch the five lanes with correlated synthetic checks because the
+  operator deliberately chose the detached diagnostic surface. It must not be
+  triggered by `push`, `pull_request`, or `workflow_run`.
+
 ### Planning and routing
 
 - Compute changed files and the CI plan once per entry graph. Each independent
   PR topic/platform workflow projects only its own lane and calls that protected
   default-branch lane natively, so every nested job and log stays visible from
-  the matching PR run without a monolithic matrix. Main and manual graphs pass
-  digest-bound lane projections through native workflow-dispatch inputs. Do
-  not use an artifact as dispatch state. Fork PRs use the same
+  the matching PR run without a monolithic matrix. Each main topic/platform
+  workflow computes the same exhaustive plan and calls its same-commit lane
+  natively. Only manual-full passes digest-bound lane projections through
+  native workflow-dispatch inputs. Do not use an artifact as dispatch state.
+  Fork PRs use the same
   no-secret reusable path after fetching the immutable head SHA through the
   base repository. All lane conditions and summaries consume the same plan or
   its bounded projection.
@@ -141,8 +162,9 @@ owning source, and update the inventory and topology in the same change.
 - If a consumer downloads an artifact, its producer must be reachable under
   the same plan and declared through `needs`. Consumers never rebuild missing
   producer inputs.
-- Every lane has one unique, stable, non-matrix summary, and the controller
-  owns one stable aggregate required check.
+- Every lane has one unique, stable, non-matrix summary. Each PR/main entry has
+  one stable native result; the manual-only controller owns one stable
+  synthetic aggregate check.
 - Each lane summary directly needs every top-level slice call in that lane,
   runs with `if: ${{ !cancelled() }}`, and validates results against its
   digest-bound plan projection. The aggregate completes only after every

@@ -222,6 +222,26 @@ class PlanCiTests(unittest.TestCase):
             plan["reasons"]["runner-contract"],
         )
 
+    def test_macos_consumer_rows_reject_multiple_architectures(self) -> None:
+        slices = json.loads((ROOT / "ci" / "slices.yml").read_text())
+        extra = copy.deepcopy(
+            next(row for row in slices["runtime_rows"] if row["id"] == "macos-metal")
+        )
+        extra.update({"id": "macos-metal-amd64", "architecture": "amd64"})
+        slices["runtime_rows"].append(extra)
+
+        with self.assertRaisesRegex(
+            PLANNER.PlanError,
+            "macOS runtime_products must use one architecture",
+        ):
+            PLANNER._select_rows(
+                slices,
+                profile="main",
+                domains=[],
+                selected=set(),
+                force_all_rows=True,
+            )
+
     def test_markdown_ci_control_change_does_not_force_all_rows(self) -> None:
         for path in (".github/README.md", ".omo/specs/ci-note.md"):
             with self.subTest(path=path):

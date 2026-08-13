@@ -1,10 +1,25 @@
 from pathlib import Path
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 PLATFORM = WORKFLOWS / "ci-platform-checks-slice.yml"
+NON_VALIDATION_PR_WORKFLOWS = {"pr_auto_assign.yml", "pr_cleanup.yml"}
+
+
+def workflow_triggers(path: Path) -> set[str]:
+    document = yaml.safe_load(path.read_text()) or {}
+    raw = document.get("on", document.get(True, {}))
+    if isinstance(raw, str):
+        return {raw}
+    if isinstance(raw, list):
+        return {str(trigger) for trigger in raw}
+    if isinstance(raw, dict):
+        return {str(trigger) for trigger in raw}
+    return set()
 
 
 class PrWorkflowArtifactTests(unittest.TestCase):
@@ -36,11 +51,12 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.assertNotIn("prepare-host-input", workflow)
 
     def test_legacy_entrypoints_are_inert_migration_shims(self):
-        for filename in ("pr_builds.yml", "ci-orchestrator.yml"):
+        for filename in ("pr_builds.yml", "ci-orchestrator.yml", "ci.yml"):
             with self.subTest(filename=filename):
                 workflow = self.workflow(filename)
                 self.assertIn("workflow_call:", workflow)
                 self.assertNotIn("pull_request:", workflow)
+                self.assertNotIn("\n  push:\n", workflow)
                 self.assertNotIn("uses: ./.github/workflows/ci-", workflow)
                 self.assertNotIn("Mesh-LLM/mesh-llm/.github/workflows/ci-", workflow)
 
@@ -52,11 +68,16 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             "pr_macos.yml": "macos",
             "pr_windows.yml": "windows",
         }
-        actual = {
+        workflow_paths = sorted(
+            [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]
+        )
+        pr_attached = {
             path.name
-            for path in WORKFLOWS.glob("*.yml")
-            if "\n  pull_request:\n" in path.read_text()
+            for path in workflow_paths
+            if {"pull_request", "pull_request_target"} & workflow_triggers(path)
         }
+        self.assertTrue(NON_VALIDATION_PR_WORKFLOWS <= pr_attached)
+        actual = pr_attached - NON_VALIDATION_PR_WORKFLOWS
         self.assertEqual(set(expected), actual)
         orchestrator = self.workflow("ci-orchestrator.yml")
         self.assertNotIn("pull_request:", orchestrator)
@@ -76,11 +97,48 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.assertNotIn("paths:", workflow)
             self.assertNotIn("createWorkflowDispatch", workflow)
 
+    def test_main_validation_has_exactly_five_focused_entrypoints(self):
+        expected = {
+            "main_quality.yml": "quality",
+            "main_website.yml": "website",
+            "main_linux.yml": "linux",
+            "main_macos.yml": "macos",
+            "main_windows.yml": "windows",
+        }
+        main_paths = sorted(
+            [*WORKFLOWS.glob("main_*.yml"), *WORKFLOWS.glob("main_*.yaml")]
+        )
+        actual = {
+            path.name for path in main_paths if "push" in workflow_triggers(path)
+        }
+        self.assertEqual(set(expected), actual)
+
+        for filename, lane in expected.items():
+            workflow = self.workflow(filename)
+            local_calls = [
+                line.strip()
+                for line in workflow.splitlines()
+                if line.strip().startswith("uses: ./.github/workflows/ci-")
+            ]
+            self.assertEqual(
+                [f"uses: ./.github/workflows/ci-{lane}-lane.yml"],
+                local_calls,
+            )
+            self.assertNotIn("paths:", workflow)
+            self.assertNotIn("concurrency:", workflow)
+            self.assertNotIn("createWorkflowDispatch", workflow)
+
+        controller = self.workflow("ci-control.yml")
+        self.assertIn("workflow_dispatch:", controller)
+        self.assertNotIn("workflow_run:", controller)
+        self.assertNotIn("\n  push:\n", controller)
+
     def test_ci_docs_forbid_monolithic_or_dispatch_only_pr_visibility(self):
         docs = (ROOT / "ci" / "ci.md").read_text()
         self.assertIn("The five-way split is a hard CI architecture invariant", docs)
         self.assertIn("`dispatched`, with the real work detached", docs)
         self.assertIn("Do not reintroduce", docs)
+        self.assertIn("Do not funnel main pushes through `ci-control.yml`", docs)
 
     def test_controller_dispatches_only_named_topic_and_platform_workflows(self):
         workflow = self.workflow("ci-control.yml")
@@ -88,7 +146,9 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.assertIn(f"'ci-{lane}-lane.yml'", workflow)
         self.assertEqual(1, workflow.count("uses: ./.github/actions/plan-ci"))
         self.assertIn("name: 'CI Required'", workflow)
-        self.assertNotIn("ci-orchestrator.yml", self.workflow("ci.yml"))
+        compatibility = self.workflow("ci.yml")
+        self.assertNotIn("ci-orchestrator.yml", compatibility)
+        self.assertNotIn("createWorkflowDispatch", compatibility)
 
     def test_platform_consumers_require_only_matching_producers(self):
         for platform in ("linux", "macos", "windows"):

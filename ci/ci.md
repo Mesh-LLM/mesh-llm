@@ -16,8 +16,13 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `pr_windows.yml` (`PR · Windows`) | `pull_request` | Plans and calls the protected Windows lane |
 | `pr_builds.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
 | `ci-orchestrator.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
-| `ci.yml` | push to `main` | One-job ingress that requests protected planning for main |
-| `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Resolves main/manual source identity, computes one plan, dispatches selected lanes, and owns correlated checks |
+| `main_quality.yml` (`Main · Quality`) | push to `main` | Plans and calls the same-commit Quality lane |
+| `main_website.yml` (`Main · Website`) | push to `main` | Plans and calls the same-commit Website lane |
+| `main_linux.yml` (`Main · Linux`) | push to `main` | Plans and calls the same-commit Linux lane |
+| `main_macos.yml` (`Main · macOS`) | push to `main` | Plans and calls the same-commit macOS lane |
+| `main_windows.yml` (`Main · Windows`) | push to `main` | Plans and calls the same-commit Windows lane |
+| `ci.yml` | `workflow_call` only | Inert compatibility for the former main ingress filename |
+| `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` on `main` | Explicit operator-only full plan, detached lane dispatch, and correlated diagnostic checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
 
 Each PR entry checks out the default branch for canonical planning, projects
@@ -30,10 +35,12 @@ trusted-main caches, and independently cancel superseded synchronizations.
 ### Required PR shape and visibility
 
 The five-way split is a hard CI architecture invariant. Keep exactly these PR
-event workflows: Quality, Website, Linux, macOS, and Windows. Every workflow
-must call only its matching protected reusable lane and finish with its own
-stable `PR / <lane>` result. Add or refactor jobs inside the owning reusable
-lane; do not move multiple lanes into a shared PR entrypoint.
+validation entry workflows: Quality, Website, Linux, macOS, and Windows. PR
+metadata, cleanup, and auto-assignment workflows such as `pr_cleanup.yml` and
+`pr_auto_assign.yml` are outside this validation census. Every validation
+workflow must call only its matching protected reusable lane and finish with
+its own stable `PR / <lane>` result. Add or refactor jobs inside the owning
+reusable lane; do not move multiple lanes into a shared PR entrypoint.
 
 Workflow visibility is part of correctness. From a PR's Checks or Actions UI,
 a reviewer must see five focused workflow runs and be able to drill directly
@@ -51,18 +58,36 @@ Its temporary reusable-only migration shim has no event trigger or lane calls
 and should be deleted with `pr_builds.yml` after the post-merge runner contract
 is active on the protected default branch.
 
-Main and explicit manual-full validation retain protected separate-run lane
-dispatch. `CI · Plan` computes their canonical shape once and passes each lane
-a digest-bound JSON projection through native workflow-dispatch inputs. Main
-runs are not cancelled, and their correlated aggregate remains `CI Required`.
+### Required main shape and visibility
+
+Routine main validation uses the same five-way split: Quality, Website, Linux,
+macOS, and Windows. Each `main_*.yml` entrypoint plans the exhaustive main
+profile at the pushed SHA, calls only its matching same-commit reusable lane,
+and finishes with `Main / <lane>`. This keeps every job and log directly
+drillable from a focused main workflow run while ensuring the workflow
+definition and implementation are from the commit being validated.
+
+Do not funnel main pushes through `ci-control.yml`, dispatch the real jobs into
+detached runs, or build one monolithic main graph. Do not add path filters or
+supersession cancellation: main is exhaustive evidence and every pushed
+revision must retain its five terminal results. `ci-control.yml` is reserved
+for a maintainer's explicit default-branch manual-full diagnostic run. That
+operator-selected path may use detached dispatch and the synthetic
+`CI Required` aggregate; routine main never does.
+
+The temporary `ci.yml` reusable-only shim has no push trigger, dispatcher, or
+lane calls. It can be removed with the other migration shims after the updated
+runner contract is active on protected main.
 
 ## Graph shape
 
 ```mermaid
 flowchart TD
     PR["five focused PR entry workflows"] --> PRPLAN["default-branch canonical planning"]
-    MAIN["Main CI or manual"] --> CONTROL["protected CI · Plan"]
-    PRPLAN --> PLAN["compute changes + plan-ci once"]
+    MAIN["five focused main entry workflows"] --> MAINPLAN["same-commit exhaustive planning"]
+    MANUAL["explicit manual-full"] --> CONTROL["protected manual dispatcher"]
+    PRPLAN --> PLAN["compute changes + plan-ci per focused entry"]
+    MAINPLAN --> PLAN
     CONTROL --> PLAN
     PLAN --> QUALITY["Quality graph"]
     PLAN --> WEB["Website graph"]
@@ -79,14 +104,20 @@ flowchart TD
     LC --> LINUXGATE["PR / Linux"]
     MC --> MACGATE["PR / macOS"]
     XC --> WINGATE["PR / Windows"]
+    QC --> MQ["Main / Quality"]
+    WC --> MW["Main / Website"]
+    LC --> ML["Main / Linux"]
+    MC --> MM["Main / macOS"]
+    XC --> MX["Main / Windows"]
 ```
 
 Each lane uses a platform-local static superset of typed reusable-workflow
 calls; `if` conditions consume only its checked planner projection. PR lanes
-are nested in five topic/platform PR runs; main/manual lanes use separate
-dispatched run IDs correlated by source SHA and plan digest. Linux
+are nested in five topic/platform PR runs; routine main lanes are nested in
+the matching five main runs; manual-full alone uses separate dispatched run
+IDs correlated by source SHA and plan digest. Linux
 graphs contain no macOS/Windows placeholder jobs, and the converse holds for
-the other platforms. Protected main/manual control uses the Actions API only
+the other platforms. Protected manual control uses the Actions API only
 for a closed list of five checked-in workflow files and passes data through
 native inputs. No workflow YAML is generated and no lane allocates a planner.
 

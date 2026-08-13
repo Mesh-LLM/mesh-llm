@@ -84,7 +84,11 @@ jobs:
           path: crates/mesh-llm-ui/dist
       - name: Verify UI distribution input
         shell: pwsh
-        run: if (-not (Test-Path -LiteralPath "crates/mesh-llm-ui/dist/index.html")) { throw "UI distribution is missing" }
+        run: |
+          $uiPath = "crates/mesh-llm-ui/dist/index.html"
+          if ((-not (Test-Path -LiteralPath $uiPath)) -or ((Get-Item -LiteralPath $uiPath).Length -eq 0)) {
+            throw "UI distribution is missing or empty"
+          }
       - name: Prepare immutable Windows host
         uses: ./.github/actions/prepare-windows-host-input
         with:

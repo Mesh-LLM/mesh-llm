@@ -24,6 +24,13 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
                 .map(|workflow| (lane, workflow))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let main_workflows = ["quality", "website", "linux", "macos", "windows"]
+        .into_iter()
+        .map(|lane| {
+            fs::read_to_string(repo_root.join(format!(".github/workflows/main_{lane}.yml")))
+                .map(|workflow| (lane, workflow))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let controller = fs::read_to_string(repo_root.join(".github/workflows/ci-control.yml"))?;
     let lane_workflows = ["quality", "website", "linux", "macos", "windows"]
         .into_iter()
@@ -92,6 +99,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
         &release_workflow,
         &ci_workflow,
         &pr_workflows,
+        &main_workflows,
         &website_pages,
     )?;
     check_producer_invariants(&ProducerInvariantSources {
@@ -110,6 +118,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     check_orchestrator_invariants(
         &controller,
         &pr_workflows,
+        &main_workflows,
         &lane_workflows,
         &compute_changes,
     )?;
@@ -158,7 +167,8 @@ fn check_documentation_invariants(
             "just check-release",
             "CONTRIBUTING release consistency command",
         ),
-        (ci_docs, "CI · Plan", "CI protected plan workflow"),
+        (ci_docs, "CI · Manual Full", "CI manual-full workflow"),
+        (ci_docs, "Main / Quality", "native main workflow results"),
         (ci_docs, "CI Required", "CI topology required summary"),
         (
             depot_docs,
@@ -175,6 +185,7 @@ fn check_workflow_invariants(
     release_workflow: &str,
     ci_workflow: &str,
     pr_workflows: &[(&str, String)],
+    main_workflows: &[(&str, String)],
     website_pages: &str,
 ) -> DynResult<()> {
     for (text, needle, context) in [
@@ -202,11 +213,8 @@ fn check_workflow_invariants(
         ensure_contains(text, needle, context)?;
     }
 
-    ensure_contains(
-        ci_workflow,
-        "push:\n    branches: [main]",
-        "main CI push trigger",
-    )?;
+    ensure_contains(ci_workflow, "workflow_call:", "legacy main CI shim")?;
+    ensure_not_contains(ci_workflow, "push:", "legacy main CI event trigger")?;
     for (lane, workflow) in pr_workflows {
         ensure_contains(workflow, "pull_request:", &format!("PR {lane} trigger"))?;
         ensure_contains(
@@ -225,6 +233,33 @@ fn check_workflow_invariants(
             &format!("PR {lane} trust boundary"),
         )?;
         ensure_not_contains(workflow, "secrets:", &format!("PR {lane} secret boundary"))?;
+    }
+    for (lane, workflow) in main_workflows {
+        ensure_contains(
+            workflow,
+            "push:\n    branches: [main]",
+            &format!("main {lane} trigger"),
+        )?;
+        ensure_contains(
+            workflow,
+            &format!("uses: ./.github/workflows/ci-{lane}-lane.yml"),
+            &format!("main same-commit {lane} lane call"),
+        )?;
+        ensure_contains(
+            workflow,
+            "needs: [plan, lane]",
+            &format!("main {lane} required job"),
+        )?;
+        ensure_not_contains(
+            workflow,
+            "createWorkflowDispatch",
+            &format!("main {lane} native visibility"),
+        )?;
+        ensure_not_contains(
+            workflow,
+            "concurrency:",
+            &format!("main {lane} exhaustive evidence"),
+        )?;
     }
     ensure_not_contains(
         ci_workflow,
@@ -335,13 +370,14 @@ fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) -> DynResul
 fn check_orchestrator_invariants(
     controller: &str,
     pr_workflows: &[(&str, String)],
+    main_workflows: &[(&str, String)],
     lanes: &[(&str, String)],
     compute_changes: &str,
 ) -> DynResult<()> {
     ensure_contains(
         controller,
-        "name: CI · Plan",
-        "protected plan workflow identity",
+        "name: CI · Manual Full",
+        "manual-full workflow identity",
     )?;
     ensure_contains(
         controller,
@@ -353,11 +389,9 @@ fn check_orchestrator_invariants(
         "github.rest.actions.createWorkflowDispatch",
         "controller native lane dispatch",
     )?;
-    ensure_contains(
-        controller,
-        "workflows: [Main CI]",
-        "controller main-only workflow-run trigger",
-    )?;
+    ensure_contains(controller, "workflow_dispatch:", "manual-full trigger")?;
+    ensure_not_contains(controller, "workflow_run:", "manual controller trigger")?;
+    ensure_not_contains(controller, "\n  push:\n", "manual controller push trigger")?;
     let lane_workflow = |name: &str| {
         lanes
             .iter()
@@ -373,6 +407,15 @@ fn check_orchestrator_invariants(
             pr_workflow,
             &format!("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"),
             &format!("native PR {lane} lane call"),
+        )?;
+        let main_workflow = main_workflows
+            .iter()
+            .find_map(|(name, workflow)| (*name == lane).then_some(workflow.as_str()))
+            .unwrap_or("");
+        ensure_contains(
+            main_workflow,
+            &format!("uses: ./.github/workflows/ci-{lane}-lane.yml"),
+            &format!("native main {lane} lane call"),
         )?;
         ensure_contains(
             lane_workflow(lane),

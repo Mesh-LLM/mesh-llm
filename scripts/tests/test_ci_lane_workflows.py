@@ -15,10 +15,13 @@ class CiLaneWorkflowTests(unittest.TestCase):
     def workflow(self, name: str) -> str:
         return (WORKFLOWS / name).read_text(encoding="utf-8")
 
-    def test_controller_plans_once_and_dispatches_native_lane_inputs(self) -> None:
+    def test_manual_controller_plans_once_and_dispatches_native_lane_inputs(self) -> None:
         workflow = self.workflow("ci-control.yml")
         self.assertEqual(1, workflow.count("uses: ./.github/actions/plan-ci"))
-        self.assertIn("workflow_run:", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("workflow_run:", workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("\n  push:\n", workflow)
         self.assertIn("actions: write", workflow)
         self.assertIn("checks: write", workflow)
         self.assertIn("github.rest.actions.createWorkflowDispatch", workflow)
@@ -37,8 +40,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
 
     def test_prs_use_protected_native_reusable_lanes(self) -> None:
         workflow = self.workflow("ci-control.yml")
-        self.assertIn("workflows: [Main CI]", workflow)
-        self.assertNotIn("workflows: [PR ·", workflow)
+        self.assertNotIn("workflow_run:", workflow)
 
         for lane in ("quality", "website", "linux", "macos", "windows"):
             pr_workflow = self.workflow(f"pr_{lane}.yml")
@@ -50,6 +52,31 @@ class CiLaneWorkflowTests(unittest.TestCase):
             )
             self.assertIn(f"name: PR / {'macOS' if lane == 'macos' else lane.title()}", pr_workflow)
             self.assertNotIn("github.rest.actions.createWorkflowDispatch", pr_workflow)
+
+    def test_main_uses_five_same_commit_native_reusable_lanes(self) -> None:
+        labels = {
+            "quality": "Quality",
+            "website": "Website",
+            "linux": "Linux",
+            "macos": "macOS",
+            "windows": "Windows",
+        }
+        for lane, label in labels.items():
+            workflow = self.workflow(f"main_{lane}.yml")
+            self.assertIn("\n  push:\n", workflow)
+            self.assertIn("branches: [main]", workflow)
+            self.assertEqual(1, workflow.count("uses: ./.github/actions/plan-ci"))
+            self.assertIn(
+                f"uses: ./.github/workflows/ci-{lane}-lane.yml",
+                workflow,
+            )
+            self.assertNotIn(
+                f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main",
+                workflow,
+            )
+            self.assertIn(f"name: Main / {label}", workflow)
+            self.assertNotIn("concurrency:", workflow)
+            self.assertNotIn("createWorkflowDispatch", workflow)
 
     def test_controller_summary_tolerates_omitted_optional_matrices(self) -> None:
         workflow = self.workflow("ci-control.yml")
@@ -292,6 +319,11 @@ class CiLaneWorkflowTests(unittest.TestCase):
                     self.workflow(name),
                 )
 
+        self.assertIn("  validate_plan:", macos_lane)
+        self.assertIn("[.matrices.runtime_products[].architecture] | unique | length", macos_lane)
+        self.assertIn("needs: [validate_plan, runtime_product, swift_sdk_input]", macos_lane)
+        self.assertIn("needs: [validate_plan, runtime_product]", macos_lane)
+
     def test_windows_vulkan_cache_is_restore_only_for_pr_dispatches(self) -> None:
         lane = self.workflow("ci-windows-lane.yml")
         runtime = self.workflow("ci-windows-runtime-slice.yml")
@@ -338,7 +370,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
         )
         self.assertIn("check.head_sha !== process.env.SOURCE_SHA", action)
 
-    def test_manual_main_depot_input_is_explicitly_forwarded(self) -> None:
+    def test_manual_depot_input_is_explicitly_forwarded(self) -> None:
         main = self.workflow("ci.yml")
         controller = self.workflow("ci-control.yml")
         prs = "\n".join(
