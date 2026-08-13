@@ -69,7 +69,11 @@ jobs:
           workflow_targets=(
             .github/workflows/ci.yml
             .github/workflows/main_*.yml
-            .github/workflows/pr_*.yml
+            .github/workflows/pr_quality.yml
+            .github/workflows/pr_website.yml
+            .github/workflows/pr_linux.yml
+            .github/workflows/pr_macos.yml
+            .github/workflows/pr_windows.yml
             .github/workflows/ci-control.yml
             .github/workflows/ci-*-lane.yml
             .github/workflows/ci-*-slice.yml
