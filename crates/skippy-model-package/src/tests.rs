@@ -433,7 +433,10 @@ fn mid_stage_artifact_opens_with_the_stage_filter_applied() -> anyhow::Result<()
         true,
         &source.tensors,
     );
-    crate::write::write_stage_artifact(&source, &stage, &artifact)?;
+    if let Err(error) = crate::write::write_stage_artifact(&source, &stage, &artifact) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(error);
+    }
 
     let config = RuntimeConfig {
         stage_index: 1,
