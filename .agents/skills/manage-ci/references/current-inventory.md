@@ -13,6 +13,7 @@ before editing CI.
 | `pr_linux.yml` (`PR · Linux`) | PR lifecycle | Canonical PR planning plus the protected reusable Linux lane |
 | `pr_macos.yml` (`PR · macOS`) | PR lifecycle | Canonical PR planning plus the protected reusable macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | PR lifecycle | Canonical PR planning plus the protected reusable Windows lane |
+| `pr_builds.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger |
 | `ci.yml` | main push | One-job ingress for protected main planning |
 | `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Protected source resolution, one canonical plan, bounded main/manual lane dispatch and correlated required checks |
 | `release.yml` | release tags, dispatch | Release-only signing, assets and publication |

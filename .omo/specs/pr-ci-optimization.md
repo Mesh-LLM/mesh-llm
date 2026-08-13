@@ -44,6 +44,9 @@ or cache identity.
   CUDA smoke on the approved ephemeral GPU scale set; trusted-main Depot
   selection remains behind the existing exact-string policy gate.
 - Current CI docs, inventory, skill and agent instructions describe this graph.
+- `pr_builds.yml` remains reusable-only and inert during the migration so the
+  pre-merge protected runner contract can find its legacy filename; it has no
+  PR trigger and cannot expand a graph.
 
 This branch does not change branch rulesets, required checks, Depot settings,
 runner groups, secrets or external capacity.

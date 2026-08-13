@@ -14,6 +14,7 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `pr_linux.yml` (`PR · Linux`) | `pull_request` | Plans and calls the protected Linux lane |
 | `pr_macos.yml` (`PR · macOS`) | `pull_request` | Plans and calls the protected macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | `pull_request` | Plans and calls the protected Windows lane |
+| `pr_builds.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
 | `ci.yml` | push to `main` | One-job ingress that requests protected planning for main |
 | `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Resolves main/manual source identity, computes one plan, dispatches selected lanes, and owns correlated checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |

@@ -35,6 +35,12 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.assertNotIn("actions.createWorkflowDispatch", workflow)
             self.assertNotIn("prepare-host-input", workflow)
 
+    def test_legacy_pr_entrypoint_is_an_inert_migration_shim(self):
+        workflow = self.workflow("pr_builds.yml")
+        self.assertIn("workflow_call:", workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("ci-orchestrator.yml", workflow)
+
     def test_controller_dispatches_only_named_topic_and_platform_workflows(self):
         workflow = self.workflow("ci-control.yml")
         for lane in ("quality", "website", "linux", "macos", "windows"):
