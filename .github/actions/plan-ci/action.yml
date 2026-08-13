@@ -193,6 +193,30 @@ runs:
         plan_json=$(jq -c . ci-plan.json)
         plan_digest=$(printf '%s' "$plan_json" | sha256sum | awk '{print $1}')
         jq -e '.schema_version == 1' ci-plan.json >/dev/null
+        quality_lane_plan=$(jq -ce '
+          {
+            lane: "quality",
+            required: (([.required_slices[] | select(. == "quality" or . == "runner-contract")] | length) > 0),
+            profile,
+            domains,
+            required_slices,
+            signals,
+            budgets,
+            matrices: {clippy: .matrices.clippy}
+          }
+        ' ci-plan.json)
+        website_lane_plan=$(jq -ce '
+          {
+            lane: "website",
+            required: ((.required_slices | index("web")) != null),
+            profile,
+            domains,
+            required_slices,
+            signals,
+            budgets,
+            matrices: {}
+          }
+        ' ci-plan.json)
         {
           echo "plan_path=ci-plan.json"
           echo "plan_json=$plan_json"
@@ -221,30 +245,8 @@ runs:
           echo "macos_max_parallel=$(jq -r '.budgets.macos_max_parallel' ci-plan.json)"
           echo "windows_max_parallel=$(jq -r '.budgets.windows_max_parallel' ci-plan.json)"
           echo "total_max_workers=$(jq -r '.budgets.total_max_workers' ci-plan.json)"
-          echo "quality_lane_plan=$(jq -c '
-            {
-              lane: "quality",
-              required: ([.required_slices[] | select(. == "quality" or . == "runner-contract")] | length) > 0,
-              profile,
-              domains,
-              required_slices,
-              signals,
-              budgets,
-              matrices: {clippy: .matrices.clippy}
-            }
-          ' ci-plan.json)"
-          echo "website_lane_plan=$(jq -c '
-            {
-              lane: "website",
-              required: (.required_slices | index("web")) != null,
-              profile,
-              domains,
-              required_slices,
-              signals,
-              budgets,
-              matrices: {}
-            }
-          ' ci-plan.json)"
+          echo "quality_lane_plan=$quality_lane_plan"
+          echo "website_lane_plan=$website_lane_plan"
           echo "linux_lane_plan=$(jq -c '
             {
               lane: "linux",

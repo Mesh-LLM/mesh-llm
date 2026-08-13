@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import re
+import subprocess
 import unittest
 
 
@@ -131,9 +134,65 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "windows_lane_plan",
         ):
             self.assertIn(f"{output}:", action)
-            self.assertIn(f'echo "{output}=$(jq -c', action)
+            self.assertIn(f'echo "{output}=$', action)
         for platform in ("linux", "macos", "windows"):
             self.assertIn(f'select(.platform == "{platform}")', action)
+
+    def test_topic_lane_projections_are_valid_jq(self) -> None:
+        action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
+            encoding="utf-8"
+        )
+        plans = (
+            {
+                "profile": "pr-ready",
+                "domains": ["ci-control"],
+                "required_slices": ["quality", "runner-contract", "web"],
+                "signals": {"rust_changed": True},
+                "budgets": {"total_max_workers": 10},
+                "matrices": {"clippy": [{"id": "batch-0"}]},
+            },
+            {
+                "profile": "pr-ready",
+                "domains": ["docs"],
+                "required_slices": [],
+                "signals": {"rust_changed": False},
+                "budgets": {"total_max_workers": 2},
+                "matrices": {"clippy": []},
+            },
+        )
+        for output, lane in (
+            ("quality_lane_plan", "quality"),
+            ("website_lane_plan", "website"),
+        ):
+            match = re.search(
+                rf"{output}=\$\(jq -ce '(.*?)' ci-plan\.json\)",
+                action,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(match)
+            for required, plan in zip((True, False), plans, strict=True):
+                with self.subTest(output=output, required=required):
+                    result = subprocess.run(
+                        ["jq", "-ce", match.group(1)],
+                        input=json.dumps(plan),
+                        text=True,
+                        capture_output=True,
+                        check=True,
+                    )
+                    projection = json.loads(result.stdout)
+                    self.assertEqual(lane, projection["lane"])
+                    self.assertIs(required, projection["required"])
+                    self.assertEqual(
+                        plan["required_slices"], projection["required_slices"]
+                    )
+                    self.assertEqual(plan["signals"], projection["signals"])
+                    self.assertEqual(plan["budgets"], projection["budgets"])
+                    expected_matrices = (
+                        {"clippy": plan["matrices"]["clippy"]}
+                        if lane == "quality"
+                        else {}
+                    )
+                    self.assertEqual(expected_matrices, projection["matrices"])
 
     def test_dispatched_pr_lanes_receive_no_hugging_face_credential(self) -> None:
         controller = self.workflow("ci-control.yml")
