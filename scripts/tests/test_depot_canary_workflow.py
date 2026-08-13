@@ -113,7 +113,7 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             "ACTIONS_RESULTS_URL; do",
         )
         canary_end = self.workflow.index(
-            "          docker_auth_config=",
+            "          {\n",
             canary_start,
         )
         canary_script = "set -euo pipefail\n" + dedent(
@@ -125,11 +125,17 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             cache_url: str,
             results_url: str,
             docker_auth_config: str | None = None,
+            docker_config_content: str | None = None,
         ) -> subprocess.CompletedProcess[str]:
             with (
                 tempfile.TemporaryDirectory() as home,
                 tempfile.TemporaryDirectory() as docker_config,
             ):
+                if docker_config_content is not None:
+                    (Path(docker_config) / "config.json").write_text(
+                        docker_config_content,
+                        encoding="utf-8",
+                    )
                 environment = {
                     "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                     "HOME": home,
@@ -192,14 +198,36 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
 
         depot_auth = '{"auths":{"REGISTRY.DEPOT.DEV":{"auth":"secret"}}}'
-        result = run_probe(
-            action_script,
-            *valid_endpoints[0],
-            docker_auth_config=depot_auth,
-        )
-        self.assertNotEqual(result.returncode, 0)
-        result = run_probe(action_script, *valid_endpoints[0])
-        self.assertEqual(result.returncode, 0, result.stderr)
+        depot_config = '{"auths":{"registry.depot.dev":{"auth":"secret"}}}'
+        safe_config = '{"auths":{"ghcr.io":{"auth":"secret"}}}'
+        for script_name, script in (
+            ("audit action", action_script),
+            ("Depot canary", canary_script),
+        ):
+            with self.subTest(script=script_name, auth="DOCKER_AUTH_CONFIG"):
+                result = run_probe(
+                    script,
+                    *valid_endpoints[0],
+                    docker_auth_config=depot_auth,
+                )
+                self.assertNotEqual(result.returncode, 0)
+            with self.subTest(script=script_name, auth="config.json"):
+                result = run_probe(
+                    script,
+                    *valid_endpoints[0],
+                    docker_config_content=depot_config,
+                )
+                self.assertNotEqual(result.returncode, 0)
+            with self.subTest(script=script_name, auth="safe config.json"):
+                result = run_probe(
+                    script,
+                    *valid_endpoints[0],
+                    docker_config_content=safe_config,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+            with self.subTest(script=script_name, auth="unset"):
+                result = run_probe(script, *valid_endpoints[0])
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
