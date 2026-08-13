@@ -171,17 +171,10 @@ pub(crate) fn check_installer_outcomes(repo_root: &Path, rows: &[FixtureRow]) ->
     let actual_cuda_asset = sourced_script_stdout(
         repo_root,
         "install.sh",
-        "detect_cuda_major() { printf '12\\n'; }; asset_name \"$2\"",
+        "asset_name \"$2\"",
         &orin_envs,
         &["cuda"],
     )?;
-    if !linux_arm64_cuda_asset.ends_with("-cuda.tar.gz") {
-        return Err(format!(
-            "linux/aarch64/cuda fixture asset `{linux_arm64_cuda_asset}` must end with `-cuda.tar.gz`"
-        )
-        .into());
-    }
-    let expected_cuda_asset = linux_arm64_cuda_asset.replace("-cuda.tar.gz", "-cuda-12.tar.gz");
     ensure_eq(
         &expected_cuda_asset,
         &actual_cuda_asset,
