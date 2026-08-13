@@ -41,6 +41,42 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("ci-orchestrator.yml", workflow)
 
+    def test_pr_validation_has_exactly_five_focused_entrypoints(self):
+        expected = {
+            "pr_quality.yml": "quality",
+            "pr_website.yml": "website",
+            "pr_linux.yml": "linux",
+            "pr_macos.yml": "macos",
+            "pr_windows.yml": "windows",
+        }
+        actual = {
+            path.name
+            for path in WORKFLOWS.glob("*.yml")
+            if "\n  pull_request:\n" in path.read_text()
+        }
+        self.assertEqual(set(expected), actual)
+        self.assertFalse((WORKFLOWS / "ci-orchestrator.yml").exists())
+
+        for filename, lane in expected.items():
+            workflow = self.workflow(filename)
+            protected_calls = [
+                line.strip()
+                for line in workflow.splitlines()
+                if line.strip().startswith("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-")
+            ]
+            self.assertEqual(
+                [f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"],
+                protected_calls,
+            )
+            self.assertNotIn("paths:", workflow)
+            self.assertNotIn("createWorkflowDispatch", workflow)
+
+    def test_ci_docs_forbid_monolithic_or_dispatch_only_pr_visibility(self):
+        docs = (ROOT / "ci" / "ci.md").read_text()
+        self.assertIn("The five-way split is a hard CI architecture invariant", docs)
+        self.assertIn("`dispatched`, with the real work detached", docs)
+        self.assertIn("Do not reintroduce", docs)
+
     def test_controller_dispatches_only_named_topic_and_platform_workflows(self):
         workflow = self.workflow("ci-control.yml")
         for lane in ("quality", "website", "linux", "macos", "windows"):

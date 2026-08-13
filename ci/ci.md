@@ -26,6 +26,27 @@ with direct job and step drill-down. Each has a stable `PR / <lane>` result.
 The entries receive no repository secrets, cannot select Depot or publish
 trusted-main caches, and independently cancel superseded synchronizations.
 
+### Required PR shape and visibility
+
+The five-way split is a hard CI architecture invariant. Keep exactly these PR
+event workflows: Quality, Website, Linux, macOS, and Windows. Every workflow
+must call only its matching protected reusable lane and finish with its own
+stable `PR / <lane>` result. Add or refactor jobs inside the owning reusable
+lane; do not move multiple lanes into a shared PR entrypoint.
+
+Workflow visibility is part of correctness. From a PR's Checks or Actions UI,
+a reviewer must see five focused workflow runs and be able to drill directly
+into each lane's nested jobs and logs. A controller check that only says
+`dispatched`, with the real work detached into separate runs, is not acceptable.
+Neither is a single PR run containing the combined Quality, Website, Linux,
+macOS, and Windows graph: that recreates the monolithic matrix and makes the
+platform/topic boundary unusable in review.
+
+Do not add path filters to these entrypoints. They all start for each relevant
+PR synchronization so their stable results exist; the canonical plan suppresses
+unselected expensive work inside each run. Do not reintroduce
+`ci-orchestrator.yml` or another all-lanes PR composer.
+
 Main and explicit manual-full validation retain protected separate-run lane
 dispatch. `CI · Plan` computes their canonical shape once and passes each lane
 a digest-bound JSON projection through native workflow-dispatch inputs. Main

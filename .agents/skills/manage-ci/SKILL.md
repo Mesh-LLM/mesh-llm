@@ -73,6 +73,30 @@ owning source, and update the inventory and topology in the same change.
 - Prefer local composite actions for repeated steps inside a job and reusable
   workflows for repeated jobs or job graphs.
 
+### PR workflow visibility and split invariant
+
+- PR validation has exactly five event entrypoints:
+  `pr_quality.yml`, `pr_website.yml`, `pr_linux.yml`, `pr_macos.yml`, and
+  `pr_windows.yml`. Keep this topic/platform split unless a maintainer
+  explicitly changes the architecture contract.
+- Each PR entrypoint may call only its matching protected default-branch lane.
+  It owns an independent concurrency group and stable `PR / <lane>` result.
+  Compose additional work inside that lane's typed reusable graph; do not add
+  cross-lane jobs to an entrypoint.
+- Native PR visibility is an operability requirement. Reviewers must be able
+  to open the PR checks view, select Quality, Website, Linux, macOS, or Windows,
+  and drill directly into that lane's jobs and logs. A custom `dispatched`
+  placeholder or a separate workflow-dispatch run does not satisfy this
+  requirement for PRs.
+- Never introduce a monolithic PR workflow or reusable PR composer that calls
+  all five lanes in one run. Do not replace the five entrypoints with one
+  matrix, one giant dependency graph, or one aggregate workflow whose only
+  visible PR result is a dispatch/controller job.
+- Do not add `paths` filters to the five PR entrypoints. All five stable results
+  must be created for every relevant PR synchronization; the checked planner
+  makes an unselected lane skip its expensive work and lets its stable result
+  succeed. This prevents required checks from remaining absent or pending.
+
 ### Planning and routing
 
 - Compute changed files and the CI plan once per entry graph. Each independent

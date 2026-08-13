@@ -24,6 +24,11 @@ before editing CI.
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
 
+The five PR lifecycle rows above are the complete allowed PR validation entry
+set. Their separation and direct GitHub log visibility are contractual, not a
+presentation preference. `pr_builds.yml` is reusable-only migration scaffolding
+and must never regain a PR event trigger or call the five lanes.
+
 ## Reusable workflows and slices
 
 | Workflow | Contract |

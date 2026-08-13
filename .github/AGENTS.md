@@ -32,6 +32,13 @@ prohibited until the cache and runner-group isolation gates in
 `ci/DEPOT_MIGRATION.md` pass. Do not change Depot settings or runner groups as
 part of an ordinary CI refactor.
 
+Preserve the five-entry PR shape exactly. Do not create an all-platform PR
+workflow, an all-lanes reusable composer, or a PR controller whose visible job
+only dispatches detached runs. Quality, Website, Linux, macOS, and Windows must
+remain separate PR-associated workflows with directly drillable nested jobs
+and one stable `PR / <lane>` result each. Do not add path filters; planning owns
+skips so every stable result exists.
+
 The manage-ci skill is normative. The inventory and `ci/ci.md` describe current
 implementation; the optimization specification records design, status and
 acceptance criteria. Update the appropriate source in the same change and

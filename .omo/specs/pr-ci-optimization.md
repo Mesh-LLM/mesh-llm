@@ -51,6 +51,12 @@ or cache identity.
 This branch does not change branch rulesets, required checks, Depot settings,
 runner groups, secrets or external capacity.
 
+The five independent PR workflows are an acceptance invariant. The PR UI must
+show distinct Quality, Website, Linux, macOS, and Windows runs with direct job
+and log drill-down. A single all-lanes PR graph or detached dispatch-only check
+is a regression even if its jobs execute successfully. Future work belongs in
+the matching reusable lane and must preserve these five entry boundaries.
+
 ## Graph
 
   PR Quality entry --> plan --> protected Quality lane --> PR / Quality
