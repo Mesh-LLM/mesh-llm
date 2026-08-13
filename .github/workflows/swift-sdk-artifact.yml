@@ -8,6 +8,16 @@ on:
         required: false
         default: ''
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       mode:
         description: "XCFramework coverage: host-only for PR iteration or full for main/release."
         required: true
@@ -48,9 +58,35 @@ on:
         type: number
 
 jobs:
+  runner_policy:
+    name: Select Swift SDK runner
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner_macos: ${{ steps.policy.outputs.runner_macos }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the Swift SDK role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: 'false'
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          force_hosted: ${{ inputs.force_hosted }}
+
   swift_sdk_artifact:
     name: Swift SDK input (${{ inputs.mode }})
-    runs-on: macos-15
+    needs: runner_policy
+    runs-on: ${{ needs.runner_policy.outputs.runner_macos }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     permissions:
       contents: read
@@ -64,6 +100,9 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'READ_ONLY' || 'READ_WRITE' }}
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}

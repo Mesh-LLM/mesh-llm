@@ -7,6 +7,16 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       hosts_matrix:
         description: JSON macOS host rows from the versioned CI plan.
         required: true
@@ -40,10 +50,37 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
+  runner_policy:
+    name: Select macOS host runner
+    if: ${{ inputs.hosts_matrix != '[]' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner_macos: ${{ steps.policy.outputs.runner_macos }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the macOS host role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: 'false'
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          force_hosted: ${{ inputs.force_hosted }}
+
   macos_host:
     name: macOS host (${{ matrix.host.architecture }})
+    needs: runner_policy
     if: ${{ inputs.hosts_matrix != '[]' }}
-    runs-on: macos-15
+    runs-on: ${{ needs.runner_policy.outputs.runner_macos }}
     timeout-minutes: 45
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
@@ -51,6 +88,9 @@ jobs:
       matrix:
         host: ${{ fromJson(inputs.hosts_matrix) }}
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}

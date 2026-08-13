@@ -1,7 +1,9 @@
 # Depot runner transition
 
 Status: trusted-main support exists; pull-request execution is future work and
-is disabled.
+is disabled. The checked-in graph and collector define the intended contract;
+external Depot cache/registry and runner-group administration still block
+activation.
 
 The complete PR/main composition design is in
 `.omo/specs/pr-ci-optimization.md`. This document contains only the durable
@@ -17,19 +19,38 @@ Depot is a placement provider, not a different CI graph.
 - `.github/actions/select-ci-runners` owns current Linux provider selection.
 - `DEPOT_RUNNERS_ENABLED == 'true'` permits eligible trusted `main` Linux jobs
   to select Depot. Every eligible role retains a GitHub-hosted fallback.
-- Pull requests, feature refs, tags, credential-bearing smokes, macOS, Windows
-  and hardware-qualified GPU work retain their approved non-Depot placement
-  until separately migrated.
+- Pull requests, feature refs, tags, credential-bearing smokes and
+  hardware-qualified GPU work retain their approved non-Depot placement until
+  the protected PR executor is separately activated. The intended executor may
+  cover eligible build/test jobs in Linux, Depot macOS 15 and Windows 2022
+  lanes when an equivalent image/architecture exists; control-plane planning
+  and required summaries remain hosted, and Intel macOS without an equivalent
+  remains hosted.
 - Callers never provide a raw Depot label or a separate remote-cache
   permission. Runner and cache policy come from one event-derived decision.
 
 Disabling Depot must change placement only. It must not change plan membership,
 commands, artifacts, smoke coverage or required checks.
 
+The PR end state is therefore a protected execution-policy change, not a
+`runs-on` label swap. The five native PR entrypoints and their matching
+protected reusable lanes remain intact. A selected PR slice keeps its main
+commands, profile, artifact identities, tests, `needs` edges, summaries,
+fail-fast profile and required-check result. Only the event-derived provider,
+cache mode and ephemeral runner allocation may differ. The runner-owning
+workflow checks out the immutable PR SHA with `persist-credentials: false`,
+receives no PR secrets or registry/cache credentials, and forces the hosted
+path for CI-control/workflow/policy changes. The planner-owned
+`signals.runner_contract_required` value is passed as `force_hosted` through
+every protected lane and runner-owning slice, and the centralized selector
+requires it to be false before enabling Depot. Control-plane planning/required
+summaries, credential-bearing smoke, `gpu-nvidia` hardware, and any Intel macOS
+row without a Depot-equivalent remain their approved provider exceptions.
+
 ## Required migration after the composable graph lands
 
 The protected controller and split lane workflows change which workflow files
-own and call eligible Linux jobs. The first `main` push after that change lands
+own and call eligible jobs. The first `main` push after that change lands
 can select Depot immediately when `DEPOT_RUNNERS_ENABLED` is already `true`.
 GitHub does not fall back to a hosted runner when a selected Depot label is
 blocked by runner-group policy; the job remains queued. Complete this sequence
@@ -60,6 +81,16 @@ when landing the composable graph:
 6. Roll back by setting `DEPOT_RUNNERS_ENABLED=false`. Re-run the same profile
    and verify that the identical plan executes on GitHub-hosted Linux workers.
 
+The live administrative state is not a checked-in prerequisite. The repository
+token cannot verify organization runner-group restrictions through the API
+(403). Depot UI inspection currently reports automatic Actions Cache and
+Registry authentication enabled and runners in the Default group with broad
+repository/workflow access. Treat those observations as rollout blockers to
+be re-verified by an organization administrator, not as proof that a PR path is
+safe. Activation requires both automatic credential authority disabled or
+per-PR isolated and a runner group restricted to this repository and exact
+protected workflow refs.
+
 Do not migrate required checks, enable Depot for PR content, or change cache
 isolation during this provider rollout. Those are independent changes with
 their own acceptance gates below.
@@ -78,18 +109,32 @@ Mesh-LLM/mesh-llm/.github/workflows/ci-control.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/ci-quality-lane.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/ci-linux-lane.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/ci-quality-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-web-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-ui-artifact-slice.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/ci-linux-host-slice.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/ci-linux-runtime-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-linux-product-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-rust-tests-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-macos-host-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-macos-runtime-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-macos-product-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-windows-host-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-windows-runtime-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-windows-product-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-platform-checks-slice.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/depot-canary.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/depot-registry-canary.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/native-sdk-artifact.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/release.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/static-abi-artifact.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/swift-sdk-artifact.yml@refs/heads/main
 ```
 
 Credential-bearing `hf-download-smoke.yml`, `smoke.yml`,
 `scripted-binary-smoke.yml`, and `sdk-smoke.yml` are not in the allowlist and
-remain GitHub-hosted. `swift-sdk-artifact.yml` remains on `macos-15`.
+remain GitHub-hosted. `swift-sdk-artifact.yml` must be in the protected workflow
+allowlist because it directly owns eligible PR Depot placement; its internal
+main gate remains false, so release/main Swift production stays on `macos-15`.
 
 Verify the live runner-group repository and selected-workflow restrictions with
 organization-admin authority before any rollout. A repository token returning
@@ -208,3 +253,23 @@ credential-bearing, macOS, Windows and hardware work on their existing runners.
 Depot PR activation must be a separate change after the composable CI graph is
 complete. It must not be combined with routing, required-check, artifact or
 branch-protection migration.
+
+## Measurement and rollback evidence
+
+Use `scripts/collect-ci-metrics.py` to monitor all five focused PR lanes and
+their historical GitHub cohorts. Keep raw run/job JSON under `/tmp` or an issue
+artifact. Schema-v3 reports separate workflow wall and queue, job runner queue,
+measured dependency wait (otherwise `n/a`), execution, runner-minutes,
+cancelled minutes and peak workers, grouped by provider, OS, architecture,
+semantic role and Depot size. Use `--compare-input` only with matching plan
+profile, selected slices, source/change class, image/toolchain epoch and cache
+mode; the provider sets must be disjoint and job families common.
+
+The date-independent rollout signals are deterministic: fewer than three job
+queue samples is `insufficient_sample`; queue p95 over 60 seconds is `hold`;
+job or terminal-job queue p95 at least 300 seconds is capacity-contaminated and
+`rollback`; a candidate cohort is `eligible` only when provider separation and
+all other comparability checks pass. A contaminated run may prove correctness
+or artifact reuse but cannot prove provider latency. Rollback changes only the
+central provider gate to GitHub-hosted and reruns the same plan; it does not
+change build shape. Do not place dated conclusions or raw evidence in `ci/`.

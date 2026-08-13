@@ -12,6 +12,16 @@ on:
         required: false
         default: ''
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       backend:
         description: Static llama ABI backend.
         required: true
@@ -54,69 +64,64 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      contents: none
+      contents: read
     outputs:
-      runner: ${{ steps.policy.outputs.runner }}
+      runner: ${{ steps.resolve.outputs.runner }}
       allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
     steps:
-      - name: Derive protected runner policy
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the static ABI role
         id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          force_hosted: ${{ inputs.force_hosted }}
+          manual_use_depot: ${{ inputs.use_depot }}
+      - name: Resolve runner size and target
+        id: resolve
         shell: bash
         env:
-          POLICY_REPOSITORY: ${{ github.repository }}
-          POLICY_REF: ${{ github.ref }}
-          POLICY_EVENT_NAME: ${{ github.event.inputs.original_event_name || github.event_name }}
-          POLICY_DEPOT_ENABLED: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
-          POLICY_MANUAL_USE_DEPOT: ${{ inputs.use_depot }}
-          POLICY_TARGET: ${{ inputs.target }}
-          POLICY_RUNNER_SIZE: ${{ inputs.runner_size }}
+          TARGET: ${{ inputs.target }}
+          RUNNER_SIZE: ${{ inputs.runner_size }}
+          RUNNER_DEFAULT: ${{ steps.policy.outputs.runner }}
+          RUNNER_4: ${{ steps.policy.outputs.runner_4 }}
+          RUNNER_8: ${{ steps.policy.outputs.runner_8 }}
+          RUNNER_16: ${{ steps.policy.outputs.runner_16 }}
+          RUNNER_ARM: ${{ steps.policy.outputs.runner_arm }}
+          RUNNER_ARM_4: ${{ steps.policy.outputs.runner_arm_4 }}
+          RUNNER_ARM_8: ${{ steps.policy.outputs.runner_arm_8 }}
+          RUNNER_ARM_16: ${{ steps.policy.outputs.runner_arm_16 }}
         run: |
           set -euo pipefail
-
-          case "$POLICY_RUNNER_SIZE" in
-            default|4|8|16) ;;
-            *)
-              echo "runner_size must be one of: default, 4, 8, 16" >&2
-              exit 1
-              ;;
+          case "$RUNNER_SIZE" in
+            default) runner="$RUNNER_DEFAULT" ;;
+            4) runner="$RUNNER_4" ;;
+            8) runner="$RUNNER_8" ;;
+            16) runner="$RUNNER_16" ;;
+            *) echo "runner_size must be one of: default, 4, 8, 16" >&2; exit 1 ;;
           esac
-
-          case "$POLICY_TARGET" in
-            x86_64-unknown-linux-gnu)
-              hosted_runner=ubuntu-24.04
-              depot_runner=depot-ubuntu-24.04
-              ;;
+          case "$TARGET" in
+            x86_64-unknown-linux-gnu) ;;
             aarch64-unknown-linux-gnu)
-              hosted_runner=ubuntu-24.04-arm
-              depot_runner=depot-ubuntu-24.04-arm
+              case "$RUNNER_SIZE" in
+                default) runner="$RUNNER_ARM" ;;
+                4) runner="$RUNNER_ARM_4" ;;
+                8) runner="$RUNNER_ARM_8" ;;
+                16) runner="$RUNNER_ARM_16" ;;
+              esac
               ;;
-            *)
-              echo "unsupported static ABI producer target: $POLICY_TARGET" >&2
-              exit 1
-              ;;
+            *) echo "unsupported static ABI producer target: $TARGET" >&2; exit 1 ;;
           esac
-
-          allow_depot_remote_cache=false
-          runner=$hosted_runner
-          if [[ "$POLICY_REPOSITORY" == "Mesh-LLM/mesh-llm" &&
-                "$POLICY_REF" == "refs/heads/main" &&
-                ( "$POLICY_EVENT_NAME" == "push" ||
-                  "$POLICY_EVENT_NAME" == "workflow_dispatch" ) &&
-                ( "$POLICY_DEPOT_ENABLED" == "true" ||
-                  ( "$POLICY_EVENT_NAME" == "workflow_dispatch" &&
-                    "$POLICY_MANUAL_USE_DEPOT" == "true" ) ) ]]; then
-            suffix=
-            if [[ "$POLICY_RUNNER_SIZE" != "default" ]]; then
-              suffix="-$POLICY_RUNNER_SIZE"
-            fi
-            runner="${depot_runner}${suffix}"
-            allow_depot_remote_cache=true
-          fi
-
-          {
-            echo "runner=$runner"
-            echo "allow_depot_remote_cache=$allow_depot_remote_cache"
-          } >> "$GITHUB_OUTPUT"
+          echo "runner=$runner" >> "$GITHUB_OUTPUT"
 
   static_abi_artifact:
     needs: runner_policy
@@ -130,9 +135,6 @@ jobs:
       toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ github.token }}
     defaults:
       run:
         shell: bash
@@ -142,6 +144,9 @@ jobs:
       MESH_LLM_REQUIRE_SCCACHE: "1"
       SCCACHE_GHA_ENABLED: "true"
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}

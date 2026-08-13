@@ -8,6 +8,16 @@ on:
         required: false
         default: ''
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       clippy_matrix:
         description: Validated JSON array of Clippy batches.
         required: false
@@ -65,8 +75,13 @@ jobs:
         uses: ./.github/actions/select-ci-runners
         with:
           event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.ref }}
           depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          force_hosted: ${{ inputs.force_hosted }}
           manual_use_depot: ${{ inputs.use_depot }}
 
   quality_contracts:
@@ -75,6 +90,9 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -106,6 +124,9 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 15
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -129,9 +150,6 @@ jobs:
         batch: ${{ fromJson(inputs.clippy_matrix) }}
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ github.token }}
     defaults:
       run:
         shell: bash
@@ -139,6 +157,9 @@ jobs:
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -185,6 +206,9 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 5
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}

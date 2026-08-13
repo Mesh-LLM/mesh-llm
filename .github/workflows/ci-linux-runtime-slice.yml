@@ -7,6 +7,16 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       runtime_matrix:
         description: JSON Linux runtime rows from the versioned CI plan.
         required: true
@@ -56,8 +66,13 @@ jobs:
         uses: ./.github/actions/select-ci-runners
         with:
           event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.ref }}
           depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          force_hosted: ${{ inputs.force_hosted }}
           manual_use_depot: ${{ inputs.use_depot }}
 
   linux_runtime:
@@ -73,9 +88,6 @@ jobs:
         runtime: ${{ fromJson(inputs.runtime_matrix) }}
     container:
       image: ${{ matrix.runtime.container_image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ github.token }}
     defaults:
       run:
         shell: bash
@@ -90,6 +102,9 @@ jobs:
       LLAMA_STAGE_SKIP_NCCL: "1"
       RUSTC_WRAPPER: sccache
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}

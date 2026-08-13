@@ -199,10 +199,14 @@ scope for same-PR reruns. Website owns the single pnpm publisher and its npm
 store cache, while platform UI producers are restore-only for the shared pnpm
 key. Artifacts remain run-scoped correctness inputs, never rerun caches.
 
-scripts/collect-ci-metrics.py is the read-only measurement tool. Timing
-experiments must use a new worktree from main. Keep queue, dependency wait,
-execution and wall-clock measurements separate; retain raw evidence outside
-authoritative topology docs. Capacity is not the optimization.
+scripts/collect-ci-metrics.py is the read-only measurement tool. Schema-v3
+reports keep queue, measured dependency wait, execution and wall-clock timing
+separate; they also record provider/OS/architecture/role/size, sample counts,
+runner-minutes, cancellation, peak workers and capacity contamination. Use
+`--compare-input` for provider-separated historical PR cohort comparisons.
+Its date-independent queue p95 heuristics are measurement gates, not dated run
+conclusions. Timing experiments must use a new worktree from main. Keep raw
+evidence outside authoritative topology docs. Capacity is not the optimization.
 
 ## Required summary
 
@@ -239,13 +243,17 @@ Before a PR Depot path is enabled, an administrator must prove:
 4. the ephemeral runner group is restricted to this repository and exact
    protected default-branch runner-owning workflow refs;
 5. CI-control changes force the GitHub path and rollback is tested;
-6. provider parity passes on comparable non-CI-change PRs.
+6. provider parity passes on comparable non-CI-change PRs, using
+   provider-separated queue, execution and critical-path metrics.
 
 The investigation and canary are defined in ci/DEPOT_MIGRATION.md. Do not
 change Depot settings or runner groups in this graph PR. Start a later rollout
 with remote cache disabled, then canary one non-secret Linux slice, one Rust
-test slice and the selected Linux product graph. Keep credential-bearing,
-macOS, Windows and hardware work hosted.
+test slice and the selected Linux product graph before expanding to equivalent
+Depot macOS 15 and Windows 2022 build/test rows. Keep control-plane
+planning/required summaries, credential-bearing smokes, `gpu-nvidia` hardware,
+and any Intel macOS row without a Depot-equivalent on their approved hosted
+providers.
 
 ## Extension pattern
 
@@ -280,4 +288,10 @@ the relevant xtask repo-consistency checks.
   is included in this implementation PR.
 
 Required-check migration and Depot PR enablement are separate follow-up changes
-after these acceptance cases pass.
+after these acceptance cases pass. The final PR-Depot contract preserves the
+five native PR checks and every selected row's commands, build profile,
+artifacts, tests, summaries, fail-fast behavior and producer/consumer edges.
+It is not a direct runner-label replacement: protected workflow refs,
+cache authority, source-SHA checkout, fork/no-secret behavior, CI-control
+fallback and provider exceptions must all be enforced by the owning runner
+policy.

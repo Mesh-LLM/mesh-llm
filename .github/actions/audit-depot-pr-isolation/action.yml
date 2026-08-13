@@ -1,0 +1,54 @@
+name: Audit Depot PR isolation
+description: Fail closed when a PR build receives Depot cache, registry, or compiler-cache authority.
+
+inputs:
+  original_event_name:
+    description: Original event used to derive the trust boundary.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Verify PR runner has no privileged Depot credentials
+      shell: bash
+      env:
+        INPUT_ORIGINAL_EVENT_NAME: ${{ inputs.original_event_name }}
+      run: |
+        set -euo pipefail
+        original_event="${INPUT_ORIGINAL_EVENT_NAME:-${GITHUB_EVENT_NAME:-}}"
+        if [[ "$original_event" != "pull_request" &&
+              "$original_event" != "pull_request_target" ]]; then
+          exit 0
+        fi
+
+        forbidden_names=(
+          DEPOT_CACHE_TOKEN
+          DEPOT_TOKEN
+          DEPOT_REGISTRY_PULL_TOKEN
+          DEPOT_REGISTRY_TOKEN
+          DEPOT_CACHE_URL
+          DEPOT_CACHE_API_URL
+          DEPOT_REGISTRY_URL
+          DEPOT_REGISTRY_HOST
+          SCCACHE_WEBDAV_ENDPOINT
+          SCCACHE_WEBDAV_TOKEN
+          SCCACHE_WEBDAV_USERNAME
+          SCCACHE_WEBDAV_PASSWORD
+          TURBO_TOKEN
+          TURBO_API
+          TURBO_TEAM
+          GOCACHEPROG
+        )
+        for name in "${forbidden_names[@]}"; do
+          if [[ -n "${!name:-}" ]]; then
+            echo "PR runner received forbidden credential/cache authority: $name" >&2
+            exit 1
+          fi
+        done
+
+        docker_config="${HOME:-}/.docker/config.json"
+        if [[ -f "$docker_config" ]] && grep -Eiq 'registry\.depot\.dev|depot\.dev' "$docker_config"; then
+          echo "PR runner has Depot registry authentication configured" >&2
+          exit 1
+        fi

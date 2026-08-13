@@ -481,37 +481,35 @@ fn check_protected_reusable_runner_policy(workflow: &str, context: &str) -> DynR
         ("runner_policy:", "protected runner policy job"),
         ("runs-on: ubuntu-24.04", "fixed hosted policy runner"),
         (
-            "POLICY_REPOSITORY: ${{ github.repository }}",
+            "uses: ./.github/actions/select-ci-runners",
+            "central protected runner selector",
+        ),
+        (
+            "repository: ${{ github.repository }}",
             "immutable repository context",
         ),
-        ("POLICY_REF: ${{ github.ref }}", "immutable ref context"),
         (
-            "POLICY_EVENT_NAME: ${{ github.event.inputs.original_event_name || github.event_name }}",
+            "head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}",
+            "same-repository PR head context",
+        ),
+        ("ref: ${{ github.ref }}", "immutable ref context"),
+        (
+            "original_event_name: ${{ inputs.original_event_name }}",
             "protected original event context",
         ),
         (
-            "POLICY_DEPOT_ENABLED: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
+            "depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
             "repository Depot gate",
         ),
         (
-            "POLICY_MANUAL_USE_DEPOT: ${{ inputs.use_depot }}",
+            "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+            "repository PR Depot gate",
+        ),
+        (
+            "manual_use_depot: ${{ inputs.use_depot }}",
             "typed main-dispatch canary flag",
         ),
-        (
-            r#"POLICY_REPOSITORY" == "Mesh-LLM/mesh-llm""#,
-            "exact repository guard",
-        ),
-        (
-            r#"POLICY_REF" == "refs/heads/main""#,
-            "exact main-ref guard",
-        ),
-        (
-            r#"POLICY_MANUAL_USE_DEPOT" == "true""#,
-            "main-dispatch canary decision",
-        ),
-        ("default|4|8|16", "bounded runner-size validation"),
-        ("depot-ubuntu-24.04", "allowlisted Depot AMD64 label"),
-        ("depot-ubuntu-24.04-arm", "allowlisted Depot ARM64 label"),
+        ("runner_size must be one of: default, 4, 8, 16", "bounded runner-size validation"),
         (
             "runs-on: ${{ needs.runner_policy.outputs.runner }}",
             "derived producer runner",

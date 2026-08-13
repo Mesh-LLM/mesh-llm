@@ -7,6 +7,16 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       runtime_matrix:
         description: JSON Windows product rows from the versioned CI plan.
         required: true
@@ -26,10 +36,37 @@ permissions:
   contents: read
 
 jobs:
+  runner_policy:
+    name: Select Windows product runner
+    if: ${{ inputs.runtime_matrix != '[]' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner_windows: ${{ steps.policy.outputs.runner_windows }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the Windows product role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: 'false'
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          force_hosted: ${{ inputs.force_hosted }}
+
   windows_product:
     name: Windows product (${{ matrix.runtime.backend }})
+    needs: runner_policy
     if: ${{ inputs.runtime_matrix != '[]' }}
-    runs-on: windows-2022
+    runs-on: ${{ needs.runner_policy.outputs.runner_windows }}
     timeout-minutes: 20
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
@@ -37,6 +74,9 @@ jobs:
       matrix:
         runtime: ${{ fromJson(inputs.runtime_matrix) }}
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}

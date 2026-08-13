@@ -36,6 +36,10 @@ class CiArtifactActionTests(unittest.TestCase):
             f"Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main": f"pr_{lane}.yml"
             for lane in ("quality", "website", "linux", "macos", "windows")
         }
+        protected_pre_checkout_action = (
+            "Mesh-LLM/mesh-llm/.github/actions/"
+            "audit-depot-pr-isolation@main"
+        )
 
         for path in (*action_files, *workflow_files):
             for line_number, line in enumerate(
@@ -49,6 +53,27 @@ class CiArtifactActionTests(unittest.TestCase):
                     continue
                 if value in protected_pr_lanes:
                     self.assertEqual(protected_pr_lanes[value], path.name)
+                    continue
+                if value == protected_pre_checkout_action:
+                    self.assertIn(path.name, {
+                        "ci-linux-host-slice.yml",
+                        "ci-linux-product-slice.yml",
+                        "ci-linux-runtime-slice.yml",
+                        "ci-macos-host-slice.yml",
+                        "ci-macos-product-slice.yml",
+                        "ci-macos-runtime-slice.yml",
+                        "ci-platform-checks-slice.yml",
+                        "ci-quality-slice.yml",
+                        "ci-rust-tests-slice.yml",
+                        "ci-ui-artifact-slice.yml",
+                        "ci-web-slice.yml",
+                        "ci-windows-host-slice.yml",
+                        "ci-windows-product-slice.yml",
+                        "ci-windows-runtime-slice.yml",
+                        "native-sdk-artifact.yml",
+                        "static-abi-artifact.yml",
+                        "swift-sdk-artifact.yml",
+                    })
                     continue
                 with self.subTest(
                     path=path.relative_to(ROOT),
@@ -287,6 +312,10 @@ class CiArtifactActionTests(unittest.TestCase):
         main_enabled: str,
         manual_enabled: str,
         original_event_name: str = "",
+        repository: str = "Mesh-LLM/mesh-llm",
+        head_repository: str | None = None,
+        pr_enabled: str = "false",
+        force_hosted: str = "false",
     ) -> dict[str, str]:
         action = self.read_action("select-ci-runners")
         run_block = action.split("      run: |\n", maxsplit=1)[1]
@@ -303,8 +332,16 @@ class CiArtifactActionTests(unittest.TestCase):
                     **os.environ,
                     "GITHUB_OUTPUT": str(output),
                     "INPUT_EVENT_NAME": event_name,
+                    "INPUT_ORIGINAL_EVENT_NAME": original_event_name,
+                    "GITHUB_EVENT_NAME": event_name,
+                    "INPUT_REPOSITORY": repository,
+                    "INPUT_HEAD_REPOSITORY": head_repository or repository,
+                    "GITHUB_REPOSITORY": repository,
                     "INPUT_REF": ref,
+                    "GITHUB_REF": ref,
                     "INPUT_DEPOT_MAIN_ENABLED": main_enabled,
+                    "INPUT_DEPOT_PR_ENABLED": pr_enabled,
+                    "INPUT_FORCE_HOSTED": force_hosted,
                     "INPUT_MANUAL_USE_DEPOT": manual_enabled,
                     "DISPATCH_ORIGINAL_EVENT_NAME": original_event_name,
                 },
@@ -333,8 +370,15 @@ class CiArtifactActionTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / workflow_name
         ).read_text(encoding="utf-8")
+        selected = self.run_runner_selector(
+            event_name=event_name,
+            ref=ref,
+            main_enabled=depot_enabled,
+            manual_enabled=manual_use_depot,
+            repository=repository,
+        )
         policy = workflow.split(
-            "      - name: Derive protected runner policy\n",
+            "      - name: Resolve runner size and target\n",
             maxsplit=1,
         )[1]
         run_block = policy.split("        run: |\n", maxsplit=1)[1]
@@ -356,13 +400,21 @@ class CiArtifactActionTests(unittest.TestCase):
                 env={
                     **os.environ,
                     "GITHUB_OUTPUT": str(output),
-                    "POLICY_REPOSITORY": repository,
-                    "POLICY_REF": ref,
+                    "TARGET": target,
+                    "RUNNER_SIZE": runner_size,
                     "POLICY_EVENT_NAME": event_name,
-                    "POLICY_DEPOT_ENABLED": depot_enabled,
-                    "POLICY_MANUAL_USE_DEPOT": manual_use_depot,
-                    "POLICY_TARGET": target,
-                    "POLICY_RUNNER_SIZE": runner_size,
+                    "ALLOW_DEPOT_REMOTE_CACHE": selected[
+                        "allow_depot_remote_cache"
+                    ],
+                    "RUNNER_DEFAULT": selected["runner"],
+                    "RUNNER_4": selected["runner_4"],
+                    "RUNNER_8": selected["runner_8"],
+                    "RUNNER_16": selected["runner_16"],
+                    "RUNNER_ARM": selected["runner_arm"],
+                    "RUNNER_ARM_4": selected["runner_arm_4"],
+                    "RUNNER_ARM_8": selected["runner_arm_8"],
+                    "RUNNER_ARM_16": selected["runner_arm_16"],
+                    "RUNNER_MACOS": selected["runner_macos"],
                 },
                 check=False,
                 capture_output=True,
@@ -376,6 +428,10 @@ class CiArtifactActionTests(unittest.TestCase):
                         encoding="utf-8",
                     ).splitlines()
                 )
+            outputs.setdefault(
+                "allow_depot_remote_cache",
+                selected["allow_depot_remote_cache"],
+            )
             return result, outputs
 
     def test_host_action_uses_canonical_dynamic_host_builder(self) -> None:
@@ -1014,33 +1070,26 @@ class CiArtifactActionTests(unittest.TestCase):
                     workflow,
                 )
                 self.assertIn(
-                    'POLICY_REPOSITORY" == "Mesh-LLM/mesh-llm"',
-                    workflow,
-                )
-                self.assertIn(
-                    'POLICY_REF" == "refs/heads/main"',
-                    workflow,
-                )
-                self.assertIn(
-                    'POLICY_EVENT_NAME" == "push"',
-                    workflow,
-                )
-                self.assertIn(
-                    'POLICY_EVENT_NAME" == "workflow_dispatch"',
-                    workflow,
-                )
-                self.assertIn(
-                    "POLICY_DEPOT_ENABLED: "
+                    "depot_main_enabled: "
                     "${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
                     workflow,
                 )
                 self.assertIn(
-                    "POLICY_MANUAL_USE_DEPOT: "
+                    "manual_use_depot: "
                     "${{ inputs.use_depot }}",
                     workflow,
                 )
-                self.assertIn("default|4|8|16", workflow)
-                self.assertIn("depot-ubuntu-24.04-arm", workflow)
+                self.assertIn("repository: ${{ github.repository }}", workflow)
+                self.assertIn(
+                    "head_repository: "
+                    "${{ github.event.pull_request.head.repo.full_name || "
+                    "github.repository }}",
+                    workflow,
+                )
+                self.assertIn("ref: ${{ github.ref }}", workflow)
+                self.assertIn("depot_pr_enabled:", workflow)
+                self.assertIn("default) runner=", workflow)
+                self.assertIn("RUNNER_ARM", workflow)
 
     def test_protected_reusable_runner_policy_is_fail_closed(self) -> None:
         hosted_cases = (
@@ -1166,7 +1215,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "runner_size must be one of",
                 result.stderr,
             )
-            self.assertEqual(outputs, {})
+            self.assertNotIn("runner", outputs)
 
             result, outputs = self.run_reusable_runner_policy(
                 workflow_name,
@@ -1264,7 +1313,11 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn("persist-credentials: false", producer)
         self.assertIn("actions/upload-artifact@", producer)
-        self.assertIn("runs-on: macos-15", producer)
+        self.assertIn(
+            "runs-on: ${{ needs.runner_policy.outputs.runner_macos }}",
+            producer,
+        )
+        self.assertIn("depot-macos-15", self.read_action("select-ci-runners"))
         self.assertIn("RUSTC_WRAPPER: sccache", producer)
         self.assertIn("SCCACHE_GHA_RW_MODE:", producer)
         self.assertIn(
@@ -1709,77 +1762,172 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
 
-    def test_runner_selection_never_routes_pull_requests_to_depot(self) -> None:
+    def test_runner_selection_uses_event_repository_and_ref_policy(self) -> None:
         action = self.read_action("select-ci-runners")
 
         self.assertIn("depot_main_enabled", action)
-        self.assertNotIn("depot_pr_enabled", action)
-        self.assertNotIn("head_repository", action)
-        self.assertNotIn("\n  repository:", action)
+        self.assertIn("depot_pr_enabled", action)
+        self.assertIn("\n  repository:", action)
+        self.assertIn("INPUT_REPOSITORY", action)
+        self.assertIn("\n  head_repository:", action)
+        self.assertIn("INPUT_HEAD_REPOSITORY", action)
+        self.assertIn("INPUT_DEPOT_PR_ENABLED", action)
         self.assertIn("\n  ref:", action)
-
-        runtime = action.split("runs:", maxsplit=1)[1]
-        effective_event_case = runtime.split(
-            'case "$effective_event_name" in',
-            maxsplit=1,
-        )[1]
-        pull_request_case = effective_event_case.split(
-            "pull_request|pull_request_target)",
-            maxsplit=1,
-        )[1].split(";;", maxsplit=1)[0]
-        self.assertIn("depot_enabled=false", pull_request_case)
-        self.assertNotIn("depot_enabled=true", pull_request_case)
-        self.assertNotIn("INPUT_DEPOT_PR_ENABLED", runtime)
-        self.assertNotIn("INPUT_HEAD_REPOSITORY", runtime)
-        self.assertNotIn("INPUT_REPOSITORY", runtime)
-
-        dispatch_case = effective_event_case.split(
-            "workflow_dispatch)",
-            maxsplit=1,
-        )[1].split(";;", maxsplit=1)[0]
-        self.assertIn("INPUT_DEPOT_MAIN_ENABLED", dispatch_case)
-        self.assertIn("INPUT_MANUAL_USE_DEPOT", dispatch_case)
-        self.assertIn('INPUT_REF" == "refs/heads/main"', dispatch_case)
-        self.assertIn("depot_enabled=true", dispatch_case)
-
-        push_case = effective_event_case.split(
-            "push)",
-            maxsplit=1,
-        )[1].split(";;", maxsplit=1)[0]
-        self.assertIn("INPUT_DEPOT_MAIN_ENABLED", push_case)
-        self.assertIn('INPUT_REF" == "refs/heads/main"', push_case)
-        self.assertIn("depot_enabled=true", push_case)
-
-        default_case = effective_event_case.split(
-            "*)",
-            maxsplit=1,
-        )[1].split(";;", maxsplit=1)[0]
-        self.assertIn("depot_enabled=false", default_case)
-        self.assertNotIn("depot_enabled=true", default_case)
+        self.assertIn("refs/pull/[0-9]+/merge", action)
+        self.assertIn("pull_request_target)", action)
+        self.assertIn("allow_depot_remote_cache=false", action)
         self.assertIn("depot-ubuntu-24.04-16", action)
         self.assertIn("depot-ubuntu-24.04-arm-16", action)
+        self.assertIn("depot-macos-15", action)
+        self.assertIn("depot-windows-2022", action)
 
         cases = (
-            ("pull_request", "refs/pull/12/merge", "true", "true", "false", "ubuntu-24.04"),
-            ("pull_request_target", "refs/heads/main", "true", "true", "false", "ubuntu-24.04"),
-            ("workflow_dispatch", "refs/heads/main", "false", "true", "true", "depot-ubuntu-24.04"),
-            ("workflow_dispatch", "refs/heads/feature", "true", "true", "false", "ubuntu-24.04"),
-            ("push", "refs/heads/main", "true", "false", "true", "depot-ubuntu-24.04"),
-            ("push", "refs/heads/feature", "true", "false", "false", "ubuntu-24.04"),
-            ("push", "refs/tags/v1.2.3", "true", "false", "false", "ubuntu-24.04"),
-            ("push", "refs/heads/main", "false", "false", "false", "ubuntu-24.04"),
-            ("schedule", "refs/heads/main", "true", "true", "false", "ubuntu-24.04"),
+            (
+                "pull_request",
+                "refs/pull/12/merge",
+                "false",
+                "false",
+                "true",
+                "true",
+                "depot-ubuntu-24.04",
+                "false",
+            ),
+            (
+                "pull_request",
+                "refs/pull/12/merge",
+                "false",
+                "false",
+                "true",
+                "false",
+                "ubuntu-24.04",
+                "false",
+            ),
+            (
+                "pull_request_target",
+                "refs/pull/12/merge",
+                "true",
+                "true",
+                "true",
+                "false",
+                "ubuntu-24.04",
+                "false",
+            ),
+            (
+                "workflow_dispatch",
+                "refs/heads/main",
+                "true",
+                "true",
+                "false",
+                "false",
+                "ubuntu-24.04",
+                "false",
+            ),
+            (
+                "workflow_dispatch",
+                "refs/heads/main",
+                "true",
+                "true",
+                "true",
+                "false",
+                "ubuntu-24.04",
+                "false",
+            ),
+            (
+                "workflow_dispatch",
+                "refs/heads/main",
+                "true",
+                "true",
+                "",
+                "false",
+                "depot-ubuntu-24.04",
+                "true",
+            ),
+            (
+                "workflow_dispatch",
+                "refs/heads/feature",
+                "true",
+                "true",
+                "",
+                "true",
+                "ubuntu-24.04",
+                "false",
+            ),
+            (
+                "push",
+                "refs/heads/main",
+                "true",
+                "false",
+                "",
+                "false",
+                "depot-ubuntu-24.04",
+                "true",
+            ),
+            (
+                "push",
+                "refs/heads/feature",
+                "true",
+                "false",
+                "",
+                "false",
+                "ubuntu-24.04",
+                "false",
+            ),
+            (
+                "push",
+                "refs/tags/v1.2.3",
+                "true",
+                "false",
+                "",
+                "false",
+                "ubuntu-24.04",
+                "false",
+            ),
+            (
+                "push",
+                "refs/heads/main",
+                "false",
+                "false",
+                "",
+                "false",
+                "ubuntu-24.04",
+                "false",
+            ),
+            (
+                "schedule",
+                "refs/heads/main",
+                "true",
+                "true",
+                "",
+                "false",
+                "ubuntu-24.04",
+                "false",
+            ),
         )
-        for event_name, ref, main, manual, enabled, runner in cases:
+        for (
+            event_name,
+            ref,
+            main,
+            manual,
+            original_event_name,
+            pr_enabled,
+            runner,
+            cache_enabled,
+        ) in cases:
             with self.subTest(event_name=event_name, ref=ref):
                 outputs = self.run_runner_selector(
                     event_name=event_name,
                     ref=ref,
                     main_enabled=main,
                     manual_enabled=manual,
+                    original_event_name=original_event_name,
+                    pr_enabled=pr_enabled,
                 )
+                enabled = "true" if runner.startswith("depot-") else "false"
                 self.assertEqual(outputs["depot_enabled"], enabled)
-                self.assertEqual(outputs["allow_depot_remote_cache"], enabled)
+                self.assertEqual(
+                    outputs["allow_depot_remote_cache"],
+                    cache_enabled,
+                )
                 self.assertEqual(outputs["runner"], runner)
                 expected_arm = (
                     "depot-ubuntu-24.04-arm"
@@ -1797,6 +1945,65 @@ class CiArtifactActionTests(unittest.TestCase):
                         outputs[f"runner_arm_{size}"],
                         expected_sized_arm,
                     )
+                expected_macos = (
+                    "depot-macos-15"
+                    if enabled == "true"
+                    else "macos-15"
+                )
+                expected_windows = (
+                    "depot-windows-2022"
+                    if enabled == "true"
+                    else "windows-2022"
+                )
+                self.assertEqual(outputs["runner_macos"], expected_macos)
+                self.assertEqual(outputs["runner_windows"], expected_windows)
+
+        untrusted_repository = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="true",
+            manual_enabled="true",
+            pr_enabled="true",
+            repository="attacker/mesh-llm",
+        )
+        self.assertEqual(untrusted_repository["depot_enabled"], "false")
+        self.assertEqual(untrusted_repository["runner"], "ubuntu-24.04")
+        self.assertEqual(
+            untrusted_repository["allow_depot_remote_cache"],
+            "false",
+        )
+
+        fork_head_repository = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="true",
+            manual_enabled="true",
+            pr_enabled="true",
+            head_repository="attacker/mesh-llm",
+        )
+        self.assertEqual(fork_head_repository["depot_enabled"], "false")
+        self.assertEqual(fork_head_repository["runner"], "ubuntu-24.04")
+
+        runner_contract_change = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="true",
+            manual_enabled="true",
+            pr_enabled="true",
+            force_hosted="true",
+        )
+        self.assertEqual(runner_contract_change["depot_enabled"], "false")
+        self.assertEqual(runner_contract_change["runner"], "ubuntu-24.04")
+
+        non_merge_ref = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/head",
+            main_enabled="true",
+            manual_enabled="true",
+            pr_enabled="true",
+        )
+        self.assertEqual(non_merge_ref["depot_enabled"], "false")
+        self.assertEqual(non_merge_ref["runner"], "ubuntu-24.04")
 
         untrusted_dispatch = self.run_runner_selector(
             event_name="workflow_dispatch",
@@ -1804,9 +2011,14 @@ class CiArtifactActionTests(unittest.TestCase):
             main_enabled="true",
             manual_enabled="true",
             original_event_name="pull_request_target",
+            pr_enabled="true",
         )
         self.assertEqual(untrusted_dispatch["depot_enabled"], "false")
         self.assertEqual(untrusted_dispatch["runner"], "ubuntu-24.04")
+        self.assertEqual(
+            untrusted_dispatch["allow_depot_remote_cache"],
+            "false",
+        )
 
     def test_dispatched_pr_cache_writes_remain_blocked_with_depot(
         self,

@@ -1,15 +1,33 @@
 name: Select trusted CI runners
-description: Select Depot or GitHub-hosted Linux runners without routing pull-request events to Depot.
+description: Select Depot or GitHub-hosted CI runners from the real event and trust context.
 
 inputs:
   event_name:
     description: GitHub event name.
+    required: true
+  original_event_name:
+    description: Source event declared by a workflow-dispatch controller, if any.
+    required: false
+    default: ""
+  repository:
+    description: Exact owner/name from the GitHub repository context.
+    required: true
+  head_repository:
+    description: Exact owner/name of the pull-request head repository, or repository outside PR events.
     required: true
   ref:
     description: Fully qualified Git ref used to enforce the trusted-main boundary.
     required: true
   depot_main_enabled:
     description: Repository-wide Depot gate for trusted push and dispatch events.
+    required: false
+    default: "false"
+  depot_pr_enabled:
+    description: Exact-string repository gate for direct pull-request Depot placement.
+    required: false
+    default: "false"
+  force_hosted:
+    description: Fail-closed planner signal for CI-control or runner-policy changes.
     required: false
     default: "false"
   manual_use_depot:
@@ -48,6 +66,12 @@ outputs:
   runner_arm_16:
     description: Sixteen-vCPU Linux ARM64 runner label for measured high-parallelism builds.
     value: ${{ steps.select.outputs.runner_arm_16 }}
+  runner_macos:
+    description: macOS runner label selected by the centralized provider policy.
+    value: ${{ steps.select.outputs.runner_macos }}
+  runner_windows:
+    description: Windows runner label selected by the centralized provider policy.
+    value: ${{ steps.select.outputs.runner_windows }}
 
 runs:
   using: composite
@@ -57,15 +81,22 @@ runs:
       shell: bash
       env:
         INPUT_EVENT_NAME: ${{ inputs.event_name }}
+        INPUT_ORIGINAL_EVENT_NAME: ${{ inputs.original_event_name }}
         DISPATCH_ORIGINAL_EVENT_NAME: ${{ github.event.inputs.original_event_name || '' }}
+        INPUT_REPOSITORY: ${{ inputs.repository }}
+        INPUT_HEAD_REPOSITORY: ${{ inputs.head_repository }}
         INPUT_REF: ${{ inputs.ref }}
         INPUT_DEPOT_MAIN_ENABLED: ${{ inputs.depot_main_enabled }}
+        INPUT_DEPOT_PR_ENABLED: ${{ inputs.depot_pr_enabled }}
+        INPUT_FORCE_HOSTED: ${{ inputs.force_hosted }}
         INPUT_MANUAL_USE_DEPOT: ${{ inputs.manual_use_depot }}
       run: |
         set -euo pipefail
 
         for value_name in \
           INPUT_DEPOT_MAIN_ENABLED \
+          INPUT_DEPOT_PR_ENABLED \
+          INPUT_FORCE_HOSTED \
           INPUT_MANUAL_USE_DEPOT
         do
           value="${!value_name}"
@@ -75,41 +106,86 @@ runs:
           fi
         done
 
+        # A direct PR may opt into Depot only when this protected repository
+        # explicitly enables the feature. Both the base and PR-head repository
+        # comparisons remain exact so a fork, mirror, or similarly named
+        # repository cannot opt in.
+        trusted_repository="Mesh-LLM/mesh-llm"
         depot_enabled=false
-        effective_event_name="$INPUT_EVENT_NAME"
-        if [[ "$INPUT_EVENT_NAME" == "workflow_dispatch" ]]; then
-          case "${DISPATCH_ORIGINAL_EVENT_NAME:-}" in
-            pull_request|pull_request_target) effective_event_name=pull_request ;;
-            push) effective_event_name=push ;;
-          esac
+        allow_depot_remote_cache=false
+        is_direct_pull_request=false
+        is_dispatched_pull_request=false
+        dispatch_original_event="${INPUT_ORIGINAL_EVENT_NAME:-}"
+        if [[ -z "$dispatch_original_event" ]]; then
+          dispatch_original_event="${DISPATCH_ORIGINAL_EVENT_NAME:-}"
         fi
-        case "$effective_event_name" in
-          pull_request|pull_request_target)
-            # Current PR workflows and local actions are evaluated from
-            # PR-controlled code. A repository variable or same-repo check
-            # therefore cannot establish a runner trust boundary.
-            depot_enabled=false
-            ;;
-          workflow_dispatch)
-            if [[ "$INPUT_REF" == "refs/heads/main" && ( \
-              "$INPUT_DEPOT_MAIN_ENABLED" == "true" || \
-              "$INPUT_MANUAL_USE_DEPOT" == "true" \
-            ) ]]; then
+
+        case "$INPUT_EVENT_NAME" in
+          pull_request)
+            # The caller must use the protected default-branch reusable lane;
+            # only the canonical PR merge ref is eligible for this path.
+            if [[ "$INPUT_REPOSITORY" == "$trusted_repository" && \
+              "$INPUT_HEAD_REPOSITORY" == "$trusted_repository" && \
+              "$INPUT_REF" =~ ^refs/pull/[0-9]+/merge$ && \
+              "$INPUT_FORCE_HOSTED" == "false" && \
+              "$INPUT_DEPOT_PR_ENABLED" == "true" ]]; then
+              is_direct_pull_request=true
               depot_enabled=true
             fi
             ;;
+          pull_request_target)
+            # Never execute pull_request_target content on Depot, even when a
+            # caller declares a matching repository, ref, or feature gate.
+            depot_enabled=false
+            ;;
+          workflow_dispatch)
+            # A dispatch controller can label its source event for cache and
+            # cancellation policy. A declared PR source is still untrusted and
+            # must remain on GitHub; it must not become a Depot opt-in.
+            case "$dispatch_original_event" in
+              pull_request|pull_request_target)
+                is_dispatched_pull_request=true
+                ;;
+              push)
+                if [[ "$INPUT_REPOSITORY" == "$trusted_repository" && \
+                  "$INPUT_REF" == "refs/heads/main" && \
+                  "$INPUT_DEPOT_MAIN_ENABLED" == "true" ]]; then
+                  depot_enabled=true
+                fi
+                ;;
+              workflow_dispatch|"")
+                if [[ "$INPUT_REPOSITORY" == "$trusted_repository" && \
+                  "$INPUT_REF" == "refs/heads/main" && ( \
+                  "$INPUT_DEPOT_MAIN_ENABLED" == "true" || \
+                  "$INPUT_MANUAL_USE_DEPOT" == "true" \
+                ) ]]; then
+                  depot_enabled=true
+                fi
+                ;;
+            esac
+            ;;
           push)
-            if [[ \
+            if [[ "$INPUT_REPOSITORY" == "$trusted_repository" && \
               "$INPUT_REF" == "refs/heads/main" && \
-              "$INPUT_DEPOT_MAIN_ENABLED" == "true" \
-            ]]; then
+              "$INPUT_DEPOT_MAIN_ENABLED" == "true" ]]; then
               depot_enabled=true
+              allow_depot_remote_cache=true
             fi
             ;;
           *)
             depot_enabled=false
             ;;
         esac
+
+        # Depot's repository-scoped cache is never authorized by a PR gate.
+        # Trusted main push/dispatch paths are the only paths that may retain
+        # the existing remote-cache behavior.
+        if [[ "$depot_enabled" == "true" && \
+          "$is_direct_pull_request" != "true" && \
+          "$is_dispatched_pull_request" != "true" && \
+          "$INPUT_EVENT_NAME" == "workflow_dispatch" ]]; then
+          allow_depot_remote_cache=true
+        fi
 
         if [[ "$depot_enabled" == "true" ]]; then
           runner=depot-ubuntu-24.04
@@ -120,6 +196,8 @@ runs:
           runner_arm_4=depot-ubuntu-24.04-arm-4
           runner_arm_8=depot-ubuntu-24.04-arm-8
           runner_arm_16=depot-ubuntu-24.04-arm-16
+          runner_macos=depot-macos-15
+          runner_windows=depot-windows-2022
         else
           runner=ubuntu-24.04
           runner_4=ubuntu-24.04
@@ -129,11 +207,13 @@ runs:
           runner_arm_4=ubuntu-24.04-arm
           runner_arm_8=ubuntu-24.04-arm
           runner_arm_16=ubuntu-24.04-arm
+          runner_macos=macos-15
+          runner_windows=windows-2022
         fi
 
         {
           echo "depot_enabled=$depot_enabled"
-          echo "allow_depot_remote_cache=$depot_enabled"
+          echo "allow_depot_remote_cache=$allow_depot_remote_cache"
           echo "runner=$runner"
           echo "runner_4=$runner_4"
           echo "runner_8=$runner_8"
@@ -142,4 +222,6 @@ runs:
           echo "runner_arm_4=$runner_arm_4"
           echo "runner_arm_8=$runner_arm_8"
           echo "runner_arm_16=$runner_arm_16"
+          echo "runner_macos=$runner_macos"
+          echo "runner_windows=$runner_windows"
         } >> "$GITHUB_OUTPUT"

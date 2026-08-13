@@ -7,6 +7,16 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       runtime_matrix:
         description: JSON Linux product rows from the versioned CI plan.
         required: true
@@ -27,10 +37,38 @@ permissions:
   packages: read
 
 jobs:
-  linux_product:
-    name: Linux product (${{ matrix.runtime.backend }})
+  runner_policy:
+    name: Select Linux product runner
     if: ${{ inputs.runtime_matrix != '[]' }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.policy.outputs.runner }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the Linux product role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.ref }}
+          # Product composition is not in the trusted-main Depot allowlist.
+          depot_main_enabled: 'false'
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          force_hosted: ${{ inputs.force_hosted }}
+
+  linux_product:
+    name: Linux product (${{ matrix.runtime.backend }})
+    needs: runner_policy
+    if: ${{ inputs.runtime_matrix != '[]' }}
+    runs-on: ${{ needs.runner_policy.outputs.runner }}
     timeout-minutes: 15
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
@@ -39,13 +77,13 @@ jobs:
         runtime: ${{ fromJson(inputs.runtime_matrix) }}
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ github.token }}
     defaults:
       run:
         shell: bash
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}

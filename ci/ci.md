@@ -212,8 +212,15 @@ platform workflow because artifacts are run-scoped; UI tests still execute
 only in the Website graph and host producers never rebuild the UI themselves.
 
 Timing evidence is collected read-only with `scripts/collect-ci-metrics.py`.
-Do not put run-specific durations or historical conclusions in this document;
-record an evidence file separately when a timing experiment is authorized.
+Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,
+execution, runner-minutes, cancelled runner-minutes and peak workers separate,
+and group results by provider, OS, architecture, semantic runner role and
+Depot size. The optional `--compare-input` mode compares a historical GitHub
+cohort with a candidate provider only when job families and provider sets are
+comparable. Deterministic queue p95 and capacity-contamination heuristics emit
+`eligible`, `hold`, `rollback` or `insufficient_sample`; they are rollout
+signals, not dated conclusions. Keep raw inputs and dated reports under
+`/tmp` or a tracking artifact, never in `ci/`.
 
 ### PR failure domains
 
@@ -273,6 +280,20 @@ trusted-main cache entries. Trusted `main` Linux roles may use Depot only when
 smokes and other hardware-qualified work retain explicit approved placement.
 Provider choice never changes plan membership, commands, artifacts, tests or
 summaries.
+
+The intended PR-Depot end state preserves the same five entry workflows and
+matching protected lane calls. After the external cache and runner-group gates
+in `ci/DEPOT_MIGRATION.md` are proven, provider policy may select ephemeral
+Depot for eligible build/test jobs in Linux, macOS 15 and Windows 2022 lanes
+where an equivalent image/architecture exists. This is not a direct label
+swap: a PR can edit checked-out workflows/actions, and Depot's automatic
+cache/registry authority is repository-scoped unless administrators prove a
+per-PR boundary. The owning protected workflow must remain pinned to the
+reviewed default branch, derive provider and cache mode from the event/trust
+policy, receive no PR secrets or registry/cache tokens, and check out the
+immutable PR SHA. Control-plane planning/required summaries, credential-
+bearing smokes, `gpu-nvidia` hardware work, and any Intel macOS row without a
+Depot-equivalent remain on their approved providers.
 
 ### PR cache audit and rerun behavior
 

@@ -59,7 +59,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |
-| `swift-sdk-artifact.yml` | Fixed `macos-15` host-only/full XCFramework producer |
+| `swift-sdk-artifact.yml` | Host-only/full XCFramework producer; trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
 | `smoke.yml` | Artifact-based inference/OpenAI/split smoke |
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke |
 | `sdk-smoke.yml` | Artifact-based SDK consumers |
@@ -109,6 +109,15 @@ from that same catalog.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
+`scripts/collect-ci-metrics.py` is the read-only timing evidence collector. Its
+schema-v3 report keeps workflow wall/queue, job runner queue, measured
+dependency wait, job execution, runner-minutes, cancelled runner-minutes and
+peak workers separate. It groups observations by provider, operating system,
+architecture, semantic runner role and Depot size, and emits deterministic
+queue/capacity heuristics plus an optional provider-cohort comparison. Raw
+inputs and dated reports belong under `/tmp` or a tracking issue/artifact, not
+under `ci/` or this inventory.
+
 Artifacts are correctness boundaries; caches only accelerate regeneration.
 PR artifacts generally retain for one day. Protected same-repository and fork
 lanes cannot publish shared trusted-main caches, and Depot cache access is
@@ -129,13 +138,26 @@ non-fail-fast, failed producers suppress only declared consumers through
 GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
 `windows-2022`. Depot labels are selected only by `select-ci-runners` for
 trusted main Linux when `DEPOT_RUNNERS_ENABLED` is exactly `true`; no workflow
-accepts a raw provider label. The documented `gpu-nvidia` ephemeral scale set
-is the sole uncredentialed, hardware-qualified same-repository PR exception.
+accepts a raw provider label. Current ordinary PR execution remains hosted
+until the protected PR gate is separately activated. The intended final gate
+may cover eligible build/test rows across Linux, Depot macOS 15 and Windows
+2022 when equivalent images/architectures exist; planning/required summaries,
+credential-bearing smokes, `gpu-nvidia` hardware and uncertified Intel macOS
+rows remain exceptions. The documented `gpu-nvidia` ephemeral scale set is
+the sole current uncredentialed, hardware-qualified same-repository PR
+exception.
 
 The future Depot PR gate is documented in `ci/DEPOT_MIGRATION.md`. It requires
 cache isolation, no PR cache/registry tokens, exact protected workflow refs,
 ephemeral runners, a sentinel canary, and a tested GitHub rollback. No Depot
 settings or runner groups are changed by this workflow refactor.
+
+As of the last live administrative inspection, the repository token could not
+verify organization runner-group restrictions (the organization API returned
+403). Depot automatic cache and registry authentication and the Default runner
+group's workflow/repository scope therefore remain external activation proof,
+not checked-in facts. Do not treat the checked-in `DEPOT_RUNNERS_ENABLED` value
+or a successful main canary as evidence that PR cache isolation is safe.
 
 Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
 `CUDA_VERSION`, `VULKAN_SDK_VERSION`, smoke configuration variables, and

@@ -55,7 +55,7 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertNotIn("pull_request_target", self.workflow(name))
 
-    def test_main_macos_and_windows_slices_have_fixed_platforms(self) -> None:
+    def test_macos_and_windows_slices_use_central_platform_policy(self) -> None:
         platform_slices = {
             "macos": (
                 "macos-15",
@@ -78,7 +78,27 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
             for name in names:
                 with self.subTest(platform=platform, workflow=name):
                     workflow = self.workflow(name)
-                    self.assertIn(f"runs-on: {runner}", workflow)
+                    output = "runner_macos" if platform == "macos" else "runner_windows"
+                    self.assertIn(
+                        f"{output}: ${{{{ steps.policy.outputs.{output} }}}}",
+                        workflow,
+                    )
+                    self.assertIn(
+                        f"runs-on: ${{{{ needs.runner_policy.outputs.{output} }}}}",
+                        workflow,
+                    )
+                    self.assertIn(
+                        "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+                        workflow,
+                    )
+                    self.assertIn(
+                        "head_repository: "
+                        "${{ github.event.pull_request.head.repo.full_name || "
+                        "github.repository }}",
+                        workflow,
+                    )
+                    selector = (ROOT / ".github" / "actions" / "select-ci-runners" / "action.yml").read_text(encoding="utf-8")
+                    self.assertIn(f"depot-{runner}", selector)
                     self.assertNotIn("macos-latest", workflow)
                     self.assertNotIn("windows-latest", workflow)
 
@@ -147,14 +167,44 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
         self.assertIn("depot-canary.yml@refs/heads/main", allowlist)
         self.assertIn("release.yml@refs/heads/main", allowlist)
         for name in (
+            "ci-quality-slice.yml",
+            "ci-web-slice.yml",
+            "ci-ui-artifact-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
+            "ci-linux-product-slice.yml",
+            "ci-rust-tests-slice.yml",
+            "ci-macos-host-slice.yml",
+            "ci-macos-runtime-slice.yml",
+            "ci-macos-product-slice.yml",
+            "ci-windows-host-slice.yml",
+            "ci-windows-runtime-slice.yml",
+            "ci-windows-product-slice.yml",
+            "ci-platform-checks-slice.yml",
+            "native-sdk-artifact.yml",
+            "static-abi-artifact.yml",
+            "swift-sdk-artifact.yml",
+        ):
+            with self.subTest(workflow=name):
+                self.assertIn(f"{name}@refs/heads/main", allowlist)
+        for name in (
             "hf-download-smoke.yml",
             "smoke.yml",
             "scripted-binary-smoke.yml",
             "sdk-smoke.yml",
-            "swift-sdk-artifact.yml",
         ):
             with self.subTest(workflow=name):
                 self.assertNotIn(name, allowlist)
+        self.assertIn(
+            "swift-sdk-artifact.yml@refs/heads/main",
+            allowlist,
+        )
+        swift = self.workflow("swift-sdk-artifact.yml")
+        self.assertIn("depot_main_enabled: 'false'", swift)
+        self.assertIn(
+            "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+            swift,
+        )
 
     def test_pr_entrypoint_maps_no_repository_secret(self) -> None:
         for lane in ("quality", "website", "linux", "macos", "windows"):

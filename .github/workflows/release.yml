@@ -140,8 +140,12 @@ jobs:
         uses: ./.github/actions/select-ci-runners
         with:
           event_name: ${{ github.event_name }}
+          original_event_name: ''
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.ref }}
           depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: 'false'
           manual_use_depot: ${{ inputs.use_depot == true }}
 
   build:
@@ -348,6 +352,8 @@ jobs:
             artifact_suffix: linux-aarch64-cpu
     uses: ./.github/workflows/native-sdk-artifact.yml
     with:
+      original_event_name: ${{ github.event_name }}
+      force_hosted: false
       backend: ${{ matrix.backend }}
       target: ${{ matrix.target }}
       profile: release
@@ -719,6 +725,8 @@ jobs:
       contents: read
     uses: ./.github/workflows/swift-sdk-artifact.yml
     with:
+      original_event_name: ${{ github.event_name }}
+      force_hosted: false
       mode: full
       artifact_name: release-swift-sdk
       release_tag: ${{ needs.metadata.outputs.tag }}
