@@ -222,6 +222,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
         self.assertIn("check.head_sha !== process.env.SOURCE_SHA", action)
         self.assertIn("if (process.env.OVERALL_CHECK_ID)", action)
         self.assertIn("github.paginate(github.rest.checks.listForRef", action)
+        self.assertNotIn("response.data.check_runs", action)
         self.assertIn("lanes.length === expected.length", action)
         self.assertNotIn("correlated lane checks did not converge", action)
 

@@ -115,7 +115,7 @@ runs:
               ref: process.env.SOURCE_SHA,
               per_page: 100,
               filter: 'latest',
-            }, (response) => response.data.check_runs);
+            });
             const lanes = checkRuns.filter((check) =>
               expected.includes(check.name) && check.external_id === process.env.CORRELATION_ID
             );
