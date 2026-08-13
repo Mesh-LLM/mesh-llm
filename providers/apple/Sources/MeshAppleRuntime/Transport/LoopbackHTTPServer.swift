@@ -182,7 +182,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
       temperature: request.temperature
     )
     if request.stream == true {
-      try await stream(generation, connection: connection)
+      try await stream(generation, includeUsage: request.includeUsage, connection: connection)
       return
     }
     let result = try await runtime.generate(request: generation) { _ in }
@@ -239,6 +239,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
 
   private func stream(
     _ request: AppleGenerationRequest,
+    includeUsage: Bool,
     connection: NWConnection
   ) async throws {
     sendHeaders(
@@ -250,7 +251,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     )
     let completionID = "chatcmpl-\(UUID().uuidString)"
     do {
-      _ = try await runtime.generate(request: request) { event in
+      let result = try await runtime.generate(request: request) { event in
         guard event.type == "delta", let delta = event.delta else { return }
         let payload: [String: Any] = [
           "id": completionID,
@@ -270,35 +271,52 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
         else { return }
         connection.send(content: Data("data: \(json)\n\n".utf8), completion: .idempotent)
       }
+      let finalPayload: [String: Any] = [
+        "id": completionID,
+        "object": "chat.completion.chunk",
+        "created": Int(Date().timeIntervalSince1970),
+        "model": request.modelID,
+        "choices": [
+          [
+            "index": 0,
+            "delta": [:],
+            "finish_reason": "stop",
+          ]
+        ],
+      ]
+      let finalData = try JSONSerialization.data(withJSONObject: finalPayload)
+      let finalJSON = String(decoding: finalData, as: UTF8.self)
+      var trailer = "data: \(finalJSON)\n\n"
+      if includeUsage {
+        let usagePayload: [String: Any] = [
+          "id": completionID,
+          "object": "chat.completion.chunk",
+          "created": Int(Date().timeIntervalSince1970),
+          "model": request.modelID,
+          "choices": [],
+          "usage": usageObject(result.usage),
+        ]
+        let usageData = try JSONSerialization.data(withJSONObject: usagePayload)
+        trailer += "data: \(String(decoding: usageData, as: UTF8.self))\n\n"
+      }
+      trailer += "data: [DONE]\n\n"
+      connection.send(
+        content: Data(trailer.utf8), contentContext: .finalMessage, isComplete: true,
+        completion: .idempotent)
     } catch {
       let failure = (error as? AppleRuntimeFailure)
-        ?? AppleRuntimeFailure(code: "internal_error", message: String(describing: error), retryable: false)
+        ?? AppleRuntimeFailure(
+          code: "internal_error", message: String(describing: error), retryable: false)
       let payload: [String: Any] = [
         "error": ["code": failure.code, "message": failure.message, "retryable": failure.retryable]
       ]
       if let data = try? JSONSerialization.data(withJSONObject: payload),
-        let json = String(data: data, encoding: .utf8) {
+        let json = String(data: data, encoding: .utf8)
+      {
         connection.send(content: Data("data: \(json)\n\n".utf8), completion: .idempotent)
       }
+      return
     }
-    let finalPayload: [String: Any] = [
-      "id": completionID,
-      "object": "chat.completion.chunk",
-      "created": Int(Date().timeIntervalSince1970),
-      "model": request.modelID,
-      "choices": [
-        [
-          "index": 0,
-          "delta": [:],
-          "finish_reason": "stop",
-        ]
-      ],
-    ]
-    let finalData = try JSONSerialization.data(withJSONObject: finalPayload)
-    guard let finalJSON = String(data: finalData, encoding: .utf8) else { return }
-    let trailer = Data("data: \(finalJSON)\n\ndata: [DONE]\n\n".utf8)
-    connection.send(
-      content: trailer, contentContext: .finalMessage, isComplete: true, completion: .idempotent)
   }
 
   private func chatResponse(_ result: AppleGenerationResult) -> [String: Any] {
@@ -500,6 +518,14 @@ private struct HTTPRequest: Sendable {
 }
 
 private struct OpenAIChatRequest: Decodable, Sendable {
+  struct StreamOptions: Decodable, Sendable {
+    let includeUsage: Bool?
+
+    enum CodingKeys: String, CodingKey {
+      case includeUsage = "include_usage"
+    }
+  }
+
   struct Message: Decodable, Sendable {
     let role: String
     let content: String?
@@ -517,6 +543,7 @@ private struct OpenAIChatRequest: Decodable, Sendable {
   let model: String
   let messages: [Message]
   let stream: Bool?
+  let streamOptions: StreamOptions?
   let temperature: Double?
   let maxTokens: Int?
   let maxCompletionTokens: Int?
@@ -524,12 +551,17 @@ private struct OpenAIChatRequest: Decodable, Sendable {
 
   enum CodingKeys: String, CodingKey {
     case model, messages, stream, temperature, tools
+    case streamOptions = "stream_options"
     case maxTokens = "max_tokens"
     case maxCompletionTokens = "max_completion_tokens"
   }
 
   var responseTokenLimit: Int? {
     maxCompletionTokens ?? maxTokens
+  }
+
+  var includeUsage: Bool {
+    streamOptions?.includeUsage == true
   }
 
   var instructions: String? {

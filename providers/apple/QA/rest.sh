@@ -111,7 +111,7 @@ curl --fail --silent --show-error \
 
 curl --fail --silent --show-error --no-buffer \
     -H 'content-type: application/json' \
-    --data-binary "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: streaming REST ready\"}],\"temperature\":0,\"max_tokens\":32,\"stream\":true}" \
+    --data-binary "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: streaming REST ready\"}],\"temperature\":0,\"max_tokens\":32,\"stream\":true,\"stream_options\":{\"include_usage\":true}}" \
     "$BASE_URL/v1/chat/completions" >"$OUTPUT_DIR/stream.txt"
 
 curl --fail --silent --show-error \
@@ -178,6 +178,12 @@ assert versioned_completion["model"] == versioned_models[0]["id"], versioned_com
 assert versioned_completion["choices"][0]["message"]["content"], versioned_completion
 assert "data: [DONE]" in stream, stream
 assert "chat.completion.chunk" in stream, stream
+stream_chunks = [
+    json.loads(line.removeprefix("data: ").strip())
+    for line in stream.splitlines()
+    if line.startswith("data: {")
+]
+assert any(chunk.get("usage", {}).get("completion_tokens", 0) > 0 for chunk in stream_chunks), stream
 assert tool["mesh_tool_executions"] == [{
     "name": "mesh_fixture_lookup",
     "arguments": {"key": "rest-demo"},
