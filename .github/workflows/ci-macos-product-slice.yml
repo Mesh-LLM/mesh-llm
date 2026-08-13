@@ -1,0 +1,60 @@
+name: CI macOS Product Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      runtime_matrix:
+        description: JSON macOS product rows from the versioned CI plan.
+        required: true
+        type: string
+      max_parallel:
+        description: Product composition worker budget.
+        required: false
+        default: 2
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  macos_product:
+    name: macOS product (${{ matrix.runtime.backend }})
+    if: ${{ inputs.runtime_matrix != '[]' }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        runtime: ${{ fromJson(inputs.runtime_matrix) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ci-host-macos-${{ matrix.runtime.architecture }}
+          path: host-input
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ci-runtime-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: runtime-input
+      - name: Compose immutable macOS product
+        id: compose
+        uses: ./.github/actions/compose-product-input
+        with:
+          host_input_dir: host-input
+          runtime_input_dir: runtime-input
+          output_dir: product-input
+          backend: ${{ matrix.runtime.backend }}
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-product-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: ${{ steps.compose.outputs.archive_path }}
+          if-no-files-found: error
+          retention-days: 1

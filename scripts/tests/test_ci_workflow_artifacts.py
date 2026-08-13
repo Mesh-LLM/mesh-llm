@@ -6,7 +6,6 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
 MAIN = ROOT / ".github/workflows/ci.yml"
-ORCHESTRATOR = ROOT / ".github/workflows/ci-orchestrator.yml"
 SLICES = ROOT / "ci/slices.yml"
 PLAN_ACTION = ROOT / ".github/actions/plan-ci/action.yml"
 
@@ -16,8 +15,8 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         workflow = MAIN.read_text()
         self.assertIn("push:", workflow)
         self.assertIn("branches: [main]", workflow)
-        self.assertIn("pull-requests: read", workflow)
-        self.assertIn("uses: ./.github/workflows/ci-orchestrator.yml", workflow)
+        self.assertIn("Request protected CI plan", workflow)
+        self.assertNotIn("uses: ./.github/workflows/ci-orchestrator.yml", workflow)
         self.assertNotIn("linux_host_input:", workflow)
 
     def test_main_plan_uses_all_rows_and_bounded_budgets(self):
@@ -37,11 +36,20 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             "ci-web-slice.yml",
             "ci-ui-artifact-slice.yml",
             "ci-rust-tests-slice.yml",
-            "ci-host-slice.yml",
-            "ci-runtime-product-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-macos-host-slice.yml",
+            "ci-windows-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
+            "ci-linux-product-slice.yml",
+            "ci-macos-runtime-slice.yml",
+            "ci-macos-product-slice.yml",
+            "ci-windows-runtime-slice.yml",
+            "ci-windows-product-slice.yml",
             "ci-platform-checks-slice.yml",
-            "ci-product-smoke-slice.yml",
-            "ci-sdk-slice.yml",
+            "ci-linux-product-smoke-slice.yml",
+            "ci-macos-product-smoke-slice.yml",
+            "ci-linux-sdk-slice.yml",
+            "ci-macos-sdk-slice.yml",
         ):
             self.assertIn(f"uses: ./.github/workflows/{path}", workflow)
 
@@ -95,13 +103,15 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         )
 
     def test_runtime_image_verification_preserves_backend_argument(self):
-        workflow = (WORKFLOWS / "ci-runtime-product-slice.yml").read_text()
+        workflow = (WORKFLOWS / "ci-linux-runtime-slice.yml").read_text()
 
         self.assertIn('read -r -a verify_args <<< "$VERIFY_BACKEND"', workflow)
         self.assertIn('verify-runner-image "${verify_args[@]}"', workflow)
 
     def test_cuda_smoke_uses_the_registered_gpu_runner_labels(self):
-        product_smoke = (WORKFLOWS / "ci-product-smoke-slice.yml").read_text()
+        product_smoke = (
+            WORKFLOWS / "ci-linux-product-smoke-slice.yml"
+        ).read_text()
         smoke = (WORKFLOWS / "smoke.yml").read_text()
 
         self.assertIn("runner: gpu-nvidia", product_smoke)

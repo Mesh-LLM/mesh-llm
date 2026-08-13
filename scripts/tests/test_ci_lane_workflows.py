@@ -35,37 +35,45 @@ class CiLaneWorkflowTests(unittest.TestCase):
         for name in ("quality", "website", "linux", "macos", "windows"):
             self.assertIn(f"ci-{name}-lane.yml", workflow)
 
-    def test_controller_does_not_dispatch_bootstrap_or_fork_runs(self) -> None:
+    def test_controller_handles_forks_without_branch_local_bootstraps(self) -> None:
         workflow = self.workflow("ci-control.yml")
-        self.assertIn("job.name === 'Bootstrap PR CI'", workflow)
-        self.assertIn("job.name.startsWith('Bootstrap PR CI / ')", workflow)
-        self.assertIn("job.name.startsWith('Bootstrap main CI / ')", workflow)
-        self.assertIn("job.conclusion !== 'skipped'", workflow)
-        self.assertIn("head_repository.full_name == github.repository", workflow)
+        self.assertNotIn("listJobsForWorkflowRun", workflow)
+        self.assertNotIn("Bootstrap PR CI", workflow)
+        self.assertNotIn("Bootstrap main CI", workflow)
+        self.assertNotIn("head_repository.full_name == github.repository", workflow)
+        self.assertIn('git fetch --no-tags origin "$SOURCE_SHA"', workflow)
+        self.assertNotIn("--depth=1", workflow)
+        self.assertIn("listPullRequestsAssociatedWithCommit", workflow)
+        self.assertIn("candidate.head.sha === run.head_sha", workflow)
+        self.assertIn("github.event.workflow_run.head_repository.id", workflow)
+        self.assertIn("github.event.workflow_run.head_branch", workflow)
         self.assertIn("should_dispatch", workflow)
 
         pr_workflow = self.workflow("pr_builds.yml")
-        self.assertIn("github.rest.pulls.listFiles", pr_workflow)
-        self.assertIn("controlPlaneChanged", pr_workflow)
-        self.assertIn("files.length >= 3000", pr_workflow)
-        self.assertIn("filename.startsWith('.github/')", pr_workflow)
-        self.assertIn(
-            "context.eventName === 'workflow_dispatch' || controlPlaneChanged",
-            pr_workflow,
-        )
-        self.assertIn("pull.head.repo?.full_name", pr_workflow)
-        self.assertIn(
-            "ref: context.payload.repository.default_branch",
-            pr_workflow,
-        )
+        self.assertNotIn("pull.head.repo?.full_name", pr_workflow)
+        self.assertNotIn("ci-orchestrator.yml", pr_workflow)
+        self.assertIn("Request protected CI plan", pr_workflow)
+
+    def test_controller_summary_tolerates_omitted_optional_matrices(self) -> None:
+        workflow = self.workflow("ci-control.yml")
+        for matrix in (
+            "hosts",
+            "runtime_products",
+            "rust_tests",
+            "smoke",
+            "sdk",
+            "platform_checks",
+        ):
+            with self.subTest(matrix=matrix):
+                self.assertIn(f"(.matrices.{matrix} // [])[]", workflow)
 
     def test_thin_routes_do_not_compete_with_bootstrap_concurrency(self) -> None:
         for name in ("pr_builds.yml", "ci.yml"):
             with self.subTest(workflow=name):
                 self.assertNotIn("concurrency:", self.workflow(name))
-        self.assertIn("concurrency:", self.workflow("ci-orchestrator.yml"))
+        self.assertIn("concurrency:", self.workflow("ci-control.yml"))
 
-    def test_lane_workflows_support_bootstrap_calls_and_native_dispatch(self) -> None:
+    def test_lane_workflows_are_native_dispatch_entrypoints(self) -> None:
         checks = {
             "quality": "CI / Quality",
             "website": "CI / Website",
@@ -76,8 +84,8 @@ class CiLaneWorkflowTests(unittest.TestCase):
         for lane, check in checks.items():
             with self.subTest(lane=lane):
                 workflow = self.workflow(f"ci-{lane}-lane.yml")
-                self.assertIn("workflow_call:", workflow)
                 self.assertIn("workflow_dispatch:", workflow)
+                self.assertNotIn("workflow_call:", workflow)
                 self.assertIn("lane_plan_json:", workflow)
                 self.assertIn(f"name: {check}", workflow)
                 self.assertIn("uses: ./.github/actions/report-ci-lane", workflow)
@@ -110,8 +118,15 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-web-slice.yml",
             "ci-ui-artifact-slice.yml",
             "ci-rust-tests-slice.yml",
-            "ci-host-slice.yml",
-            "ci-runtime-product-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-macos-host-slice.yml",
+            "ci-windows-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
+            "ci-linux-product-slice.yml",
+            "ci-macos-runtime-slice.yml",
+            "ci-macos-product-slice.yml",
+            "ci-windows-runtime-slice.yml",
+            "ci-windows-product-slice.yml",
             "ci-platform-checks-slice.yml",
             "static-abi-artifact.yml",
             "native-sdk-artifact.yml",
@@ -210,21 +225,69 @@ class CiLaneWorkflowTests(unittest.TestCase):
             self.assertIn("inputs.original_event_name == 'push'", workflow)
 
     def test_product_smoke_jobs_parse_formatted_matrix_json(self) -> None:
-        workflow = self.workflow("ci-product-smoke-slice.yml")
-        for smoke_id in (
-            "core",
-            "core-cuda",
-            "two-node-client",
-            "two-node-split",
-            "metal-model-load",
-            "model-download",
-        ):
-            with self.subTest(smoke_id=smoke_id):
-                self.assertIn(
-                    f"contains(fromJson(inputs.smoke_matrix).*.id, '{smoke_id}')",
-                    workflow,
+        smoke_workflows = {
+            "ci-linux-product-smoke-slice.yml": (
+                "core",
+                "core-cuda",
+                "two-node-client",
+                "two-node-split",
+                "model-download",
+            ),
+            "ci-macos-product-smoke-slice.yml": ("metal-model-load",),
+        }
+        for workflow_name, smoke_ids in smoke_workflows.items():
+            workflow = self.workflow(workflow_name)
+            for smoke_id in smoke_ids:
+                with self.subTest(workflow=workflow_name, smoke_id=smoke_id):
+                    self.assertIn(
+                        f"contains(fromJson(inputs.smoke_matrix).*.id, '{smoke_id}')",
+                        workflow,
+                    )
+            self.assertNotIn("contains(inputs.smoke_matrix,", workflow)
+
+    def test_runtime_and_product_artifact_ids_preserve_architecture(self) -> None:
+        for platform in ("linux", "macos", "windows"):
+            with self.subTest(platform=platform):
+                runtime = self.workflow(f"ci-{platform}-runtime-slice.yml")
+                product = self.workflow(f"ci-{platform}-product-slice.yml")
+                runtime_id = (
+                    f"ci-runtime-{platform}-${{{{ matrix.runtime.architecture }}}}-"
+                    "${{ matrix.runtime.backend }}"
                 )
-        self.assertNotIn("contains(inputs.smoke_matrix,", workflow)
+                product_id = (
+                    f"ci-product-{platform}-${{{{ matrix.runtime.architecture }}}}-"
+                    "${{ matrix.runtime.backend }}"
+                )
+                self.assertIn(runtime_id, runtime)
+                self.assertIn(runtime_id, product)
+                self.assertIn(product_id, product)
+
+        macos_lane = self.workflow("ci-macos-lane.yml")
+        self.assertEqual(
+            2,
+            macos_lane.count(
+                "architecture: ${{ fromJson(inputs.lane_plan_json).matrices.runtime_products[0].architecture }}"
+            ),
+        )
+        for name in (
+            "ci-macos-product-smoke-slice.yml",
+            "ci-macos-sdk-slice.yml",
+        ):
+            with self.subTest(workflow=name):
+                self.assertIn(
+                    "ci-product-macos-${{ inputs.architecture }}-metal",
+                    self.workflow(name),
+                )
+
+    def test_windows_vulkan_cache_is_restore_only_for_pr_dispatches(self) -> None:
+        lane = self.workflow("ci-windows-lane.yml")
+        runtime = self.workflow("ci-windows-runtime-slice.yml")
+        self.assertIn("original_event_name: ${{ inputs.original_event_name }}", lane)
+        self.assertIn("cache: true", runtime)
+        self.assertIn(
+            "cache_save_if: ${{ inputs.original_event_name != 'pull_request' && inputs.original_event_name != 'pull_request_target' }}",
+            runtime,
+        )
 
     def test_dispatched_main_preserves_trusted_runner_policy(self) -> None:
         selector = (ROOT / ".github/actions/select-ci-runners/action.yml").read_text(
@@ -264,23 +327,18 @@ class CiLaneWorkflowTests(unittest.TestCase):
 
     def test_manual_main_depot_input_is_explicitly_forwarded(self) -> None:
         main = self.workflow("ci.yml")
-        orchestrator = self.workflow("ci-orchestrator.yml")
+        controller = self.workflow("ci-control.yml")
         pr = self.workflow("pr_builds.yml")
 
-        self.assertIn(
-            "use_depot: ${{ github.event_name == 'workflow_dispatch' && inputs.use_depot == true }}",
-            main,
-        )
-        self.assertIn("use_depot:", orchestrator)
-        self.assertGreaterEqual(
-            orchestrator.count("use_depot: ${{ inputs.use_depot }}"),
-            11,
-        )
+        self.assertNotIn("workflow_dispatch:", main)
+        self.assertIn("workflow_dispatch:", controller)
+        self.assertIn("context.payload.inputs?.use_depot", controller)
+        self.assertIn("inputs.use_depot = process.env.USE_DEPOT", controller)
         self.assertNotIn("use_depot:", pr)
         for name in (
             "ci-quality-slice.yml",
-            "ci-host-slice.yml",
-            "ci-runtime-product-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
             "static-abi-artifact.yml",
             "native-sdk-artifact.yml",
         ):
@@ -291,7 +349,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
 
     def test_superseded_pr_runs_cancel_by_pull_request_identity(self) -> None:
         controller = self.workflow("ci-control.yml")
-        self.assertIn("core.setOutput('supersession_key', `pr-${pull.number}`)", controller)
+        self.assertIn("supersessionKey = `pr-${pull.number}`", controller)
         for lane in ("quality", "website", "linux", "macos", "windows"):
             workflow = self.workflow(f"ci-{lane}-lane.yml")
             self.assertIn("inputs.supersession_key || inputs.source_sha", workflow)

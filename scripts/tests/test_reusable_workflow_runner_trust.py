@@ -43,20 +43,36 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                 )
 
     def test_main_entry_and_orchestrator_do_not_use_pull_request_target(self) -> None:
-        for name in ("ci.yml", "pr_builds.yml", "ci-orchestrator.yml"):
+        for name in ("ci.yml", "pr_builds.yml", "ci-control.yml"):
             with self.subTest(workflow=name):
                 self.assertNotIn("pull_request_target", self.workflow(name))
 
     def test_main_macos_and_windows_slices_have_fixed_platforms(self) -> None:
-        host = self.workflow("ci-host-slice.yml")
-        runtime = self.workflow("ci-runtime-product-slice.yml")
-        self.assertIn("runs-on: macos-15", host)
-        self.assertIn("runs-on: windows-2022", host)
-        self.assertIn("runs-on: macos-15", runtime)
-        self.assertIn("runs-on: windows-2022", runtime)
-        for workflow in (host, runtime):
-            self.assertNotIn("macos-latest", workflow)
-            self.assertNotIn("windows-latest", workflow)
+        platform_slices = {
+            "macos": (
+                "macos-15",
+                (
+                    "ci-macos-host-slice.yml",
+                    "ci-macos-runtime-slice.yml",
+                    "ci-macos-product-slice.yml",
+                ),
+            ),
+            "windows": (
+                "windows-2022",
+                (
+                    "ci-windows-host-slice.yml",
+                    "ci-windows-runtime-slice.yml",
+                    "ci-windows-product-slice.yml",
+                ),
+            ),
+        }
+        for platform, (runner, names) in platform_slices.items():
+            for name in names:
+                with self.subTest(platform=platform, workflow=name):
+                    workflow = self.workflow(name)
+                    self.assertIn(f"runs-on: {runner}", workflow)
+                    self.assertNotIn("macos-latest", workflow)
+                    self.assertNotIn("windows-latest", workflow)
 
     def test_main_runner_contract_preserves_image_checks(self) -> None:
         workflow = self.workflow("ci-runner-contract-slice.yml")
@@ -84,12 +100,17 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
         self.assertNotIn("2>/dev/null", workflow)
 
     def test_sdk_slice_matches_parsed_row_ids(self) -> None:
-        workflow = self.workflow("ci-sdk-slice.yml")
+        linux = self.workflow("ci-linux-sdk-slice.yml")
+        macos = self.workflow("ci-macos-sdk-slice.yml")
         self.assertEqual(
-            workflow.count("contains(fromJson(inputs.sdk_matrix).*.id"),
-            3,
+            linux.count("contains(fromJson(inputs.sdk_matrix).*.id"),
+            2,
         )
-        self.assertNotIn("contains(inputs.sdk_matrix", workflow)
+        self.assertEqual(
+            macos.count("contains(fromJson(inputs.sdk_matrix).*.id"),
+            1,
+        )
+        self.assertNotIn("contains(inputs.sdk_matrix", linux + macos)
 
     def test_depot_allowlist_excludes_credential_smokes(self) -> None:
         migration = (ROOT / "ci" / "DEPOT_MIGRATION.md").read_text(
@@ -99,8 +120,8 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
         allowlist_end = migration.index("```", allowlist_start)
         allowlist_end = migration.index("```", allowlist_end + 3)
         allowlist = migration[allowlist_start:allowlist_end]
-        self.assertIn("ci-orchestrator.yml@refs/heads/main", allowlist)
-        self.assertIn("ci-runtime-product-slice.yml@refs/heads/main", allowlist)
+        self.assertIn("ci-linux-lane.yml@refs/heads/main", allowlist)
+        self.assertIn("ci-linux-runtime-slice.yml@refs/heads/main", allowlist)
         self.assertIn("depot-canary.yml@refs/heads/main", allowlist)
         self.assertIn("release.yml@refs/heads/main", allowlist)
         for name in (
@@ -121,7 +142,7 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
     def test_pr_facing_checkouts_disable_persisted_credentials(self) -> None:
         names = [
             "docker-precheck.yml",
-            "ci-orchestrator.yml",
+            "ci-control.yml",
             "static-abi-artifact.yml",
             *sorted(
                 path.name
@@ -138,6 +159,18 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                         checkout_count,
                         workflow.count("persist-credentials: false"),
                     )
+
+    def test_future_pr_depot_executor_requires_least_privilege_token_handling(
+        self,
+    ) -> None:
+        migration = (ROOT / "ci" / "DEPOT_MIGRATION.md").read_text(
+            encoding="utf-8",
+        )
+        section_start = migration.index("## Future protected PR Depot executor")
+        section_end = migration.index("\n## ", section_start + 4)
+        section = migration[section_start:section_end]
+        self.assertIn("`permissions: contents: read`", section)
+        self.assertIn("`persist-credentials: false`", section)
 
 
 if __name__ == "__main__":

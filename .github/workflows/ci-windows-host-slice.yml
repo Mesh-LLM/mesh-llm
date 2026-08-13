@@ -1,0 +1,94 @@
+name: CI Windows Host Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      hosts_matrix:
+        description: JSON Windows host rows from the versioned CI plan.
+        required: true
+        type: string
+      ui_artifact_name:
+        description: Immutable console UI producer artifact.
+        required: true
+        type: string
+      profile:
+        description: Host profile selected by the semantic CI profile.
+        required: true
+        type: string
+      max_parallel:
+        description: Host worker budget.
+        required: false
+        default: 2
+        type: number
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  windows_host:
+    name: Windows host (${{ matrix.host.architecture }})
+    if: ${{ inputs.hosts_matrix != '[]' }}
+    runs-on: windows-2022
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        host: ${{ fromJson(inputs.hosts_matrix) }}
+    env:
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: ci-host-windows-${{ inputs.profile }}
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - name: Download immutable UI distribution
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.ui_artifact_name }}
+          path: crates/mesh-llm-ui/dist
+      - name: Verify UI distribution input
+        shell: pwsh
+        run: if (-not (Test-Path -LiteralPath "crates/mesh-llm-ui/dist/index.html")) { throw "UI distribution is missing" }
+      - name: Prepare immutable Windows host
+        uses: ./.github/actions/prepare-windows-host-input
+        with:
+          profile: ${{ inputs.profile == 'dev' && 'debug' || inputs.profile }}
+          skip_ui: "true"
+      - name: Upload immutable Windows host input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-host-windows-${{ matrix.host.architecture }}
+          path: host-input/
+          if-no-files-found: error
+          retention-days: 1

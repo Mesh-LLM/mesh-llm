@@ -1,0 +1,83 @@
+name: CI macOS Host Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      hosts_matrix:
+        description: JSON macOS host rows from the versioned CI plan.
+        required: true
+        type: string
+      ui_artifact_name:
+        description: Immutable console UI producer artifact.
+        required: true
+        type: string
+      profile:
+        description: Host profile selected by the semantic CI profile.
+        required: true
+        type: string
+      max_parallel:
+        description: Host worker budget.
+        required: false
+        default: 2
+        type: number
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  macos_host:
+    name: macOS host (${{ matrix.host.architecture }})
+    if: ${{ inputs.hosts_matrix != '[]' }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        host: ${{ fromJson(inputs.hosts_matrix) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: ci-host-macos-${{ inputs.profile }}
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
+      - name: Install host linker
+        run: brew install lld
+      - name: Download immutable UI distribution
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.ui_artifact_name }}
+          path: crates/mesh-llm-ui/dist
+      - name: Verify UI distribution input
+        run: test -s crates/mesh-llm-ui/dist/index.html
+      - name: Prepare immutable macOS host
+        uses: ./.github/actions/prepare-host-input
+        with:
+          profile: ${{ inputs.profile }}
+          output_dir: host-input
+          skip_ui: "true"
+      - name: Upload immutable macOS host input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-host-macos-${{ matrix.host.architecture }}
+          path: host-input/
+          if-no-files-found: error
+          retention-days: 1

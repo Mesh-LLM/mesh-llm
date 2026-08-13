@@ -4,63 +4,80 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 class RequiredSummaryTests(unittest.TestCase):
-    def test_orchestrator_summary_is_stable_and_cancellation_safe(self):
-        workflow = (ROOT / ".github/workflows/ci-orchestrator.yml").read_text()
-        self.assertIn("name: CI Required", workflow)
-        self.assertIn("if: ${{ !cancelled() }}", workflow)
-        self.assertNotIn("always()", workflow)
+    def test_protected_plan_owns_stable_correlated_checks(self):
+        workflow = (WORKFLOWS / "ci-control.yml").read_text()
+        self.assertIn("name: CI · Plan", workflow)
+        self.assertIn("name: 'CI Required'", workflow)
+        for lane in ("Quality", "Website", "Linux", "macOS", "Windows"):
+            self.assertIn(f"'CI / {lane}'", workflow)
+        self.assertIn("external_id: process.env.CORRELATION_ID", workflow)
 
-    def test_summary_directly_needs_static_superset(self):
-        workflow = (ROOT / ".github/workflows/ci-orchestrator.yml").read_text()
-        summary_start = workflow.index("  summary:")
-        next_job = re.search(
-            r"(?m)^  [A-Za-z0-9_]+:\s*$",
-            workflow[summary_start + len("  summary:") :],
-        )
-        summary_end = (
-            summary_start + len("  summary:") + next_job.start()
-            if next_job
-            else len(workflow)
-        )
-        summary = workflow[
-            summary_start:summary_end
-        ]
-        for job in (
-            "plan",
-            "quality",
-            "web",
-            "ui_artifact",
-            "static_abi",
-            "rust_tests",
-            "hosts_linux",
-            "hosts_macos",
-            "hosts_windows",
-            "native_runtimes_linux",
-            "native_runtimes_macos",
-            "native_runtimes_windows",
-            "runtime_product_linux",
-            "runtime_product_macos",
-            "runtime_product_windows",
-            "platform_checks",
-            "product_smoke",
-            "sdk",
-            "runner_contract",
-        ):
-            self.assertIn(f"      - {job}", summary)
+    def test_each_lane_has_one_cancellation_safe_summary(self):
+        checks = {
+            "quality": ("CI / Quality", ("quality", "runner_contract")),
+            "website": ("CI / Website", ("web",)),
+            "linux": (
+                "CI / Linux",
+                (
+                    "ui_artifact",
+                    "static_abi",
+                    "rust_tests",
+                    "hosts",
+                    "native_runtimes",
+                    "runtime_product",
+                    "kotlin_sdk_input",
+                    "sdk",
+                    "product_smoke",
+                ),
+            ),
+            "macos": (
+                "CI / macOS",
+                (
+                    "ui_artifact",
+                    "hosts",
+                    "native_runtimes",
+                    "runtime_product",
+                    "platform_checks",
+                    "swift_sdk_input",
+                    "sdk",
+                    "product_smoke",
+                ),
+            ),
+            "windows": (
+                "CI / Windows",
+                (
+                    "ui_artifact",
+                    "hosts",
+                    "native_runtimes",
+                    "runtime_product",
+                    "platform_checks",
+                ),
+            ),
+        }
+        for lane, (check_name, jobs) in checks.items():
+            with self.subTest(lane=lane):
+                workflow = (WORKFLOWS / f"ci-{lane}-lane.yml").read_text()
+                summary_start = workflow.index("  summary:")
+                summary = workflow[summary_start:]
+                self.assertEqual(1, workflow.count("\n  summary:\n"))
+                self.assertIn(f"    name: {check_name}", summary)
+                self.assertIn("if: ${{ !cancelled() }}", summary)
+                self.assertNotIn("always()", summary)
+                for job in jobs:
+                    self.assertRegex(
+                        summary,
+                        rf"(?:needs: \[[^\]]*\b{re.escape(job)}\b|      - {re.escape(job)}\n)",
+                    )
 
-    def test_summary_rejects_bad_results(self):
-        workflow = (ROOT / ".github/workflows/ci-orchestrator.yml").read_text()
-        self.assertIn(
-            'if .key == "plan"\n              then .value.result == "success"',
-            workflow,
-        )
-        self.assertIn('result == "success"', workflow)
-        self.assertIn('result == "skipped"', workflow)
-        self.assertIn("set -euo pipefail", workflow)
-        self.assertIn("jq -e --argjson required", workflow)
+    def test_lane_validator_rejects_required_skips_and_extra_work(self):
+        validator = (ROOT / "scripts/validate-ci-lane-results.py").read_text()
+        self.assertIn('if result != "success"', validator)
+        self.assertIn('if result != "skipped"', validator)
+        self.assertIn("required lane has no planned jobs", validator)
 
 
 if __name__ == "__main__":

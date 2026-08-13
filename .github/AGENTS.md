@@ -21,10 +21,14 @@ Strict extension pattern:
 - preserve immutable producer/consumer artifacts and a stable unique summary;
 - validate GitHub fallback before any provider rollout.
 
-The current `ci-orchestrator.yml` is authoritative for PR and main slice
-assembly. Current PR code is GitHub-hosted. Depot PR execution is prohibited
-until the cache and runner-group isolation gates in `ci/DEPOT_MIGRATION.md`
-pass. Do not change Depot settings or runner groups as part of an ordinary CI
+The protected `ci-control.yml` planner and the separate Quality, Website,
+Linux, macOS and Windows lane workflows are authoritative for PR and main
+assembly. Platform lanes must call platform-pure host/runtime/product/smoke/SDK
+reusables; do not reintroduce a cross-platform bootstrap graph or empty
+platform placeholders. Current PR code is GitHub-hosted. Depot PR execution is
+prohibited until the cache and runner-group isolation gates in
+`ci/DEPOT_MIGRATION.md` pass. Do not change Depot settings or runner groups as
+part of an ordinary CI
 refactor.
 
 The manage-ci skill is normative. The inventory and `ci/ci.md` describe current

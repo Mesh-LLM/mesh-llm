@@ -2,8 +2,8 @@ name: CI · Quality
 run-name: CI · Quality · ${{ inputs.source_sha }}
 
 on:
-  workflow_call:
-    inputs: &lane_inputs
+  workflow_dispatch:
+    inputs:
       lane_plan_json:
         required: true
         type: string
@@ -39,9 +39,11 @@ on:
         required: false
         default: "[]"
         type: string
-  workflow_dispatch:
-    inputs: *lane_inputs
-
+      use_depot:
+        description: Opt into the guarded main-only Depot canary.
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
   packages: read
@@ -62,6 +64,7 @@ jobs:
       cli_surface_changed: ${{ fromJson(inputs.lane_plan_json).signals.cli_surface_changed }}
       website_docs_changed: ${{ fromJson(inputs.lane_plan_json).signals.website_docs_changed }}
       clippy_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+      use_depot: ${{ inputs.use_depot }}
 
   runner_contract:
     name: Runner and cache contracts

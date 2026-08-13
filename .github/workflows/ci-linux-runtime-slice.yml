@@ -1,0 +1,133 @@
+name: CI Linux Runtime Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      runtime_matrix:
+        description: JSON Linux runtime rows from the versioned CI plan.
+        required: true
+        type: string
+      max_parallel:
+        description: Runtime worker budget.
+        required: false
+        default: 2
+        type: number
+      use_depot:
+        description: Opt into the guarded main-only Depot canary.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  runner_policy:
+    name: Select Linux native runner
+    if: ${{ inputs.runtime_matrix != '[]' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner_16: ${{ steps.policy.outputs.runner_16 }}
+      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the native runtime role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          manual_use_depot: ${{ inputs.use_depot }}
+
+  linux_runtime:
+    name: Linux runtime (${{ matrix.runtime.backend }})
+    needs: runner_policy
+    if: ${{ !cancelled() && inputs.runtime_matrix != '[]' && needs.runner_policy.result == 'success' }}
+    runs-on: ${{ needs.runner_policy.outputs.runner_16 }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        runtime: ${{ fromJson(inputs.runtime_matrix) }}
+    container:
+      image: ${{ matrix.runtime.container_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BACKEND: ${{ matrix.runtime.backend }}
+      LLAMA_STAGE_BUILD_DIR: ${{ matrix.runtime.build_dir }}
+      LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.runtime.cuda_architectures }}
+      LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.runtime.rocm_architectures }}
+      MESH_CUDA_VERSION: ${{ matrix.runtime.cuda_version }}
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      GGML_CUDA_NO_VMM: "1"
+      LLAMA_STAGE_SKIP_NCCL: "1"
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - name: Verify prebuilt native environment
+        env:
+          VERIFY_BACKEND: ${{ matrix.runtime.verify_backend }}
+        run: |
+          read -r -a verify_args <<< "$VERIFY_BACKEND"
+          verify-runner-image "${verify_args[@]}"
+      - name: Resolve native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: ${{ matrix.runtime.toolchain_epoch }}
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: ci-runtime-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
+      - name: Prepare immutable Linux native runtime
+        uses: ./.github/actions/prepare-native-runtime-input
+        with:
+          backend: ${{ matrix.runtime.backend }}
+          target: ${{ matrix.runtime.target }}
+          output_dir: runtime-input
+      - name: Upload immutable Linux runtime input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-runtime-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: |
+            runtime-input/*.tar.gz
+            runtime-input/*.sha256
+          if-no-files-found: error
+          retention-days: 1
+      - name: Capture native cache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-ci-runtime-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}-${{ github.run_attempt }}

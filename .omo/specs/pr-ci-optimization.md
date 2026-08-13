@@ -1,9 +1,9 @@
 # PR and main CI composition plan
 
-Status: implemented on this branch. The shared planner, protected controller,
-topic/platform lane workflows, bootstrap graph, contracts and documentation
-are checked in. Ruleset migration and Depot PR execution remain separate
-future work.
+Status: implemented on this branch. The shared planner, protected fork-capable
+controller, topic/platform lane workflows, platform-pure reusable graphs,
+contracts and documentation are checked in. Ruleset migration and Depot PR
+execution remain separate future work.
 
 Owners: MeshLLM maintainers
 
@@ -22,18 +22,18 @@ or cache identity.
 
 ## Implemented on this branch
 
-- Thin pr_builds.yml and ci.yml entrypoints route same-repository protected
-  runs through ci-control.yml and retain ci-orchestrator.yml as a bootstrap for
-  forks, migration and manual validation.
+- One-job pr_builds.yml and ci.yml ingress workflows wake the protected
+  ci-control.yml planner. Same-repository PRs, fork PRs and main pushes use the
+  same protected dispatch path; explicit manual-full runs start at CI · Plan.
 - ci/ownership.yml and ci/slices.yml define the checked ownership, dependency,
   row, runner-role, cache-mode and worker-budget catalog.
 - scripts/plan-ci.py emits the versioned plan described by
   ci/ci-plan.schema.json, including direct domains, affected crates, signals,
   reasons, dependencies, matrices and budgets.
 - Separate Quality, Website, Linux, macOS and Windows workflows receive bounded
-  native inputs from one controller plan and own typed static slice supersets.
-- Stable per-lane checks converge into one correlated CI Required check; the
-  bootstrap graph exposes the same aggregate name.
+  native inputs from one controller plan and own typed platform-local static
+  slice supersets without unrelated platform placeholders.
+- Stable per-lane checks converge into one correlated CI Required check.
 - Existing static ABI, native SDK, Swift, smoke and HF workflows remain
   lower-level reusable producers/consumers.
 - Current PR routing is GitHub-hosted except for the documented uncredentialed
@@ -59,11 +59,11 @@ runner groups, secrets or external capacity.
 
 The controller dispatches a closed list of protected default-branch workflows
 with bounded JSON inputs and passes the immutable source SHA only to product
-checkouts; each lane contains a static superset of typed reusable calls.
-Workflow YAML is never generated, and lanes do not download a planner artifact
-or allocate another planner. The bootstrap orchestrator retains a monolithic
-static slice graph while the protected controller is unavailable; this avoids
-granting check-write permission through a PR reusable-workflow chain.
+checkouts; each lane contains a platform-local static superset of typed
+reusable calls. Workflow YAML is never generated, and lanes do not download a
+planner artifact or allocate another planner. Fork heads are fetched through
+the base repository for classification while workflow definitions and
+reporting stay on the protected default branch.
 
 ## Planner contract
 
@@ -103,16 +103,19 @@ optional trusted credentials may differ.
 - ci-ui-artifact-slice.yml: one immutable console distribution producer.
 - static-abi-artifact.yml: one verified portable static llama ABI producer.
 - ci-rust-tests-slice.yml: deterministic affected/all-workspace Cargo batches.
-- ci-host-slice.yml: one neutral host per selected OS/architecture.
-- ci-runtime-product-slice.yml: one runtime per selected backend in a
-  platform-scoped producer invocation that runs in parallel with the matching
-  host, followed by platform-local composition after those producers succeed.
+- ci-{linux,macos,windows}-host-slice.yml: platform-pure neutral hosts.
+- ci-{linux,macos,windows}-runtime-slice.yml: one native runtime per selected
+  backend, running in parallel with the matching host.
+- ci-{linux,macos,windows}-product-slice.yml: platform-local composition after
+  matching host and runtime producers succeed.
 - ci-platform-checks-slice.yml: macOS portable/unit and Windows checks.
-- ci-product-smoke-slice.yml: inference, backend, two-node, Metal and model
-  download consumers using only composed artifacts.
-- ci-sdk-slice.yml: platform-local Rust/Kotlin/Swift consumers. Swift and
-  Kotlin SDK artifacts are independent producers that start from the plan and
-  static ABI respectively, before product composition completes.
+- ci-linux-product-smoke-slice.yml and ci-macos-product-smoke-slice.yml:
+  platform-local inference, backend, two-node, Metal and model-download
+  consumers using only composed artifacts.
+- ci-linux-sdk-slice.yml and ci-macos-sdk-slice.yml: platform-local
+  Rust/Kotlin/Swift consumers. Swift and Kotlin SDK artifacts are independent
+  producers that start from the plan and static ABI respectively, before
+  product composition completes.
 - ci-runner-contract-slice.yml: plan/provider/cache trust checks plus trusted
   main runner-image contracts.
 
@@ -169,9 +172,8 @@ Each lane owns one stable non-matrix summary that directly needs its complete
 static job superset and validates required work against its bounded plan.
 ci-control.yml creates correlated lane checks and one non-matrix CI Required
 check on the exact source SHA; the final lane completes the aggregate only when
-all expected correlated checks are terminal. The bootstrap orchestrator
-validates all five lane calls directly. Existing branch-protection rules are
-not edited by this implementation.
+all expected correlated checks are terminal. Existing branch-protection rules
+are not edited by this implementation.
 
 ## GitHub and Depot
 

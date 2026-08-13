@@ -8,10 +8,9 @@ before editing CI.
 
 | Workflow | Trigger | Ownership |
 | --- | --- | --- |
-| `pr_builds.yml` | PR lifecycle, dispatch | Routes ordinary same-repository PRs to protected control; bootstraps control-plane changes, forks and migrations through `ci-orchestrator.yml` |
-| `ci.yml` | main push, dispatch | Routes main pushes to protected control; manual/migration runs use `ci-orchestrator.yml` |
-| `ci-control.yml` | completed `PR CI` / `Main CI` | Protected source resolution, one canonical plan, bounded lane dispatch and correlated required checks |
-| `ci-orchestrator.yml` | `workflow_call` | Bootstrap planner and monolithic static slice graph with `CI Required` |
+| `pr_builds.yml` | PR lifecycle | One-job ingress for protected same-repository and fork PR planning |
+| `ci.yml` | main push | One-job ingress for protected main planning |
+| `ci-control.yml` (`CI · Plan`) | completed `PR CI` / `Main CI`, dispatch | Protected source resolution, one canonical plan, bounded lane dispatch, manual-full validation and correlated required checks |
 | `release.yml` | release tags, dispatch | Release-only signing, assets and publication |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
@@ -25,8 +24,8 @@ workflows are independent of required PR readiness. The former
 
 | Workflow | Contract |
 | --- | --- |
-| `ci-quality-lane.yml` | Quality and runner/cache contract graph; supports typed call and native dispatch |
-| `ci-website-lane.yml` | Console and website graph; supports typed call and native dispatch |
+| `ci-quality-lane.yml` | Quality and runner/cache contract graph; protected native dispatch |
+| `ci-website-lane.yml` | Console and website graph; protected native dispatch |
 | `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows host/runtime/product/platform graph with one platform-local UI producer |
@@ -35,11 +34,12 @@ workflows are independent of required PR readiness. The former
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch |
-| `ci-host-slice.yml` | Neutral host producer per selected OS/architecture, invoked in independent platform lanes |
-| `ci-runtime-product-slice.yml` | Separately invoked native runtime producers and composition-only products, joined within each platform lane |
+| `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
+| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
+| `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
-| `ci-product-smoke-slice.yml` | CPU, CUDA (`gpu-nvidia` self-hosted), two-node, Metal and model-download consumers; ROCm/Vulkan products remain package-verified pending eligible inference runners |
-| `ci-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls |
+| `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local CPU, CUDA (`gpu-nvidia` self-hosted), two-node, Metal and model-download consumers; ROCm/Vulkan products remain package-verified pending eligible inference runners |
+| `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |
 | `swift-sdk-artifact.yml` | Fixed `macos-15` host-only/full XCFramework producer |
@@ -64,10 +64,9 @@ repository secrets. The trusted main entrypoint may pass the optional
 - `compute-changes` supplies the complete event diff and affected Cargo
   closure; the planner owns signals and final matrix selection.
 - `ci-control.yml` calls the planner once and dispatches bounded JSON lane
-  projections as native inputs. `ci-orchestrator.yml` preserves the same
-  planner-once and slice-selection contracts in a monolithic bootstrap graph
-  for fork/manual/migration compatibility without requesting check-write
-  permission through a reusable-workflow chain.
+  projections as native inputs for same-repository PRs, fork PRs, main pushes
+  and explicit manual-full runs. Fork source SHAs are fetched through the base
+  repository while planner and lane definitions remain protected.
 
 Main/manual profiles enumerate every workspace crate exactly once and all
 supported product/SDK rows. PR profiles select affected or directly owned rows
@@ -87,11 +86,10 @@ from that same catalog.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
 Artifacts are correctness boundaries; caches only accelerate regeneration.
-PR artifacts generally retain for one day. Bootstrap/fork cache writes are
-merge-ref scoped; protected same-repository dispatched lanes are restore-only
-despite running from the default-branch workflow ref. PR dispatches cannot
-publish shared caches, and Depot cache access is denied. Trusted main may
-publish shared caches.
+PR artifacts generally retain for one day. Protected same-repository and fork
+lanes are restore-only despite running from the default-branch workflow ref.
+PR dispatches cannot publish shared caches, and Depot cache access is denied.
+Trusted main may publish shared caches.
 
 ## Providers and variables
 

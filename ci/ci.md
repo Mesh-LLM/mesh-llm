@@ -9,31 +9,28 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 | Workflow | Trigger | Role |
 | --- | --- | --- |
-| `pr_builds.yml` | `pull_request`, dispatch | Thin PR router; protected control for ordinary same-repository PRs, bootstrap graph for control-plane changes, forks, migration and manual runs |
-| `ci.yml` | push to `main`, dispatch | Thin main router; protected control for pushes, bootstrap graph for migration/manual |
-| `ci-control.yml` | completed `PR CI` / `Main CI` | Resolves source identity, computes one plan, dispatches lanes, and owns correlated checks |
-| `ci-orchestrator.yml` | `workflow_call` | Bootstrap planner and monolithic static slice graph |
-| `ci-*-lane.yml` | `workflow_dispatch`, `workflow_call` | Separate Quality, Website, Linux, macOS and Windows graphs |
+| `pr_builds.yml` | `pull_request` | One-job ingress that requests protected planning for same-repository and fork PRs |
+| `ci.yml` | push to `main` | One-job ingress that requests protected planning for main |
+| `ci-control.yml` (`CI · Plan`) | completed `PR CI` / `Main CI`, dispatch | Resolves source identity, computes one plan, dispatches selected lanes, and owns correlated checks |
+| `ci-*-lane.yml` | `workflow_dispatch` | Separate Quality, Website, Linux, macOS and Windows graphs |
 
 The lane workflows are not independent planners. Protected control computes
 the canonical shape once and passes each lane a digest-bound JSON projection
-through native workflow-dispatch inputs. Forks cannot invoke protected
-dispatch and therefore use the bootstrap graph. PR runs cancel superseded
-synchronizations; main runs are not cancelled.
-
-Protected dispatch is gated on `workflow_run.head_repository.full_name ==
-github.repository`. The controller and each lane workflow run from the
-protected default branch; the immutable source SHA is passed only to product
-checkout steps. Reporting, planning, and orchestration actions therefore stay
-protected. Lane workflows retain least-privilege permissions, and pull-request
-dispatches receive no repository secrets; a missing or foreign head repository
-or control-plane change falls back to the branch-local bootstrap graph.
+through native workflow-dispatch inputs. The completed ingress run gives the
+controller protected `workflow_run` authority for both same-repository and
+fork PRs. It fetches the immutable PR head SHA through the base repository's
+pull refs for change classification, while all planner, reporter and workflow
+definitions remain protected on the default branch. Pull-request dispatches
+receive no repository secrets and cannot select Depot or publish trusted-main
+caches. PR runs cancel superseded synchronizations; main runs are not
+cancelled. Explicit full validation is dispatched from `CI · Plan` on
+`main`.
 
 ## Graph shape
 
 ```mermaid
 flowchart TD
-    ENTRY["PR CI or Main CI route"] --> CONTROL["protected CI Control"]
+    ENTRY["PR CI or Main CI request"] --> CONTROL["protected CI · Plan"]
     CONTROL --> PLAN["compute changes + plan-ci once"]
     PLAN --> QUALITY["Quality graph"]
     PLAN --> WEB["Website graph"]
@@ -50,18 +47,16 @@ flowchart TD
     LC --> GATE
     MC --> GATE
     XC --> GATE
-    ENTRY -. "control-plane / fork / migration / manual" .-> BOOT["bootstrap orchestrator\nstatic slices in one run"]
-    BOOT --> GATE
 ```
 
-Each lane uses a static superset of typed reusable-workflow calls; `if`
-conditions consume only its checked planner projection. Protected control uses
-the Actions API only for a closed list of five checked-in workflow files and
-passes data through native inputs. No workflow YAML is generated and no lane
-allocates another planner. Runs have separate graphs/run IDs, correlated by a
-controller identity, stable lane checks, source SHA and plan digest. The
-bootstrap orchestrator calls the slices directly so a PR caller never has to
-grant `checks: write` through a nested reusable-workflow permission chain.
+Each lane uses a platform-local static superset of typed reusable-workflow
+calls; `if` conditions consume only its checked planner projection. Linux
+graphs contain no macOS/Windows placeholder jobs, and the converse holds for
+the other platforms. Protected control uses the Actions API only for a closed
+list of five checked-in workflow files and passes data through native inputs.
+No workflow YAML is generated and no lane allocates another planner. Runs have
+separate graphs/run IDs, correlated by a controller identity, stable lane
+checks, source SHA and plan digest.
 
 ## Planner and profiles
 
@@ -109,16 +104,18 @@ runtime producers are not duplicated.
 - `ci-rust-tests-slice.yml` — deterministic affected or all-workspace Cargo
   test batches consuming the static ABI artifact and its producer-owned
   toolchain epoch.
-- `ci-host-slice.yml` — one neutral host per selected OS/architecture,
-  consuming the immutable UI distribution. Independent Linux, macOS and
-  Windows calls prevent an unrelated platform from delaying composition.
-- `ci-runtime-product-slice.yml` — invoked per platform first for native
-  runtime producers and again for composition-only products. Each platform
-  joins only its own immutable host and runtime producers.
+- `ci-{linux,macos,windows}-host-slice.yml` — one platform-pure neutral host
+  producer consuming that lane's immutable UI distribution.
+- `ci-{linux,macos,windows}-runtime-slice.yml` — platform-pure native runtime
+  producers selected by backend rows.
+- `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
+  that join only their matching immutable host and runtime artifacts.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable, and
   focused Windows log-store privacy ACL checks.
-- `ci-product-smoke-slice.yml` — CPU core, CUDA, two-node, Metal and model-
-  download consumers using only composed artifacts. CUDA inference uses the
+- `ci-linux-product-smoke-slice.yml` and
+  `ci-macos-product-smoke-slice.yml` — platform-local CPU core, CUDA,
+  two-node, Metal and model-download consumers using only composed artifacts.
+  CUDA inference uses the
   approved `gpu-nvidia` ephemeral self-hosted scale set, including for
   same-repository PRs. That hardware-qualified exception is dispatched only
   from protected default-branch workflows, receives no repository secrets or
@@ -129,9 +126,10 @@ runtime producers are not duplicated.
   product before inference.
   ROCm and Vulkan products remain package-verified until eligible inference
   runners are registered.
-- `ci-sdk-slice.yml` — platform-local Rust, Kotlin and Swift consumers. Swift
-  production starts from the plan and Kotlin production from the shared static
-  ABI; only smoke consumers wait for the matching product lane.
+- `ci-linux-sdk-slice.yml` and `ci-macos-sdk-slice.yml` — platform-local
+  Rust, Kotlin and Swift consumers. Swift production starts from the plan and
+  Kotlin production from the shared static ABI; only smoke consumers wait for
+  the matching product lane.
 - `ci-runner-contract-slice.yml` — plan/provider/PR cache-boundary checks and
   trusted-main runner-image contracts.
 
@@ -168,6 +166,11 @@ Smoke and SDK consumers download those artifacts and never rebuild a missing
 producer. PR and smoke artifacts retain for one day; caches are acceleration,
 not correctness contracts.
 
+Runtime and product artifact IDs preserve every compatibility discriminator:
+`ci-runtime-<platform>-<architecture>-<backend>` and
+`ci-product-<platform>-<architecture>-<backend>`. Consumers download the exact
+platform, architecture, and backend identity selected by the plan.
+
 Release-profile hosts are used for both selected PR rows and main rows. Besides
 keeping product semantics identical, this prevents unstripped debug binaries
 from being duplicated into every composed product artifact.
@@ -177,11 +180,10 @@ from being duplicated into every composed product artifact.
 `.github/actions/select-ci-runners` maps semantic roles to approved labels.
 Pull requests use GitHub-hosted runners for ordinary work. The sole current
 exception is uncredentialed CUDA smoke on the approved ephemeral `gpu-nvidia`
-scale set described above; forks use the bootstrap path and receive no
-repository secrets. Same-repository dispatched PR caches are restore-only even
-though the protected workflow ref is `main`; bootstrap/fork cache writes remain
-merge-ref scoped. Neither path may publish trusted-main cache entries. Trusted
-`main` Linux roles may use Depot only when
+scale set described above. Same-repository and fork PRs use the same protected
+dispatch path and receive no repository secrets. Their caches are restore-only
+even though the protected workflow ref is `main`; neither may publish
+trusted-main cache entries. Trusted `main` Linux roles may use Depot only when
 `DEPOT_RUNNERS_ENABLED` is exactly `true`; macOS, Windows, credential-bearing
 smokes and other hardware-qualified work retain explicit approved placement.
 Provider choice never changes plan membership, commands, artifacts, tests or

@@ -557,7 +557,7 @@ class CiArtifactActionTests(unittest.TestCase):
     ) -> None:
         resolver = self.read_action("resolve-native-toolchain-epoch")
         runtime_workflow = (
-            ROOT / ".github" / "workflows" / "ci-runtime-product-slice.yml"
+            ROOT / ".github" / "workflows" / "ci-linux-runtime-slice.yml"
         ).read_text(encoding="utf-8")
         release_workflow = (
             ROOT / ".github" / "workflows" / "release.yml"
@@ -1805,8 +1805,8 @@ class CiArtifactActionTests(unittest.TestCase):
         workflow_names = (
             "ci-quality-slice.yml",
             "ci-rust-tests-slice.yml",
-            "ci-host-slice.yml",
-            "ci-runtime-product-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
             "static-abi-artifact.yml",
         )
         for workflow_name in workflow_names:

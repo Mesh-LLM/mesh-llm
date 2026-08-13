@@ -2,8 +2,8 @@ name: CI · Linux
 run-name: CI · Linux · ${{ inputs.source_sha }}
 
 on:
-  workflow_call:
-    inputs: &lane_inputs
+  workflow_dispatch:
+    inputs:
       lane_plan_json:
         required: true
         type: string
@@ -36,12 +36,11 @@ on:
         required: false
         default: "[]"
         type: string
-    secrets:
-      HF_TOKEN:
+      use_depot:
+        description: Opt into the guarded main-only Depot canary.
         required: false
-  workflow_dispatch:
-    inputs: *lane_inputs
-
+        default: false
+        type: boolean
 permissions:
   contents: read
   packages: read
@@ -89,45 +88,34 @@ jobs:
     name: Neutral Linux host
     needs: [ui_artifact]
     if: ${{ !cancelled() && needs.ui_artifact.result == 'success' && fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
-    uses: ./.github/workflows/ci-host-slice.yml
+    uses: ./.github/workflows/ci-linux-host-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      linux_hosts_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}
-      macos_hosts_matrix: '[]'
-      windows_hosts_matrix: '[]'
+      hosts_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}
       ui_artifact_name: ci-ui-dist-linux-${{ github.run_id }}
       profile: release
-      linux_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
-      macos_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
-      windows_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+      use_depot: ${{ inputs.use_depot }}
 
   native_runtimes:
     name: Native Linux runtimes
     if: ${{ fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null }}
-    uses: ./.github/workflows/ci-runtime-product-slice.yml
+    uses: ./.github/workflows/ci-linux-runtime-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      linux_runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      macos_runtime_matrix: '[]'
-      windows_runtime_matrix: '[]'
-      linux_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
-      macos_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
-      windows_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+      use_depot: ${{ inputs.use_depot }}
 
   runtime_product:
     name: Linux products
     needs: [hosts, native_runtimes]
     if: ${{ !cancelled() && needs.hosts.result == 'success' && needs.native_runtimes.result == 'success' }}
-    uses: ./.github/workflows/ci-runtime-product-slice.yml
+    uses: ./.github/workflows/ci-linux-product-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      linux_runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      macos_runtime_matrix: '[]'
-      windows_runtime_matrix: '[]'
-      linux_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
-      macos_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
-      windows_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
-      compose_products: true
+      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
 
   kotlin_sdk_input:
     name: Kotlin SDK input
@@ -149,14 +137,12 @@ jobs:
     name: Linux SDK smoke
     needs: [runtime_product, kotlin_sdk_input]
     if: ${{ !cancelled() && needs.runtime_product.result == 'success' && (!contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'kotlin') || needs.kotlin_sdk_input.result == 'success') && fromJson(inputs.lane_plan_json).matrices.sdk[0] != null }}
-    uses: ./.github/workflows/ci-sdk-slice.yml
+    uses: ./.github/workflows/ci-linux-sdk-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
       sdk_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.sdk) }}
-      lane: linux
       binary_target: target/release/mesh-llm
       profile: release
-      swift_mode: ${{ (fromJson(inputs.lane_plan_json).profile == 'main' || fromJson(inputs.lane_plan_json).profile == 'manual-full') && 'full' || 'host-only' }}
     secrets:
       HF_TOKEN: ${{ inputs.original_event_name == 'push' && secrets.HF_TOKEN || '' }}
 
@@ -164,7 +150,7 @@ jobs:
     name: Linux product smoke
     needs: [runtime_product]
     if: ${{ !cancelled() && needs.runtime_product.result == 'success' && fromJson(inputs.lane_plan_json).matrices.smoke[0] != null }}
-    uses: ./.github/workflows/ci-product-smoke-slice.yml
+    uses: ./.github/workflows/ci-linux-product-smoke-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
       smoke_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.smoke) }}

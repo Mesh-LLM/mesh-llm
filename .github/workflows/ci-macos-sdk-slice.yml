@@ -1,0 +1,50 @@
+name: CI macOS SDK Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      architecture:
+        description: Selected macOS product architecture.
+        required: true
+        type: string
+      sdk_matrix:
+        description: JSON macOS SDK rows from the versioned CI plan.
+        required: true
+        type: string
+      binary_target:
+        description: Product binary path used by SDK smoke tests.
+        required: true
+        type: string
+      swift_mode:
+        description: Swift artifact coverage selected by the semantic CI profile.
+        required: true
+        type: string
+    secrets:
+      HF_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  swift_smoke:
+    name: Swift SDK smoke
+    if: ${{ contains(fromJson(inputs.sdk_matrix).*.id, 'swift') }}
+    uses: ./.github/workflows/sdk-smoke.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      sdk_kind: swift
+      artifact_name: ci-product-macos-${{ inputs.architecture }}-metal
+      artifact_path: ci-artifacts/macos
+      staged_binary_path: ${{ inputs.binary_target }}
+      swift_artifact_name: ci-sdk-swift
+      swift_artifact_mode: ${{ inputs.swift_mode }}
+      model_cache_scope: sdk-smoke-model
+      timeout_minutes: 35
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}

@@ -62,8 +62,10 @@ owning source, and update the inventory and topology in the same change.
   use `secrets: inherit` in CI slice calls.
 - Keep reusable-workflow nesting shallow and the slice catalog small. Separate
   topic/platform graphs may be dispatched with native, bounded inputs from the
-  protected controller. Each lane still owns a static superset of typed calls
-  gated by the checked plan; do not generate workflow YAML at run time.
+  protected controller. Each lane owns a platform-local static superset of
+  typed calls gated by the checked plan; a platform lane must not call a
+  cross-platform reusable workflow with empty placeholder matrices. Do not
+  generate workflow YAML at run time.
 - Prefer local composite actions for repeated steps inside a job and reusable
   workflows for repeated jobs or job graphs.
 
@@ -71,10 +73,13 @@ owning source, and update the inventory and topology in the same change.
 
 - Compute changed files and the CI plan once in the protected controller. Pass
   digest-bound lane projections through native workflow-dispatch inputs; do
-  not allocate one planner per lane or use an artifact as dispatch state. The
-  bootstrap reusable graph may plan once when the controller or lane files are
-  not yet available on the required refs. All lane conditions and summaries
-  consume that same plan or its bounded projection.
+  not allocate one planner per lane or use an artifact as dispatch state.
+  Pull-request and main entrypoints are one-job ingress workflows whose
+  completed runs wake the protected planner. Fork PRs use the same protected
+  dispatch path after the controller fetches the immutable head SHA through
+  the base repository; do not restore a monolithic bootstrap fallback. All
+  lane conditions and summaries consume that same plan or its bounded
+  projection.
 - Keep direct semantic ownership separate from Cargo reverse dependencies:
   direct paths/crates select product, SDK, backend, platform, protocol, model,
   UI, website, and infrastructure slices; affected crates select Rust compile,
@@ -104,8 +109,7 @@ owning source, and update the inventory and topology in the same change.
   the same plan and declared through `needs`. Consumers never rebuild missing
   producer inputs.
 - Every lane has one unique, stable, non-matrix summary, and the controller
-  owns one stable aggregate required check. The bootstrap graph owns the same
-  aggregate name until protected dispatch is available.
+  owns one stable aggregate required check.
 - Each lane summary directly needs every top-level slice call in that lane,
   runs with `if: ${{ !cancelled() }}`, and validates results against its
   digest-bound plan projection. The aggregate completes only after every
@@ -179,11 +183,11 @@ or PR runner routing as part of ordinary workflow refactoring.
 
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
-- GitHub-hosted PR writes remain isolated from trusted main: bootstrap/fork
-  jobs use the pull-request merge ref, while protected same-repository lanes
-  explicitly force restore-only cache mode even though their workflow ref is
-  the default branch. Trusted main/release/warmers own shared publication. Do
-  not save large shared Rust/native caches from PRs.
+- GitHub-hosted PR writes remain isolated from trusted main: protected
+  same-repository and fork lanes explicitly force restore-only cache mode even
+  though their workflow ref is the default branch. Trusted
+  main/release/warmers own shared publication. Do not save large shared
+  Rust/native caches from PRs.
 - Keep PR sccache job-local unless a provider proves safe isolation. A cache
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.

@@ -1,19 +1,14 @@
-name: CI SDK Slice
+name: CI Linux SDK Slice
 
 on:
   workflow_call:
     inputs:
       source_sha:
         description: Immutable product source revision.
-        required: false
-        default: ''
-        type: string
-      sdk_matrix:
-        description: JSON SDK rows from the versioned CI plan.
         required: true
         type: string
-      lane:
-        description: Platform SDK consumer lane (linux or macos).
+      sdk_matrix:
+        description: JSON Linux SDK rows from the versioned CI plan.
         required: true
         type: string
       binary_target:
@@ -22,10 +17,6 @@ on:
         type: string
       profile:
         description: Native SDK profile selected by the semantic CI profile.
-        required: true
-        type: string
-      swift_mode:
-        description: Swift artifact coverage selected by the semantic CI profile.
         required: true
         type: string
     secrets:
@@ -39,12 +30,12 @@ permissions:
 jobs:
   rust_smoke:
     name: Rust SDK smoke
-    if: ${{ inputs.lane == 'linux' && contains(fromJson(inputs.sdk_matrix).*.id, 'rust') }}
+    if: ${{ contains(fromJson(inputs.sdk_matrix).*.id, 'rust') }}
     uses: ./.github/workflows/sdk-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
       sdk_kind: rust
-      artifact_name: ci-product-linux-cpu
+      artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       staged_binary_path: ${{ inputs.binary_target }}
       model_cache_scope: sdk-smoke-model
@@ -53,12 +44,12 @@ jobs:
 
   kotlin_smoke:
     name: Kotlin SDK smoke
-    if: ${{ inputs.lane == 'linux' && contains(fromJson(inputs.sdk_matrix).*.id, 'kotlin') }}
+    if: ${{ contains(fromJson(inputs.sdk_matrix).*.id, 'kotlin') }}
     uses: ./.github/workflows/sdk-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
       sdk_kind: kotlin
-      artifact_name: ci-product-linux-cpu
+      artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       staged_binary_path: ${{ inputs.binary_target }}
       kotlin_artifact_name: ci-sdk-kotlin-native
@@ -66,22 +57,5 @@ jobs:
       kotlin_artifact_backend: cpu
       kotlin_artifact_profile: ${{ inputs.profile }}
       model_cache_scope: sdk-smoke-model
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-
-  swift_smoke:
-    name: Swift SDK smoke
-    if: ${{ inputs.lane == 'macos' && contains(fromJson(inputs.sdk_matrix).*.id, 'swift') }}
-    uses: ./.github/workflows/sdk-smoke.yml
-    with:
-      source_sha: ${{ inputs.source_sha }}
-      sdk_kind: swift
-      artifact_name: ci-product-macos-metal
-      artifact_path: ci-artifacts/macos
-      staged_binary_path: ${{ inputs.binary_target }}
-      swift_artifact_name: ci-sdk-swift
-      swift_artifact_mode: ${{ inputs.swift_mode }}
-      model_cache_scope: sdk-smoke-model
-      timeout_minutes: 35
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
