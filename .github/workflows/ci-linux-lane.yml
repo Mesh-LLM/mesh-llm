@@ -2,8 +2,8 @@ name: CI · Linux
 run-name: CI · Linux · ${{ inputs.source_sha }}
 
 on:
-  workflow_dispatch:
-    inputs:
+  workflow_call:
+    inputs: &lane_inputs
       lane_plan_json:
         required: true
         type: string
@@ -41,6 +41,11 @@ on:
         required: false
         default: false
         type: boolean
+    secrets:
+      HF_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs: *lane_inputs
 permissions:
   contents: read
   packages: read

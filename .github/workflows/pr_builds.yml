@@ -1,4 +1,4 @@
-name: PR CI
+name: PR Validation
 
 on:
   pull_request:
@@ -6,17 +6,12 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  packages: read
 
 jobs:
-  request_plan:
-    name: Request protected CI plan
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Queue the protected planner
-        run: |
-          {
-            echo "## CI plan requested"
-            echo
-            echo "The protected CI · Plan workflow will classify this revision and dispatch only selected topic/platform workflows."
-          } >> "$GITHUB_STEP_SUMMARY"
+  validation:
+    name: Native PR CI
+    permissions:
+      contents: read
+      packages: read
+    uses: Mesh-LLM/mesh-llm/.github/workflows/ci-orchestrator.yml@main

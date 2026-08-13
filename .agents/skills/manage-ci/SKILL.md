@@ -44,9 +44,11 @@ owning source, and update the inventory and topology in the same change.
 ### Entrypoints and reusable slices
 
 - Event entrypoints own triggers, concurrency, and top-level read permissions.
-  The protected default-branch controller owns source resolution, profile
+  Pull requests call the protected default-branch PR composer so reusable lane
+  jobs remain attached to the native PR workflow run. Main and manual runs use
+  the protected default-branch controller for source resolution, profile
   selection, one canonical plan, bounded lane dispatch, and the stable overall
-  required check. They do not own duplicated build implementations.
+  required check. Neither path owns duplicated build implementations.
 - New PR and main behavior must be implemented in a typed reusable workflow or
   local action consumed by both entrypoints. Do not copy a job between PR and
   main and do not add a third implementation to release.
@@ -71,15 +73,15 @@ owning source, and update the inventory and topology in the same change.
 
 ### Planning and routing
 
-- Compute changed files and the CI plan once in the protected controller. Pass
-  digest-bound lane projections through native workflow-dispatch inputs; do
-  not allocate one planner per lane or use an artifact as dispatch state.
-  Pull-request and main entrypoints are one-job ingress workflows whose
-  completed runs wake the protected planner. Fork PRs use the same protected
-  dispatch path after the controller fetches the immutable head SHA through
-  the base repository; do not restore a monolithic bootstrap fallback. All
-  lane conditions and summaries consume that same plan or its bounded
-  projection.
+- Compute changed files and the CI plan once per entry graph. Pull requests
+  call the protected default-branch PR composer as a reusable workflow; it
+  calls the selected lane workflows natively so every nested job and log stays
+  visible from the PR run. Main and manual graphs pass digest-bound lane
+  projections through native workflow-dispatch inputs. Do not allocate one
+  planner per lane or use an artifact as dispatch state. Fork PRs use the same
+  no-secret reusable path after fetching the immutable head SHA through the
+  base repository. All lane conditions and summaries consume the same plan or
+  its bounded projection.
 - Keep direct semantic ownership separate from Cargo reverse dependencies:
   direct paths/crates select product, SDK, backend, platform, protocol, model,
   UI, website, and infrastructure slices; affected crates select Rust compile,

@@ -18,6 +18,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
     let ci_workflow = fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))?;
     let pr_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
+    let pr_composer = fs::read_to_string(repo_root.join(".github/workflows/ci-orchestrator.yml"))?;
     let controller = fs::read_to_string(repo_root.join(".github/workflows/ci-control.yml"))?;
     let lane_workflows = ["quality", "website", "linux", "macos", "windows"]
         .into_iter()
@@ -86,6 +87,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
         &release_workflow,
         &ci_workflow,
         &pr_workflow,
+        &pr_composer,
         &website_pages,
     )?;
     check_producer_invariants(&ProducerInvariantSources {
@@ -101,7 +103,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
         prepare_runtime: &prepare_runtime,
         compose_product: &compose_product,
     })?;
-    check_orchestrator_invariants(&controller, &lane_workflows, &compute_changes)?;
+    check_orchestrator_invariants(&controller, &pr_composer, &lane_workflows, &compute_changes)?;
     check_release_dispatch_version_preparation(&release_workflow, &native_sdk, &swift_sdk)?;
     check_release_container_contracts(&release_workflow, &configure_sccache)?;
     check_windows_dynamic_runtime_contract(
@@ -164,6 +166,7 @@ fn check_workflow_invariants(
     release_workflow: &str,
     ci_workflow: &str,
     pr_workflow: &str,
+    pr_composer: &str,
     website_pages: &str,
 ) -> DynResult<()> {
     for (text, needle, context) in [
@@ -199,14 +202,10 @@ fn check_workflow_invariants(
     ensure_contains(pr_workflow, "pull_request:", "PR pull-request trigger")?;
     ensure_contains(
         pr_workflow,
-        "Request protected CI plan",
-        "PR protected-plan request",
+        "uses: Mesh-LLM/mesh-llm/.github/workflows/ci-orchestrator.yml@main",
+        "PR protected native composer call",
     )?;
-    ensure_not_contains(
-        pr_workflow,
-        "uses: ./.github/workflows/ci-orchestrator.yml",
-        "PR entrypoint must not expand the monolithic bootstrap graph",
-    )?;
+    ensure_contains(pr_composer, "name: CI Required", "native PR required job")?;
     ensure_not_contains(
         ci_workflow,
         "uses: ./.github/workflows/ci-orchestrator.yml",
@@ -325,6 +324,7 @@ fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) -> DynResul
 
 fn check_orchestrator_invariants(
     controller: &str,
+    pr_composer: &str,
     lanes: &[(&str, String)],
     compute_changes: &str,
 ) -> DynResult<()> {
@@ -343,12 +343,29 @@ fn check_orchestrator_invariants(
         "github.rest.actions.createWorkflowDispatch",
         "controller native lane dispatch",
     )?;
+    ensure_contains(
+        controller,
+        "workflows: [Main CI]",
+        "controller main-only workflow-run trigger",
+    )?;
     let lane_workflow = |name: &str| {
         lanes
             .iter()
             .find_map(|(lane, workflow)| (*lane == name).then_some(workflow.as_str()))
             .unwrap_or("")
     };
+    for lane in ["quality", "website", "linux", "macos", "windows"] {
+        ensure_contains(
+            pr_composer,
+            &format!("uses: ./.github/workflows/ci-{lane}-lane.yml"),
+            &format!("native PR {lane} lane call"),
+        )?;
+        ensure_contains(
+            lane_workflow(lane),
+            "workflow_call:",
+            &format!("{lane} reusable lane trigger"),
+        )?;
+    }
     ensure_contains(
         lane_workflow("quality"),
         "uses: ./.github/workflows/ci-quality-slice.yml",
@@ -385,7 +402,12 @@ fn check_orchestrator_invariants(
     ensure_contains(
         controller,
         "name: 'CI Required'",
-        "stable CI required check",
+        "stable dispatched CI required check",
+    )?;
+    ensure_contains(
+        pr_composer,
+        "name: CI Required",
+        "stable native PR required job",
     )?;
     ensure_contains(
         compute_changes,

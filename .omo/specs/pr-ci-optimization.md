@@ -1,9 +1,9 @@
 # PR and main CI composition plan
 
-Status: implemented on this branch. The shared planner, protected fork-capable
-controller, topic/platform lane workflows, platform-pure reusable graphs,
-contracts and documentation are checked in. Ruleset migration and Depot PR
-execution remain separate future work.
+Status: implemented on this branch. The shared planner, protected PR composer,
+main/manual controller, topic/platform lane workflows, platform-pure reusable
+graphs, contracts and documentation are checked in. Ruleset migration and
+Depot PR execution remain separate future work.
 
 Owners: MeshLLM maintainers
 
@@ -22,18 +22,21 @@ or cache identity.
 
 ## Implemented on this branch
 
-- One-job pr_builds.yml and ci.yml ingress workflows wake the protected
-  ci-control.yml planner. Same-repository PRs, fork PRs and main pushes use the
-  same protected dispatch path; explicit manual-full runs start at CI · Plan.
+- One-job pr_builds.yml calls the protected default-branch PR composer, while
+  ci.yml wakes the protected ci-control.yml planner. Same-repository and fork
+  PRs keep nested reusable jobs in their native PR run; main and explicit
+  manual-full runs use separate protected lane dispatch.
 - ci/ownership.yml and ci/slices.yml define the checked ownership, dependency,
   row, runner-role, cache-mode and worker-budget catalog.
 - scripts/plan-ci.py emits the versioned plan described by
   ci/ci-plan.schema.json, including direct domains, affected crates, signals,
   reasons, dependencies, matrices and budgets.
 - Separate Quality, Website, Linux, macOS and Windows workflows receive bounded
-  native inputs from one controller plan and own typed platform-local static
-  slice supersets without unrelated platform placeholders.
-- Stable per-lane checks converge into one correlated CI Required check.
+  native inputs from one plan and own typed platform-local static slice
+  supersets without unrelated platform placeholders. They support native
+  reusable PR calls and protected main/manual dispatch.
+- PRs expose native lane jobs and one native CI Required job; dispatched
+  main/manual lanes retain correlated checks.
 - Existing static ABI, native SDK, Swift, smoke and HF workflows remain
   lower-level reusable producers/consumers.
 - Current PR routing is GitHub-hosted except for the documented uncredentialed
@@ -46,10 +49,7 @@ runner groups, secrets or external capacity.
 
 ## Graph
 
-  PR/main entry
-       |
-       v
-  protected controller: compute-changes + plan-ci once
+  PR entry --> protected reusable composer: compute-changes + plan-ci once
        |
        +--> Quality workflow --> CI / Quality ---+
        +--> Website workflow --> CI / Website ---+
@@ -57,13 +57,16 @@ runner groups, secrets or external capacity.
        +--> macOS workflow ----> CI / macOS -----+--> CI Required
        +--> Windows workflow --> CI / Windows ---+
 
-The controller dispatches a closed list of protected default-branch workflows
-with bounded JSON inputs and passes the immutable source SHA only to product
-checkouts; each lane contains a platform-local static superset of typed
-reusable calls. Workflow YAML is never generated, and lanes do not download a
-planner artifact or allocate another planner. Fork heads are fetched through
-the base repository for classification while workflow definitions and
-reporting stay on the protected default branch.
+  Main/manual entry --> protected controller --> the same five dispatched lanes
+
+The PR composer calls a closed list of protected default-branch workflows as
+nested reusable jobs, preserving native PR run/log visibility. The main/manual
+controller dispatches the same list with bounded JSON inputs. Both pass the
+immutable source SHA only to product checkouts; each lane contains a
+platform-local static superset of typed reusable calls. Workflow YAML is never
+generated, and lanes do not download a planner artifact or allocate another
+planner. Fork heads are fetched through the base repository while workflow
+definitions remain protected on the default branch.
 
 ## Planner contract
 
@@ -170,10 +173,12 @@ authoritative topology docs. Capacity is not the optimization.
 
 Each lane owns one stable non-matrix summary that directly needs its complete
 static job superset and validates required work against its bounded plan.
-ci-control.yml creates correlated lane checks and one non-matrix CI Required
-check on the exact source SHA; the final lane completes the aggregate only when
-all expected correlated checks are terminal. Existing branch-protection rules
-are not edited by this implementation.
+The PR composer owns one native non-matrix CI Required job that directly needs
+all reusable lane calls and validates required successes and unplanned skips.
+ci-control.yml creates correlated lane checks for dispatched main/manual runs;
+the final lane completes that aggregate only when all expected checks are
+terminal. Existing branch-protection rules are not edited by this
+implementation.
 
 ## GitHub and Depot
 

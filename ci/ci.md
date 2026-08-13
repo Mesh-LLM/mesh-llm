@@ -9,35 +9,33 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 | Workflow | Trigger | Role |
 | --- | --- | --- |
-| `pr_builds.yml` | `pull_request` | One-job ingress that requests protected planning for same-repository and fork PRs |
+| `pr_builds.yml` (`PR Validation`) | `pull_request` | One-job caller of the protected default-branch PR composer |
+| `ci-orchestrator.yml` (`PR CI Graph`) | `workflow_call` | Computes one PR plan and calls selected lanes natively inside the PR run |
 | `ci.yml` | push to `main` | One-job ingress that requests protected planning for main |
-| `ci-control.yml` (`CI · Plan`) | completed `PR CI` / `Main CI`, dispatch | Resolves source identity, computes one plan, dispatches selected lanes, and owns correlated checks |
-| `ci-*-lane.yml` | `workflow_dispatch` | Separate Quality, Website, Linux, macOS and Windows graphs |
+| `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Resolves main/manual source identity, computes one plan, dispatches selected lanes, and owns correlated checks |
+| `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
 
-The lane workflows are not independent planners. Protected control computes
-the canonical shape once and passes each lane a digest-bound JSON projection
-through native workflow-dispatch inputs. The completed ingress run gives the
-controller protected `workflow_run` authority for both same-repository and
-fork PRs. It fetches the immutable PR head SHA through the base repository's
-pull refs for change classification, while all planner, reporter and workflow
-definitions remain protected on the default branch. Pull-request dispatches
-receive no repository secrets and cannot select Depot or publish trusted-main
-caches. PR runs cancel superseded synchronizations; main runs are not
-cancelled. Explicit full validation is dispatched from `CI · Plan` on
-`main`.
+The lane workflows are not independent planners. PR Validation calls the
+default-branch PR composer, which computes one canonical plan and invokes each
+selected lane as a nested reusable workflow. GitHub therefore keeps every lane
+job and step in the PR-associated workflow run, with direct log drill-down and
+a native `CI Required` job. The composer receives no repository secrets,
+cannot select Depot or publish trusted-main caches, and cancels superseded PR
+synchronizations.
 
-`ci-orchestrator.yml` is an inert reusable compatibility target during this
-topology migration. It has no ingress or lane callers and exists only because
-the protected default-branch runner contract still validates its predecessor's
-required-file set against a PR source checkout. Remove it after the new
-runner-contract workflow has landed on `main`.
+Main and explicit manual-full validation retain protected separate-run lane
+dispatch. `CI · Plan` computes their canonical shape once and passes each lane
+a digest-bound JSON projection through native workflow-dispatch inputs. Main
+runs are not cancelled.
 
 ## Graph shape
 
 ```mermaid
 flowchart TD
-    ENTRY["PR CI or Main CI request"] --> CONTROL["protected CI · Plan"]
-    CONTROL --> PLAN["compute changes + plan-ci once"]
+    PR["PR Validation"] --> PRPLAN["protected reusable PR composer"]
+    MAIN["Main CI or manual"] --> CONTROL["protected CI · Plan"]
+    PRPLAN --> PLAN["compute changes + plan-ci once"]
+    CONTROL --> PLAN
     PLAN --> QUALITY["Quality graph"]
     PLAN --> WEB["Website graph"]
     PLAN --> LINUX["Linux graph\nUI + ABI + tests + products + SDK/smoke"]
@@ -56,13 +54,14 @@ flowchart TD
 ```
 
 Each lane uses a platform-local static superset of typed reusable-workflow
-calls; `if` conditions consume only its checked planner projection. Linux
+calls; `if` conditions consume only its checked planner projection. PR lanes
+are nested in one native PR run; main/manual lanes use separate dispatched run
+IDs correlated by source SHA and plan digest. Linux
 graphs contain no macOS/Windows placeholder jobs, and the converse holds for
-the other platforms. Protected control uses the Actions API only for a closed
-list of five checked-in workflow files and passes data through native inputs.
-No workflow YAML is generated and no lane allocates another planner. Runs have
-separate graphs/run IDs, correlated by a controller identity, stable lane
-checks, source SHA and plan digest.
+the other platforms. Protected main/manual control uses the Actions API only
+for a closed list of five checked-in workflow files and passes data through
+native inputs. No workflow YAML is generated and no lane allocates another
+planner.
 
 ## Planner and profiles
 
@@ -123,8 +122,8 @@ runtime producers are not duplicated.
   two-node, Metal and model-download consumers using only composed artifacts.
   CUDA inference uses the
   approved `gpu-nvidia` ephemeral self-hosted scale set, including for
-  same-repository PRs. That hardware-qualified exception is dispatched only
-  from protected default-branch workflows, receives no repository secrets or
+  same-repository PRs. That hardware-qualified exception executes only through
+  protected default-branch reusable workflows, receives no repository secrets or
   credential-bearing caches, and is restricted to the repository's GPU runner
   group. Its PR runtime is compiled for both sm86 and sm120 because the scale
   set currently contains RTX 3080 and RTX 5090 workers. The smoke installs the
@@ -187,7 +186,7 @@ from being duplicated into every composed product artifact.
 Pull requests use GitHub-hosted runners for ordinary work. The sole current
 exception is uncredentialed CUDA smoke on the approved ephemeral `gpu-nvidia`
 scale set described above. Same-repository and fork PRs use the same protected
-dispatch path and receive no repository secrets. Their caches are restore-only
+reusable composer and receive no repository secrets. Their caches are restore-only
 even though the protected workflow ref is `main`; neither may publish
 trusted-main cache entries. Trusted `main` Linux roles may use Depot only when
 `DEPOT_RUNNERS_ENABLED` is exactly `true`; macOS, Windows, credential-bearing

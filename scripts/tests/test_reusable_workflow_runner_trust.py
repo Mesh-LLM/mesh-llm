@@ -43,7 +43,12 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                 )
 
     def test_main_entry_and_orchestrator_do_not_use_pull_request_target(self) -> None:
-        for name in ("ci.yml", "pr_builds.yml", "ci-control.yml"):
+        for name in (
+            "ci.yml",
+            "pr_builds.yml",
+            "ci-control.yml",
+            "ci-orchestrator.yml",
+        ):
             with self.subTest(workflow=name):
                 self.assertNotIn("pull_request_target", self.workflow(name))
 
@@ -143,6 +148,7 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
         names = [
             "docker-precheck.yml",
             "ci-control.yml",
+            "ci-orchestrator.yml",
             "static-abi-artifact.yml",
             *sorted(
                 path.name

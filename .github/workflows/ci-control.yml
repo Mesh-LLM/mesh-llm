@@ -10,7 +10,7 @@ on:
         default: false
         type: boolean
   workflow_run:
-    workflows: [PR CI, Main CI]
+    workflows: [Main CI]
     types: [completed]
 
 permissions:

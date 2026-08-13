@@ -8,9 +8,9 @@ before editing CI.
 
 | Workflow | Trigger | Ownership |
 | --- | --- | --- |
-| `pr_builds.yml` | PR lifecycle | One-job ingress for protected same-repository and fork PR planning |
+| `pr_builds.yml` (`PR Validation`) | PR lifecycle | One-job caller of the protected default-branch PR composer, keeping all reusable jobs in the native PR run |
 | `ci.yml` | main push | One-job ingress for protected main planning |
-| `ci-control.yml` (`CI · Plan`) | completed `PR CI` / `Main CI`, dispatch | Protected source resolution, one canonical plan, bounded lane dispatch, manual-full validation and correlated required checks |
+| `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Protected source resolution, one canonical plan, bounded main/manual lane dispatch and correlated required checks |
 | `release.yml` | release tags, dispatch | Release-only signing, assets and publication |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
@@ -24,8 +24,9 @@ workflows are independent of required PR readiness. The former
 
 | Workflow | Contract |
 | --- | --- |
-| `ci-quality-lane.yml` | Quality and runner/cache contract graph; protected native dispatch |
-| `ci-website-lane.yml` | Console and website graph; protected native dispatch |
+| `ci-orchestrator.yml` (`PR CI Graph`) | Protected default-branch PR planner and native reusable-lane composer with one native `CI Required` job |
+| `ci-quality-lane.yml` | Quality and runner/cache contract graph; reusable from PRs and dispatchable for main/manual |
+| `ci-website-lane.yml` | Console and website graph; reusable from PRs and dispatchable for main/manual |
 | `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows host/runtime/product/platform graph with one platform-local UI producer |
@@ -63,10 +64,12 @@ repository secrets. The trusted main entrypoint may pass the optional
 - `ci/ci-plan.schema.json` versions the machine-readable output.
 - `compute-changes` supplies the complete event diff and affected Cargo
   closure; the planner owns signals and final matrix selection.
-- `ci-control.yml` calls the planner once and dispatches bounded JSON lane
-  projections as native inputs for same-repository PRs, fork PRs, main pushes
-  and explicit manual-full runs. Fork source SHAs are fetched through the base
-  repository while planner and lane definitions remain protected.
+- `ci-orchestrator.yml` calls the planner once for same-repository and fork PRs,
+  then calls selected default-branch lanes as nested reusable workflows so all
+  jobs and logs remain attached to the PR run.
+- `ci-control.yml` calls the planner once for main pushes and explicit
+  manual-full runs, then dispatches bounded JSON lane projections as native
+  inputs. Planner and lane definitions remain protected in both paths.
 
 Main/manual profiles enumerate every workspace crate exactly once and all
 supported product/SDK rows. PR profiles select affected or directly owned rows
@@ -88,7 +91,7 @@ from that same catalog.
 Artifacts are correctness boundaries; caches only accelerate regeneration.
 PR artifacts generally retain for one day. Protected same-repository and fork
 lanes are restore-only despite running from the default-branch workflow ref.
-PR dispatches cannot publish shared caches, and Depot cache access is denied.
+PR calls cannot publish shared caches, and Depot cache access is denied.
 Trusted main may publish shared caches.
 
 ## Providers and variables

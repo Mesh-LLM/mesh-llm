@@ -1,22 +1,188 @@
-name: CI Orchestrator Compatibility
+name: PR CI Graph
 
 on:
   workflow_call:
-    inputs:
-      enabled:
-        description: Reserved compatibility toggle; no caller enables this workflow.
-        required: false
-        default: "false"
-        type: string
 
-permissions: {}
+permissions:
+  contents: read
+  packages: read
 
-# This inert compatibility target is retained only while the protected
-# default-branch runner-contract workflow still validates its predecessor's
-# required-file set against PR source revisions. No ingress or lane calls it.
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  retired:
-    if: ${{ inputs.enabled == 'true' }}
+  plan:
+    name: Plan PR CI graph
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      plan_json: ${{ steps.plan.outputs.plan_json }}
+      plan_digest: ${{ steps.plan.outputs.plan_digest }}
+      quality_lane_plan: ${{ steps.plan.outputs.quality_lane_plan }}
+      website_lane_plan: ${{ steps.plan.outputs.website_lane_plan }}
+      linux_lane_plan: ${{ steps.plan.outputs.linux_lane_plan }}
+      macos_lane_plan: ${{ steps.plan.outputs.macos_lane_plan }}
+      windows_lane_plan: ${{ steps.plan.outputs.windows_lane_plan }}
     steps:
-      - run: true
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate immutable PR identity
+        id: identity
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "pull request source identity is malformed" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "$SOURCE_SHA"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Compute changed files and affected crates
+        id: changes
+        uses: ./.github/actions/compute-changes
+        with:
+          event_name: pull_request
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          head_sha: ${{ steps.identity.outputs.source_sha }}
+      - name: Build one versioned provider-neutral plan
+        id: plan
+        uses: ./.github/actions/plan-ci
+        with:
+          event_name: pull_request
+          source_sha: ${{ steps.identity.outputs.source_sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          draft: ${{ github.event.pull_request.draft || false }}
+          changed_files: ${{ steps.changes.outputs.changed_files }}
+          affected_crates: ${{ steps.changes.outputs.affected_crates }}
+      - name: Render selected native lanes
+        env:
+          PLAN_JSON: ${{ steps.plan.outputs.plan_json }}
+          PLAN_DIGEST: ${{ steps.plan.outputs.plan_digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Native PR CI plan"
+            echo
+            jq -r '"Profile: " + .profile + "  ", "Source: " + .source_sha + "  "' <<<"$PLAN_JSON"
+            printf 'Digest: %s\n' "$PLAN_DIGEST"
+            echo
+            echo "Selected lanes remain nested in this PR workflow run for direct log access."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  quality:
+    name: Quality lane
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && fromJson(needs.plan.outputs.quality_lane_plan).required }}
+    uses: ./.github/workflows/ci-quality-lane.yml
+    with:
+      lane_plan_json: ${{ needs.plan.outputs.quality_lane_plan }}
+      canonical_plan_json: ${{ needs.plan.outputs.plan_json }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+      original_event_name: pull_request
+      supersession_key: pr-${{ github.event.pull_request.number }}
+      use_depot: false
+
+  website:
+    name: Website lane
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && fromJson(needs.plan.outputs.website_lane_plan).required }}
+    uses: ./.github/workflows/ci-website-lane.yml
+    with:
+      lane_plan_json: ${{ needs.plan.outputs.website_lane_plan }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+      original_event_name: pull_request
+      supersession_key: pr-${{ github.event.pull_request.number }}
+
+  linux:
+    name: Linux lane
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && fromJson(needs.plan.outputs.linux_lane_plan).required }}
+    uses: ./.github/workflows/ci-linux-lane.yml
+    with:
+      lane_plan_json: ${{ needs.plan.outputs.linux_lane_plan }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+      original_event_name: pull_request
+      supersession_key: pr-${{ github.event.pull_request.number }}
+      use_depot: false
+
+  macos:
+    name: macOS lane
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && fromJson(needs.plan.outputs.macos_lane_plan).required }}
+    uses: ./.github/workflows/ci-macos-lane.yml
+    with:
+      lane_plan_json: ${{ needs.plan.outputs.macos_lane_plan }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+      original_event_name: pull_request
+      supersession_key: pr-${{ github.event.pull_request.number }}
+
+  windows:
+    name: Windows lane
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && fromJson(needs.plan.outputs.windows_lane_plan).required }}
+    uses: ./.github/workflows/ci-windows-lane.yml
+    with:
+      lane_plan_json: ${{ needs.plan.outputs.windows_lane_plan }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+      original_event_name: pull_request
+      supersession_key: pr-${{ github.event.pull_request.number }}
+
+  summary:
+    name: CI Required
+    needs: [plan, quality, website, linux, macos, windows]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 10
+    steps:
+      - name: Validate selected native lanes
+        env:
+          NEEDS_RESULTS: ${{ toJson(needs) }}
+          QUALITY_PLAN: ${{ needs.plan.outputs.quality_lane_plan }}
+          WEBSITE_PLAN: ${{ needs.plan.outputs.website_lane_plan }}
+          LINUX_PLAN: ${{ needs.plan.outputs.linux_lane_plan }}
+          MACOS_PLAN: ${{ needs.plan.outputs.macos_lane_plan }}
+          WINDOWS_PLAN: ${{ needs.plan.outputs.windows_lane_plan }}
+          PLAN_DIGEST: ${{ needs.plan.outputs.plan_digest }}
+        run: |
+          set -euo pipefail
+          jq -e '.plan.result == "success"' <<<"$NEEDS_RESULTS" >/dev/null
+          requirements=$(jq -cn \
+            --argjson quality "$QUALITY_PLAN" \
+            --argjson website "$WEBSITE_PLAN" \
+            --argjson linux "$LINUX_PLAN" \
+            --argjson macos "$MACOS_PLAN" \
+            --argjson windows "$WINDOWS_PLAN" \
+            '{quality: $quality.required, website: $website.required, linux: $linux.required, macos: $macos.required, windows: $windows.required}')
+          jq -e --argjson requirements "$requirements" '
+            . as $needs
+            | all($requirements | to_entries[];
+                if .value then
+                  $needs[.key].result == "success"
+                else
+                  $needs[.key].result == "skipped"
+                end)
+          ' <<<"$NEEDS_RESULTS" >/dev/null
+          {
+            echo "## CI Required"
+            echo
+            echo "Plan digest: \`$PLAN_DIGEST\`"
+            echo
+            echo "| Native lane | Result |"
+            echo "| --- | --- |"
+            jq -r 'to_entries | map(select(.key != "plan")) | sort_by(.key)[] | "| \(.key) | \(.value.result) |"' <<<"$NEEDS_RESULTS"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -32,6 +32,9 @@ class CiArtifactActionTests(unittest.TestCase):
         exact_pin = re.compile(
             r"^[^@\s]+@[0-9a-f]{40}\s+#\s+\S",
         )
+        protected_pr_composer = (
+            "Mesh-LLM/mesh-llm/.github/workflows/ci-orchestrator.yml@main"
+        )
 
         for path in (*action_files, *workflow_files):
             for line_number, line in enumerate(
@@ -42,6 +45,9 @@ class CiArtifactActionTests(unittest.TestCase):
                     continue
                 value = line.split("uses:", maxsplit=1)[1].strip()
                 if value.startswith("./"):
+                    continue
+                if value == protected_pr_composer:
+                    self.assertEqual("pr_builds.yml", path.name)
                     continue
                 with self.subTest(
                     path=path.relative_to(ROOT),

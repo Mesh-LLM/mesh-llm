@@ -35,24 +35,24 @@ class CiLaneWorkflowTests(unittest.TestCase):
         for name in ("quality", "website", "linux", "macos", "windows"):
             self.assertIn(f"ci-{name}-lane.yml", workflow)
 
-    def test_controller_handles_forks_without_branch_local_bootstraps(self) -> None:
+    def test_prs_use_protected_native_reusable_lanes(self) -> None:
         workflow = self.workflow("ci-control.yml")
-        self.assertNotIn("listJobsForWorkflowRun", workflow)
-        self.assertNotIn("Bootstrap PR CI", workflow)
-        self.assertNotIn("Bootstrap main CI", workflow)
-        self.assertNotIn("head_repository.full_name == github.repository", workflow)
-        self.assertIn('git fetch --no-tags origin "$SOURCE_SHA"', workflow)
-        self.assertNotIn("--depth=1", workflow)
-        self.assertIn("listPullRequestsAssociatedWithCommit", workflow)
-        self.assertIn("candidate.head.sha === run.head_sha", workflow)
-        self.assertIn("github.event.workflow_run.head_repository.id", workflow)
-        self.assertIn("github.event.workflow_run.head_branch", workflow)
-        self.assertIn("should_dispatch", workflow)
+        self.assertIn("workflows: [Main CI]", workflow)
+        self.assertNotIn("workflows: [PR Validation", workflow)
 
         pr_workflow = self.workflow("pr_builds.yml")
-        self.assertNotIn("pull.head.repo?.full_name", pr_workflow)
-        self.assertNotIn("ci-orchestrator.yml", pr_workflow)
-        self.assertIn("Request protected CI plan", pr_workflow)
+        self.assertIn("name: PR Validation", pr_workflow)
+        self.assertIn("ci-orchestrator.yml@main", pr_workflow)
+
+        composer = self.workflow("ci-orchestrator.yml")
+        self.assertEqual(1, composer.count("uses: ./.github/actions/plan-ci"))
+        for lane in ("quality", "website", "linux", "macos", "windows"):
+            self.assertIn(
+                f"uses: ./.github/workflows/ci-{lane}-lane.yml",
+                composer,
+            )
+        self.assertIn("name: CI Required", composer)
+        self.assertNotIn("github.rest.actions.createWorkflowDispatch", composer)
 
     def test_controller_summary_tolerates_omitted_optional_matrices(self) -> None:
         workflow = self.workflow("ci-control.yml")
@@ -72,8 +72,9 @@ class CiLaneWorkflowTests(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertNotIn("concurrency:", self.workflow(name))
         self.assertIn("concurrency:", self.workflow("ci-control.yml"))
+        self.assertIn("concurrency:", self.workflow("ci-orchestrator.yml"))
 
-    def test_lane_workflows_are_native_dispatch_entrypoints(self) -> None:
+    def test_lane_workflows_are_reusable_and_dispatchable(self) -> None:
         checks = {
             "quality": "CI / Quality",
             "website": "CI / Website",
@@ -85,7 +86,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             with self.subTest(lane=lane):
                 workflow = self.workflow(f"ci-{lane}-lane.yml")
                 self.assertIn("workflow_dispatch:", workflow)
-                self.assertNotIn("workflow_call:", workflow)
+                self.assertIn("workflow_call:", workflow)
                 self.assertIn("lane_plan_json:", workflow)
                 self.assertIn(f"name: {check}", workflow)
                 self.assertIn("uses: ./.github/actions/report-ci-lane", workflow)
@@ -362,8 +363,9 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn("${{ inputs.use_depot }}", workflow)
 
     def test_superseded_pr_runs_cancel_by_pull_request_identity(self) -> None:
-        controller = self.workflow("ci-control.yml")
-        self.assertIn("supersessionKey = `pr-${pull.number}`", controller)
+        composer = self.workflow("ci-orchestrator.yml")
+        self.assertIn("group: pr-ci-${{ github.event.pull_request.number", composer)
+        self.assertIn("cancel-in-progress: true", composer)
         for lane in ("quality", "website", "linux", "macos", "windows"):
             workflow = self.workflow(f"ci-{lane}-lane.yml")
             self.assertIn("inputs.supersession_key || inputs.source_sha", workflow)
