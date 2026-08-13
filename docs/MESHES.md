@@ -110,11 +110,11 @@ Join from an API-only client:
 mesh-llm client --join <token>
 ```
 
-### Apple models on a private mesh (experimental)
+### Apple models on a mesh (experimental)
 
 On an Apple silicon Mac running macOS Golden Gate with the signed Apple
 provider runtime installed, `mesh-llm serve` can advertise the packaged Apple
-model identity to peers that joined the same private mesh. The system model is
+model identity to peers in the joined mesh. The system model is
 advertised as `apple/system` with its resolved generation, for example
 `apple/system@27.0`; a published Core AI artifact is advertised under its
 normal Hugging Face identity, for example
@@ -131,11 +131,9 @@ unknown capacity, preserving mixed-version operation.
 
 This provider is intentionally explicit-only. Call the exact advertised model
 identity; `auto`, `mesh`, and MoA will not select experimental Apple models.
-Nodes started with `--publish` do not advertise Apple provider models. This
-keeps the experimental route inside an invite-gated trust boundary while
-licensing, quality, privacy, signing, and release-distribution gates remain
-open. See [Experimental Apple runtime](design/APPLE_RUNTIME.md) for packaging
-and setup.
+Public meshes may advertise Apple provider models when the sidecar is healthy,
+but they never become implicit candidates for unrelated requests. See
+[Experimental Apple runtime](design/APPLE_RUNTIME.md) for packaging and setup.
 
 ### Multi-interface Linux and Docker hosts
 

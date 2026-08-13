@@ -9,8 +9,9 @@ runtime, REST contract, scheduler, and host lifecycle.
 This work is **experimental**. A macOS `mesh-llm serve` host can supervise the
 runtime and expose `apple/system` or a packaged Core AI artifact through its
 normal local OpenAI frontend. A release-shaped macOS product can embed and
-auto-discover the provider, and private meshes can route its advertised model
-targets. It is not enabled in published releases. It implements the Milestone
+auto-discover the provider, and public or private meshes can route its exact
+advertised model targets. It is not enabled in published releases. It
+implements the Milestone
 0 evidence, local REST vertical slice, Rust host-supervision layer, CLI
 product-packaging layer, and the first published Core AI artifact lane from
 [issue #1246](https://github.com/Mesh-LLM/mesh-llm/issues/1246).

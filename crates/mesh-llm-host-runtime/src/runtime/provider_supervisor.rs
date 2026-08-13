@@ -1066,7 +1066,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_mesh_does_not_advertise_apple_system() {
+    async fn public_mesh_advertises_apple_system() {
         let mut node = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 9_337 })
             .await
             .unwrap();
@@ -1088,7 +1088,16 @@ mod tests {
         )
         .await;
 
-        assert!(advertised.is_empty());
-        assert!(node.hosted_models().await.is_empty());
+        assert_eq!(
+            advertised,
+            vec!["apple/system".to_string(), "apple/system@27.0".to_string()]
+        );
+        assert_eq!(node.hosted_models().await, advertised);
+        let runtimes = node.all_model_runtime_descriptors().await;
+        assert_eq!(runtimes.len(), 2);
+        assert!(runtimes.iter().all(|runtime| {
+            runtime.provider_kind.as_deref() == Some("apple")
+                && runtime.max_concurrent_requests == Some(1)
+        }));
     }
 }

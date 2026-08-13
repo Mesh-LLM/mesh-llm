@@ -112,11 +112,7 @@ pub(super) async fn reconcile_provider_advertisement(
     advertised_model_ids: &mut Vec<String>,
     context: &ProviderSupervisorContext,
 ) {
-    let desired = if context.node.public_mesh {
-        Vec::new()
-    } else {
-        desired_provider_routes(model_id, availability)
-    };
+    let desired = desired_provider_routes(model_id, availability);
     let previous = advertised_model_ids.clone();
     let mut changed = previous != desired;
 

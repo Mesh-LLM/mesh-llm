@@ -2,8 +2,8 @@
 
 Status: Milestones 0–3 have experimental implementations as of 2026-08-12:
 the system-model spike, local REST vertical slice, shared SDK carrier contract,
-and private-mesh whole-model routing. Release promotion and public-mesh
-advertisement remain gated. Tracking issue:
+and mesh whole-model routing. Public advertisement is technically supported for
+healthy exact Apple identities; release promotion remains gated. Tracking issue:
 [#1246](https://github.com/mesh-llm/mesh-llm/issues/1246).
 
 ## Outcome
@@ -20,9 +20,11 @@ path uses Apple's native accelerator stack; it is not a CPU-only Swift wrapper.
 
 The experimental sidecar exposes a loopback OpenAI-shaped REST surface. The
 Rust host can now resolve and supervise the packaged process and route
-`apple/system` through MeshLLM's normal local OpenAI frontend. Private meshes
-gossip its observed availability, version, context, and one-slot load; the
-provider does not ship in release products or advertise on public meshes.
+`apple/system` through MeshLLM's normal local OpenAI frontend. Meshes gossip its
+observed availability, version, context, and one-slot load; the provider does
+not ship in release products. When a host joins a public mesh with `--auto`, a
+healthy provider advertises its exact model identities, which remain
+explicit-only and are never selected by `auto`, `mesh`, or MoA routing.
 
 ## Why this is valuable to Apple silicon users
 
@@ -163,11 +165,11 @@ The supervisor:
   `SIGTERM`, waits up to five seconds, and force-kills a child that does not
   exit.
 
-On private meshes, the supervisor advertises both the packaged model identity
-and its resolved generation as ordinary whole-model routes. Additive runtime
+On meshes, the supervisor advertises both the packaged model identity and its
+resolved generation as ordinary whole-model routes. Additive runtime
 fields carry provider kind, generation, maximum concurrency, active requests,
 and queued requests. Health loss or process exit withdraws the routes and
-triggers fresh gossip; public meshes suppress the advertisement entirely.
+triggers fresh gossip, including on public meshes.
 
 Routing prefers an idle provider, then peers without load metadata, then busy
 or queued providers. Existing request affinity keeps a session on the selected
@@ -369,7 +371,8 @@ whose lifecycle requires it.
 
 ## Safety, privacy, and product policy
 
-Milestone 0 should remain local/private. Before public-mesh advertisement:
+Public advertisement is now an explicit exact-identity route. Before release
+promotion and broad public distribution:
 
 - confirm Apple's applicable license and acceptable-use terms for the intended
   hosted/routed product behavior;
@@ -409,7 +412,7 @@ before composition. Remaining promotion work is release-channel publication
 of the one signed artifact plus app-sandbox and quarantine validation in a
 signed Swift app and packaged Electron app.
 
-### 3. Private-mesh system-model routing — experimental implementation complete
+### 3. Mesh system-model routing — experimental implementation complete
 
 Private peers now exchange additive provider runtime descriptors and route the
 rolling or versioned system-model ID as one whole request. The Apple sidecar
@@ -419,7 +422,8 @@ different healthy Mac only before streaming begins, and withdraws a provider
 after health or process failure. Older peers safely ignore the new fields; a
 new peer treats an older provider's missing load as unknown. The management API,
 OpenAI model metadata, and console expose the observed provider generation and
-load. Public meshes, `auto`, virtual `mesh`, and MoA do not select this model.
+load. `auto`, virtual `mesh`, and MoA do not select this model implicitly;
+callers must request its exact advertised identity.
 
 ### 4. Core AI model providers and workload certification
 
