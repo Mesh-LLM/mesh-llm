@@ -207,6 +207,21 @@ class PlanCiTests(unittest.TestCase):
             "trusted-readwrite",
         )
 
+    def test_main_ignores_partial_affected_crate_input(self) -> None:
+        payload = fixture("main.json")
+        payload["affected_crates"] = ["mesh-llm"]
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        workspace = {"mesh-llm", "mesh-llm-host-runtime", "mesh-llm-config"}
+        tested = {
+            crate
+            for batch in plan["matrices"]["rust_tests"]
+            for crate in batch["crates"]
+        }
+        self.assertEqual(set(plan["affected_crates"]), workspace)
+        self.assertEqual(tested, workspace)
+
     def test_control_plane_changes_fail_open_to_the_profile_rows(self) -> None:
         payload = fixture("runtime.json")
         payload["changed_files"] = [".github/workflows/pr_linux.yml"]
