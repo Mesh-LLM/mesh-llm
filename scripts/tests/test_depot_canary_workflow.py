@@ -1,5 +1,9 @@
 import unittest
+import os
 from pathlib import Path
+import subprocess
+import tempfile
+from textwrap import dedent
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -93,6 +97,109 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             action,
         )
         self.assertIn("grep -Eiq 'depot\\.dev'", action)
+
+    def test_endpoint_and_docker_auth_probes_fail_closed(self) -> None:
+        action = (
+            ROOT
+            / ".github"
+            / "actions"
+            / "audit-depot-pr-isolation"
+            / "action.yml"
+        ).read_text(encoding="utf-8")
+        action_run = action.split("      run: |\n", maxsplit=1)[1]
+        action_script = dedent(action_run)
+        canary_start = self.workflow.index(
+            "          for endpoint_name in ACTIONS_CACHE_URL "
+            "ACTIONS_RESULTS_URL; do",
+        )
+        canary_end = self.workflow.index(
+            "          docker_auth_config=",
+            canary_start,
+        )
+        canary_script = "set -euo pipefail\n" + dedent(
+            self.workflow[canary_start:canary_end],
+        )
+
+        def run_probe(
+            script: str,
+            cache_url: str,
+            results_url: str,
+            docker_auth_config: str | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            with (
+                tempfile.TemporaryDirectory() as home,
+                tempfile.TemporaryDirectory() as docker_config,
+            ):
+                environment = {
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOME": home,
+                    "DOCKER_CONFIG": docker_config,
+                    "GITHUB_EVENT_NAME": "pull_request",
+                    "INPUT_ORIGINAL_EVENT_NAME": "pull_request",
+                    "ACTIONS_CACHE_URL": cache_url,
+                    "ACTIONS_RESULTS_URL": results_url,
+                }
+                if docker_auth_config is not None:
+                    environment["DOCKER_AUTH_CONFIG"] = docker_auth_config
+                return subprocess.run(
+                    ["bash", "-c", script],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+
+        valid_endpoints = (
+            (
+                "https://actions.githubusercontent.com/cache",
+                "https://results-receiver.actions.githubusercontent.com/results",
+            ),
+            (
+                "https://actions.githubusercontent.com:443/cache",
+                "https://results-receiver.actions.githubusercontent.com:8443/results?x=1#ok",
+            ),
+            (
+                "HTTPS://ACTIONS.GITHUBUSERCONTENT.COM?cache=1",
+                "https://results-receiver.actions.githubusercontent.com#results",
+            ),
+        )
+        invalid_endpoints = (
+            (
+                "https://actions.githubusercontent.com:443@attacker.example/",
+                valid_endpoints[0][1],
+            ),
+            (
+                "http://actions.githubusercontent.com/cache",
+                valid_endpoints[0][1],
+            ),
+            (
+                "https://actions.githubusercontent.com.evil/cache",
+                valid_endpoints[0][1],
+            ),
+            ("", valid_endpoints[0][1]),
+        )
+        for script_name, script in (
+            ("audit action", action_script),
+            ("Depot canary", canary_script),
+        ):
+            for endpoints in valid_endpoints:
+                with self.subTest(script=script_name, endpoints=endpoints):
+                    result = run_probe(script, *endpoints)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+            for endpoints in invalid_endpoints:
+                with self.subTest(script=script_name, endpoints=endpoints):
+                    result = run_probe(script, *endpoints)
+                    self.assertNotEqual(result.returncode, 0)
+
+        depot_auth = '{"auths":{"REGISTRY.DEPOT.DEV":{"auth":"secret"}}}'
+        result = run_probe(
+            action_script,
+            *valid_endpoints[0],
+            docker_auth_config=depot_auth,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        result = run_probe(action_script, *valid_endpoints[0])
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

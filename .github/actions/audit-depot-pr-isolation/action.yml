@@ -50,11 +50,18 @@ runs:
         for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL; do
           endpoint="${!endpoint_name:-}"
           endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
-          if [[ ! "$endpoint_lower" =~ ^https://([a-z0-9-]+\.)*actions\.githubusercontent\.com([/:]|$) ]]; then
+          if [[ ! "$endpoint_lower" =~ ^https://([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]+)?([/?#]|$) ]]; then
             echo "PR runner received a non-GitHub Actions endpoint: $endpoint_name" >&2
             exit 1
           fi
         done
+
+        docker_auth_config="${DOCKER_AUTH_CONFIG:-}"
+        if [[ -n "$docker_auth_config" ]] &&
+           printf '%s' "$docker_auth_config" | grep -Eiq 'depot\.dev'; then
+          echo "PR runner has Depot registry authentication configured" >&2
+          exit 1
+        fi
 
         docker_config="${DOCKER_CONFIG:-${HOME:-}/.docker}/config.json"
         if [[ -f "$docker_config" ]] && grep -Eiq 'depot\.dev' "$docker_config"; then
