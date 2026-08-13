@@ -26,6 +26,12 @@ caches. PR runs cancel superseded synchronizations; main runs are not
 cancelled. Explicit full validation is dispatched from `CI · Plan` on
 `main`.
 
+`ci-orchestrator.yml` is an inert reusable compatibility target during this
+topology migration. It has no ingress or lane callers and exists only because
+the protected default-branch runner contract still validates its predecessor's
+required-file set against a PR source checkout. Remove it after the new
+runner-contract workflow has landed on `main`.
+
 ## Graph shape
 
 ```mermaid

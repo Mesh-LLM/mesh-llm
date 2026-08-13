@@ -1,0 +1,22 @@
+name: CI Orchestrator Compatibility
+
+on:
+  workflow_call:
+    inputs:
+      enabled:
+        description: Reserved compatibility toggle; no caller enables this workflow.
+        required: false
+        default: "false"
+        type: string
+
+permissions: {}
+
+# This inert compatibility target is retained only while the protected
+# default-branch runner-contract workflow still validates its predecessor's
+# required-file set against PR source revisions. No ingress or lane calls it.
+jobs:
+  retired:
+    if: ${{ inputs.enabled == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - run: true

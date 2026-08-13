@@ -140,10 +140,24 @@ class CiLaneWorkflowTests(unittest.TestCase):
             with self.subTest(workflow=workflow_name):
                 workflow = self.workflow(workflow_name)
                 self.assertIn("source_sha:", workflow)
+                checkout_ref = (
+                    "ref: ${{ inputs.source_sha }}"
+                    if workflow_name == "ci-windows-runtime-slice.yml"
+                    else "ref: ${{ inputs.source_sha || github.sha }}"
+                )
                 self.assertIn(
-                    "ref: ${{ inputs.source_sha || github.sha }}",
+                    checkout_ref,
                     workflow,
                 )
+
+        windows_runtime = self.workflow("ci-windows-runtime-slice.yml")
+        self.assertIn("Validate immutable source SHA", windows_runtime)
+        self.assertIn("SOURCE_SHA: ${{ inputs.source_sha }}", windows_runtime)
+        self.assertIn(
+            "if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$')",
+            windows_runtime,
+        )
+        self.assertNotIn("inputs.source_sha || github.sha", windows_runtime)
 
     def test_lane_plans_are_bounded_platform_projections(self) -> None:
         action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
