@@ -207,20 +207,31 @@ class PlanCiTests(unittest.TestCase):
             "trusted-readwrite",
         )
 
-    def test_main_ignores_partial_affected_crate_input(self) -> None:
-        payload = fixture("main.json")
-        payload["affected_crates"] = ["mesh-llm"]
-
-        plan = PLANNER.build_plan(payload, root=ROOT)
-
+    def test_full_profiles_ignore_partial_affected_crate_input(self) -> None:
         workspace = {"mesh-llm", "mesh-llm-host-runtime", "mesh-llm-config"}
-        tested = {
-            crate
-            for batch in plan["matrices"]["rust_tests"]
-            for crate in batch["crates"]
-        }
-        self.assertEqual(set(plan["affected_crates"]), workspace)
-        self.assertEqual(tested, workspace)
+        for profile, event_name in (
+            ("main", "push"),
+            ("manual-full", "workflow_dispatch"),
+        ):
+            with self.subTest(profile=profile):
+                payload = fixture("main.json")
+                payload.update(
+                    {
+                        "profile": profile,
+                        "event_name": event_name,
+                        "affected_crates": ["mesh-llm"],
+                    }
+                )
+
+                plan = PLANNER.build_plan(payload, root=ROOT)
+
+                tested = {
+                    crate
+                    for batch in plan["matrices"]["rust_tests"]
+                    for crate in batch["crates"]
+                }
+                self.assertEqual(set(plan["affected_crates"]), workspace)
+                self.assertEqual(tested, workspace)
 
     def test_control_plane_changes_fail_open_to_the_profile_rows(self) -> None:
         payload = fixture("runtime.json")
