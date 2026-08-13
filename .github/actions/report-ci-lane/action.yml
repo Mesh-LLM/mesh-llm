@@ -1,0 +1,144 @@
+name: Report dispatched CI lane
+description: Complete one correlated lane check and the aggregate CI check when all lanes finish
+
+inputs:
+  lane_name:
+    description: Stable lane check name
+    required: true
+  lane_result:
+    description: Validated lane result, success or failure
+    required: true
+  lane_check_id:
+    description: Check run created by the protected controller; empty for workflow_call bootstrap runs
+    required: false
+    default: ""
+  overall_check_id:
+    description: Aggregate CI Required check run created by the protected controller
+    required: false
+    default: ""
+  expected_lane_checks:
+    description: JSON array of stable lane check names
+    required: false
+    default: "[]"
+  source_sha:
+    description: Source revision owning the correlated checks
+    required: true
+  correlation_id:
+    description: Controller-generated external check identity
+    required: false
+    default: ""
+  plan_digest:
+    description: Digest of the canonical CI plan
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Render lane summary
+      shell: bash
+      env:
+        LANE_NAME: ${{ inputs.lane_name }}
+        LANE_RESULT: ${{ inputs.lane_result }}
+        PLAN_DIGEST: ${{ inputs.plan_digest }}
+      run: |
+        set -euo pipefail
+        {
+          echo "## $LANE_NAME"
+          echo
+          echo "Result: **$LANE_RESULT**"
+          echo
+          echo "Plan digest: \`$PLAN_DIGEST\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Complete correlated PR/main checks
+      if: ${{ inputs.lane_check_id != '' }}
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+      env:
+        LANE_NAME: ${{ inputs.lane_name }}
+        LANE_RESULT: ${{ inputs.lane_result }}
+        LANE_CHECK_ID: ${{ inputs.lane_check_id }}
+        OVERALL_CHECK_ID: ${{ inputs.overall_check_id }}
+        EXPECTED_LANE_CHECKS: ${{ inputs.expected_lane_checks }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        CORRELATION_ID: ${{ inputs.correlation_id }}
+        PLAN_DIGEST: ${{ inputs.plan_digest }}
+      with:
+        script: |
+          const expected = JSON.parse(process.env.EXPECTED_LANE_CHECKS);
+          if (!Array.isArray(expected) || expected.some((name) => typeof name !== 'string')) {
+            throw new Error('expected_lane_checks must be a JSON string array');
+          }
+          if (!/^[0-9a-f]{40}$/.test(process.env.SOURCE_SHA)) {
+            throw new Error('planned source SHA is malformed');
+          }
+          if (!process.env.CORRELATION_ID) {
+            throw new Error('a dispatched lane requires a correlation identity');
+          }
+          const laneCheck = await github.rest.checks.get({
+            ...context.repo,
+            check_run_id: Number(process.env.LANE_CHECK_ID),
+          });
+          const checks = [
+            ['lane', laneCheck.data, process.env.LANE_NAME],
+          ];
+          if (process.env.OVERALL_CHECK_ID) {
+            const overallCheck = await github.rest.checks.get({
+              ...context.repo,
+              check_run_id: Number(process.env.OVERALL_CHECK_ID),
+            });
+            checks.push(['overall', overallCheck.data, 'CI Required']);
+          }
+          for (const [label, check, expectedName] of checks) {
+            if (check.name !== expectedName ||
+                check.external_id !== process.env.CORRELATION_ID ||
+                check.head_sha !== process.env.SOURCE_SHA) {
+              throw new Error(`${label} check identity does not match this dispatched lane`);
+            }
+          }
+          const conclusion = process.env.LANE_RESULT === 'success' ? 'success' : 'failure';
+          const detailsUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          await github.rest.checks.update({
+            ...context.repo,
+            check_run_id: Number(process.env.LANE_CHECK_ID),
+            status: 'completed',
+            conclusion,
+            details_url: detailsUrl,
+            output: {
+              title: `${process.env.LANE_NAME}: ${conclusion}`,
+              summary: `Plan digest: ${process.env.PLAN_DIGEST}`,
+            },
+          });
+
+          if (!process.env.OVERALL_CHECK_ID || expected.length === 0) return;
+          for (let attempt = 0; attempt < 6; attempt += 1) {
+            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+              ...context.repo,
+              ref: process.env.SOURCE_SHA,
+              per_page: 100,
+              filter: 'latest',
+            });
+            const lanes = checkRuns.filter((check) =>
+              expected.includes(check.name) && check.external_id === process.env.CORRELATION_ID
+            );
+            if (lanes.length === expected.length && lanes.every((check) => check.status === 'completed')) {
+              const aggregateConclusion = lanes.every((check) => check.conclusion === 'success')
+                ? 'success'
+                : 'failure';
+              await github.rest.checks.update({
+                ...context.repo,
+                check_run_id: Number(process.env.OVERALL_CHECK_ID),
+                status: 'completed',
+                conclusion: aggregateConclusion,
+                details_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                output: {
+                  title: `CI Required: ${aggregateConclusion}`,
+                  summary: lanes
+                    .sort((left, right) => left.name.localeCompare(right.name))
+                    .map((check) => `- ${check.name}: ${check.conclusion}`)
+                    .join('\n'),
+                },
+              });
+              return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+          return;

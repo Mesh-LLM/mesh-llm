@@ -1,0 +1,112 @@
+name: CI Product Smoke Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
+      smoke_matrix:
+        description: JSON product-smoke rows from the versioned CI plan.
+        required: true
+        type: string
+      binary_target:
+        description: Product binary path used by the smoke harness.
+        required: true
+        type: string
+      timeout_minutes:
+        description: Bounded smoke timeout.
+        required: false
+        default: 25
+        type: number
+    secrets:
+      HF_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core inference smoke
+    if: ${{ contains(inputs.smoke_matrix, '"id":"core"') }}
+    uses: ./.github/workflows/smoke.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      artifact_name: ci-product-linux-cpu
+      artifact_path: ci-artifacts/linux
+      mesh_binary_target: ${{ inputs.binary_target }}
+      cache_key_prefix: ""
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  core_cuda:
+    name: CUDA inference smoke
+    if: ${{ contains(inputs.smoke_matrix, '"id":"core-cuda"') }}
+    uses: ./.github/workflows/smoke.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      artifact_name: ci-product-linux-cuda
+      artifact_path: ci-artifacts/linux-cuda
+      mesh_binary_target: ${{ inputs.binary_target }}
+      cache_key_prefix: ""
+      runner: gpu-nvidia
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+
+  two_node_client:
+    name: Two-node client smoke
+    if: ${{ contains(inputs.smoke_matrix, '"id":"two-node-client"') }}
+    uses: ./.github/workflows/scripted-binary-smoke.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      artifact_name: ci-product-linux-cpu
+      artifact_path: ci-artifacts/linux
+      staged_binary_path: ${{ inputs.binary_target }}
+      model_cache_scope: two-node-smoke-model
+      smoke_script: scripts/ci-two-node-client-serving-smoke.sh
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  two_node_split:
+    name: Two-node split smoke
+    if: ${{ contains(inputs.smoke_matrix, '"id":"two-node-split"') }}
+    uses: ./.github/workflows/scripted-binary-smoke.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      artifact_name: ci-product-linux-cpu
+      artifact_path: ci-artifacts/linux
+      staged_binary_path: ${{ inputs.binary_target }}
+      model_cache_scope: two-node-split-smoke-model
+      smoke_script: scripts/ci-two-node-split-smoke.sh
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  metal_model_load:
+    name: Metal model-load smoke
+    if: ${{ contains(inputs.smoke_matrix, '"id":"metal-model-load"') }}
+    uses: ./.github/workflows/smoke.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      artifact_name: ci-product-macos-metal
+      artifact_path: ci-artifacts/macos
+      mesh_binary_target: ${{ inputs.binary_target }}
+      cache_key_prefix: ""
+      runner: macos-15
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  model_download:
+    name: Model download smoke
+    if: ${{ contains(inputs.smoke_matrix, '"id":"model-download"') }}
+    uses: ./.github/workflows/hf-download-smoke.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}

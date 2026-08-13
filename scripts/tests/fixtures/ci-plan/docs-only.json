@@ -1,0 +1,11 @@
+{
+  "profile": "pr-ready",
+  "event_name": "pull_request",
+  "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "changed_files": ["docs/design/TESTING.md"],
+  "affected_crates": [],
+  "workspace_packages": [
+    {"name": "mesh-llm", "path": "crates/mesh-llm"}
+  ]
+}

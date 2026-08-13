@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 import unittest
 
 
@@ -13,100 +12,97 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
     def workflow(self, name: str) -> str:
         return (WORKFLOWS / name).read_text(encoding="utf-8")
 
-    def test_no_reusable_workflow_allocates_a_raw_caller_label(self) -> None:
+    def test_reusable_workflows_accept_semantic_inputs_not_raw_runners(self) -> None:
         offenders = []
         for path in sorted(WORKFLOWS.glob("*.yml")):
             workflow = path.read_text(encoding="utf-8")
             if "workflow_call:" not in workflow:
                 continue
-            if "fromJson(inputs.runs_on)" in workflow:
+            if "fromJson(inputs.runs_on)" in workflow or "runs_on:" in workflow:
                 offenders.append(path.name)
-
         self.assertEqual([], offenders)
 
-    def test_credential_bearing_smokes_are_github_hosted(self) -> None:
+    def test_credential_smokes_remain_fixed_github_hosted(self) -> None:
         for name in (
             "hf-download-smoke.yml",
             "smoke.yml",
             "scripted-binary-smoke.yml",
+            "sdk-smoke.yml",
         ):
             with self.subTest(workflow=name):
                 workflow = self.workflow(name)
-                self.assertIn("runs-on: ubuntu-24.04", workflow)
-                self.assertNotIn("runs_on:", workflow)
+                self.assertIn("ubuntu-24.04", workflow)
                 self.assertNotIn("depot-ubuntu", workflow)
-                self.assertIn("persist-credentials: false", workflow)
+                checkout_count = workflow.count("uses: actions/checkout@")
+                persisted_credentials_disabled = workflow.count(
+                    "persist-credentials: false"
+                )
+                self.assertEqual(
+                    checkout_count,
+                    persisted_credentials_disabled,
+                )
 
-    def test_sdk_and_swift_runners_are_fixed_hosted_labels(self) -> None:
-        sdk_smoke = self.workflow("sdk-smoke.yml")
-        swift_producer = self.workflow("swift-sdk-artifact.yml")
+    def test_main_entry_and_orchestrator_do_not_use_pull_request_target(self) -> None:
+        for name in ("ci.yml", "pr_builds.yml", "ci-orchestrator.yml"):
+            with self.subTest(workflow=name):
+                self.assertNotIn("pull_request_target", self.workflow(name))
 
-        for workflow in (sdk_smoke, swift_producer):
-            self.assertIn("macos-15", workflow)
-            self.assertNotIn("macos_runner:", workflow)
+    def test_main_macos_and_windows_slices_have_fixed_platforms(self) -> None:
+        host = self.workflow("ci-host-slice.yml")
+        runtime = self.workflow("ci-runtime-product-slice.yml")
+        self.assertIn("runs-on: macos-15", host)
+        self.assertIn("runs-on: windows-2022", host)
+        self.assertIn("runs-on: macos-15", runtime)
+        self.assertIn("runs-on: windows-2022", runtime)
+        for workflow in (host, runtime):
             self.assertNotIn("macos-latest", workflow)
-            self.assertNotIn("runs_on:", workflow)
-            self.assertNotIn("fromJson(inputs.", workflow)
-            self.assertNotIn("depot-ubuntu", workflow)
-            self.assertNotIn("self-hosted", workflow)
+            self.assertNotIn("windows-latest", workflow)
 
-        self.assertIn("'ubuntu-24.04'", sdk_smoke)
-        self.assertIn("'ubuntu-24.04-arm'", sdk_smoke)
+    def test_main_runner_contract_preserves_image_checks(self) -> None:
+        workflow = self.workflow("ci-runner-contract-slice.yml")
+        self.assertIn("inputs.profile == 'main'", workflow)
+        self.assertIn("runner: mesh-llm-amd64", workflow)
+        self.assertIn("runner: mesh-llm-arm64", workflow)
+        self.assertIn("verify-runner-image self-hosted", workflow)
+
+    def test_runner_contract_rejects_malformed_roles_and_missing_workflows(self) -> None:
+        workflow = self.workflow("ci-runner-contract-slice.yml")
+        self.assertIn('.runner_roles | type == "object"', workflow)
+        self.assertIn('.value | type == "string"', workflow)
+        self.assertIn('test("depot"; "i")', workflow)
+        self.assertIn('[[ -f "$workflow" ]]', workflow)
+        self.assertIn('workflow_scan_targets+=("$workflow")', workflow)
         self.assertIn(
-            "inputs.kotlin_artifact_target == "
-            "'aarch64-unknown-linux-gnu'",
-            sdk_smoke,
+            '[[ "$workflow" != ".github/workflows/ci-runner-contract-slice.yml" ]]',
+            workflow,
         )
+        self.assertIn('"${workflow_scan_targets[@]}"', workflow)
         self.assertIn(
-            "x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu",
-            sdk_smoke,
+            "grep -nE '^[[:space:]]+pull_request_target:'",
+            workflow,
         )
+        self.assertNotIn("2>/dev/null", workflow)
 
-    def test_main_macos_product_graph_uses_the_swift_toolchain_boundary(
-        self,
-    ) -> None:
-        main = self.workflow("ci.yml")
-
-        self.assertNotIn("macos-latest", main)
-        for job_id in (
-            "macos_host_input",
-            "macos_metal_runtime_input",
-            "macos_cpu_artifact",
-            "macos_unit_tests",
-        ):
-            with self.subTest(job=job_id):
-                match = re.search(
-                    rf"(?ms)^  {re.escape(job_id)}:\n"
-                    r"(?P<body>.*?)(?=^  [A-Za-z0-9_]+:\n|\Z)",
-                    main,
-                )
-                self.assertIsNotNone(match)
-                self.assertIn(
-                    "runs-on: macos-15",
-                    match.group("body") if match else "",
-                )
-
-    def test_nightly_reusable_workflow_cannot_select_a_runner(self) -> None:
-        wrapper = self.workflow("nightly-stability.yml")
-        reusable = self.workflow("nightly-stability-run.yml")
-
-        self.assertNotIn("runs_on:", wrapper)
-        self.assertNotIn("MESH_NIGHTLY_STABILITY_RUNS_ON", wrapper)
-        self.assertNotIn("runs_on:", reusable)
-        self.assertIn("runs-on: ubuntu-24.04", reusable)
-        self.assertIn("persist-credentials: false", reusable)
+    def test_sdk_slice_matches_parsed_row_ids(self) -> None:
+        workflow = self.workflow("ci-sdk-slice.yml")
+        self.assertEqual(
+            workflow.count("contains(fromJson(inputs.sdk_matrix).*.id"),
+            3,
+        )
+        self.assertNotIn("contains(inputs.sdk_matrix", workflow)
 
     def test_depot_allowlist_excludes_credential_smokes(self) -> None:
         migration = (ROOT / "ci" / "DEPOT_MIGRATION.md").read_text(
             encoding="utf-8",
         )
-        allowlist_start = migration.index("The initial main allowlist is:")
+        allowlist_start = migration.index("The current main allowlist is:")
         allowlist_end = migration.index("```", allowlist_start)
         allowlist_end = migration.index("```", allowlist_end + 3)
         allowlist = migration[allowlist_start:allowlist_end]
-
-        self.assertIn("native-sdk-artifact.yml@refs/heads/main", allowlist)
-        self.assertIn("static-abi-artifact.yml@refs/heads/main", allowlist)
+        self.assertIn("ci-orchestrator.yml@refs/heads/main", allowlist)
+        self.assertIn("ci-runtime-product-slice.yml@refs/heads/main", allowlist)
+        self.assertIn("depot-canary.yml@refs/heads/main", allowlist)
+        self.assertIn("release.yml@refs/heads/main", allowlist)
         for name in (
             "hf-download-smoke.yml",
             "smoke.yml",
@@ -117,26 +113,31 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertNotIn(name, allowlist)
 
-    def test_pull_request_builds_do_not_receive_hugging_face_secret(self) -> None:
-        pr_builds = self.workflow("pr_builds.yml")
+    def test_pr_entrypoint_maps_no_repository_secret(self) -> None:
+        workflow = self.workflow("pr_builds.yml")
+        self.assertNotIn("secrets:", workflow)
+        self.assertNotIn("HF_TOKEN", workflow)
 
-        self.assertNotIn("secrets.HF_TOKEN", pr_builds)
-        self.assertNotIn("HUGGING_FACE_HUB_TOKEN:", pr_builds)
-
-    def test_pr_facing_checkouts_do_not_persist_job_credentials(self) -> None:
-        for name in (
+    def test_pr_facing_checkouts_disable_persisted_credentials(self) -> None:
+        names = [
             "docker-precheck.yml",
-            "pr_quality.yml",
-            "pr_website.yml",
-        ):
+            "ci-orchestrator.yml",
+            "static-abi-artifact.yml",
+            *sorted(
+                path.name
+                for pattern in ("ci-*-slice.yml", "ci-*-lane.yml")
+                for path in WORKFLOWS.glob(pattern)
+            ),
+        ]
+        for name in names:
             with self.subTest(workflow=name):
                 workflow = self.workflow(name)
                 checkout_count = workflow.count("uses: actions/checkout@")
-                self.assertGreater(checkout_count, 0)
-                self.assertEqual(
-                    checkout_count,
-                    workflow.count("persist-credentials: false"),
-                )
+                if checkout_count:
+                    self.assertEqual(
+                        checkout_count,
+                        workflow.count("persist-credentials: false"),
+                    )
 
 
 if __name__ == "__main__":

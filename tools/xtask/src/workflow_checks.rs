@@ -1,6 +1,5 @@
 use crate::command::{
-    DynResult, ensure_contains, ensure_contains_normalized, ensure_not_contains, ensure_set_eq,
-    workflow_job_section,
+    DynResult, ensure_contains, ensure_not_contains, ensure_set_eq, workflow_job_section,
 };
 use crate::repo_consistency::{script_workspace_members, workspace_package_names};
 use std::fs;
@@ -8,481 +7,357 @@ use std::path::Path;
 use std::process::Command;
 
 pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
+    check_current_ci_invariants(repo_root)
+}
+
+fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     let readme = fs::read_to_string(repo_root.join("README.md"))?;
     let contributing = fs::read_to_string(repo_root.join("CONTRIBUTING.md"))?;
     let release = fs::read_to_string(repo_root.join("RELEASE.md"))?;
     let justfile = fs::read_to_string(repo_root.join("Justfile"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
-    let native_sdk_artifact_workflow =
-        fs::read_to_string(repo_root.join(".github/workflows/native-sdk-artifact.yml"))?;
-    let static_abi_artifact_workflow =
-        fs::read_to_string(repo_root.join(".github/workflows/static-abi-artifact.yml"))?;
-    let swift_sdk_artifact_workflow =
-        fs::read_to_string(repo_root.join(".github/workflows/swift-sdk-artifact.yml"))?;
     let ci_workflow = fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))?;
-    let pr_builds_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
-    let pr_quality_workflow =
-        fs::read_to_string(repo_root.join(".github/workflows/pr_quality.yml"))?;
-    let pr_website_workflow =
-        fs::read_to_string(repo_root.join(".github/workflows/pr_website.yml"))?;
-    let website_pages_workflow =
-        fs::read_to_string(repo_root.join(".github/workflows/website-pages.yml"))?;
-    let compute_changes_action =
+    let pr_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
+    let orchestrator = fs::read_to_string(repo_root.join(".github/workflows/ci-orchestrator.yml"))?;
+    let controller = fs::read_to_string(repo_root.join(".github/workflows/ci-control.yml"))?;
+    let lane_workflows = ["quality", "website", "linux", "macos", "windows"]
+        .into_iter()
+        .map(|lane| {
+            fs::read_to_string(repo_root.join(format!(".github/workflows/ci-{lane}-lane.yml")))
+                .map(|workflow| (lane, workflow))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let quality = fs::read_to_string(repo_root.join(".github/workflows/ci-quality-slice.yml"))?;
+    let web = fs::read_to_string(repo_root.join(".github/workflows/ci-web-slice.yml"))?;
+    let host = fs::read_to_string(repo_root.join(".github/workflows/ci-host-slice.yml"))?;
+    let runtime =
+        fs::read_to_string(repo_root.join(".github/workflows/ci-runtime-product-slice.yml"))?;
+    let rust_tests =
+        fs::read_to_string(repo_root.join(".github/workflows/ci-rust-tests-slice.yml"))?;
+    let static_abi =
+        fs::read_to_string(repo_root.join(".github/workflows/static-abi-artifact.yml"))?;
+    let native_sdk =
+        fs::read_to_string(repo_root.join(".github/workflows/native-sdk-artifact.yml"))?;
+    let swift_sdk = fs::read_to_string(repo_root.join(".github/workflows/swift-sdk-artifact.yml"))?;
+    let website_pages = fs::read_to_string(repo_root.join(".github/workflows/website-pages.yml"))?;
+    let compute_changes =
         fs::read_to_string(repo_root.join(".github/actions/compute-changes/action.yml"))?;
-    let configure_sccache_action =
-        fs::read_to_string(repo_root.join(".github/actions/configure-sccache-gha/action.yml"))?;
-    let prepare_windows_host_action = fs::read_to_string(
+    let prepare_windows_host = fs::read_to_string(
         repo_root.join(".github/actions/prepare-windows-host-input/action.yml"),
     )?;
-    let prepare_native_runtime_action = fs::read_to_string(
+    let prepare_runtime = fs::read_to_string(
         repo_root.join(".github/actions/prepare-native-runtime-input/action.yml"),
     )?;
-    let compose_product_action =
+    let compose_product =
         fs::read_to_string(repo_root.join(".github/actions/compose-product-input/action.yml"))?;
-    let affected_crates_script = fs::read_to_string(repo_root.join("scripts/affected-crates.sh"))?;
+    let configure_sccache =
+        fs::read_to_string(repo_root.join(".github/actions/configure-sccache-gha/action.yml"))?;
     let ci_docs = fs::read_to_string(repo_root.join("ci/ci.md"))?;
-    let pr_cleanup_workflow =
-        fs::read_to_string(repo_root.join(".github/workflows/pr_cleanup.yml"))?;
+    let depot_docs = fs::read_to_string(repo_root.join("ci/DEPOT_MIGRATION.md"))?;
+
+    check_documentation_invariants(
+        &readme,
+        &contributing,
+        &release,
+        &justfile,
+        &ci_docs,
+        &depot_docs,
+    )?;
+    check_workflow_invariants(
+        &release_workflow,
+        &ci_workflow,
+        &pr_workflow,
+        &website_pages,
+    )?;
+    check_producer_invariants(&ProducerInvariantSources {
+        quality: &quality,
+        web: &web,
+        host: &host,
+        runtime: &runtime,
+        rust_tests: &rust_tests,
+        static_abi: &static_abi,
+        native_sdk: &native_sdk,
+        swift_sdk: &swift_sdk,
+        prepare_windows_host: &prepare_windows_host,
+        prepare_runtime: &prepare_runtime,
+        compose_product: &compose_product,
+    })?;
+    check_orchestrator_invariants(
+        &orchestrator,
+        &controller,
+        &lane_workflows,
+        &compute_changes,
+    )?;
+    check_release_dispatch_version_preparation(&release_workflow, &native_sdk, &swift_sdk)?;
+    check_release_container_contracts(&release_workflow, &configure_sccache)?;
+    check_windows_dynamic_runtime_contract(
+        &host,
+        &runtime,
+        &prepare_windows_host,
+        &prepare_runtime,
+        &compose_product,
+    )
+}
+
+fn check_documentation_invariants(
+    readme: &str,
+    contributing: &str,
+    release: &str,
+    justfile: &str,
+    ci_docs: &str,
+    depot_docs: &str,
+) -> DynResult<()> {
+    for (text, needle, context) in [
+        (
+            readme,
+            "mesh-llm-aarch64-unknown-linux-gnu.tar.gz",
+            "README ARM64 asset note",
+        ),
+        (
+            readme,
+            "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz",
+            "README ARM64 CUDA asset note",
+        ),
+        (
+            release,
+            "Windows release artifacts use the `x86_64-pc-windows-msvc` target triple",
+            "RELEASE Windows publish note",
+        ),
+        (
+            justfile,
+            "cargo run -p xtask -- repo-consistency release-targets",
+            "Justfile release consistency command",
+        ),
+        (
+            contributing,
+            "just check-release",
+            "CONTRIBUTING release consistency command",
+        ),
+        (ci_docs, "ci-orchestrator.yml", "CI topology orchestrator"),
+        (ci_docs, "CI Required", "CI topology required summary"),
+        (
+            depot_docs,
+            "Cache isolation",
+            "Depot cache-isolation policy",
+        ),
+    ] {
+        ensure_contains(text, needle, context)?;
+    }
+    Ok(())
+}
+
+fn check_workflow_invariants(
+    release_workflow: &str,
+    ci_workflow: &str,
+    pr_workflow: &str,
+    website_pages: &str,
+) -> DynResult<()> {
+    for (text, needle, context) in [
+        (
+            release_workflow,
+            "compose_windows_gpu:",
+            "release Windows GPU composition",
+        ),
+        (
+            release_workflow,
+            "publish_crates_preflight:",
+            "release crates.io preflight",
+        ),
+        (
+            website_pages,
+            "name: Public Website Deploy",
+            "public website deploy workflow",
+        ),
+        (
+            website_pages,
+            "branches: [main]",
+            "public website main trigger",
+        ),
+    ] {
+        ensure_contains(text, needle, context)?;
+    }
 
     ensure_contains(
-        &readme,
-        "mesh-llm-aarch64-unknown-linux-gnu.tar.gz",
-        "README Linux ARM64 asset note",
-    )?;
-    ensure_contains(
-        &readme,
-        "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz",
-        "README Linux ARM64 CUDA asset note",
-    )?;
-    ensure_contains(
-        &release,
-        "mesh-llm-aarch64-unknown-linux-gnu.tar.gz",
-        "RELEASE Linux ARM64 asset note",
-    )?;
-    ensure_contains(
-        &release,
-        "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz",
-        "RELEASE Linux ARM64 CUDA asset note",
-    )?;
-    ensure_contains_normalized(
-        &readme,
-        "Windows CPU, Windows CUDA, Windows ROCm, and Windows Vulkan bundles",
-        "README Windows publish note",
-    )?;
-    ensure_contains(
-        &release,
-        "Windows release artifacts use the `x86_64-pc-windows-msvc` target triple",
-        "RELEASE Windows publish note",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "runs-on: ubuntu-24.04-arm",
-        "release workflow ARM64 runner",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "name: release-linux-arm64",
-        "release workflow ARM64 artifact",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "name: release-linux-aarch64-cuda-${{ matrix.cuda_version }}",
-        "release workflow aarch64 CUDA artifact (matrix)",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "- compose_linux_aarch64_cuda",
-        "release workflow aarch64 CUDA publish need",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "windows_host_input:",
-        "release workflow immutable Windows host build",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "compose_windows_gpu:",
-        "release workflow Windows GPU composition",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "- windows_host_input",
-        "release workflow immutable Windows host publish need",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "- compose_windows_gpu",
-        "release workflow Windows GPU composition publish need",
-    )?;
-    ensure_contains(
-        &justfile,
-        "check-release:",
-        "Justfile release consistency wrapper",
-    )?;
-    ensure_contains(
-        &justfile,
-        "release-build-aarch64-cuda",
-        "Justfile aarch64 CUDA build recipe",
-    )?;
-    ensure_contains(
-        &justfile,
-        "release-bundle-aarch64-cuda",
-        "Justfile aarch64 CUDA bundle recipe",
-    )?;
-    ensure_contains(
-        &justfile,
-        "cargo run -p xtask -- repo-consistency release-targets",
-        "Justfile xtask command",
-    )?;
-    ensure_contains(
-        &contributing,
-        "just check-release",
-        "CONTRIBUTING release consistency command",
-    )?;
-    ensure_contains(
-        &contributing,
-        "On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks",
-        "CONTRIBUTING Windows check-release note",
-    )?;
-    ensure_contains(
-        &release,
-        "On native Windows, `just check-release` still runs the Rust/docs/workflow invariant checks, but it skips the Bash-only `install.sh` and `scripts/package-release.sh` parity checks",
-        "RELEASE Windows check-release note",
-    )?;
-    ensure_contains(
-        &pr_builds_workflow,
-        "cargo run -p xtask -- repo-consistency release-targets",
-        "PR Builds xtask release-target check",
-    )?;
-    ensure_contains(
-        &pr_quality_workflow,
-        "name: PR Quality Checks",
-        "PR quality workflow display name",
-    )?;
-    ensure_contains(
-        &pr_quality_workflow,
-        "cargo run -p xtask -- repo-consistency ci-crate-lists",
-        "PR quality CI crate-list drift check",
-    )?;
-    ensure_not_contains(
-        &pr_quality_workflow,
-        "website-build:",
-        "PR quality should not own public website builds",
-    )?;
-    ensure_contains(
-        &compute_changes_action,
-        "website_changed",
-        "compute-changes public website change output",
-    )?;
-    ensure_contains(
-        &compute_changes_action,
-        "website_docs_changed",
-        "compute-changes public website docs output",
-    )?;
-    ensure_contains(
-        &compute_changes_action,
-        "cli_surface_changed",
-        "compute-changes CLI surface output",
-    )?;
-    ensure_contains(
-        &compute_changes_action,
-        "inference_artifact_required",
-        "compute-changes inference artifact output",
-    )?;
-    ensure_contains(
-        &compute_changes_action,
-        "backend_recipe_changed",
-        "compute-changes backend Justfile recipe output",
-    )?;
-    ensure_contains(
-        &compute_changes_action,
-        "windows_cpu_build_required",
-        "compute-changes Windows CPU build output",
-    )?;
-    ensure_contains(
-        &compute_changes_action,
-        "windows_gpu_build_required",
-        "compute-changes Windows GPU build output",
-    )?;
-    ensure_contains(
-        &compute_changes_action,
-        "runner_contract_required",
-        "compute-changes runner contract output",
-    )?;
-    ensure_contains(
-        &compute_changes_action,
-        "build-linux-rocm",
-        "compute-changes Linux ROCm build script route",
-    )?;
-    ensure_contains(
-        &affected_crates_script,
-        "is_website_input",
-        "affected-crates public website input classifier",
-    )?;
-    ensure_contains(
-        &pr_website_workflow,
-        "name: PR Website Checks",
-        "PR website workflow display name",
-    )?;
-    ensure_contains(
-        &pr_website_workflow,
-        "./.github/actions/compute-changes",
-        "PR website compute-changes route",
-    )?;
-    ensure_contains(
-        &pr_website_workflow,
-        "website_changed",
-        "PR website public website change gate",
-    )?;
-    ensure_contains(
-        &pr_website_workflow,
-        "website-build:",
-        "PR website public website build gate",
-    )?;
-    ensure_contains(
-        &pr_website_workflow,
-        "npm run build",
-        "PR website public website build command",
-    )?;
-    ensure_contains(
-        &pr_website_workflow,
-        "PR Website Checks",
-        "PR website Markdown summary output",
-    )?;
-    ensure_contains(
-        &pr_quality_workflow,
-        "cli-docs-sync:",
-        "PR quality CLI docs sync gate",
-    )?;
-    ensure_contains(
-        &pr_quality_workflow,
-        "GITHUB_STEP_SUMMARY",
-        "PR quality Markdown summary output",
-    )?;
-    ensure_contains(
-        &pr_builds_workflow,
-        "website_changed",
-        "PR Builds public website change output",
-    )?;
-    ensure_contains(
-        &pr_builds_workflow,
-        "inference_artifact_required",
-        "PR Builds inference artifact gate",
-    )?;
-    ensure_contains(
-        &pr_builds_workflow,
-        "backend_recipe_changed",
-        "PR Builds backend recipe route",
-    )?;
-    ensure_contains(
-        &pr_builds_workflow,
-        "steps.compute.outputs.windows_cpu_build_required",
-        "PR Builds Windows CPU compute route",
-    )?;
-    ensure_contains(
-        &pr_builds_workflow,
-        "steps.compute.outputs.windows_gpu_build_required",
-        "PR Builds Windows GPU compute route",
-    )?;
-    ensure_contains(
-        &pr_builds_workflow,
-        "steps.compute.outputs.runner_contract_required",
-        "PR Builds runner contract route",
-    )?;
-    ensure_contains(
-        &ci_docs,
-        "website_changed?",
-        "CI topology public website route",
-    )?;
-    ensure_contains(
-        &ci_docs,
-        "inference_artifact_required?",
-        "CI topology inference artifact route",
-    )?;
-    ensure_contains(
-        &ci_docs,
-        "backend_recipe_changed?",
-        "CI topology backend Justfile recipe route",
-    )?;
-    ensure_contains(
-        &ci_docs,
-        "windows_cpu_build_required?",
-        "CI topology Windows CPU compute route",
-    )?;
-    ensure_contains(
-        &ci_docs,
-        "windows_gpu_build_required?",
-        "CI topology Windows GPU compute route",
-    )?;
-    ensure_contains(&ci_docs, "cli-docs-sync", "CI topology CLI docs sync gate")?;
-    ensure_contains(
-        &ci_docs,
-        "pr_website.yml",
-        "CI topology PR website workflow",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "name: Public Website Deploy",
-        "public website deploy workflow name",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "branches: [main]",
-        "public website deploy main trigger",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "workflow_dispatch:",
-        "public website manual deploy trigger",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'",
-        "public website manual deploy main-ref guard",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "npm run clean",
-        "public website clean generated output step",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "public-website-artifact",
-        "public website staged artifact directory",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "path: public-website-artifact",
-        "public website staged Pages artifact upload",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa",
-        "public website Pages artifact upload",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",
-        "public website Pages deploy action",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "pages: write",
-        "public website deploy Pages permission",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "id-token: write",
-        "public website deploy OIDC permission",
-    )?;
-    ensure_contains(
-        &website_pages_workflow,
-        "name: Public Website",
-        "public website custom environment",
-    )?;
-    ensure_contains(
-        &ci_docs,
-        "website-pages.yml",
-        "CI topology public website deploy workflow",
-    )?;
-    ensure_contains(
-        &pr_cleanup_workflow,
-        "pull_request_target:",
-        "PR cache cleanup trigger",
-    )?;
-    ensure_contains(
-        &ci_workflow,
+        ci_workflow,
         "push:\n    branches: [main]",
         "main CI push trigger",
     )?;
-    check_windows_dynamic_runtime_contract(
-        &ci_workflow,
-        &pr_builds_workflow,
-        &prepare_windows_host_action,
-        &prepare_native_runtime_action,
-        &compose_product_action,
+    ensure_contains(pr_workflow, "pull_request:", "PR pull-request trigger")?;
+    ensure_contains(
+        pr_workflow,
+        "uses: ./.github/workflows/ci-orchestrator.yml",
+        "PR shared orchestrator",
     )?;
+    ensure_not_contains(
+        pr_workflow,
+        "pull_request_target",
+        "PR must not use pull_request_target",
+    )?;
+    ensure_not_contains(
+        pr_workflow,
+        "secrets:",
+        "PR entrypoint must not pass repository secrets",
+    )?;
+    Ok(())
+}
+
+struct ProducerInvariantSources<'a> {
+    quality: &'a str,
+    web: &'a str,
+    host: &'a str,
+    runtime: &'a str,
+    rust_tests: &'a str,
+    static_abi: &'a str,
+    native_sdk: &'a str,
+    swift_sdk: &'a str,
+    prepare_windows_host: &'a str,
+    prepare_runtime: &'a str,
+    compose_product: &'a str,
+}
+
+fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) -> DynResult<()> {
     for (workflow, context) in [
-        (&ci_workflow, "main shared static ABI producer"),
-        (&pr_builds_workflow, "PR shared static ABI producer"),
+        (sources.quality, "quality slice"),
+        (sources.web, "web slice"),
+        (sources.host, "host slice"),
+        (sources.runtime, "runtime/product slice"),
+        (sources.rust_tests, "Rust test slice"),
+        (sources.static_abi, "static ABI producer"),
+        (sources.native_sdk, "native SDK producer"),
+        (sources.swift_sdk, "Swift SDK producer"),
     ] {
         ensure_contains(
             workflow,
-            "uses: ./.github/workflows/static-abi-artifact.yml",
-            context,
-        )?;
-        ensure_contains(
-            workflow,
-            "scripts/restore-static-abi-input.sh",
-            &format!("{context} consumer restore"),
-        )?;
-        let static_abi_caller = workflow_job_section(workflow, "linux_static_abi_input")
-            .ok_or_else(|| format!("{context}: missing `linux_static_abi_input` job"))?;
-        ensure_contains(
-            static_abi_caller,
-            "runner_size: '8'",
-            &format!("{context} bounded runner size"),
-        )?;
-        ensure_not_contains(
-            static_abi_caller,
-            "runs_on:",
-            &format!("{context} must not supply a runner label"),
-        )?;
-        ensure_not_contains(
-            static_abi_caller,
-            "allow_depot_remote_cache:",
-            &format!("{context} must not supply Depot cache authority"),
-        )?;
-
-        let native_sdk_caller = workflow_job_section(workflow, "kotlin_sdk_input")
-            .ok_or_else(|| format!("{context}: missing `kotlin_sdk_input` job"))?;
-        ensure_contains(
-            native_sdk_caller,
-            "runner_size: '8'",
-            &format!("{context} native SDK bounded runner size"),
-        )?;
-        ensure_not_contains(
-            native_sdk_caller,
-            "runs_on:",
-            &format!("{context} native SDK must not supply a runner label"),
-        )?;
-        ensure_not_contains(
-            native_sdk_caller,
-            "allow_depot_remote_cache:",
-            &format!("{context} native SDK must not supply Depot cache authority"),
+            "persist-credentials: false",
+            &format!("{context} safe checkout"),
         )?;
     }
-    check_protected_reusable_runner_policy(
-        &native_sdk_artifact_workflow,
-        "native SDK reusable workflow",
-    )?;
-    check_protected_reusable_runner_policy(
-        &static_abi_artifact_workflow,
-        "static ABI reusable workflow",
+    ensure_contains(
+        sources.quality,
+        "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
+        "quality contract suite",
     )?;
     ensure_contains(
-        &native_sdk_artifact_workflow,
-        "uses: ./.github/workflows/static-abi-artifact.yml",
-        "native SDK nested release static ABI producer",
+        sources.quality,
+        "cargo run -p xtask -- repo-consistency ci-crate-lists",
+        "quality crate-list consistency",
     )?;
     ensure_contains(
-        &native_sdk_artifact_workflow,
-        "scripts/restore-static-abi-input.sh",
-        "native SDK static ABI consumer restore",
+        sources.quality,
+        "cargo run -p xtask -- repo-consistency publish-crates",
+        "quality publish consistency",
+    )?;
+    ensure_contains(sources.web, "website:", "web website sub-slice")?;
+    ensure_contains(
+        sources.host,
+        "uses: ./.github/actions/prepare-host-input",
+        "host immutable producer",
     )?;
     ensure_contains(
-        &static_abi_artifact_workflow,
-        "CACHE_NAMESPACE: mesh-llm",
-        "static ABI reusable cache namespace",
+        sources.host,
+        "uses: ./.github/actions/prepare-windows-host-input",
+        "Windows host producer",
     )?;
-    check_release_dispatch_version_preparation(
-        &release_workflow,
-        &native_sdk_artifact_workflow,
-        &swift_sdk_artifact_workflow,
+    ensure_contains(
+        sources.runtime,
+        "uses: ./.github/actions/prepare-native-runtime-input",
+        "runtime immutable producer",
     )?;
-    check_release_container_contracts(&release_workflow, &configure_sccache_action)?;
-    check_ci_crate_test_coverage(&ci_workflow, &pr_builds_workflow, &compute_changes_action)?;
+    ensure_contains(
+        sources.runtime,
+        "uses: ./.github/actions/compose-product-input",
+        "composition-only product producer",
+    )?;
+    ensure_contains(
+        sources.runtime,
+        "binary_name: mesh-llm.exe",
+        "Windows product executable",
+    )?;
+    ensure_contains(
+        sources.rust_tests,
+        "cargo test --locked",
+        "Rust test command",
+    )?;
+    ensure_contains(
+        sources.prepare_windows_host,
+        "-HostOnly",
+        "Windows host-only builder",
+    )?;
+    ensure_contains(
+        sources.prepare_runtime,
+        "scripts/package-native-runtime.sh",
+        "native runtime builder",
+    )?;
+    ensure_not_contains(
+        sources.compose_product,
+        "cargo build",
+        "composition must not compile",
+    )?;
+    check_protected_reusable_runner_policy(sources.native_sdk, "native SDK reusable workflow")?;
+    check_protected_reusable_runner_policy(sources.static_abi, "static ABI reusable workflow")?;
 
+    Ok(())
+}
+
+fn check_orchestrator_invariants(
+    orchestrator: &str,
+    controller: &str,
+    lanes: &[(&str, String)],
+    compute_changes: &str,
+) -> DynResult<()> {
+    ensure_contains(
+        orchestrator,
+        "uses: ./.github/workflows/ci-quality-slice.yml",
+        "bootstrap orchestrator quality call",
+    )?;
+    ensure_contains(
+        orchestrator,
+        "uses: ./.github/workflows/ci-runtime-product-slice.yml",
+        "bootstrap orchestrator runtime call",
+    )?;
+    ensure_contains(
+        controller,
+        "uses: ./.github/actions/plan-ci",
+        "controller canonical planner call",
+    )?;
+    ensure_contains(
+        controller,
+        "github.rest.actions.createWorkflowDispatch",
+        "controller native lane dispatch",
+    )?;
+    let lane_workflow = |name: &str| {
+        lanes
+            .iter()
+            .find_map(|(lane, workflow)| (*lane == name).then_some(workflow.as_str()))
+            .unwrap_or("")
+    };
+    ensure_contains(
+        lane_workflow("quality"),
+        "uses: ./.github/workflows/ci-quality-slice.yml",
+        "quality lane slice call",
+    )?;
+    for lane in ["linux", "macos", "windows"] {
+        ensure_contains(
+            lane_workflow(lane),
+            "uses: ./.github/workflows/ci-runtime-product-slice.yml",
+            &format!("{lane} lane runtime call"),
+        )?;
+    }
+    ensure_contains(
+        orchestrator,
+        "name: CI Required",
+        "stable CI required summary",
+    )?;
+    ensure_contains(
+        compute_changes,
+        "changed_files:",
+        "changed-file planner input",
+    )?;
+    ensure_contains(
+        compute_changes,
+        "affected_crates:",
+        "affected-crate planner input",
+    )?;
     Ok(())
 }
 
@@ -498,16 +373,16 @@ fn check_protected_reusable_runner_policy(workflow: &str, context: &str) -> DynR
         ),
         ("POLICY_REF: ${{ github.ref }}", "immutable ref context"),
         (
-            "POLICY_EVENT_NAME: ${{ github.event_name }}",
-            "immutable event context",
+            "POLICY_EVENT_NAME: ${{ github.event.inputs.original_event_name || github.event_name }}",
+            "protected original event context",
         ),
         (
             "POLICY_DEPOT_ENABLED: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
             "repository Depot gate",
         ),
         (
-            "POLICY_MANUAL_USE_DEPOT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.use_depot == 'true' }}",
-            "immutable main-dispatch canary flag",
+            "POLICY_MANUAL_USE_DEPOT: ${{ inputs.use_depot }}",
+            "typed main-dispatch canary flag",
         ),
         (
             r#"POLICY_REPOSITORY" == "Mesh-LLM/mesh-llm""#,
@@ -852,8 +727,8 @@ fn release_container_job_names(release_workflow: &str) -> Vec<&str> {
 }
 
 fn check_windows_dynamic_runtime_contract(
-    ci_workflow: &str,
-    pr_builds_workflow: &str,
+    host_workflow: &str,
+    runtime_workflow: &str,
     prepare_windows_host_action: &str,
     prepare_native_runtime_action: &str,
     compose_product_action: &str,
@@ -889,145 +764,98 @@ fn check_windows_dynamic_runtime_contract(
         "shared product action canonical composition script",
     )?;
 
-    for (workflow, workflow_name) in [(ci_workflow, "main CI"), (pr_builds_workflow, "PR Builds")] {
-        let host = workflow_job_section(workflow, "windows_host_input")
-            .ok_or_else(|| format!("{workflow_name}: missing `windows_host_input` job"))?;
-        let cpu_runtime = workflow_job_section(workflow, "windows_cpu_runtime_input")
-            .ok_or_else(|| format!("{workflow_name}: missing `windows_cpu_runtime_input` job"))?;
-        let gpu_runtimes = workflow_job_section(workflow, "windows_gpu_runtime_inputs")
-            .ok_or_else(|| format!("{workflow_name}: missing `windows_gpu_runtime_inputs` job"))?;
-        let cpu_product = workflow_job_section(workflow, "windows_cpu_product")
-            .ok_or_else(|| format!("{workflow_name}: missing `windows_cpu_product` job"))?;
-        let gpu_products = workflow_job_section(workflow, "windows_gpu_products")
-            .ok_or_else(|| format!("{workflow_name}: missing `windows_gpu_products` job"))?;
+    let host = workflow_job_section(host_workflow, "windows_host")
+        .ok_or("host slice: missing `windows_host` job")?;
+    let runtime = workflow_job_section(runtime_workflow, "windows_runtime")
+        .ok_or("runtime slice: missing `windows_runtime` job")?;
+    let product = workflow_job_section(runtime_workflow, "windows_product")
+        .ok_or("runtime slice: missing `windows_product` job")?;
 
-        ensure_contains(
-            host,
-            "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756",
-            &format!("{workflow_name} persistent MSVC host environment"),
+    ensure_contains(
+        host,
+        "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756",
+        "host slice persistent MSVC host environment",
+    )?;
+    ensure_contains(
+        host,
+        "uses: ./.github/actions/prepare-windows-host-input",
+        "host slice shared immutable Windows host producer",
+    )?;
+    ensure_contains(
+        runtime,
+        "uses: ./.github/actions/prepare-native-runtime-input",
+        "runtime slice shared Windows runtime producer",
+    )?;
+    ensure_contains(
+        runtime,
+        "target: ${{ matrix.runtime.target }}",
+        "runtime slice planned Windows target",
+    )?;
+    ensure_contains(
+        product,
+        "uses: ./.github/actions/compose-product-input",
+        "runtime slice shared Windows product composer",
+    )?;
+    ensure_contains(
+        product,
+        "binary_name: mesh-llm.exe",
+        "runtime slice Windows product executable",
+    )?;
+    ensure_contains(
+        product,
+        "readiness_smoke: \"true\"",
+        "runtime slice Windows product readiness",
+    )?;
+
+    for forbidden in [
+        "cargo ",
+        "dtolnay/rust-toolchain",
+        "Swatinem/rust-cache",
+        "mozilla-actions/sccache-action",
+        "scripts/build-windows.ps1",
+        "scripts/package-native-runtime.sh",
+        "prepare-windows-host-input",
+        "prepare-native-runtime-input",
+    ] {
+        ensure_not_contains(
+            product,
+            forbidden,
+            "runtime slice Windows product composition-only contract",
         )?;
-        ensure_contains(
-            host,
-            "uses: ./.github/actions/prepare-windows-host-input",
-            &format!("{workflow_name} shared immutable Windows host producer"),
-        )?;
-
-        for (runtime, runtime_name) in [
-            (cpu_runtime, "CPU runtime"),
-            (gpu_runtimes, "GPU runtime matrix"),
-        ] {
-            ensure_contains(
-                runtime,
-                "uses: ./.github/actions/prepare-native-runtime-input",
-                &format!("{workflow_name} shared Windows {runtime_name} producer"),
-            )?;
-            ensure_contains(
-                runtime,
-                "target: x86_64-pc-windows-msvc",
-                &format!("{workflow_name} Windows {runtime_name} target"),
-            )?;
-        }
-
-        for (product, product_name) in [
-            (cpu_product, "CPU product"),
-            (gpu_products, "GPU product matrix"),
-        ] {
-            ensure_contains(
-                product,
-                "uses: ./.github/actions/compose-product-input",
-                &format!("{workflow_name} shared Windows {product_name} composer"),
-            )?;
-            ensure_contains(
-                product,
-                "binary_name: mesh-llm.exe",
-                &format!("{workflow_name} Windows {product_name} executable"),
-            )?;
-            ensure_contains(
-                product,
-                "readiness_smoke: \"true\"",
-                &format!("{workflow_name} Windows {product_name} readiness"),
-            )?;
-
-            for forbidden in [
-                "cargo ",
-                "dtolnay/rust-toolchain",
-                "Swatinem/rust-cache",
-                "mozilla-actions/sccache-action",
-                "scripts/build-windows.ps1",
-                "scripts/package-native-runtime.sh",
-                "prepare-windows-host-input",
-                "prepare-native-runtime-input",
-            ] {
-                ensure_not_contains(
-                    product,
-                    forbidden,
-                    &format!("{workflow_name} Windows {product_name} composition-only contract"),
-                )?;
-            }
-        }
     }
 
     Ok(())
 }
 
 fn check_ci_crate_test_coverage(
-    ci_workflow: &str,
-    pr_builds_workflow: &str,
-    compute_changes_action: &str,
+    linux_lane_workflow: &str,
+    quality_workflow: &str,
 ) -> DynResult<()> {
     ensure_contains(
-        compute_changes_action,
-        "TEST_BATCHES=$(bash scripts/plan-test-batches.sh --all --bins 4)",
-        "all-workspace Cargo test batch planning",
+        linux_lane_workflow,
+        "rust_tests_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.rust_tests) }}",
+        "Linux lane Rust test matrix input",
     )?;
     ensure_contains(
-        compute_changes_action,
-        "if [[ \"${{ inputs.event_name }}\" != \"pull_request\" ]] || [[ \"$ALL_RUST\" == \"true\" ]]; then",
-        "main and dispatch exhaustive Cargo test routing",
+        linux_lane_workflow,
+        "uses: ./.github/workflows/ci-rust-tests-slice.yml",
+        "Linux lane shared Rust test slice",
     )?;
     ensure_contains(
-        compute_changes_action,
-        "TEST_BATCHES=$(bash scripts/plan-test-batches.sh --crates-json \"$AFFECTED_CRATES\" --bins 4)",
-        "affected-crate Cargo test batch planning",
+        quality_workflow,
+        "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
+        "quality CI contract test suite",
     )?;
-    ensure_contains(
-        compute_changes_action,
-        "echo \"test_batches_json=$TEST_BATCHES\"",
-        "Cargo test batch output",
-    )?;
-
-    for (workflow, context) in [(ci_workflow, "main CI"), (pr_builds_workflow, "PR Builds")] {
-        ensure_contains(
-            workflow,
-            "test_batches_json: ${{ steps.compute.outputs.test_batches_json }}",
-            &format!("{context} test batch output"),
-        )?;
-        ensure_contains(
-            workflow,
-            "rust_crate_tests:",
-            &format!("{context} Rust crate test job"),
-        )?;
-        ensure_contains(
-            workflow,
-            "batch: ${{ fromJson(needs.changes.outputs.test_batches_json) }}",
-            &format!("{context} Rust crate test matrix"),
-        )?;
-        ensure_contains(
-            workflow,
-            "cargo test -p \"$crate\"",
-            &format!("{context} per-crate test command"),
-        )?;
-    }
 
     Ok(())
 }
 
 pub(crate) fn check_ci_crate_test_coverage_files(repo_root: &Path) -> DynResult<()> {
-    let ci_workflow = fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))?;
-    let pr_builds_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
-    let compute_changes_action =
-        fs::read_to_string(repo_root.join(".github/actions/compute-changes/action.yml"))?;
-    check_ci_crate_test_coverage(&ci_workflow, &pr_builds_workflow, &compute_changes_action)?;
+    let linux_lane_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/ci-linux-lane.yml"))?;
+    let quality_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/ci-quality-slice.yml"))?;
+    check_ci_crate_test_coverage(&linux_lane_workflow, &quality_workflow)?;
     check_test_batch_planner_covers_workspace(repo_root)
 }
 

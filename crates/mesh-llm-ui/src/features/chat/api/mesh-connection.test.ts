@@ -447,6 +447,59 @@ describe('createMeshConnectionAdapter', () => {
     })
   })
 
+  it('retries a transient model-not-found response while public routing converges', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "model 'apple/system' not found" } }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          createSSEStream(['data: {"type":"response.output_text.delta","delta":"Recovered"}\n', 'data: [DONE]\n']),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+    const chunks: StreamChunk[] = []
+    try {
+      const first = await iterator.next()
+      if (!first.done) chunks.push(first.value)
+
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(500)
+
+      while (true) {
+        const next = await pendingNext
+        if (!next.done) chunks.push(next.value)
+        break
+      }
+      while (true) {
+        const next = await iterator.next()
+        if (next.done) break
+        chunks.push(next.value)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+        .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+        .join('')
+    ).toContain('Recovered')
+  })
+
   it('stops before /api/responses when attachment upload fails', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ error: { message: 'Upload failed: 503' } }), {

@@ -164,7 +164,7 @@ runs:
         if [[ "${{ inputs.event_name }}" == "workflow_dispatch" ]]; then
           RUNNER_CONTRACT_REQUIRED="true"
         elif [[ -n "$CHANGED_FILES" ]]; then
-          RUNNER_CONTRACT_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^\.github/cache-version\.txt$|^\.github/actionlint\.yaml$|^\.github/actions/(capture-sccache-stats|configure-sccache-gha|resolve-native-toolchain-epoch|select-ci-runners)/|^\.github/workflows/(ci|depot-canary|native-sdk-artifact|pr_builds|pr_quality|release|sdk-smoke|static-abi-artifact|swift-sdk-artifact)\.yml$)' || true)
+          RUNNER_CONTRACT_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^\.github/cache-version\.txt$|^\.github/actionlint\.yaml$|^\.github/actions/(capture-sccache-stats|configure-sccache-gha|resolve-native-toolchain-epoch|select-ci-runners)/|^\.github/workflows/(ci|ci-orchestrator|ci-.*-slice|depot-canary|native-sdk-artifact|pr_builds|release|sdk-smoke|static-abi-artifact|swift-sdk-artifact)\.yml$)' || true)
           if [[ -n "$RUNNER_CONTRACT_INPUTS" ]]; then
             RUNNER_CONTRACT_REQUIRED="true"
           fi
@@ -354,7 +354,7 @@ runs:
         # Inference artifacts are needed for runtime-facing changes, SDK smoke
         # tests, backend/native inputs, or embedded React console changes. Do
         # not build mesh-llm artifacts just because Rust tooling such as xtask
-        # changed; PR Quality's targeted fmt/clippy jobs cover those crates.
+        # changed; the quality slice's targeted fmt/Clippy jobs cover those crates.
         INFERENCE_ARTIFACT_REQUIRED="false"
         if [[ "$ALL_RUST" == "true" ]] || [[ "$UI_CHANGED" == "true" ]] || [[ "$BACKEND_CHANGED" == "true" ]] || [[ "$SDK_SMOKE_REQUIRED" == "true" ]]; then
           INFERENCE_ARTIFACT_REQUIRED="true"

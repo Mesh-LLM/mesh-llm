@@ -1,0 +1,108 @@
+name: CI · Quality
+run-name: CI · Quality · ${{ inputs.source_sha }}
+
+on:
+  workflow_call:
+    inputs: &lane_inputs
+      lane_plan_json:
+        required: true
+        type: string
+      canonical_plan_json:
+        required: true
+        type: string
+      plan_digest:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      original_event_name:
+        required: true
+        type: string
+      correlation_id:
+        required: false
+        default: ""
+        type: string
+      supersession_key:
+        required: false
+        default: ""
+        type: string
+      lane_check_id:
+        required: false
+        default: ""
+        type: string
+      overall_check_id:
+        required: false
+        default: ""
+        type: string
+      expected_lane_checks:
+        required: false
+        default: "[]"
+        type: string
+  workflow_dispatch:
+    inputs: *lane_inputs
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ci-quality-${{ inputs.supersession_key || inputs.source_sha }}
+  cancel-in-progress: ${{ inputs.original_event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    name: Quality
+    if: ${{ contains(fromJson(inputs.lane_plan_json).required_slices, 'quality') }}
+    uses: ./.github/workflows/ci-quality-slice.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      clippy_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.clippy) }}
+      rust_changed: ${{ fromJson(inputs.lane_plan_json).signals.rust_changed }}
+      cli_surface_changed: ${{ fromJson(inputs.lane_plan_json).signals.cli_surface_changed }}
+      website_docs_changed: ${{ fromJson(inputs.lane_plan_json).signals.website_docs_changed }}
+      clippy_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+
+  runner_contract:
+    name: Runner and cache contracts
+    if: ${{ contains(fromJson(inputs.lane_plan_json).required_slices, 'runner-contract') }}
+    uses: ./.github/workflows/ci-runner-contract-slice.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      plan_json: ${{ inputs.canonical_plan_json }}
+      profile: ${{ fromJson(inputs.lane_plan_json).profile }}
+      total_max_workers: ${{ fromJson(inputs.lane_plan_json).budgets.total_max_workers }}
+
+  summary:
+    name: CI / Quality
+    needs: [quality, runner_contract]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Validate planned quality jobs
+        id: validate
+        continue-on-error: true
+        env:
+          LANE_PLAN: ${{ inputs.lane_plan_json }}
+          NEEDS_RESULTS: ${{ toJson(needs) }}
+        run: python3 scripts/validate-ci-lane-results.py --lane-plan "$LANE_PLAN" --needs "$NEEDS_RESULTS"
+      - uses: ./.github/actions/report-ci-lane
+        with:
+          lane_name: CI / Quality
+          lane_result: ${{ steps.validate.outcome == 'success' && 'success' || 'failure' }}
+          lane_check_id: ${{ inputs.lane_check_id }}
+          overall_check_id: ${{ inputs.overall_check_id }}
+          expected_lane_checks: ${{ inputs.expected_lane_checks }}
+          source_sha: ${{ inputs.source_sha }}
+          correlation_id: ${{ inputs.correlation_id }}
+          plan_digest: ${{ inputs.plan_digest }}
+      - name: Enforce quality result
+        if: ${{ steps.validate.outcome != 'success' }}
+        run: exit 1

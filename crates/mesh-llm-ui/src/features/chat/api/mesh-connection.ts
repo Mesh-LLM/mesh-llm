@@ -81,6 +81,33 @@ function isAbortError(error: unknown) {
   return error instanceof Error && error.name === 'AbortError'
 }
 
+const MODEL_ROUTE_RETRY_DELAY_MS = 500
+
+function isModelRouteNotFound(status: number, body: string): boolean {
+  if (status !== 404) return false
+  const normalized = body.toLowerCase()
+  return normalized.includes('model') && (normalized.includes('not found') || normalized.includes('missing'))
+}
+
+async function waitForModelRouteRetry(abortSignal?: AbortSignal): Promise<boolean> {
+  if (abortSignal?.aborted) return false
+
+  return new Promise((resolve) => {
+    let timerId: ReturnType<typeof setTimeout> | undefined
+    let abortHandler: (() => void) | undefined
+
+    const finish = (shouldRetry: boolean) => {
+      if (timerId !== undefined) clearTimeout(timerId)
+      if (abortHandler) abortSignal?.removeEventListener('abort', abortHandler)
+      resolve(shouldRetry)
+    }
+
+    abortHandler = () => finish(false)
+    abortSignal?.addEventListener('abort', abortHandler, { once: true })
+    timerId = setTimeout(() => finish(true), MODEL_ROUTE_RETRY_DELAY_MS)
+  })
+}
+
 async function* parseSSEStream(
   body: ReadableStream<Uint8Array>,
   abortSignal?: AbortSignal
@@ -183,20 +210,31 @@ async function* runConnect(
   let response: Response
   try {
     const requestBody = await buildResponsesInput(messages, model, clientId, requestId, systemPrompt)
-    response = await fetch(`${env.managementApiUrl}/api/responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      signal: abortSignal
-    })
+    for (let attempt = 0; ; attempt += 1) {
+      response = await fetch(`${env.managementApiUrl}/api/responses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: abortSignal
+      })
+
+      if (response.ok) break
+
+      const errorBody = await parseApiErrorBody(response)
+      const shouldRetry = attempt === 0 && isModelRouteNotFound(response.status, errorBody)
+      if (!shouldRetry) {
+        throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+      }
+
+      const retryAllowed = await waitForModelRouteRetry(abortSignal)
+      if (abortSignal?.aborted) return
+      if (!retryAllowed) {
+        throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+      }
+    }
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return
     throw err
-  }
-
-  if (!response.ok) {
-    const errorBody = await parseApiErrorBody(response)
-    throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
   }
 
   if (!response.body) {

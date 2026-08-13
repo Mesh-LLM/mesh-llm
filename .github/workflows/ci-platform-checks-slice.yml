@@ -1,0 +1,133 @@
+name: CI Platform Checks Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
+      platform_checks_matrix:
+        description: JSON platform-check rows from the versioned CI plan.
+        required: true
+        type: string
+      profile:
+        description: Semantic profile represented by the platform rows.
+        required: true
+        type: string
+      max_parallel:
+        description: Platform worker budget.
+        required: false
+        default: 2
+        type: number
+
+permissions:
+  contents: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+  LLAMA_STAGE_BACKEND: metal
+  LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-static-metal
+  MESH_LLM_SKIP_UI: "1"
+
+jobs:
+  platform_checks:
+    name: Platform checks (${{ matrix.check.id }})
+    if: ${{ inputs.platform_checks_matrix != '[]' }}
+    runs-on: ${{ matrix.check.platform == 'macos' && 'macos-15' || 'windows-2022' }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        check: ${{ fromJson(inputs.platform_checks_matrix) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - name: Configure macOS linker
+        if: ${{ matrix.check.platform == 'macos' }}
+        run: |
+          brew install lld
+          mkdir -p .cargo
+          lld_prefix="$(brew --prefix lld)"
+          cat > .cargo/config.toml <<EOF
+          [target.aarch64-apple-darwin]
+          rustflags = ["-C", "link-arg=-fuse-ld=$lld_prefix/bin/ld64.lld"]
+          EOF
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: ${{ matrix.check.platform == 'windows' }}
+        with:
+          python-version: "3.x"
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+        if: ${{ matrix.check.platform == 'windows' }}
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        if: ${{ matrix.check.platform == 'windows' }}
+        with:
+          arch: x64
+      - name: Check neutral host on macOS
+        if: ${{ matrix.check.platform == 'macos' && matrix.check.kind != 'unit' }}
+        run: cargo check --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime
+      - name: Check neutral host and Node SDK on Windows
+        if: ${{ matrix.check.kind == 'portable' && matrix.check.platform == 'windows' }}
+        shell: pwsh
+        env:
+          CI_PROFILE: ${{ inputs.profile }}
+        run: |
+          cargo check --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime
+          cargo check --locked -p mesh-llm-nodejs
+          if ($env:CI_PROFILE -eq 'main' -or $env:CI_PROFILE -eq 'manual-full') {
+            cargo build --release --locked -p mesh-llm-nodejs
+          }
+      - name: Test Windows log artifact privacy ACL
+        if: ${{ matrix.check.kind == 'log-store' }}
+        shell: pwsh
+        run: cargo test --locked -p mesh-llm-log-store --lib windows_artifact_paths_have_current_owner_and_exact_user_only_dacl
+      - name: Test Windows log SQLite storage ACL
+        if: ${{ matrix.check.kind == 'log-store' }}
+        shell: pwsh
+        run: cargo test --locked -p mesh-llm-log-store --lib sqlite_root_database_and_sidecars_have_only_current_user_acl
+      - name: Install macOS unit-test dependencies
+        if: ${{ matrix.check.kind == 'unit' }}
+        run: brew install cmake ninja jq lld
+      - name: Resolve macOS unit-test toolchain epoch
+        if: ${{ matrix.check.kind == 'unit' }}
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          include_tool_versions: "true"
+      - name: Ensure static Metal ABI cache directory
+        if: ${{ matrix.check.kind == 'unit' }}
+        run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
+      - name: Restore static Metal ABI build
+        if: ${{ matrix.check.kind == 'unit' }}
+        id: llama_cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-abi-static-metal-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+      - name: Prepare patched llama.cpp ABI checkout
+        if: ${{ matrix.check.kind == 'unit' }}
+        run: scripts/prepare-llama.sh pinned
+      - name: Verify cached patched llama.cpp ABI libraries
+        if: ${{ matrix.check.kind == 'unit' && steps.llama_cache.outputs.cache-hit == 'true' }}
+        run: scripts/build-llama.sh --require-existing
+      - name: Build patched llama.cpp ABI libraries
+        if: ${{ matrix.check.kind == 'unit' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        run: scripts/build-llama.sh
+      - name: Save static Metal ABI build
+        if: ${{ matrix.check.kind == 'unit' && github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+      - name: Run macOS unit tests
+        if: ${{ matrix.check.kind == 'unit' }}
+        run: |
+          set -euo pipefail
+          cargo test --locked -p model-artifact --lib
+          cargo test --locked -p mesh-llm-host-runtime --lib
+          cargo test --locked -p mesh-llm --lib
