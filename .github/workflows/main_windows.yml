@@ -17,6 +17,7 @@ jobs:
       contents: read
     outputs:
       source_sha: ${{ steps.identity.outputs.source_sha }}
+      base_sha: ${{ steps.identity.outputs.base_sha }}
       plan_digest: ${{ steps.plan.outputs.plan_digest }}
       lane_plan: ${{ steps.plan.outputs.windows_lane_plan }}
     steps:
@@ -38,12 +39,18 @@ jobs:
           fi
           git cat-file -e "$SOURCE_SHA^{commit}"
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          if [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "base_sha=" >> "$GITHUB_OUTPUT"
+          else
+            git cat-file -e "$BASE_SHA^{commit}"
+            echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          fi
       - name: Compute changed files and affected crates
         id: changes
         uses: ./.github/actions/compute-changes
         with:
           event_name: push
-          base_sha: ${{ github.event.before }}
+          base_sha: ${{ steps.identity.outputs.base_sha }}
           head_sha: ${{ steps.identity.outputs.source_sha }}
       - name: Build canonical plan
         id: plan
@@ -51,7 +58,7 @@ jobs:
         with:
           event_name: push
           source_sha: ${{ steps.identity.outputs.source_sha }}
-          base_sha: ${{ github.event.before }}
+          base_sha: ${{ steps.identity.outputs.base_sha }}
           draft: false
           changed_files: ${{ steps.changes.outputs.changed_files }}
           affected_crates: ${{ steps.changes.outputs.affected_crates }}
@@ -89,6 +96,9 @@ jobs:
           set -euo pipefail
           [[ "$PLAN_RESULT" == "success" ]]
           required=$(jq -r '.required' <<<"$LANE_PLAN")
-          [[ "$required" == "true" ]]
-          [[ "$LANE_RESULT" == "success" ]]
+          if [[ "$required" == "true" ]]; then
+            [[ "$LANE_RESULT" == "success" ]]
+          else
+            [[ "$LANE_RESULT" == "skipped" ]]
+          fi
           echo "Plan digest: \`$PLAN_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"

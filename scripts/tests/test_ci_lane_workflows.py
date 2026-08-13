@@ -75,6 +75,9 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 workflow,
             )
             self.assertIn(f"name: Main / {label}", workflow)
+            self.assertIn('if [[ "$BASE_SHA" =~ ^0+$ ]]', workflow)
+            self.assertEqual(3, workflow.count("base_sha: ${{ steps.identity.outputs.base_sha }}"))
+            self.assertIn('[[ "$LANE_RESULT" == "skipped" ]]', workflow)
             self.assertNotIn("concurrency:", workflow)
             self.assertNotIn("createWorkflowDispatch", workflow)
 
