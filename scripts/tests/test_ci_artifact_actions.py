@@ -1081,9 +1081,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 )
                 self.assertIn("repository: ${{ github.repository }}", workflow)
                 self.assertIn(
-                    "head_repository: "
-                    "${{ github.event.pull_request.head.repo.full_name || "
-                    "github.repository }}",
+                    "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
                     workflow,
                 )
                 self.assertIn("ref: ${{ github.ref }}", workflow)

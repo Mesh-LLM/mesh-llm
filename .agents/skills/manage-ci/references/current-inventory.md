@@ -160,6 +160,7 @@ not checked-in facts. Do not treat the checked-in `DEPOT_RUNNERS_ENABLED` value
 or a successful main canary as evidence that PR cache isolation is safe.
 
 Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
+`DEPOT_PR_RUNNERS_ENABLED` (absent/false until protected PR activation),
 `CUDA_VERSION`, `VULKAN_SDK_VERSION`, smoke configuration variables, and
 release/deployment variables. Secret values never belong in this inventory;
 known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`

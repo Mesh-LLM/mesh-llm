@@ -92,9 +92,7 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                         workflow,
                     )
                     self.assertIn(
-                        "head_repository: "
-                        "${{ github.event.pull_request.head.repo.full_name || "
-                        "github.repository }}",
+                        "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
                         workflow,
                     )
                     selector = (ROOT / ".github" / "actions" / "select-ci-runners" / "action.yml").read_text(encoding="utf-8")

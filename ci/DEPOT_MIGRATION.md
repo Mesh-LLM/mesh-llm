@@ -19,6 +19,9 @@ Depot is a placement provider, not a different CI graph.
 - `.github/actions/select-ci-runners` owns current Linux provider selection.
 - `DEPOT_RUNNERS_ENABLED == 'true'` permits eligible trusted `main` Linux jobs
   to select Depot. Every eligible role retains a GitHub-hosted fallback.
+- `DEPOT_PR_RUNNERS_ENABLED == 'true'` is the independent same-repository PR
+  placement gate. It must remain absent or `false` until every administrative
+  and sentinel acceptance gate below passes; a missing value fails closed.
 - Pull requests, feature refs, tags, credential-bearing smokes and
   hardware-qualified GPU work retain their approved non-Depot placement until
   the protected PR executor is separately activated. The intended executor may
@@ -212,6 +215,12 @@ protected workflows must:
 - receive no repository secrets or registry credentials;
 - run on ephemeral Depot instances;
 - be exact selected workflows allowed by the runner group.
+
+After every acceptance canary passes, activate PR placement with the repository
+variable `DEPOT_PR_RUNNERS_ENABLED=true`. Roll back immediately by setting it to
+`false` (or deleting it) and rerun the identical PR plan; this changes provider
+placement only and must leave commands, matrices, artifacts, and required checks
+unchanged. `DEPOT_RUNNERS_ENABLED` remains the separate trusted-main gate.
 
 CI workflow, action, planner, ownership, runner and cache-policy changes must
 remain on the local GitHub-hosted path. A PR may not modify the workflow that

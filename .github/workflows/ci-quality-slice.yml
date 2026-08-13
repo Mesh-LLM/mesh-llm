@@ -77,7 +77,7 @@ jobs:
           event_name: ${{ github.event_name }}
           original_event_name: ${{ inputs.original_event_name }}
           repository: ${{ github.repository }}
-          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.ref }}
           depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
           depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}

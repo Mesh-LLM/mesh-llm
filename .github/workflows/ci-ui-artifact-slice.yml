@@ -54,7 +54,7 @@ jobs:
           event_name: ${{ github.event_name }}
           original_event_name: ${{ inputs.original_event_name }}
           repository: ${{ github.repository }}
-          head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.ref }}
           # The pre-existing trusted-main allowlist does not include this
           # producer. PR placement is independently gated and cache-isolated.
