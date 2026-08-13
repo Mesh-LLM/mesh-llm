@@ -45,6 +45,13 @@ class CiLaneWorkflowTests(unittest.TestCase):
         self.assertIn("should_dispatch", workflow)
 
         pr_workflow = self.workflow("pr_builds.yml")
+        self.assertIn("github.rest.pulls.listFiles", pr_workflow)
+        self.assertIn("controlPlaneChanged", pr_workflow)
+        self.assertIn("filename.startsWith('.github/')", pr_workflow)
+        self.assertIn(
+            "context.eventName === 'workflow_dispatch' || controlPlaneChanged",
+            pr_workflow,
+        )
         self.assertIn("pull.head.repo?.full_name", pr_workflow)
         self.assertIn(
             "ref: context.payload.repository.default_branch",
