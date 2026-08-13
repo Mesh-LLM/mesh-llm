@@ -876,6 +876,14 @@ enum MoaInterceptResult {
     /// Not an MoA request — caller should continue with normal routing,
     /// reusing the returned stream.
     NotMoa(tokio::net::TcpStream),
+    /// MoA could not form a committee but degraded `model=mesh` to a real
+    /// single model (already rewritten on the request). Caller routes it
+    /// normally, but must use this model rather than the stale
+    /// `decision.effective_model` (still "mesh").
+    Degraded {
+        stream: tokio::net::TcpStream,
+        model: Option<String>,
+    },
 }
 
 /// Dispatch to the MoA gateway when `model == "mesh"`. Self-gates on the
@@ -909,7 +917,16 @@ async fn try_handle_moa_intercept(
     .await;
     match result {
         crate::network::openai::moa_gateway::MoaDispatchResult::Passthrough(stream) => {
-            MoaInterceptResult::NotMoa(stream)
+            // The gateway hands the stream back in two cases: the request was
+            // never MoA-shaped, or MoA degraded `model=mesh` to a real single
+            // model by rewriting the request in place. The outer gate above
+            // guarantees we got here with `effective_model == "mesh"`, so this
+            // is the degrade case: routing must use the rewritten model, not
+            // the stale decision.
+            MoaInterceptResult::Degraded {
+                stream,
+                model: request.model_name.clone(),
+            }
         }
         crate::network::openai::moa_gateway::MoaDispatchResult::Responded(status) => {
             proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids)
@@ -1019,6 +1036,7 @@ async fn handle_buffered_api_request(
         }
     };
 
+    let mut routing_model = decision.effective_model.clone();
     let tcp_stream = match try_handle_moa_intercept(
         tcp_stream,
         &mut request,
@@ -1038,6 +1056,10 @@ async fn handle_buffered_api_request(
             return;
         }
         MoaInterceptResult::NotMoa(stream) => stream,
+        MoaInterceptResult::Degraded { stream, model } => {
+            routing_model = model;
+            stream
+        }
     };
 
     let mut tcp_stream = tcp_stream;
@@ -1055,13 +1077,13 @@ async fn handle_buffered_api_request(
             tcp_stream,
             &mut request,
             &ctx.route,
-            decision.effective_model.as_deref(),
+            routing_model.as_deref(),
             decision.required_tokens,
             route_observer,
         )
         .await
     };
-    if let Some(model) = decision.effective_model.as_deref()
+    if let Some(model) = routing_model.as_deref()
         && !request.is_tokenize_request()
     {
         let mut event =
@@ -1418,6 +1440,115 @@ mod tests {
         let (model_ref, profile) = parse_model_with_profile("model#with#hash#profile");
         assert_eq!(model_ref, "model#with#hash");
         assert_eq!(profile, "profile");
+    }
+
+    /// Regression: single-model `model=mesh` must degrade to the real model.
+    ///
+    /// When MoA cannot form a committee (one model in the mesh), the gateway
+    /// rewrites the request to the real model and hands the stream back. The
+    /// intercept must surface that as `Degraded { model }` so routing uses the
+    /// rewritten model — reusing the stale `decision.effective_model` (still
+    /// "mesh") 404s every single-node `model=mesh` request. Broken by the
+    /// ingress rewrite in #1175, which collapsed `Degraded` into `NotMoa`.
+    #[tokio::test]
+    async fn moa_single_model_degrade_rewrites_routing_model() {
+        let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .expect("test node");
+        node.set_hosted_models(vec!["local/only-model:Q4_K_M".to_string()])
+            .await;
+        let mut targets = election::ModelTargets::default();
+        targets.targets.insert(
+            "local/only-model:Q4_K_M".to_string(),
+            vec![election::InferenceTarget::Local(1)],
+        );
+        let affinity = affinity::AffinityRouter::new();
+        let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Real connected TcpStream pair; the degrade path hands it back unused.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let client = tokio::net::TcpStream::connect(addr);
+        let server = async { listener.accept().await.map(|(stream, _)| stream) };
+        let (_client_side, server_side) = tokio::join!(client, server);
+        let tcp_stream = server_side.expect("accept");
+
+        let body = br#"{"model":"mesh","messages":[{"role":"user","content":"hi"}]}"#;
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes()
+        .into_iter()
+        .chain(body.iter().copied())
+        .collect::<Vec<u8>>();
+        let mut request = proxy::BufferedHttpRequest {
+            raw,
+            method: "POST".to_owned(),
+            path: "/v1/chat/completions".to_owned(),
+            client_path: "/v1/chat/completions".to_owned(),
+            request_id: RequestId::default(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: body.len(),
+            completion_tokens: None,
+            stream: None,
+            model_name: Some("mesh".to_owned()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
+            correlation_id: None,
+        };
+        let decision = AutoRouteDecision {
+            effective_model: Some("mesh".to_owned()),
+            classification: None,
+            required_tokens: None,
+        };
+        let ctx = ProxyConnectionContext {
+            route: IngressRouteContext {
+                node: &node,
+                targets: &targets,
+                affinity: &affinity,
+                plugin_manager: None,
+            },
+            control_tx: &control_tx,
+        };
+        let lifecycle = OpenAiLifecycleAttachment::unowned();
+
+        let result = try_handle_moa_intercept(
+            tcp_stream,
+            &mut request,
+            &ctx,
+            &decision,
+            lifecycle.route_observer(),
+        )
+        .await;
+
+        match result {
+            MoaInterceptResult::Degraded { model, .. } => {
+                assert_eq!(
+                    model.as_deref(),
+                    Some("local/only-model:Q4_K_M"),
+                    "degrade must carry the rewritten real model for routing"
+                );
+                assert_eq!(
+                    request.model_name.as_deref(),
+                    Some("local/only-model:Q4_K_M"),
+                    "request must be rewritten in place"
+                );
+            }
+            MoaInterceptResult::NotMoa(_) => {
+                panic!(
+                    "single-model model=mesh fell through as NotMoa — routing would use the stale \
+                     'mesh' model and 404 (#1175 regression)"
+                );
+            }
+            MoaInterceptResult::Handled(outcome) => {
+                panic!("expected degrade passthrough, got handled outcome: {outcome:?}");
+            }
+        }
     }
 
     // --- Routing behavior tests for model-independent daemon support ---
