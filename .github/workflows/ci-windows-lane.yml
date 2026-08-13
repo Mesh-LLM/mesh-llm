@@ -67,6 +67,7 @@ jobs:
       ui_artifact_name: ci-ui-dist-windows-${{ github.run_id }}
       profile: release
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   native_runtimes:
     name: Native Windows runtimes
@@ -77,6 +78,7 @@ jobs:
       original_event_name: ${{ inputs.original_event_name }}
       runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   runtime_product:
     name: Windows products
@@ -87,6 +89,7 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   platform_checks:
     name: Windows checks
@@ -96,7 +99,9 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       platform_checks_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.platform_checks) }}
       profile: ${{ fromJson(inputs.lane_plan_json).profile }}
+      original_event_name: ${{ inputs.original_event_name }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   summary:
     name: CI / Windows

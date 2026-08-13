@@ -81,7 +81,10 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
-          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: |
+            .github/cache-version.txt
+            website/package-lock.json
       - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Install website dependencies
         working-directory: website

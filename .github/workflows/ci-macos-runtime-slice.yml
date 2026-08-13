@@ -16,6 +16,11 @@ on:
         required: false
         default: 2
         type: number
+      fail_fast:
+        description: Cancel sibling runtime builds after the first required failure.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -32,7 +37,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 75
     strategy:
-      fail-fast: false
+      fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
       matrix:
         runtime: ${{ fromJson(inputs.runtime_matrix) }}

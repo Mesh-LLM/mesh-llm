@@ -172,6 +172,20 @@ build one prepared UI artifact per active platform lane; that is the accepted
 readability tradeoff, while UI tests remain owned by the Website graph. Every
 heavy job has a timeout and a deterministic row identity.
 
+PR platform matrices for compilation, Rust tests, products and functional
+platform checks fail fast. Main/manual matrices continue all rows for exhaustive
+diagnostics, and Quality remains non-fail-fast and independent. A failure never
+cancels another focused PR workflow; declared producer dependencies suppress
+only consumers that can no longer run. Whole-workflow API cancellation is
+forbidden because every lane must reach its stable summary.
+
+PR caching is selective. Large Cargo target caches restore trusted main and do
+not publish per-PR copies; sccache remains job-local. Exact verified static,
+Swift, Metal-unit and Windows ABI caches may publish into the PR merge-ref
+scope for same-PR reruns. Website owns the single pnpm publisher and its npm
+store cache, while platform UI producers are restore-only for the shared pnpm
+key. Artifacts remain run-scoped correctness inputs, never rerun caches.
+
 scripts/collect-ci-metrics.py is the read-only measurement tool. Timing
 experiments must use a new worktree from main. Keep queue, dependency wait,
 execution and wall-clock measurements separate; retain raw evidence outside

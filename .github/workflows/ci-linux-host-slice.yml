@@ -24,6 +24,11 @@ on:
         required: false
         default: 2
         type: number
+      fail_fast:
+        description: Cancel sibling host builds after the first required failure.
+        required: false
+        default: false
+        type: boolean
       use_depot:
         description: Opt into the guarded main-only Depot canary.
         required: false
@@ -69,7 +74,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_8 }}
     timeout-minutes: 45
     strategy:
-      fail-fast: false
+      fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
       matrix:
         host: ${{ fromJson(inputs.hosts_matrix) }}

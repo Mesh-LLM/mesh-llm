@@ -167,8 +167,11 @@ class CiWorkflowArtifactTests(unittest.TestCase):
     def test_ui_cache_and_website_dependencies_are_explicit(self):
         ui = (ROOT / ".github/workflows/ci-ui-artifact-slice.yml").read_text()
         web = (ROOT / ".github/workflows/ci-web-slice.yml").read_text()
-        self.assertIn("uses: actions/cache/save@", ui)
+        self.assertIn("uses: actions/cache/restore@", ui)
+        self.assertNotIn("uses: actions/cache/save@", ui)
         self.assertIn("uses: actions/cache/save@", web)
+        self.assertIn("cache: npm", web)
+        self.assertIn("website/package-lock.json", web)
         self.assertIn("working-directory: website", web)
         self.assertIn("run: npm ci", web)
         self.assertIn("uses: taiki-e/install-action@", web)

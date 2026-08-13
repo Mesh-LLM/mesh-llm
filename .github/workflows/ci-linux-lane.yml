@@ -88,6 +88,7 @@ jobs:
       static_abi_artifact_name: ci-static-abi-${{ github.run_id }}
       static_abi_toolchain_epoch: ${{ needs.static_abi.outputs.toolchain_epoch }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   hosts:
     name: Neutral Linux host
@@ -100,6 +101,7 @@ jobs:
       ui_artifact_name: ci-ui-dist-linux-${{ github.run_id }}
       profile: release
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
       use_depot: ${{ inputs.use_depot }}
 
   native_runtimes:
@@ -110,6 +112,7 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
       use_depot: ${{ inputs.use_depot }}
 
   runtime_product:
@@ -121,6 +124,7 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   kotlin_sdk_input:
     name: Kotlin SDK input

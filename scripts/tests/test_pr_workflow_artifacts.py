@@ -151,6 +151,58 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         workflow = self.workflow("ci-macos-lane.yml")
         self.assertIn("timeout_minutes: 90", workflow)
 
+    def test_pr_platform_critical_matrices_fail_fast_by_profile(self):
+        slices = (
+            "ci-rust-tests-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
+            "ci-linux-product-slice.yml",
+            "ci-macos-host-slice.yml",
+            "ci-macos-runtime-slice.yml",
+            "ci-macos-product-slice.yml",
+            "ci-windows-host-slice.yml",
+            "ci-windows-runtime-slice.yml",
+            "ci-windows-product-slice.yml",
+            "ci-platform-checks-slice.yml",
+        )
+        for filename in slices:
+            with self.subTest(filename=filename):
+                workflow = self.workflow(filename)
+                self.assertIn("fail_fast:", workflow)
+                self.assertIn("fail-fast: ${{ inputs.fail_fast }}", workflow)
+
+        for platform in ("linux", "macos", "windows"):
+            lane = self.workflow(f"ci-{platform}-lane.yml")
+            self.assertIn(
+                "fail_fast: ${{ inputs.original_event_name == 'pull_request' }}",
+                lane,
+            )
+
+        quality = self.workflow("ci-quality-slice.yml")
+        self.assertIn("fail-fast: false", quality)
+        self.assertNotIn("fail-fast: ${{ inputs.fail_fast }}", quality)
+
+    def test_pr_cache_publishers_are_exact_and_bounded(self):
+        ui_artifact = self.workflow("ci-ui-artifact-slice.yml")
+        website = self.workflow("ci-web-slice.yml")
+        self.assertNotIn("name: Save pnpm store", ui_artifact)
+        self.assertEqual(1, website.count("name: Save pnpm store"))
+        self.assertIn("cache: npm", website)
+        self.assertIn("website/package-lock.json", website)
+
+        windows = self.workflow("ci-windows-runtime-slice.yml")
+        self.assertIn("name: Save exact PR-scoped Windows ABI build", windows)
+        self.assertIn("key: ${{ steps.llama_cache.outputs.cache-primary-key }}", windows)
+        self.assertNotIn("restore-keys:", windows)
+
+        platform = self.workflow("ci-platform-checks-slice.yml")
+        self.assertIn("inputs.original_event_name == 'pull_request'", platform)
+        self.assertIn("key: ${{ steps.llama_cache.outputs.cache-primary-key }}", platform)
+
+        rust_tests = self.workflow("ci-rust-tests-slice.yml")
+        self.assertIn("github.ref == 'refs/heads/main'", rust_tests)
+        self.assertIn("original_event_name != 'pull_request'", rust_tests)
+
 
 if __name__ == "__main__":
     unittest.main()

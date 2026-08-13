@@ -180,6 +180,28 @@ Timing evidence is collected read-only with `scripts/collect-ci-metrics.py`.
 Do not put run-specific durations or historical conclusions in this document;
 record an evidence file separately when a timing experiment is authorized.
 
+### PR failure domains
+
+The five PR workflows are independent failure domains. Quality and Website
+continue when a platform compile or functional test fails, and platform lanes
+do not cancel one another. This preserves useful, directly visible diagnostics
+and prevents one topic from hiding another topic's result.
+
+Inside Linux, macOS, and Windows, PR-only `fail_fast` inputs are enabled for
+Rust-test, host, native-runtime, product, and platform-check matrices. The
+first required failure cancels queued and in-progress siblings in that matrix.
+Main and manual-full pass `false` so exhaustive runs retain complete backend
+and platform diagnostics. Quality's Clippy matrix also remains non-fail-fast:
+quality failures are independent findings and never make a product producer
+unusable.
+
+Producer/consumer `needs` edges are the second cancellation layer. A failed UI,
+ABI, host, or runtime producer prevents its product and smoke consumers from
+starting. Do not add an Actions-API watcher that cancels the whole workflow on
+first failure. Whole-run cancellation would also cancel the stable lane
+summary, leaving reviewers with a cancelled required result instead of a
+precise terminal failure.
+
 ## Artifact contract
 
 Every product has three immutable layers:
@@ -216,6 +238,31 @@ trusted-main cache entries. Trusted `main` Linux roles may use Depot only when
 smokes and other hardware-qualified work retain explicit approved placement.
 Provider choice never changes plan membership, commands, artifacts, tests or
 summaries.
+
+### PR cache audit and rerun behavior
+
+GitHub-hosted PR runs may restore caches from their PR merge ref and the base
+branch. A cache written by a `pull_request` run is scoped to that PR merge ref,
+so it is reusable by later runs of the same PR but not by main or another PR.
+The implemented policy uses that isolation selectively:
+
+| Cache class | PR publication | Effective rerun behavior |
+| --- | --- | --- |
+| sccache compiler objects | Job-local disk only | Helps repeated compilation inside one job; no reuse by another job or rerun |
+| Cargo `target` directories | Restore trusted main, never save from PR | A rerun reuses the latest compatible main cache, but not objects compiled by the earlier PR run |
+| Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged |
+| macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
+| Console pnpm store | Website is the sole publisher; platform UI jobs restore only | Avoids four platform workflows racing to upload the same entry; later same-PR runs reuse a lockfile-keyed store |
+| Website npm store | Website-only lockfile-keyed cache | Later same-PR website runs avoid downloading the unchanged dependency store |
+| GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
+
+This is intentionally not a universal PR write-through policy. Cargo target
+caches are commonly hundreds of megabytes to several gigabytes per row; making
+every PR matrix row publish one would multiply storage, increase upload time,
+and evict the trusted main caches available to every PR. Small exact native
+caches have substantially better reuse-to-storage value. Cache hits are always
+an optimization: native stamps/manifests/checksums are verified, and every job
+must still regenerate successfully after a miss.
 
 Depot PR execution is not implemented. Cache isolation, protected
 default-branch runner-owning workflow refs, no-secret/no-token execution and a

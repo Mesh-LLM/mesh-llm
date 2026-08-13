@@ -99,9 +99,18 @@ from that same catalog.
 
 Artifacts are correctness boundaries; caches only accelerate regeneration.
 PR artifacts generally retain for one day. Protected same-repository and fork
-lanes are restore-only despite running from the default-branch workflow ref.
-PR calls cannot publish shared caches, and Depot cache access is denied.
-Trusted main may publish shared caches.
+lanes cannot publish shared trusted-main caches, and Depot cache access is
+denied. Large Cargo target caches restore trusted-main entries but remain
+restore-only on PRs. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
+and Windows native ABI caches may publish into GitHub's isolated PR merge-ref
+scope for same-PR reruns. The Website slice is the sole publisher for the
+shared pnpm key and owns the website npm cache; platform UI producers restore
+the pnpm store without racing to save it. Trusted main owns shared publication.
+
+PR Rust-test, host, native-runtime, product, and platform-check matrices receive
+`fail_fast: true`; main/manual pass `false`. Quality matrices remain
+non-fail-fast, failed producers suppress only declared consumers through
+`needs`, and focused PR workflows never cancel one another.
 
 ## Providers and variables
 

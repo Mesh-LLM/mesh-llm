@@ -148,6 +148,20 @@ owning source, and update the inventory and topology in the same change.
 - Cancel superseded PR runs. Do not cancel releases, deployments, cache
   warming, cleanup, or publishing unless their rollback semantics explicitly
   permit it.
+- Treat each focused PR workflow as an independent failure domain. A Quality
+  or Website failure must not cancel platform compilation, tests, products, or
+  smoke jobs, and a platform failure must not cancel another focused PR
+  workflow.
+- Within a PR platform lane, compilation, functional-test, product, and smoke
+  matrices fail fast so a required row failure cancels their queued and
+  in-progress sibling rows. Keep this profile-derived: exhaustive main/manual
+  runs continue sibling rows to retain complete diagnostics, and Quality
+  matrices continue all rows because they are independent diagnostics rather
+  than producer/consumer gates.
+- Prefer declared `needs` edges to suppress impossible consumers after a
+  producer failure. Do not cancel an entire workflow run through the Actions
+  API on first failure: that prevents the stable lane summary from reporting a
+  terminal failure and discards unrelated failure-domain evidence.
 - Control fan-out in the graph. Use bounded matrices and `max-parallel` after
   eliminating irrelevant work; do not use additional runner capacity as a
   substitute for routing and composition.
@@ -216,6 +230,17 @@ or PR runner routing as part of ordinary workflow refactoring.
   though their workflow ref is the default branch. Trusted
   main/release/warmers own shared publication. Do not save large shared
   Rust/native caches from PRs.
+- GitHub scopes caches created by `pull_request` runs to that PR's merge ref.
+  Small exact caches may publish in that isolated scope when their key covers
+  every compatibility boundary and their contents are verified before use;
+  this is the approved mechanism for accelerating reruns of the same PR.
+  Never use a restore prefix for these PR-produced native caches.
+- Keep multi-gigabyte Cargo target caches restore-only on PRs. Per-PR copies
+  multiply by matrix row, consume repository cache quota, and can evict the
+  trusted main caches that every PR can restore. Prefer small exact native ABI
+  caches and package-manager download stores with lockfile-exact keys.
+- Assign one publisher for a shared package-manager key. Other focused PR
+  workflows may restore it but must not race to upload the same cache entry.
 - Keep PR sccache job-local unless a provider proves safe isolation. A cache
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
