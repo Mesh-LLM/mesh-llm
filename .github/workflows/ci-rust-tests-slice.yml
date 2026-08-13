@@ -86,7 +86,7 @@ jobs:
       - name: Prepare UI placeholder
         run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
       - name: Prepare patched llama.cpp when required
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-quantize') || contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-ffi') }}
+        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-quantize') || contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package') || contains(toJson(matrix.batch.crates), 'skippy-ffi') }}
         run: scripts/prepare-llama.sh pinned
       - name: Download immutable static ABI input
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -96,7 +96,7 @@ jobs:
       - name: Restore immutable static ABI input
         run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
       - name: Download Skippy correctness model when required
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') }}
+        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package') }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/skippy-correctness-model"
