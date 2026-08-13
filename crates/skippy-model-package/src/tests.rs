@@ -423,8 +423,9 @@ fn mid_stage_artifact_opens_with_the_stage_filter_applied() -> anyhow::Result<()
     }
     let layer_start = layer_count / 2;
 
-    let dir = unique_test_dir("mid-stage-load");
-    let artifact = dir.join("stage-mid.gguf");
+    // RAII: the directory is removed when `dir` drops, on every exit path.
+    let dir = tempfile::tempdir()?;
+    let artifact = dir.path().join("stage-mid.gguf");
     let stage = crate::plan::stage_plan_from_tensors(
         1,
         layer_start,
@@ -433,10 +434,7 @@ fn mid_stage_artifact_opens_with_the_stage_filter_applied() -> anyhow::Result<()
         true,
         &source.tensors,
     );
-    if let Err(error) = crate::write::write_stage_artifact(&source, &stage, &artifact) {
-        let _ = std::fs::remove_dir_all(&dir);
-        return Err(error);
-    }
+    crate::write::write_stage_artifact(&source, &stage, &artifact)?;
 
     let config = RuntimeConfig {
         stage_index: 1,
@@ -454,10 +452,12 @@ fn mid_stage_artifact_opens_with_the_stage_filter_applied() -> anyhow::Result<()
         ..RuntimeConfig::default()
     };
 
-    let result = StageModel::open(&artifact, &config);
-    let _ = std::fs::remove_dir_all(&dir);
-    result.map_err(|error| {
+    let model = StageModel::open(&artifact, &config).map_err(|error| {
         anyhow::anyhow!("mid-stage load of layers {layer_start}..{layer_count} failed: {error}")
     })?;
+    // Close the model before the temp dir is removed: on Windows a mapped file
+    // cannot be deleted while it is still open.
+    drop(model);
+    dir.close()?;
     Ok(())
 }
