@@ -267,7 +267,7 @@ fn family_policy_for_normalized_family_id(
         | "gptneox" | "bloom" | "stablelm" | "starcoder2" | "mpt" | "phi" | "phi2" | "phimoe"
         | "gpt2" | "mistral" | "internlm2" | "baichuan" | "exaone" | "exaone4" | "cohere2"
         | "command_r" | "falcon" | "qwen2vl" | "qwen3vl" | "deepseek2ocr" | "qwen3vlmoe"
-        | "openai_moe" | "ernie4_5_moe" | "llama4" | "mistral4" | "seed_oss" => {
+        | "openai_moe" | "ernie4_5_moe" | "llama4" | "mistral4" | "seed_oss" | "muse_glimmer" => {
             resident_kv_policy(activation_wire_dtype)
         }
         "qwen3next" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2" | "rwkv6" | "rwkv7"
@@ -578,6 +578,40 @@ mod tests {
                 max_entries: 16,
             }
         );
+    }
+
+    /// Regression: Muse-Glimmer must get the resident-KV prefix cache.
+    ///
+    /// The arch is supported by the pinned llama.cpp, but the family was
+    /// missing from the cache certification list, so every agent turn
+    /// re-prefilled the full context (`cached_tokens=0`, ~10x turn latency
+    /// on long agent transcripts).
+    #[test]
+    fn muse_glimmer_policy_comes_from_gguf_architecture() {
+        let policy = family_policy_for_gguf_meta(&meta("muse-glimmer"), None);
+
+        assert_eq!(policy.activation_wire_dtype, StageWireDType::F16);
+        assert_eq!(
+            policy.prefix_cache,
+            FamilyPrefixCachePolicy::Auto {
+                payload: FamilyPrefixCachePayload::ResidentKv,
+                min_tokens: 256,
+                max_entries: 16,
+            }
+        );
+    }
+
+    #[test]
+    fn muse_glimmer_policy_comes_from_model_id() {
+        let policy = family_policy_for_model_id("meta-models/Muse-Glimmer-30B-GGUF:Q4_K_M");
+
+        assert!(matches!(
+            policy.prefix_cache,
+            FamilyPrefixCachePolicy::Auto {
+                payload: FamilyPrefixCachePayload::ResidentKv,
+                ..
+            }
+        ));
     }
 
     #[test]
