@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   packages: read
+  pull-requests: read
 
 jobs:
   validation:
@@ -14,4 +15,5 @@ jobs:
     permissions:
       contents: read
       packages: read
+      pull-requests: read
     uses: Mesh-LLM/mesh-llm/.github/workflows/ci-orchestrator.yml@main
