@@ -1,4 +1,4 @@
-From e6999a73cb1ecd85fe8ad89b14bd164b28a9ed58 Mon Sep 17 00:00:00 2001
+From d05c14f28310cbed10527f4fb1a1b2f32bad1a6c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
 Subject: [PATCH 01/15] Add staged model graph and family support
@@ -3279,7 +3279,7 @@ index ef82eb976..4f1f1df8d 100644
      }
      if (cell_count > size) {
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 3d50f8a1c..4aa1d7e56 100644
+index 3d50f8a1c..1086cad36 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -18,6 +18,25 @@ static const size_t kiB = 1024;
@@ -3368,7 +3368,7 @@ index 3d50f8a1c..4aa1d7e56 100644
              // make sure the main file is loaded first
              uint16_t idx = 0;
              const std::string kv_split_no = llm_kv(LLM_KV_SPLIT_NO);
-@@ -1090,14 +1149,20 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1090,14 +1149,101 @@ struct ggml_tensor * llama_model_loader::create_tensor(
          return it->second.get();
      };
  
@@ -3386,78 +3386,101 @@ index 3d50f8a1c..4aa1d7e56 100644
 +                return false;
              }
 -            throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
-         }
++        }
 +        return true;
 +    };
++
++    auto stage_filter_excludes = [&](ggml_tensor * t_meta) -> bool {
++        if (!g_skippy_filter.enabled) {
++            return false;
++        }
++
++        llm_tensor tn_tensor = tn.tensor;
++        if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && (flags & TENSOR_DUPLICATED)) {
++            tn_tensor = LLM_TENSOR_OUTPUT;
+         }
  
++        llm_tensor_info info;
++        try {
++            info = llm_tensor_info_for(tn_tensor);
++        } catch (const std::out_of_range & e) {
++            // Leave the diagnostic to buft_for_tensor, which reports it with context.
++            return false;
++        }
++
++        bool keep = true;
++        switch (info.layer) {
++            case LLM_TENSOR_LAYER_INPUT:
++                keep = g_skippy_filter.include_embeddings;
++                break;
++            case LLM_TENSOR_LAYER_OUTPUT:
++                keep = g_skippy_filter.include_output;
++                break;
++            case LLM_TENSOR_LAYER_REPEATING:
++                keep = tn.bid >= g_skippy_filter.layer_start &&
++                       tn.bid <  g_skippy_filter.layer_end;
++                break;
++            default:
++                keep = true;
++                break;
++        }
++
++        if (!keep && llm_kv.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0) {
++            keep = tn.tensor == LLM_TENSOR_TOKEN_EMBD ||
++                   tn.tensor == LLM_TENSOR_PER_LAYER_TOKEN_EMBD ||
++                   tn.tensor == LLM_TENSOR_PER_LAYER_MODEL_PROJ ||
++                   tn.tensor == LLM_TENSOR_PER_LAYER_PROJ_NORM;
++        }
++        if (!keep && llm_kv.arch == LLM_ARCH_GEMMA3N) {
++            keep = tn.tensor == LLM_TENSOR_PER_LAYER_TOKEN_EMBD ||
++                   tn.tensor == LLM_TENSOR_PER_LAYER_MODEL_PROJ ||
++                   tn.tensor == LLM_TENSOR_PER_LAYER_PROJ_NORM ||
++                   (tn.tensor == LLM_TENSOR_ALTUP_PROJ && g_skippy_filter.include_embeddings) ||
++                   (tn.tensor == LLM_TENSOR_ALTUP_UNEMBD_PROJ && g_skippy_filter.include_output);
++        }
++
++        if (!keep) {
++            if (t_meta) {
++                const bool requested_tensor_exists =
++                        !(flags & TENSOR_NOT_REQUIRED) || requested_shape_matches(t_meta);
++                const std::string tensor_name = tn.str();
++                bool first_filtered_request = true;
++                if (requested_tensor_exists && !(flags & TENSOR_DUPLICATED)) {
++                    first_filtered_request = skippy_counted_filtered_tensors.insert(tensor_name).second;
++                }
++                const size_t nbytes = ggml_nbytes(t_meta);
++                LLAMA_LOG_DEBUG(
++                        "llama_model_loader: stage filter skipping tensor %s (size = %zu bytes)\n",
++                        tensor_name.c_str(),
++                        nbytes);
++
++                if (requested_tensor_exists && first_filtered_request) {
++                    size_data -= nbytes;
++                    if (!(flags & TENSOR_DUPLICATED)) {
++                        n_created++;
++                    }
++                }
++                g_skippy_last_tensor_filtered = true;
++            } else {
++                g_skippy_last_tensor_filtered = false;
++            }
++
++            return true;
++        }
++
++        return false;
++    };
++
 +    auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
          // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
          // the tensor is duplicated
          // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
-@@ -1113,6 +1178,78 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1113,6 +1259,20 @@ struct ggml_tensor * llama_model_loader::create_tensor(
              throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
          }
  
-+        if (g_skippy_filter.enabled) {
-+            bool keep = true;
-+            switch (info.layer) {
-+                case LLM_TENSOR_LAYER_INPUT:
-+                    keep = g_skippy_filter.include_embeddings;
-+                    break;
-+                case LLM_TENSOR_LAYER_OUTPUT:
-+                    keep = g_skippy_filter.include_output;
-+                    break;
-+                case LLM_TENSOR_LAYER_REPEATING:
-+                    keep = tn.bid >= g_skippy_filter.layer_start &&
-+                           tn.bid <  g_skippy_filter.layer_end;
-+                    break;
-+                default:
-+                    keep = true;
-+                    break;
-+            }
-+
-+            if (!keep && llm_kv.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0) {
-+                keep = tn.tensor == LLM_TENSOR_TOKEN_EMBD ||
-+                       tn.tensor == LLM_TENSOR_PER_LAYER_TOKEN_EMBD ||
-+                       tn.tensor == LLM_TENSOR_PER_LAYER_MODEL_PROJ ||
-+                       tn.tensor == LLM_TENSOR_PER_LAYER_PROJ_NORM;
-+            }
-+            if (!keep && llm_kv.arch == LLM_ARCH_GEMMA3N) {
-+                keep = tn.tensor == LLM_TENSOR_PER_LAYER_TOKEN_EMBD ||
-+                       tn.tensor == LLM_TENSOR_PER_LAYER_MODEL_PROJ ||
-+                       tn.tensor == LLM_TENSOR_PER_LAYER_PROJ_NORM ||
-+                       (tn.tensor == LLM_TENSOR_ALTUP_PROJ && g_skippy_filter.include_embeddings) ||
-+                       (tn.tensor == LLM_TENSOR_ALTUP_UNEMBD_PROJ && g_skippy_filter.include_output);
-+            }
-+
-+            if (!keep) {
-+                if (t_meta) {
-+                    const bool requested_tensor_exists =
-+                            !(flags & TENSOR_NOT_REQUIRED) || requested_shape_matches(t_meta);
-+                    const std::string tensor_name = tn.str();
-+                    bool first_filtered_request = true;
-+                    if (requested_tensor_exists && !(flags & TENSOR_DUPLICATED)) {
-+                        first_filtered_request = skippy_counted_filtered_tensors.insert(tensor_name).second;
-+                    }
-+                    const size_t nbytes = ggml_nbytes(t_meta);
-+                    LLAMA_LOG_DEBUG(
-+                            "llama_model_loader: stage filter skipping tensor %s (size = %zu bytes)\n",
-+                            tensor_name.c_str(),
-+                            nbytes);
-+
-+                    if (requested_tensor_exists && first_filtered_request) {
-+                        size_data -= nbytes;
-+                        if (!(flags & TENSOR_DUPLICATED)) {
-+                            n_created++;
-+                        }
-+                    }
-+                    g_skippy_last_tensor_filtered = true;
-+                } else {
-+                    g_skippy_last_tensor_filtered = false;
-+                }
-+
-+                return nullptr;
-+            }
++        if (stage_filter_excludes(t_meta)) {
++            return nullptr;
 +        }
 +
 +        if (!t_meta) {
@@ -3473,6 +3496,23 @@ index 3d50f8a1c..4aa1d7e56 100644
          // skip unused tensors
          if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
              const size_t nbytes = ggml_nbytes(t_meta);
+@@ -1269,6 +1429,16 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+     }
+ 
+     LLAMA_LOG_DEBUG("%s: loading tensor %s\n", __func__, tn.str().c_str());
++
++    // The stage filter must be consulted BEFORE the tensor is looked up: a filtered
++    // stage package legitimately does not contain tensors outside its layer range, so
++    // check_tensor_dims would throw "tensor 'blk.0.attn_norm.weight' not found" for a
++    // stage that starts above layer 0. buft_for_tensor also applies the filter, but it
++    // runs after this lookup on the file-backed path.
++    if (g_skippy_filter.enabled && stage_filter_excludes(get_tensor_meta(tn.str().c_str()))) {
++        return nullptr;
++    }
++
+     const struct ggml_tensor * cur = check_tensor_dims(tn.str(), ne, !(flags & TENSOR_NOT_REQUIRED), flags & TENSOR_ALLOW_RESHAPE);
+     if (cur == NULL) {
+         return NULL;
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
 index d6b31c231..74fc6c093 100644
 --- a/src/llama-model-loader.h
