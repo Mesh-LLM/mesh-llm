@@ -369,7 +369,8 @@ mod tests {
                 "metric_4": 4,
                 "metric_5": 5,
                 "metric_6": 6,
-                "metric_7": 7
+                "metric_7": 7,
+                "metric_8": 8
             }
         })
         .to_string();
@@ -385,6 +386,7 @@ mod tests {
         assert_eq!(data["outcome"], "completed");
         assert_eq!(data["numericSummaries"].as_object().unwrap().len(), 8);
         assert!(data["numericSummaries"].get("metric_7").is_some());
+        assert!(data["numericSummaries"].get("metric_8").is_none());
         assert!(data["numericSummaries"].get("bad-key").is_none());
     }
 
