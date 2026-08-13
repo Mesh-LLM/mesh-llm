@@ -12,7 +12,7 @@ Collect a bounded comparable cohort:
 ```bash
 python3 scripts/collect-ci-metrics.py \
   --repo Mesh-LLM/mesh-llm \
-  --workflow pr_builds.yml \
+  --workflow pr_linux.yml \
   --event pull_request \
   --limit 20 \
   --label profile=pr-ready \

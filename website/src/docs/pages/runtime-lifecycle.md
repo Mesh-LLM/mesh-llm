@@ -97,6 +97,11 @@ curl -s -X DELETE \
   localhost:3131/api/runtime/instances/<instance-id>
 ```
 
+The legacy `/mesh/load` and `/mesh/drop` paths on the peer-reachable `:9337`
+OpenAI ingress return `410 Gone` and never mutate or route runtime state. Use
+the `:3131` management API for local lifecycle changes and the authenticated
+owner-control endpoints for remote administration.
+
 Model-targeted unload applies to the resolved model. Instance-targeted unload
 selects one exact running instance.
 

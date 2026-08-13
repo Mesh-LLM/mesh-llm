@@ -40,6 +40,77 @@ async fn runtime_status_and_activity_routes_are_dispatched() {
 }
 
 #[tokio::test]
+async fn local_runtime_model_routes_remain_the_lifecycle_api() {
+    let state = build_test_mesh_api().await;
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+    state.set_runtime_control(control_tx).await;
+
+    let load_task = tokio::spawn(async move {
+        match control_rx.recv().await {
+            Some(RuntimeControlRequest::Load {
+                spec,
+                profile,
+                resp,
+            }) => {
+                assert_eq!(spec, "org/model:Q4_K_M");
+                assert_eq!(profile, "low-ctx");
+                let _ = resp.send(Ok(RuntimeLoadResponse {
+                    model_ref: spec.clone(),
+                    model: spec,
+                    instance_id: "runtime-load-1".to_string(),
+                    profile,
+                    backend: None,
+                    context_length: None,
+                }));
+            }
+            _ => panic!("expected local load request"),
+        }
+    });
+
+    let loaded = send_runtime_lifecycle_request(
+        state.clone(),
+        lifecycle_post(
+            "/api/runtime/models",
+            r#"{"model":"org/model:Q4_K_M#low-ctx"}"#,
+        ),
+    )
+    .await;
+    load_task.await.unwrap();
+    assert!(loaded.starts_with("HTTP/1.1 201 Created"), "response: {loaded}");
+    assert_eq!(json_body(&loaded)["loaded"], "org/model:Q4_K_M");
+
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+    state.set_runtime_control(control_tx).await;
+    let unload_task = tokio::spawn(async move {
+        match control_rx.recv().await {
+            Some(RuntimeControlRequest::Unload {
+                target: mesh_llm_node::serving::UnloadTarget::Model(model),
+                options: _,
+                resp,
+            }) => {
+                assert_eq!(model, "org/model:Q4_K_M");
+                let _ = resp.send(Ok(RuntimeUnloadResponse {
+                    model,
+                    instance_id: "runtime-load-1".to_string(),
+                    unloaded: true,
+                }));
+            }
+            _ => panic!("expected local unload request"),
+        }
+    });
+
+    let unloaded = send_runtime_lifecycle_request(
+        state,
+        "DELETE /api/runtime/models/org%2Fmodel%3AQ4_K_M HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            .into(),
+    )
+    .await;
+    unload_task.await.unwrap();
+    assert!(unloaded.starts_with("HTTP/1.1 200 OK"), "response: {unloaded}");
+    assert_eq!(json_body(&unloaded)["dropped"], "org/model:Q4_K_M");
+}
+
+#[tokio::test]
 async fn runtime_activity_override_uses_put_and_delete() {
     let state = build_test_mesh_api().await;
     let body = r#""active""#;

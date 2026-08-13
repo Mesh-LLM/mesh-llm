@@ -43,7 +43,16 @@ const AUDIT: LogAuditEntry = {
   source: 'runtime',
   code: 'runtime_ready',
   severity: 'info',
-  sequence: 7
+  sequence: 7,
+  contextVersion: 1,
+  subjectKind: 'model',
+  subjectId: 'unsloth/Qwen3.5-4B-GGUF',
+  operationId: 'runtime-instance-7',
+  requestId: REQUEST_ID,
+  reasonCode: 'model_loaded',
+  outcome: 'ready',
+  durationMs: 412,
+  numericSummaries: { layers: 36 }
 }
 
 function ready<T>(data: T) {
@@ -96,12 +105,20 @@ describe('LogEventInspector', () => {
       AUDIT.source,
       AUDIT.code,
       AUDIT.severity ?? 'Not provided',
-      String(AUDIT.sequence)
+      String(AUDIT.sequence),
+      AUDIT.subjectKind ?? '',
+      AUDIT.subjectId ?? '',
+      AUDIT.operationId ?? '',
+      AUDIT.requestId ?? '',
+      AUDIT.reasonCode ?? '',
+      AUDIT.outcome ?? '',
+      `${AUDIT.durationMs} ms`,
+      String(AUDIT.numericSummaries?.layers)
     ]) {
       expect(within(dialog).getByText(value)).toBeInTheDocument()
     }
-    expect(within(dialog).getAllByRole('term')).toHaveLength(6)
-    expect(within(dialog).getAllByRole('definition')).toHaveLength(6)
+    expect(within(dialog).getAllByRole('term')).toHaveLength(14)
+    expect(within(dialog).getAllByRole('definition')).toHaveLength(14)
     expect(dialog).not.toHaveTextContent(/payload|destination|peer address|raw fields/i)
     expect(requestQueries.summary).not.toHaveBeenCalled()
     expect(requestQueries.events).not.toHaveBeenCalled()

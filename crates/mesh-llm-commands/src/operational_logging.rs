@@ -72,9 +72,13 @@ pub struct CommandDispatchBoundary {
 impl CommandDispatchBoundary {
     /// Start the command boundary after parsing succeeds.
     pub fn start(command: &Command) -> Self {
-        let boundary = Self {
-            family: command_family(command),
-        };
+        Self::start_family(command_family(command))
+    }
+
+    /// Start a command boundary whose bounded family was resolved by the
+    /// dispatcher (for example, external plugin versus truly unknown).
+    pub fn start_family(family: CliCommandFamily) -> Self {
+        let boundary = Self { family };
         boundary.emit(CliCommandOutcome::Started);
         boundary
     }
@@ -100,6 +104,13 @@ impl CommandDispatchBoundary {
             outcome,
         }
     }
+}
+
+/// Emit a process lifecycle outcome that occurs before a parsed [`Command`]
+/// exists, while retaining the same presentation and durable-audit bridge.
+pub fn emit_cli_process_event(family: CliCommandFamily, outcome: CliCommandOutcome) {
+    let boundary = CommandDispatchBoundary { family };
+    boundary.emit(outcome);
 }
 
 /// Map a parsed command to a stable, argument-free event family.

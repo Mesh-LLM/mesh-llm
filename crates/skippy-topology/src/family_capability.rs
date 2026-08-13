@@ -1369,6 +1369,15 @@ fn infer_mid_remaining_capability(
     layer_count: u32,
     activation_width: u32,
 ) -> Option<FamilyCapabilityRecord> {
+    if compact.contains("museglimmer") {
+        return Some(dense_family_capability(
+            "muse_glimmer",
+            layer_count,
+            activation_width,
+            WireValidation::Untested,
+            ExactStateMobility::Untested,
+        ));
+    }
     if compact.contains("mpt") {
         return Some(dense_family_capability(
             "mpt",

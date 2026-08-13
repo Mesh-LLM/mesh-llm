@@ -42,6 +42,10 @@ pub(crate) struct OpenAiLifecycleAttachment {
 /// transport can only submit body bytes and fixed artifact kinds; it never
 /// receives filesystem or store access.
 pub(crate) trait OpenAiArtifactCapture: Send + Sync {
+    fn body_limit_bytes(&self) -> usize {
+        256 * 1024
+    }
+
     fn capture_body(
         &self,
         request_id: RequestId,
@@ -55,6 +59,78 @@ pub(crate) trait OpenAiArtifactCapture: Send + Sync {
         kind: &'static str,
         reason: ArtifactUnavailableReason,
     );
+}
+
+/// Request-local bounded assembly for a client-visible SSE response body.
+/// The configured per-artifact limit is enforced while frames arrive, before
+/// the persistence queue is offered any body bytes.
+pub(crate) struct OpenAiStreamArtifactCapture {
+    capture: Arc<dyn OpenAiArtifactCapture>,
+    request_id: RequestId,
+    bytes: Vec<u8>,
+    limit: usize,
+    overflowed: bool,
+    finalized: bool,
+}
+
+impl OpenAiStreamArtifactCapture {
+    fn new(capture: Arc<dyn OpenAiArtifactCapture>, request_id: RequestId, limit: usize) -> Self {
+        Self {
+            capture,
+            request_id,
+            bytes: Vec::new(),
+            limit,
+            overflowed: false,
+            finalized: false,
+        }
+    }
+
+    pub(crate) fn push(&mut self, bytes: &[u8]) {
+        if self.overflowed {
+            return;
+        }
+        let Some(next_len) = self.bytes.len().checked_add(bytes.len()) else {
+            self.overflowed = true;
+            self.bytes.clear();
+            return;
+        };
+        if next_len > self.limit {
+            self.overflowed = true;
+            self.bytes.clear();
+            return;
+        }
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    fn complete(mut self) {
+        self.finalized = true;
+        if self.overflowed {
+            self.capture.capture_unavailable(
+                self.request_id,
+                "response",
+                ArtifactUnavailableReason::CaptureContentLimitExceeded,
+            );
+        } else {
+            self.capture.capture_body(
+                self.request_id,
+                "response",
+                &self.bytes,
+                Some("text/event-stream"),
+            );
+        }
+    }
+}
+
+impl Drop for OpenAiStreamArtifactCapture {
+    fn drop(&mut self) {
+        if !self.finalized {
+            self.capture.capture_unavailable(
+                self.request_id,
+                "response",
+                ArtifactUnavailableReason::StreamingResponseNotAssembled,
+            );
+        }
+    }
 }
 
 /// Metadata-only route view handed to downstream dispatch code.
@@ -176,6 +252,33 @@ impl<'a> OpenAiRouteObserver<'a> {
         if let (Some(request_id), Some(capture)) = (self.request_id, self.capture) {
             capture.capture_unavailable(request_id, "response", reason);
         }
+    }
+
+    pub(crate) fn begin_stream_response_capture(&self) -> Option<OpenAiStreamArtifactCapture> {
+        let capture = self.capture?;
+        let request_id = self.request_id?;
+        Some(OpenAiStreamArtifactCapture::new(
+            Arc::clone(capture),
+            request_id,
+            capture.body_limit_bytes(),
+        ))
+    }
+
+    pub(crate) fn complete_stream_response_capture(
+        &self,
+        capture: Option<OpenAiStreamArtifactCapture>,
+    ) {
+        let Some(capture) = capture else {
+            return;
+        };
+        capture.complete();
+    }
+
+    pub(crate) fn abandon_stream_response_capture(
+        &self,
+        capture: Option<OpenAiStreamArtifactCapture>,
+    ) {
+        drop(capture);
     }
 
     pub(crate) fn route_selected(&self, model: Option<&str>) {
@@ -693,7 +796,7 @@ fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use mesh_llm_events::logging::{events::LifecycleEvent, identifiers::RequestId};
     use openai_frontend::{
@@ -702,6 +805,66 @@ mod tests {
     };
 
     use super::*;
+
+    #[derive(Default)]
+    struct ArtifactCaptureProbe {
+        bodies: Mutex<Vec<Vec<u8>>>,
+        unavailable: Mutex<Vec<ArtifactUnavailableReason>>,
+    }
+
+    impl OpenAiArtifactCapture for ArtifactCaptureProbe {
+        fn capture_body(
+            &self,
+            _request_id: RequestId,
+            _kind: &'static str,
+            content: &[u8],
+            _media_kind: Option<&str>,
+        ) {
+            self.bodies.lock().unwrap().push(content.to_vec());
+        }
+
+        fn capture_unavailable(
+            &self,
+            _request_id: RequestId,
+            _kind: &'static str,
+            reason: ArtifactUnavailableReason,
+        ) {
+            self.unavailable.lock().unwrap().push(reason);
+        }
+    }
+
+    #[test]
+    fn stream_artifact_capture_enforces_the_limit_before_persistence() {
+        let probe = Arc::new(ArtifactCaptureProbe::default());
+        let capture: Arc<dyn OpenAiArtifactCapture> = probe.clone();
+        let mut stream = OpenAiStreamArtifactCapture::new(capture, RequestId::new(), 4);
+
+        stream.push(b"1234");
+        stream.push(b"5");
+        stream.complete();
+
+        assert!(probe.bodies.lock().unwrap().is_empty());
+        assert_eq!(
+            *probe.unavailable.lock().unwrap(),
+            vec![ArtifactUnavailableReason::CaptureContentLimitExceeded]
+        );
+    }
+
+    #[test]
+    fn dropped_stream_artifact_capture_records_an_explicit_unavailable_state() {
+        let probe = Arc::new(ArtifactCaptureProbe::default());
+        let capture: Arc<dyn OpenAiArtifactCapture> = probe.clone();
+        let mut stream = OpenAiStreamArtifactCapture::new(capture, RequestId::new(), 64);
+
+        stream.push(b"partial");
+        drop(stream);
+
+        assert!(probe.bodies.lock().unwrap().is_empty());
+        assert_eq!(
+            *probe.unavailable.lock().unwrap(),
+            vec![ArtifactUnavailableReason::StreamingResponseNotAssembled]
+        );
+    }
 
     fn context(request_id: RequestId) -> OpenAiLifecycleContext {
         OpenAiLifecycleContext::new(

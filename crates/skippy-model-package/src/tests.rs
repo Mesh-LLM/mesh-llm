@@ -393,3 +393,71 @@ fn unique_test_dir(name: &str) -> PathBuf {
         std::process::id()
     ))
 }
+
+/// Regression cover for loading a stage that does not start at layer 0.
+///
+/// A mid-stage artifact legitimately contains no `blk.0.*` tensors. The native
+/// loader must consult the skippy stage filter *before* looking a tensor up;
+/// when the filter runs after the lookup instead, opening this artifact fails
+/// with `check_tensor_dims: tensor 'blk.0.attn_norm.weight' not found`.
+///
+/// Writing a real mid-stage artifact and opening it through the runtime is what
+/// makes this catch the bug: a full GGUF still contains block 0, so a filtered
+/// config over an unfiltered file exercises none of this.
+#[test]
+fn mid_stage_artifact_opens_with_the_stage_filter_applied() -> anyhow::Result<()> {
+    use skippy_runtime::{
+        FlashAttentionType, GGML_TYPE_F16, RuntimeConfig, RuntimeLoadMode, StageModel,
+    };
+
+    let Some(model_path) = std::env::var_os("SKIPPY_CORRECTNESS_MODEL").map(PathBuf::from) else {
+        eprintln!("skipping mid-stage load: SKIPPY_CORRECTNESS_MODEL is not set");
+        return Ok(());
+    };
+
+    let source = crate::write::ModelSource::open(&model_path)?;
+    let layer_count = crate::plan::layer_count(&source.tensors)?;
+    if layer_count < 2 {
+        eprintln!("skipping mid-stage load: model has fewer than 2 layers");
+        return Ok(());
+    }
+    let layer_start = layer_count / 2;
+
+    // RAII: the directory is removed when `dir` drops, on every exit path.
+    let dir = tempfile::tempdir()?;
+    let artifact = dir.path().join("stage-mid.gguf");
+    let stage = crate::plan::stage_plan_from_tensors(
+        1,
+        layer_start,
+        layer_count,
+        true,
+        true,
+        &source.tensors,
+    );
+    crate::write::write_stage_artifact(&source, &stage, &artifact)?;
+
+    let config = RuntimeConfig {
+        stage_index: 1,
+        layer_start,
+        layer_end: layer_count,
+        ctx_size: 256,
+        n_gpu_layers: 0,
+        cache_type_k: GGML_TYPE_F16,
+        cache_type_v: GGML_TYPE_F16,
+        flash_attn_type: FlashAttentionType::Auto,
+        load_mode: RuntimeLoadMode::RuntimeSlice,
+        include_embeddings: true,
+        include_output: true,
+        filter_tensors_on_load: true,
+        ..RuntimeConfig::default()
+    };
+
+    let model = StageModel::open(&artifact, &config).map_err(|error| {
+        anyhow::anyhow!("mid-stage load of layers {layer_start}..{layer_count} failed: {error}")
+    })?;
+    // Close the model before the temp dir is removed: on Windows a mapped file
+    // cannot be deleted while it is still open.
+    drop(model);
+    dir.close()?;
+    Ok(())
+}

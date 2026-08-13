@@ -44,6 +44,19 @@ headers are present. It is not advertised through mesh gossip and must not be
 put behind a public reverse proxy. Use the local embedded console rather than
 sharing its log routes with other users or nodes.
 
+### Invite tokens are public connection information
+
+Mesh invite tokens are intentionally shareable connection descriptors, not
+private credentials or secrets. They may appear in normal CLI/TUI/JSON output,
+diagnostic logs, and test evidence and do not require redaction merely because
+they are invite tokens. Do not classify or report their presence as a logging
+privacy defect.
+
+This exception applies only to mesh invite tokens. Owner keys, API keys,
+authorization headers, owner-control endpoint tokens, signed private URLs, and
+other authentication material remain secrets and must follow the normal
+redaction and evidence-handling rules.
+
 An older host can lack this API. The console treats a missing or explicitly
 unsupported ledger endpoint as **unsupported** and asks the operator to
 upgrade the host; it does not substitute the older status or runtime event
@@ -133,6 +146,37 @@ Use the console for investigation and the CLI stream for process observation.
 They are bounded projections of the same lifecycle, but the console remains
 the authority for details, artifacts, replay, retention, and audited
 operations.
+
+## Operational event coverage
+
+The operational ledger records events only where an existing Rust owner has an
+authoritative transition. The following matrix is the current support contract;
+it is intentionally narrower than every line that may appear in terminal or
+native debug output.
+
+| Owner | Captured now | Displayed in Logs |
+|---|---|---|
+| CLI dispatch | Parsed command start and terminal result, bounded parse failure, and normalized command family | Yes, with command family and outcome |
+| Host runtime | Startup, ready, shutdown start, and authoritative shutdown completion | Yes, with runtime subject context where available |
+| Model lifecycle | Resolve/load start, ready, load failure, unload start, unload completion/failure, and unexpected model exit at existing Rust-owned boundaries | Yes, with model and runtime-instance correlation |
+| Configuration and diagnostics | Existing apply and diagnostics outcomes | Yes |
+| Discovery, mesh, and local serving | Existing join/discovery, connection, readiness, and availability outcomes already owned by Rust | Yes |
+| OpenAI-compatible inference | Admission, route and attempts, stream boundaries, usage, terminal outcome, and optional request/response artifacts | Yes; payload bodies require `redacted_artifacts` and an explicit operator read |
+| Logging operations | Queue/persistence failures, cleanup/delete/export/retry operations, audited reads, and local authorization rejection | Yes; routine management records remain filterable |
+
+The request ledger is canonical for inference lifecycle records. Operational
+logging does not emit duplicate audit rows for those same request events.
+Streaming response artifacts are assembled only in `redacted_artifacts` mode,
+bounded by the configured artifact limit while frames arrive, and redacted
+before persistence. An incomplete stream or an over-limit stream is recorded
+as explicitly unavailable rather than as a partial payload.
+
+Lower-level native runtime/model phases, stage and topology lifecycle, session
+and capacity events, tokenization/prefill/decode progress, KV/cache pressure,
+device degradation, and reducer-owned availability remain deferred to the
+future event pipeline in [`.omo/specs/event-system.md`](../.omo/specs/event-system.md).
+Do not change the mesh protocol, Skippy ABI, native callbacks, or low-level
+runtime ownership solely to add logging hooks before that system is implemented.
 
 ## Troubleshooting and rollback
 

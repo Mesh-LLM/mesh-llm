@@ -41,7 +41,6 @@ on:
         required: false
   workflow_dispatch:
     inputs: *lane_inputs
-
 permissions:
   contents: read
   packages: read
@@ -51,6 +50,22 @@ concurrency:
   cancel-in-progress: ${{ inputs.original_event_name == 'pull_request' }}
 
 jobs:
+  validate_plan:
+    name: Validate macOS lane plan
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Enforce one consumer architecture
+        env:
+          LANE_PLAN: ${{ inputs.lane_plan_json }}
+        run: |
+          set -euo pipefail
+          jq -e '
+            .lane == "macos" and
+            (.matrices.runtime_products | type == "array") and
+            ([.matrices.runtime_products[].architecture] | unique | length) <= 1
+          ' <<<"$LANE_PLAN" >/dev/null
+
   ui_artifact:
     name: Console artifact
     if: ${{ fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
@@ -64,45 +79,35 @@ jobs:
     name: Neutral macOS host
     needs: [ui_artifact]
     if: ${{ !cancelled() && needs.ui_artifact.result == 'success' && fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
-    uses: ./.github/workflows/ci-host-slice.yml
+    uses: ./.github/workflows/ci-macos-host-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      linux_hosts_matrix: '[]'
-      macos_hosts_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}
-      windows_hosts_matrix: '[]'
+      hosts_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}
       ui_artifact_name: ci-ui-dist-macos-${{ github.run_id }}
       profile: release
-      linux_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
-      macos_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
-      windows_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   native_runtimes:
     name: Native macOS runtimes
     if: ${{ fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null }}
-    uses: ./.github/workflows/ci-runtime-product-slice.yml
+    uses: ./.github/workflows/ci-macos-runtime-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      linux_runtime_matrix: '[]'
-      macos_runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      windows_runtime_matrix: '[]'
-      linux_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
-      macos_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
-      windows_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   runtime_product:
     name: macOS products
     needs: [hosts, native_runtimes]
     if: ${{ !cancelled() && needs.hosts.result == 'success' && needs.native_runtimes.result == 'success' }}
-    uses: ./.github/workflows/ci-runtime-product-slice.yml
+    uses: ./.github/workflows/ci-macos-product-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      linux_runtime_matrix: '[]'
-      macos_runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      windows_runtime_matrix: '[]'
-      linux_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
-      macos_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
-      windows_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
-      compose_products: true
+      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   platform_checks:
     name: macOS checks
@@ -112,7 +117,9 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       platform_checks_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.platform_checks) }}
       profile: ${{ fromJson(inputs.lane_plan_json).profile }}
+      original_event_name: ${{ inputs.original_event_name }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   swift_sdk_input:
     name: Swift SDK input
@@ -127,26 +134,26 @@ jobs:
 
   sdk:
     name: Swift SDK smoke
-    needs: [runtime_product, swift_sdk_input]
-    if: ${{ !cancelled() && needs.runtime_product.result == 'success' && needs.swift_sdk_input.result == 'success' && contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift') }}
-    uses: ./.github/workflows/ci-sdk-slice.yml
+    needs: [validate_plan, runtime_product, swift_sdk_input]
+    if: ${{ !cancelled() && needs.validate_plan.result == 'success' && needs.runtime_product.result == 'success' && needs.swift_sdk_input.result == 'success' && contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift') }}
+    uses: ./.github/workflows/ci-macos-sdk-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      architecture: ${{ fromJson(inputs.lane_plan_json).matrices.runtime_products[0].architecture }}
       sdk_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.sdk) }}
-      lane: macos
       binary_target: target/release/mesh-llm
-      profile: release
       swift_mode: ${{ (fromJson(inputs.lane_plan_json).profile == 'main' || fromJson(inputs.lane_plan_json).profile == 'manual-full') && 'full' || 'host-only' }}
     secrets:
       HF_TOKEN: ${{ inputs.original_event_name == 'push' && secrets.HF_TOKEN || '' }}
 
   product_smoke:
     name: Metal product smoke
-    needs: [runtime_product]
-    if: ${{ !cancelled() && needs.runtime_product.result == 'success' && fromJson(inputs.lane_plan_json).matrices.smoke[0] != null }}
-    uses: ./.github/workflows/ci-product-smoke-slice.yml
+    needs: [validate_plan, runtime_product]
+    if: ${{ !cancelled() && needs.validate_plan.result == 'success' && needs.runtime_product.result == 'success' && fromJson(inputs.lane_plan_json).matrices.smoke[0] != null }}
+    uses: ./.github/workflows/ci-macos-product-smoke-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      architecture: ${{ fromJson(inputs.lane_plan_json).matrices.runtime_products[0].architecture }}
       smoke_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.smoke) }}
       binary_target: target/release/mesh-llm
       timeout_minutes: 30
@@ -154,6 +161,7 @@ jobs:
   summary:
     name: CI / macOS
     needs:
+      - validate_plan
       - ui_artifact
       - hosts
       - native_runtimes

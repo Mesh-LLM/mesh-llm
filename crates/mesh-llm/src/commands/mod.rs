@@ -23,8 +23,12 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
     let Some(cmd) = cli.command.as_ref() else {
         return Ok(false);
     };
+    let family = match cmd {
+        Command::ExternalPlugin(args) => plugin_cli::external_cli_command_family(cli, args),
+        _ => mesh_llm_commands::operational_logging::command_family(cmd),
+    };
     let command_boundary =
-        mesh_llm_commands::operational_logging::CommandDispatchBoundary::start(cmd);
+        mesh_llm_commands::operational_logging::CommandDispatchBoundary::start_family(family);
     let result = dispatch_command(cli, cmd).await;
     command_boundary.finish(&result);
     result?;

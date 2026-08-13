@@ -1,0 +1,77 @@
+name: CI Linux Product Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      runtime_matrix:
+        description: JSON Linux product rows from the versioned CI plan.
+        required: true
+        type: string
+      max_parallel:
+        description: Product composition worker budget.
+        required: false
+        default: 2
+        type: number
+      fail_fast:
+        description: Cancel sibling product rows after the first required failure.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  linux_product:
+    name: Linux product (${{ matrix.runtime.backend }})
+    if: ${{ inputs.runtime_matrix != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: ${{ inputs.fail_fast }}
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        runtime: ${{ fromJson(inputs.runtime_matrix) }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - name: Verify product composition environment
+        run: verify-runner-image public
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ci-host-linux-${{ matrix.runtime.architecture }}
+          path: host-input
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ci-runtime-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: runtime-input
+      - name: Compose immutable Linux product
+        id: compose
+        uses: ./.github/actions/compose-product-input
+        with:
+          host_input_dir: host-input
+          runtime_input_dir: runtime-input
+          output_dir: product-input
+          backend: ${{ matrix.runtime.backend }}
+      - name: Upload immutable Linux product
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-product-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: ${{ steps.compose.outputs.archive_path }}
+          if-no-files-found: error
+          retention-days: 1

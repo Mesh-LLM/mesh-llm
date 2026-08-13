@@ -1,9 +1,9 @@
 # PR and main CI composition plan
 
-Status: implemented on this branch. The shared planner, protected controller,
-topic/platform lane workflows, bootstrap graph, contracts and documentation
-are checked in. Ruleset migration and Depot PR execution remain separate
-future work.
+Status: implemented on this branch. The shared planner, focused PR and main
+entrypoints, manual controller, topic/platform lane workflows, platform-pure reusable
+graphs, contracts and documentation are checked in. Ruleset migration and
+Depot PR execution remain separate future work.
 
 Owners: MeshLLM maintainers
 
@@ -22,48 +22,72 @@ or cache identity.
 
 ## Implemented on this branch
 
-- Thin pr_builds.yml and ci.yml entrypoints route same-repository protected
-  runs through ci-control.yml and retain ci-orchestrator.yml as a bootstrap for
-  forks, migration and manual validation.
+- Five `pr_*.yml` entrypoints independently plan and call their matching
+  protected default-branch reusable lane. Five `main_*.yml` entrypoints
+  independently plan the exhaustive profile and call their matching
+  same-commit reusable lane. PRs and routine main pushes therefore keep nested
+  jobs in focused native topic/platform runs; only explicit manual-full runs
+  use protected detached lane dispatch.
 - ci/ownership.yml and ci/slices.yml define the checked ownership, dependency,
   row, runner-role, cache-mode and worker-budget catalog.
 - scripts/plan-ci.py emits the versioned plan described by
   ci/ci-plan.schema.json, including direct domains, affected crates, signals,
   reasons, dependencies, matrices and budgets.
 - Separate Quality, Website, Linux, macOS and Windows workflows receive bounded
-  native inputs from one controller plan and own typed static slice supersets.
-- Stable per-lane checks converge into one correlated CI Required check; the
-  bootstrap graph exposes the same aggregate name.
+  native inputs from one plan and own typed platform-local static slice
+  supersets without unrelated platform placeholders. They support native
+  reusable PR/main calls and protected manual dispatch.
+- PRs and routine main pushes expose native lane jobs and five stable
+  topic/platform results; dispatched manual-full lanes retain correlated checks.
 - Existing static ABI, native SDK, Swift, smoke and HF workflows remain
   lower-level reusable producers/consumers.
 - Current PR routing is GitHub-hosted except for the documented uncredentialed
   CUDA smoke on the approved ephemeral GPU scale set; trusted-main Depot
   selection remains behind the existing exact-string policy gate.
 - Current CI docs, inventory, skill and agent instructions describe this graph.
+- `pr_builds.yml` remains reusable-only and inert during the migration so the
+  pre-merge protected runner contract can find its legacy filename; it has no
+  PR trigger and cannot expand a graph.
+- `ci-orchestrator.yml` likewise remains as a reusable-only, no-op filename
+  shim for the protected pre-merge contract. It has no event trigger or lane
+  calls and must not regain orchestration behavior. Both shims are removable
+  after this branch's runner contract reaches protected main.
+- `ci.yml` is also a reusable-only, no-op filename shim now that routine main
+  pushes enter through the five `main_*.yml` files. It must not regain a push
+  trigger, dispatch behavior, or lane calls.
 
 This branch does not change branch rulesets, required checks, Depot settings,
 runner groups, secrets or external capacity.
 
+The five independent PR workflows are an acceptance invariant. The PR UI must
+show distinct Quality, Website, Linux, macOS, and Windows runs with direct job
+and log drill-down. A single all-lanes PR graph or detached dispatch-only check
+is a regression even if its jobs execute successfully. Future work belongs in
+the matching reusable lane and must preserve these five entry boundaries.
+Routine main validation has the same acceptance invariant and exposes
+`Main / Quality`, `Main / Website`, `Main / Linux`, `Main / macOS`, and
+`Main / Windows` from five focused native runs.
+
 ## Graph
 
-  PR/main entry
-       |
-       v
-  protected controller: compute-changes + plan-ci once
-       |
-       +--> Quality workflow --> CI / Quality ---+
-       +--> Website workflow --> CI / Website ---+
-       +--> Linux workflow ----> CI / Linux -----+
-       +--> macOS workflow ----> CI / macOS -----+--> CI Required
-       +--> Windows workflow --> CI / Windows ---+
+  PR Quality entry --> plan --> protected Quality lane --> PR / Quality
+  PR Website entry --> plan --> protected Website lane --> PR / Website
+  PR Linux entry --> plan --> protected Linux lane --> PR / Linux
+  PR macOS entry --> plan --> protected macOS lane --> PR / macOS
+  PR Windows entry --> plan --> protected Windows lane --> PR / Windows
 
-The controller dispatches a closed list of protected default-branch workflows
-with bounded JSON inputs and passes the immutable source SHA only to product
-checkouts; each lane contains a static superset of typed reusable calls.
-Workflow YAML is never generated, and lanes do not download a planner artifact
-or allocate another planner. The bootstrap orchestrator retains a monolithic
-static slice graph while the protected controller is unavailable; this avoids
-granting check-write permission through a PR reusable-workflow chain.
+  Main Quality/Website/Linux/macOS/Windows entries --> same-commit matching lanes
+  Explicit manual-full entry --> protected controller --> five dispatched lanes
+
+Each PR entry calls one protected default-branch workflow as a nested reusable
+job, and each main entry calls its same-commit workflow. Both preserve native
+run/log visibility without a monolithic graph. The manual-only controller
+dispatches the same list with bounded JSON inputs. All paths pass the
+immutable source SHA only to product checkouts; each lane contains a
+platform-local static superset of typed reusable calls. Workflow YAML is never
+generated, and lanes do not download a planner artifact or allocate a planner.
+Fork heads are fetched through the base repository while workflow
+definitions remain protected on the default branch.
 
 ## Planner contract
 
@@ -103,16 +127,19 @@ optional trusted credentials may differ.
 - ci-ui-artifact-slice.yml: one immutable console distribution producer.
 - static-abi-artifact.yml: one verified portable static llama ABI producer.
 - ci-rust-tests-slice.yml: deterministic affected/all-workspace Cargo batches.
-- ci-host-slice.yml: one neutral host per selected OS/architecture.
-- ci-runtime-product-slice.yml: one runtime per selected backend in a
-  platform-scoped producer invocation that runs in parallel with the matching
-  host, followed by platform-local composition after those producers succeed.
+- ci-{linux,macos,windows}-host-slice.yml: platform-pure neutral hosts.
+- ci-{linux,macos,windows}-runtime-slice.yml: one native runtime per selected
+  backend, running in parallel with the matching host.
+- ci-{linux,macos,windows}-product-slice.yml: platform-local composition after
+  matching host and runtime producers succeed.
 - ci-platform-checks-slice.yml: macOS portable/unit and Windows checks.
-- ci-product-smoke-slice.yml: inference, backend, two-node, Metal and model
-  download consumers using only composed artifacts.
-- ci-sdk-slice.yml: platform-local Rust/Kotlin/Swift consumers. Swift and
-  Kotlin SDK artifacts are independent producers that start from the plan and
-  static ABI respectively, before product composition completes.
+- ci-linux-product-smoke-slice.yml and ci-macos-product-smoke-slice.yml:
+  platform-local inference, backend, two-node, Metal and model-download
+  consumers using only composed artifacts.
+- ci-linux-sdk-slice.yml and ci-macos-sdk-slice.yml: platform-local
+  Rust/Kotlin/Swift consumers. Swift and Kotlin SDK artifacts are independent
+  producers that start from the plan and static ABI respectively, before
+  product composition completes.
 - ci-runner-contract-slice.yml: plan/provider/cache trust checks plus trusted
   main runner-image contracts.
 
@@ -158,6 +185,20 @@ build one prepared UI artifact per active platform lane; that is the accepted
 readability tradeoff, while UI tests remain owned by the Website graph. Every
 heavy job has a timeout and a deterministic row identity.
 
+PR platform matrices for compilation, Rust tests, products and functional
+platform checks fail fast. Main/manual matrices continue all rows for exhaustive
+diagnostics, and Quality remains non-fail-fast and independent. A failure never
+cancels another focused PR workflow; declared producer dependencies suppress
+only consumers that can no longer run. Whole-workflow API cancellation is
+forbidden because every lane must reach its stable summary.
+
+PR caching is selective. Large Cargo target caches restore trusted main and do
+not publish per-PR copies; sccache remains job-local. Exact verified static,
+Swift, Metal-unit and Windows ABI caches may publish into the PR merge-ref
+scope for same-PR reruns. Website owns the single pnpm publisher and its npm
+store cache, while platform UI producers are restore-only for the shared pnpm
+key. Artifacts remain run-scoped correctness inputs, never rerun caches.
+
 scripts/collect-ci-metrics.py is the read-only measurement tool. Timing
 experiments must use a new worktree from main. Keep queue, dependency wait,
 execution and wall-clock measurements separate; retain raw evidence outside
@@ -167,11 +208,13 @@ authoritative topology docs. Capacity is not the optimization.
 
 Each lane owns one stable non-matrix summary that directly needs its complete
 static job superset and validates required work against its bounded plan.
-ci-control.yml creates correlated lane checks and one non-matrix CI Required
-check on the exact source SHA; the final lane completes the aggregate only when
-all expected correlated checks are terminal. The bootstrap orchestrator
-validates all five lane calls directly. Existing branch-protection rules are
-not edited by this implementation.
+Each PR entry owns one native non-matrix `PR / <lane>` job that directly needs
+its reusable lane call and validates required success or an unplanned skip.
+Each main entry owns one native non-matrix `Main / <lane>` job. ci-control.yml
+creates correlated lane checks only for explicit manual-full runs;
+the final lane completes that aggregate only when all expected checks are
+terminal. Existing branch-protection rules are not edited by this
+implementation.
 
 ## GitHub and Depot
 

@@ -1,8 +1,7 @@
-import type { ColumnDef } from '@tanstack/react-table'
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DataTable, type DataTableProps } from '@/components/ui/data-table'
+import { DataTable, type ColumnDef, type DataTableProps } from '@/components/ui/data-table'
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header'
 import { DataTableViewOptions } from '@/components/ui/data-table-view-options'
 
@@ -24,7 +23,7 @@ describe('DataTable', () => {
   it('settles after a sort instead of re-rendering in a loop', async () => {
     const user = userEvent.setup()
     let renders = 0
-    function TrackedDataTable(props: DataTableProps<Row, unknown>) {
+    function TrackedDataTable(props: DataTableProps<Row>) {
       renders += 1
       return <DataTable {...props} />
     }
@@ -53,7 +52,7 @@ describe('DataTable', () => {
   it('settles while typing a filter instead of re-rendering in a loop', async () => {
     const user = userEvent.setup()
     let renders = 0
-    function TrackedDataTable(props: DataTableProps<Row, unknown>) {
+    function TrackedDataTable(props: DataTableProps<Row>) {
       renders += 1
       return <DataTable {...props} />
     }

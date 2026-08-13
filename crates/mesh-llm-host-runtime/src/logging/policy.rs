@@ -94,6 +94,19 @@ pub fn apply_redaction(value: &str) -> (String, RedactMode) {
     (value.to_string(), RedactMode::PassThrough)
 }
 
+/// Apply credential redaction to an explicitly captured artifact string
+/// without the presentation-oriented 1 KiB log-value truncation. Artifact
+/// bytes already have configured per-item and aggregate bounds; clipping here
+/// would silently corrupt an otherwise available payload and leave its
+/// `truncated` metadata false.
+fn apply_artifact_redaction(value: &str) -> String {
+    if contains_credential_marker(value) || looks_like_credential_value(value) {
+        "[REDACTED]".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 /// Sanitize every free-form string carried by a canonical lifecycle event.
 ///
 /// This is deliberately exhaustive: adding a string-bearing lifecycle variant
@@ -156,7 +169,7 @@ pub fn sanitize_lifecycle_event(event: LifecycleEvent) -> LifecycleEvent {
     }
 }
 
-fn redact_urls_in_text(text: &str) -> String {
+pub(crate) fn redact_urls_in_text(text: &str) -> String {
     text.split_whitespace()
         .map(|word| {
             if word.starts_with("http://") || word.starts_with("https://") {
@@ -187,14 +200,11 @@ pub fn redact_headers<'a>(
 
 /// Redact sensitive query parameters from a URL. Returns the cleaned URL string.
 pub fn redact_url_query(url: &str) -> String {
-    if !url.contains('?') {
-        return url.to_string();
+    let (base, query_part) = url.split_once('?').unwrap_or((url, ""));
+    let base = redact_url_userinfo(base);
+    if query_part.is_empty() {
+        return base;
     }
-
-    let (base, query_part) = match url.split_once('?') {
-        Some(parts) => parts,
-        None => return url.to_string(),
-    };
 
     // Handle fragments.
     let (query_only, fragment) = match query_part.split_once('#') {
@@ -238,6 +248,26 @@ pub fn redact_url_query(url: &str) -> String {
     } else {
         format!("{}?{}{}", base, cleaned_params.join("&"), fragment)
     }
+}
+
+fn redact_url_userinfo(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let authority_start = scheme_end + 3;
+    let authority_end = url[authority_start..]
+        .find(['/', '#'])
+        .map_or(url.len(), |offset| authority_start + offset);
+    let authority = &url[authority_start..authority_end];
+    let Some(user_info_end) = authority.rfind('@') else {
+        return url.to_string();
+    };
+    format!(
+        "{}[REDACTED]@{}{}",
+        &url[..authority_start],
+        &authority[user_info_end + 1..],
+        &url[authority_end..]
+    )
 }
 
 /// Truncate a multi-line string (stack trace, error output) to MAX_STACK_LINES.

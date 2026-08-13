@@ -23,8 +23,10 @@ pub enum CliCommandFamily {
     Installation,
     Models,
     Plugin,
+    Process,
     Runtime,
     Skills,
+    Unknown,
 }
 
 impl CliCommandFamily {
@@ -40,8 +42,10 @@ impl CliCommandFamily {
             Self::Installation => "installation",
             Self::Models => "models",
             Self::Plugin => "plugin",
+            Self::Process => "process",
             Self::Runtime => "runtime",
             Self::Skills => "skills",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -53,6 +57,7 @@ pub enum CliCommandOutcome {
     Completed,
     Failed,
     Rejected,
+    ParseFailed,
 }
 
 impl CliCommandOutcome {
@@ -62,6 +67,7 @@ impl CliCommandOutcome {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Rejected => "rejected",
+            Self::ParseFailed => "parse_failed",
         }
     }
 
@@ -71,13 +77,14 @@ impl CliCommandOutcome {
             Self::Completed => "cli_command_completed",
             Self::Failed => "cli_command_failed",
             Self::Rejected => "cli_command_rejected",
+            Self::ParseFailed => "cli_parse_failed",
         }
     }
 
     pub(crate) const fn level(self) -> OutputLevel {
         match self {
             Self::Started | Self::Completed => OutputLevel::Info,
-            Self::Failed | Self::Rejected => OutputLevel::Warn,
+            Self::Failed | Self::Rejected | Self::ParseFailed => OutputLevel::Warn,
         }
     }
 }
@@ -222,14 +229,17 @@ mod tests {
             CliCommandFamily::Installation,
             CliCommandFamily::Models,
             CliCommandFamily::Plugin,
+            CliCommandFamily::Process,
             CliCommandFamily::Runtime,
             CliCommandFamily::Skills,
+            CliCommandFamily::Unknown,
         ];
         let outcomes = [
             CliCommandOutcome::Started,
             CliCommandOutcome::Completed,
             CliCommandOutcome::Failed,
             CliCommandOutcome::Rejected,
+            CliCommandOutcome::ParseFailed,
         ];
 
         for family in families {

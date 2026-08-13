@@ -16,11 +16,20 @@ on:
         description: Semantic profile represented by the platform rows.
         required: true
         type: string
+      original_event_name:
+        description: Original event used to derive isolated cache-write policy.
+        required: true
+        type: string
       max_parallel:
         description: Platform worker budget.
         required: false
         default: 2
         type: number
+      fail_fast:
+        description: Cancel sibling functional checks after the first required failure.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -38,7 +47,7 @@ jobs:
     runs-on: ${{ matrix.check.platform == 'macos' && 'macos-15' || 'windows-2022' }}
     timeout-minutes: 75
     strategy:
-      fail-fast: false
+      fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
       matrix:
         check: ${{ fromJson(inputs.platform_checks_matrix) }}
@@ -119,7 +128,7 @@ jobs:
         if: ${{ matrix.check.kind == 'unit' && steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
       - name: Save static Metal ABI build
-        if: ${{ matrix.check.kind == 'unit' && github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        if: ${{ matrix.check.kind == 'unit' && steps.llama_cache.outputs.cache-hit != 'true' && (inputs.original_event_name == 'pull_request' || (github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request_target')) }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}

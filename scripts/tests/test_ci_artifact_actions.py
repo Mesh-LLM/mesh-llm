@@ -32,6 +32,10 @@ class CiArtifactActionTests(unittest.TestCase):
         exact_pin = re.compile(
             r"^[^@\s]+@[0-9a-f]{40}\s+#\s+\S",
         )
+        protected_pr_lanes = {
+            f"Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main": f"pr_{lane}.yml"
+            for lane in ("quality", "website", "linux", "macos", "windows")
+        }
 
         for path in (*action_files, *workflow_files):
             for line_number, line in enumerate(
@@ -42,6 +46,9 @@ class CiArtifactActionTests(unittest.TestCase):
                     continue
                 value = line.split("uses:", maxsplit=1)[1].strip()
                 if value.startswith("./"):
+                    continue
+                if value in protected_pr_lanes:
+                    self.assertEqual(protected_pr_lanes[value], path.name)
                     continue
                 with self.subTest(
                     path=path.relative_to(ROOT),
@@ -441,7 +448,8 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("package-release", gpu_routing)
         for workflow in (
             "ci",
-            "pr_builds",
+            "main_[a-z]+",
+            "pr_[a-z]+",
             "release",
             "windows-warm-caches",
         ):
@@ -557,7 +565,7 @@ class CiArtifactActionTests(unittest.TestCase):
     ) -> None:
         resolver = self.read_action("resolve-native-toolchain-epoch")
         runtime_workflow = (
-            ROOT / ".github" / "workflows" / "ci-runtime-product-slice.yml"
+            ROOT / ".github" / "workflows" / "ci-linux-runtime-slice.yml"
         ).read_text(encoding="utf-8")
         release_workflow = (
             ROOT / ".github" / "workflows" / "release.yml"
@@ -713,11 +721,12 @@ class CiArtifactActionTests(unittest.TestCase):
         for contract_path in (
             ".github/actions/compute-changes/action.yml",
             ".github/workflows/ci.yml",
-            ".github/workflows/pr_builds.yml",
             ".github/workflows/release.yml",
         ):
             with self.subTest(contract_path=contract_path):
                 self.assertRegex(contract_path, direct_sdk_pattern)
+        self.assertIn("pr_[a-z]+", action)
+        self.assertIn("main_[a-z]+", action)
         smoke_scripts = (
             ROOT / "scripts" / "ci-rust-sdk-smoke.sh",
             ROOT / "scripts" / "ci-kotlin-sdk-smoke.sh",
@@ -1805,8 +1814,8 @@ class CiArtifactActionTests(unittest.TestCase):
         workflow_names = (
             "ci-quality-slice.yml",
             "ci-rust-tests-slice.yml",
-            "ci-host-slice.yml",
-            "ci-runtime-product-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
             "static-abi-artifact.yml",
         )
         for workflow_name in workflow_names:
@@ -1833,11 +1842,10 @@ class CiArtifactActionTests(unittest.TestCase):
                 if "uses: ./.github/actions/configure-sccache-gha" in workflow:
                     self.assertIn("allow_depot_remote_cache", workflow)
 
-        pr = (ROOT / ".github" / "workflows" / "pr_builds.yml").read_text(
-            encoding="utf-8",
-        )
-        self.assertNotIn("depot-ubuntu", pr)
-        self.assertNotIn("SCCACHE_GHA_ENABLED: \"false\"", pr)
+        for pr_path in (ROOT / ".github" / "workflows").glob("pr_*.yml"):
+            pr = pr_path.read_text(encoding="utf-8")
+            self.assertNotIn("depot-ubuntu", pr)
+            self.assertNotIn("SCCACHE_GHA_ENABLED: \"false\"", pr)
 
 
 if __name__ == "__main__":

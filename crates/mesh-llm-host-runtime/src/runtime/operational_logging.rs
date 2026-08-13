@@ -1,14 +1,14 @@
-//! Bounded, metadata-only operational audit vocabulary for runtime, model,
-//! configuration, discovery, and local-serving boundaries.
+//! Bounded operational audit vocabulary for runtime, model, configuration,
+//! discovery, and local-serving boundaries.
 //!
-//! These events deliberately accept no model reference, configuration value,
-//! mesh identity, invite token, path, endpoint, secret, signal, error, or
-//! process metadata. The logging service receives only the static level and
-//! code below.
+//! Most events carry only a static level and code. Existing model lifecycle
+//! owners may add the shared, sanitized typed context; arbitrary errors,
+//! configuration values, paths, endpoints, and process metadata remain out of
+//! scope.
 
 #[cfg(test)]
 use crate::logging::LoggingService;
-use crate::logging::{OperationalAuditRecord, OperationalAuditSeverity};
+use crate::logging::{OperationalAuditContext, OperationalAuditRecord, OperationalAuditSeverity};
 use mesh_llm_config::{ConfigDiagnostic, ConfigDiagnosticSeverity};
 
 const OPERATIONAL_AUDIT_INFO: &str = "info";
@@ -34,10 +34,14 @@ pub(crate) enum RuntimeOperationalEvent {
     StartupFailed,
     Ready,
     ShutdownStarted,
+    ShutdownCompleted,
     ModelLoadStarted,
     ModelReady,
     ModelLoadFailed,
+    ModelUnloadStarted,
+    ModelUnloadFailed,
     ModelUnloaded,
+    ModelExited,
 }
 
 /// Static native Skippy runtime transitions. These deliberately identify the
@@ -85,10 +89,15 @@ impl RuntimeOperationalEvent {
             Self::StartupStarted
             | Self::Ready
             | Self::ShutdownStarted
+            | Self::ShutdownCompleted
             | Self::ModelLoadStarted
             | Self::ModelReady
+            | Self::ModelUnloadStarted
             | Self::ModelUnloaded => OPERATIONAL_AUDIT_INFO,
-            Self::StartupFailed | Self::ModelLoadFailed => OPERATIONAL_AUDIT_WARNING,
+            Self::StartupFailed
+            | Self::ModelLoadFailed
+            | Self::ModelUnloadFailed
+            | Self::ModelExited => OPERATIONAL_AUDIT_WARNING,
         }
     }
 
@@ -98,10 +107,14 @@ impl RuntimeOperationalEvent {
             Self::StartupFailed => "runtime_startup_failed",
             Self::Ready => "runtime_ready",
             Self::ShutdownStarted => "runtime_shutdown_started",
+            Self::ShutdownCompleted => "runtime_shutdown_completed",
             Self::ModelLoadStarted => "runtime_model_load_started",
             Self::ModelReady => "runtime_model_ready",
             Self::ModelLoadFailed => "runtime_model_load_failed",
+            Self::ModelUnloadStarted => "runtime_model_unload_started",
+            Self::ModelUnloadFailed => "runtime_model_unload_failed",
             Self::ModelUnloaded => "runtime_model_unloaded",
+            Self::ModelExited => "runtime_model_exited",
         }
     }
 }
@@ -251,6 +264,19 @@ pub(crate) fn record_runtime_operational_event(event: RuntimeOperationalEvent) {
         return;
     };
     let _ = state.write_operational_audit(operational_audit_record(event.code(), event.level()));
+}
+
+/// Record an existing runtime lifecycle boundary with the shared typed
+/// correlation context. Context is sanitized and bounded before replay.
+pub(crate) fn record_runtime_operational_event_with_context(
+    event: RuntimeOperationalEvent,
+    context: OperationalAuditContext,
+) {
+    let Some(state) = crate::logging_runtime_state() else {
+        return;
+    };
+    let record = operational_audit_record(event.code(), event.level()).with_context(context);
+    let _ = state.write_operational_audit(record);
 }
 
 /// Record a native Skippy lifecycle transition through the same bounded,

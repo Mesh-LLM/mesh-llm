@@ -1,4 +1,165 @@
 use super::{AffinityRouter, RequestId, handle_mesh_request};
+use crate::inference::election;
+use crate::mesh;
+use crate::network::openai::ingress::api_proxy;
+use crate::network::tunnel::Manager as TunnelManager;
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{oneshot, watch};
+
+async fn start_http_tunnel_test_node() -> (mesh::Node, mesh::TunnelChannels) {
+    let relay_urls = Vec::new();
+    let relay_auths = HashMap::new();
+    mesh::Node::start(
+        mesh::NodeRole::Client,
+        mesh::RelayConfig {
+            urls: &relay_urls,
+            auths: &relay_auths,
+            policy: mesh::RelayPolicy::Disabled,
+        },
+        mesh::QuicBindSelection {
+            ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            port: Some(0),
+        },
+        Some(0.0),
+        false,
+        None,
+        None,
+        crate::MeshRequirements::unrestricted(),
+    )
+    .await
+    .expect("start HTTP tunnel test node")
+}
+
+async fn spawn_tunnel_capture() -> (u16, oneshot::Receiver<Vec<u8>>, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind tunnel capture listener");
+    let port = listener
+        .local_addr()
+        .expect("tunnel capture listener address")
+        .port();
+    let (capture_tx, capture_rx) = oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut request = vec![0; 8192];
+        let bytes_read = stream.read(&mut request).await.unwrap_or_default();
+        request.truncate(bytes_read);
+        let _ = capture_tx.send(request);
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await;
+    });
+    (port, capture_rx, handle)
+}
+
+async fn send_tunneled_request(
+    node: &mesh::Node,
+    peer_id: iroh::EndpointId,
+    path: &str,
+) -> Vec<u8> {
+    let body = r#"{"model":"test"}"#;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len(),
+    );
+    let (mut send, mut recv) = node
+        .open_http_tunnel(peer_id)
+        .await
+        .expect("open HTTP tunnel");
+    send.write_all(request.as_bytes())
+        .await
+        .expect("write tunneled lifecycle request");
+    send.finish().expect("finish tunneled lifecycle request");
+    recv.read_to_end(4 * 1024 * 1024)
+        .await
+        .expect("read tunneled lifecycle response")
+}
+
+async fn assert_passive_legacy_lifecycle_path_is_rejected(path: &str) {
+    let (sender, sender_channels) = start_http_tunnel_test_node().await;
+    let (receiver, receiver_channels) = start_http_tunnel_test_node().await;
+    let (upstream_port, upstream_rx, upstream_handle) = spawn_tunnel_capture().await;
+    let api_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind receiving API proxy listener");
+    let api_port = api_listener
+        .local_addr()
+        .expect("receiving API proxy listener address")
+        .port();
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        "test".to_string(),
+        vec![election::InferenceTarget::Local(upstream_port)],
+    );
+    let (_target_tx, target_rx) = watch::channel(targets);
+    let api_proxy_handle = tokio::spawn(api_proxy(
+        receiver.clone(),
+        api_port,
+        target_rx,
+        Some(api_listener),
+        false,
+        AffinityRouter::new(),
+    ));
+    let tunnel_manager = TunnelManager::start(
+        receiver.clone(),
+        receiver_channels.rpc,
+        receiver_channels.http,
+        receiver_channels.stage,
+    )
+    .await
+    .expect("start receiving tunnel manager");
+    tunnel_manager.set_http_port(api_port);
+    sender.start_accepting();
+    receiver.start_accepting();
+    sender
+        .connect_to_peer(receiver.endpoint_addr_for_advertisement())
+        .await
+        .expect("connect HTTP tunnel test nodes");
+
+    let before_models = receiver.models.lock().await.clone();
+    let before_requested_models = receiver.requested_models.lock().await.clone();
+    let before_runtime_intents = receiver.runtime_intents.lock().unwrap().len();
+    let wire = send_tunneled_request(&sender, receiver.id(), path).await;
+    let response = String::from_utf8(wire).expect("HTTP response should be UTF-8");
+    assert!(
+        response.starts_with("HTTP/1.1 410 Gone"),
+        "response: {response}"
+    );
+    assert!(
+        response.contains("legacy_route_gone"),
+        "response: {response}"
+    );
+    assert_eq!(receiver.models.lock().await.clone(), before_models);
+    assert_eq!(
+        receiver.requested_models.lock().await.clone(),
+        before_requested_models
+    );
+    assert_eq!(
+        receiver.runtime_intents.lock().unwrap().len(),
+        before_runtime_intents
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), upstream_rx)
+            .await
+            .is_err(),
+        "legacy lifecycle paths must not reach an inference target"
+    );
+    api_proxy_handle.abort();
+    upstream_handle.abort();
+    drop(sender_channels);
+}
+
+#[tokio::test]
+async fn passive_legacy_lifecycle_paths_are_rejected_before_mesh_routing() {
+    for path in ["/mesh/load", "/mesh/drop?model=test"] {
+        assert_passive_legacy_lifecycle_path_is_rejected(path).await;
+    }
+}
 
 #[tokio::test]
 #[serial_test::serial]

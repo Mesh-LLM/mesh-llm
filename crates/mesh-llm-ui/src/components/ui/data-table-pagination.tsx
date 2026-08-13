@@ -1,6 +1,7 @@
-import { type Table } from '@tanstack/react-table'
+import type { RowData } from '@tanstack/react-table'
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import type { TanStackTable } from '@/components/ui/data-table-features'
 import { NativeSelect, type NativeSelectOption } from '@/components/ui/NativeSelect'
 
 const PAGE_SIZES: readonly NativeSelectOption[] = [10, 20, 25, 30, 40, 50].map((size) => ({
@@ -8,14 +9,14 @@ const PAGE_SIZES: readonly NativeSelectOption[] = [10, 20, 25, 30, 40, 50].map((
   label: String(size)
 }))
 
-export type DataTablePaginationProps<TData> = {
-  readonly table: Table<TData>
+export type DataTablePaginationProps<TData extends RowData> = {
+  readonly table: TanStackTable<TData>
 }
 
-export function DataTablePagination<TData>({ table }: DataTablePaginationProps<TData>) {
-  const pageSize = table.getState().pagination.pageSize
+export function DataTablePagination<TData extends RowData>({ table }: DataTablePaginationProps<TData>) {
+  const pageSize = table.state.pagination.pageSize
   const pageCount = table.getPageCount()
-  const pageIndex = table.getState().pagination.pageIndex
+  const pageIndex = table.state.pagination.pageIndex
   const canPreviousPage = table.getCanPreviousPage()
   const canNextPage = table.getCanNextPage()
 

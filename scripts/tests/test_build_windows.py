@@ -4,7 +4,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/build-windows.ps1"
-RUNTIME = ROOT / ".github/workflows/ci-runtime-product-slice.yml"
+RUNTIME = ROOT / ".github/workflows/ci-windows-runtime-slice.yml"
+PRODUCT = ROOT / ".github/workflows/ci-windows-product-slice.yml"
 HOST_INPUT = ROOT / ".github/actions/prepare-windows-host-input/action.yml"
 
 
@@ -37,12 +38,13 @@ class BuildWindowsScriptTests(unittest.TestCase):
         self.assertNotIn("[switch]$AbiOnly", script)
 
     def test_windows_runtime_slice_uses_verified_cache_and_composer(self):
-        workflow = RUNTIME.read_text()
-        self.assertIn("restore-windows-abi-cache", workflow)
-        self.assertIn("compose-product-input", workflow)
-        self.assertIn("binary_name: mesh-llm.exe", workflow)
-        self.assertIn('readiness_smoke: "true"', workflow)
-        self.assertNotIn("build-windows.ps1", workflow[workflow.index("  windows_product:") :])
+        runtime = RUNTIME.read_text()
+        product = PRODUCT.read_text()
+        self.assertIn("restore-windows-abi-cache", runtime)
+        self.assertIn("compose-product-input", product)
+        self.assertIn("binary_name: mesh-llm.exe", product)
+        self.assertIn('readiness_smoke: "true"', product)
+        self.assertNotIn("build-windows.ps1", product)
 
 
 if __name__ == "__main__":

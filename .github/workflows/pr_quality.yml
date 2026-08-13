@@ -1,0 +1,104 @@
+name: PR · Quality
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  checks: write
+  contents: read
+  packages: read
+
+concurrency:
+  group: pr-quality-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan quality
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      canonical_plan: ${{ steps.plan.outputs.plan_json }}
+      plan_digest: ${{ steps.plan.outputs.plan_digest }}
+      lane_plan: ${{ steps.plan.outputs.quality_lane_plan }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate immutable PR identity
+        id: identity
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "pull request source identity is malformed" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "$SOURCE_SHA"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Compute changed files and affected crates
+        id: changes
+        uses: ./.github/actions/compute-changes
+        with:
+          event_name: pull_request
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          head_sha: ${{ steps.identity.outputs.source_sha }}
+      - name: Build canonical plan
+        id: plan
+        uses: ./.github/actions/plan-ci
+        with:
+          event_name: pull_request
+          source_sha: ${{ steps.identity.outputs.source_sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          draft: ${{ github.event.pull_request.draft || false }}
+          changed_files: ${{ steps.changes.outputs.changed_files }}
+          affected_crates: ${{ steps.changes.outputs.affected_crates }}
+
+  lane:
+    name: Quality
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && fromJson(needs.plan.outputs.lane_plan).required }}
+    permissions:
+      checks: write
+      contents: read
+      packages: read
+    uses: Mesh-LLM/mesh-llm/.github/workflows/ci-quality-lane.yml@main
+    with:
+      lane_plan_json: ${{ needs.plan.outputs.lane_plan }}
+      canonical_plan_json: ${{ needs.plan.outputs.canonical_plan }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+      original_event_name: pull_request
+      supersession_key: pr-${{ github.event.pull_request.number }}
+
+  required:
+    name: PR / Quality
+    needs: [plan, lane]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Enforce quality result
+        env:
+          LANE_PLAN: ${{ needs.plan.outputs.lane_plan }}
+          LANE_RESULT: ${{ needs.lane.result }}
+          PLAN_DIGEST: ${{ needs.plan.outputs.plan_digest }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+        run: |
+          set -euo pipefail
+          [[ "$PLAN_RESULT" == "success" ]]
+          required=$(jq -r '.required' <<<"$LANE_PLAN")
+          if [[ "$required" == "true" ]]; then
+            [[ "$LANE_RESULT" == "success" ]]
+          else
+            [[ "$LANE_RESULT" == "skipped" ]]
+          fi
+          echo "Plan digest: \`$PLAN_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"

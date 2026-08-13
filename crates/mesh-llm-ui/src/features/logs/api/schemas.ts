@@ -66,6 +66,15 @@ export type LogAuditEntry = {
   readonly code: string
   readonly severity?: LogAuditSeverity
   readonly sequence: number
+  readonly contextVersion?: 1
+  readonly subjectKind?: 'runtime' | 'model' | 'runtime_instance' | 'cli_command'
+  readonly subjectId?: string
+  readonly operationId?: string
+  readonly requestId?: string
+  readonly reasonCode?: string
+  readonly outcome?: string
+  readonly durationMs?: number
+  readonly numericSummaries?: Readonly<Record<string, number>>
 }
 
 export type LogLifecycleEvent = {
@@ -435,7 +444,18 @@ const auditEntrySchema = v.object({
   source: auditSourceSchema,
   code: v.string(),
   severity: v.optional(auditSeveritySchema),
-  sequence: v.pipe(nonNegativeIntegerSchema, v.minValue(1))
+  sequence: v.pipe(nonNegativeIntegerSchema, v.minValue(1)),
+  contextVersion: v.optional(v.literal(1)),
+  subjectKind: v.optional(
+    v.union([v.literal('runtime'), v.literal('model'), v.literal('runtime_instance'), v.literal('cli_command')])
+  ),
+  subjectId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  operationId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  requestId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  reasonCode: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(64))),
+  outcome: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(64))),
+  durationMs: v.optional(nonNegativeIntegerSchema),
+  numericSummaries: v.optional(v.record(v.string(), nonNegativeIntegerSchema))
 })
 
 const auditGapSchema = v.object({

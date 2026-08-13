@@ -8,7 +8,8 @@ use crate::timestamps::{
     canonical_persisted_timestamp, canonical_timestamp_metadata,
 };
 use rusqlite::{OptionalExtension, Row, Transaction, types::Value};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 mod cleanup;
 
@@ -64,8 +65,8 @@ pub struct LifecycleEventRow {
 
 /// Public, privacy-safe projection of a durable operational audit entry.
 ///
-/// `detail_json` remains private to durable audit storage and is never part of
-/// this read model.
+/// `detail_json` remains private to durable audit storage. Only the versioned,
+/// bounded fields below are projected from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditEntryRow {
     pub sequence: i64,
@@ -75,6 +76,80 @@ pub struct AuditEntryRow {
     pub source: String,
     pub code: String,
     pub severity: Option<AuditEntrySeverity>,
+    pub context_version: Option<u8>,
+    pub subject_kind: Option<String>,
+    pub subject_id: Option<String>,
+    pub operation_id: Option<String>,
+    pub correlation_request_id: Option<String>,
+    pub reason_code: Option<String>,
+    pub outcome: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub numeric_summaries: BTreeMap<String, u64>,
+}
+
+#[derive(Default, Deserialize)]
+struct StoredAuditDetail {
+    severity: Option<String>,
+    context_version: Option<u8>,
+    subject_kind: Option<String>,
+    subject_id: Option<String>,
+    operation_id: Option<String>,
+    request_id: Option<String>,
+    reason_code: Option<String>,
+    outcome: Option<String>,
+    duration_ms: Option<u64>,
+    #[serde(default)]
+    numeric_summaries: BTreeMap<String, u64>,
+}
+
+impl StoredAuditDetail {
+    fn parse(raw: Option<String>) -> Self {
+        raw.and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    fn bounded(mut self) -> Self {
+        if self.context_version != Some(1) {
+            return Self {
+                severity: self.severity,
+                ..Self::default()
+            };
+        }
+        self.subject_kind = self.subject_kind.filter(|value| {
+            matches!(
+                value.as_str(),
+                "runtime" | "model" | "runtime_instance" | "cli_command"
+            )
+        });
+        self.subject_id = bounded_audit_value(self.subject_id);
+        self.operation_id = bounded_audit_value(self.operation_id);
+        self.request_id = bounded_audit_value(self.request_id);
+        self.reason_code = bounded_audit_code(self.reason_code);
+        self.outcome = bounded_audit_code(self.outcome);
+        self.numeric_summaries = self
+            .numeric_summaries
+            .into_iter()
+            .filter(|(key, _)| bounded_code(key))
+            .take(8)
+            .collect();
+        self
+    }
+}
+
+fn bounded_audit_value(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.is_empty() && value.chars().count() <= 256)
+}
+
+fn bounded_audit_code(value: Option<String>) -> Option<String> {
+    value.filter(|value| bounded_code(value))
+}
+
+fn bounded_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 /// Finite source vocabulary accepted by durable audit queries.
@@ -1309,8 +1384,7 @@ impl LogStore {
         let cursor = after_cursor.map(decode_ordering_cursor).transpose()?;
         let (where_clause, parameters) = audit_entry_query_parts(cursor.as_ref(), filters)?;
         let sql = format!(
-            "SELECT sequence, entry_id, request_id, occurred_at, actor, action, \
-             CASE WHEN json_valid(detail_json) THEN json_extract(detail_json, '$.severity') END \
+            "SELECT sequence, entry_id, request_id, occurred_at, actor, action, detail_json \
              FROM audit_entries {where_clause} \
              ORDER BY occurred_at DESC, entry_id DESC LIMIT {}",
             limit + 1
@@ -1319,6 +1393,7 @@ impl LogStore {
         let mut statement = conn.prepare(&sql).map_err(LogStoreError::Sqlite)?;
         let mut items: Vec<AuditEntryRow> = statement
             .query_map(rusqlite::params_from_iter(parameters), |row| {
+                let detail = StoredAuditDetail::parse(row.get(6)?).bounded();
                 Ok(AuditEntryRow {
                     sequence: row.get(0)?,
                     entry_id: row.get(1)?,
@@ -1326,9 +1401,18 @@ impl LogStore {
                     occurred_at: row.get(3)?,
                     source: row.get(4)?,
                     code: row.get(5)?,
-                    severity: AuditEntrySeverity::parse(row.get(6)?).map_err(|error| {
+                    severity: AuditEntrySeverity::parse(detail.severity).map_err(|error| {
                         rusqlite::Error::ToSqlConversionFailure(Box::new(error))
                     })?,
+                    context_version: detail.context_version,
+                    subject_kind: detail.subject_kind,
+                    subject_id: detail.subject_id,
+                    operation_id: detail.operation_id,
+                    correlation_request_id: detail.request_id,
+                    reason_code: detail.reason_code,
+                    outcome: detail.outcome,
+                    duration_ms: detail.duration_ms,
+                    numeric_summaries: detail.numeric_summaries,
                 })
             })
             .map_err(LogStoreError::Sqlite)?
