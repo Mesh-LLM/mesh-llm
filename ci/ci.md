@@ -215,12 +215,13 @@ Timing evidence is collected read-only with `scripts/collect-ci-metrics.py`.
 Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,
 execution, runner-minutes, cancelled runner-minutes and peak workers separate,
 and group results by provider, OS, architecture, semantic runner role and
-Depot size. The optional `--compare-input` mode compares a historical GitHub
-cohort with a candidate provider only when job families and provider sets are
-comparable. Deterministic queue p95 and capacity-contamination heuristics emit
-`eligible`, `hold`, `rollback` or `insufficient_sample`; they are rollout
-signals, not dated conclusions. Keep raw inputs and dated reports under
-`/tmp` or a tracking artifact, never in `ci/`.
+Depot size. When `--compare-input` is supplied, the report always emits a
+`comparison` block. Its recommendation is `hold` when job families or
+provider sets are not comparable. Deterministic queue p95 and
+capacity-contamination heuristics emit `eligible`, `hold`, `rollback` or
+`insufficient_sample`; they are rollout signals, not dated conclusions. Keep
+raw inputs and dated reports under `/tmp` or a tracking artifact, never in
+`ci/`.
 
 ### PR failure domains
 

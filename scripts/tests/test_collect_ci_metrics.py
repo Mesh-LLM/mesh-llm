@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "collect-ci-metrics.py"
@@ -450,6 +451,92 @@ class CollectCiMetricsTests(unittest.TestCase):
         self.assertEqual(report["heuristics"]["state"], "rollback")
         self.assertGreaterEqual(report["capacity"]["runner_minutes"], 28.0)
 
+    def test_capacity_peak_total_merges_runner_dimension_groups(self):
+        raw = run(
+            106,
+            "2026-07-05T00:00:00Z",
+            "2026-07-05T00:00:01Z",
+            "2026-07-05T00:11:00Z",
+            [
+                job(
+                    "linux build",
+                    "2026-07-05T00:00:05Z",
+                    "2026-07-05T00:00:10Z",
+                    "2026-07-05T00:10:00Z",
+                    labels=["depot-ubuntu-24.04-8"],
+                ),
+                job(
+                    "windows build",
+                    "2026-07-05T00:00:06Z",
+                    "2026-07-05T00:00:10Z",
+                    "2026-07-05T00:10:00Z",
+                    labels=["depot-windows-2022-8"],
+                ),
+            ],
+        )
+        report = self.collector.analyze(
+            [self.collector.normalize_run(raw)],
+            requested_status="success",
+            top=5,
+            source={"description": "capacity overlap"},
+            labels={},
+        )
+
+        self.assertEqual(report["capacity"]["peak_workers"]["total"], 2)
+        self.assertEqual(
+            report["capacity"]["peak_workers"]["by_provider_os_role"],
+            {
+                "depot/linux/unknown": 1,
+                "depot/windows/unknown": 1,
+            },
+        )
+
+    def test_observation_capacity_contamination_uses_runner_queue(self):
+        raw = run(
+            107,
+            "2026-07-06T00:00:00Z",
+            "2026-07-06T00:00:01Z",
+            "2026-07-06T00:10:00Z",
+            [
+                job(
+                    "dependency build",
+                    "2026-07-06T00:00:05Z",
+                    "2026-07-06T00:08:35Z",
+                    "2026-07-06T00:09:35Z",
+                    labels=["depot-ubuntu-24.04-8"],
+                )
+            ],
+        )
+        raw["jobs"][0]["dependency_ready_at"] = "2026-07-06T00:08:25Z"
+        normalized = self.collector.normalize_run(raw)
+        sample = self.collector.observation(normalized, normalized["jobs"][0])
+
+        self.assertEqual(sample["queue_seconds"], 510.0)
+        self.assertEqual(sample["runner_queue_seconds"], 10.0)
+        self.assertFalse(sample["capacity_contaminated"])
+
+    def test_analysis_reuses_terminal_sample(self):
+        raw = self.sample_runs()[0]
+        normalized = self.collector.normalize_run(raw)
+
+        with mock.patch.object(
+            self.collector,
+            "observation",
+            wraps=self.collector.observation,
+        ) as observation_mock:
+            self.collector.analyze(
+                [normalized],
+                requested_status="success",
+                top=5,
+                source={"description": "terminal reuse"},
+                labels={},
+            )
+
+        self.assertEqual(
+            observation_mock.call_count,
+            sum(job["conclusion"] != "skipped" for job in normalized["jobs"]),
+        )
+
     def test_compare_reports_requires_provider_cohort_separation(self):
         baseline_raw = self.sample_runs()
         candidate_raw = self.sample_runs()
@@ -516,9 +603,15 @@ class CollectCiMetricsTests(unittest.TestCase):
         self.assertEqual(comparison["recommendation"], "hold")
 
     def test_runner_dimensions_cover_depot_platforms_and_hosted_intel_macos(self):
+        depot_32 = self.collector.runner_dimensions(["depot-ubuntu-24.04-32"])
+        depot_64 = self.collector.runner_dimensions(["depot-ubuntu-24.04-64"])
+        depot_2 = self.collector.runner_dimensions(["depot-ubuntu-24.04-2"])
         depot_macos = self.collector.runner_dimensions(["depot-macos-15"])
         depot_windows = self.collector.runner_dimensions(["depot-windows-2022-8"])
         hosted_intel = self.collector.runner_dimensions(["macos-15-intel"])
+        self.assertEqual(depot_32["runner_size"], "32")
+        self.assertEqual(depot_64["runner_size"], "64")
+        self.assertEqual(depot_2["runner_size"], "default")
         self.assertEqual(
             depot_macos,
             {

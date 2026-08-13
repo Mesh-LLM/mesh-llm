@@ -75,10 +75,20 @@ jobs:
             fi
           done
           actions_cache_url="${ACTIONS_CACHE_URL:-}"
-          if [[ "${actions_cache_url,,}" == *depot.dev* ]]; then
+          actions_results_url="${ACTIONS_RESULTS_URL:-}"
+          if [[ "${actions_cache_url,,}" == *depot.dev* ||
+                "${actions_results_url,,}" == *depot.dev* ]]; then
             echo "GitHub Actions cache was transparently redirected to Depot" >&2
             exit 1
           fi
+          for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL; do
+            endpoint="${!endpoint_name:-}"
+            endpoint_lower="${endpoint,,}"
+            if [[ ! "$endpoint_lower" =~ ^https://([a-z0-9-]+\.)*actions\.githubusercontent\.com([/:]|$) ]]; then
+              echo "GitHub Actions endpoint is missing or not GitHub-owned: $endpoint_name" >&2
+              exit 1
+            fi
+          done
           docker_auth_config="${DOCKER_AUTH_CONFIG:-}"
           if [[ "${docker_auth_config,,}" == *depot.dev* ]]; then
             echo "Docker registry authentication points at Depot" >&2

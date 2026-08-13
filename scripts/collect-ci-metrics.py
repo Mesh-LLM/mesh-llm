@@ -384,7 +384,9 @@ def runner_dimensions(
                 if "-arm" in depot_label or depot_os == "macos"
                 else "amd64"
             ),
-            "runner_size": suffix if suffix in {"4", "8", "16"} else "default",
+            "runner_size": (
+                suffix if suffix in {"4", "8", "16", "32", "64"} else "default"
+            ),
             "operating_system": _canonical_os(operating_system) or depot_os,
             "runner_role": role,
         }
@@ -476,9 +478,9 @@ def observation(run: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
         "dependency_wait_seconds": dependency_wait,
         "dependency_wait_observed": dependency_wait is not None,
         "capacity_contaminated": (
-            elapsed(job["created"], job["started"]) or 0
-        )
-        >= QUEUE_CONTAMINATION_SECONDS,
+            runner_queue is not None
+            and runner_queue >= QUEUE_CONTAMINATION_SECONDS
+        ),
         "start_delay_seconds": (
             elapsed(run["created"], job["started"])
             if run["attempt"] == 1
@@ -541,9 +543,10 @@ def capacity_metrics(observations: list[dict[str, Any]]) -> dict[str, Any]:
             or sample["conclusion"] in {"cancelled", "canceled"}
         )
     )
-    events: dict[tuple[str | None, str | None, str | None], list[tuple[dt.datetime, int]]] = (
-        collections.defaultdict(list)
-    )
+    events: dict[
+        tuple[str | None, str | None, str | None], list[tuple[dt.datetime, int]]
+    ] = collections.defaultdict(list)
+    all_events: list[tuple[dt.datetime, int]] = []
     for sample in observations:
         started = _job_timestamp(sample, "started_at")
         completed = _job_timestamp(sample, "completed_at")
@@ -555,7 +558,9 @@ def capacity_metrics(observations: list[dict[str, Any]]) -> dict[str, Any]:
             dimensions.get("operating_system"),
             dimensions.get("runner_role"),
         )
-        events[key].extend(((started, 1), (completed, -1)))
+        points = ((started, 1), (completed, -1))
+        events[key].extend(points)
+        all_events.extend(points)
 
     peaks: dict[str, int] = {}
     for key, points in events.items():
@@ -570,6 +575,14 @@ def capacity_metrics(observations: list[dict[str, Any]]) -> dict[str, Any]:
         name = "/".join(value or "unknown" for value in (provider, operating_system, role))
         peaks[name] = peak
 
+    total_active = 0
+    total_peak = 0
+    # Repeat the same end-before-start sweep across every runner dimension so
+    # `peak_workers.total` captures simultaneous work in different groups.
+    for _, delta in sorted(all_events, key=lambda point: (point[0], point[1])):
+        total_active += delta
+        total_peak = max(total_peak, total_active)
+
     return {
         "runner_minutes": round(runner_seconds / 60, 3),
         "cancelled_runner_minutes": round(cancelled_seconds / 60, 3),
@@ -580,7 +593,7 @@ def capacity_metrics(observations: list[dict[str, Any]]) -> dict[str, Any]:
             and _job_timestamp(sample, "completed_at") is not None
         ),
         "peak_workers": {
-            "total": max(peaks.values(), default=None),
+            "total": total_peak if all_events else None,
             "by_provider_os_role": dict(sorted(peaks.items())),
         },
     }
@@ -841,9 +854,14 @@ def analyze(
         terminal = (
             max(completed, key=lambda job: job["completed"]) if completed else None
         )
+        sample_by_job_id = {sample["job_id"]: sample for sample in samples}
         if terminal:
             terminal_counts[terminal["name"]] += 1
-            terminal_sample = observation(run, terminal)
+            terminal_sample = sample_by_job_id.get(terminal["id"])
+            if terminal_sample is None:
+                raise ValueError(
+                    f"terminal job {terminal['id']} is missing from observations"
+                )
             terminal_queue_times.append(terminal_sample["queue_seconds"])
             terminal_runner_queue_times.append(
                 terminal_sample["runner_queue_seconds"]
@@ -923,12 +941,6 @@ def analyze(
                     and sample["runner_queue_seconds"]
                     >= QUEUE_CONTAMINATION_SECONDS
                     for sample in samples
-                )
-                or (
-                    terminal_sample is not None
-                    and terminal_sample["runner_queue_seconds"] is not None
-                    and terminal_sample["runner_queue_seconds"]
-                    >= QUEUE_CONTAMINATION_SECONDS
                 ),
             }
         )

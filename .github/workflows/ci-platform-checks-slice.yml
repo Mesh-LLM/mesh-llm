@@ -55,6 +55,7 @@ jobs:
     outputs:
       runner_macos: ${{ steps.policy.outputs.runner_macos }}
       runner_windows: ${{ steps.policy.outputs.runner_windows }}
+      runner_by_platform: ${{ steps.platform_runners.outputs.runner_by_platform }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -72,12 +73,21 @@ jobs:
           depot_main_enabled: 'false'
           depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
           force_hosted: ${{ inputs.force_hosted }}
+      - name: Map platform runners explicitly
+        id: platform_runners
+        env:
+          RUNNER_MACOS: ${{ steps.policy.outputs.runner_macos }}
+          RUNNER_WINDOWS: ${{ steps.policy.outputs.runner_windows }}
+        run: |
+          set -euo pipefail
+          printf 'runner_by_platform={"macos":"%s","windows":"%s"}\n' \
+            "$RUNNER_MACOS" "$RUNNER_WINDOWS" >> "$GITHUB_OUTPUT"
 
   platform_checks:
     name: Platform checks (${{ matrix.check.id }})
     needs: runner_policy
     if: ${{ inputs.platform_checks_matrix != '[]' }}
-    runs-on: ${{ matrix.check.platform == 'macos' && needs.runner_policy.outputs.runner_macos || needs.runner_policy.outputs.runner_windows }}
+    runs-on: ${{ fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform] }}
     timeout-minutes: 75
     strategy:
       fail-fast: ${{ inputs.fail_fast }}

@@ -50,8 +50,12 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(name, self.workflow)
         self.assertIn('actions_cache_url="${ACTIONS_CACHE_URL:-}"', self.workflow)
+        self.assertIn('actions_results_url="${ACTIONS_RESULTS_URL:-}"', self.workflow)
         self.assertIn("${actions_cache_url,,}", self.workflow)
+        self.assertIn("${actions_results_url,,}", self.workflow)
         self.assertIn("transparently redirected to Depot", self.workflow)
+        self.assertIn("ACTIONS_RESULTS_URL", self.workflow)
+        self.assertIn("actions\\.githubusercontent\\.com", self.workflow)
         self.assertIn('docker_auth_config="${DOCKER_AUTH_CONFIG:-}"', self.workflow)
         self.assertIn("${docker_auth_config,,}", self.workflow)
         self.assertIn("Docker config contains Depot registry authentication", self.workflow)

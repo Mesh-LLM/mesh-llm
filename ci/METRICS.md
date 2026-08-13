@@ -216,9 +216,9 @@ The built-in, date-independent heuristic constants are:
 
 | Signal | Rule |
 | --- | --- |
-| Queue warning | job queue p95 above 60 seconds → `hold` |
-| Capacity contamination | job or terminal-job queue p95 at least 300 seconds → `rollback` |
-| Minimum evidence | fewer than 3 job queue samples → `insufficient_sample` |
+| Minimum evidence | fewer than 3 `jobs.runner_queue_seconds` samples → `insufficient_sample` (checked before queue warning and capacity contamination) |
+| Queue warning | with minimum evidence met, `jobs.runner_queue_seconds` p95 above 60 seconds, or unavailable → `hold` |
+| Capacity contamination | `jobs.runner_queue_seconds` or terminal-job runner queue p95 at least 300 seconds → `rollback` |
 | Provider cohort separation | baseline and candidate runner-provider sets must be disjoint |
 
 These are rollout/rollback heuristics, not historical conclusions. A maintainer
