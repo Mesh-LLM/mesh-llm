@@ -100,10 +100,10 @@ model is loaded lazily on first request and remains resident for subsequent
 requests. The Core AI adapter uses a conservative byte-based token estimate for
 context admission from the artifact's declared context limit.
 
-The provider package declares the Core AI model identity, pinned artifact
-revision, and SHA-256 digests for every downloaded model file. A package
-containing a Core AI artifact selects that artifact as its provider target; a
-package without one remains the `apple/system` package.
+The provider package declares the `apple/system` identity alongside any Core AI
+model identity, its pinned artifact revision, and SHA-256 digests for every
+downloaded model file. One sidecar can therefore serve both the system model
+and the packaged Core AI artifact concurrently.
 
 Qwen3 artifacts advertise reasoning capability. The runtime automatically
 prefixes ordinary generation prompts with Qwen's `/no_think` control token so

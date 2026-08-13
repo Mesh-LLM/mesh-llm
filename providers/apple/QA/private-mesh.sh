@@ -12,9 +12,10 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     models = json.load(handle)["runtime"]["models"]
-if len(models) != 1:
-    raise SystemExit("Apple private-mesh QA requires exactly one packaged provider model")
-print(models[0]["id"])
+ids = {model["id"] for model in models}
+if "apple/system" not in ids:
+    raise SystemExit("Apple private-mesh QA requires apple/system")
+print("apple/system")
 PY
 )"
 export APPLE_MODEL_ID

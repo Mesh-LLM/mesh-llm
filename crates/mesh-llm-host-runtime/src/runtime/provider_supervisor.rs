@@ -57,13 +57,13 @@ pub(crate) struct ProviderRuntimeDiscoveryOptions {
 pub(crate) struct ProviderSupervisorHandle {
     shutdown_tx: watch::Sender<bool>,
     task: JoinHandle<()>,
-    pub(super) model_id: String,
+    pub(super) model_ids: Vec<String>,
 }
 
 #[derive(Clone)]
 struct ProviderRuntimeContext {
     runtime: InstalledProviderRuntime,
-    model_id: String,
+    model_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -144,23 +144,28 @@ pub(crate) async fn start_apple_provider_supervisor(
         emit_provider_warning("Apple provider runtime failed platform policy", &error);
         return None;
     }
-    let model_id = resolved
+    let model_ids = resolved
         .manifest
         .runtime
         .models
-        .first()
+        .iter()
         .map(|model| model.id.clone())
-        .unwrap_or_else(|| APPLE_MODEL_ID.to_string());
+        .collect::<Vec<_>>();
+    let model_ids = if model_ids.is_empty() {
+        vec![APPLE_MODEL_ID.to_string()]
+    } else {
+        model_ids
+    };
     let runtime = ProviderRuntimeContext {
         runtime: resolved,
-        model_id: model_id.clone(),
+        model_ids: model_ids.clone(),
     };
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let task = tokio::spawn(supervise_provider_runtime(runtime, context, shutdown_rx));
     Some(ProviderSupervisorHandle {
         shutdown_tx,
         task,
-        model_id,
+        model_ids,
     })
 }
 
@@ -357,7 +362,7 @@ async fn supervise_provider_runtime(
         match run_provider_process(&runtime, &context, &mut shutdown_rx).await {
             ProviderRunOutcome::Shutdown => break,
             ProviderRunOutcome::Restart(detail) => {
-                remove_provider_process(&context, &runtime.model_id).await;
+                remove_provider_process(&context, &runtime.model_ids).await;
                 restart_count = restart_count.saturating_add(1);
                 let delay = restart_backoff(restart_count);
                 let _ = emit_event(OutputEvent::Warning {
@@ -370,7 +375,7 @@ async fn supervise_provider_runtime(
             }
         }
     }
-    remove_provider_process(&context, &runtime.model_id).await;
+    remove_provider_process(&context, &runtime.model_ids).await;
 }
 
 async fn wait_for_restart_or_shutdown(
@@ -543,7 +548,7 @@ async fn monitor_provider_process(
                 if changed.is_err() || *shutdown_rx.borrow() {
                     withdraw_provider_routes(&mut state.routed_model_ids, port, context);
                     withdraw_provider_advertisement(&mut state.advertised_model_ids, context).await;
-                    remove_provider_process(context, &runtime.model_id).await;
+                    remove_provider_process(context, &runtime.model_ids).await;
                     let _ = terminate_provider_process(child).await;
                     return ProviderRunOutcome::Shutdown;
                 }
@@ -551,7 +556,7 @@ async fn monitor_provider_process(
             status = child.wait() => {
                 withdraw_provider_routes(&mut state.routed_model_ids, port, context);
                 withdraw_provider_advertisement(&mut state.advertised_model_ids, context).await;
-                remove_provider_process(context, &runtime.model_id).await;
+                remove_provider_process(context, &runtime.model_ids).await;
                 return ProviderRunOutcome::Restart(match status {
                     Ok(status) => format!("provider process exited with {status}"),
                     Err(error) => format!("provider process wait failed: {error}"),
@@ -586,27 +591,23 @@ async fn observe_provider_health(
     port: u16,
     state: &mut ProviderRoutingState,
 ) -> Option<ProviderRunOutcome> {
-    match probe_provider(client, port, &runtime.model_id).await {
-        Ok(availability) => {
+    match probe_provider(client, port, &runtime.model_ids).await {
+        Ok(availabilities) => {
             state.failures = 0;
-            publish_provider_state(runtime, context, pid, port, &availability).await;
+            let primary = availabilities
+                .first()
+                .expect("provider probe always returns at least one model");
+            publish_provider_state(runtime, context, pid, port, &primary.1).await;
             let was_unrouted = state.routed_model_ids.is_empty();
-            reconcile_provider_routes(
-                runtime,
-                &availability,
-                &mut state.routed_model_ids,
-                port,
-                context,
-            );
-            reconcile_provider_advertisement(
-                &runtime.model_id,
-                &availability,
+            reconcile_provider_routes(&availabilities, &mut state.routed_model_ids, port, context);
+            reconcile_provider_advertisements(
+                &availabilities,
                 &mut state.advertised_model_ids,
                 context,
             )
             .await;
             if was_unrouted && !state.routed_model_ids.is_empty() {
-                emit_provider_ready(runtime, &availability, port, pid);
+                emit_provider_ready(runtime, &primary.1, port, pid);
             }
             None
         }
@@ -631,8 +632,8 @@ async fn observe_provider_health(
 async fn probe_provider(
     client: &reqwest::Client,
     port: u16,
-    model_id: &str,
-) -> Result<ProviderAvailability> {
+    model_ids: &[String],
+) -> Result<Vec<(String, ProviderAvailability)>> {
     let base = format!("http://127.0.0.1:{port}");
     client
         .get(format!("{base}/health"))
@@ -651,29 +652,37 @@ async fn probe_provider(
         .json::<ProviderModelsResponse>()
         .await
         .context("decode provider models")?;
-    let model = models
-        .data
-        .into_iter()
-        .find(|candidate| candidate.id == model_id)
-        .with_context(|| format!("provider does not report requested model {model_id}"))?;
-    let versioned_model_id = validated_versioned_model_id(&model)?;
-    if model.max_concurrent_requests == 0 {
-        bail!("provider returned zero max_concurrent_requests");
-    }
-    Ok(ProviderAvailability {
-        available: model
-            .availability
-            .as_deref()
-            .is_none_or(|status| status.eq_ignore_ascii_case("available")),
-        unavailable_reason: model.unavailable_reason,
-        context_length: model.context_length,
-        model_version: model.model_version,
-        versioned_model_id,
-        capabilities: model.capabilities,
-        max_concurrent_requests: model.max_concurrent_requests,
-        active_requests: model.active_requests,
-        queued_requests: model.queued_requests,
-    })
+    model_ids
+        .iter()
+        .map(|model_id| {
+            let model = models
+                .data
+                .iter()
+                .find(|candidate| candidate.id == *model_id)
+                .with_context(|| format!("provider does not report requested model {model_id}"))?;
+            let versioned_model_id = validated_versioned_model_id(model)?;
+            if model.max_concurrent_requests == 0 {
+                bail!("provider returned zero max_concurrent_requests");
+            }
+            Ok((
+                model_id.clone(),
+                ProviderAvailability {
+                    available: model
+                        .availability
+                        .as_deref()
+                        .is_none_or(|status| status.eq_ignore_ascii_case("available")),
+                    unavailable_reason: model.unavailable_reason.clone(),
+                    context_length: model.context_length,
+                    model_version: model.model_version.clone(),
+                    versioned_model_id,
+                    capabilities: model.capabilities.clone(),
+                    max_concurrent_requests: model.max_concurrent_requests,
+                    active_requests: model.active_requests,
+                    queued_requests: model.queued_requests,
+                },
+            ))
+        })
+        .collect()
 }
 
 fn validated_versioned_model_id(model: &ProviderModelEntry) -> Result<String> {
@@ -702,7 +711,7 @@ fn emit_provider_ready(
     let _ = emit_event(OutputEvent::Info {
         message: format!(
             "Apple system model is available through the MeshLLM OpenAI API ({})",
-            runtime.model_id
+            runtime.model_ids.join(",")
         ),
         context: Some(format!(
             "provider={} version={} model_generation={} pid={pid} port={port}",
@@ -1023,6 +1032,18 @@ mod tests {
         }
     }
 
+    fn available_coreai_provider() -> ProviderAvailability {
+        ProviderAvailability {
+            context_length: Some(8_192),
+            model_version: "88064c009da71a9e5488c5db044fbfcf07703e42".to_string(),
+            versioned_model_id:
+                "meshllm/qwen3-0.6b-4bit-aimodel@88064c009da71a9e5488c5db044fbfcf07703e42"
+                    .to_string(),
+            capabilities: vec!["reasoning".to_string(), "tool_calling".to_string()],
+            ..available_provider()
+        }
+    }
+
     #[tokio::test]
     async fn private_mesh_advertises_provider_load_and_withdraws_it() {
         let node = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 9_337 })
@@ -1099,5 +1120,41 @@ mod tests {
             runtime.provider_kind.as_deref() == Some("apple")
                 && runtime.max_concurrent_requests == Some(1)
         }));
+    }
+
+    #[tokio::test]
+    async fn one_provider_advertises_system_and_coreai_models() {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 9_337 })
+            .await
+            .unwrap();
+        let (target_tx, _target_rx) = watch::channel(election::ModelTargets::default());
+        let context = ProviderSupervisorContext {
+            target_tx: Arc::new(target_tx),
+            dashboard_processes: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            console_state: None,
+            node: node.clone(),
+        };
+        let mut advertised = Vec::new();
+        let availabilities = vec![
+            (APPLE_MODEL_ID.to_string(), available_provider()),
+            (
+                "meshllm/qwen3-0.6b-4bit-aimodel".to_string(),
+                available_coreai_provider(),
+            ),
+        ];
+
+        reconcile_provider_advertisements(&availabilities, &mut advertised, &context).await;
+
+        assert_eq!(
+            advertised,
+            vec![
+                "apple/system".to_string(),
+                "apple/system@27.0".to_string(),
+                "meshllm/qwen3-0.6b-4bit-aimodel".to_string(),
+                "meshllm/qwen3-0.6b-4bit-aimodel@88064c009da71a9e5488c5db044fbfcf07703e42"
+                    .to_string(),
+            ]
+        );
+        assert_eq!(node.hosted_models().await, advertised);
     }
 }

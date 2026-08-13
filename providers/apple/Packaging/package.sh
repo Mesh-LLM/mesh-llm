@@ -243,10 +243,10 @@ if coreai_model_id:
 
 models = [{"id": "apple/system", "kind": "system"}]
 if coreai_model_id:
-    models = [{
+    models.append({
         "id": coreai_model_id,
         "kind": "coreai",
-    }]
+    })
 
 manifest = {
     "schema_version": 1,

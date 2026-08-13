@@ -14,13 +14,15 @@ pub(super) fn desired_provider_routes(
 }
 
 pub(super) fn reconcile_provider_routes(
-    runtime: &ProviderRuntimeContext,
-    availability: &ProviderAvailability,
+    availabilities: &[(String, ProviderAvailability)],
     routed_model_ids: &mut Vec<String>,
     port: u16,
     context: &ProviderSupervisorContext,
 ) {
-    let desired = desired_provider_routes(&runtime.model_id, availability);
+    let desired = availabilities
+        .iter()
+        .flat_map(|(model_id, availability)| desired_provider_routes(model_id, availability))
+        .collect::<Vec<_>>();
     for model_id in routed_model_ids.iter().filter(|id| !desired.contains(id)) {
         super::super::remove_runtime_local_target(&context.target_tx, model_id, port);
     }
@@ -79,9 +81,14 @@ async fn upsert_provider_process(
     status: &str,
     context_length: Option<u32>,
 ) {
+    let process_model_id = runtime
+        .model_ids
+        .first()
+        .map(String::as_str)
+        .unwrap_or(APPLE_MODEL_ID);
     let process = api::RuntimeProcessPayload {
-        name: runtime.model_id.clone(),
-        instance_id: Some(provider_instance_id(&runtime.model_id)),
+        name: process_model_id.to_string(),
+        instance_id: Some(provider_instance_id(process_model_id)),
         profile: String::new(),
         backend: runtime.runtime.manifest.runtime.provider_kind.clone(),
         status: status.to_string(),
@@ -106,13 +113,15 @@ pub(super) fn withdraw_provider_routes(
     }
 }
 
-pub(super) async fn reconcile_provider_advertisement(
-    model_id: &str,
-    availability: &ProviderAvailability,
+pub(super) async fn reconcile_provider_advertisements(
+    availabilities: &[(String, ProviderAvailability)],
     advertised_model_ids: &mut Vec<String>,
     context: &ProviderSupervisorContext,
 ) {
-    let desired = desired_provider_routes(model_id, availability);
+    let desired = availabilities
+        .iter()
+        .flat_map(|(model_id, availability)| desired_provider_routes(model_id, availability))
+        .collect::<Vec<_>>();
     let previous = advertised_model_ids.clone();
     let mut changed = previous != desired;
 
@@ -124,6 +133,13 @@ pub(super) async fn reconcile_provider_advertisement(
         changed |= context.node.remove_model_runtime_descriptor(model_id).await;
     }
     for model_id in &desired {
+        let availability = availabilities
+            .iter()
+            .find(|(candidate, availability)| {
+                candidate == model_id || availability.versioned_model_id == *model_id
+            })
+            .map(|(_, availability)| availability)
+            .expect("desired provider route must have availability");
         context
             .node
             .upsert_served_model_descriptor(provider_served_model_descriptor(
@@ -140,6 +156,16 @@ pub(super) async fn reconcile_provider_advertisement(
     if changed {
         context.node.regossip().await;
     }
+}
+
+pub(super) async fn reconcile_provider_advertisement(
+    model_id: &str,
+    availability: &ProviderAvailability,
+    advertised_model_ids: &mut Vec<String>,
+    context: &ProviderSupervisorContext,
+) {
+    let availabilities = vec![(model_id.to_string(), availability.clone())];
+    reconcile_provider_advertisements(&availabilities, advertised_model_ids, context).await;
 }
 
 async fn reconcile_provider_model_names(
@@ -248,11 +274,16 @@ pub(super) async fn withdraw_provider_advertisement(
     context.node.regossip().await;
 }
 
-pub(super) async fn remove_provider_process(context: &ProviderSupervisorContext, model_id: &str) {
-    let instance_id = provider_instance_id(model_id);
-    super::super::remove_dashboard_process(&context.dashboard_processes, &instance_id).await;
-    if let Some(console_state) = &context.console_state {
-        console_state.remove_local_process(&instance_id).await;
+pub(super) async fn remove_provider_process(
+    context: &ProviderSupervisorContext,
+    model_ids: &[String],
+) {
+    for model_id in model_ids {
+        let instance_id = provider_instance_id(model_id);
+        super::super::remove_dashboard_process(&context.dashboard_processes, &instance_id).await;
+        if let Some(console_state) = &context.console_state {
+            console_state.remove_local_process(&instance_id).await;
+        }
     }
 }
 
