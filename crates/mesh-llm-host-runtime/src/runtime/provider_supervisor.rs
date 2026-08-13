@@ -597,6 +597,19 @@ async fn observe_provider_health(
             let primary = availabilities
                 .first()
                 .expect("provider probe always returns at least one model");
+            if availabilities
+                .iter()
+                .any(|(_, availability)| availability.available)
+            {
+                // Provider-only nodes start as Workers while joining a mesh,
+                // but the sidecar exposes a direct HTTP inference endpoint.
+                // Promote it to Host so public gateways and Nostr listings
+                // treat the Apple runtime as directly routable.
+                context
+                    .node
+                    .set_role(mesh::NodeRole::Host { http_port: port })
+                    .await;
+            }
             publish_provider_state(runtime, context, pid, port, &primary.1).await;
             let was_unrouted = state.routed_model_ids.is_empty();
             reconcile_provider_routes(&availabilities, &mut state.routed_model_ids, port, context);
