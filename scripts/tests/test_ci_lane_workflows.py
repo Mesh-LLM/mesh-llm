@@ -47,6 +47,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
         pr_workflow = self.workflow("pr_builds.yml")
         self.assertIn("github.rest.pulls.listFiles", pr_workflow)
         self.assertIn("controlPlaneChanged", pr_workflow)
+        self.assertIn("files.length >= 3000", pr_workflow)
         self.assertIn("filename.startsWith('.github/')", pr_workflow)
         self.assertIn(
             "context.eventName === 'workflow_dispatch' || controlPlaneChanged",

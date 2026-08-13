@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       bootstrap: ${{ steps.route.outputs.bootstrap }}
     steps:
@@ -45,7 +46,7 @@ jobs:
                 pull_number: pull.number,
                 per_page: 100,
               });
-              controlPlaneChanged = files.some(({filename}) =>
+              controlPlaneChanged = files.length >= 3000 || files.some(({filename}) =>
                 filename.startsWith('.github/') ||
                 filename.startsWith('.omo/') ||
                 filename.startsWith('ci/') ||
