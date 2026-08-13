@@ -31,7 +31,7 @@ permissions:
 jobs:
   core:
     name: Core inference smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"core"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -45,7 +45,7 @@ jobs:
 
   core_cuda:
     name: CUDA inference smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"core-cuda"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -58,7 +58,7 @@ jobs:
 
   two_node_client:
     name: Two-node client smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"two-node-client"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'two-node-client') }}
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -73,7 +73,7 @@ jobs:
 
   two_node_split:
     name: Two-node split smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"two-node-split"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'two-node-split') }}
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -88,7 +88,7 @@ jobs:
 
   metal_model_load:
     name: Metal model-load smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"metal-model-load"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'metal-model-load') }}
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -103,7 +103,7 @@ jobs:
 
   model_download:
     name: Model download smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"model-download"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'model-download') }}
     uses: ./.github/workflows/hf-download-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}

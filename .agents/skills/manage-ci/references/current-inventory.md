@@ -8,7 +8,7 @@ before editing CI.
 
 | Workflow | Trigger | Ownership |
 | --- | --- | --- |
-| `pr_builds.yml` | PR lifecycle, dispatch | Routes same-repository PRs to protected control; bootstraps forks and migrations through `ci-orchestrator.yml` |
+| `pr_builds.yml` | PR lifecycle, dispatch | Routes ordinary same-repository PRs to protected control; bootstraps control-plane changes, forks and migrations through `ci-orchestrator.yml` |
 | `ci.yml` | main push, dispatch | Routes main pushes to protected control; manual/migration runs use `ci-orchestrator.yml` |
 | `ci-control.yml` | completed `PR CI` / `Main CI` | Protected source resolution, one canonical plan, bounded lane dispatch and correlated required checks |
 | `ci-orchestrator.yml` | `workflow_call` | Bootstrap planner and monolithic static slice graph with `CI Required` |

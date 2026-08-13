@@ -9,7 +9,7 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 | Workflow | Trigger | Role |
 | --- | --- | --- |
-| `pr_builds.yml` | `pull_request`, dispatch | Thin PR router; protected control for same-repository PRs, bootstrap graph for forks/migration/manual |
+| `pr_builds.yml` | `pull_request`, dispatch | Thin PR router; protected control for ordinary same-repository PRs, bootstrap graph for control-plane changes, forks, migration and manual runs |
 | `ci.yml` | push to `main`, dispatch | Thin main router; protected control for pushes, bootstrap graph for migration/manual |
 | `ci-control.yml` | completed `PR CI` / `Main CI` | Resolves source identity, computes one plan, dispatches lanes, and owns correlated checks |
 | `ci-orchestrator.yml` | `workflow_call` | Bootstrap planner and monolithic static slice graph |
@@ -27,7 +27,7 @@ protected default branch; the immutable source SHA is passed only to product
 checkout steps. Reporting, planning, and orchestration actions therefore stay
 protected. Lane workflows retain least-privilege permissions, and pull-request
 dispatches receive no repository secrets; a missing or foreign head repository
-falls back to the bootstrap graph.
+or control-plane change falls back to the branch-local bootstrap graph.
 
 ## Graph shape
 
@@ -50,7 +50,7 @@ flowchart TD
     LC --> GATE
     MC --> GATE
     XC --> GATE
-    ENTRY -. "fork / migration / manual" .-> BOOT["bootstrap orchestrator\nstatic slices in one run"]
+    ENTRY -. "control-plane / fork / migration / manual" .-> BOOT["bootstrap orchestrator\nstatic slices in one run"]
     BOOT --> GATE
 ```
 

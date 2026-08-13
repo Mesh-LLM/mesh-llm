@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       bootstrap: ${{ steps.route.outputs.bootstrap }}
     steps:
@@ -37,8 +38,24 @@ jobs:
             }
             const pull = context.payload.pull_request;
             const sameRepository = !pull || pull.head.repo?.full_name === context.payload.repository.full_name;
+            let controlPlaneChanged = false;
             let lanesReady = true;
             if (pull && sameRepository) {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: pull.number,
+                per_page: 100,
+              });
+              controlPlaneChanged = files.length >= 3000 || files.some(({filename}) =>
+                filename.startsWith('.github/') ||
+                filename.startsWith('.omo/') ||
+                filename.startsWith('ci/') ||
+                filename === 'scripts/affected-crates.sh' ||
+                filename === 'scripts/plan-ci.py' ||
+                (filename.startsWith('scripts/plan-') && filename.endsWith('.sh')) ||
+                filename === 'scripts/collect-ci-metrics.py' ||
+                filename === 'scripts/tests/test_plan_ci.py'
+              );
               for (const path of [
                 '.github/workflows/ci-quality-lane.yml',
                 '.github/workflows/ci-website-lane.yml',
@@ -59,12 +76,13 @@ jobs:
                 }
               }
             }
-            const bootstrap = context.eventName === 'workflow_dispatch' || !controllerReady || !sameRepository || !lanesReady;
+            const bootstrap = context.eventName === 'workflow_dispatch' || controlPlaneChanged || !controllerReady || !sameRepository || !lanesReady;
             core.setOutput('bootstrap', String(bootstrap));
             core.summary.addHeading('CI routing', 2);
             core.summary.addRaw(`Protected controller available: ${controllerReady}\n`);
             core.summary.addRaw(`Same-repository source: ${sameRepository}\n`);
             core.summary.addRaw(`Lane workflows available on protected default branch: ${lanesReady}\n`);
+            core.summary.addRaw(`Control-plane change: ${controlPlaneChanged}\n`);
             core.summary.addRaw(`Bootstrap graph: ${bootstrap}\n`);
             await core.summary.write();
 
