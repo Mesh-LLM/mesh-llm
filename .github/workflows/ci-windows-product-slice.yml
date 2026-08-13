@@ -74,7 +74,7 @@ jobs:
       matrix:
         runtime: ${{ fromJson(inputs.runtime_matrix) }}
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@main
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@e0dd4586b585d2a20ee8e6d2c786424521dfdcfe
         with:
           original_event_name: ${{ inputs.original_event_name }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

@@ -75,6 +75,25 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('"$ImageOS" "$ImageVersion"', self.workflow)
         self.assertNotIn("printenv", self.workflow)
 
+    def test_pr_audit_uses_portable_endpoint_and_docker_config_checks(self) -> None:
+        action = (
+            ROOT
+            / ".github"
+            / "actions"
+            / "audit-depot-pr-isolation"
+            / "action.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'endpoint_lower="$(printf \'%s\' "$endpoint" | tr '
+            "'[:upper:]' '[:lower:]')\"",
+            action,
+        )
+        self.assertIn(
+            'docker_config="${DOCKER_CONFIG:-${HOME:-}/.docker}/config.json"',
+            action,
+        )
+        self.assertIn("grep -Eiq 'depot\\.dev'", action)
+
 
 if __name__ == "__main__":
     unittest.main()
