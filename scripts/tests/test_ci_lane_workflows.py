@@ -38,21 +38,18 @@ class CiLaneWorkflowTests(unittest.TestCase):
     def test_prs_use_protected_native_reusable_lanes(self) -> None:
         workflow = self.workflow("ci-control.yml")
         self.assertIn("workflows: [Main CI]", workflow)
-        self.assertNotIn("workflows: [PR Validation", workflow)
+        self.assertNotIn("workflows: [PR ·", workflow)
 
-        pr_workflow = self.workflow("pr_builds.yml")
-        self.assertIn("name: PR Validation", pr_workflow)
-        self.assertIn("ci-orchestrator.yml@main", pr_workflow)
-
-        composer = self.workflow("ci-orchestrator.yml")
-        self.assertEqual(1, composer.count("uses: ./.github/actions/plan-ci"))
         for lane in ("quality", "website", "linux", "macos", "windows"):
+            pr_workflow = self.workflow(f"pr_{lane}.yml")
+            self.assertIn("pull_request:", pr_workflow)
+            self.assertEqual(1, pr_workflow.count("uses: ./.github/actions/plan-ci"))
             self.assertIn(
-                f"uses: ./.github/workflows/ci-{lane}-lane.yml",
-                composer,
+                f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main",
+                pr_workflow,
             )
-        self.assertIn("name: CI Required", composer)
-        self.assertNotIn("github.rest.actions.createWorkflowDispatch", composer)
+            self.assertIn(f"name: PR / {'macOS' if lane == 'macos' else lane.title()}", pr_workflow)
+            self.assertNotIn("github.rest.actions.createWorkflowDispatch", pr_workflow)
 
     def test_controller_summary_tolerates_omitted_optional_matrices(self) -> None:
         workflow = self.workflow("ci-control.yml")
@@ -67,12 +64,13 @@ class CiLaneWorkflowTests(unittest.TestCase):
             with self.subTest(matrix=matrix):
                 self.assertIn(f"(.matrices.{matrix} // [])[]", workflow)
 
-    def test_thin_routes_do_not_compete_with_bootstrap_concurrency(self) -> None:
-        for name in ("pr_builds.yml", "ci.yml"):
-            with self.subTest(workflow=name):
-                self.assertNotIn("concurrency:", self.workflow(name))
+    def test_pr_routes_cancel_independently(self) -> None:
+        self.assertNotIn("concurrency:", self.workflow("ci.yml"))
         self.assertIn("concurrency:", self.workflow("ci-control.yml"))
-        self.assertIn("concurrency:", self.workflow("ci-orchestrator.yml"))
+        for lane in ("quality", "website", "linux", "macos", "windows"):
+            workflow = self.workflow(f"pr_{lane}.yml")
+            self.assertIn(f"group: pr-{lane}-", workflow)
+            self.assertIn("cancel-in-progress: true", workflow)
 
     def test_lane_workflows_are_reusable_and_dispatchable(self) -> None:
         checks = {
@@ -343,13 +341,16 @@ class CiLaneWorkflowTests(unittest.TestCase):
     def test_manual_main_depot_input_is_explicitly_forwarded(self) -> None:
         main = self.workflow("ci.yml")
         controller = self.workflow("ci-control.yml")
-        pr = self.workflow("pr_builds.yml")
+        prs = "\n".join(
+            self.workflow(f"pr_{lane}.yml")
+            for lane in ("quality", "website", "linux", "macos", "windows")
+        )
 
         self.assertNotIn("workflow_dispatch:", main)
         self.assertIn("workflow_dispatch:", controller)
         self.assertIn("context.payload.inputs?.use_depot", controller)
         self.assertIn("inputs.use_depot = process.env.USE_DEPOT", controller)
-        self.assertNotIn("use_depot:", pr)
+        self.assertNotIn("use_depot: true", prs)
         for name in (
             "ci-quality-slice.yml",
             "ci-linux-host-slice.yml",
@@ -363,10 +364,13 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn("${{ inputs.use_depot }}", workflow)
 
     def test_superseded_pr_runs_cancel_by_pull_request_identity(self) -> None:
-        composer = self.workflow("ci-orchestrator.yml")
-        self.assertIn("group: pr-ci-${{ github.event.pull_request.number", composer)
-        self.assertIn("cancel-in-progress: true", composer)
         for lane in ("quality", "website", "linux", "macos", "windows"):
+            pr_workflow = self.workflow(f"pr_{lane}.yml")
+            self.assertIn(
+                f"group: pr-{lane}-${{{{ github.event.pull_request.number }}}}",
+                pr_workflow,
+            )
+            self.assertIn("cancel-in-progress: true", pr_workflow)
             workflow = self.workflow(f"ci-{lane}-lane.yml")
             self.assertIn("inputs.supersession_key || inputs.source_sha", workflow)
 

@@ -24,16 +24,16 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             workflow,
         )
 
-    def test_pr_entrypoint_calls_the_protected_native_composer(self):
-        workflow = self.workflow("pr_builds.yml")
-        self.assertIn("pull_request:", workflow)
-        self.assertIn("name: PR Validation", workflow)
-        self.assertIn(
-            "uses: Mesh-LLM/mesh-llm/.github/workflows/ci-orchestrator.yml@main",
-            workflow,
-        )
-        self.assertNotIn("actions.createWorkflowDispatch", workflow)
-        self.assertNotIn("prepare-host-input", workflow)
+    def test_pr_entrypoints_call_protected_native_lanes(self):
+        for lane in ("quality", "website", "linux", "macos", "windows"):
+            workflow = self.workflow(f"pr_{lane}.yml")
+            self.assertIn("pull_request:", workflow)
+            self.assertIn(
+                f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main",
+                workflow,
+            )
+            self.assertNotIn("actions.createWorkflowDispatch", workflow)
+            self.assertNotIn("prepare-host-input", workflow)
 
     def test_controller_dispatches_only_named_topic_and_platform_workflows(self):
         workflow = self.workflow("ci-control.yml")
@@ -41,7 +41,6 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.assertIn(f"'ci-{lane}-lane.yml'", workflow)
         self.assertEqual(1, workflow.count("uses: ./.github/actions/plan-ci"))
         self.assertIn("name: 'CI Required'", workflow)
-        self.assertIn("ci-orchestrator.yml@main", self.workflow("pr_builds.yml"))
         self.assertNotIn("ci-orchestrator.yml", self.workflow("ci.yml"))
 
     def test_platform_consumers_require_only_matching_producers(self):

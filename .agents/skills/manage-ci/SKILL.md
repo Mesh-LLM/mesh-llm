@@ -43,9 +43,11 @@ owning source, and update the inventory and topology in the same change.
 
 ### Entrypoints and reusable slices
 
-- Event entrypoints own triggers, concurrency, and top-level read permissions.
-  Pull requests call the protected default-branch PR composer so reusable lane
-  jobs remain attached to the native PR workflow run. Main and manual runs use
+- Event entrypoints own triggers, concurrency, and top-level permissions.
+  Pull requests use separate Quality, Website, Linux, macOS, and Windows
+  workflows. Each entry computes the canonical plan against a default-branch
+  checkout, then calls only its protected default-branch reusable lane so jobs
+  remain attached to a small topic/platform PR run. Main and manual runs use
   the protected default-branch controller for source resolution, profile
   selection, one canonical plan, bounded lane dispatch, and the stable overall
   required check. Neither path owns duplicated build implementations.
@@ -73,12 +75,12 @@ owning source, and update the inventory and topology in the same change.
 
 ### Planning and routing
 
-- Compute changed files and the CI plan once per entry graph. Pull requests
-  call the protected default-branch PR composer as a reusable workflow; it
-  calls the selected lane workflows natively so every nested job and log stays
-  visible from the PR run. Main and manual graphs pass digest-bound lane
-  projections through native workflow-dispatch inputs. Do not allocate one
-  planner per lane or use an artifact as dispatch state. Fork PRs use the same
+- Compute changed files and the CI plan once per entry graph. Each independent
+  PR topic/platform workflow projects only its own lane and calls that protected
+  default-branch lane natively, so every nested job and log stays visible from
+  the matching PR run without a monolithic matrix. Main and manual graphs pass
+  digest-bound lane projections through native workflow-dispatch inputs. Do
+  not use an artifact as dispatch state. Fork PRs use the same
   no-secret reusable path after fetching the immutable head SHA through the
   base repository. All lane conditions and summaries consume the same plan or
   its bounded projection.

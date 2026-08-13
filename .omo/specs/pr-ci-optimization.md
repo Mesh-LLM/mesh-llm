@@ -1,6 +1,6 @@
 # PR and main CI composition plan
 
-Status: implemented on this branch. The shared planner, protected PR composer,
+Status: implemented on this branch. The shared planner, focused PR entrypoints,
 main/manual controller, topic/platform lane workflows, platform-pure reusable
 graphs, contracts and documentation are checked in. Ruleset migration and
 Depot PR execution remain separate future work.
@@ -22,9 +22,10 @@ or cache identity.
 
 ## Implemented on this branch
 
-- One-job pr_builds.yml calls the protected default-branch PR composer, while
-  ci.yml wakes the protected ci-control.yml planner. Same-repository and fork
-  PRs keep nested reusable jobs in their native PR run; main and explicit
+- Five `pr_*.yml` entrypoints independently plan and call their matching
+  protected default-branch reusable lane, while ci.yml wakes the protected
+  ci-control.yml planner. Same-repository and fork PRs keep nested reusable
+  jobs in focused native PR runs; main and explicit
   manual-full runs use separate protected lane dispatch.
 - ci/ownership.yml and ci/slices.yml define the checked ownership, dependency,
   row, runner-role, cache-mode and worker-budget catalog.
@@ -35,7 +36,7 @@ or cache identity.
   native inputs from one plan and own typed platform-local static slice
   supersets without unrelated platform placeholders. They support native
   reusable PR calls and protected main/manual dispatch.
-- PRs expose native lane jobs and one native CI Required job; dispatched
+- PRs expose native lane jobs and five stable topic/platform results; dispatched
   main/manual lanes retain correlated checks.
 - Existing static ABI, native SDK, Swift, smoke and HF workflows remain
   lower-level reusable producers/consumers.
@@ -49,23 +50,21 @@ runner groups, secrets or external capacity.
 
 ## Graph
 
-  PR entry --> protected reusable composer: compute-changes + plan-ci once
-       |
-       +--> Quality workflow --> CI / Quality ---+
-       +--> Website workflow --> CI / Website ---+
-       +--> Linux workflow ----> CI / Linux -----+
-       +--> macOS workflow ----> CI / macOS -----+--> CI Required
-       +--> Windows workflow --> CI / Windows ---+
+  PR Quality entry --> plan --> protected Quality lane --> PR / Quality
+  PR Website entry --> plan --> protected Website lane --> PR / Website
+  PR Linux entry --> plan --> protected Linux lane --> PR / Linux
+  PR macOS entry --> plan --> protected macOS lane --> PR / macOS
+  PR Windows entry --> plan --> protected Windows lane --> PR / Windows
 
   Main/manual entry --> protected controller --> the same five dispatched lanes
 
-The PR composer calls a closed list of protected default-branch workflows as
-nested reusable jobs, preserving native PR run/log visibility. The main/manual
-controller dispatches the same list with bounded JSON inputs. Both pass the
+Each PR entry calls one protected default-branch workflow as a nested reusable
+job, preserving native PR run/log visibility without a monolithic graph. The
+main/manual controller dispatches the same list with bounded JSON inputs. Both pass the
 immutable source SHA only to product checkouts; each lane contains a
 platform-local static superset of typed reusable calls. Workflow YAML is never
-generated, and lanes do not download a planner artifact or allocate another
-planner. Fork heads are fetched through the base repository while workflow
+generated, and lanes do not download a planner artifact or allocate a planner.
+Fork heads are fetched through the base repository while workflow
 definitions remain protected on the default branch.
 
 ## Planner contract
@@ -173,8 +172,8 @@ authoritative topology docs. Capacity is not the optimization.
 
 Each lane owns one stable non-matrix summary that directly needs its complete
 static job superset and validates required work against its bounded plan.
-The PR composer owns one native non-matrix CI Required job that directly needs
-all reusable lane calls and validates required successes and unplanned skips.
+Each PR entry owns one native non-matrix `PR / <lane>` job that directly needs
+its reusable lane call and validates required success or an unplanned skip.
 ci-control.yml creates correlated lane checks for dispatched main/manual runs;
 the final lane completes that aggregate only when all expected checks are
 terminal. Existing branch-protection rules are not edited by this

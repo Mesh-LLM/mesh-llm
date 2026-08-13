@@ -17,8 +17,13 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     let justfile = fs::read_to_string(repo_root.join("Justfile"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
     let ci_workflow = fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))?;
-    let pr_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
-    let pr_composer = fs::read_to_string(repo_root.join(".github/workflows/ci-orchestrator.yml"))?;
+    let pr_workflows = ["quality", "website", "linux", "macos", "windows"]
+        .into_iter()
+        .map(|lane| {
+            fs::read_to_string(repo_root.join(format!(".github/workflows/pr_{lane}.yml")))
+                .map(|workflow| (lane, workflow))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let controller = fs::read_to_string(repo_root.join(".github/workflows/ci-control.yml"))?;
     let lane_workflows = ["quality", "website", "linux", "macos", "windows"]
         .into_iter()
@@ -86,8 +91,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     check_workflow_invariants(
         &release_workflow,
         &ci_workflow,
-        &pr_workflow,
-        &pr_composer,
+        &pr_workflows,
         &website_pages,
     )?;
     check_producer_invariants(&ProducerInvariantSources {
@@ -103,7 +107,12 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
         prepare_runtime: &prepare_runtime,
         compose_product: &compose_product,
     })?;
-    check_orchestrator_invariants(&controller, &pr_composer, &lane_workflows, &compute_changes)?;
+    check_orchestrator_invariants(
+        &controller,
+        &pr_workflows,
+        &lane_workflows,
+        &compute_changes,
+    )?;
     check_release_dispatch_version_preparation(&release_workflow, &native_sdk, &swift_sdk)?;
     check_release_container_contracts(&release_workflow, &configure_sccache)?;
     check_windows_dynamic_runtime_contract(
@@ -165,8 +174,7 @@ fn check_documentation_invariants(
 fn check_workflow_invariants(
     release_workflow: &str,
     ci_workflow: &str,
-    pr_workflow: &str,
-    pr_composer: &str,
+    pr_workflows: &[(&str, String)],
     website_pages: &str,
 ) -> DynResult<()> {
     for (text, needle, context) in [
@@ -199,27 +207,29 @@ fn check_workflow_invariants(
         "push:\n    branches: [main]",
         "main CI push trigger",
     )?;
-    ensure_contains(pr_workflow, "pull_request:", "PR pull-request trigger")?;
-    ensure_contains(
-        pr_workflow,
-        "uses: Mesh-LLM/mesh-llm/.github/workflows/ci-orchestrator.yml@main",
-        "PR protected native composer call",
-    )?;
-    ensure_contains(pr_composer, "name: CI Required", "native PR required job")?;
+    for (lane, workflow) in pr_workflows {
+        ensure_contains(workflow, "pull_request:", &format!("PR {lane} trigger"))?;
+        ensure_contains(
+            workflow,
+            &format!("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"),
+            &format!("PR protected native {lane} lane call"),
+        )?;
+        ensure_contains(
+            workflow,
+            "needs: [plan, lane]",
+            &format!("PR {lane} required job"),
+        )?;
+        ensure_not_contains(
+            workflow,
+            "pull_request_target",
+            &format!("PR {lane} trust boundary"),
+        )?;
+        ensure_not_contains(workflow, "secrets:", &format!("PR {lane} secret boundary"))?;
+    }
     ensure_not_contains(
         ci_workflow,
         "uses: ./.github/workflows/ci-orchestrator.yml",
         "main entrypoint must not expand the monolithic bootstrap graph",
-    )?;
-    ensure_not_contains(
-        pr_workflow,
-        "pull_request_target",
-        "PR must not use pull_request_target",
-    )?;
-    ensure_not_contains(
-        pr_workflow,
-        "secrets:",
-        "PR entrypoint must not pass repository secrets",
     )?;
     Ok(())
 }
@@ -324,7 +334,7 @@ fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) -> DynResul
 
 fn check_orchestrator_invariants(
     controller: &str,
-    pr_composer: &str,
+    pr_workflows: &[(&str, String)],
     lanes: &[(&str, String)],
     compute_changes: &str,
 ) -> DynResult<()> {
@@ -355,9 +365,13 @@ fn check_orchestrator_invariants(
             .unwrap_or("")
     };
     for lane in ["quality", "website", "linux", "macos", "windows"] {
+        let pr_workflow = pr_workflows
+            .iter()
+            .find_map(|(name, workflow)| (*name == lane).then_some(workflow.as_str()))
+            .unwrap_or("");
         ensure_contains(
-            pr_composer,
-            &format!("uses: ./.github/workflows/ci-{lane}-lane.yml"),
+            pr_workflow,
+            &format!("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"),
             &format!("native PR {lane} lane call"),
         )?;
         ensure_contains(
@@ -403,11 +417,6 @@ fn check_orchestrator_invariants(
         controller,
         "name: 'CI Required'",
         "stable dispatched CI required check",
-    )?;
-    ensure_contains(
-        pr_composer,
-        "name: CI Required",
-        "stable native PR required job",
     )?;
     ensure_contains(
         compute_changes,

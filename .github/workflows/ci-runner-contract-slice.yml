@@ -68,7 +68,7 @@ jobs:
           grep -Fq 'depot_enabled=false' .github/actions/select-ci-runners/action.yml
           workflow_targets=(
             .github/workflows/ci.yml
-            .github/workflows/pr_builds.yml
+            .github/workflows/pr_*.yml
             .github/workflows/ci-control.yml
             .github/workflows/ci-*-lane.yml
             .github/workflows/ci-*-slice.yml

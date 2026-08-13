@@ -9,30 +9,32 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 | Workflow | Trigger | Role |
 | --- | --- | --- |
-| `pr_builds.yml` (`PR Validation`) | `pull_request` | One-job caller of the protected default-branch PR composer |
-| `ci-orchestrator.yml` (`PR CI Graph`) | `workflow_call` | Computes one PR plan and calls selected lanes natively inside the PR run |
+| `pr_quality.yml` (`PR · Quality`) | `pull_request` | Plans and calls the protected Quality lane |
+| `pr_website.yml` (`PR · Website`) | `pull_request` | Plans and calls the protected Website lane |
+| `pr_linux.yml` (`PR · Linux`) | `pull_request` | Plans and calls the protected Linux lane |
+| `pr_macos.yml` (`PR · macOS`) | `pull_request` | Plans and calls the protected macOS lane |
+| `pr_windows.yml` (`PR · Windows`) | `pull_request` | Plans and calls the protected Windows lane |
 | `ci.yml` | push to `main` | One-job ingress that requests protected planning for main |
 | `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Resolves main/manual source identity, computes one plan, dispatches selected lanes, and owns correlated checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
 
-The lane workflows are not independent planners. PR Validation calls the
-default-branch PR composer, which computes one canonical plan and invokes each
-selected lane as a nested reusable workflow. GitHub therefore keeps every lane
-job and step in the PR-associated workflow run, with direct log drill-down and
-a native `CI Required` job. The composer receives no repository secrets,
-cannot select Depot or publish trusted-main caches, and cancels superseded PR
-synchronizations.
+Each PR entry checks out the default branch for canonical planning, projects
+only its matching bounded lane, and invokes that lane at `@main` as a nested
+reusable workflow. GitHub therefore exposes five focused PR-associated runs
+with direct job and step drill-down. Each has a stable `PR / <lane>` result.
+The entries receive no repository secrets, cannot select Depot or publish
+trusted-main caches, and independently cancel superseded synchronizations.
 
 Main and explicit manual-full validation retain protected separate-run lane
 dispatch. `CI · Plan` computes their canonical shape once and passes each lane
 a digest-bound JSON projection through native workflow-dispatch inputs. Main
-runs are not cancelled.
+runs are not cancelled, and their correlated aggregate remains `CI Required`.
 
 ## Graph shape
 
 ```mermaid
 flowchart TD
-    PR["PR Validation"] --> PRPLAN["protected reusable PR composer"]
+    PR["five focused PR entry workflows"] --> PRPLAN["default-branch canonical planning"]
     MAIN["Main CI or manual"] --> CONTROL["protected CI · Plan"]
     PRPLAN --> PLAN["compute changes + plan-ci once"]
     CONTROL --> PLAN
@@ -46,22 +48,21 @@ flowchart TD
     LINUX --> LC["CI / Linux"]
     MAC --> MC["CI / macOS"]
     WIN --> XC["CI / Windows"]
-    QC --> GATE["CI Required"]
-    WC --> GATE
-    LC --> GATE
-    MC --> GATE
-    XC --> GATE
+    QC --> GATE["PR / Quality"]
+    WC --> WEBGATE["PR / Website"]
+    LC --> LINUXGATE["PR / Linux"]
+    MC --> MACGATE["PR / macOS"]
+    XC --> WINGATE["PR / Windows"]
 ```
 
 Each lane uses a platform-local static superset of typed reusable-workflow
 calls; `if` conditions consume only its checked planner projection. PR lanes
-are nested in one native PR run; main/manual lanes use separate dispatched run
-IDs correlated by source SHA and plan digest. Linux
+are nested in five topic/platform PR runs; main/manual lanes use separate
+dispatched run IDs correlated by source SHA and plan digest. Linux
 graphs contain no macOS/Windows placeholder jobs, and the converse holds for
 the other platforms. Protected main/manual control uses the Actions API only
 for a closed list of five checked-in workflow files and passes data through
-native inputs. No workflow YAML is generated and no lane allocates another
-planner.
+native inputs. No workflow YAML is generated and no lane allocates a planner.
 
 ## Planner and profiles
 
@@ -186,7 +187,7 @@ from being duplicated into every composed product artifact.
 Pull requests use GitHub-hosted runners for ordinary work. The sole current
 exception is uncredentialed CUDA smoke on the approved ephemeral `gpu-nvidia`
 scale set described above. Same-repository and fork PRs use the same protected
-reusable composer and receive no repository secrets. Their caches are restore-only
+reusable lanes and receive no repository secrets. Their caches are restore-only
 even though the protected workflow ref is `main`; neither may publish
 trusted-main cache entries. Trusted `main` Linux roles may use Depot only when
 `DEPOT_RUNNERS_ENABLED` is exactly `true`; macOS, Windows, credential-bearing

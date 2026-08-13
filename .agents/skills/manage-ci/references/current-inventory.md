@@ -8,7 +8,11 @@ before editing CI.
 
 | Workflow | Trigger | Ownership |
 | --- | --- | --- |
-| `pr_builds.yml` (`PR Validation`) | PR lifecycle | One-job caller of the protected default-branch PR composer, keeping all reusable jobs in the native PR run |
+| `pr_quality.yml` (`PR · Quality`) | PR lifecycle | Canonical PR planning plus the protected reusable Quality lane |
+| `pr_website.yml` (`PR · Website`) | PR lifecycle | Canonical PR planning plus the protected reusable Website lane |
+| `pr_linux.yml` (`PR · Linux`) | PR lifecycle | Canonical PR planning plus the protected reusable Linux lane |
+| `pr_macos.yml` (`PR · macOS`) | PR lifecycle | Canonical PR planning plus the protected reusable macOS lane |
+| `pr_windows.yml` (`PR · Windows`) | PR lifecycle | Canonical PR planning plus the protected reusable Windows lane |
 | `ci.yml` | main push | One-job ingress for protected main planning |
 | `ci-control.yml` (`CI · Plan`) | completed `Main CI`, dispatch | Protected source resolution, one canonical plan, bounded main/manual lane dispatch and correlated required checks |
 | `release.yml` | release tags, dispatch | Release-only signing, assets and publication |
@@ -17,14 +21,12 @@ before editing CI.
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
-workflows are independent of required PR readiness. The former
-`pr_quality.yml` and `pr_website.yml` entrypoints no longer exist.
+workflows are independent of required PR readiness.
 
 ## Reusable workflows and slices
 
 | Workflow | Contract |
 | --- | --- |
-| `ci-orchestrator.yml` (`PR CI Graph`) | Protected default-branch PR planner and native reusable-lane composer with one native `CI Required` job |
 | `ci-quality-lane.yml` | Quality and runner/cache contract graph; reusable from PRs and dispatchable for main/manual |
 | `ci-website-lane.yml` | Console and website graph; reusable from PRs and dispatchable for main/manual |
 | `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
@@ -50,7 +52,7 @@ workflows are independent of required PR readiness. The former
 | `hf-download-smoke.yml` | Hugging Face download smoke |
 
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
-workflows remain fixed to GitHub-hosted runners; the PR entrypoint passes no
+workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no
 repository secrets. The trusted main entrypoint may pass the optional
 `HF_TOKEN` for public-fixture rate-limit resilience.
 
@@ -64,9 +66,10 @@ repository secrets. The trusted main entrypoint may pass the optional
 - `ci/ci-plan.schema.json` versions the machine-readable output.
 - `compute-changes` supplies the complete event diff and affected Cargo
   closure; the planner owns signals and final matrix selection.
-- `ci-orchestrator.yml` calls the planner once for same-repository and fork PRs,
-  then calls selected default-branch lanes as nested reusable workflows so all
-  jobs and logs remain attached to the PR run.
+- Each `pr_*.yml` workflow checks out the default branch for canonical planning,
+  projects one bounded lane, and calls its matching default-branch lane as a
+  nested reusable workflow. Jobs and logs remain attached to five focused PR
+  runs rather than one monolithic graph.
 - `ci-control.yml` calls the planner once for main pushes and explicit
   manual-full runs, then dispatches bounded JSON lane projections as native
   inputs. Planner and lane definitions remain protected in both paths.

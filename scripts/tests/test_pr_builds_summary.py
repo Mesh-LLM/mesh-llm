@@ -8,12 +8,13 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 class RequiredSummaryTests(unittest.TestCase):
-    def test_pr_composer_owns_the_native_required_job(self):
-        workflow = (WORKFLOWS / "ci-orchestrator.yml").read_text()
-        self.assertIn("name: PR CI Graph", workflow)
-        self.assertIn("name: CI Required", workflow)
-        self.assertIn("needs: [plan, quality, website, linux, macos, windows]", workflow)
-        self.assertNotIn("checks.create", workflow)
+    def test_each_pr_entry_owns_a_native_required_job(self):
+        labels = {"quality": "Quality", "website": "Website", "linux": "Linux", "macos": "macOS", "windows": "Windows"}
+        for lane, label in labels.items():
+            workflow = (WORKFLOWS / f"pr_{lane}.yml").read_text()
+            self.assertIn(f"name: PR / {label}", workflow)
+            self.assertIn("needs: [plan, lane]", workflow)
+            self.assertNotIn("checks.create", workflow)
 
     def test_main_plan_owns_stable_correlated_checks(self):
         workflow = (WORKFLOWS / "ci-control.yml").read_text()

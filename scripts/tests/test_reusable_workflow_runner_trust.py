@@ -45,9 +45,12 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
     def test_main_entry_and_orchestrator_do_not_use_pull_request_target(self) -> None:
         for name in (
             "ci.yml",
-            "pr_builds.yml",
             "ci-control.yml",
-            "ci-orchestrator.yml",
+            "pr_quality.yml",
+            "pr_website.yml",
+            "pr_linux.yml",
+            "pr_macos.yml",
+            "pr_windows.yml",
         ):
             with self.subTest(workflow=name):
                 self.assertNotIn("pull_request_target", self.workflow(name))
@@ -140,16 +143,17 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                 self.assertNotIn(name, allowlist)
 
     def test_pr_entrypoint_maps_no_repository_secret(self) -> None:
-        workflow = self.workflow("pr_builds.yml")
-        self.assertNotIn("secrets:", workflow)
-        self.assertNotIn("HF_TOKEN", workflow)
+        for lane in ("quality", "website", "linux", "macos", "windows"):
+            workflow = self.workflow(f"pr_{lane}.yml")
+            self.assertNotIn("secrets:", workflow)
+            self.assertNotIn("HF_TOKEN", workflow)
 
     def test_pr_facing_checkouts_disable_persisted_credentials(self) -> None:
         names = [
             "docker-precheck.yml",
             "ci-control.yml",
-            "ci-orchestrator.yml",
             "static-abi-artifact.yml",
+            *sorted(path.name for path in WORKFLOWS.glob("pr_*.yml")),
             *sorted(
                 path.name
                 for pattern in ("ci-*-slice.yml", "ci-*-lane.yml")

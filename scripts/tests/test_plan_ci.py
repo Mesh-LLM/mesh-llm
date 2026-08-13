@@ -209,7 +209,7 @@ class PlanCiTests(unittest.TestCase):
 
     def test_control_plane_changes_fail_open_to_the_profile_rows(self) -> None:
         payload = fixture("runtime.json")
-        payload["changed_files"] = [".github/workflows/pr_builds.yml"]
+        payload["changed_files"] = [".github/workflows/pr_linux.yml"]
         payload["affected_crates"] = []
 
         plan = PLANNER.build_plan(payload, root=ROOT)
