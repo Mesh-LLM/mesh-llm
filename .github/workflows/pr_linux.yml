@@ -76,7 +76,6 @@ jobs:
       source_sha: ${{ needs.plan.outputs.source_sha }}
       original_event_name: pull_request
       supersession_key: pr-${{ github.event.pull_request.number }}
-      use_depot: false
 
   required:
     name: PR / Linux
