@@ -850,22 +850,28 @@ async fn maybe_handle_control_request(
     Err(tcp_stream)
 }
 
-async fn try_pipeline_route(
-    tcp_stream: &mut tokio::net::TcpStream,
-    request: &mut proxy::BufferedHttpRequest,
-    ctx: &IngressRouteContext<'_>,
+fn pipeline_route_model<'a>(
+    request: &proxy::BufferedHttpRequest,
     decision: &AutoRouteDecision,
-) -> Option<proxy::RouteDispatchOutcome> {
+    routing_model: Option<&'a str>,
+) -> Option<&'a str> {
     let use_pipeline = decision
         .classification
         .as_ref()
         .map(pipeline::should_pipeline)
         .unwrap_or(false)
         && request.response_adapter == proxy::ResponseAdapter::None;
-    if !use_pipeline {
-        return None;
-    }
-    let strong_name = decision.effective_model.as_deref()?;
+    use_pipeline.then_some(routing_model).flatten()
+}
+
+async fn try_pipeline_route(
+    tcp_stream: &mut tokio::net::TcpStream,
+    request: &mut proxy::BufferedHttpRequest,
+    ctx: &IngressRouteContext<'_>,
+    decision: &AutoRouteDecision,
+    routing_model: Option<&str>,
+) -> Option<proxy::RouteDispatchOutcome> {
+    let strong_name = pipeline_route_model(request, decision, routing_model)?;
     try_pipeline_proxy(ctx.node, tcp_stream, request, ctx.targets, strong_name).await
 }
 
@@ -1063,8 +1069,14 @@ async fn handle_buffered_api_request(
     };
 
     let mut tcp_stream = tcp_stream;
-    if let Some(outcome) =
-        try_pipeline_route(&mut tcp_stream, &mut request, &ctx.route, &decision).await
+    if let Some(outcome) = try_pipeline_route(
+        &mut tcp_stream,
+        &mut request,
+        &ctx.route,
+        &decision,
+        routing_model.as_deref(),
+    )
+    .await
     {
         proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
         lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
@@ -1442,14 +1454,11 @@ mod tests {
         assert_eq!(profile, "profile");
     }
 
-    /// Regression: single-model `model=mesh` must degrade to the real model.
+    /// Regression: the MoA intercept must surface a single-model degradation.
     ///
-    /// When MoA cannot form a committee (one model in the mesh), the gateway
-    /// rewrites the request to the real model and hands the stream back. The
-    /// intercept must surface that as `Degraded { model }` so routing uses the
-    /// rewritten model — reusing the stale `decision.effective_model` (still
-    /// "mesh") 404s every single-node `model=mesh` request. Broken by the
-    /// ingress rewrite in #1175, which collapsed `Degraded` into `NotMoa`.
+    /// This helper-level test verifies that the gateway rewrites the request
+    /// and returns the resolved model to its caller. The separate pipeline
+    /// regression below verifies that the caller actually consumes that model.
     #[tokio::test]
     async fn moa_single_model_degrade_rewrites_routing_model() {
         let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
@@ -1465,7 +1474,8 @@ mod tests {
         let affinity = affinity::AffinityRouter::new();
         let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Real connected TcpStream pair; the degrade path hands it back unused.
+        // The helper returns the connected stream; this test only inspects the
+        // degradation result and intentionally does not dispatch it.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
@@ -1549,6 +1559,45 @@ mod tests {
                 panic!("expected degrade passthrough, got handled outcome: {outcome:?}");
             }
         }
+    }
+
+    #[test]
+    fn moa_degraded_model_is_consumed_by_pipeline_dispatch() {
+        use crate::network::router::{Category, Classification, Complexity};
+
+        let request = proxy::BufferedHttpRequest {
+            raw: Vec::new(),
+            method: "POST".to_owned(),
+            path: "/v1/chat/completions".to_owned(),
+            client_path: "/v1/chat/completions".to_owned(),
+            request_id: RequestId::default(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: 0,
+            completion_tokens: None,
+            stream: None,
+            model_name: Some("local/only-model:Q4_K_M".to_owned()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: proxy::ResponseAdapter::None,
+            correlation_id: None,
+        };
+        let decision = AutoRouteDecision {
+            effective_model: Some("mesh".to_owned()),
+            classification: Some(Classification {
+                category: Category::Code,
+                complexity: Complexity::Deep,
+                needs_tools: true,
+                has_media_inputs: false,
+            }),
+            required_tokens: None,
+        };
+
+        assert_eq!(
+            pipeline_route_model(&request, &decision, request.model_name.as_deref(),),
+            Some("local/only-model:Q4_K_M"),
+            "pipeline dispatch must consume the post-degradation model, not stale 'mesh'"
+        );
     }
 
     // --- Routing behavior tests for model-independent daemon support ---
