@@ -1,0 +1,69 @@
+name: CI macOS Runtime Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      runtime_matrix:
+        description: JSON macOS runtime rows from the versioned CI plan.
+        required: true
+        type: string
+      max_parallel:
+        description: Runtime worker budget.
+        required: false
+        default: 2
+        type: number
+      fail_fast:
+        description: Cancel sibling runtime builds after the first required failure.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  macos_runtime:
+    name: macOS Metal runtime
+    if: ${{ inputs.runtime_matrix != '[]' }}
+    runs-on: macos-15
+    timeout-minutes: 75
+    strategy:
+      fail-fast: ${{ inputs.fail_fast }}
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        runtime: ${{ fromJson(inputs.runtime_matrix) }}
+    env:
+      LLAMA_STAGE_BACKEND: ${{ matrix.runtime.backend }}
+      LLAMA_STAGE_BUILD_DIR: ${{ matrix.runtime.build_dir }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - name: Install Metal runtime dependencies
+        run: brew install cmake ninja jq
+      - uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          include_tool_versions: "true"
+      - uses: ./.github/actions/prepare-native-runtime-input
+        with:
+          backend: ${{ matrix.runtime.backend }}
+          target: ${{ matrix.runtime.target }}
+          output_dir: runtime-input
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-runtime-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: |
+            runtime-input/*.tar.gz
+            runtime-input/*.sha256
+          if-no-files-found: error
+          retention-days: 1

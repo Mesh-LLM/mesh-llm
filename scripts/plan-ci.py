@@ -504,6 +504,13 @@ def _select_rows(
         return result
 
     runtime = unique_rows(runtime_rows, runtime_ids, "runtime_rows")
+    macos_architectures = {
+        row["architecture"] for row in runtime if row["platform"] == "macos"
+    }
+    if len(macos_architectures) > 1:
+        raise PlanError(
+            "macOS runtime_products must use one architecture until SDK and smoke consumers are row-scoped"
+        )
     hosts: list[dict[str, Any]] = []
     seen_hosts: set[tuple[str, str]] = set()
     for row in runtime:

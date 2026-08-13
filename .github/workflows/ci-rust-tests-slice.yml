@@ -25,6 +25,11 @@ on:
         required: false
         default: 4
         type: number
+      fail_fast:
+        description: Cancel sibling test batches after the first required failure.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -42,7 +47,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
-      fail-fast: false
+      fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
       matrix:
         batch: ${{ fromJson(inputs.rust_tests_matrix) }}

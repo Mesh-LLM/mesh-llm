@@ -9,7 +9,7 @@ inputs:
     description: Validated lane result, success or failure
     required: true
   lane_check_id:
-    description: Check run created by the protected controller; empty for workflow_call bootstrap runs
+    description: Check run created by the protected controller; empty for direct validation runs
     required: false
     default: ""
   overall_check_id:

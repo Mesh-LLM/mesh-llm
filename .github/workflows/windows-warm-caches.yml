@@ -20,7 +20,7 @@ on:
       - '.github/actions/restore-windows-abi-cache/action.yml'
       - '.github/actions/save-and-verify-actions-cache/action.yml'
       - '.github/workflows/ci.yml'
-      - '.github/workflows/pr_builds.yml'
+      - '.github/workflows/pr_windows.yml'
       - '.github/workflows/windows-warm-caches.yml'
   workflow_dispatch:
     inputs:

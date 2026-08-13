@@ -41,18 +41,19 @@ when landing the composable graph:
    protected workflow ref in the allowlist below. If that cannot be verified,
    set `DEPOT_RUNNERS_ENABLED=false` before merging.
 2. Merge the graph change with either the verified allowlist or the
-   GitHub-hosted fallback active. Confirm that the first protected `Main CI`
-   controller run dispatches the separate Quality, Website, Linux, macOS and
-   Windows workflows and that `CI Required` completes.
+   GitHub-hosted fallback active. Confirm that the first protected `CI · Plan`
+   run after `Main CI` dispatches the separate Quality, Website, Linux, macOS
+   and Windows workflows and that `CI Required` completes.
 3. Run a same-repository activation PR on GitHub-hosted workers. Confirm that
    PR-origin dispatch remains GitHub-hosted even though the lane definitions run
    from `main`; `original_event_name=pull_request` must keep Depot and Depot
    remote-cache authority disabled.
-4. From `main`, manually dispatch `Main CI` with `use_depot=true`. This exercises
-   the bootstrap graph as a bounded provider canary without changing the plan,
-   commands, artifacts or required summaries. Verify the eligible jobs report
-   Depot labels and Depot cache evidence while macOS, Windows, credentialed
-   smoke and GPU jobs retain their documented providers.
+4. From `main`, manually dispatch `CI · Plan` with `use_depot=true`. This
+   exercises the split Quality/Linux graphs as a bounded provider canary
+   without changing the plan, commands, artifacts or required summaries.
+   Verify the eligible jobs report Depot labels and Depot cache evidence while
+   macOS, Windows, credentialed smoke and GPU jobs retain their documented
+   providers.
 5. When the canary is green, set `DEPOT_RUNNERS_ENABLED=true` for normal trusted
    `main` pushes and verify one protected split-lane run. Quality and Linux
    slices may select Depot; PR, Website-only, macOS and Windows work must not.
@@ -73,13 +74,12 @@ allow only exact protected default-branch runner-owning workflow refs.
 The current main allowlist is:
 
 ```text
-Mesh-LLM/mesh-llm/.github/workflows/ci.yml@refs/heads/main
-Mesh-LLM/mesh-llm/.github/workflows/ci-orchestrator.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-control.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/ci-quality-lane.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/ci-linux-lane.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/ci-quality-slice.yml@refs/heads/main
-Mesh-LLM/mesh-llm/.github/workflows/ci-host-slice.yml@refs/heads/main
-Mesh-LLM/mesh-llm/.github/workflows/ci-runtime-product-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-linux-host-slice.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/ci-linux-runtime-slice.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/depot-canary.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/depot-registry-canary.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/native-sdk-artifact.yml@refs/heads/main
@@ -149,17 +149,21 @@ Required questions:
 Do not introduce a long-lived Depot organization token without a separate
 security review and explicit authorization.
 
-## Future protected PR executor
+## Future protected PR Depot executor
 
-After cache isolation is proven, a normal code PR may call a protected
-orchestrator and runner-owning reusable slices pinned to `refs/heads/main`.
+After cache isolation is proven, the protected planner may place eligible
+normal-code PR lane calls on runner-owning Depot reusable slices pinned to
+`refs/heads/main`.
 Every workflow whose job directly owns a Depot `runs-on` must be selected in
 the runner group; allowlisting only the outer caller is insufficient. The
 protected workflows must:
 
 - own `runs-on` and cache mode;
+- declare least-privilege `permissions: contents: read` unless a narrower
+  documented permission is sufficient;
 - accept only bounded semantic slice inputs and a source SHA;
-- check out the PR merge SHA as untrusted code;
+- check out the immutable PR head SHA as untrusted code with
+  `persist-credentials: false`;
 - receive no repository secrets or registry credentials;
 - run on ephemeral Depot instances;
 - be exact selected workflows allowed by the runner group.

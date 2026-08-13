@@ -8,25 +8,41 @@ before editing CI.
 
 | Workflow | Trigger | Ownership |
 | --- | --- | --- |
-| `pr_builds.yml` | PR lifecycle, dispatch | Routes ordinary same-repository PRs to protected control; bootstraps control-plane changes, forks and migrations through `ci-orchestrator.yml` |
-| `ci.yml` | main push, dispatch | Routes main pushes to protected control; manual/migration runs use `ci-orchestrator.yml` |
-| `ci-control.yml` | completed `PR CI` / `Main CI` | Protected source resolution, one canonical plan, bounded lane dispatch and correlated required checks |
-| `ci-orchestrator.yml` | `workflow_call` | Bootstrap planner and monolithic static slice graph with `CI Required` |
+| `pr_quality.yml` (`PR · Quality`) | PR lifecycle | Canonical PR planning plus the protected reusable Quality lane |
+| `pr_website.yml` (`PR · Website`) | PR lifecycle | Canonical PR planning plus the protected reusable Website lane |
+| `pr_linux.yml` (`PR · Linux`) | PR lifecycle | Canonical PR planning plus the protected reusable Linux lane |
+| `pr_macos.yml` (`PR · macOS`) | PR lifecycle | Canonical PR planning plus the protected reusable macOS lane |
+| `pr_windows.yml` (`PR · Windows`) | PR lifecycle | Canonical PR planning plus the protected reusable Windows lane |
+| `pr_builds.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger |
+| `ci-orchestrator.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger or lane calls |
+| `main_quality.yml` (`Main · Quality`) | push to `main` | Exhaustive main planning plus the same-commit reusable Quality lane |
+| `main_website.yml` (`Main · Website`) | push to `main` | Exhaustive main planning plus the same-commit reusable Website lane |
+| `main_linux.yml` (`Main · Linux`) | push to `main` | Exhaustive main planning plus the same-commit reusable Linux lane |
+| `main_macos.yml` (`Main · macOS`) | push to `main` | Exhaustive main planning plus the same-commit reusable macOS lane |
+| `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
+| `ci.yml` | `workflow_call` only | Inert migration shim for the former main ingress filename; no push trigger or dispatch |
+| `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
 | `release.yml` | release tags, dispatch | Release-only signing, assets and publication |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
-workflows are independent of required PR readiness. The former
-`pr_quality.yml` and `pr_website.yml` entrypoints no longer exist.
+workflows are independent of required PR readiness.
+
+The five PR lifecycle rows and five main push rows above are the complete
+allowed routine validation entry sets. Their separation and direct GitHub log
+visibility are contractual, not a presentation preference. `pr_builds.yml`,
+`ci-orchestrator.yml`, and `ci.yml` are reusable-only migration scaffolding;
+they must never regain event triggers or call the five lanes. They are
+removable after this branch's runner contract is active on protected main.
 
 ## Reusable workflows and slices
 
 | Workflow | Contract |
 | --- | --- |
-| `ci-quality-lane.yml` | Quality and runner/cache contract graph; supports typed call and native dispatch |
-| `ci-website-lane.yml` | Console and website graph; supports typed call and native dispatch |
+| `ci-quality-lane.yml` | Quality and runner/cache contract graph; reusable from PRs and dispatchable for main/manual |
+| `ci-website-lane.yml` | Console and website graph; reusable from PRs and dispatchable for main/manual |
 | `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows host/runtime/product/platform graph with one platform-local UI producer |
@@ -35,11 +51,12 @@ workflows are independent of required PR readiness. The former
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch |
-| `ci-host-slice.yml` | Neutral host producer per selected OS/architecture, invoked in independent platform lanes |
-| `ci-runtime-product-slice.yml` | Separately invoked native runtime producers and composition-only products, joined within each platform lane |
+| `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
+| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
+| `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
-| `ci-product-smoke-slice.yml` | CPU, CUDA (`gpu-nvidia` self-hosted), two-node, Metal and model-download consumers; ROCm/Vulkan products remain package-verified pending eligible inference runners |
-| `ci-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls |
+| `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local CPU, CUDA (`gpu-nvidia` self-hosted), two-node, Metal and model-download consumers; ROCm/Vulkan products remain package-verified pending eligible inference runners |
+| `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |
 | `swift-sdk-artifact.yml` | Fixed `macos-15` host-only/full XCFramework producer |
@@ -49,7 +66,7 @@ workflows are independent of required PR readiness. The former
 | `hf-download-smoke.yml` | Hugging Face download smoke |
 
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
-workflows remain fixed to GitHub-hosted runners; the PR entrypoint passes no
+workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no
 repository secrets. The trusted main entrypoint may pass the optional
 `HF_TOKEN` for public-fixture rate-limit resilience.
 
@@ -63,11 +80,17 @@ repository secrets. The trusted main entrypoint may pass the optional
 - `ci/ci-plan.schema.json` versions the machine-readable output.
 - `compute-changes` supplies the complete event diff and affected Cargo
   closure; the planner owns signals and final matrix selection.
-- `ci-control.yml` calls the planner once and dispatches bounded JSON lane
-  projections as native inputs. `ci-orchestrator.yml` preserves the same
-  planner-once and slice-selection contracts in a monolithic bootstrap graph
-  for fork/manual/migration compatibility without requesting check-write
-  permission through a reusable-workflow chain.
+- Each `pr_*.yml` workflow checks out the default branch for canonical planning,
+  projects one bounded lane, and calls its matching default-branch lane as a
+  nested reusable workflow. Jobs and logs remain attached to five focused PR
+  runs rather than one monolithic graph.
+- Each `main_*.yml` workflow plans the exhaustive main profile at the pushed
+  SHA, projects one bounded lane, and calls its matching same-commit lane as a
+  nested reusable workflow. Routine main jobs and logs therefore remain
+  attached to five focused main runs.
+- `ci-control.yml` is manual-full only. It calls the planner once and dispatches
+  bounded JSON lane projections as native inputs for explicit operator
+  diagnostics; it cannot receive a push, PR, or workflow-run event.
 
 Main/manual profiles enumerate every workspace crate exactly once and all
 supported product/SDK rows. PR profiles select affected or directly owned rows
@@ -87,11 +110,19 @@ from that same catalog.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
 Artifacts are correctness boundaries; caches only accelerate regeneration.
-PR artifacts generally retain for one day. Bootstrap/fork cache writes are
-merge-ref scoped; protected same-repository dispatched lanes are restore-only
-despite running from the default-branch workflow ref. PR dispatches cannot
-publish shared caches, and Depot cache access is denied. Trusted main may
-publish shared caches.
+PR artifacts generally retain for one day. Protected same-repository and fork
+lanes cannot publish shared trusted-main caches, and Depot cache access is
+denied. Large Cargo target caches restore trusted-main entries but remain
+restore-only on PRs. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
+and Windows native ABI caches may publish into GitHub's isolated PR merge-ref
+scope for same-PR reruns. The Website slice is the sole publisher for the
+shared pnpm key and owns the website npm cache; platform UI producers restore
+the pnpm store without racing to save it. Trusted main owns shared publication.
+
+PR Rust-test, host, native-runtime, product, and platform-check matrices receive
+`fail_fast: true`; main/manual pass `false`. Quality matrices remain
+non-fail-fast, failed producers suppress only declared consumers through
+`needs`, and focused PR workflows never cancel one another.
 
 ## Providers and variables
 

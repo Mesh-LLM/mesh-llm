@@ -20,8 +20,8 @@ CONFIGURE_ACTION = (
 WORKFLOWS = {
     "quality": ROOT / ".github" / "workflows" / "ci-quality-slice.yml",
     "rust-tests": ROOT / ".github" / "workflows" / "ci-rust-tests-slice.yml",
-    "host": ROOT / ".github" / "workflows" / "ci-host-slice.yml",
-    "runtime": ROOT / ".github" / "workflows" / "ci-runtime-product-slice.yml",
+    "host": ROOT / ".github" / "workflows" / "ci-linux-host-slice.yml",
+    "runtime": ROOT / ".github" / "workflows" / "ci-linux-runtime-slice.yml",
     "static-abi": ROOT / ".github" / "workflows" / "static-abi-artifact.yml",
     "main": ROOT / ".github" / "workflows" / "ci.yml",
     "swift-sdk": ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml",
