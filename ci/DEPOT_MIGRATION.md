@@ -1,9 +1,11 @@
 # Depot runner transition
 
 Status: trusted-main support exists; pull-request execution is future work and
-is disabled. The checked-in graph and collector define the intended contract;
-external Depot cache/registry and runner-group administration still block
-activation.
+is disabled. Automatic Depot Cache and Registry Actions connectivity are
+admin-verified off, and the Depot runner group is admin-verified restricted to
+this repository and the protected workflow allowlist. The checked-in graph and
+collector define the remaining branch/main and same-repository/fork canaries;
+those runtime checks still block PR activation.
 
 The complete PR/main composition design is in
 `.omo/specs/pr-ci-optimization.md`. This document contains only the durable
@@ -20,8 +22,9 @@ Depot is a placement provider, not a different CI graph.
 - `DEPOT_RUNNERS_ENABLED == 'true'` permits eligible trusted `main` Linux jobs
   to select Depot. Every eligible role retains a GitHub-hosted fallback.
 - `DEPOT_PR_RUNNERS_ENABLED == 'true'` is the independent same-repository PR
-  placement gate. It must remain absent or `false` until every administrative
-  and sentinel acceptance gate below passes; a missing value fails closed.
+  placement gate. It must remain absent or `false` until the branch/main
+  provider-parity, same-repository, and fork sentinel canaries below pass; a
+  missing value fails closed.
 - Pull requests, feature refs, tags, credential-bearing smokes and
   hardware-qualified GPU work retain their approved non-Depot placement until
   the protected PR executor is separately activated. The intended executor may
@@ -84,15 +87,15 @@ when landing the composable graph:
 6. Roll back by setting `DEPOT_RUNNERS_ENABLED=false`. Re-run the same profile
    and verify that the identical plan executes on GitHub-hosted Linux workers.
 
-The live administrative state is not a checked-in prerequisite. The repository
-token cannot verify organization runner-group restrictions through the API
-(403). Depot UI inspection currently reports automatic Actions Cache and
-Registry authentication enabled and runners in the Default group with broad
-repository/workflow access. Treat those observations as rollout blockers to
-be re-verified by an organization administrator, not as proof that a PR path is
-safe. Activation requires both automatic credential authority disabled or
-per-PR isolated and a runner group restricted to this repository and exact
-protected workflow refs.
+The current administrative posture has been verified outside the repository:
+automatic Actions Cache connectivity to Depot is disabled, automatic Registry
+Actions authentication is disabled, and the Depot runner group is restricted
+to `Mesh-LLM/mesh-llm` with exact protected workflow refs. The repository token
+cannot independently inspect organization runner-group settings through the
+API (403), so this remains external activation state rather than checked-in
+proof. The settings remove automatic credential authority; they do not prove
+that a protected main build, same-repository PR, or fork PR receives the
+intended provider, cache mode, or rollback behavior.
 
 Do not migrate required checks, enable Depot for PR content, or change cache
 isolation during this provider rollout. Those are independent changes with
@@ -139,13 +142,18 @@ remain GitHub-hosted. `swift-sdk-artifact.yml` must be in the protected workflow
 allowlist because it directly owns eligible PR Depot placement; its internal
 main gate remains false, so release/main Swift production stays on `macos-15`.
 
-Verify the live runner-group repository and selected-workflow restrictions with
-organization-admin authority before any rollout. A repository token returning
-`403` is unverified state, not proof of a safe configuration.
+The runner-group boundary above is an external administrative prerequisite.
+Re-verify it with organization-admin authority if the group, repository, or
+workflow allowlist changes. A repository token returning `403` is not an
+independent proof of the configuration.
 
-## Why PRs cannot use Depot today
+## Why PR canaries remain pending
 
-Cache isolation is the prerequisite for any future PR execution on Depot.
+Disabling automatic Depot Cache and Registry Actions connectivity removes the
+repository-wide credential path that blocked the first canary. It does not by
+itself prove provider parity, branch/main cache behavior, or that a same-
+repository or fork PR cannot publish an entry later restored by trusted main.
+Those runtime isolation checks remain prerequisites for PR execution on Depot.
 
 Depot documents these GitHub Actions cache properties:
 
@@ -171,28 +179,26 @@ Official references:
 - [GitHub dependency cache isolation](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)
 - [GitHub runner-group API](https://docs.github.com/en/rest/actions/self-hosted-runner-groups)
 
-## Required future investigation
+## Cache isolation and remaining registry investigation
 
 Depot documents an organization setting named **Allow Actions jobs to
-automatically connect to Depot Cache**. Before using Depot for PRs, an
-organization administrator must disable or isolate automatic cache connectivity
-in a controlled canary and prove the resulting behavior.
+automatically connect to Depot Cache**. That setting and automatic Registry
+Actions authentication are now admin-verified off. The negative
+`depot-canary.yml` contract checks that this posture reaches fresh runners
+without Depot cache, WebDAV, registry, or transparent GitHub-cache authority.
 
-Required questions:
+The remaining runtime questions are:
 
-1. Does disabling the setting remove `DEPOT_CACHE_TOKEN`,
-   `SCCACHE_WEBDAV_*`, tool-specific cache configuration and transparent
-   GitHub-cache API redirection from the PR job?
-2. Does `actions/cache` then use GitHub's native branch-isolated cache, or must
-   all remote cache actions be disabled on Depot PR runners?
-3. Can Depot provide a short-lived cache token scoped to workflow/ref and
-   read/write policy? Cache authentication does not currently document project
-   tokens as supported.
-4. If automatic connectivity is disabled organization-wide, how will trusted
-   main cache safely: GitHub native cache, no remote compiler cache, an isolated
-   Depot tenant/runner group, or a Depot-supported per-workflow policy?
-5. Can the runner group be verified as exact-workflow restricted by an
-   organization administrator?
+1. Does `actions/cache` on a fresh Depot runner use GitHub's native
+   branch-isolated cache, or must all cache actions remain disabled for PR jobs?
+2. Does a trusted main build retain its intended cache behavior with automatic
+   Depot connectivity disabled, or should it use GitHub native cache only?
+3. Can a same-repository PR and a fork PR both run the protected canary with no
+   Depot cache/registry authority and no entry that trusted main later restores?
+4. Does provider parity hold for the same checked plan, commands, artifacts,
+   and required results on GitHub and Depot?
+5. Does the restricted runner group continue to allow only the exact protected
+   workflow refs after the PR canary is enabled?
 
 Do not introduce a long-lived Depot organization token without a separate
 security review and explicit authorization.

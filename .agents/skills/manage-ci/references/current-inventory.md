@@ -152,12 +152,15 @@ cache isolation, no PR cache/registry tokens, exact protected workflow refs,
 ephemeral runners, a sentinel canary, and a tested GitHub rollback. No Depot
 settings or runner groups are changed by this workflow refactor.
 
-As of the last live administrative inspection, the repository token could not
-verify organization runner-group restrictions (the organization API returned
-403). Depot automatic cache and registry authentication and the Default runner
-group's workflow/repository scope therefore remain external activation proof,
-not checked-in facts. Do not treat the checked-in `DEPOT_RUNNERS_ENABLED` value
-or a successful main canary as evidence that PR cache isolation is safe.
+External administrative posture is now verified as follows: automatic Depot
+Cache connectivity is disabled, automatic Registry Actions authentication is
+disabled, and the Depot runner group is restricted to `Mesh-LLM/mesh-llm` and
+the exact protected workflow refs. The repository token cannot independently
+inspect organization runner-group settings through the API (403), so these
+remain external facts rather than checked-in evidence. The protected
+branch/main canary, same-repository PR canary, fork PR canary, provider-parity
+comparison, and rollback run are still pending; `DEPOT_RUNNERS_ENABLED` or a
+successful manual canary does not prove PR isolation.
 
 Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
 `DEPOT_PR_RUNNERS_ENABLED` (absent/false until protected PR activation),

@@ -325,6 +325,13 @@ default-branch runner-owning workflow refs, no-secret/no-token execution and a
 sentinel canary are prerequisites in `ci/DEPOT_MIGRATION.md`. Do not change
 Depot settings or runner groups in a workflow refactor.
 
+The external administrative posture now has automatic Depot Cache and Registry
+Actions connectivity disabled and the Depot runner group restricted to this
+repository and its exact protected workflow refs. The negative main canary,
+branch/main provider-parity check, same-repository PR canary, fork PR canary,
+and rollback evidence remain pending; those runtime checks are distinct from
+the settings verification and must pass before PR placement is enabled.
+
 ## Required extension pattern
 
 1. Read the manage-ci skill, inventory, this file and the optimization spec.

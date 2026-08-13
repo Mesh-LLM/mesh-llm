@@ -31,38 +31,44 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("expected_arch=aarch64", self.workflow)
         self.assertIn('actual_arch="$(uname -m)"', self.workflow)
 
-    def test_canary_uses_a_pinned_cache_action_without_printing_tokens(
-        self,
-    ) -> None:
+    def test_canary_fails_closed_on_cache_and_registry_injection(self) -> None:
+        self.assertIn("forbidden_names=", self.workflow)
+        for name in (
+            "DEPOT_CACHE_TOKEN",
+            "DEPOT_CACHE_URL",
+            "DEPOT_CACHE_API_URL",
+            "DEPOT_TOKEN",
+            "DEPOT_REGISTRY_HOST",
+            "DEPOT_REGISTRY_URL",
+            "DEPOT_REGISTRY_PULL_TOKEN",
+            "DEPOT_REGISTRY_TOKEN",
+            "SCCACHE_WEBDAV_ENDPOINT",
+            "SCCACHE_WEBDAV_TOKEN",
+            "SCCACHE_WEBDAV_USERNAME",
+            "SCCACHE_WEBDAV_PASSWORD",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, self.workflow)
+        self.assertIn('actions_cache_url="${ACTIONS_CACHE_URL:-}"', self.workflow)
+        self.assertIn("${actions_cache_url,,}", self.workflow)
+        self.assertIn("transparently redirected to Depot", self.workflow)
+        self.assertIn('docker_auth_config="${DOCKER_AUTH_CONFIG:-}"', self.workflow)
+        self.assertIn("${docker_auth_config,,}", self.workflow)
+        self.assertIn("Docker config contains Depot registry authentication", self.workflow)
         self.assertIn(
-            "actions/cache@caa296126883cff596d87d8935842f9db880ef25 "
-            "# v5.1.0",
+            "Depot cache credentials/endpoints injected | no",
             self.workflow,
         )
-        self.assertIn("${DEPOT_CACHE_TOKEN:-}", self.workflow)
-        self.assertIn("${SCCACHE_WEBDAV_TOKEN:-}", self.workflow)
-        self.assertIn("${SCCACHE_WEBDAV_ENDPOINT:-}", self.workflow)
-        self.assertIn("Depot Cache authentication was not injected", self.workflow)
-        self.assertIn("Depot runner image identity was not injected", self.workflow)
+        self.assertIn(
+            "Depot registry credentials/config injected | no",
+            self.workflow,
+        )
+        self.assertNotIn("expect_cache_hit", self.workflow)
+        self.assertNotIn("actions/cache@", self.workflow)
+        self.assertNotIn("sccache cc", self.workflow)
+        self.assertNotIn("mozilla-actions/sccache-action@", self.workflow)
+        self.assertNotIn("Exercise authenticated Depot sccache", self.workflow)
         self.assertIn('"$ImageOS" "$ImageVersion"', self.workflow)
-        self.assertIn("mozilla-actions/sccache-action@", self.workflow)
-        self.assertIn("sccache cc", self.workflow)
-        self.assertIn(
-            "sccache did not select the Depot WebDAV backend",
-            self.workflow,
-        )
-        self.assertIn("expected a warm Depot sccache hit", self.workflow)
-        self.assertIn("expect_cache_hit:", self.workflow)
-        self.assertIn(
-            '[[ "$EXPECT_CACHE_HIT" == "true" && "$CACHE_HIT" != "true" ]]',
-            self.workflow,
-        )
-        self.assertIn(
-            "key: depot-runner-canary-v2-exact-${{ matrix.runner }}-probe",
-            self.workflow,
-        )
-        self.assertNotIn("key: depot-runner-canary-v1-", self.workflow)
-        self.assertNotIn("echo \"$DEPOT_CACHE_TOKEN\"", self.workflow)
         self.assertNotIn("printenv", self.workflow)
 
 
