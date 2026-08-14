@@ -96,6 +96,18 @@ fn parses_llama_message_tool_calls() {
 }
 
 #[test]
+fn assigns_id_when_llama_message_tool_call_omits_it() {
+    let parsed = parsed_tool_calls_from_message_json(
+        r#"{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"lookup","arguments":"{\"city\":\"Sydney\"}"}}]}"#,
+        &tool_request(),
+    )
+    .expect("tool call");
+
+    let id = parsed.tool_calls[0]["id"].as_str().expect("tool call id");
+    assert!(id.starts_with("call_"));
+}
+
+#[test]
 fn parses_llama_message_reasoning_content() {
     let parsed = parsed_chat_message_from_json(
         r#"{"role":"assistant","reasoning_content":"Checked facts first.","content":"Final answer."}"#,
@@ -426,6 +438,7 @@ fn emulated_output_final_parses_tool_call() {
     assert_eq!(parsed.content.as_deref(), Some("Let me check."));
     let calls = parsed.tool_calls.expect("tool calls");
     assert_eq!(calls[0]["function"]["name"], "lookup");
+    assert!(calls[0]["id"].as_str().unwrap().starts_with("call_"));
     let args: serde_json::Value =
         serde_json::from_str(calls[0]["function"]["arguments"].as_str().unwrap()).unwrap();
     assert_eq!(args["city"], "Sydney");

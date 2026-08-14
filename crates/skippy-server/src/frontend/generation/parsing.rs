@@ -293,10 +293,29 @@ pub(in crate::frontend) fn parsed_tool_calls_from_message_value(
     if tool_calls.is_empty() {
         return None;
     }
+    ensure_tool_call_ids(&mut tool_calls);
     Some(ParsedToolCalls {
         content: string_field(value, "content"),
         tool_calls: Value::Array(tool_calls),
     })
+}
+
+pub(in crate::frontend) fn ensure_tool_call_ids(tool_calls: &mut [Value]) {
+    for tool_call in tool_calls {
+        let Some(object) = tool_call.as_object_mut() else {
+            continue;
+        };
+        let has_valid_id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.trim().is_empty());
+        if !has_valid_id {
+            object.insert(
+                "id".to_string(),
+                Value::String(format!("call_{}", uuid::Uuid::new_v4().simple())),
+            );
+        }
+    }
 }
 
 pub(in crate::frontend) fn string_field(value: &Value, field: &str) -> Option<String> {
