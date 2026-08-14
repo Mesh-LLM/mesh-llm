@@ -92,7 +92,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@9aad044a103125fca53e2fe5877e502a4793ad98
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@b5dc126b0abe9b990cccbbf65796c26af7a09dc8
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
@@ -129,7 +129,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 15
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@9aad044a103125fca53e2fe5877e502a4793ad98
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@b5dc126b0abe9b990cccbbf65796c26af7a09dc8
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
@@ -165,7 +165,7 @@ jobs:
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@9aad044a103125fca53e2fe5877e502a4793ad98
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@b5dc126b0abe9b990cccbbf65796c26af7a09dc8
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_8, 'depot-') }}
@@ -219,7 +219,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 5
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@9aad044a103125fca53e2fe5877e502a4793ad98
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@b5dc126b0abe9b990cccbbf65796c26af7a09dc8
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
