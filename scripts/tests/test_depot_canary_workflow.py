@@ -149,7 +149,7 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             self.assertIn("Attest provider-injected cache backend", block)
             self.assertIn("ACTIONS_CACHE_URL", block)
             self.assertIn("ACTIONS_RESULTS_URL", block)
-            self.assertIn("ACTIONS_RUNTIME_TOKEN", block)
+            self.assertNotIn("ACTIONS_RUNTIME_TOKEN", block)
             self.assertIn("cache backend attestation failed", block)
             self.assertNotIn("${endpoint,,}", block)
 
@@ -339,12 +339,9 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                     valid_results,
                     runtime_token="",
                 )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(
-                    "cache backend attestation failed (variable=ACTIONS_RUNTIME_TOKEN reason=missing)",
-                    result.stderr,
-                )
-                self.assertNotIn("non-secret-runtime-token", result.stderr)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "")
 
     def test_canary_fails_closed_on_cache_and_registry_injection(self) -> None:
         self.assertIn("forbidden_names=", self.workflow)

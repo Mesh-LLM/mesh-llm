@@ -299,7 +299,11 @@ any cache action, all three cache phases attest that the provider-injected
 `ACTIONS_CACHE_URL` and `ACTIONS_RESULTS_URL` are present, value-free
 structurally validated HTTP endpoints with a non-GitHub/non-loopback authority
 (including all IPv4 `127/8` and IPv4-mapped IPv6 loopback spellings), numeric
-port and explicit path, and that `ACTIONS_RUNTIME_TOKEN` is present.
+port and explicit path. The shell attestation intentionally does not require
+ambient `ACTIONS_RUNTIME_TOKEN`: GitHub's `NodeScriptActionHandler` injects
+that credential into the pinned Actions-cache restore/save actions, while the
+shell `ScriptHandler` does not. Successful full restore/save calls provide the
+credential/token proof.
 Bracketed authorities use the fixed runner's Python 3.8+ stdlib `ipaddress`
 classifier for every IPv6 spelling; missing, too-old or invalid parser state
 fails closed with only a `parser` reason class.
@@ -308,10 +312,13 @@ remote backend. Seed and verify inputs are bound to the configured sentinel ID
 and exact merge ref before cache access. Seed clears its local marker, performs
 a full restore and validates the exact marker content; verify performs a full
 restore and validates exact poison content before its expected-miss check. The
-protected PR probe uses that same path and exact marker grammar so cache-version
-metadata cannot vary across jobs. After the protected PR probe publishes the
-bounded poison key, dispatch `mode=verify-pr-write` with the same validated
-inputs; a hit fails because trusted main saw a PR publication. The existing
+protected PR probe uses that same path and exact marker grammar, then clears
+and fully restores its saved poison key, requiring a cache hit and exact bytes
+before the trusted-seed gate; this same-job restore/save proves the PR Node
+token/write path, while main verify's poison miss remains the cross-scope proof.
+Cache-version metadata cannot vary across jobs. After the protected PR probe
+publishes the bounded poison key, dispatch `mode=verify-pr-write` with the same
+validated inputs; a hit fails because trusted main saw a PR publication. The existing
 default `mode=audit` remains the negative resource/credential audit across the
 full Depot matrix and is unchanged.
 
@@ -347,15 +354,20 @@ record the result without executing PR-controlled code. The job has
 fixed `.depot-authority-sentinel` path. Before the pinned cache restore it
 attests the provider-injected remote backend using the same structural
 non-GitHub/non-loopback HTTP contract (including all IPv4 `127/8` and
-IPv4-mapped IPv6 loopback spellings) and requires a nonempty runtime token; no
-endpoint, host, path, port or token value is printed. It validates the
+IPv4-mapped IPv6 loopback spellings); no endpoint, host, path, port or token
+value is printed. The shell attestation does not require ambient
+`ACTIONS_RUNTIME_TOKEN`; the pinned Actions-cache restore/save actions are Node
+actions, whose `NodeScriptActionHandler` receives that credential while the
+shell `ScriptHandler` does not. Successful full restore/save calls prove the
+credential/token path. It validates the
 repository variable and the actual `github.event.pull_request.number`,
 restores the trusted seed (not lookup-only), validates exact seed marker
 content on a hit, replaces the path with a deterministic non-secret poison
-marker, saves the exact Stage 1 poison key, then fails only if the trusted seed
+marker, saves the exact Stage 1 poison key, clears and fully restores that key,
+requires a cache hit and exact marker bytes, then fails only if the trusted seed
 was readable. A seed miss passes with a pending trusted-main
-`verify-pr-write` check; a seed hit is reported only after the poison save has
-completed.
+`verify-pr-write` check; a seed hit is reported only after the poison
+restore/save proof has completed.
 
 Fork PRs remain on the hosted path and provide the no-Depot-authority half of
 the acceptance evidence; only the same-repository exact sentinel ref can

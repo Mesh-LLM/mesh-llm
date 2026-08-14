@@ -400,10 +400,6 @@ jobs:
           }
           attest_cache_endpoint ACTIONS_CACHE_URL
           attest_cache_endpoint ACTIONS_RESULTS_URL
-          if [[ -z "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
-            echo "cache backend attestation failed (variable=ACTIONS_RUNTIME_TOKEN reason=missing)" >&2
-            exit 1
-          fi
 
       - name: Restore trusted authority marker
         id: restore_seed
@@ -450,6 +446,40 @@ jobs:
         with:
           path: .depot-authority-sentinel
           key: ${{ steps.validate.outputs.poison_key }}
+
+      - name: Clear local poison marker before proof restore
+        shell: bash
+        run: rm -rf -- .depot-authority-sentinel
+
+      - name: Restore saved PR poison marker
+        id: restore_poison
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .depot-authority-sentinel
+          key: ${{ steps.validate.outputs.poison_key }}
+          fail-on-cache-miss: true
+
+      - name: Validate saved PR poison marker content
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ steps.validate.outputs.sentinel_id }}
+          PR_NUMBER: ${{ steps.validate.outputs.pr_number }}
+          CACHE_HIT: ${{ steps.restore_poison.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [[ "$CACHE_HIT" != "true" ]]; then
+            echo "saved PR poison marker restore did not report a cache hit" >&2
+            exit 1
+          fi
+          expected_file="$(mktemp)"
+          trap 'rm -f "$expected_file"' EXIT
+          printf 'mesh-llm-depot-authority-pr-marker-v1\nsentinel_id=%s\npr_number=%s\n' \
+            "$SENTINEL_ID" "$PR_NUMBER" > "$expected_file"
+          if [[ ! -f .depot-authority-sentinel/marker ]] ||
+             ! cmp -s "$expected_file" .depot-authority-sentinel/marker; then
+            echo "saved PR poison marker content mismatch" >&2
+            exit 1
+          fi
 
       - name: Require trusted seed isolation after poison publication
         shell: bash

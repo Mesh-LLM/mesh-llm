@@ -428,10 +428,6 @@ jobs:
           }
           attest_cache_endpoint ACTIONS_CACHE_URL
           attest_cache_endpoint ACTIONS_RESULTS_URL
-          if [[ -z "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
-            echo "cache backend attestation failed (variable=ACTIONS_RUNTIME_TOKEN reason=missing)" >&2
-            exit 1
-          fi
 
       - name: Prepare deterministic non-secret marker
         shell: bash
@@ -632,10 +628,6 @@ jobs:
           }
           attest_cache_endpoint ACTIONS_CACHE_URL
           attest_cache_endpoint ACTIONS_RESULTS_URL
-          if [[ -z "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
-            echo "cache backend attestation failed (variable=ACTIONS_RUNTIME_TOKEN reason=missing)" >&2
-            exit 1
-          fi
 
       - name: Clear local poison marker before trusted restore
         shell: bash

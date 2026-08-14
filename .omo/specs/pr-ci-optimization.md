@@ -268,17 +268,23 @@ permissions, no checkout, no secrets and only the fixed
 provider-injected `ACTIONS_CACHE_URL` and `ACTIONS_RESULTS_URL` to be present
 and structurally attested as HTTP endpoints with a nonempty, non-GitHub,
 non-loopback authority (including all IPv4 `127/8` and IPv4-mapped IPv6
-loopback spellings), numeric port and explicit path, plus a nonempty
-`ACTIONS_RUNTIME_TOKEN`; it reports only variable/reason classes and never
-endpoint values. Manual seed/verify inputs bind to the configured sentinel ID
+loopback spellings), numeric port and explicit path; it reports only
+variable/reason classes and never endpoint values. The shell attestation does
+not require ambient `ACTIONS_RUNTIME_TOKEN`: GitHub's
+`NodeScriptActionHandler` injects that credential into the pinned cache
+actions, while the shell `ScriptHandler` does not. Their successful full
+restore/save calls provide the credential/token proof. Manual seed/verify
+inputs bind to the configured sentinel ID
 and use the fixed runner's Python 3.8+ stdlib `ipaddress` classifier for every
 bracketed IPv6 spelling; parser absence/version/invalidity fails closed.
 and exact merge ref. The PR probe restores the trusted seed (not lookup-only),
 validates exact seed marker content on a hit, replaces it with a deterministic
-non-secret poison marker, saves the exact Stage 1 poison key, then fails only
-after saving if the seed was readable. A seed miss passes with the trusted-main
-`verify-pr-write` phase pending; main verify fully restores and validates exact
-poison content before its expected-miss failure. Fork PRs remain hosted and
+non-secret poison marker, saves the exact Stage 1 poison key, clears and fully
+restores that key, and requires a cache hit and exact marker bytes before the
+seed decision; only then does it fail if the seed was readable. This same-job
+restore/save proves the PR Node token/write path. A seed miss passes with the
+trusted-main `verify-pr-write` phase pending; main verify's poison miss remains
+the cross-scope proof. Fork PRs remain hosted and
 provide the no-Depot-authority evidence; only the exact same-repository
 sentinel ref exercises the Depot diagnostic.
 

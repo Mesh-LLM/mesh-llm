@@ -170,9 +170,17 @@ successful manual canary does not prove PR isolation. Fork PR validation
 remains hosted and is the no-Depot-authority half of the sentinel acceptance
 evidence; only the exact same-repository sentinel ref may exercise the
 diagnostic Depot job. All three sentinel cache phases attest the
-provider-injected `ACTIONS_CACHE_URL`/`ACTIONS_RESULTS_URL` structure and
-require a runtime token before invoking `actions/cache`; the non-loopback
-check includes all IPv4 `127/8` and IPv4-mapped IPv6 loopback spellings.
+provider-injected `ACTIONS_CACHE_URL`/`ACTIONS_RESULTS_URL` structure before
+invoking pinned `actions/cache` restore/save actions. The shell attestation
+does not require ambient `ACTIONS_RUNTIME_TOKEN`: GitHub's
+`NodeScriptActionHandler` injects that credential into the cache actions, while
+the shell `ScriptHandler` does not. Successful full restore/save is the
+credential/token proof. The non-loopback check includes all IPv4 `127/8`
+and IPv4-mapped IPv6 loopback spellings.
+The protected PR probe clears and fully restores its saved poison key, requires
+a cache hit and exact marker bytes before the trusted-seed gate, and thereby
+proves the same-job Node token/write path; main verify's poison miss remains
+the cross-scope proof.
 Bracketed IPv6 authorities use the fixed runner's Python 3.8+ stdlib
 `ipaddress` classifier; parser absence/version/invalidity fails closed.
 Attestation reports only value-free variable/reason classes and fails closed

@@ -324,13 +324,21 @@ at `.depot-authority-sentinel`, and gates only after publication. Before any
 cache action, it attests the provider-injected `ACTIONS_CACHE_URL` and
 `ACTIONS_RESULTS_URL` as value-free structural HTTP endpoints with a nonempty
 non-GitHub/non-loopback authority (including all IPv4 `127/8` and IPv4-mapped
-IPv6 loopback spellings), numeric port and explicit path, and requires
-`ACTIONS_RUNTIME_TOKEN`; malformed/missing inputs fail closed without printing
-endpoint, host, path, port or token values. Endpoint authorities are classified
+IPv6 loopback spellings), numeric port and explicit path; malformed/missing
+inputs fail closed without printing endpoint, host, path, port or token values.
+The shell attestation intentionally does not inspect ambient
+`ACTIONS_RUNTIME_TOKEN`: pinned `actions/cache` restore/save actions run as
+Node actions; GitHub's `NodeScriptActionHandler` injects the runtime
+credential, while the shell `ScriptHandler` does not. Successful full
+restore/save calls are the credential/token proof. Endpoint authorities are
+classified
 with the fixed runner's Python 3.8+ stdlib `ipaddress` parser for all bracketed
 IPv6 spellings; parser absence/version/invalidity fails closed. Seed and poison
-markers are validated byte-for-byte on cache hits. It is outside planner
-slices and does
+markers are validated byte-for-byte on cache hits. After saving the PR poison,
+the no-checkout job clears and fully restores that exact key, requires a cache
+hit and exact bytes before the trusted-seed gate, and proves the same-job Node
+token/write path; main verify's poison miss remains the cross-scope proof. It
+is outside planner slices and does
 not add build commands, matrices, artifacts, or producer/consumer edges; the
 existing Quality lane summary still gates on its normal `quality` and
 `runner_contract` jobs. Fork PRs remain hosted and provide the

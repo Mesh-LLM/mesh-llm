@@ -379,6 +379,18 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         )
         self.assertLess(
             positions["Save PR poison marker"],
+            positions["Clear local poison marker before proof restore"],
+        )
+        self.assertLess(
+            positions["Clear local poison marker before proof restore"],
+            positions["Restore saved PR poison marker"],
+        )
+        self.assertLess(
+            positions["Restore saved PR poison marker"],
+            positions["Validate saved PR poison marker content"],
+        )
+        self.assertLess(
+            positions["Validate saved PR poison marker content"],
             positions["Require trusted seed isolation after poison publication"],
         )
         restore = self._step_block(self.sentinel, "Restore trusted authority marker")
@@ -388,7 +400,33 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             "uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25",
             self._step_block(self.sentinel, "Save PR poison marker"),
         )
-        self.assertIn("rm -rf -- .depot-authority-sentinel", self.sentinel)
+        poison_restore = self._step_block(
+            self.sentinel, "Restore saved PR poison marker"
+        )
+        self.assertIn(
+            "uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25",
+            poison_restore,
+        )
+        self.assertIn(
+            "key: ${{ steps.validate.outputs.poison_key }}",
+            poison_restore,
+        )
+        self.assertIn("fail-on-cache-miss: true", poison_restore)
+        poison_validation = self._step_block(
+            self.sentinel, "Validate saved PR poison marker content"
+        )
+        self.assertIn(
+            'CACHE_HIT: ${{ steps.restore_poison.outputs.cache-hit }}',
+            poison_validation,
+        )
+        self.assertIn("mesh-llm-depot-authority-pr-marker-v1", poison_validation)
+        self.assertIn("cmp -s", poison_validation)
+        self.assertIn(
+            "rm -rf -- .depot-authority-sentinel",
+            self._step_block(
+                self.sentinel, "Clear local poison marker before proof restore"
+            ),
+        )
         self.assertIn(
             "Trusted seed was not readable; pending trusted-main verify-pr-write.",
             self.sentinel,
@@ -461,12 +499,9 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             valid_results,
             runtime_token="",
         )
-        self.assertNotEqual(missing_token.returncode, 0)
-        self.assertIn(
-            "cache backend attestation failed (variable=ACTIONS_RUNTIME_TOKEN reason=missing)",
-            missing_token.stderr,
-        )
-        self.assertNotIn("non-secret-runtime-token", missing_token.stderr)
+        self.assertEqual(missing_token.returncode, 0, missing_token.stderr)
+        self.assertEqual(missing_token.stdout, "")
+        self.assertEqual(missing_token.stderr, "")
 
         with tempfile.TemporaryDirectory() as bin_dir:
             tr_path = shutil.which("tr")
@@ -527,9 +562,9 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             "python_status == 3",
             "ACTIONS_CACHE_URL",
             "ACTIONS_RESULTS_URL",
-            "ACTIONS_RUNTIME_TOKEN",
         ):
             self.assertIn(required, quality_script)
+        self.assertNotIn("ACTIONS_RUNTIME_TOKEN", quality_script)
 
     def test_five_pr_entrypoints_and_existing_build_shape_are_unchanged(self) -> None:
         expected = {
