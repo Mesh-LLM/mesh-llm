@@ -2307,6 +2307,22 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertEqual(stale_approval["depot_enabled"], "false")
 
+        stale_ref_approval = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="false",
+            manual_enabled="false",
+            pr_enabled="true",
+            pr_approved_ref="refs/pull/13/merge",
+            pr_approved_sha="0123456789abcdef0123456789abcdef01234567",
+        )
+        self.assertEqual(stale_ref_approval["depot_enabled"], "false")
+        self.assertEqual(stale_ref_approval["runner"], "ubuntu-24.04")
+        self.assertEqual(
+            stale_ref_approval["allow_native_github_cache"],
+            "true",
+        )
+
         expired_approval = self.run_runner_selector(
             event_name="pull_request",
             ref="refs/pull/12/merge",
