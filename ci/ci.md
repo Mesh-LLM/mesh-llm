@@ -408,14 +408,14 @@ The external administrative posture now has automatic Depot Cache and Registry
 Actions connectivity disabled and the Depot runner group restricted to this
 repository and its exact protected workflow refs. The controlled trusted-main
 seed [run 31816775585](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816775585)
-at `main` commit `9e977e246`, same-repository PR authority sentinel
+at `main` commit `9e977e246` succeeded. The same-repository PR authority sentinel
 [run 31816869128 / job 94821057215](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816869128/job/94821057215),
-and trusted-main verify
+read and exactly validated the trusted seed, published and exactly validated
+the poison marker, and then failed its intended seed-isolation gate; the
+enclosing PR run was later cancelled during cleanup. Trusted-main verify
 [run 31817111471 / job 94821343605](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31817111471/job/94821343605)
-are complete. The PR sentinel read and exactly validated the trusted seed,
-published and exactly validated the poison marker, and then failed its
-intended seed-isolation gate; trusted main later restored and exactly validated
-that poison and failed its intended expected-miss gate. This proves unsafe
+restored and exactly validated that poison and failed its intended expected-
+miss gate. This proves unsafe
 repository-scoped cross-trust authority. Do not enable PR Depot without a
 provider-isolation redesign and a new successful sentinel; all
 `DEPOT_PR_RUNNERS_ENABLED`, `DEPOT_PR_CANARY_REF`, `DEPOT_PR_SENTINEL_REF` and

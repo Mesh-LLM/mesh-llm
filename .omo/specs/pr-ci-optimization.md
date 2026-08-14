@@ -295,7 +295,7 @@ succeeded at `main` commit `9e977e246`; the same-repository PR sentinel
 [run 31816869128 / job 94821057215](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816869128/job/94821057215)
 restored and exactly validated the trusted seed, saved/cleared/restored and
 exactly validated the poison, then failed its intended seed-isolation gate;
-trusted-main verify
+the enclosing PR run was later cancelled during cleanup. Trusted-main verify
 [run 31817111471 / job 94821343605](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31817111471/job/94821343605)
 restored and exactly validated that poison, then failed its intended expected-
 miss gate. This is unsafe repository-scoped cross-trust authority, not a
