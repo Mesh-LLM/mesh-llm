@@ -105,10 +105,24 @@ impl Node {
     pub async fn invite_token(&self) -> String {
         let mut addr = self.endpoint_addr_for_advertisement();
         // Inject STUN-discovered public address if relay STUN didn't provide one.
-        if let Some(pub_addr) = self.public_addr
-            && !endpoint_addr_has_public_ipv4(&addr)
-        {
-            addr.addrs.insert(TransportAddr::Ip(pub_addr));
+        // An observed address supersedes any locally-enumerated public candidate:
+        // enumeration carries the port we bound, which is wrong wherever the host
+        // remaps ports, and `endpoint.addr()` mixes both kinds indistinguishably.
+        if let Some(pub_addr) = self.public_addr {
+            match pub_addr.source {
+                stun::PublicAddrSource::Observed => {
+                    addr.addrs.retain(|candidate| match candidate {
+                        TransportAddr::Ip(socket) => !is_public_ipv4_candidate(socket),
+                        _ => true,
+                    });
+                    addr.addrs.insert(TransportAddr::Ip(pub_addr.addr));
+                }
+                stun::PublicAddrSource::LocallyEnumerated => {
+                    if !endpoint_addr_has_public_ipv4(&addr) {
+                        addr.addrs.insert(TransportAddr::Ip(pub_addr.addr));
+                    }
+                }
+            }
         }
         addr = filter_endpoint_addr_for_bind_ip(
             addr,
