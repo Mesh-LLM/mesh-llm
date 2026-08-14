@@ -321,16 +321,36 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                     result = run_probe(script, *endpoints)
                     self.assertNotEqual(result.returncode, 0)
             if script_name == "Depot canary":
-                with self.subTest(script=script_name, diagnostic="endpoint name only"):
-                    endpoint = "https://cache.example.invalid/cache"
-                    result = run_probe(
-                        script,
-                        endpoint,
-                        valid_endpoints[0][1],
-                    )
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("ACTIONS_CACHE_URL", result.stderr)
-                    self.assertNotIn(endpoint, result.stderr)
+                diagnostic_cases = (
+                    (
+                        "unsupported host",
+                        "https://cache.example.invalid/cache",
+                        "GitHub Actions endpoint is not GitHub-owned or loopback",
+                    ),
+                    (
+                        "Depot redirect",
+                        "https://cache.depot.dev/cache",
+                        "GitHub Actions cache was transparently redirected to Depot",
+                    ),
+                    (
+                        "URL userinfo",
+                        "https://actions.githubusercontent.com:443@attacker.example/",
+                        "GitHub Actions endpoint contains URL userinfo",
+                    ),
+                )
+                for diagnostic, endpoint, message in diagnostic_cases:
+                    with self.subTest(script=script_name, diagnostic=diagnostic):
+                        result = run_probe(
+                            script,
+                            endpoint,
+                            valid_endpoints[0][1],
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(
+                            f"{message} (ACTIONS_CACHE_URL)",
+                            result.stderr,
+                        )
+                        self.assertNotIn(endpoint, result.stderr)
             if script_name == "audit action":
                 with self.subTest(script=script_name, policy="native cache enabled"):
                     result = run_probe(
