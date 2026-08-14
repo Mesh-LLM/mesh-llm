@@ -187,19 +187,51 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                             break
                         block_lines.append(line)
                     block = "\n".join(block_lines)
-                    for marker in (
-                        "event_name:",
-                        "original_event_name:",
-                        "repository:",
-                        "head_repository:",
-                        "head_sha:",
-                        "ref:",
-                        "depot_pr_enabled:",
-                        "pr_approved_ref:",
-                        "pr_approved_sha:",
-                        "force_hosted:",
-                    ):
-                        self.assertIn(marker, block, marker)
+                    common_values = (
+                        "event_name: ${{ github.event_name }}",
+                        "original_event_name: ${{ inputs.original_event_name }}",
+                        "repository: ${{ github.repository }}",
+                        "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
+                        "head_sha: ${{ github.event.pull_request.head.sha || github.sha }}",
+                        "ref: ${{ github.ref }}",
+                        "force_hosted: ${{ inputs.force_hosted }}",
+                    )
+                    for value in common_values:
+                        self.assertIn(value, block, value)
+
+                    is_sentinel = any(
+                        "id: sentinel_policy" in line
+                        for line in lines[max(0, index - 2) : index]
+                    )
+                    if is_sentinel:
+                        bounded_values = (
+                            "depot_main_enabled: 'false'",
+                            "depot_pr_enabled: 'false'",
+                            "pr_canary_ref: ${{ vars.DEPOT_PR_SENTINEL_REF }}",
+                            "pr_approved_ref: ''",
+                            "pr_approved_sha: ''",
+                            "manual_use_depot: 'false'",
+                        )
+                    else:
+                        bounded_values = (
+                            "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+                            "pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}",
+                            "pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}",
+                            "pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}",
+                        )
+                        self.assertTrue(
+                            "depot_main_enabled: 'false'" in block
+                            or "depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}"
+                            in block,
+                            "depot_main_enabled must be a bounded constant or repository gate",
+                        )
+                        if "manual_use_depot:" in block:
+                            self.assertIn(
+                                "manual_use_depot: ${{ inputs.use_depot }}",
+                                block,
+                            )
+                    for value in bounded_values:
+                        self.assertIn(value, block, value)
 
                 # The runner-owning job must consume a selector output.  The
                 # platform-check slice maps two semantic OS outputs through a

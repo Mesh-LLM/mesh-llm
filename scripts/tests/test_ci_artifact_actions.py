@@ -2322,6 +2322,10 @@ class CiArtifactActionTests(unittest.TestCase):
             stale_ref_approval["allow_native_github_cache"],
             "true",
         )
+        self.assertEqual(
+            stale_ref_approval["allow_depot_remote_cache"],
+            "false",
+        )
 
         expired_approval = self.run_runner_selector(
             event_name="pull_request",
