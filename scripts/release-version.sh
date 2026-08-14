@@ -267,6 +267,7 @@ literal_version_files=(
     "docs/sdk/rust.md"
     "docs/sdk/swift.md"
     "docs/SDK.md"
+    "docs/plugins/exemplars/web-ui/Cargo.lock"
     "sdk/swift/README.md"
     "sdk/swift/scripts/generate-swift-bindings.sh"
     "website/src/docs/pages/CLI.md"
@@ -274,6 +275,8 @@ literal_version_files=(
     "sdk/kotlin/README.md"
     "sdk/kotlin/example/example-jvm/build.gradle.kts"
     "crates/mesh-llm-config/src/model/built_in_schema/presentation.rs"
+    "crates/mesh-llm-host-runtime/tests/fixtures/config_schema_reference.json"
+    "website/src/docs/pages/developing-plugins.md"
 )
 
 for relative_file in "${literal_version_files[@]}"; do
