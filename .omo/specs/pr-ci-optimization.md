@@ -228,10 +228,19 @@ stay on their approved placement. Trusted main Linux work may use Depot only
 when DEPOT_RUNNERS_ENABLED is exactly true, with a GitHub-hosted fallback.
 Callers never provide raw labels or independent remote-cache permission.
 
-Depot PR execution is not implemented. Depot's documented GitHub cache path is
+Depot PR execution is not enabled. The selector has a bounded
+`DEPOT_PR_CANARY_REF` hook for one exact same-repository merge ref, while the
+global `DEPOT_PR_RUNNERS_ENABLED` gate remains absent/false. Fork heads,
+`pull_request_target`, dispatches and planner-forced hosted paths remain on
+GitHub-hosted runners. Depot's documented GitHub cache path is
 repository-scoped and not branch-isolated; automatic cache redirection can
 expose repository-wide cache authority to PR code. Cache-key prefixes are not
-isolation.
+isolation. The central selector now emits `allow_native_github_cache=false`
+for a Depot-selected direct PR, and all eligible native GitHub cache consumers
+are conditionally disabled while the underlying install/build commands remain
+unchanged. This removes the checked-in cache API path but is not an ambient
+Depot/WebDAV authority proof; the actual runner sentinel and no-token checks
+remain required before enabling the canary or global PR gate.
 
 Before a PR Depot path is enabled, an administrator must prove:
 

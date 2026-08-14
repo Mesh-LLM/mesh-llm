@@ -252,7 +252,10 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         website = self.workflow("ci-web-slice.yml")
         self.assertNotIn("name: Save pnpm store", ui_artifact)
         self.assertEqual(1, website.count("name: Save pnpm store"))
-        self.assertIn("cache: npm", website)
+        self.assertIn(
+            "cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && 'npm' || '' }}",
+            website,
+        )
         self.assertIn("website/package-lock.json", website)
 
         windows = self.workflow("ci-windows-runtime-slice.yml")

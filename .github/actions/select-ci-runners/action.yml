@@ -26,6 +26,10 @@ inputs:
     description: Exact-string repository gate for direct pull-request Depot placement.
     required: false
     default: "false"
+  pr_canary_ref:
+    description: Optional exact pull-request merge ref selected for a protected canary.
+    required: false
+    default: ""
   force_hosted:
     description: Fail-closed planner signal for CI-control or runner-policy changes.
     required: false
@@ -42,6 +46,9 @@ outputs:
   allow_depot_remote_cache:
     description: Whether this trusted runner selection may use Depot's remote cache.
     value: ${{ steps.select.outputs.allow_depot_remote_cache }}
+  allow_native_github_cache:
+    description: Whether this provider/trust selection may use native GitHub Actions cache APIs.
+    value: ${{ steps.select.outputs.allow_native_github_cache }}
   runner:
     description: Default two-vCPU Linux runner label.
     value: ${{ steps.select.outputs.runner }}
@@ -88,6 +95,7 @@ runs:
         INPUT_REF: ${{ inputs.ref }}
         INPUT_DEPOT_MAIN_ENABLED: ${{ inputs.depot_main_enabled }}
         INPUT_DEPOT_PR_ENABLED: ${{ inputs.depot_pr_enabled }}
+        INPUT_PR_CANARY_REF: ${{ inputs.pr_canary_ref }}
         INPUT_FORCE_HOSTED: ${{ inputs.force_hosted }}
         INPUT_MANUAL_USE_DEPOT: ${{ inputs.manual_use_depot }}
       run: |
@@ -106,13 +114,22 @@ runs:
           fi
         done
 
+        pr_canary_ref="${INPUT_PR_CANARY_REF:-}"
+        if [[ -n "$pr_canary_ref" &&
+          ! "$pr_canary_ref" =~ ^refs/pull/[0-9]+/merge$ ]]; then
+          echo "INPUT_PR_CANARY_REF must be an exact pull-request merge ref" >&2
+          exit 1
+        fi
+
         # A direct PR may opt into Depot only when this protected repository
-        # explicitly enables the feature. Both the base and PR-head repository
-        # comparisons remain exact so a fork, mirror, or similarly named
-        # repository cannot opt in.
+        # explicitly enables the feature, or when one exact merge ref is
+        # selected for the protected canary. Both the base and PR-head
+        # repository comparisons remain exact so a fork, mirror, or similarly
+        # named repository cannot opt in.
         trusted_repository="Mesh-LLM/mesh-llm"
         depot_enabled=false
         allow_depot_remote_cache=false
+        allow_native_github_cache=true
         is_direct_pull_request=false
         is_dispatched_pull_request=false
         dispatch_original_event="${INPUT_ORIGINAL_EVENT_NAME:-}"
@@ -128,7 +145,8 @@ runs:
               "$INPUT_HEAD_REPOSITORY" == "$trusted_repository" && \
               "$INPUT_REF" =~ ^refs/pull/[0-9]+/merge$ && \
               "$INPUT_FORCE_HOSTED" == "false" && \
-              "$INPUT_DEPOT_PR_ENABLED" == "true" ]]; then
+              ( "$INPUT_DEPOT_PR_ENABLED" == "true" ||
+                ( -n "$pr_canary_ref" && "$INPUT_REF" == "$pr_canary_ref" ) ) ]]; then
               is_direct_pull_request=true
               depot_enabled=true
             fi
@@ -187,6 +205,17 @@ runs:
           allow_depot_remote_cache=true
         fi
 
+        # Depot runners do not provide GitHub's branch-isolated cache
+        # authority.  Native GitHub cache APIs are therefore disabled for a
+        # directly selected PR, while hosted PRs and trusted main/release or
+        # manual paths retain their existing cache behavior.  This value is
+        # derived only from the protected provider policy; callers cannot opt
+        # a Depot PR back in by supplying a cache-related input.
+        if [[ "$depot_enabled" == "true" && \
+          "$is_direct_pull_request" == "true" ]]; then
+          allow_native_github_cache=false
+        fi
+
         if [[ "$depot_enabled" == "true" ]]; then
           runner=depot-ubuntu-24.04
           runner_4=depot-ubuntu-24.04-4
@@ -214,6 +243,7 @@ runs:
         {
           echo "depot_enabled=$depot_enabled"
           echo "allow_depot_remote_cache=$allow_depot_remote_cache"
+          echo "allow_native_github_cache=$allow_native_github_cache"
           echo "runner=$runner"
           echo "runner_4=$runner_4"
           echo "runner_8=$runner_8"

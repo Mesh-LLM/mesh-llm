@@ -70,6 +70,7 @@ jobs:
           backend: cpu
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
           toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
+          allow-native-github-cache: "true"
       - name: Initialize MSVC for CPU runtime
         if: steps.llama_cache.outputs.cache-hit != 'true'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
@@ -163,6 +164,7 @@ jobs:
           cuda_toolchain_version: ${{ env.WINDOWS_CUDA_VERSION }}
           vulkan_toolchain_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
           rocm_toolchain_version: ${{ env.ROCM_HIP_SDK_FILENAME }}
+          allow-native-github-cache: "true"
       - name: Install CUDA toolkit
         if: ${{ matrix.backend == 'cuda' && steps.llama_cache.outputs.cache-hit != 'true' }}
         uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76 # v0.2.35
@@ -215,6 +217,7 @@ jobs:
         uses: ./.github/actions/setup-windows-rocm-sdk
         with:
           rocm-hip-sdk-filename: ${{ env.ROCM_HIP_SDK_FILENAME }}
+          allow-native-github-cache: "true"
       - name: Initialize MSVC for native runtime
         if: steps.llama_cache.outputs.cache-hit != 'true'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
