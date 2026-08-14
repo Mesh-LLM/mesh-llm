@@ -434,6 +434,10 @@ class CiArtifactActionTests(unittest.TestCase):
                 "allow_depot_remote_cache",
                 selected["allow_depot_remote_cache"],
             )
+            outputs.setdefault(
+                "allow_native_github_cache",
+                selected["allow_native_github_cache"],
+            )
             return result, outputs
 
     def test_host_action_uses_canonical_dynamic_host_builder(self) -> None:
@@ -1262,6 +1266,10 @@ class CiArtifactActionTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(outputs["runner"], expected_runner)
                     self.assertEqual(
+                        outputs["allow_native_github_cache"],
+                        "false",
+                    )
+                    self.assertEqual(
                         outputs["allow_depot_remote_cache"],
                         "false",
                     )
@@ -1278,9 +1286,28 @@ class CiArtifactActionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(outputs["runner"], "ubuntu-24.04-arm")
             self.assertEqual(
+                outputs["allow_native_github_cache"],
+                "true",
+            )
+            self.assertEqual(
                 outputs["allow_depot_remote_cache"],
                 "false",
             )
+
+            if workflow_name == "native-sdk-artifact.yml":
+                result, outputs = self.run_reusable_runner_policy(
+                    workflow_name,
+                    repository="Mesh-LLM/mesh-llm",
+                    event_name="push",
+                    ref="refs/heads/main",
+                    depot_enabled="true",
+                    target="aarch64-apple-darwin",
+                    runner_size="8",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs["runner"], "macos-15")
+                self.assertEqual(outputs["allow_native_github_cache"], "true")
+                self.assertEqual(outputs["allow_depot_remote_cache"], "false")
 
             result, outputs = self.run_reusable_runner_policy(
                 workflow_name,
@@ -1818,7 +1845,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("allow_depot_remote_cache", action)
         self.assertIn('default: "false"', action)
         self.assertIn("allow_native_github_cache", action)
-        self.assertIn('default: "true"', action)
+        self.assertIn('default: "false"', action)
         self.assertIn("SCCACHE_WEBDAV_ENDPOINT", action)
         self.assertIn("DEPOT_CACHE_TOKEN", action)
         self.assertIn("process.env.SCCACHE_DIR", action)
@@ -2482,7 +2509,7 @@ class CiArtifactActionTests(unittest.TestCase):
             ROOT / ".github" / "workflows" / "release.yml"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "allow_native_github_cache: ${{ needs.metadata.outputs.allow_native_github_cache }}",
+            "allow_native_github_cache: ${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || 'true' }}",
             release,
         )
 

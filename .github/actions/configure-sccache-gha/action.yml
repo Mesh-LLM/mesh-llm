@@ -9,7 +9,7 @@ inputs:
   allow_native_github_cache:
     description: Allow this job to use GitHub Actions cache as an sccache backend.
     required: false
-    default: "true"
+    default: "false"
 
 runs:
   using: composite

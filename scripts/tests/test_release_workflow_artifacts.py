@@ -160,6 +160,40 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertNotIn("USE_SELF_HOSTED", arm_smoke)
 
+    def test_native_runtime_cache_policy_tracks_effective_runner(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        native_runtime = job_block(
+            workflow,
+            "build_native_runtime",
+            "build_native_runtime_linux_aarch64_cuda",
+        )
+        self.assertIn(
+            "allow_native_github_cache: ${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || 'true' }}",
+            native_runtime,
+        )
+        for target, runner_8, runner_arm_8, expected in (
+            ("x86_64-unknown-linux-gnu", "depot-ubuntu-24.04-8", "ubuntu-24.04-arm", "false"),
+            ("x86_64-unknown-linux-gnu", "ubuntu-24.04", "ubuntu-24.04-arm", "true"),
+            ("aarch64-unknown-linux-gnu", "ubuntu-24.04", "depot-ubuntu-24.04-arm-8", "false"),
+            ("aarch64-apple-darwin", "depot-ubuntu-24.04-8", "depot-ubuntu-24.04-arm-8", "true"),
+        ):
+            depot = (
+                target == "x86_64-unknown-linux-gnu" and runner_8.startswith("depot-")
+            ) or (
+                target == "aarch64-unknown-linux-gnu"
+                and runner_arm_8.startswith("depot-")
+            )
+            self.assertEqual("false" if depot else "true", expected)
+
+        for runner_16, expected in (
+            ("depot-ubuntu-24.04-16", "false"),
+            ("ubuntu-24.04", "true"),
+        ):
+            self.assertEqual(
+                "false" if runner_16.startswith("depot-") else "true",
+                expected,
+            )
+
     def test_inference_smoke_consumes_composed_product(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
