@@ -292,6 +292,15 @@ proxy is inert transport only; its presence is not proof of authority
 isolation, and the gate remains closed until no trusted workflow consumes the
 Depot namespace.
 
+The admin-verified organization switches have a narrower meaning than that
+consumer policy: disabling automatic Depot Cache and Registry Actions
+connectivity removes the direct `DEPOT_CACHE_TOKEN`/WebDAV build-tool
+preconfiguration and Registry Actions authentication from fresh runners. It
+does not document or enforce a per-connection/job/ref disable or ACL for the
+GitHub Actions cache proxy/runtime-token path. The controlled sentinel proved
+that this path remains repository-scoped and crosses the trusted-main/PR
+boundary, so switch state is not an isolation proof.
+
 The selector also accepts the optional repository variable
 `DEPOT_PR_CANARY_REF`. When it is absent (the default), no canary PR is
 selected and the normal global `DEPOT_PR_RUNNERS_ENABLED` gate is unchanged.
@@ -406,7 +415,10 @@ Do not change Depot settings or runner groups in a workflow refactor.
 
 The external administrative posture now has automatic Depot Cache and Registry
 Actions connectivity disabled and the Depot runner group restricted to this
-repository and its exact protected workflow refs. The controlled trusted-main
+repository and its exact protected workflow refs. The switches remove the
+direct Depot build-tool/registry credential path (including automatic
+`DEPOT_CACHE_TOKEN`/WebDAV preconfiguration), but do not disable or isolate the
+GitHub Actions cache proxy/runtime-token path. The controlled trusted-main
 seed [run 31816775585](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816775585)
 at `main` commit `9e977e246` succeeded. The same-repository PR authority sentinel
 [run 31816869128 / job 94821057215](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816869128/job/94821057215),

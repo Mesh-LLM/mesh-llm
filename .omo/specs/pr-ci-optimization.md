@@ -260,6 +260,18 @@ shown unsafe repository-scoped cross-trust access, so a provider-isolation
 redesign and a new successful sentinel remain required before enabling the
 canary or global PR gate.
 
+The admin-verified organization switches have a narrower effect than the
+checked-in consumer policy: they remove direct `DEPOT_CACHE_TOKEN`/WebDAV
+build-tool preconfiguration and Registry Actions authentication from fresh
+runners, but they do not document or enforce a per-connection/job/ref disable
+or ACL for the GitHub Actions cache proxy/runtime-token path. The sentinel
+proved that path remains repository-scoped across the trusted-main/PR boundary.
+The required provider contract is therefore a supported, server-enforced
+per-connection/job/ref control that either leaves PR jobs on GitHub-native
+branch-scoped Actions endpoints/token with no Depot proxy or direct cache
+token, or issues a PR-isolated namespace whose ACL prevents trusted
+main/release reads and restores, without exposing `DEPOT_CACHE_TOKEN`.
+
 The sentinel is deliberately outside the planner/build graph and does not
 invoke `audit-depot-pr-isolation`: that audit rejects the ambient endpoint
 before cache access, whereas this diagnostic must exercise the actual restore
@@ -306,7 +318,9 @@ provider-parity, capacity and rollback evidence remain pending.
 
 Before a PR Depot path is enabled, an administrator must prove:
 
-1. automatic Depot cache connectivity is disabled or provides per-PR isolation;
+1. the provider's documented per-connection/job/ref control selects either
+   GitHub-native branch-scoped Actions cache endpoints/token with no Depot
+   cache token, or a PR-isolated namespace inaccessible to trusted main/release;
 2. same-repository and fork PRs receive no cache, registry or repository secret
    authority;
 3. hostile PRs cannot read a trusted sentinel or publish an entry restored by

@@ -162,7 +162,11 @@ Cache connectivity is disabled, automatic Registry Actions authentication is
 disabled, and the Depot runner group is restricted to `Mesh-LLM/mesh-llm` and
 the exact protected workflow refs. The repository token cannot independently
 inspect organization runner-group settings through the API (403), so these
-remain external facts rather than checked-in evidence. The controlled
+remain external facts rather than checked-in evidence. The two switches remove
+Depot's direct `DEPOT_CACHE_TOKEN`/WebDAV build-tool preconfiguration and
+Registry Actions authentication on fresh runners; they do not document or
+enforce a per-connection/job/ref disable or ACL for the GitHub Actions cache
+proxy/runtime-token path. The controlled
 trusted-main seed [run 31816775585](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816775585)
 succeeded at `main` commit `9e977e246`; the same-repository PR authority
 sentinel [run 31816869128 / job 94821057215](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816869128/job/94821057215)
@@ -190,6 +194,17 @@ The protected PR probe clears and fully restores its saved poison key, requires
 a cache hit and exact marker bytes before the trusted-seed gate, and thereby
 proves the same-job Node token/write path; main verify's poison miss remains
 the cross-scope proof.
+
+The provider contract required before PR placement is enabled is a documented,
+server-enforced per-connection/job/ref control for the GitHub Actions cache
+path. It must either leave PR jobs on GitHub-native branch-scoped
+`ACTIONS_CACHE_URL`/`ACTIONS_RESULTS_URL` and runtime-token semantics with no
+Depot proxy or direct cache token, or issue a PR-isolated namespace whose ACL
+denies reads/writes outside that PR and prevents trusted main/release restores,
+without exposing `DEPOT_CACHE_TOKEN`. Key prefixes, loopback proxies,
+ephemeral runners and the org switches are not equivalent controls. A fresh
+same-repository PR, fork PR and trusted-main seed/verify sentinel must prove
+the selected behavior before any PR gate or canary variable is armed.
 Bracketed IPv6 authorities use the fixed runner's Python 3.8+ stdlib
 `ipaddress` classifier; parser absence/version/invalidity fails closed.
 Attestation reports only value-free variable/reason classes and fails closed
