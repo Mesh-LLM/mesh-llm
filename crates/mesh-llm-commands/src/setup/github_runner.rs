@@ -4,7 +4,6 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const GITHUB_REPOSITORY: &str = "Mesh-LLM/mesh-llm";
 const GH_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const GH_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -99,34 +98,6 @@ impl Default for ProcessGhCommandRunner {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::GhCommand;
-
-    #[test]
-    fn github_api_commands_are_pinned_to_dot_com() {
-        for command in [
-            GhCommand::CheckAuthentication,
-            GhCommand::CheckViewerHasStarred,
-            GhCommand::StarRepository,
-        ] {
-            assert!(
-                command.args().windows(2).any(|args| args == ["--hostname", "github.com"]),
-                "{} must explicitly target github.com",
-                command.display_name()
-            );
-        }
-    }
-
-    #[test]
-    fn authentication_probe_checks_the_selected_api_credential() {
-        assert_eq!(
-            GhCommand::CheckAuthentication.args(),
-            &["api", "--hostname", "github.com", "/user", "--silent"]
-        );
-    }
-}
-
 impl GhCommandRunner for ProcessGhCommandRunner {
     fn run(&mut self, command: GhCommand) -> Result<GhCommandOutput, GhCommandError> {
         let mut child = Command::new("gh")
@@ -182,5 +153,36 @@ impl GhCommandRunner for ProcessGhCommandRunner {
                 Err(error) => return Err(GhCommandError::WaitFailed(error.to_string())),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GhCommand;
+
+    #[test]
+    fn github_api_commands_are_pinned_to_dot_com() {
+        for command in [
+            GhCommand::CheckAuthentication,
+            GhCommand::CheckViewerHasStarred,
+            GhCommand::StarRepository,
+        ] {
+            assert!(
+                command
+                    .args()
+                    .windows(2)
+                    .any(|args| args == ["--hostname", "github.com"]),
+                "{} must explicitly target github.com",
+                command.display_name()
+            );
+        }
+    }
+
+    #[test]
+    fn authentication_probe_checks_the_selected_api_credential() {
+        assert_eq!(
+            GhCommand::CheckAuthentication.args(),
+            &["api", "--hostname", "github.com", "/user", "--silent"]
+        );
     }
 }
