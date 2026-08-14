@@ -644,7 +644,7 @@ jobs:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
           allow_native_github_cache: ${{ startsWith(needs.metadata.outputs.runner_16, 'depot-') && 'false' || 'true' }}
       - name: Cache native runtime ROCm backend build
-        if: ${{ needs.metadata.outputs.allow_native_github_cache == 'true' }}
+        if: ${{ !startsWith(needs.metadata.outputs.runner_16, 'depot-') }}
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
@@ -702,7 +702,7 @@ jobs:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
           allow_native_github_cache: ${{ startsWith(needs.metadata.outputs.runner_16, 'depot-') && 'false' || 'true' }}
       - name: Cache native runtime Vulkan backend build
-        if: ${{ needs.metadata.outputs.allow_native_github_cache == 'true' }}
+        if: ${{ !startsWith(needs.metadata.outputs.runner_16, 'depot-') }}
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}

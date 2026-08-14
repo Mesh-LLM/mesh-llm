@@ -167,6 +167,16 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             "build_native_runtime",
             "build_native_runtime_linux_aarch64_cuda",
         )
+        rocm = job_block(
+            workflow,
+            "build_native_runtime_linux_x86_64_rocm",
+            "build_native_runtime_linux_x86_64_vulkan",
+        )
+        vulkan = job_block(
+            workflow,
+            "build_native_runtime_linux_x86_64_vulkan",
+            "build_swift_sdk_artifact",
+        )
         self.assertIn(
             "allow_native_github_cache: ${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || 'true' }}",
             native_runtime,
@@ -193,6 +203,16 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
                 "false" if runner_16.startswith("depot-") else "true",
                 expected,
             )
+
+        effective_runner_16_cache_gate = (
+            "if: ${{ !startsWith(needs.metadata.outputs.runner_16, 'depot-') }}"
+        )
+        provider_level_cache_gate = (
+            "if: ${{ needs.metadata.outputs.allow_native_github_cache == 'true' }}"
+        )
+        for producer in (rocm, vulkan):
+            self.assertIn(effective_runner_16_cache_gate, producer)
+            self.assertNotIn(provider_level_cache_gate, producer)
 
     def test_inference_smoke_consumes_composed_product(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")

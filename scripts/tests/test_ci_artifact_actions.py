@@ -2471,7 +2471,7 @@ class CiArtifactActionTests(unittest.TestCase):
             cache_start = release.index(f"name: {cache_name}")
             cache_block = release[cache_start : release.find("\n      - ", cache_start + 1)]
             self.assertIn(
-                "needs.metadata.outputs.allow_native_github_cache == 'true'",
+                "!startsWith(needs.metadata.outputs.runner_16, 'depot-')",
                 cache_block,
             )
         self.assertGreaterEqual(
