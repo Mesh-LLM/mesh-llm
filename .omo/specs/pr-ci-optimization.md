@@ -2,8 +2,9 @@
 
 Status: implemented on this branch. The shared planner, focused PR and main
 entrypoints, manual controller, topic/platform lane workflows, platform-pure reusable
-graphs, contracts and documentation are checked in. Ruleset migration and
-Depot PR execution remain separate future work.
+graphs, contracts and documentation are checked in. Ruleset migration remains
+separate work. Exact same-repository PR revisions may use Depot under the
+time-bounded exception in `ci/DEPOT_PR_RISK_EXCEPTION.md`.
 
 Owners: MeshLLM maintainers
 
@@ -42,7 +43,8 @@ or cache identity.
 - Existing static ABI, native SDK, Swift, smoke and HF workflows remain
   lower-level reusable producers/consumers.
 - Current PR routing is GitHub-hosted except for the documented uncredentialed
-  CUDA smoke on the approved ephemeral GPU scale set; trusted-main Depot
+  CUDA smoke and an exact maintainer-approved same-repository merge ref/head SHA
+  selected under the checked-in Depot cache-risk deadline; trusted-main Depot
   selection remains behind the existing exact-string policy gate.
 - `ci-quality-slice.yml` contains an additive protected authority-sentinel
   diagnostic selected by separate `DEPOT_PR_SENTINEL_REF` and
@@ -233,9 +235,11 @@ stay on their approved placement. Trusted main Linux work may use Depot only
 when DEPOT_RUNNERS_ENABLED is exactly true, with a GitHub-hosted fallback.
 Callers never provide raw labels or independent remote-cache permission.
 
-Depot PR execution is not enabled. The selector has a bounded
-`DEPOT_PR_CANARY_REF` hook for one exact same-repository merge ref, while the
-global `DEPOT_PR_RUNNERS_ENABLED` gate remains absent/false. The Quality slice
+Permanent Depot PR execution is not enabled. The selector has a bounded
+`DEPOT_PR_CANARY_REF` hook for one exact same-repository merge ref. The separate
+temporary exception requires `DEPOT_PR_RUNNERS_ENABLED`, exact
+`DEPOT_PR_APPROVED_REF`, exact `DEPOT_PR_APPROVED_SHA`, and the checked-in
+2026-09-14 UTC deadline. The Quality slice
 also has a separate `DEPOT_PR_SENTINEL_REF` selector and
 `DEPOT_PR_SENTINEL_ID` validation for one no-checkout authority diagnostic;
 the ordinary Quality jobs still use `DEPOT_PR_CANARY_REF`, and a global PR gate
@@ -247,18 +251,16 @@ non-matching refs remain hosted/no-Depot; malformed selector configuration is
 rejected by the central selector. Depot's documented GitHub cache path is
 repository-scoped and not branch-isolated; automatic cache redirection can
 expose repository-wide cache authority to PR code. Cache-key prefixes are not
-isolation. The central selector now emits both
-`allow_native_github_cache=false` and `allow_depot_remote_cache=false` for
-every Depot selection, including trusted main; all eligible native GitHub and
-Depot remote-cache consumers are conditionally disabled while the underlying
-install/build commands remain unchanged. Hosted release and cache-warmer
-paths retain their existing GitHub cache behavior. The Depot namespace is
-intentionally unused by trusted workflows, so existing entries must be purged
-or expire before the PR gate. A GitHub-owned or strict loopback proxy is inert
-transport only, not an ambient authority proof; the completed sentinel has
-shown unsafe repository-scoped cross-trust access, so a provider-isolation
-redesign and a new successful sentinel remain required before enabling the
-canary or global PR gate.
+isolation. The central selector emits
+`allow_depot_remote_cache=false` for every Depot selection. Outside the bounded
+exception, native Actions-cache consumers are disabled. During the exception,
+an exact approved PR revision and eligible trusted-main Depot jobs emit
+`allow_native_github_cache=true`, deliberately sharing Depot's repository-wide,
+cross-branch Actions-cache namespace for iteration speed. Hosted release and
+cache-warmer paths retain their existing GitHub cache behavior. This is
+accepted risk, not an ambient authority proof; the completed sentinel has shown
+unsafe repository-scoped cross-trust access, so a provider-isolation redesign
+and a new successful sentinel remain required for permanent activation.
 
 The admin-verified organization switches have a narrower effect than the
 checked-in consumer policy: they remove direct `DEPOT_CACHE_TOKEN`/WebDAV
@@ -312,12 +314,14 @@ the enclosing PR run was later cancelled during cleanup. Trusted-main verify
 [run 31817111471 / job 94821343605](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31817111471/job/94821343605)
 restored and exactly validated that poison, then failed its intended expected-
 miss gate. This is unsafe repository-scoped cross-trust authority, not a
-successful isolation result. Keep `DEPOT_PR_RUNNERS_ENABLED` and all sentinel /
-canary variables absent. A provider-isolation redesign and a new successful
-sentinel are required before PR Depot can be reconsidered; fork,
+successful isolation result. The temporary exception knowingly accepts it only
+when `DEPOT_PR_RUNNERS_ENABLED=true`, `DEPOT_PR_APPROVED_REF` and
+`DEPOT_PR_APPROVED_SHA` match exactly, and the 2026-09-14 UTC deadline is still
+active. A provider-isolation redesign and a new successful sentinel are
+required before that exception can become permanent; fork,
 provider-parity, capacity and rollback evidence remain pending.
 
-Before a PR Depot path is enabled, an administrator must prove:
+Before a permanent PR Depot path is enabled, an administrator must prove:
 
 1. the provider's documented per-connection/job/ref control selects either
    GitHub-native branch-scoped Actions cache endpoints/token with no Depot

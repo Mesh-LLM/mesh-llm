@@ -271,26 +271,26 @@ from being duplicated into every composed product artifact.
 ## Provider and cache policy
 
 `.github/actions/select-ci-runners` maps semantic roles to approved labels.
-Pull requests use GitHub-hosted runners for ordinary work. The sole current
-exception is uncredentialed CUDA smoke on the approved ephemeral `gpu-nvidia`
-scale set described above. Same-repository and fork PRs use the same protected
-reusable lanes and receive no repository secrets. Their caches are restore-only
-even though the protected workflow ref is `main`; neither may publish
-trusted-main cache entries. Trusted `main` Linux roles may use Depot only when
+Fork pull requests use GitHub-hosted runners. Same-repository PRs normally do
+too, but an exact maintainer-approved merge ref and head SHA may use Depot under
+the time-bounded cache-risk exception in `ci/DEPOT_PR_RISK_EXCEPTION.md`. The
+other exception is uncredentialed CUDA smoke on the approved ephemeral
+`gpu-nvidia` scale set described above. PRs use the same protected reusable
+lanes and receive no repository secrets. Trusted `main` Linux roles may use Depot only when
 `DEPOT_RUNNERS_ENABLED` is exactly `true`; macOS, Windows, credential-bearing
 smokes and other hardware-qualified work retain explicit approved placement.
 Provider choice never changes plan membership, commands, artifacts, tests or
 summaries.
 
-The central selector makes the Depot cache namespace intentionally inert for
-every Depot selection, including trusted `main`: it emits both
-`allow_native_github_cache=false` and `allow_depot_remote_cache=false`. Hosted
-release and cache-warmer workflows retain their existing GitHub cache behavior.
-Any pre-existing Depot namespace entries must be purged or allowed to expire
-before the PR gate is enabled. A GitHub-owned or strict loopback Actions-cache
-proxy is inert transport only; its presence is not proof of authority
-isolation, and the gate remains closed until no trusted workflow consumes the
-Depot namespace.
+The central selector normally makes the Depot cache namespace inert by emitting
+`allow_native_github_cache=false` and `allow_depot_remote_cache=false`. During
+the bounded exception, the exact approved PR revision and eligible trusted-main
+Depot jobs emit `allow_native_github_cache=true`, enabling intentional
+cross-branch reuse through Depot's repository-wide Actions-cache proxy. Direct
+Depot build-tool remote cache remains disabled. This is a conscious iteration-
+speed tradeoff and the shared cache is treated as attacker-controlled input,
+not a correctness or authority boundary. Hosted release and cache-warmer
+workflows retain their existing GitHub cache behavior.
 
 The admin-verified organization switches have a narrower meaning than that
 consumer policy: disabling automatic Depot Cache and Registry Actions
@@ -311,6 +311,14 @@ hosted. The canary gate never grants remote Depot cache permission and does not
 replace the global PR gate. Maintainers must not set it until the external
 isolation protocol proves the actual Depot/WebDAV and Actions-cache authority
 boundary.
+
+The ordinary PR selector also requires the independent global gate plus exact
+`DEPOT_PR_APPROVED_REF` and `DEPOT_PR_APPROVED_SHA` values. The SHA binding
+invalidates approval after every push, forks and CI-policy changes remain
+hosted, and the source-enforced exception expires on 2026-09-14 UTC. GitHub's
+`all_external_contributors` approval policy covers external contributors, not
+same-repository collaborator branches; the exact ref/SHA values are therefore
+the protected same-repository maintainer approval control.
 
 The Quality slice also contains a separate, additive authority-sentinel
 selector. It reads `DEPOT_PR_SENTINEL_REF` (not `DEPOT_PR_CANARY_REF`) and
@@ -384,7 +392,7 @@ The implemented policy uses that isolation selectively:
 | Website npm store | Website-only lockfile-keyed cache | Later same-PR website runs avoid downloading the unchanged dependency store |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
-For any Depot-selected run, the central runner policy emits
+Outside the bounded exception, a Depot-selected run emits
 `allow_native_github_cache=false` and `allow_depot_remote_cache=false`. Every
 native GitHub cache consumer in the
 eligible five-lane build graph (explicit `actions/cache`, setup-node package
@@ -395,6 +403,13 @@ main/release/manual paths retain the existing cache behavior. This is a
 checked-in consumer policy, not proof that a Depot runner has no ambient
 Depot/WebDAV authority.
 
+For an exactly approved exception run, `allow_native_github_cache=true` enables
+those guarded cache consumers on both the selected PR and eligible trusted-main
+Depot jobs. Depot's lack of branch isolation means the cache can cross the PR,
+main, and other-PR trust boundaries. That accepted risk, including the exact
+sentinel evidence and rollback procedure, is documented in
+`ci/DEPOT_PR_RISK_EXCEPTION.md`.
+
 This is intentionally not a universal PR write-through policy. Cargo target
 caches are commonly hundreds of megabytes to several gigabytes per row; making
 every PR matrix row publish one would multiply storage, increase upload time,
@@ -403,15 +418,12 @@ caches have substantially better reuse-to-storage value. Cache hits are always
 an optimization: native stamps/manifests/checksums are verified, and every job
 must still regenerate successfully after a miss.
 
-Depot PR execution is not enabled. The bounded `DEPOT_PR_CANARY_REF` selector
-hook exists only to exercise a single protected same-repository ref after the
-external gates are ready. The implemented cache-inert mode prevents the
-checked-in GitHub and Depot cache consumers from reading or writing on any
-Depot run, but it does not prove that a runner has no ambient Depot/WebDAV/cache
-authority. A protected runner-group check, no-secret/no-token execution,
-namespace purge/expiry, provider-isolation redesign and a new successful
-non-secret sentinel in `ci/DEPOT_MIGRATION.md` remain prerequisites.
-Do not change Depot settings or runner groups in a workflow refactor.
+Permanent Depot PR execution is not yet approved. The bounded exception permits
+only an exact same-repository ref/SHA through 2026-09-14 UTC. A protected
+runner-group check, no-secret/no-direct-token execution, provider-isolation
+redesign, and a new successful non-secret sentinel remain prerequisites for
+removing that deadline. Do not change Depot settings or runner groups in a
+workflow refactor.
 
 The external administrative posture now has automatic Depot Cache and Registry
 Actions connectivity disabled and the Depot runner group restricted to this
@@ -428,10 +440,9 @@ enclosing PR run was later cancelled during cleanup. Trusted-main verify
 [run 31817111471 / job 94821343605](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31817111471/job/94821343605)
 restored and exactly validated that poison and failed its intended expected-
 miss gate. This proves unsafe
-repository-scoped cross-trust authority. Do not enable PR Depot without a
-provider-isolation redesign and a new successful sentinel; all
-`DEPOT_PR_RUNNERS_ENABLED`, `DEPOT_PR_CANARY_REF`, `DEPOT_PR_SENTINEL_REF` and
-`DEPOT_PR_SENTINEL_ID` variables remain absent.
+repository-scoped cross-trust authority. It is the basis of the explicitly
+accepted temporary risk, not evidence of isolation. Permanent enablement still
+requires a provider-isolation redesign and a new successful sentinel.
 
 Branch/main provider-parity, fork PR canary, capacity/namespace purge or expiry,
 and rollback evidence remain pending; those checks are distinct from the

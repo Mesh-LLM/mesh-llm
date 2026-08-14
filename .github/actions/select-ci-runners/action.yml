@@ -15,6 +15,9 @@ inputs:
   head_repository:
     description: Exact owner/name of the pull-request head repository, or repository outside PR events.
     required: true
+  head_sha:
+    description: Exact pull-request head SHA, or current SHA outside pull-request events.
+    required: true
   ref:
     description: Fully qualified Git ref used to enforce the trusted-main boundary.
     required: true
@@ -28,6 +31,14 @@ inputs:
     default: "false"
   pr_canary_ref:
     description: Optional exact pull-request merge ref selected for a protected canary.
+    required: false
+    default: ""
+  pr_approved_ref:
+    description: Maintainer-approved exact pull-request merge ref for the bounded risk exception.
+    required: false
+    default: ""
+  pr_approved_sha:
+    description: Maintainer-approved exact pull-request head SHA for the bounded risk exception.
     required: false
     default: ""
   force_hosted:
@@ -47,7 +58,7 @@ outputs:
     description: Whether this trusted runner selection may use Depot's remote cache.
     value: ${{ steps.select.outputs.allow_depot_remote_cache }}
   allow_native_github_cache:
-    description: Whether this provider/trust selection may use native GitHub Actions cache APIs.
+    description: Whether this provider/trust selection may use GitHub Actions cache APIs, including Depot's transparent proxy on Depot runners.
     value: ${{ steps.select.outputs.allow_native_github_cache }}
   runner:
     description: Default two-vCPU Linux runner label.
@@ -92,10 +103,13 @@ runs:
         DISPATCH_ORIGINAL_EVENT_NAME: ${{ github.event.inputs.original_event_name || '' }}
         INPUT_REPOSITORY: ${{ inputs.repository }}
         INPUT_HEAD_REPOSITORY: ${{ inputs.head_repository }}
+        INPUT_HEAD_SHA: ${{ inputs.head_sha }}
         INPUT_REF: ${{ inputs.ref }}
         INPUT_DEPOT_MAIN_ENABLED: ${{ inputs.depot_main_enabled }}
         INPUT_DEPOT_PR_ENABLED: ${{ inputs.depot_pr_enabled }}
         INPUT_PR_CANARY_REF: ${{ inputs.pr_canary_ref }}
+        INPUT_PR_APPROVED_REF: ${{ inputs.pr_approved_ref }}
+        INPUT_PR_APPROVED_SHA: ${{ inputs.pr_approved_sha }}
         INPUT_FORCE_HOSTED: ${{ inputs.force_hosted }}
         INPUT_MANUAL_USE_DEPOT: ${{ inputs.manual_use_depot }}
       run: |
@@ -121,6 +135,29 @@ runs:
           exit 1
         fi
 
+        pr_approved_ref="${INPUT_PR_APPROVED_REF:-}"
+        if [[ -n "$pr_approved_ref" &&
+          ! "$pr_approved_ref" =~ ^refs/pull/[0-9]+/merge$ ]]; then
+          echo "INPUT_PR_APPROVED_REF must be an exact pull-request merge ref" >&2
+          exit 1
+        fi
+        pr_approved_sha="${INPUT_PR_APPROVED_SHA:-}"
+        if [[ -n "$pr_approved_sha" &&
+          ! "$pr_approved_sha" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "INPUT_PR_APPROVED_SHA must be an exact lowercase commit SHA" >&2
+          exit 1
+        fi
+
+        # This checked-in deadline makes the accepted repository-wide cache
+        # risk self-expiring. Extending it requires a reviewed source change.
+        depot_pr_exception_expires="2026-09-14"
+        current_utc_date="$(date -u +%F)"
+        depot_pr_exception_active=false
+        if [[ "$INPUT_DEPOT_PR_ENABLED" == "true" &&
+          "$current_utc_date" < "$depot_pr_exception_expires" ]]; then
+          depot_pr_exception_active=true
+        fi
+
         # A direct PR may opt into Depot only when this protected repository
         # explicitly enables the feature, or when one exact merge ref is
         # selected for the protected canary. Both the base and PR-head
@@ -131,6 +168,7 @@ runs:
         allow_depot_remote_cache=false
         allow_native_github_cache=true
         is_direct_pull_request=false
+        risk_exception_selected=false
         is_dispatched_pull_request=false
         dispatch_original_event="${INPUT_ORIGINAL_EVENT_NAME:-}"
         if [[ -z "$dispatch_original_event" ]]; then
@@ -145,10 +183,19 @@ runs:
               "$INPUT_HEAD_REPOSITORY" == "$trusted_repository" && \
               "$INPUT_REF" =~ ^refs/pull/[0-9]+/merge$ && \
               "$INPUT_FORCE_HOSTED" == "false" && \
-              ( "$INPUT_DEPOT_PR_ENABLED" == "true" ||
+              ( ( "$depot_pr_exception_active" == "true" &&
+                  -n "$pr_approved_ref" &&
+                  "$INPUT_REF" == "$pr_approved_ref" &&
+                  -n "$pr_approved_sha" &&
+                  "$INPUT_HEAD_SHA" == "$pr_approved_sha" ) ||
                 ( -n "$pr_canary_ref" && "$INPUT_REF" == "$pr_canary_ref" ) ) ]]; then
               is_direct_pull_request=true
               depot_enabled=true
+              if [[ "$depot_pr_exception_active" == "true" &&
+                "$INPUT_REF" == "$pr_approved_ref" &&
+                "$INPUT_HEAD_SHA" == "$pr_approved_sha" ]]; then
+                risk_exception_selected=true
+              fi
             fi
             ;;
           pull_request_target)
@@ -194,14 +241,23 @@ runs:
             ;;
         esac
 
-        # Depot's Actions cache namespace is intentionally inert for every
-        # Depot selection. Native GitHub cache APIs and Depot's remote cache
-        # are both disabled; hosted selections retain native GitHub cache
-        # behavior. These values are derived only from provider policy, so a
-        # caller cannot opt a Depot build back into either cache authority.
+        # Depot remote build-tool cache remains disabled. During the bounded
+        # risk exception, selected PR jobs and eligible trusted-main jobs may
+        # use the GitHub Actions cache API, which Depot transparently maps to
+        # its repository-wide, cross-branch namespace. This is an intentional
+        # speed-versus-isolation decision recorded in CI documentation.
         if [[ "$depot_enabled" == "true" ]]; then
           allow_depot_remote_cache=false
           allow_native_github_cache=false
+          if [[ "$depot_pr_exception_active" == "true" &&
+            ( "$risk_exception_selected" == "true" ||
+              ( "$INPUT_EVENT_NAME" == "push" &&
+                "$INPUT_REF" == "refs/heads/main" ) ||
+              ( "$INPUT_EVENT_NAME" == "workflow_dispatch" &&
+                "$INPUT_REF" == "refs/heads/main" &&
+                "$is_dispatched_pull_request" == "false" ) ) ]]; then
+            allow_native_github_cache=true
+          fi
         fi
 
         if [[ "$depot_enabled" == "true" ]]; then

@@ -70,10 +70,13 @@ jobs:
           original_event_name: ${{ inputs.original_event_name }}
           repository: ${{ github.repository }}
           head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
           ref: ${{ github.ref }}
           depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
           depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
           pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
           force_hosted: ${{ inputs.force_hosted }}
           manual_use_depot: ${{ inputs.use_depot }}
 

@@ -144,6 +144,7 @@ jobs:
           original_event_name: ''
           repository: ${{ github.repository }}
           head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.sha }}
           ref: ${{ github.ref }}
           depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
           depot_pr_enabled: 'false'

@@ -418,7 +418,8 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         )
         self.assertIn("depot_selected", action)
         self.assertIn("INPUT_DEPOT_SELECTED", action)
-        self.assertIn('if [[ "$endpoint_lower" == *depot.dev* ]]', action)
+        self.assertIn('if [[ "$endpoint_lower" == *depot.dev* &&', action)
+        self.assertIn('"$allow_native_github_cache" == "true"', action)
         self.assertIn("allow_native_github_cache", action)
         self.assertIn("allow_depot_remote_cache", action)
         self.assertIn("URL userinfo", action)
@@ -476,6 +477,7 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             docker_auth_config: str | None = None,
             docker_config_content: str | None = None,
             depot_selected: str = "true",
+            allow_native_github_cache: str | None = None,
             unset_endpoints: bool = False,
             **extra_environment: str,
         ) -> subprocess.CompletedProcess[str]:
@@ -496,7 +498,9 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                     "INPUT_ORIGINAL_EVENT_NAME": "pull_request",
                     "INPUT_DEPOT_SELECTED": depot_selected,
                     "INPUT_ALLOW_NATIVE_GITHUB_CACHE": (
-                        "false" if depot_selected == "true" else "true"
+                        allow_native_github_cache
+                        if allow_native_github_cache is not None
+                        else "false" if depot_selected == "true" else "true"
                     ),
                     "INPUT_ALLOW_DEPOT_REMOTE_CACHE": "false",
                     "ACTIONS_CACHE_URL": cache_url,
@@ -597,6 +601,14 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                     result = run_probe(script, *endpoints)
                     self.assertEqual(result.returncode, 0, result.stderr)
             if script_name == "audit action":
+                with self.subTest(script=script_name, bounded_exception=True):
+                    result = run_probe(
+                        script,
+                        "https://cache.depot.dev/cache",
+                        "https://results.example.invalid/results",
+                        allow_native_github_cache="true",
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
                 with self.subTest(script=script_name, provider="malformed"):
                     result = run_probe(
                         script,
@@ -766,13 +778,27 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                             ):
                                 self.assertNotIn(forbidden_fragment, result.stderr)
             if script_name == "audit action":
-                with self.subTest(script=script_name, policy="native cache enabled"):
+                with self.subTest(
+                    script=script_name,
+                    policy="bounded native cache exception",
+                ):
                     result = run_probe(
                         script,
                         *valid_endpoints[0],
                         INPUT_ALLOW_NATIVE_GITHUB_CACHE="true",
                     )
-                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    malformed = run_probe(
+                        script,
+                        "ftp://cache.depot.dev/cache",
+                        valid_endpoints[0][1],
+                        allow_native_github_cache="true",
+                    )
+                    self.assertNotEqual(malformed.returncode, 0)
+                    self.assertNotIn(
+                        "ftp://cache.depot.dev/cache",
+                        malformed.stderr,
+                    )
                 with self.subTest(script=script_name, policy="Depot remote cache enabled"):
                     result = run_probe(
                         script,

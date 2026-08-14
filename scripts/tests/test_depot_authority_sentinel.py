@@ -87,11 +87,20 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "github-output"
+            bin_dir = Path(temp_dir) / "bin"
+            bin_dir.mkdir()
+            date = bin_dir / "date"
+            date.write_text(
+                "#!/bin/sh\nprintf '2026-08-14\\n'\n",
+                encoding="utf-8",
+            )
+            date.chmod(0o755)
             result = subprocess.run(
                 ["bash", "-c", script],
                 cwd=ROOT,
                 env={
                     **os.environ,
+                    "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
                     "GITHUB_OUTPUT": str(output),
                     "GITHUB_EVENT_NAME": event_name,
                     "GITHUB_REPOSITORY": repository,
@@ -100,10 +109,13 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
                     "INPUT_ORIGINAL_EVENT_NAME": event_name,
                     "INPUT_REPOSITORY": repository,
                     "INPUT_HEAD_REPOSITORY": head_repository,
+                    "INPUT_HEAD_SHA": "0123456789abcdef0123456789abcdef01234567",
                     "INPUT_REF": ref,
                     "INPUT_DEPOT_MAIN_ENABLED": "false",
                     "INPUT_DEPOT_PR_ENABLED": pr_enabled,
                     "INPUT_PR_CANARY_REF": sentinel_ref,
+                    "INPUT_PR_APPROVED_REF": "",
+                    "INPUT_PR_APPROVED_SHA": "",
                     "INPUT_FORCE_HOSTED": force_hosted,
                     "INPUT_MANUAL_USE_DEPOT": "false",
                     "DISPATCH_ORIGINAL_EVENT_NAME": "",
@@ -240,7 +252,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             sentinel_ref="", pr_enabled="true"
         )
         self.assertEqual(global_gate.returncode, 0, global_gate.stderr)
-        self.assertEqual(global_outputs["depot_enabled"], "true")
+        self.assertEqual(global_outputs["depot_enabled"], "false")
         self.assertIn("github.ref == vars.DEPOT_PR_SENTINEL_REF", self.sentinel)
 
     def test_normal_quality_jobs_keep_the_existing_provider_output(self) -> None:
