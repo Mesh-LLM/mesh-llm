@@ -138,16 +138,16 @@ jobs:
             # lookalike host suffixes.
             authority="$(endpoint_host "$endpoint_lower")"
             if [[ "$endpoint_lower" == *depot.dev* ]]; then
-              echo "GitHub Actions cache was transparently redirected to Depot (endpoint)" >&2
+              echo "GitHub Actions cache was transparently redirected to Depot ($endpoint_name)" >&2
               exit 1
             fi
             if [[ "$authority" == *"@"* ]]; then
-              echo "GitHub Actions endpoint contains URL userinfo (endpoint)" >&2
+              echo "GitHub Actions endpoint contains URL userinfo ($endpoint_name)" >&2
               exit 1
             fi
             if ! is_github_endpoint "$endpoint" &&
                ! is_loopback_endpoint "$endpoint"; then
-              echo "GitHub Actions endpoint is not GitHub-owned or loopback (endpoint)" >&2
+              echo "GitHub Actions endpoint is not GitHub-owned or loopback ($endpoint_name)" >&2
               exit 1
             fi
           done

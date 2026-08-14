@@ -59,6 +59,18 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         self.assertIn(r"\[::1\]", self.workflow)
         self.assertIn("numeric", self.workflow.lower())
         self.assertIn("transparently redirected to Depot", self.workflow)
+        self.assertIn(
+            'GitHub Actions cache was transparently redirected to Depot ($endpoint_name)',
+            self.workflow,
+        )
+        self.assertIn(
+            'GitHub Actions endpoint contains URL userinfo ($endpoint_name)',
+            self.workflow,
+        )
+        self.assertIn(
+            'GitHub Actions endpoint is not GitHub-owned or loopback ($endpoint_name)',
+            self.workflow,
+        )
         self.assertIn("ACTIONS_RESULTS_URL", self.workflow)
         self.assertIn("actions\\.githubusercontent\\.com", self.workflow)
         self.assertNotIn(",,}", self.workflow)
@@ -308,6 +320,17 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                 with self.subTest(script=script_name, endpoints=endpoints):
                     result = run_probe(script, *endpoints)
                     self.assertNotEqual(result.returncode, 0)
+            if script_name == "Depot canary":
+                with self.subTest(script=script_name, diagnostic="endpoint name only"):
+                    endpoint = "https://cache.example.invalid/cache"
+                    result = run_probe(
+                        script,
+                        endpoint,
+                        valid_endpoints[0][1],
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("ACTIONS_CACHE_URL", result.stderr)
+                    self.assertNotIn(endpoint, result.stderr)
             if script_name == "audit action":
                 with self.subTest(script=script_name, policy="native cache enabled"):
                     result = run_probe(
