@@ -169,6 +169,28 @@ describe('unified logs event ledger', () => {
     expect(within(filter).queryByRole('checkbox', { name: /Iroh/i })).not.toBeInTheDocument()
   })
 
+  it('applies the category selection to both the event chart and ledger rows', () => {
+    const view = render(
+      <LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({ categories: ['requests'] })} />
+    )
+
+    let legend = screen.getByRole('list', { name: 'Visible event categories' })
+    let table = screen.getByRole('table', { name: 'MeshLLM event logs' })
+    expect(legend).toHaveTextContent('Requests1')
+    expect(legend).not.toHaveTextContent('System')
+    expect(within(table).getByText(REQUEST_ID)).toBeInTheDocument()
+    expect(within(table).queryByText(AUDIT.code)).not.toBeInTheDocument()
+
+    view.rerender(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({ categories: ['system'] })} />)
+
+    legend = screen.getByRole('list', { name: 'Visible event categories' })
+    table = screen.getByRole('table', { name: 'MeshLLM event logs' })
+    expect(legend).toHaveTextContent('System1')
+    expect(legend).not.toHaveTextContent('Requests')
+    expect(within(table).queryByText(REQUEST_ID)).not.toBeInTheDocument()
+    expect(within(table).getByText(AUDIT.code)).toBeInTheDocument()
+  })
+
   it.each([
     ['request source', REQUEST.source, REQUEST_ID],
     ['audit entry ID', AUDIT.entryId, AUDIT.code],

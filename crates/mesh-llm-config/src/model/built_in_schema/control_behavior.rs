@@ -1,5 +1,6 @@
 use super::*;
 mod hardware;
+mod logging;
 mod model_fit;
 mod multimodal;
 mod request_defaults;
@@ -10,6 +11,7 @@ mod speculative;
 mod throughput;
 
 use self::hardware::apply_hardware_behavior;
+use self::logging::apply_logging_behavior;
 use self::model_fit::apply_model_fit_behavior;
 use self::multimodal::apply_multimodal_behavior;
 use self::request_defaults::apply_request_defaults_behavior;
@@ -30,7 +32,9 @@ pub(super) fn apply_built_in_control_behavior(setting: &mut ConfigSettingSchema)
             set_numeric(setting, Some(1.0), None, Some(1.0), Some("models"));
         }
         _ => {
-            if let Some(suffix) = rendered.strip_prefix("defaults.model_fit.") {
+            if rendered.starts_with("logging.") {
+                apply_logging_behavior(setting, rendered.as_str());
+            } else if let Some(suffix) = rendered.strip_prefix("defaults.model_fit.") {
                 apply_model_fit_behavior(setting, "defaults.model_fit", suffix);
             } else if let Some(suffix) = rendered.strip_prefix("models.<model-ref>.model_fit.") {
                 apply_model_fit_behavior(setting, "models.<model-ref>.model_fit", suffix);

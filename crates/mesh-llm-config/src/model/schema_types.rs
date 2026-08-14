@@ -225,6 +225,25 @@ pub struct ConfigPresentationMetadata {
     pub control_hint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub renderer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<ConfigPresentationChoice>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display_units: Vec<ConfigDisplayUnit>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ConfigPresentationChoice {
+    pub value: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ConfigDisplayUnit {
+    pub value: String,
+    pub label: String,
+    pub multiplier: u64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]

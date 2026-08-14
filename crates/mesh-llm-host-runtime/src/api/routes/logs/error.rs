@@ -30,9 +30,19 @@ pub(crate) enum LogsError {
     MethodNotAllowed,
     ServiceUnavailable,
     StoreUnavailable,
+    SchemaIncompatible { found: u32, supported: u32 },
 }
 
 impl LogsError {
+    pub(crate) fn unavailable(state: &crate::logging::LoggingRuntimeState) -> Self {
+        match state.metadata_state() {
+            crate::logging::LoggingMetadataState::SchemaIncompatible { found, supported } => {
+                Self::SchemaIncompatible { found, supported }
+            }
+            _ => Self::ServiceUnavailable,
+        }
+    }
+
     pub(crate) async fn write(self, stream: &mut TcpStream) -> anyhow::Result<()> {
         let (status, code, message) = match self {
             Self::Forbidden => (
@@ -111,12 +121,28 @@ impl LogsError {
                 "logging service is not available",
             ),
             Self::StoreUnavailable => (503, "store_unavailable", "logging store is not available"),
+            Self::SchemaIncompatible { .. } => (
+                503,
+                "logging_schema_incompatible",
+                "the local log database schema is incompatible with this MeshLLM version",
+            ),
+        };
+        let details = match self {
+            Self::SchemaIncompatible { found, supported } => Some(ErrorDetails {
+                schema_version: found,
+                supported_schema_version: supported,
+            }),
+            _ => None,
         };
         respond_json(
             stream,
             status,
             &ErrorResponse {
-                error: ErrorBody { code, message },
+                error: ErrorBody {
+                    code,
+                    message,
+                    details,
+                },
             },
         )
         .await
@@ -132,6 +158,14 @@ struct ErrorResponse {
 struct ErrorBody {
     code: &'static str,
     message: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<ErrorDetails>,
+}
+
+#[derive(Serialize)]
+struct ErrorDetails {
+    schema_version: u32,
+    supported_schema_version: u32,
 }
 
 impl From<mesh_llm_log_store::LogStoreError> for LogsError {
@@ -154,6 +188,9 @@ impl From<mesh_llm_log_store::LogStoreError> for LogsError {
             | mesh_llm_log_store::LogStoreError::ArtifactLimitExceeded { .. }
             | mesh_llm_log_store::LogStoreError::PrivacyNotGuaranteed
             | mesh_llm_log_store::LogStoreError::InvalidQuery(_) => Self::StoreUnavailable,
+            mesh_llm_log_store::LogStoreError::SchemaIncompatible { found, supported } => {
+                Self::SchemaIncompatible { found, supported }
+            }
             mesh_llm_log_store::LogStoreError::MaintenanceScopeInvalid { .. } => {
                 Self::InvalidQuery("cleanup request is invalid")
             }
@@ -180,6 +217,20 @@ mod tests {
         assert_eq!(
             LogsError::from(mesh_llm_log_store::LogStoreError::ConnectionPoisoned),
             LogsError::StoreUnavailable
+        );
+    }
+
+    #[test]
+    fn schema_incompatibility_preserves_only_the_version_pair() {
+        assert_eq!(
+            LogsError::from(mesh_llm_log_store::LogStoreError::SchemaIncompatible {
+                found: 14,
+                supported: 11,
+            }),
+            LogsError::SchemaIncompatible {
+                found: 14,
+                supported: 11,
+            }
         );
     }
 }

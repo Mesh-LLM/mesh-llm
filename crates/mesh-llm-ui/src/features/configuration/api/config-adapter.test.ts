@@ -1424,7 +1424,7 @@ describe('adaptStatusToConfiguration', () => {
     expect(auditGroup[0]).toMatchObject({ id: 'logging.audit.enabled', settingOrder: 10 })
   })
 
-  it('promotes logging schema entries from advanced to standard visibility', () => {
+  it('keeps core logging visible and security audit under advanced settings', () => {
     const schema: RuntimeConfigSchemaReference = {
       settings: [
         loggingSchemaSetting(
@@ -1455,7 +1455,7 @@ describe('adaptStatusToConfiguration', () => {
     const auditSetting = auditSettings.settings.find((s) => s.id === 'logging.audit.enabled')
 
     expect(loggingSetting?.visibility).toBe('standard')
-    expect(auditSetting?.visibility).toBe('standard')
+    expect(auditSetting?.visibility).toBe('advanced')
   })
 
   it('keeps metadata-only artifact controls from authorizing payload-related writes', () => {

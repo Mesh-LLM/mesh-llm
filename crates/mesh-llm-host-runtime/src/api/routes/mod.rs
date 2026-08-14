@@ -8,6 +8,7 @@ mod mesh_hook;
 mod model_interests;
 mod model_targets;
 mod objects;
+mod path_picker;
 mod plugins;
 pub(crate) mod runtime;
 mod runtime_activity;
@@ -58,6 +59,10 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 }
                 ("GET" | "POST" | "DELETE", "/mcp") => {
                     mcp::handle(stream, state, raw_request).await?;
+                    Ok(true)
+                }
+                ("POST", "/api/runtime/pick-directory") => {
+                    path_picker::handle(stream).await?;
                     Ok(true)
                 }
                 ("GET", "/api/status")

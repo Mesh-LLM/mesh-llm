@@ -2,8 +2,14 @@
 
 use rusqlite::Connection;
 
+mod legacy_v10;
+
 /// Current forward-only schema version for the integrated local logging feature.
-pub const CURRENT_VERSION: u32 = 3;
+///
+/// Versions 4 through 10 were used by pre-integration development builds. The
+/// version remains monotonic so a v10 development store can be identified and
+/// upgraded without mistaking it for an unknown future schema.
+pub const CURRENT_VERSION: u32 = 11;
 
 const MIGRATIONS_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS summaries (
@@ -267,16 +273,43 @@ pub fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         0 => {
             apply_migration_transactionally(conn, 1, MIGRATIONS_V1)?;
             apply_migration_transactionally(conn, 2, MIGRATIONS_V2)?;
-            apply_migration_transactionally(conn, 3, MIGRATIONS_V3)
+            apply_migration_transactionally(conn, 3, MIGRATIONS_V3)?;
+            mark_current(conn)
         }
         1 => {
             apply_migration_transactionally(conn, 2, MIGRATIONS_V2)?;
-            apply_migration_transactionally(conn, 3, MIGRATIONS_V3)
+            apply_migration_transactionally(conn, 3, MIGRATIONS_V3)?;
+            mark_current(conn)
         }
-        2 => apply_migration_transactionally(conn, 3, MIGRATIONS_V3),
+        2 => {
+            apply_migration_transactionally(conn, 3, MIGRATIONS_V3)?;
+            mark_current(conn)
+        }
+        3 => mark_current(conn),
+        legacy_v10::LEGACY_VERSION if legacy_v10::matches(conn)? => legacy_v10::migrate(conn),
         version if version == CURRENT_VERSION as i32 => Ok(()),
         _ => Err(rusqlite::Error::InvalidQuery),
     }
+}
+
+/// Return the version pair when the database cannot be migrated safely.
+///
+/// The v10 development lineage is accepted only when its structural
+/// fingerprint matches. This check is read-only so callers can surface an
+/// actionable compatibility state before any migration is attempted.
+pub(crate) fn incompatible_schema(
+    conn: &Connection,
+) -> Result<Option<(u32, u32)>, rusqlite::Error> {
+    let found: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let supported = CURRENT_VERSION;
+    let compatible = matches!(found, 0..=3)
+        || found == supported
+        || (found == legacy_v10::LEGACY_VERSION as u32 && legacy_v10::matches(conn)?);
+    Ok((!compatible).then_some((found, supported)))
+}
+
+fn mark_current(conn: &Connection) -> Result<(), rusqlite::Error> {
+    apply_migration_transactionally(conn, CURRENT_VERSION as i32, "")
 }
 
 fn apply_migration_transactionally(
@@ -527,14 +560,14 @@ mod tests {
 
     fn assert_schema_identity(connection: &Connection) {
         assert_eq!(
-            CURRENT_VERSION, 3,
-            "the feature ships three schema versions"
+            CURRENT_VERSION, 11,
+            "the canonical schema follows the pre-integration v10 lineage"
         );
         assert_eq!(
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
                 .expect("schema version"),
-            3
+            11
         );
         assert_eq!(schema_object_names(connection, "table"), EXPECTED_TABLES);
         assert_eq!(schema_object_names(connection, "index"), EXPECTED_INDEXES);
@@ -613,12 +646,12 @@ mod tests {
     }
 
     #[test]
-    fn fresh_database_is_exactly_complete_schema_v3() {
+    fn fresh_database_is_exactly_complete_current_schema() {
         let connection = Connection::open_in_memory().expect("open database");
         connection
             .execute_batch("PRAGMA foreign_keys = ON;")
             .expect("enable foreign keys");
-        apply_migrations(&connection).expect("apply fresh V3");
+        apply_migrations(&connection).expect("apply fresh schema");
 
         assert_schema_identity(&connection);
 
@@ -639,6 +672,36 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, 99);
+    }
+
+    #[test]
+    fn rejects_unrecognized_v10_schema_without_modifying_it() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE sentinel (value TEXT); \
+                 INSERT INTO sentinel VALUES ('unchanged'); \
+                 PRAGMA user_version = 10;",
+            )
+            .unwrap();
+
+        assert!(matches!(
+            apply_migrations(&connection),
+            Err(rusqlite::Error::InvalidQuery)
+        ));
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
+                .unwrap(),
+            10
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT value FROM sentinel", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "unchanged"
+        );
     }
 
     #[test]
@@ -682,13 +745,13 @@ mod tests {
     }
 
     #[test]
-    fn schema_v1_upgrades_to_current_and_current_v3_is_a_noop() {
+    fn schema_v1_upgrades_to_current_and_current_schema_is_a_noop() {
         let connection = Connection::open_in_memory().expect("open database");
         connection
             .execute_batch(MIGRATIONS_V1)
             .expect("install V1 schema");
         connection.pragma_update(None, "user_version", 1).unwrap();
-        apply_migrations(&connection).expect("upgrade V1 to V3");
+        apply_migrations(&connection).expect("upgrade V1 to current");
         assert_schema_identity(&connection);
 
         connection
@@ -696,7 +759,7 @@ mod tests {
                 "CREATE TABLE sentinel (value TEXT); INSERT INTO sentinel VALUES ('unchanged');",
             )
             .expect("seed sentinel");
-        apply_migrations(&connection).expect("V3 is current");
+        apply_migrations(&connection).expect("current schema is a no-op");
         assert_eq!(
             connection
                 .query_row("SELECT value FROM sentinel", [], |row| row

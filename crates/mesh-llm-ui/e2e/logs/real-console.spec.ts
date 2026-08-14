@@ -101,18 +101,20 @@ test.describe('real embedded logging console', () => {
     )
     await exportDialog.getByRole('button', { name: 'Cancel' }).click()
 
-    await page.getByRole('button', { name: 'Scoped cleanup' }).click()
-    const cleanupDialog = page.getByRole('dialog', { name: 'Preview scoped cleanup' })
-    await cleanupDialog.getByLabel('Delete terminal logs before').fill(new Date(Date.now() + 60_000).toISOString())
-    await cleanupDialog.getByLabel('Request scope').fill('1')
-    await cleanupDialog.getByLabel('Required audit reason').fill('real scoped cleanup certification')
-    await cleanupDialog.getByRole('button', { name: 'Preview cleanup' }).click()
-    const confirmDialog = page.getByRole('dialog', { name: 'Confirm scoped cleanup' })
+    await page.getByRole('button', { name: 'Clean up logs' }).click()
+    const cleanupDialog = page.getByRole('dialog', { name: 'Choose logs to remove' })
+    await cleanupDialog.getByLabel('Reason for removal').fill('real scoped cleanup certification')
+    await cleanupDialog.getByRole('button', { name: 'Review deletion' }).click()
+    const confirmDialog = page.getByRole('dialog')
+    await expect(confirmDialog.getByRole('heading', { name: 'Review log cleanup' })).toBeVisible()
+    await confirmDialog.getByText('Audit details').click()
     await expect(confirmDialog.getByText('Operation ID', { exact: true })).toBeVisible()
     await expect(confirmDialog.getByText('Audit ID', { exact: true })).toBeVisible()
-    await confirmDialog.getByRole('button', { name: 'Confirm cleanup' }).click()
-    await expect(confirmDialog.getByRole('status').last()).toContainText(/Cleanup completed(\.| with diagnostics\.)/)
-    await confirmDialog.getByRole('button', { name: 'Cancel' }).click()
+    await confirmDialog.getByRole('button', { name: 'Delete this batch' }).click()
+    await expect(confirmDialog.getByRole('status').last()).toContainText(
+      /Log cleanup completed(\.| with diagnostics\.)/
+    )
+    await confirmDialog.getByRole('button', { name: 'Close' }).click()
 
     const secondResponse = await page.request.post(openAiEndpoint, {
       data: { model: 'qa-no-model', messages: [{ role: 'user', content: 'real delete receipt lifecycle' }] }

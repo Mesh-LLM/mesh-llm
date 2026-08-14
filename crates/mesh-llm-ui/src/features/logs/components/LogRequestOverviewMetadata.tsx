@@ -27,15 +27,21 @@ const CONTENT_STATES = [
   'corrupt'
 ] as const satisfies readonly LogArtifact['contentState'][]
 
-function MetadataGrid({ fields }: { readonly fields: readonly MetadataField[] }) {
+function MetadataGrid({
+  fields,
+  wideColumns = 2
+}: {
+  readonly fields: readonly MetadataField[]
+  readonly wideColumns?: 2 | 3
+}) {
   return (
-    <dl className="grid gap-px bg-border-soft sm:grid-cols-2 xl:grid-cols-3">
+    <dl className={cn('grid gap-px bg-border-soft sm:grid-cols-2', wideColumns === 3 && 'lg:grid-cols-3')}>
       {fields.map((field, fieldIndex) => (
         <div
           className={cn(
             'min-w-0 bg-panel px-[var(--panel-x)] py-[var(--panel-y)]',
             trailingRowSpanClass(fields.length, fieldIndex, 2, 'sm'),
-            trailingRowSpanClass(fields.length, fieldIndex, 3, 'xl')
+            wideColumns === 3 && trailingRowSpanClass(fields.length, fieldIndex, 3, 'lg')
           )}
           key={field.label}
         >
@@ -124,14 +130,14 @@ function ArtifactSummary({
 
 export function LogRequestOverviewMetadata({ artifacts, request }: LogRequestOverviewMetadataProps) {
   return (
-    <>
+    <div className="grid min-w-0 gap-[var(--shell-normal)] xl:grid-cols-[minmax(0,1.7fr)_minmax(20rem,1fr)]">
       <LogRequestOverviewPanel
         ariaLabel="Request metadata"
         description="Canonical fields retained with the request summary."
         icon={Database}
         title="Request metadata"
       >
-        <MetadataGrid fields={requestMetadata(request)} />
+        <MetadataGrid fields={requestMetadata(request)} wideColumns={3} />
       </LogRequestOverviewPanel>
       <LogRequestOverviewPanel
         ariaLabel="Artifact retention"
@@ -141,6 +147,6 @@ export function LogRequestOverviewMetadata({ artifacts, request }: LogRequestOve
       >
         <ArtifactSummary artifacts={artifacts} source={request.source} />
       </LogRequestOverviewPanel>
-    </>
+    </div>
   )
 }

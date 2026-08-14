@@ -1,6 +1,7 @@
 import type { StatusPayload, MeshModelRaw, PeerInfo, GpuInfo } from '@/lib/api/types'
 import type {
   ConfigurationDefaultsCategory,
+  ConfigurationDefaultsChoice,
   ConfigurationDefaultsHarnessData,
   ConfigurationDefaultsControl,
   ConfigurationDefaultsSetting,
@@ -124,6 +125,8 @@ export type RuntimeConfigPresentation = {
   placeholder?: string
   control_hint?: string
   renderer_id?: string
+  choices?: readonly ConfigurationDefaultsChoice[]
+  display_units?: readonly { value: string; label: string; multiplier: number }[]
 }
 
 export type RuntimeConfigSchemaSource =
@@ -639,7 +642,8 @@ function resolvedVisibilityForPath(
   canonicalPath: string,
   schemaVisibility: RuntimeConfigSchemaEntry['visibility']
 ): 'standard' | 'advanced' {
-  // Promote logging.* from advanced to standard so they render without "Show advanced"
+  if (canonicalPath.startsWith('logging.audit.')) return 'advanced'
+  // Core logging controls remain visible without expanding advanced settings.
   if (canonicalPath.startsWith('logging.')) return 'standard'
   return schemaVisibility === 'advanced' ? 'advanced' : 'standard'
 }
@@ -715,6 +719,7 @@ function schemaSettingFromEntry(input: SchemaSettingFromEntryInput): Configurati
     tomlKey: key,
     rendererId,
     controlHint: entry.presentation?.control_hint,
+    displayUnits: entry.presentation?.display_units,
     settingOrder: settingOrderForEntry(entry),
     icon: CATEGORY_ICON_BY_ID[String(resolvedCategoryId)] ?? 'cog',
     label: entry.presentation?.label ?? titleCaseIdentifier(key),

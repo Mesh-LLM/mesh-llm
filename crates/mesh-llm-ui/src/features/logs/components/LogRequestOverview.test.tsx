@@ -81,8 +81,7 @@ describe('LogRequestOverview', () => {
     expect(artifactSummary).toHaveTextContent('durable')
     expect(artifactSummary).not.toHaveTextContent(/expiry|ttl|body loaded/i)
     expect(within(artifactSummary).getByText('Request source', { exact: true }).parentElement).toHaveClass(
-      'sm:col-span-2',
-      'xl:col-span-3'
+      'sm:col-span-2'
     )
     expect(within(artifactSummary).getByText('3 available · 1 unavailable', { exact: true })).toHaveClass('break-words')
     expect(within(artifactSummary).getByText('3 available · 1 unavailable', { exact: true })).not.toHaveClass(

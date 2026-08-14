@@ -54,6 +54,12 @@ fn event_kind(event: &LifecycleEvent) -> &'static str {
     }
 }
 
+fn query_facade(state: &LoggingRuntimeState) -> Result<LoggingQueryFacade, LogsError> {
+    state
+        .query_facade()
+        .ok_or_else(|| LogsError::unavailable(state))
+}
+
 /// Dispatch a bounded trusted-local log query. The management server has
 /// already classified `/api/logs/**` as trusted-local before it reaches here.
 /// Keep route/method/query validation ahead of acquiring the process-owned
@@ -233,7 +239,7 @@ async fn handle_event_stream(
         return LogsError::ServiceUnavailable.write(stream).await;
     };
     let Some(bus) = state.replay_bus() else {
-        return LogsError::ServiceUnavailable.write(stream).await;
+        return LogsError::unavailable(&state).write(stream).await;
     };
     let recovery_cursor = if subscription.is_audit() {
         audit_recovery_cursor(&state).await
@@ -368,7 +374,7 @@ pub(crate) async fn list_requests(
     path: &str,
 ) -> Result<PageDto<RequestDto>, LogsError> {
     let parsed = parse::request_query(path)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = query_facade(state)?;
     let active = facade.snapshot_active().into_entries();
     run_blocking(move || list_requests_blocking(facade, active, parsed)).await
 }
@@ -379,7 +385,7 @@ pub(crate) async fn request_detail(
     request_id: &str,
 ) -> Result<RequestDto, LogsError> {
     let request_id = parse::id(request_id)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = query_facade(state)?;
     let audit_facade = facade.clone();
     let result = if let Some(active) = facade
         .snapshot_active()
@@ -415,7 +421,7 @@ pub(crate) async fn request_events(
 ) -> Result<PageDto<EventDto>, LogsError> {
     let request_id = parse::id(request_id)?;
     let query = parse::page_query(path)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = query_facade(state)?;
     run_blocking(move || {
         if facade.request(&request_id)?.is_none() {
             return Err(LogsError::NotFound);
@@ -443,7 +449,7 @@ pub(crate) async fn request_artifacts(
 ) -> Result<PageDto<ArtifactDto>, LogsError> {
     let request_id = parse::id(request_id)?;
     let query = parse::page_query(path)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = query_facade(state)?;
     run_blocking(move || {
         if facade.request(&request_id)?.is_none() {
             return Err(LogsError::NotFound);
@@ -465,7 +471,7 @@ pub(crate) async fn artifact_content(
     artifact_id: &str,
 ) -> Result<ArtifactDto, LogsError> {
     let artifact_id = parse::id(artifact_id)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = query_facade(state)?;
     let audit_facade = facade.clone();
     let result = run_blocking(move || {
         let record = facade.artifact(&artifact_id)?.ok_or(LogsError::NotFound)?;
@@ -518,7 +524,7 @@ pub(crate) async fn proxy_records(
     path: &str,
 ) -> Result<PageDto<ProxyDto>, LogsError> {
     let query = parse::proxy_query(path)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = query_facade(state)?;
     run_blocking(move || {
         let page = facade.proxy_records(&query)?;
         Ok(PageDto {
@@ -536,7 +542,7 @@ pub(crate) async fn list_audits(
     path: &str,
 ) -> Result<PageDto<AuditDto>, LogsError> {
     let query = parse::audit_query(path)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = query_facade(state)?;
     run_blocking(move || {
         let page =
             facade.audit_entries(Some(query.limit), query.cursor.as_deref(), query.filters)?;

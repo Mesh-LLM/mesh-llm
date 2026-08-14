@@ -1,4 +1,7 @@
 use super::*;
+mod logging;
+
+use self::logging::{is_advanced_logging_category, logging_presentation};
 
 #[derive(Clone, Copy)]
 struct CategoryPresentation {
@@ -97,10 +100,13 @@ struct SettingPresentation {
     placeholder: Option<&'static str>,
     control_hint: Option<&'static str>,
     renderer_id: Option<&'static str>,
+    choices: &'static [(&'static str, &'static str, &'static str)],
+    display_units: &'static [(&'static str, &'static str, u64)],
 }
 
 fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> {
-    process_setting_presentation(rendered)
+    logging_presentation(rendered)
+        .or_else(|| process_setting_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
         .or_else(|| generation_defaults_presentation(rendered))
         .or_else(|| skippy_multimodal_presentation(rendered))
@@ -828,6 +834,8 @@ fn sp(
         placeholder: None,
         control_hint: None,
         renderer_id: None,
+        choices: &[],
+        display_units: &[],
     }
 }
 
@@ -851,6 +859,16 @@ impl SettingPresentation {
         self.renderer_id = Some(renderer_id);
         self
     }
+
+    fn choices(mut self, choices: &'static [(&'static str, &'static str, &'static str)]) -> Self {
+        self.choices = choices;
+        self
+    }
+
+    fn display_units(mut self, units: &'static [(&'static str, &'static str, u64)]) -> Self {
+        self.display_units = units;
+        self
+    }
 }
 
 pub(super) fn apply_built_in_presentation_metadata(setting: &mut ConfigSettingSchema) {
@@ -861,7 +879,9 @@ pub(super) fn apply_built_in_presentation_metadata(setting: &mut ConfigSettingSc
     };
 
     setting.description = Some(presentation.help.to_string());
-    if presentation.category.id != ADVANCED_SERVER_CATEGORY.id {
+    if presentation.category.id != ADVANCED_SERVER_CATEGORY.id
+        && !is_advanced_logging_category(presentation.category.id)
+    {
         setting.visibility = ConfigVisibility::User;
     }
     setting.presentation = Some(ConfigPresentationMetadata {
@@ -876,6 +896,24 @@ pub(super) fn apply_built_in_presentation_metadata(setting: &mut ConfigSettingSc
         placeholder: presentation.placeholder.map(str::to_string),
         control_hint: presentation.control_hint.map(str::to_string),
         renderer_id: presentation.renderer_id.map(str::to_string),
+        choices: presentation
+            .choices
+            .iter()
+            .map(|(value, label, description)| ConfigPresentationChoice {
+                value: (*value).to_string(),
+                label: (*label).to_string(),
+                description: Some((*description).to_string()),
+            })
+            .collect(),
+        display_units: presentation
+            .display_units
+            .iter()
+            .map(|(value, label, multiplier)| ConfigDisplayUnit {
+                value: (*value).to_string(),
+                label: (*label).to_string(),
+                multiplier: *multiplier,
+            })
+            .collect(),
     });
 }
 
@@ -899,6 +937,8 @@ fn apply_fallback_presentation_metadata(setting: &mut ConfigSettingSchema, rende
         placeholder: placeholder_for_path(rendered).map(str::to_string),
         control_hint: control_hint_for_schema(&setting.value_schema).map(str::to_string),
         renderer_id: None,
+        choices: vec![],
+        display_units: vec![],
     });
 }
 

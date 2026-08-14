@@ -5,7 +5,7 @@ import {
   HARNESS_LOG_SCENARIO_IDS
 } from '@/features/logs/lib/log-fixtures'
 import { LOG_PAYLOAD_RENDER_LIMIT_BYTES } from '@/features/logs/lib/log-payload-content'
-import { LogsApiClient } from './client'
+import { LogsApiClient, LogsApiError } from './client'
 import { LogArtifactId, LogOperationId, LogPageCursor, LogReplayCursor, LogRequestId } from './ids'
 import { LogsDtoError } from './schemas'
 
@@ -96,6 +96,31 @@ afterEach(() => {
 })
 
 describe('LogsApiClient', () => {
+  it('preserves schema compatibility details from an unavailable response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            code: 'logging_schema_incompatible',
+            message: 'the local log database schema is incompatible with this MeshLLM version',
+            details: { schema_version: 14, supported_schema_version: 11 }
+          }
+        },
+        503
+      )
+    )
+
+    const error = await new LogsApiClient(fetchMock).listRequests().catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(LogsApiError)
+    expect(error).toMatchObject({
+      status: 503,
+      code: 'logging_schema_incompatible',
+      message: 'the local log database schema is incompatible with this MeshLLM version',
+      details: { schemaVersion: 14, supportedSchemaVersion: 11 }
+    })
+  })
+
   it('binds the default browser fetch before issuing a request', async () => {
     const browserFetch = vi.fn(function (this: typeof globalThis, input: RequestInfo | URL) {
       expect(this).toBe(globalThis)

@@ -4,6 +4,7 @@ import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LogRequestId } from '@/features/logs/api/ids'
+import { LogsApiError } from '@/features/logs/api/client'
 import type { LogAuditEntry, LogRequest } from '@/features/logs/api/schemas'
 import {
   HARNESS_LOG_FIXTURES,
@@ -301,7 +302,7 @@ describe('LogsLedger', () => {
     expect(within(controls).getByLabelText('Search loaded event window')).toBeVisible()
     expect(within(controls).queryByRole('heading')).not.toBeInTheDocument()
     expect(within(controls).getByRole('button', { name: 'Export view' })).toBeVisible()
-    expect(within(controls).queryByRole('button', { name: 'Scoped cleanup' })).not.toBeInTheDocument()
+    expect(within(controls).queryByRole('button', { name: 'Clean up logs' })).not.toBeInTheDocument()
 
     const infoBanner = screen.getByRole('region', { name: 'System logs' })
     expect(within(infoBanner).getByRole('heading', { level: 1, name: 'System logs' })).toHaveAttribute(
@@ -311,7 +312,7 @@ describe('LogsLedger', () => {
     expect(infoBanner).toHaveTextContent('Monitor request activity and operational events from this MeshLLM host.')
     expect(infoBanner).toHaveTextContent('Live')
     expect(infoBanner).toHaveTextContent('Local only')
-    expect(within(infoBanner).getByRole('button', { name: 'Scoped cleanup' })).toBeVisible()
+    expect(within(infoBanner).getByRole('button', { name: 'Clean up logs' })).toBeVisible()
     expect(infoBanner).not.toContainElement(screen.getByRole('button', { name: 'Export view' }))
     expect(screen.queryByRole('button', { name: 'Dead-letter retry' })).not.toBeInTheDocument()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
@@ -324,7 +325,7 @@ describe('LogsLedger', () => {
     render(<LogsLedger search={parseLogsLedgerSearch({ model: 'Qwen3' })} onSearchChange={vi.fn()} />)
 
     await user.tab()
-    expect(screen.getByRole('button', { name: 'Scoped cleanup' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Clean up logs' })).toHaveFocus()
     await user.tab()
     expect(screen.getByLabelText('Bucket interval')).toHaveFocus()
     await user.tab()
@@ -529,13 +530,126 @@ describe('LogsLedger', () => {
     queryState.current = { isLoading: false, isError: true, isFetching: false, data: undefined, refetch }
     render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Request window could not be loaded')
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Some log data could not be loaded')
+    expect(alert).toHaveTextContent('Request history')
+    expect(alert).toHaveTextContent('Unavailable')
     const retry = screen.getByRole('button', { name: 'Retry requests' })
     expect(retry).toBeEnabled()
 
     await user.click(retry)
 
     expect(refetch).toHaveBeenCalledOnce()
+  })
+
+  it('combines simultaneous source failures while preserving independent retries', async () => {
+    const user = userEvent.setup()
+    const refetchRequests = vi.fn()
+    const refetchOperations = vi.fn()
+    queryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      data: undefined,
+      refetch: refetchRequests
+    }
+    auditQueryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      data: undefined,
+      refetch: refetchOperations
+    }
+
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    const alert = screen.getByRole('alert')
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(alert).toHaveTextContent('Log data could not be loaded')
+    expect(within(alert).getByRole('group', { name: 'Log data source recovery' })).toHaveTextContent(
+      'Request historyUnavailable'
+    )
+    expect(alert).toHaveTextContent('Operational eventsUnavailable')
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry requests' }))
+    expect(refetchRequests).toHaveBeenCalledOnce()
+    expect(refetchOperations).not.toHaveBeenCalled()
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry operations' }))
+    expect(refetchOperations).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the combined recovery surface stable while one source retries', () => {
+    queryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: true,
+      data: undefined,
+      refetch: vi.fn()
+    }
+
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Request historyRetrying')
+    expect(within(alert).getByRole('button', { name: 'Retrying…' })).toBeDisabled()
+  })
+
+  it('renders one actionable compatibility state instead of the recovery surface', () => {
+    queryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      error: new LogsApiError(503, 'logging_schema_incompatible'),
+      data: undefined,
+      refetch: vi.fn()
+    }
+    auditQueryState.current = { ...queryState.current, refetch: vi.fn() }
+
+    render(
+      <LogsLedger
+        loggingStatus={{
+          metadata_available: false,
+          metadata_state: 'schema_incompatible',
+          schema_version: 14,
+          supported_schema_version: 11,
+          capture_mode: 'unavailable',
+          artifact_capture_available: false,
+          artifact_capture_ready: false
+        }}
+        search={parseLogsLedgerSearch({})}
+        onSearchChange={vi.fn()}
+      />
+    )
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Log database version mismatch')
+    expect(alert).toHaveTextContent('Update the node to a build that supports schema v14')
+    expect(alert).toHaveTextContent('Log history was left unchanged')
+    expect(alert).toHaveTextContent('Database schema v14')
+    expect(alert).toHaveTextContent('Runtime supports v11')
+    expect(screen.queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Log data source recovery' })).not.toBeInTheDocument()
+  })
+
+  it('uses typed HTTP compatibility details when status has not loaded yet', () => {
+    queryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      error: new LogsApiError(503, 'logging_schema_incompatible', {
+        schemaVersion: 10,
+        supportedSchemaVersion: 11
+      }),
+      data: undefined,
+      refetch: vi.fn()
+    }
+
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('This MeshLLM build cannot safely upgrade')
+    expect(screen.getByText('Database schema v10')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Retry requests' })).not.toBeInTheDocument()
   })
 
   it('renders the populated harness ledger across outcomes, durability states, metadata fallbacks, KPIs, and pages', () => {
@@ -559,8 +673,8 @@ describe('LogsLedger', () => {
         })
       ).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Show management records' })).toBeInTheDocument()
-      expect(screen.getByLabelText('Requests over time bar chart')).toBeInTheDocument()
-      expect(screen.queryByText('No requests during the selected time range.')).not.toBeInTheDocument()
+      expect(screen.getByLabelText(/Events over time stacked bar chart/)).toBeInTheDocument()
+      expect(screen.queryByText('No selected events during the chart time range.')).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Go to next page' })).toBeEnabled()
       const workloadFixtureCount = HARNESS_LOG_FIXTURES.filter((row) => !row.route?.startsWith('management_')).length
       expect(screen.getAllByText(String(workloadFixtureCount)).length).toBeGreaterThan(0)

@@ -69,6 +69,8 @@ export function SettingsSummaryBanner({
   return (
     <InfoBanner
       action={action}
+      actionClassName="max-sm:w-full max-sm:self-stretch max-sm:justify-start"
+      className="max-sm:flex-col max-sm:items-stretch max-sm:gap-3 max-sm:px-4"
       descriptionClassName="max-w-none whitespace-normal"
       description={
         <>

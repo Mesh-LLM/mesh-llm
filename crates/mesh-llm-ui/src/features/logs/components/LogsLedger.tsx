@@ -32,9 +32,10 @@ import {
   buildLogEventLedgerColumns,
   LOG_EVENT_LEDGER_COLUMN_LABELS
 } from '@/features/logs/components/LogEventLedgerColumns'
+import { EventsOverTimeChart } from '@/features/logs/components/EventsOverTimeChart'
 import { LogEventInspector } from '@/features/logs/components/LogEventInspector'
 import { LogOperations } from '@/features/logs/components/LogOperations'
-import { RequestsOverTimeChart } from '@/features/logs/components/RequestsOverTimeChart'
+import { LogsSchemaCompatibilityAlert } from '@/features/logs/components/LogsSchemaCompatibilityAlert'
 import type { LogRequest } from '@/features/logs/api/schemas'
 import type { LoggingStatus } from '@/lib/api/types'
 import {
@@ -47,6 +48,7 @@ import {
 } from '@/features/logs/lib/log-event-ledger'
 import { compareLogInstants } from '@/features/logs/lib/log-instant'
 import { buildLogKpiMetrics } from '@/features/logs/lib/log-kpis'
+import { resolveLogsSchemaCompatibility } from '@/features/logs/lib/logs-schema-compatibility'
 import type { VolumeTimeRangeKey } from '@/features/logs/lib/log-volume'
 import { useAdvancingChartClock } from '@/features/logs/lib/use-advancing-chart-clock'
 import {
@@ -331,12 +333,94 @@ type TableCaptureProps = {
   readonly onCapture: (table: DataTableTanStackTableType<LogEventLedgerRow> | null) => void
 }
 
+type LogWindowRecoverySource = {
+  readonly id: 'requests' | 'operations'
+  readonly label: string
+  readonly error: boolean
+  readonly fetching: boolean
+  readonly loading: boolean
+  readonly hasLoadedData: boolean
+  readonly onRetry: () => void
+}
+
 function TableCapture({ table, onCapture }: TableCaptureProps) {
   useEffect(() => {
     onCapture(table)
     return () => onCapture(null)
   }, [table, onCapture])
   return null
+}
+
+function recoverySourceStatus(source: LogWindowRecoverySource) {
+  if (source.error && source.fetching) return { label: 'Retrying', tone: 'accent' as const }
+  if (source.error && source.hasLoadedData) return { label: 'Showing last window', tone: 'warn' as const }
+  if (source.error) return { label: 'Unavailable', tone: 'bad' as const }
+  return { label: 'Loading', tone: 'accent' as const }
+}
+
+function LogWindowRecoveryAlert({ sources }: { readonly sources: readonly LogWindowRecoverySource[] }) {
+  const failedSources = sources.filter((source) => source.error)
+  if (failedSources.length === 0) return null
+
+  const visibleSources = sources.filter((source) => source.error || source.loading)
+  const hasLoadedFailure = failedSources.some((source) => source.hasLoadedData)
+  const title = `${failedSources.length === sources.length ? 'Log data' : 'Some log data'} could not be ${
+    hasLoadedFailure ? 'refreshed' : 'loaded'
+  }`
+  const description =
+    failedSources.length === sources.length
+      ? 'The local logging service did not return a usable response. Retry each source independently.'
+      : failedSources[0]?.hasLoadedData
+        ? `${failedSources[0].label} could not be refreshed. The last loaded window remains visible.`
+        : `${failedSources[0]?.label ?? 'One source'} could not be loaded. Data from the other source remains usable when loaded.`
+
+  return (
+    <Alert
+      className="panel-shell rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-bad)_35%,var(--color-border))] bg-panel p-[var(--panel-x)]"
+      variant="destructive"
+    >
+      <div className="min-w-0">
+        <AlertTitle className="type-panel-title text-foreground">{title}</AlertTitle>
+        <AlertDescription className="mt-1 max-w-[68ch] type-caption text-fg-dim">{description}</AlertDescription>
+      </div>
+      <div
+        aria-label="Log data source recovery"
+        className={`mt-3 grid gap-3 border-t border-border-soft pt-3 ${visibleSources.length > 1 ? 'md:grid-cols-2 md:gap-0' : ''}`}
+        role="group"
+      >
+        {visibleSources.map((source, index) => {
+          const status = recoverySourceStatus(source)
+          return (
+            <div
+              className={`flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between ${
+                visibleSources.length > 1 && index === 0 ? 'md:pr-4' : ''
+              } ${visibleSources.length > 1 && index > 0 ? 'md:border-l md:border-border-soft md:pl-4' : ''}`}
+              key={source.id}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="type-caption font-medium text-foreground">{source.label}</span>
+                <StatusBadge dot size="caption" tone={status.tone}>
+                  {status.label}
+                </StatusBadge>
+              </div>
+              {source.error ? (
+                <Button
+                  className="ui-control min-h-[3.15rem] shrink-0 gap-1.5 !text-xs sm:min-h-0"
+                  disabled={source.fetching}
+                  onClick={source.onRetry}
+                  size="sm"
+                  variant="outline"
+                >
+                  <RotateCcw className={`size-3.5 ${source.fetching ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  {source.fetching ? 'Retrying…' : `Retry ${source.id}`}
+                </Button>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    </Alert>
+  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -356,6 +440,7 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
   const { refetch: refetchAudit } = auditQuery
   const requestResult = requestQuery.data
   const auditResult = auditQuery.data
+  const schemaCompatibility = resolveLogsSchemaCompatibility(loggingStatus, requestQuery.error, auditQuery.error)
   const hydrate = useCallback(async () => refetch(), [refetch])
   const hydrateAudit = useCallback(async () => refetchAudit(), [refetchAudit])
   const live = useLogsLiveRecovery({
@@ -478,6 +563,8 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
               operation="cleanup"
               onMaintenanceMutationSucceeded={onMaintenanceMutationSucceeded}
               query={requestScope}
+              rows={mergedRows}
+              selectedCategories={selectedCategoryValues}
             />
           ) : undefined
         }
@@ -531,10 +618,11 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
         titleLevel="h1"
       />
 
-      {requestResult?.state === 'supported' ? (
-        <RequestsOverTimeChart
+      {hasSupportedWindow ? (
+        <EventsOverTimeChart
           now={selectedLedgerRange.endMs}
-          rows={requestRows}
+          rows={categoryRows}
+          selectedCategories={selectedCategoryValues}
           selectedRange={selectedLedgerRange.chartRange}
           selectedRangeMs={selectedLedgerRange.rangeMs}
         />
@@ -564,7 +652,7 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
         </Alert>
       ) : null}
 
-      {requestQuery.isLoading && auditQuery.isLoading ? (
+      {requestQuery.isLoading && auditQuery.isLoading && !schemaCompatibility ? (
         <div
           role="status"
           className="panel-shell min-h-[14rem] rounded-[var(--radius)] border border-border bg-panel p-[var(--panel-x)]"
@@ -574,55 +662,30 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
         </div>
       ) : null}
 
-      {requestQuery.isError ? (
-        <Alert
-          className="panel-shell rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-bad)_35%,var(--color-border))] bg-panel p-[var(--panel-x)]"
-          variant="destructive"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <AlertTitle className="type-panel-title text-foreground">Request window could not be loaded</AlertTitle>
-              <AlertDescription className="type-caption mt-1 text-fg-dim">
-                The local logging service did not return a usable response.
-              </AlertDescription>
-            </div>
-            <Button
-              className="ui-control gap-1.5"
-              onClick={() => void requestQuery.refetch()}
-              size="sm"
-              variant="outline"
-            >
-              Retry requests
-            </Button>
-          </div>
-        </Alert>
-      ) : null}
+      {schemaCompatibility ? <LogsSchemaCompatibilityAlert {...schemaCompatibility} /> : null}
 
-      {auditQuery.isError ? (
-        <Alert
-          className="panel-shell rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-bad)_35%,var(--color-border))] bg-panel p-[var(--panel-x)]"
-          variant="destructive"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <AlertTitle className="type-panel-title text-foreground">
-                Operational window could not be loaded
-              </AlertTitle>
-              <AlertDescription className="type-caption mt-1 text-fg-dim">
-                The local logging service did not return a usable operational response.
-              </AlertDescription>
-            </div>
-            <Button
-              className="ui-control gap-1.5"
-              onClick={() => void auditQuery.refetch()}
-              size="sm"
-              variant="outline"
-            >
-              Retry operations
-            </Button>
-          </div>
-        </Alert>
-      ) : null}
+      <LogWindowRecoveryAlert
+        sources={[
+          {
+            id: 'requests',
+            label: 'Request history',
+            error: requestQuery.isError && !schemaCompatibility,
+            fetching: requestQuery.isFetching,
+            loading: requestQuery.isLoading,
+            hasLoadedData: requestResult?.state === 'supported',
+            onRetry: () => void requestQuery.refetch()
+          },
+          {
+            id: 'operations',
+            label: 'Operational events',
+            error: auditQuery.isError && !schemaCompatibility,
+            fetching: auditQuery.isFetching,
+            loading: auditQuery.isLoading,
+            hasLoadedData: auditResult?.state === 'supported',
+            onRetry: () => void auditQuery.refetch()
+          }
+        ]}
+      />
 
       {requestResult?.state === 'unsupported' ? (
         <div

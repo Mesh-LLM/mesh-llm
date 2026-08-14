@@ -59,7 +59,13 @@ function ready<T>(data: T) {
   return { data, isLoading: false, isError: false }
 }
 
-function InspectorHarness({ initialInspector }: { readonly initialInspector?: LogInspector }) {
+function InspectorHarness({
+  audit = AUDIT,
+  initialInspector
+}: {
+  readonly audit?: LogAuditEntry
+  readonly initialInspector?: LogInspector
+}) {
   const [inspector, setInspector] = useState<LogInspector | undefined>(initialInspector)
   return (
     <>
@@ -70,7 +76,7 @@ function InspectorHarness({ initialInspector }: { readonly initialInspector?: Lo
         Open request
       </button>
       <LogEventInspector
-        auditEntries={[AUDIT]}
+        auditEntries={[audit]}
         inspector={inspector}
         onClose={() => setInspector(undefined)}
         onRequestTabChange={vi.fn()}
@@ -103,7 +109,6 @@ describe('LogEventInspector', () => {
       AUDIT.entryId,
       AUDIT.occurredAt,
       AUDIT.source,
-      AUDIT.code,
       AUDIT.severity ?? 'Not provided',
       String(AUDIT.sequence),
       AUDIT.subjectKind ?? '',
@@ -115,10 +120,10 @@ describe('LogEventInspector', () => {
       `${AUDIT.durationMs} ms`,
       String(AUDIT.numericSummaries?.layers)
     ]) {
-      expect(within(dialog).getByText(value)).toBeInTheDocument()
+      expect(within(dialog).getByText(value, { exact: true })).toBeInTheDocument()
     }
-    expect(within(dialog).getAllByRole('term')).toHaveLength(14)
-    expect(within(dialog).getAllByRole('definition')).toHaveLength(14)
+    expect(within(dialog).getAllByRole('term')).toHaveLength(13)
+    expect(within(dialog).getAllByRole('definition')).toHaveLength(13)
     expect(dialog).not.toHaveTextContent(/payload|destination|peer address|raw fields/i)
     expect(requestQueries.summary).not.toHaveBeenCalled()
     expect(requestQueries.events).not.toHaveBeenCalled()
@@ -126,7 +131,38 @@ describe('LogEventInspector', () => {
     expect(requestQueries.attempts).not.toHaveBeenCalled()
   })
 
-  it('holds audit and request inspectors in the same fixed frame with a named audit scroll body', () => {
+  it('makes the event code the primary identity and promotes state above the metadata ledger', async () => {
+    const user = userEvent.setup()
+    render(<InspectorHarness />)
+
+    await user.click(screen.getByRole('button', { name: 'Open audit' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Operational event runtime_ready' })
+    const title = within(dialog).getByRole('heading', { name: 'Operational event runtime_ready' })
+    expect(within(title).getByText(AUDIT.code, { exact: true })).toHaveClass(
+      'font-mono',
+      'text-[length:var(--density-type-display)]',
+      '[overflow-wrap:anywhere]'
+    )
+
+    const state = within(dialog).getByRole('heading', { name: 'Event state' })
+    expect(state.parentElement).toContainElement(within(dialog).getByText('info', { exact: true }))
+    expect(state.parentElement).toContainElement(within(dialog).getByText('ready', { exact: true }))
+    expect(within(dialog).getByRole('heading', { name: 'Event metadata' })).toBeInTheDocument()
+  })
+
+  it('keeps unknown outcome values muted instead of inferring a state from substrings', async () => {
+    const user = userEvent.setup()
+    const audit = { ...AUDIT, outcome: 'unblocked' }
+    render(<InspectorHarness audit={audit} />)
+
+    await user.click(screen.getByRole('button', { name: 'Open audit' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Operational event runtime_ready' })
+    expect(within(dialog).getByText('unblocked', { exact: true })).toHaveStyle({ color: 'var(--color-fg-dim)' })
+  })
+
+  it('keeps the request frame fixed while audit content adapts with a named scroll body', () => {
     const auditView = render(<InspectorHarness initialInspector={{ type: 'audit', id: AUDIT.entryId }} />)
     const auditDialog = screen.getByRole('dialog', { name: 'Operational event runtime_ready' })
 
@@ -137,7 +173,8 @@ describe('LogEventInspector', () => {
       'flex-col',
       'overflow-hidden',
       'rounded-none',
-      'sm:h-[min(calc(100dvh-4rem),50rem)]',
+      'sm:h-auto',
+      'sm:max-h-[min(calc(100dvh-4rem),50rem)]',
       'sm:w-[calc(100vw-2rem)]',
       'sm:max-w-[720px]',
       'sm:rounded-[var(--radius-lg)]'
@@ -157,9 +194,9 @@ describe('LogEventInspector', () => {
       'flex-col',
       'overflow-hidden',
       'rounded-none',
-      'sm:h-[min(calc(100dvh-4rem),50rem)]',
+      'sm:h-[min(calc(100dvh-3rem),54rem)]',
       'sm:w-[calc(100vw-2rem)]',
-      'sm:max-w-[720px]',
+      'sm:max-w-[1120px]',
       'sm:rounded-[var(--radius-lg)]'
     )
   })

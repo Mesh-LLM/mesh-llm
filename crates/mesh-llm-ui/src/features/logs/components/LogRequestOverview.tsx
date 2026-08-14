@@ -28,7 +28,10 @@ import {
   machineValue,
   type RetainedQueryState
 } from '@/features/logs/components/LogRequestOverviewDerivations'
-import { LogRequestOverviewEvidence } from '@/features/logs/components/LogRequestOverviewEvidence'
+import {
+  LogRequestLifecycleOverview,
+  LogRequestRoutingOverview
+} from '@/features/logs/components/LogRequestOverviewEvidence'
 import { LogRequestOverviewMetadata } from '@/features/logs/components/LogRequestOverviewMetadata'
 
 type LogRequestOverviewProps = {
@@ -61,12 +64,14 @@ const outcomePresentation: Record<LogOutcome, OutcomePresentation> = {
 
 function MetricCell({ children, icon: Icon, label }: MetricCellProps) {
   return (
-    <div className="min-w-0 basis-40 grow shrink-0 rounded-[var(--radius)] border border-border-soft bg-panel-strong px-[var(--panel-x)] py-[var(--panel-y)] md:basis-64 xl:basis-40">
-      <dt className="flex items-center gap-2 text-fg-faint">
-        <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+    <div className="min-w-0 bg-panel px-4 py-4">
+      <dt className="flex items-center gap-2.5 text-fg-faint">
+        <span className="grid size-7 shrink-0 place-items-center rounded-[var(--radius-sm)] border border-[color:color-mix(in_oklab,var(--color-accent)_28%,var(--color-border-soft))] bg-[color:color-mix(in_oklab,var(--color-accent)_8%,var(--color-panel))] text-accent">
+          <Icon aria-hidden="true" className="size-3.5" />
+        </span>
         <span className="type-label">{label}</span>
       </dt>
-      <dd className="mt-2 min-w-0">{children}</dd>
+      <dd className="mt-3 min-w-0">{children}</dd>
     </div>
   )
 }
@@ -84,8 +89,11 @@ export function LogRequestOverview({ request, artifacts, attempts, events }: Log
   const OutcomeIcon = presentation.icon
 
   return (
-    <section aria-label="Request overview" className="flex min-w-0 flex-col gap-[var(--shell-compact)]">
-      <dl aria-label="Request metrics" className="flex min-w-0 flex-wrap gap-2">
+    <section aria-label="Request overview" className="flex min-w-0 flex-col gap-[var(--shell-normal)]">
+      <dl
+        aria-label="Request metrics"
+        className="grid min-w-0 grid-cols-2 gap-px overflow-hidden rounded-[var(--radius)] border border-border-soft bg-border-soft lg:grid-cols-3 xl:grid-cols-6"
+      >
         <MetricCell icon={Activity} label="Status">
           <StatusBadge size="caption" tone={presentation.tone}>
             <OutcomeIcon aria-hidden="true" className="size-3" />
@@ -108,8 +116,9 @@ export function LogRequestOverview({ request, artifacts, attempts, events }: Log
           <MachineValue>{formatStreamEvidence(events.items)}</MachineValue>
         </MetricCell>
       </dl>
+      <LogRequestLifecycleOverview events={events} />
       <LogRequestOverviewMetadata artifacts={artifacts} request={request} />
-      <LogRequestOverviewEvidence attempts={attempts} events={events} />
+      <LogRequestRoutingOverview attempts={attempts} />
     </section>
   )
 }

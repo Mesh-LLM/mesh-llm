@@ -16,6 +16,7 @@ evals/results/
 !.omo/specs/
 .omo/specs/*
 !.omo/specs/pr-ci-optimization.md
+.impeccable
 .playwright-mcp/
 .envrc
 .moe-cache/

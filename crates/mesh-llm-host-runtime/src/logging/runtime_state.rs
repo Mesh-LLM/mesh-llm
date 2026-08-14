@@ -63,6 +63,9 @@ pub struct LoggingRuntimeHealth {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LoggingRuntimeStatus {
     pub(crate) metadata_available: bool,
+    pub(crate) metadata_state: &'static str,
+    pub(crate) schema_version: Option<u32>,
+    pub(crate) supported_schema_version: Option<u32>,
     pub(crate) capture_mode: &'static str,
     pub(crate) artifact_capture_available: bool,
     pub(crate) artifact_capture_ready: bool,
@@ -76,6 +79,35 @@ pub(crate) struct LoggingRuntimeStatus {
     pub(crate) cleanup_shutdown_timeouts: u64,
     pub(crate) cleanup_last_outcome: Option<&'static str>,
     pub(crate) cleanup_last_deleted_count: Option<u64>,
+}
+
+/// Stable, path-free explanation for metadata availability. Schema versions
+/// are safe to expose to trusted-local clients and make upgrade/downgrade
+/// failures actionable without leaking the database location or SQLite text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LoggingMetadataState {
+    Ready,
+    Disabled,
+    StorageUnavailable,
+    SchemaIncompatible { found: u32, supported: u32 },
+}
+
+impl LoggingMetadataState {
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Disabled => "disabled",
+            Self::StorageUnavailable => "storage_unavailable",
+            Self::SchemaIncompatible { .. } => "schema_incompatible",
+        }
+    }
+
+    const fn schema_versions(self) -> (Option<u32>, Option<u32>) {
+        match self {
+            Self::SchemaIncompatible { found, supported } => (Some(found), Some(supported)),
+            _ => (None, None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +207,7 @@ pub struct LoggingRuntimeState {
     artifact_limits: Option<(usize, usize)>,
     artifact_export_enabled: bool,
     capture_mode: &'static str,
+    metadata_state: LoggingMetadataState,
     export_limit_bytes: usize,
     health: Mutex<LoggingRuntimeHealth>,
     health_audit_writer: FailOpenWriter,
@@ -258,7 +291,12 @@ impl LoggingRuntimeState {
     {
         if !foundation.is_healthy() {
             tracing::warn!("Logging durable storage unavailable; continuing without logging");
-            return Self::unavailable();
+            let metadata_state = if config.enabled {
+                LoggingMetadataState::StorageUnavailable
+            } else {
+                LoggingMetadataState::Disabled
+            };
+            return Self::unavailable(metadata_state);
         }
 
         Self::initialize_healthy_foundation(foundation, config, open_capture)
@@ -293,8 +331,9 @@ impl LoggingRuntimeState {
             Arc<LogStore>,
         ) -> Result<FailOpenArtifactCapture, LogStoreError>,
     {
-        let Some(store) = Self::open_metadata_store(foundation, &clock) else {
-            return Self::unavailable();
+        let store = match Self::open_metadata_store(foundation, &clock) {
+            Ok(store) => store,
+            Err(metadata_state) => return Self::unavailable(metadata_state),
         };
         let policy = super::policy::build_policy(config);
         let (artifact_capture, artifact_limits) = match policy.capture_mode {
@@ -310,12 +349,20 @@ impl LoggingRuntimeState {
     fn open_metadata_store(
         foundation: &LoggingFoundation,
         clock: &Arc<dyn StoreClock>,
-    ) -> Option<Arc<LogStore>> {
+    ) -> Result<Arc<LogStore>, LoggingMetadataState> {
         match LogStore::open(foundation.store_dir(), Arc::clone(clock)) {
-            Ok(store) => Some(Arc::new(store)),
+            Ok(store) => Ok(Arc::new(store)),
+            Err(LogStoreError::SchemaIncompatible { found, supported }) => {
+                tracing::warn!(
+                    found_schema_version = found,
+                    supported_schema_version = supported,
+                    "Logging database schema is incompatible; database left unchanged"
+                );
+                Err(LoggingMetadataState::SchemaIncompatible { found, supported })
+            }
             Err(_) => {
                 tracing::warn!("Logging durable storage unavailable; continuing without logging");
-                None
+                Err(LoggingMetadataState::StorageUnavailable)
             }
         }
     }
@@ -391,6 +438,7 @@ impl LoggingRuntimeState {
                 mesh_llm_config::CaptureMode::MetadataOnly => "metadata_only",
                 mesh_llm_config::CaptureMode::RedactedArtifacts => "redacted_artifacts",
             },
+            metadata_state: LoggingMetadataState::Ready,
             export_limit_bytes: config.export_limit_bytes as usize,
             health: Mutex::new(LoggingRuntimeHealth {
                 metadata_available: true,
@@ -423,7 +471,7 @@ impl LoggingRuntimeState {
         state
     }
 
-    fn unavailable() -> Self {
+    fn unavailable(metadata_state: LoggingMetadataState) -> Self {
         Self {
             store: None,
             service: None,
@@ -433,6 +481,7 @@ impl LoggingRuntimeState {
             artifact_limits: None,
             artifact_export_enabled: false,
             capture_mode: "unavailable",
+            metadata_state,
             export_limit_bytes: mesh_llm_config::LoggingConfig::default().export_limit_bytes
                 as usize,
             health: Mutex::new(LoggingRuntimeHealth::unavailable()),
@@ -511,8 +560,12 @@ impl LoggingRuntimeState {
                 )
             });
 
+        let (schema_version, supported_schema_version) = self.metadata_state.schema_versions();
         LoggingRuntimeStatus {
             metadata_available: health.metadata_available,
+            metadata_state: self.metadata_state.code(),
+            schema_version,
+            supported_schema_version,
             capture_mode: self.capture_mode,
             artifact_capture_available: health.artifact_capture_available,
             artifact_capture_ready: health.artifact_capture_ready,
@@ -586,6 +639,10 @@ impl LoggingRuntimeState {
     /// degradation alone still yields a facade for metadata-only queries.
     pub(crate) fn query_facade(&self) -> Option<LoggingQueryFacade> {
         LoggingQueryFacade::from_runtime(self)
+    }
+
+    pub(crate) const fn metadata_state(&self) -> LoggingMetadataState {
+        self.metadata_state
     }
 
     /// Drain the serial persistence queue for an integration test without
@@ -838,7 +895,12 @@ impl LoggingRuntimeState {
         clock: Arc<dyn StoreClock>,
     ) -> Self {
         if !foundation.is_healthy() {
-            return Self::unavailable();
+            let metadata_state = if config.enabled {
+                LoggingMetadataState::StorageUnavailable
+            } else {
+                LoggingMetadataState::Disabled
+            };
+            return Self::unavailable(metadata_state);
         }
         Self::initialize_healthy_foundation_with_clock(
             foundation,

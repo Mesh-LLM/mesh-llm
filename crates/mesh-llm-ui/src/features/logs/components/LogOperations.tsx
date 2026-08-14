@@ -16,6 +16,7 @@ import { LogsApiClient, type LogsRequestQuery } from '@/features/logs/api/client
 import type { LogExport } from '@/features/logs/api/schemas'
 import { LogCleanupDialog } from '@/features/logs/components/LogCleanupDialog'
 import { supportsCleanup } from '@/features/logs/components/LogCleanupScope'
+import type { LogEventCategory, LogEventLedgerRow } from '@/features/logs/lib/log-event-ledger'
 
 type ActionState = { readonly message: string; readonly tone: 'success' | 'error' } | undefined
 
@@ -23,7 +24,11 @@ type LogOperationsProps = {
   readonly operation: 'cleanup' | 'export'
   readonly query: LogsRequestQuery
   readonly onMaintenanceMutationSucceeded?: () => void
+  readonly rows?: readonly LogEventLedgerRow[]
+  readonly selectedCategories?: ReadonlySet<LogEventCategory>
 }
+
+const DEFAULT_CLEANUP_CATEGORIES = new Set<LogEventCategory>(['requests', 'system', 'quic', 'gossip'])
 
 function isReasonValid(reason: string) {
   return reason.trim().length > 0
@@ -144,7 +149,13 @@ function ExportDialog({
   )
 }
 
-export function LogOperations({ operation, query, onMaintenanceMutationSucceeded }: LogOperationsProps) {
+export function LogOperations({
+  operation,
+  query,
+  onMaintenanceMutationSucceeded,
+  rows = [],
+  selectedCategories = DEFAULT_CLEANUP_CATEGORIES
+}: LogOperationsProps) {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
 
@@ -183,19 +194,22 @@ export function LogOperations({ operation, query, onMaintenanceMutationSucceeded
             variant="outline"
           >
             <Trash2 className="size-3.5" aria-hidden="true" />
-            Scoped cleanup
+            Clean up logs
           </Button>
           {!supportsCleanup(query) ? (
             <span className="type-caption text-fg-dim">
-              Clear active source or outcome selection before cleaning durable records.
+              Clear active-source or non-terminal outcome filters before removing durable logs.
             </span>
           ) : null}
           <LogCleanupDialog
+            key={`${query.from ?? ''}:${query.to ?? ''}:${[...selectedCategories].join(',')}`}
             open={open}
             onMaintenanceMutationSucceeded={onMaintenanceMutationSucceeded}
             onOpenChange={setOpen}
             query={query}
             returnFocusRef={triggerRef}
+            rows={rows}
+            initialCategories={selectedCategories}
           />
         </div>
       )

@@ -3,12 +3,16 @@ import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from 'recharts'
 import { Card } from '@/components/ui/card'
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart'
 import { NativeSelect } from '@/components/ui/NativeSelect'
-import type { LogRequest } from '@/features/logs/api/schemas'
+import {
+  LOG_EVENT_CATEGORIES,
+  type LogEventCategory,
+  type LogEventLedgerRow
+} from '@/features/logs/lib/log-event-ledger'
 import {
   BUCKET_INTERVALS,
   VOLUME_TIME_RANGES,
-  buildRequestVolumeBuckets,
-  effectiveRequestVolumeIntervalMs,
+  buildEventVolumeBuckets,
+  effectiveEventVolumeIntervalMs,
   formatBucketInterval,
   formatBucketRange,
   type BucketIntervalKey,
@@ -16,8 +20,9 @@ import {
 } from '@/features/logs/lib/log-volume'
 import { useAdvancingChartClock } from '@/features/logs/lib/use-advancing-chart-clock'
 
-type RequestsOverTimeChartProps = {
-  readonly rows: readonly LogRequest[]
+type EventsOverTimeChartProps = {
+  readonly rows: readonly LogEventLedgerRow[]
+  readonly selectedCategories: ReadonlySet<LogEventCategory>
   /** The ledger filter window; selecting a new ledger range resets the chart to the same window. */
   readonly selectedRange?: VolumeTimeRangeKey
   /** Exact duration for a custom ledger window represented by `selected`. */
@@ -27,10 +32,32 @@ type RequestsOverTimeChartProps = {
 }
 
 const chartConfig = {
-  total: { label: 'Requests', color: 'var(--color-accent)' }
+  requests: {
+    label: 'Requests',
+    color: 'color-mix(in oklab, var(--color-accent) 58%, var(--color-foreground))'
+  },
+  system: {
+    label: 'System',
+    color: 'color-mix(in oklab, var(--color-accent-contrast) 58%, var(--color-foreground))'
+  },
+  quic: {
+    label: 'QUIC',
+    color: 'color-mix(in oklab, var(--color-accent) 34%, var(--color-foreground))'
+  },
+  gossip: {
+    label: 'Gossip',
+    color: 'color-mix(in oklab, var(--color-accent-contrast) 34%, var(--color-foreground))'
+  },
+  iroh: { label: 'Iroh', color: 'var(--color-fg-dim)' }
 } satisfies ChartConfig
 
-export function RequestsOverTimeChart({ rows, now, selectedRange, selectedRangeMs }: RequestsOverTimeChartProps) {
+export function EventsOverTimeChart({
+  rows,
+  selectedCategories,
+  now,
+  selectedRange,
+  selectedRangeMs
+}: EventsOverTimeChartProps) {
   const [intervalKey, setIntervalKey] = useState<BucketIntervalKey>('5m')
   const [rangeSelection, setRangeSelection] = useState<{
     readonly filter: VolumeTimeRangeKey | undefined
@@ -45,13 +72,24 @@ export function RequestsOverTimeChart({ rows, now, selectedRange, selectedRangeM
       : (VOLUME_TIME_RANGES.find((option) => option.value === rangeKey)?.ms ?? 43_200_000)
   const liveCurrent = useAdvancingChartClock(now === undefined)
   const current = now ?? liveCurrent
+  const activeCategories = useMemo(
+    () => LOG_EVENT_CATEGORIES.filter((category) => selectedCategories.has(category)),
+    [selectedCategories]
+  )
 
   const data = useMemo(
-    () => buildRequestVolumeBuckets(rows, { intervalMs, rangeMs, now: current }),
-    [rows, intervalMs, rangeMs, current]
+    () => buildEventVolumeBuckets(rows, selectedCategories, { intervalMs, rangeMs, now: current }),
+    [rows, selectedCategories, intervalMs, rangeMs, current]
   )
-  const totalRequests = useMemo(() => data.reduce((sum, bucket) => sum + bucket.total, 0), [data])
-  const effectiveIntervalMs = effectiveRequestVolumeIntervalMs(data, intervalMs)
+  const totalEvents = useMemo(() => data.reduce((sum, bucket) => sum + bucket.total, 0), [data])
+  const totalsByCategory = useMemo(
+    () =>
+      Object.fromEntries(
+        LOG_EVENT_CATEGORIES.map((category) => [category, data.reduce((sum, bucket) => sum + bucket[category], 0)])
+      ) as Record<LogEventCategory, number>,
+    [data]
+  )
+  const effectiveIntervalMs = effectiveEventVolumeIntervalMs(data, intervalMs)
   const wasAutoBucketed = effectiveIntervalMs > intervalMs
 
   const [activeIndex, setActiveIndex] = useState<number | undefined>(undefined)
@@ -59,12 +97,18 @@ export function RequestsOverTimeChart({ rows, now, selectedRange, selectedRangeM
   const handleBarMouseLeave = useCallback(() => setActiveIndex(undefined), [])
 
   return (
-    <Card className="w-full rounded-[var(--radius)] border-border-soft bg-panel px-[var(--panel-x)] py-[var(--panel-y)] shadow-none">
+    <Card
+      aria-labelledby="events-over-time-title"
+      className="w-full rounded-[var(--radius)] border-border-soft bg-panel px-[var(--panel-x)] py-[var(--panel-y)] shadow-none"
+      role="region"
+    >
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
-          <h2 className="type-panel-title text-foreground">Requests Over Time</h2>
+          <h2 className="type-panel-title text-foreground" id="events-over-time-title">
+            Events Over Time
+          </h2>
           <p className="type-caption mt-1 text-fg-dim">
-            Request volume by time bucket
+            Loaded event volume by category and time bucket
             {wasAutoBucketed ? ` · Auto-bucketed to ${formatBucketInterval(effectiveIntervalMs)}` : ''}
           </p>
         </div>
@@ -91,14 +135,36 @@ export function RequestsOverTimeChart({ rows, now, selectedRange, selectedRangeM
         </div>
       </div>
 
-      {totalRequests === 0 ? (
+      {activeCategories.length > 0 ? (
+        <ul aria-label="Visible event categories" className="mt-3 flex flex-wrap gap-x-4 gap-y-2" role="list">
+          {activeCategories.map((category) => (
+            <li className="inline-flex items-center gap-1.5 type-caption text-fg-dim" key={category}>
+              <span
+                aria-hidden="true"
+                className="size-2 rounded-[2px]"
+                style={{ backgroundColor: chartConfig[category].color }}
+              />
+              <span>{chartConfig[category].label}</span>
+              <span className="font-mono tabular-nums text-fg">{totalsByCategory[category]}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {activeCategories.length === 0 ? (
         <div className="flex h-[170px] items-center justify-center">
-          <p className="type-caption text-fg-dim">No requests during the selected time range.</p>
+          <p className="type-caption text-fg-dim">Select an event category to display the chart.</p>
+        </div>
+      ) : totalEvents === 0 ? (
+        <div className="flex h-[170px] items-center justify-center">
+          <p className="type-caption text-fg-dim">No selected events during the chart time range.</p>
         </div>
       ) : (
         <div className="mt-4 h-[170px] w-full">
           <ChartContainer
-            aria-label="Requests over time bar chart"
+            aria-label={`Events over time stacked bar chart. Showing ${activeCategories
+              .map((category) => chartConfig[category].label)
+              .join(', ')}.`}
             className="h-full w-full"
             config={chartConfig}
             role="img"
@@ -124,8 +190,7 @@ export function RequestsOverTimeChart({ rows, now, selectedRange, selectedRangeM
               <ChartTooltip
                 content={
                   <ChartTooltipContent
-                    formatter={(value) => `${String(value)} requests`}
-                    hideName
+                    formatter={(value) => `${String(value)} ${Number(value) === 1 ? 'event' : 'events'}`}
                     labelFormatter={(_label, payload) => {
                       const first = payload[0]?.payload
                       return formatBucketRange(Number(first?.bucketStart), Number(first?.bucketEnd))
@@ -135,22 +200,28 @@ export function RequestsOverTimeChart({ rows, now, selectedRange, selectedRangeM
                 }
                 cursor={{ fill: 'var(--color-fg-faint)', fillOpacity: 0.08 }}
               />
-              <Bar
-                dataKey="total"
-                fill="var(--color-total)"
-                isAnimationActive={false}
-                maxBarSize={8}
-                onMouseEnter={handleBarMouseEnter}
-                onMouseLeave={handleBarMouseLeave}
-                radius={[2, 2, 0, 0]}
-              >
-                {data.map((bucket, index) => (
-                  <Cell
-                    key={bucket.bucketStart}
-                    fillOpacity={activeIndex === undefined || activeIndex === index ? 1 : 0.35}
-                  />
-                ))}
-              </Bar>
+              {activeCategories.map((category, categoryIndex) => (
+                <Bar
+                  dataKey={category}
+                  fill={`var(--color-${category})`}
+                  isAnimationActive={false}
+                  key={category}
+                  maxBarSize={8}
+                  onMouseEnter={handleBarMouseEnter}
+                  onMouseLeave={handleBarMouseLeave}
+                  radius={categoryIndex === activeCategories.length - 1 ? [2, 2, 0, 0] : 0}
+                  stackId="events"
+                  stroke="var(--color-panel)"
+                  strokeWidth={1}
+                >
+                  {data.map((bucket, index) => (
+                    <Cell
+                      key={`${category}-${bucket.bucketStart}`}
+                      fillOpacity={activeIndex === undefined || activeIndex === index ? 1 : 0.35}
+                    />
+                  ))}
+                </Bar>
+              ))}
             </BarChart>
           </ChartContainer>
         </div>

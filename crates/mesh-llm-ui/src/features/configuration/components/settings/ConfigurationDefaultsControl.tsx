@@ -93,7 +93,7 @@ export function configurationControlDetailBuckets(
 
   const textFormat = textFormatForSetting(setting)
   if (textFormat === 'path') {
-    pushUnique(visibleDetails, 'Path hint: enter a local filesystem path. No file picker is available here.')
+    pushUnique(visibleDetails, 'Paths are resolved on the machine running this MeshLLM node.')
   }
   if (textFormat === 'url') pushUnique(visibleDetails, 'URL hint: enter a full URL including protocol.')
   if (hasSchemaKind(setting.valueSchema, 'array')) {
