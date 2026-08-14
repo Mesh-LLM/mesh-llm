@@ -297,8 +297,12 @@ workflow derives the only accepted keys internally:
 non-secret marker at the fixed relative `.depot-authority-sentinel` path. Before
 any cache action, all three cache phases attest that the provider-injected
 `ACTIONS_CACHE_URL` and `ACTIONS_RESULTS_URL` are present, value-free
-structurally validated HTTP endpoints with a non-GitHub/non-loopback authority,
-numeric port and explicit path, and that `ACTIONS_RUNTIME_TOKEN` is present.
+structurally validated HTTP endpoints with a non-GitHub/non-loopback authority
+(including all IPv4 `127/8` and IPv4-mapped IPv6 loopback spellings), numeric
+port and explicit path, and that `ACTIONS_RUNTIME_TOKEN` is present.
+Bracketed authorities use the fixed runner's Python 3.8+ stdlib `ipaddress`
+classifier for every IPv6 spelling; missing, too-old or invalid parser state
+fails closed with only a `parser` reason class.
 The pinned Actions-cache save/restore actions then exercise that attested
 remote backend. Seed and verify inputs are bound to the configured sentinel ID
 and exact merge ref before cache access. Seed clears its local marker, performs
@@ -342,7 +346,8 @@ record the result without executing PR-controlled code. The job has
 `permissions: {}`, performs no checkout, receives no secrets, and uses only the
 fixed `.depot-authority-sentinel` path. Before the pinned cache restore it
 attests the provider-injected remote backend using the same structural
-non-GitHub/non-loopback HTTP contract and requires a nonempty runtime token; no
+non-GitHub/non-loopback HTTP contract (including all IPv4 `127/8` and
+IPv4-mapped IPv6 loopback spellings) and requires a nonempty runtime token; no
 endpoint, host, path, port or token value is printed. It validates the
 repository variable and the actual `github.event.pull_request.number`,
 restores the trusted seed (not lookup-only), validates exact seed marker

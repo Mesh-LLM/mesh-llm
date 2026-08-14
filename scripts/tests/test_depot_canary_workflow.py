@@ -2,6 +2,7 @@ import unittest
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 from textwrap import dedent
@@ -28,10 +29,21 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
 
     @staticmethod
     def _step_script(job: str, step_name: str) -> str:
-        start = job.index(f"      - name: {step_name}")
-        body = job[start:].split("        run: |\n", 1)[1]
-        body = body.split("\n      - name:", 1)[0]
-        return dedent(body)
+        match = re.search(
+            rf"^      - name: {re.escape(step_name)}\n(?P<body>.*?)(?=^      - name:|\Z)",
+            job,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if match is None:
+            raise AssertionError(f"missing step {step_name}")
+        run = re.search(
+            r"^        run: \|\n(?P<script>.*)",
+            match.group("body"),
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if run is None:
+            raise AssertionError(f"step {step_name} has no run script")
+        return dedent(run.group("script"))
 
     def _run_attestation(
         self,
@@ -40,9 +52,10 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         results_url: str,
         *,
         runtime_token: str = "non-secret-runtime-token",
+        path: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         environment = {
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PATH": path or os.environ.get("PATH", "/usr/bin:/bin"),
             "ACTIONS_CACHE_URL": cache_url,
             "ACTIONS_RESULTS_URL": results_url,
             "ACTIONS_RUNTIME_TOKEN": runtime_token,
@@ -50,7 +63,7 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         if runtime_token == "":
             environment.pop("ACTIONS_RUNTIME_TOKEN")
         return subprocess.run(
-            ["bash", "-c", "set -euo pipefail\n" + script],
+            ["/bin/bash", "-c", "set -euo pipefail\n" + script],
             check=False,
             capture_output=True,
             text=True,
@@ -84,12 +97,9 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         for mode in ("audit", "seed", "verify-pr-write"):
             self.assertIn(f"          - {mode}", self.workflow)
 
-        audit_start = self.workflow.index("  runner:")
-        seed_start = self.workflow.index("  seed_authority_marker:")
-        verify_start = self.workflow.index("  verify_pr_write:")
-        audit = self.workflow[audit_start:seed_start]
-        seed = self.workflow[seed_start:verify_start]
-        verify = self.workflow[verify_start:]
+        audit = self._job_block("runner")
+        seed = self._job_block("seed_authority_marker")
+        verify = self._job_block("verify_pr_write")
 
         self.assertIn("github.event.inputs.mode == 'audit'", audit)
         self.assertIn("github.event.inputs.mode == 'seed'", seed)
@@ -281,7 +291,21 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                 ("ACTIONS_CACHE_URL", "http://actions.githubusercontent.com:1234/cache", "github"),
                 ("ACTIONS_CACHE_URL", "http://localhost:1234/cache", "loopback"),
                 ("ACTIONS_CACHE_URL", "http://127.0.0.1:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://127.0.0.0:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://127.1.2.3:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://127.255.255.255:1234/cache", "loopback"),
                 ("ACTIONS_CACHE_URL", "http://[::1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[::ffff:127.0.0.1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[::ffff:127.255.255.255]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[::ffff:7f00:1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[0:0:0:0:0:ffff:127.0.0.1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[0:0:0:0:0:ffff:7f00:1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[0:0:0:0:0:0:0:1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[0::1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[0:0:0:0::1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[0::ffff:127.0.0.1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[0:0:0:0::ffff:127.0.0.1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[not-an-ip]:1234/cache", "parser"),
                 ("ACTIONS_CACHE_URL", "http://user@cache.example.invalid:1234/cache", "userinfo"),
                 ("ACTIONS_CACHE_URL", "http://cache.example.invalid/cache", "port"),
                 ("ACTIONS_CACHE_URL", "http://cache.example.invalid:0/cache", "port"),
@@ -435,14 +459,18 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         action_run = action.split("      run: |\n", maxsplit=1)[1]
         action_script = dedent(action_run)
-        canary_start = self.workflow.index("          depot_selected=true")
-        canary_end = self.workflow.index(
-            "          {\n",
-            canary_start,
+        runner_script = self._step_script(
+            self._job_block("runner"),
+            "Verify ephemeral runner resources",
         )
-        canary_script = "set -euo pipefail\n" + dedent(
-            self.workflow[canary_start:canary_end],
+        cache_probe = re.search(
+            r"^depot_selected=true\n(?P<body>.*?)(?=^\{\n|\Z)",
+            runner_script,
+            flags=re.MULTILINE | re.DOTALL,
         )
+        if cache_probe is None:
+            raise AssertionError("missing canary cache probe")
+        canary_script = "set -euo pipefail\n" + cache_probe.group(0)
 
         def run_probe(
             script: str,

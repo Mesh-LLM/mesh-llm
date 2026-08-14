@@ -267,9 +267,12 @@ permissions, no checkout, no secrets and only the fixed
 `.depot-authority-sentinel` path. Before each cache action it requires the
 provider-injected `ACTIONS_CACHE_URL` and `ACTIONS_RESULTS_URL` to be present
 and structurally attested as HTTP endpoints with a nonempty, non-GitHub,
-non-loopback authority, numeric port and explicit path, plus a nonempty
+non-loopback authority (including all IPv4 `127/8` and IPv4-mapped IPv6
+loopback spellings), numeric port and explicit path, plus a nonempty
 `ACTIONS_RUNTIME_TOKEN`; it reports only variable/reason classes and never
 endpoint values. Manual seed/verify inputs bind to the configured sentinel ID
+and use the fixed runner's Python 3.8+ stdlib `ipaddress` classifier for every
+bracketed IPv6 spelling; parser absence/version/invalidity fails closed.
 and exact merge ref. The PR probe restores the trusted seed (not lookup-only),
 validates exact seed marker content on a hit, replaces it with a deterministic
 non-secret poison marker, saves the exact Stage 1 poison key, then fails only

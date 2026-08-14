@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -19,8 +20,11 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         self.workflow = (WORKFLOWS / "ci-quality-slice.yml").read_text(
             encoding="utf-8"
         )
+        self.canary = (WORKFLOWS / "depot-canary.yml").read_text(
+            encoding="utf-8"
+        )
         self.selector = SELECTOR.read_text(encoding="utf-8")
-        self.sentinel = self.workflow.split("  authority_sentinel:\n", 1)[1]
+        self.sentinel = self._job_block(self.workflow, "authority_sentinel")
 
     @staticmethod
     def _job_block(workflow: str, job_name: str) -> str:
@@ -33,6 +37,37 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         if match is None:
             raise AssertionError(f"missing job {job_name}")
         return match.group("body")
+
+    @staticmethod
+    def _job_names(workflow: str) -> set[str]:
+        jobs = workflow.split("\njobs:\n", 1)[1]
+        return set(re.findall(r"^  ([A-Za-z0-9_-]+):", jobs, re.MULTILINE))
+
+    @staticmethod
+    def _step_names(job: str) -> list[str]:
+        return re.findall(r"^      - name: (.+)$", job, re.MULTILINE)
+
+    @staticmethod
+    def _step_block(job: str, step_name: str) -> str:
+        match = re.search(
+            rf"^      - name: {re.escape(step_name)}\n(?P<body>.*?)(?=^      - name:|\Z)",
+            job,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if match is None:
+            raise AssertionError(f"missing step {step_name}")
+        return match.group("body")
+
+    @classmethod
+    def _step_script(cls, job: str, step_name: str) -> str:
+        run = re.search(
+            r"^        run: \|\n(?P<script>.*)",
+            cls._step_block(job, step_name),
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if run is None:
+            raise AssertionError(f"step {step_name} has no run script")
+        return dedent(run.group("script"))
 
     def _run_selector(
         self,
@@ -86,18 +121,14 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             return result, outputs
 
     def _validation_script(self) -> str:
-        block = self.sentinel.split(
-            "        run: |\n", 1
-        )[1].split("\n      - name:", 1)[0]
-        return "set -euo pipefail\n" + dedent(block)
+        return "set -euo pipefail\n" + self._step_script(
+            self.sentinel, "Validate protected sentinel identity"
+        )
 
     def _attestation_script(self) -> str:
-        start = self.sentinel.index(
-            "      - name: Attest provider-injected cache backend"
+        return "set -euo pipefail\n" + self._step_script(
+            self.sentinel, "Attest provider-injected cache backend"
         )
-        block = self.sentinel[start:].split("        run: |\n", 1)[1]
-        block = block.split("\n      - name:", 1)[0]
-        return "set -euo pipefail\n" + dedent(block)
 
     def _run_validation(
         self,
@@ -129,9 +160,10 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         results_url: str,
         *,
         runtime_token: str = "non-secret-runtime-token",
+        path: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         environment = {
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PATH": path or os.environ.get("PATH", "/usr/bin:/bin"),
             "ACTIONS_CACHE_URL": cache_url,
             "ACTIONS_RESULTS_URL": results_url,
             "ACTIONS_RUNTIME_TOKEN": runtime_token,
@@ -139,7 +171,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         if runtime_token == "":
             environment.pop("ACTIONS_RUNTIME_TOKEN")
         return subprocess.run(
-            ["bash", "-c", self._attestation_script()],
+            ["/bin/bash", "-c", self._attestation_script()],
             cwd=ROOT,
             env=environment,
             check=False,
@@ -335,17 +367,27 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         self.assertNotEqual(number_mismatch.returncode, 0)
 
     def test_cache_probe_restores_then_publishes_before_gate(self) -> None:
-        restore_index = self.sentinel.index("id: restore_seed")
-        replace_index = self.sentinel.index("Replace with deterministic PR poison marker")
-        save_index = self.sentinel.index("Save PR poison marker")
-        gate_index = self.sentinel.index("Require trusted seed isolation after poison publication")
-        self.assertLess(restore_index, replace_index)
-        self.assertLess(replace_index, save_index)
-        self.assertLess(save_index, gate_index)
-        restore = self.sentinel[restore_index:replace_index]
+        step_names = self._step_names(self.sentinel)
+        positions = {name: index for index, name in enumerate(step_names)}
+        self.assertLess(
+            positions["Restore trusted authority marker"],
+            positions["Replace with deterministic PR poison marker"],
+        )
+        self.assertLess(
+            positions["Replace with deterministic PR poison marker"],
+            positions["Save PR poison marker"],
+        )
+        self.assertLess(
+            positions["Save PR poison marker"],
+            positions["Require trusted seed isolation after poison publication"],
+        )
+        restore = self._step_block(self.sentinel, "Restore trusted authority marker")
         self.assertNotIn("lookup-only", restore)
         self.assertIn("uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25", restore)
-        self.assertIn("uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25", self.sentinel[save_index:gate_index])
+        self.assertIn(
+            "uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25",
+            self._step_block(self.sentinel, "Save PR poison marker"),
+        )
         self.assertIn("rm -rf -- .depot-authority-sentinel", self.sentinel)
         self.assertIn(
             "Trusted seed was not readable; pending trusted-main verify-pr-write.",
@@ -362,12 +404,37 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "")
 
+        for endpoint in (
+            "http://126.255.255.255:1234/cache",
+            "http://128.0.0.0:1234/cache",
+            "http://[::ffff:126.255.255.255]:1234/cache",
+            "http://[::ffff:7e00:1]:1234/cache",
+            "http://[2001:db8::1]:1234/cache",
+        ):
+            with self.subTest(non_loopback=endpoint):
+                result = self._run_attestation(endpoint, valid_results)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
         invalid_cases = (
             ("https://cache.example.invalid:1234/cache", "scheme"),
             ("http://actions.githubusercontent.com:1234/cache", "github"),
             ("http://localhost:1234/cache", "loopback"),
             ("http://127.0.0.1:1234/cache", "loopback"),
+            ("http://127.0.0.0:1234/cache", "loopback"),
+            ("http://127.1.2.3:1234/cache", "loopback"),
+            ("http://127.255.255.255:1234/cache", "loopback"),
             ("http://[::1]:1234/cache", "loopback"),
+            ("http://[::ffff:127.0.0.1]:1234/cache", "loopback"),
+            ("http://[::ffff:127.255.255.255]:1234/cache", "loopback"),
+            ("http://[::ffff:7f00:1]:1234/cache", "loopback"),
+            ("http://[0:0:0:0:0:ffff:127.0.0.1]:1234/cache", "loopback"),
+            ("http://[0:0:0:0:0:ffff:7f00:1]:1234/cache", "loopback"),
+            ("http://[0:0:0:0:0:0:0:1]:1234/cache", "loopback"),
+            ("http://[0::1]:1234/cache", "loopback"),
+            ("http://[0:0:0:0::1]:1234/cache", "loopback"),
+            ("http://[0::ffff:127.0.0.1]:1234/cache", "loopback"),
+            ("http://[0:0:0:0::ffff:127.0.0.1]:1234/cache", "loopback"),
+            ("http://[not-an-ip]:1234/cache", "parser"),
             ("http://user@cache.example.invalid:1234/cache", "userinfo"),
             ("http://cache.example.invalid/cache", "port"),
             ("http://cache.example.invalid:0/cache", "port"),
@@ -401,59 +468,145 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         )
         self.assertNotIn("non-secret-runtime-token", missing_token.stderr)
 
+        with tempfile.TemporaryDirectory() as bin_dir:
+            tr_path = shutil.which("tr")
+            self.assertIsNotNone(tr_path)
+            os.symlink(tr_path, Path(bin_dir) / "tr")
+            parser_missing = self._run_attestation(
+                "http://[2001:db8::1]:1234/cache",
+                valid_results,
+                path=bin_dir,
+            )
+        self.assertNotEqual(parser_missing.returncode, 0)
+        self.assertIn(
+            "cache backend attestation failed (variable=ACTIONS_CACHE_URL reason=parser)",
+            parser_missing.stderr,
+        )
+        self.assertNotIn("2001:db8::1", parser_missing.stderr)
+        self.assertIn("sys.version_info < (3, 8)", self._attestation_script())
+
+        with tempfile.TemporaryDirectory() as bin_dir:
+            tr_path = shutil.which("tr")
+            self.assertIsNotNone(tr_path)
+            os.symlink(tr_path, Path(bin_dir) / "tr")
+            fake_python = Path(bin_dir) / "python3"
+            fake_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            fake_python.chmod(0o755)
+            classifier_failed = self._run_attestation(
+                "http://[2001:db8::1]:1234/cache",
+                valid_results,
+                path=bin_dir,
+            )
+        self.assertNotEqual(classifier_failed.returncode, 0)
+        self.assertIn(
+            "cache backend attestation failed (variable=ACTIONS_CACHE_URL reason=parser)",
+            classifier_failed.stderr,
+        )
+        self.assertNotIn("2001:db8::1", classifier_failed.stderr)
+
+    def test_authority_attestation_copies_are_identical(self) -> None:
+        quality_script = self._attestation_script()
+        seed_script = "set -euo pipefail\n" + self._step_script(
+            self._job_block(self.canary, "seed_authority_marker"),
+            "Attest provider-injected cache backend",
+        )
+        verify_script = "set -euo pipefail\n" + self._step_script(
+            self._job_block(self.canary, "verify_pr_write"),
+            "Attest provider-injected cache backend",
+        )
+        self.assertEqual(quality_script, seed_script)
+        self.assertEqual(quality_script, verify_script)
+        for required in (
+            "is_loopback_authority()",
+            "127\\.[0-9]{1,3}",
+            "command -v python3",
+            "import ipaddress",
+            "sys.version_info < (3, 8)",
+            "ipv4_mapped",
+            "else 3",
+            "python_status == 3",
+            "ACTIONS_CACHE_URL",
+            "ACTIONS_RESULTS_URL",
+            "ACTIONS_RUNTIME_TOKEN",
+        ):
+            self.assertIn(required, quality_script)
+
     def test_five_pr_entrypoints_and_existing_build_shape_are_unchanged(self) -> None:
         expected = {
-            "pr_quality.yml",
-            "pr_website.yml",
-            "pr_linux.yml",
-            "pr_macos.yml",
-            "pr_windows.yml",
+            "pr_quality.yml": ("quality", "Quality", "quality"),
+            "pr_website.yml": ("website", "Website", "website"),
+            "pr_linux.yml": ("Linux", "Linux", "linux"),
+            "pr_macos.yml": ("macOS", "macOS", "macos"),
+            "pr_windows.yml": ("Windows", "Windows", "windows"),
         }
         validation_entrypoints = {
             path.name
             for path in WORKFLOWS.glob("pr_*.yml")
             if "  pull_request:" in path.read_text(encoding="utf-8")
         }
-        self.assertEqual(validation_entrypoints, expected)
+        self.assertEqual(validation_entrypoints, set(expected))
 
-        for name in ("ci-quality-lane.yml", *sorted(expected)):
-            current = (WORKFLOWS / name).read_text(encoding="utf-8")
-            baseline_entry = subprocess.check_output(
-                ["git", "show", f"HEAD:.github/workflows/{name}"],
-                cwd=ROOT,
-                text=True,
-            )
-            self.assertEqual(current, baseline_entry, name)
-
-        baseline = subprocess.check_output(
-            ["git", "show", "HEAD:.github/workflows/ci-quality-slice.yml"],
-            cwd=ROOT,
-            text=True,
+        quality_lane = (WORKFLOWS / "ci-quality-lane.yml").read_text(
+            encoding="utf-8"
         )
-        current_jobs = self.workflow.split("\njobs:\n", 1)[1]
-        baseline_jobs = baseline.split("\njobs:\n", 1)[1]
         self.assertEqual(
-            {
-                line.split(":", 1)[0].strip()
-                for line in current_jobs.splitlines()
-                if line.startswith("  ") and not line.startswith("    ")
-            },
-            {
-                line.split(":", 1)[0].strip()
-                for line in baseline_jobs.splitlines()
-                if line.startswith("  ") and not line.startswith("    ")
-            }
-            | {"authority_sentinel"},
+            self._job_names(quality_lane),
+            {"quality", "runner_contract", "summary"},
         )
+        self.assertIn(
+            "uses: ./.github/workflows/ci-quality-slice.yml",
+            self._job_block(quality_lane, "quality"),
+        )
+        self.assertIn(
+            "uses: ./.github/workflows/ci-runner-contract-slice.yml",
+            self._job_block(quality_lane, "runner_contract"),
+        )
+        summary = self._job_block(quality_lane, "summary")
+        self.assertIn("needs: [quality, runner_contract]", summary)
+        self.assertIn("runs-on: ubuntu-24.04", summary)
+
+        for filename, (plan_name, lane_name, lane_id) in expected.items():
+            workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")
+            with self.subTest(workflow=filename):
+                self.assertEqual(
+                    self._job_names(workflow),
+                    {"plan", "lane", "required"},
+                )
+                plan = self._job_block(workflow, "plan")
+                lane = self._job_block(workflow, "lane")
+                required = self._job_block(workflow, "required")
+                self.assertIn(f"name: Plan {plan_name}", plan)
+                self.assertIn("runs-on: ubuntu-24.04", plan)
+                self.assertIn(
+                    f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane_id}-lane.yml@main",
+                    lane,
+                )
+                self.assertIn(f"name: {lane_name}", lane)
+                self.assertIn(f"name: PR / {lane_name}", required)
+                self.assertIn("needs: [plan, lane]", required)
+                self.assertIn("runs-on: ubuntu-24.04", required)
+                self.assertIn("permissions: {}", required)
+
+        expected_slice_jobs = {
+            "runner_policy": "runs-on: ubuntu-24.04",
+            "quality_contracts": "runs-on: ${{ needs.runner_policy.outputs.runner_4 }}",
+            "rust_fmt": "runs-on: ${{ needs.runner_policy.outputs.runner_4 }}",
+            "rust_clippy": "runs-on: ${{ needs.runner_policy.outputs.runner_8 }}",
+            "cli_docs_sync": "runs-on: ${{ needs.runner_policy.outputs.runner_4 }}",
+            "authority_sentinel": "runs-on: ${{ needs.runner_policy.outputs.authority_sentinel_runner }}",
+        }
+        self.assertEqual(self._job_names(self.workflow), set(expected_slice_jobs))
+        for job_name, runner_expression in expected_slice_jobs.items():
+            with self.subTest(job=job_name):
+                self.assertIn(runner_expression, self._job_block(self.workflow, job_name))
+
         for job_name in (
             "quality_contracts",
             "rust_fmt",
             "rust_clippy",
             "cli_docs_sync",
         ):
-            current_job = self._job_block(self.workflow, job_name)
-            baseline_job = self._job_block(baseline, job_name)
-            self.assertEqual(current_job.rstrip(), baseline_job.rstrip(), job_name)
+            self.assertNotIn("authority_sentinel", self._job_block(self.workflow, job_name))
 
 
 if __name__ == "__main__":

@@ -323,10 +323,14 @@ separate `DEPOT_PR_SENTINEL_ID` and actual PR number, restores the trusted seed
 at `.depot-authority-sentinel`, and gates only after publication. Before any
 cache action, it attests the provider-injected `ACTIONS_CACHE_URL` and
 `ACTIONS_RESULTS_URL` as value-free structural HTTP endpoints with a nonempty
-non-GitHub/non-loopback authority, numeric port and explicit path, and requires
+non-GitHub/non-loopback authority (including all IPv4 `127/8` and IPv4-mapped
+IPv6 loopback spellings), numeric port and explicit path, and requires
 `ACTIONS_RUNTIME_TOKEN`; malformed/missing inputs fail closed without printing
-endpoint, host, path, port or token values. Seed and poison markers are
-validated byte-for-byte on cache hits. It is outside planner slices and does
+endpoint, host, path, port or token values. Endpoint authorities are classified
+with the fixed runner's Python 3.8+ stdlib `ipaddress` parser for all bracketed
+IPv6 spellings; parser absence/version/invalidity fails closed. Seed and poison
+markers are validated byte-for-byte on cache hits. It is outside planner
+slices and does
 not add build commands, matrices, artifacts, or producer/consumer edges; the
 existing Quality lane summary still gates on its normal `quality` and
 `runner_contract` jobs. Fork PRs remain hosted and provide the

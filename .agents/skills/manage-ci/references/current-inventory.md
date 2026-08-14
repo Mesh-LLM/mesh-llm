@@ -171,9 +171,12 @@ remains hosted and is the no-Depot-authority half of the sentinel acceptance
 evidence; only the exact same-repository sentinel ref may exercise the
 diagnostic Depot job. All three sentinel cache phases attest the
 provider-injected `ACTIONS_CACHE_URL`/`ACTIONS_RESULTS_URL` structure and
-require a runtime token before invoking `actions/cache`; attestation reports
-only value-free variable/reason classes and fails closed on malformed or
-missing backend data.
+require a runtime token before invoking `actions/cache`; the non-loopback
+check includes all IPv4 `127/8` and IPv4-mapped IPv6 loopback spellings.
+Bracketed IPv6 authorities use the fixed runner's Python 3.8+ stdlib
+`ipaddress` classifier; parser absence/version/invalidity fails closed.
+Attestation reports only value-free variable/reason classes and fails closed
+on malformed or missing backend data.
 
 Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
 `DEPOT_PR_RUNNERS_ENABLED` (absent/false until protected PR activation),
