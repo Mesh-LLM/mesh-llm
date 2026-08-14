@@ -157,13 +157,23 @@ fn stage_disk_budget(root: &Path, config: &StageConfig) -> Option<disk_budget::B
         return None;
     }
     let node_bytes = budget.bytes()?;
-    let desired = config
+    let desired = disk_working_set_bytes(config).unwrap_or(node_bytes);
+    disk_budget::reserve(node_bytes, desired)
+}
+
+/// Size serialized disk pages against the full native KV pool.
+///
+/// `StageKvCacheConfig::max_bytes` is deliberately half of that pool: resident
+/// prefixes share cells with active lanes. Disk pages do not consume native KV
+/// cells, and reusing the resident allowance here rejects valid prefixes beyond
+/// half the context (for example, 4,864 tokens in an 8,192-token context).
+fn disk_working_set_bytes(config: &StageConfig) -> Option<u64> {
+    config
         .kv_cache
         .as_ref()
         .map(|cache| cache.max_bytes)
         .filter(|bytes| *bytes > 0)
-        .unwrap_or(node_bytes);
-    disk_budget::reserve(node_bytes, desired)
+        .map(|bytes| bytes.saturating_mul(2))
 }
 
 fn effective_disk_cache_config() -> KvDiskCacheConfig {
@@ -427,6 +437,38 @@ fn parse_cache_mode(value: &str) -> Option<StageKvCacheMode> {
 mod tests {
     use super::*;
     use skippy_protocol::FlashAttentionType;
+
+    #[test]
+    fn disk_working_set_uses_full_pool_not_resident_half() {
+        let mut config = test_config("example/dense-model");
+        config.kv_cache = Some(StageKvCacheConfig {
+            mode: StageKvCacheMode::LookupRecord,
+            payload: StageKvCachePayload::ResidentKv,
+            max_entries: 64,
+            max_bytes: 8_912_896,
+            min_tokens: 64,
+            shared_prefix_stride_tokens: 128,
+            shared_prefix_record_limit: 2,
+        });
+
+        assert_eq!(disk_working_set_bytes(&config), Some(17_825_792));
+    }
+
+    #[test]
+    fn zero_resident_budget_defers_to_node_disk_budget() {
+        let mut config = test_config("example/dense-model");
+        config.kv_cache = Some(StageKvCacheConfig {
+            mode: StageKvCacheMode::LookupRecord,
+            payload: StageKvCachePayload::ResidentKv,
+            max_entries: 64,
+            max_bytes: 0,
+            min_tokens: 64,
+            shared_prefix_stride_tokens: 128,
+            shared_prefix_record_limit: 2,
+        });
+
+        assert_eq!(disk_working_set_bytes(&config), None);
+    }
 
     #[test]
     fn recurrent_tensor_names_require_exact_state_cache() {
