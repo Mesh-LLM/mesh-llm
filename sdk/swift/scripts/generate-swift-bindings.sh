@@ -27,7 +27,7 @@ rm -f \
 cat > "$RUNNER_DIR/Cargo.toml" <<'EOF'
 [package]
 name = "swift_bindgen_runner"
-version = "0.72.1"
+version = "0.76.0-rc1"
 edition = "2021"
 
 [dependencies]

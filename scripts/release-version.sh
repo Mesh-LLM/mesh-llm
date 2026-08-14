@@ -141,7 +141,7 @@ JS
     if [[ "$before" == "$after" ]]; then
         return
     fi
-    printf '%s' "$after" >"$file"
+    printf '%s\n' "$after" >"$file"
 }
 
 update_known_mesh_versions() {
