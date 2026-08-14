@@ -366,6 +366,14 @@ impl KvStageIntegration {
             ("skippy.kv.disk_promotions", json!(stats.promotions)),
             ("skippy.kv.disk_evictions", json!(stats.evictions)),
             (
+                "skippy.kv.disk_pages_rejected_too_large",
+                json!(stats.pages_rejected_too_large),
+            ),
+            (
+                "skippy.kv.disk_last_rejected_page_bytes",
+                json!(stats.last_rejected_page_bytes),
+            ),
+            (
                 "skippy.kv.disk_corrupt_entries",
                 json!(stats.corrupt_entries),
             ),

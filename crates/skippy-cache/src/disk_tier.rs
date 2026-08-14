@@ -141,6 +141,10 @@ pub struct DiskTierStats {
     pub promotions: u64,
     /// Entries dropped to stay inside the size budget.
     pub evictions: u64,
+    /// Pages rejected because one page exceeded the whole tier budget.
+    pub pages_rejected_too_large: u64,
+    /// Byte size of the most recently rejected oversized page.
+    pub last_rejected_page_bytes: u64,
     /// Entries rejected because their bytes failed verification.
     pub corrupt_entries: u64,
     /// Loads that hashed the payload against its stored checksums.
@@ -376,9 +380,15 @@ impl PrefixDiskTier {
             return Ok(());
         }
         let total_bytes: u64 = components.iter().map(|bytes| bytes.len() as u64).sum();
-        if total_bytes == 0 || total_bytes > self.max_bytes {
+        if total_bytes == 0 {
+            return Ok(());
+        }
+        if total_bytes > self.max_bytes {
             // A single page larger than the whole budget would evict
-            // everything else and then itself; skip it.
+            // everything else and then itself; make the rejection observable.
+            self.stats.pages_rejected_too_large =
+                self.stats.pages_rejected_too_large.saturating_add(1);
+            self.stats.last_rejected_page_bytes = total_bytes;
             return Ok(());
         }
         if self.entries.contains_key(page_id) {
@@ -748,6 +758,60 @@ mod tests {
             &payload[..]
         );
         assert_eq!(reopened.stats().entries, 1);
+    }
+
+    #[test]
+    fn above_half_context_pages_survive_reopen_at_split_stage_densities() {
+        const HALF_CONTEXT_TOKENS: u64 = 4_096;
+        const PAGE_TOKENS: u64 = 4_864;
+        // Scaled-down forms of the observed stage densities (76,160 and 2,176
+        // bytes/token). Their ratio is preserved without writing 353 MiB.
+        const SCALED_STAGE_BYTES_PER_TOKEN: [u64; 2] = [2_380, 68];
+
+        for bytes_per_token in SCALED_STAGE_BYTES_PER_TOKEN {
+            let dir = tempfile::tempdir().unwrap();
+            let payload_len = PAGE_TOKENS * bytes_per_token;
+            let old_resident_derived_budget = HALF_CONTEXT_TOKENS * bytes_per_token;
+            let payload = vec![11u8; payload_len as usize];
+
+            let mut old_tier = tier(&dir, old_resident_derived_budget);
+            old_tier
+                .store("above-half", PAGE_TOKENS, "resident-kv", &[&payload], None)
+                .unwrap();
+            assert_eq!(old_tier.stats().entries, 0);
+            assert_eq!(old_tier.stats().pages_rejected_too_large, 1);
+            drop(old_tier);
+
+            let disk_derived_budget = payload_len + bytes_per_token;
+            {
+                let mut tier = tier(&dir, disk_derived_budget);
+                tier.store("above-half", PAGE_TOKENS, "resident-kv", &[&payload], None)
+                    .unwrap();
+                assert_eq!(tier.stats().entries, 1);
+            }
+
+            let mut reopened = tier(&dir, disk_derived_budget);
+            let loaded = reopened
+                .load("above-half", "resident-kv")
+                .unwrap()
+                .expect("disk-derived budget should survive restart");
+            assert_eq!(loaded.token_count, PAGE_TOKENS);
+            assert_eq!(loaded.components[0].len(), payload_len);
+        }
+    }
+
+    #[test]
+    fn oversized_page_rejection_is_observable() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tier = tier(&dir, 1024);
+
+        tier.store("too-large", 512, "resident-kv", &[&[7u8; 1025]], None)
+            .unwrap();
+
+        let stats = tier.stats();
+        assert_eq!(stats.entries, 0);
+        assert_eq!(stats.pages_rejected_too_large, 1);
+        assert_eq!(stats.last_rejected_page_bytes, 1025);
     }
 
     /// Verification is ~95% of restore cost on a multi-gigabyte page, so a

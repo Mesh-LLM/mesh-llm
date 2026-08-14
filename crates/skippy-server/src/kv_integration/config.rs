@@ -157,23 +157,16 @@ fn stage_disk_budget(root: &Path, config: &StageConfig) -> Option<disk_budget::B
         return None;
     }
     let node_bytes = budget.bytes()?;
-    let desired = disk_working_set_bytes(config).unwrap_or(node_bytes);
-    disk_budget::reserve(node_bytes, desired)
+    disk_budget::reserve(node_bytes, stage_disk_share(node_bytes))
 }
 
-/// Size serialized disk pages against the full native KV pool.
+/// Give two co-located stages equal access to the node-owned disk budget.
 ///
-/// `StageKvCacheConfig::max_bytes` is deliberately half of that pool: resident
-/// prefixes share cells with active lanes. Disk pages do not consume native KV
-/// cells, and reusing the resident allowance here rejects valid prefixes beyond
-/// half the context (for example, 4,864 tokens in an 8,192-token context).
-fn disk_working_set_bytes(config: &StageConfig) -> Option<u64> {
-    config
-        .kv_cache
-        .as_ref()
-        .map(|cache| cache.max_bytes)
-        .filter(|bytes| *bytes > 0)
-        .map(|bytes| bytes.saturating_mul(2))
+/// A stage must not claim the whole pool before later stages open, and this
+/// share must not be derived from the resident KV allowance: that value may be
+/// an explicit operator cap and disk pages do not consume native KV cells.
+fn stage_disk_share(node_bytes: u64) -> u64 {
+    node_bytes.saturating_add(1) / 2
 }
 
 fn effective_disk_cache_config() -> KvDiskCacheConfig {
@@ -439,35 +432,9 @@ mod tests {
     use skippy_protocol::FlashAttentionType;
 
     #[test]
-    fn disk_working_set_uses_full_pool_not_resident_half() {
-        let mut config = test_config("example/dense-model");
-        config.kv_cache = Some(StageKvCacheConfig {
-            mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::ResidentKv,
-            max_entries: 64,
-            max_bytes: 8_912_896,
-            min_tokens: 64,
-            shared_prefix_stride_tokens: 128,
-            shared_prefix_record_limit: 2,
-        });
-
-        assert_eq!(disk_working_set_bytes(&config), Some(17_825_792));
-    }
-
-    #[test]
-    fn zero_resident_budget_defers_to_node_disk_budget() {
-        let mut config = test_config("example/dense-model");
-        config.kv_cache = Some(StageKvCacheConfig {
-            mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::ResidentKv,
-            max_entries: 64,
-            max_bytes: 0,
-            min_tokens: 64,
-            shared_prefix_stride_tokens: 128,
-            shared_prefix_record_limit: 2,
-        });
-
-        assert_eq!(disk_working_set_bytes(&config), None);
+    fn stages_share_the_node_disk_budget_without_using_resident_caps() {
+        assert_eq!(stage_disk_share(1_000), 500);
+        assert_eq!(stage_disk_share(1_001), 501);
     }
 
     #[test]
