@@ -274,10 +274,10 @@ not require ambient `ACTIONS_RUNTIME_TOKEN`: GitHub's
 `NodeScriptActionHandler` injects that credential into the pinned cache
 actions, while the shell `ScriptHandler` does not. Their successful full
 restore/save calls provide the credential/token proof. Manual seed/verify
-inputs bind to the configured sentinel ID
-and use the fixed runner's Python 3.8+ stdlib `ipaddress` classifier for every
-bracketed IPv6 spelling; parser absence/version/invalidity fails closed.
-and exact merge ref. The PR probe restores the trusted seed (not lookup-only),
+inputs bind to both the configured sentinel ID and the exact merge ref. Every
+attestation uses the fixed runner's Python 3.8+ stdlib `ipaddress` classifier
+for each bracketed IPv6 spelling; parser absence/version/invalidity fails
+closed. The PR probe restores the trusted seed (not lookup-only),
 validates exact seed marker content on a hit, replaces it with a deterministic
 non-secret poison marker, saves the exact Stage 1 poison key, clears and fully
 restores that key, and requires a cache hit and exact marker bytes before the
