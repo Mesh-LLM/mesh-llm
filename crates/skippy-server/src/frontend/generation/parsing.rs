@@ -17,6 +17,7 @@ use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
 use skippy_runtime::MediaInput;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 
 pub(in crate::frontend) fn ensure_requested_model(
     advertised_model_id: &str,
@@ -301,19 +302,24 @@ pub(in crate::frontend) fn parsed_tool_calls_from_message_value(
 }
 
 pub(in crate::frontend) fn ensure_tool_call_ids(tool_calls: &mut [Value]) {
+    let mut emitted_ids = HashSet::new();
     for tool_call in tool_calls {
         let Some(object) = tool_call.as_object_mut() else {
             continue;
         };
-        let has_valid_id = object
+        let valid_unseen_id = object
             .get("id")
             .and_then(Value::as_str)
-            .is_some_and(|id| !id.trim().is_empty());
-        if !has_valid_id {
-            object.insert(
-                "id".to_string(),
-                Value::String(format!("call_{}", uuid::Uuid::new_v4().simple())),
-            );
+            .filter(|id| !id.trim().is_empty())
+            .filter(|id| emitted_ids.insert((*id).to_string()));
+        if valid_unseen_id.is_none() {
+            let id = loop {
+                let candidate = format!("call_{}", uuid::Uuid::new_v4().simple());
+                if emitted_ids.insert(candidate.clone()) {
+                    break candidate;
+                }
+            };
+            object.insert("id".to_string(), Value::String(id));
         }
     }
 }
