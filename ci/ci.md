@@ -100,6 +100,33 @@ the final notes retain the RC changes and add any post-RC changes.
 The workflow-scoped token push does not fan out another main CI run; the release
 graph is the evidence for that version-only source commit.
 
+```mermaid
+flowchart TD
+    JUST["just release VERSION<br/>preflight + dispatch + wait"] --> DISPATCH["Release workflow dispatch"]
+    UI["GitHub Actions UI"] --> DISPATCH
+    TAG["Pre-versioned v* tag push"] --> VERIFY["Verify tag is on main history<br/>and already version-complete"]
+    DISPATCH --> META["Resolve version and highest prior stable notes tag"]
+    VERIFY --> META
+    META --> PATH{"Release path"}
+    PATH -- "canary dispatch" --> CANARY["Use dispatch SHA<br/>do not update main"]
+    PATH -- "non-canary dispatch" --> BUMP["Run release-version.sh"]
+    BUMP --> VERSION_COMMIT["Commit tracked version surface<br/>fast-forward main"]
+    PATH -- "tag push" --> TAG_SOURCE["Use validated tag source"]
+    CANARY --> BUILD["Build, compose, and smoke artifact matrix"]
+    VERSION_COMMIT --> BUILD
+    TAG_SOURCE --> BUILD
+    BUILD --> PUBLISHABLE{"Canary?"}
+    PUBLISHABLE -- "yes" --> CANARY_DONE["Stop without tag or publication"]
+    PUBLISHABLE -- "no" --> TAG_PATH{"Entry path"}
+    TAG_PATH -- "dispatch" --> PREPARE_TAG["Add generated SDK resources<br/>create and push immutable tag"]
+    TAG_PATH -- "tag push" --> EXISTING_TAG["Use existing immutable tag"]
+    PREPARE_TAG --> RELEASE["Publish GitHub release<br/>notes compare from prior stable tag"]
+    EXISTING_TAG --> RELEASE
+    RELEASE --> KIND{"Prerelease?"}
+    KIND -- "yes" --> RC_DONE["Stop after GitHub prerelease"]
+    KIND -- "no" --> DOWNSTREAM["Publish crates and dispatch<br/>packages, images, and npm"]
+```
+
 ## Graph shape
 
 ```mermaid
