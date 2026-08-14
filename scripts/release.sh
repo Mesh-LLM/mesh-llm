@@ -202,11 +202,6 @@ dispatch_release_workflow() {
     local tag="$1"
     local skip_gpu_bundles="$2"
     local canary="$3"
-    local release_sha="$4"
-    local before
-    local run_id
-
-    before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     echo "Dispatching Release workflow for $tag..." >&2
     gh workflow run release.yml \
@@ -214,6 +209,20 @@ dispatch_release_workflow() {
         --raw-field "version=$tag" \
         --raw-field "skip_gpu_bundles=$skip_gpu_bundles" \
         --raw-field "canary=$canary"
+}
+
+workflow_run_id_from_url() {
+    local run_url="$1"
+
+    if [[ "$run_url" =~ /actions/runs/([0-9]+)([/?#]|$) ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+    fi
+}
+
+find_dispatched_release_run_id() {
+    local release_sha="$1"
+    local created_after="$2"
+    local run_id
 
     echo "Waiting for GitHub to create the workflow run..." >&2
     for _ in {1..30}; do
@@ -223,7 +232,7 @@ dispatch_release_workflow() {
                 --branch main \
                 --commit "$release_sha" \
                 --event workflow_dispatch \
-                --created ">=$before" \
+                --created ">=$created_after" \
                 --json databaseId,headSha,createdAt \
                 --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty'
         )"
@@ -310,9 +319,16 @@ main() {
     confirm_release "$tag" "$version" "$current_version" "$skip_gpu_bundles" "$canary"
 
     local dispatch_sha
+    local dispatch_started_at
+    local run_url
     local run_id
-    dispatch_sha="$(git rev-parse HEAD)"
-    run_id="$(dispatch_release_workflow "$tag" "$skip_gpu_bundles" "$canary" "$dispatch_sha")"
+    dispatch_sha="$(git rev-parse origin/main)"
+    dispatch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    run_url="$(dispatch_release_workflow "$tag" "$skip_gpu_bundles" "$canary")"
+    run_id="$(workflow_run_id_from_url "$run_url")"
+    if [[ -z "$run_id" ]]; then
+        run_id="$(find_dispatched_release_run_id "$dispatch_sha" "$dispatch_started_at")"
+    fi
 
     echo "Watching Release workflow run $run_id..."
     gh run watch "$run_id" --compact --exit-status
@@ -333,4 +349,6 @@ main() {
     echo "Local main can now be fast-forwarded with: git pull --ff-only"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

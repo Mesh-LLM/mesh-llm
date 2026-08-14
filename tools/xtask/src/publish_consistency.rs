@@ -445,6 +445,16 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         "gh workflow run release.yml",
         "local release canonical workflow dispatch",
     )?;
+    ensure_contains(
+        &release_script,
+        "workflow_run_id_from_url",
+        "local release URL-derived workflow run ID",
+    )?;
+    ensure_contains(
+        &release_script,
+        "find_dispatched_release_run_id",
+        "local release SHA-correlated workflow run fallback",
+    )?;
     ensure_not_contains(
         &release_script,
         "scripts/release-version.sh",
