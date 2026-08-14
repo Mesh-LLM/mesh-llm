@@ -10,12 +10,17 @@ inputs:
     description: Directory used to cache downloaded HIP SDK installers.
     required: false
     default: sdk-installer-cache
+  allow-native-github-cache:
+    description: Whether the protected provider policy permits native GitHub cache APIs.
+    required: false
+    default: "true"
 
 runs:
   using: composite
   steps:
     - name: Cache HIP SDK installers
       id: installer-cache
+      if: ${{ inputs.allow-native-github-cache == 'true' }}
       uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: ${{ inputs.installer-cache-dir }}/rocm

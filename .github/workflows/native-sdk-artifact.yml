@@ -102,6 +102,7 @@ jobs:
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
       allow_depot_remote_cache: ${{ steps.resolve.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:

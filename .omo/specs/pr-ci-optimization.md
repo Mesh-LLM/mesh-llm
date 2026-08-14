@@ -235,10 +235,12 @@ global `DEPOT_PR_RUNNERS_ENABLED` gate remains absent/false. Fork heads,
 GitHub-hosted runners. Depot's documented GitHub cache path is
 repository-scoped and not branch-isolated; automatic cache redirection can
 expose repository-wide cache authority to PR code. Cache-key prefixes are not
-isolation. Native `actions/cache` consumers remain an unresolved boundary for
-the canary hook, so the hook is not itself an isolation proof and must not be
-enabled until the actual Depot/WebDAV authority is tested or those consumers
-are explicitly disabled.
+isolation. The central selector now emits `allow_native_github_cache=false`
+for a Depot-selected direct PR, and all eligible native GitHub cache consumers
+are conditionally disabled while the underlying install/build commands remain
+unchanged. This removes the checked-in cache API path but is not an ambient
+Depot/WebDAV authority proof; the actual runner sentinel and no-token checks
+remain required before enabling the canary or global PR gate.
 
 Before a PR Depot path is enabled, an administrator must prove:
 

@@ -178,7 +178,10 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("uses: actions/cache/restore@", ui)
         self.assertNotIn("uses: actions/cache/save@", ui)
         self.assertIn("uses: actions/cache/save@", web)
-        self.assertIn("cache: npm", web)
+        self.assertIn(
+            "cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && 'npm' || '' }}",
+            web,
+        )
         self.assertIn("website/package-lock.json", web)
         self.assertIn("working-directory: website", web)
         self.assertIn("run: npm ci", web)

@@ -105,7 +105,10 @@ from that same catalog.
 - `prepare-static-abi-input`: portable static ABI archive.
 - `compose-product-input`: exact host/runtime verification and composition.
 - `restore-smoke-inputs`: product/model extraction for consumers.
-- `select-ci-runners`: provider labels and Depot cache permission.
+- `select-ci-runners`: provider labels, Depot cache permission, and the
+  provider-derived `allow_native_github_cache` output. Depot-selected direct
+  PRs set it to false; hosted PR and trusted main/release/manual selections
+  retain native GitHub cache behavior.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
@@ -167,8 +170,12 @@ Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
 `DEPOT_PR_CANARY_REF` (absent by default; one exact
 `refs/pull/<number>/merge` ref only). The latter is a bounded selector
 canary, not a cache-isolation proof or a replacement for the global PR gate.
-Native Actions-cache consumers remain a documented unresolved boundary for
-any future Depot PR run. Other variables include `CUDA_VERSION`,
+The eligible five-lane Depot-PR graph now disables every native GitHub cache
+consumer (explicit cache actions, setup-* package caches, rust-cache, static /
+Metal / Windows / Swift ABI caches and Windows SDK cache toggles) when that
+output is false; cache misses rebuild normally. This checked-in mode does not
+prove the absence of ambient Depot/WebDAV authority, so the runtime sentinel
+and no-secret/no-token canaries remain required. Other variables include `CUDA_VERSION`,
 `VULKAN_SDK_VERSION`, smoke configuration variables, and release/deployment
 variables. Secret values never belong in this inventory;
 known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`

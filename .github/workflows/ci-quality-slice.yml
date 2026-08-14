@@ -65,6 +65,7 @@ jobs:
       runner_4: ${{ steps.policy.outputs.runner_4 }}
       runner_8: ${{ steps.policy.outputs.runner_8 }}
       allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -173,7 +174,8 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+      - if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target

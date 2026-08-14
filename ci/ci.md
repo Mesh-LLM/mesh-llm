@@ -324,6 +324,15 @@ The implemented policy uses that isolation selectively:
 | Website npm store | Website-only lockfile-keyed cache | Later same-PR website runs avoid downloading the unchanged dependency store |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
+For a Depot-selected direct PR, the central runner policy emits
+`allow_native_github_cache=false`. Every native GitHub cache consumer in the
+eligible five-lane build graph (explicit `actions/cache`, setup-node package
+caches, rust-cache, static/Metal/Windows/Swift ABI caches, and Windows SDK
+cache toggles) is then skipped or disabled; the installation and build steps
+still run and regenerate on a miss. Hosted PRs and trusted main/release/manual
+paths retain the existing cache behavior. This is a checked-in consumer
+policy, not proof that a Depot runner has no ambient Depot/WebDAV authority.
+
 This is intentionally not a universal PR write-through policy. Cargo target
 caches are commonly hundreds of megabytes to several gigabytes per row; making
 every PR matrix row publish one would multiply storage, increase upload time,
@@ -334,13 +343,12 @@ must still regenerate successfully after a miss.
 
 Depot PR execution is not enabled. The bounded `DEPOT_PR_CANARY_REF` selector
 hook exists only to exercise a single protected same-repository ref after the
-external gates are ready. Native `actions/cache` consumers on a Depot runner
-may still read repository/base caches; a selector result, cache-key prefix or
-negative credential audit is not proof of cache isolation. Cache isolation,
-protected default-branch runner-owning workflow refs, no-secret/no-token
-execution and a sentinel canary are prerequisites in
-`ci/DEPOT_MIGRATION.md`. Do not change Depot settings or runner groups in a
-workflow refactor.
+external gates are ready. The implemented no-native-cache mode prevents the
+checked-in GitHub cache consumers from reading or writing on that Depot PR,
+but it does not prove that a runner has no ambient Depot/WebDAV/cache
+authority. A protected runner-group check, no-secret/no-token execution and
+the non-secret sentinel canary in `ci/DEPOT_MIGRATION.md` remain prerequisites.
+Do not change Depot settings or runner groups in a workflow refactor.
 
 The external administrative posture now has automatic Depot Cache and Registry
 Actions connectivity disabled and the Depot runner group restricted to this

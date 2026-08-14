@@ -199,8 +199,8 @@ without Depot cache, WebDAV, registry, or transparent GitHub-cache authority.
 
 The remaining runtime questions are:
 
-1. Does `actions/cache` on a fresh Depot runner use GitHub's native
-   branch-isolated cache, or must all cache actions remain disabled for PR jobs?
+1. Does a fresh Depot runner expose any ambient Depot/WebDAV/cache authority
+   to a PR job even when the checked-in native cache consumers are disabled?
 2. Does a trusted main build retain its intended cache behavior with automatic
    Depot connectivity disabled, or should it use GitHub native cache only?
 3. Can a same-repository PR and a fork PR both run the protected canary with no
@@ -210,12 +210,14 @@ The remaining runtime questions are:
 5. Does the restricted runner group continue to allow only the exact protected
    workflow refs after the PR canary is enabled?
 
-The checked-in selector and negative audit do not prove this boundary. Native
-`actions/cache` consumers on a Depot runner can still read repository/base
-caches, so a canary ref must either target the actual Depot/WebDAV authority
-with an approved non-secret marker protocol or explicitly disable every
-relevant cache consumer before any PR code is placed on Depot. This repository
-does neither yet; the canary remains an external runtime/admin prerequisite.
+The selector now emits a provider-derived `allow_native_github_cache` output.
+Every eligible Depot-selected direct PR cache consumer is skipped or passed a
+disabled cache input, while installation and build commands remain active;
+cache misses therefore rebuild normally. This closes the checked-in native
+GitHub-cache path but does not prove that a fresh Depot runner cannot reach an
+ambient Depot/WebDAV/cache service. The canary must still target the actual
+authority with an approved non-secret marker protocol and verify no read/write
+or registry token access; it remains an external runtime/admin prerequisite.
 
 Do not introduce a long-lived Depot organization token without a separate
 security review and explicit authorization.
