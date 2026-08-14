@@ -3,13 +3,33 @@ use std::{
     fs,
     path::Path,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
 };
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KvDiskCacheBudget {
+    Off,
+    Auto,
+    Bytes(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KvDiskCacheConfig {
+    pub budget: KvDiskCacheBudget,
+    pub directory: Option<PathBuf>,
+}
+
+static DISK_CACHE_CONFIG: OnceLock<KvDiskCacheConfig> = OnceLock::new();
+
+/// Install host-owned disk-cache policy before any stage is constructed.
+pub fn configure_kv_disk_cache(config: KvDiskCacheConfig) -> Result<(), KvDiskCacheConfig> {
+    DISK_CACHE_CONFIG.set(config)
+}
 
 use anyhow::Result;
 use skippy_cache::{
-    ExactStateCache, PrefixCandidatePolicy, ResidentActivationCache, ResidentCacheConfig,
-    ResidentPrefixCache,
+    ExactStateCache, PrefixCandidatePolicy, PrefixDiskTier, ResidentActivationCache,
+    ResidentCacheConfig, ResidentPrefixCache,
 };
 use skippy_protocol::{
     LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
@@ -17,7 +37,10 @@ use skippy_protocol::{
 use skippy_runtime::ModelInfo;
 use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, infer_family_capability};
 
-use super::{ExactStateExtra, KvStageIntegration, StageKvMode, StagePrefixCachePayload};
+use super::{
+    ExactStateExtra, KvStageIntegration, StageKvMode, StagePrefixCachePayload, disk_budget,
+    disk_budget::NodeBudget,
+};
 
 impl KvStageIntegration {
     pub fn from_config(config: &StageConfig) -> Result<Option<Self>> {
@@ -41,8 +64,20 @@ impl KvStageIntegration {
         {
             return Ok(None);
         }
-        let candidate_policy = PrefixCandidatePolicy::from_cache(&cache_config);
+        let mut candidate_policy = PrefixCandidatePolicy::from_cache(&cache_config);
         let resident_config = ResidentCacheConfig::from_stage(config, &cache_config);
+        // Bound the record ladder by the same token budget the resident cache
+        // enforces, so a single request cannot record more than it can hold.
+        candidate_policy.max_resident_tokens_hint = resident_config.max_resident_tokens;
+        let mut exact_states = ExactStateCache::<ExactStateExtra>::new(
+            cache_config.max_entries.clamp(1, 512),
+            cache_config.max_bytes,
+        );
+        let disk = open_disk_tier(config);
+        let disk_budget_reservation = disk.as_ref().map(|opened| opened.reservation.clone());
+        if let Some(opened) = disk {
+            exact_states = exact_states.with_disk_tier(opened.tier);
+        }
         Ok(Some(Self {
             mode,
             payload,
@@ -52,14 +87,156 @@ impl KvStageIntegration {
             inflight_records: Arc::new(Mutex::new(BTreeSet::new())),
             resident: Arc::new(Mutex::new(ResidentPrefixCache::new(resident_config))),
             activations: Arc::new(Mutex::new(ResidentActivationCache::new(resident_config))),
-            exact_states: Arc::new(Mutex::new(ExactStateCache::<ExactStateExtra>::new(
-                cache_config.max_entries.clamp(1, 512),
-                cache_config.max_bytes,
-            ))),
+            exact_states: Arc::new(Mutex::new(exact_states)),
             first_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             replay_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+            split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+            dense_archive_unsupported: Arc::new(AtomicBool::new(false)),
+            _disk_budget_reservation: disk_budget_reservation,
         }))
     }
+}
+
+/// Open the KV disk tier for this stage. Host configuration wins; legacy
+/// environment variables remain compatibility input when no host configured it.
+struct OpenedDiskTier {
+    tier: PrefixDiskTier,
+    reservation: disk_budget::BudgetReservation,
+}
+
+fn open_disk_tier(config: &StageConfig) -> Option<OpenedDiskTier> {
+    let root = disk_tier_root(config);
+    if !has_valid_content_digest(config) {
+        eprintln!(
+            "skippy: KV disk tier disabled for stage {}: no valid content digest",
+            config.stage_id
+        );
+        return None;
+    }
+    let reservation = stage_disk_budget(&root, config)?;
+    match PrefixDiskTier::open(&root, reservation.bytes()) {
+        Ok(tier) => Some(OpenedDiskTier { tier, reservation }),
+        Err(error) => {
+            eprintln!("skippy: KV disk tier unavailable, continuing without it: {error}");
+            None
+        }
+    }
+}
+
+fn has_valid_content_digest(config: &StageConfig) -> bool {
+    [
+        config.manifest_sha256.as_deref(),
+        config.source_model_sha256.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(is_sha256_digest)
+}
+
+fn is_sha256_digest(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Reserve this stage's desired working set from the node-level budget.
+fn stage_disk_budget(root: &Path, config: &StageConfig) -> Option<disk_budget::BudgetReservation> {
+    let probe = disk_budget::existing_ancestor(root);
+    let free_bytes = disk_budget::free_space_bytes(&probe);
+    let policy = effective_disk_cache_config();
+    let (explicit, enabled) = match policy.budget {
+        KvDiskCacheBudget::Off => (None, false),
+        KvDiskCacheBudget::Auto => (None, true),
+        KvDiskCacheBudget::Bytes(bytes) => (Some(bytes), true),
+    };
+    let budget = disk_budget::resolve_node_budget(explicit, enabled, free_bytes);
+    if let NodeBudget::InsufficientSpace { free_bytes } = budget {
+        eprintln!(
+            "skippy: KV disk tier disabled for stage {}: only {:.1} GiB free on {}",
+            config.stage_id,
+            free_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+            probe.display(),
+        );
+        return None;
+    }
+    let node_bytes = budget.bytes()?;
+    disk_budget::reserve(node_bytes, stage_disk_share(node_bytes))
+}
+
+/// Give two co-located stages equal access to the node-owned disk budget.
+///
+/// A stage must not claim the whole pool before later stages open, and this
+/// share must not be derived from the resident KV allowance: that value may be
+/// an explicit operator cap and disk pages do not consume native KV cells.
+fn stage_disk_share(node_bytes: u64) -> u64 {
+    node_bytes.saturating_add(1) / 2
+}
+
+fn effective_disk_cache_config() -> KvDiskCacheConfig {
+    DISK_CACHE_CONFIG.get().cloned().unwrap_or_else(|| {
+        let budget = explicit_disk_tier_bytes()
+            .map(KvDiskCacheBudget::Bytes)
+            .unwrap_or_else(|| {
+                if legacy_disk_tier_disabled() {
+                    KvDiskCacheBudget::Off
+                } else {
+                    KvDiskCacheBudget::Auto
+                }
+            });
+        KvDiskCacheConfig {
+            budget,
+            directory: None,
+        }
+    })
+}
+
+fn explicit_disk_tier_bytes() -> Option<u64> {
+    let mib = std::env::var("SKIPPY_KV_DISK_TIER_MIB")
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    (mib > 0).then(|| mib.saturating_mul(1024 * 1024))
+}
+
+fn legacy_disk_tier_disabled() -> bool {
+    std::env::var("SKIPPY_KV_DISK_TIER")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "off" | "false"
+            )
+        })
+}
+
+fn disk_tier_root(config: &StageConfig) -> PathBuf {
+    let base = effective_disk_cache_config()
+        .directory
+        .or_else(|| {
+            std::env::var("SKIPPY_KV_DISK_TIER_DIR")
+                .ok()
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| {
+            std::env::var("MESH_LLM_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| dirs_home().join(".mesh-llm"))
+                .join("kv-cache")
+        });
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(config.model_id.as_bytes());
+    hasher.update(config.stage_id.as_bytes());
+    hasher.update(&config.stage_index.to_le_bytes());
+    hasher.update(&config.layer_start.to_le_bytes());
+    hasher.update(&config.layer_end.to_le_bytes());
+    let stage_key = hasher.finalize().to_hex();
+    base.join(&stage_key[..16])
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
 }
 
 fn effective_cache_payload(
@@ -270,6 +447,12 @@ mod tests {
     use skippy_protocol::FlashAttentionType;
 
     #[test]
+    fn stages_share_the_node_disk_budget_without_using_resident_caps() {
+        assert_eq!(stage_disk_share(1_000), 500);
+        assert_eq!(stage_disk_share(1_001), 501);
+    }
+
+    #[test]
     fn recurrent_tensor_names_require_exact_state_cache() {
         assert!(tensor_name_requires_recurrent_state("blk.0.ssm_a"));
         assert!(tensor_name_requires_recurrent_state(
@@ -454,6 +637,19 @@ mod tests {
             Some(StageKvCachePayload::ResidentKv)
         );
         assert_eq!(parse_cache_payload("nope"), None);
+    }
+
+    #[test]
+    fn disk_tier_requires_a_valid_content_digest() {
+        let mut config = test_config("example/model");
+        config.package_ref = Some("/tmp/mutable-package".to_string());
+        assert!(!has_valid_content_digest(&config));
+
+        config.manifest_sha256 = Some("not-a-digest".to_string());
+        assert!(!has_valid_content_digest(&config));
+
+        config.source_model_sha256 = Some("a".repeat(64));
+        assert!(has_valid_content_digest(&config));
     }
 
     fn test_config(model_id: &str) -> StageConfig {

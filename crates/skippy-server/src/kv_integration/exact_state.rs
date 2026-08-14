@@ -4,8 +4,8 @@ use skippy_cache::ExactStatePayload;
 use crate::runtime_state::RuntimeState;
 
 use super::{
-    ExactStateExtra, ExactStateRecord, ExactStateRestore, KvStageIntegration, PrefillKvIdentity,
-    StagePrefixCachePayload, records::add_reconstruct_stats,
+    ExactStateExtra, ExactStateRecord, ExactStateRestore, ExactStateSource, KvStageIntegration,
+    PrefillKvIdentity, StagePrefixCachePayload, records::add_reconstruct_stats,
 };
 
 impl KvStageIntegration {
@@ -20,14 +20,31 @@ impl KvStageIntegration {
         }
         for identity in identities {
             let lookup = {
-                self.exact_states
+                let mut cache = self
+                    .exact_states
                     .lock()
-                    .expect("exact state cache lock poisoned")
-                    .lookup(&identity.page_id)
+                    .expect("exact state cache lock poisoned");
+                // Fall through to the disk tier on a RAM miss, so a demoted
+                // page is actually readable. Without this the tier is
+                // write-only: eviction pays to serialize every payload and
+                // nothing ever reads one back.
+                //
+                // A verification failure inside the tier is a hard error and
+                // quarantines the entry; treat it as a miss here and keep
+                // probing shorter candidates rather than failing the request.
+                match cache.lookup_with_disk(
+                    &identity.page_id,
+                    self.payload.into(),
+                    Default::default,
+                ) {
+                    Ok(found) => found,
+                    Err(_) => continue,
+                }
             };
             let Some(lookup) = lookup else {
                 continue;
             };
+            let from_disk = lookup.from_disk;
             let mut reconstruct_ms = 0.0;
             let mut reconstruct_bytes = 0u64;
             let mut reconstruct_blocks = 0usize;
@@ -89,6 +106,11 @@ impl KvStageIntegration {
                 page_id: lookup.page_id,
                 token_count: lookup.token_count as usize,
                 payload_kind: lookup.payload.kind(),
+                source: if from_disk {
+                    ExactStateSource::Disk
+                } else {
+                    ExactStateSource::Ram
+                },
                 logical_bytes: lookup.logical_bytes,
                 entries: lookup.entries,
                 reconstruct_ms,
@@ -134,7 +156,7 @@ impl KvStageIntegration {
                             recurrent,
                         ),
                         ExactStateExtra {
-                            kv_desc: kv.as_ref().map(|kv| kv.desc),
+                            kv_desc: kv.as_ref().map(|kv| kv.desc.clone()),
                         },
                     )
                 }
@@ -183,6 +205,10 @@ impl From<skippy_cache::ExactStatePayloadKind> for StagePrefixCachePayload {
             skippy_cache::ExactStatePayloadKind::FullState => Self::FullState,
             skippy_cache::ExactStatePayloadKind::KvRecurrent => Self::KvRecurrent,
             skippy_cache::ExactStatePayloadKind::RecurrentOnly => Self::Disabled,
+            // A dense archive is a disk-tier payload, not an exact-state
+            // family: the resident cache, not `ExactStateCache`, owns reuse
+            // for these models.
+            skippy_cache::ExactStatePayloadKind::ResidentKvArchive => Self::ResidentKv,
         }
     }
 }

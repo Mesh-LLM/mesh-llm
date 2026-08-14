@@ -78,6 +78,7 @@ ahash = "0.8.12"
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+memmap2 = "0.9"
 mesh-llm-build-info = { path = "crates/mesh-llm-build-info", version = "0.72.1" }
 mesh-llm-release-footer = { path = "crates/mesh-llm-release-footer", version = "0.72.1" }
 mesh-llm-skills = { path = "crates/mesh-llm-skills", version = "0.72.1" }
@@ -93,6 +94,13 @@ too_many_lines = "warn"
 # Do not remove this section: direct GGUF debug startup spends most of its time
 # hashing the source model via sha2/sha2-asm before native skippy model open,
 # so keep those crates near release speed in dev builds.
+# blake3 verifies every KV page read back from the disk tier, so an
+# unoptimized build hashes multi-gigabyte pages at a few hundred MB/s and
+# makes a cache restore look far more expensive than it is. Same reasoning
+# as sha2 below: cryptographic primitives are hot even in dev builds.
+[profile.dev.package.blake3]
+opt-level = 3
+
 [profile.dev.package.sha2]
 opt-level = 3
 

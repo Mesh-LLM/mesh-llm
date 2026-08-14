@@ -46,6 +46,9 @@ outputs:
   allow_depot_remote_cache:
     description: Whether this trusted runner selection may use Depot's remote cache.
     value: ${{ steps.select.outputs.allow_depot_remote_cache }}
+  allow_native_github_cache:
+    description: Whether this provider/trust selection may use native GitHub Actions cache APIs.
+    value: ${{ steps.select.outputs.allow_native_github_cache }}
   runner:
     description: Default two-vCPU Linux runner label.
     value: ${{ steps.select.outputs.runner }}
@@ -126,6 +129,7 @@ runs:
         trusted_repository="Mesh-LLM/mesh-llm"
         depot_enabled=false
         allow_depot_remote_cache=false
+        allow_native_github_cache=true
         is_direct_pull_request=false
         is_dispatched_pull_request=false
         dispatch_original_event="${INPUT_ORIGINAL_EVENT_NAME:-}"
@@ -183,7 +187,6 @@ runs:
               "$INPUT_REF" == "refs/heads/main" && \
               "$INPUT_DEPOT_MAIN_ENABLED" == "true" ]]; then
               depot_enabled=true
-              allow_depot_remote_cache=true
             fi
             ;;
           *)
@@ -191,14 +194,14 @@ runs:
             ;;
         esac
 
-        # Depot's repository-scoped cache is never authorized by a PR gate.
-        # Trusted main push/dispatch paths are the only paths that may retain
-        # the existing remote-cache behavior.
-        if [[ "$depot_enabled" == "true" && \
-          "$is_direct_pull_request" != "true" && \
-          "$is_dispatched_pull_request" != "true" && \
-          "$INPUT_EVENT_NAME" == "workflow_dispatch" ]]; then
-          allow_depot_remote_cache=true
+        # Depot's Actions cache namespace is intentionally inert for every
+        # Depot selection. Native GitHub cache APIs and Depot's remote cache
+        # are both disabled; hosted selections retain native GitHub cache
+        # behavior. These values are derived only from provider policy, so a
+        # caller cannot opt a Depot build back into either cache authority.
+        if [[ "$depot_enabled" == "true" ]]; then
+          allow_depot_remote_cache=false
+          allow_native_github_cache=false
         fi
 
         if [[ "$depot_enabled" == "true" ]]; then
@@ -228,6 +231,7 @@ runs:
         {
           echo "depot_enabled=$depot_enabled"
           echo "allow_depot_remote_cache=$allow_depot_remote_cache"
+          echo "allow_native_github_cache=$allow_native_github_cache"
           echo "runner=$runner"
           echo "runner_4=$runner_4"
           echo "runner_8=$runner_8"

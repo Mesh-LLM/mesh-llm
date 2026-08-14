@@ -54,6 +54,15 @@ jobs:
           # intentionally disabled. Fail closed if the runner still receives
           # any Depot cache/registry authority or transparently redirects the
           # GitHub cache service. Names are checked without printing values.
+          depot_selected=true
+          allow_native_github_cache=false
+          allow_depot_remote_cache=false
+          if [[ "$depot_selected" != "true" ||
+                "$allow_native_github_cache" != "false" ||
+                "$allow_depot_remote_cache" != "false" ]]; then
+            echo "canary cache policy is inconsistent (cache policy)" >&2
+            exit 1
+          fi
           forbidden_names=(
             DEPOT_CACHE_TOKEN
             DEPOT_CACHE_URL
@@ -67,42 +76,92 @@ jobs:
             SCCACHE_WEBDAV_TOKEN
             SCCACHE_WEBDAV_USERNAME
             SCCACHE_WEBDAV_PASSWORD
+            SCCACHE_BUCKET
+            SCCACHE_ENDPOINT
+            TURBO_TOKEN
+            TURBO_API
+            TURBO_TEAM
+            GOCACHEPROG
+            REGISTRY_TOKEN
+            REGISTRY_USERNAME
+            REGISTRY_PASSWORD
+            REGISTRY_AUTH_TOKEN
+            NPM_TOKEN
+            NODE_AUTH_TOKEN
+            CARGO_REGISTRIES_CRATES_IO_TOKEN
           )
           for name in "${forbidden_names[@]}"; do
             if [[ -n "${!name:-}" ]]; then
-              echo "forbidden Depot cache/registry setting was injected: $name" >&2
+              echo "forbidden Depot cache/registry setting was injected ($name)" >&2
               exit 1
             fi
           done
-          actions_cache_url="${ACTIONS_CACHE_URL:-}"
-          actions_results_url="${ACTIONS_RESULTS_URL:-}"
-          if [[ "${actions_cache_url,,}" == *depot.dev* ||
-                "${actions_results_url,,}" == *depot.dev* ]]; then
-            echo "GitHub Actions cache was transparently redirected to Depot" >&2
-            exit 1
-          fi
-          for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL; do
+
+          endpoint_host() {
+            local endpoint="$1"
+            local authority="${endpoint#*://}"
+            authority="${authority%%[/?#]*}"
+            printf '%s' "$authority"
+          }
+
+          is_github_endpoint() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            local authority
+            authority="$(endpoint_host "$endpoint_lower")"
+            [[ "$endpoint_lower" == https://* ]] || return 1
+            [[ "$authority" != *"@"* ]] || return 1
+            [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]
+          }
+
+          is_loopback_endpoint() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            # Loopback proxies require a numeric TCP port and an explicit path.
+            if [[ ! "$endpoint_lower" =~ ^https?://(localhost|127\.0\.0\.1|\[::1\]):([0-9]{1,5})/[^[:space:]]*$ ]]; then
+              return 1
+            fi
+            local port="${BASH_REMATCH[2]}"
+            (( port >= 1 && port <= 65535 ))
+          }
+
+          for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_RUNTIME_URL; do
             endpoint="${!endpoint_name:-}"
             if [[ -z "$endpoint" ]]; then
               continue
             fi
-            endpoint_lower="${endpoint,,}"
-            if [[ ! "$endpoint_lower" =~ ^https://([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]+)?([/?#]|$) ]]; then
-              echo "GitHub Actions endpoint is not GitHub-owned: $endpoint_name" >&2
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            # The endpoint may be the expected runner-local inert proxy.
+            # Never accept arbitrary remote endpoints, URL userinfo, or
+            # lookalike host suffixes.
+            authority="$(endpoint_host "$endpoint_lower")"
+            if [[ "$endpoint_lower" == *depot.dev* ]]; then
+              echo "GitHub Actions cache was transparently redirected to Depot (endpoint)" >&2
+              exit 1
+            fi
+            if [[ "$authority" == *"@"* ]]; then
+              echo "GitHub Actions endpoint contains URL userinfo (endpoint)" >&2
+              exit 1
+            fi
+            if ! is_github_endpoint "$endpoint" &&
+               ! is_loopback_endpoint "$endpoint"; then
+              echo "GitHub Actions endpoint is not GitHub-owned or loopback (endpoint)" >&2
               exit 1
             fi
           done
           docker_auth_config="${DOCKER_AUTH_CONFIG:-}"
-          if [[ "${docker_auth_config,,}" == *depot.dev* ]]; then
-            echo "Docker registry authentication points at Depot" >&2
+          if [[ -n "$docker_auth_config" ]]; then
+            echo "Docker registry authentication is configured (DOCKER_AUTH_CONFIG)" >&2
             exit 1
           fi
           docker_home="${HOME:-}"
           docker_config="${DOCKER_CONFIG:-$docker_home/.docker}/config.json"
           if [[ -f "$docker_config" ]] &&
-             grep -Eiq '(^|[^[:alnum:]])(registry\.)?depot\.dev([^[:alnum:]]|$)' \
+             grep -Eiq '"(auths|credHelpers|credsStore)"[[:space:]]*:' \
                "$docker_config"; then
-            echo "Docker config contains Depot registry authentication" >&2
+            echo "Docker registry authentication is configured (config.json)" >&2
             exit 1
           fi
 

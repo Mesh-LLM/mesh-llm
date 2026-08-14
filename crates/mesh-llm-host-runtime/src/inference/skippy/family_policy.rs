@@ -106,11 +106,47 @@ impl FamilyPolicy {
                     max_bytes,
                     min_tokens,
                     shared_prefix_stride_tokens: 128,
-                    shared_prefix_record_limit: 2,
+                    shared_prefix_record_limit: derive_shared_prefix_record_limit(bounded_entries),
                 })
             }
         }
     }
+}
+
+/// How many prefix lengths a single request may record.
+///
+/// Recording only the two longest candidates makes cross-session
+/// sharing unreachable in practice: for an 8000-token agentic prompt
+/// the recorded lengths are `[8000, 7936]`, both in the request's
+/// tail. A second session with the same system prompt and tool
+/// schemas but a different tail probes the shared region, finds
+/// nothing, and pays a full cold prefill — even though the lookup
+/// grid already probes 62 different lengths for it.
+///
+/// A deeper ladder lets `PrefixCandidatePolicy` keep the near-tail
+/// continuation pages *and* reach down into the shared
+/// system-prompt/tool-schema region. See the ladder documentation in
+/// `skippy-cache/src/config.rs` for the selection strategy.
+///
+/// The limit is bounded by cache cardinality for the same reason
+/// `max_entries` is bounded by the cell pool: every recorded
+/// candidate pins KV cells, so a ladder deeper than the cache can
+/// hold just churns the LRU and evicts the entries it recorded a
+/// moment earlier. Recording at most a quarter of the cache per
+/// request leaves room for several distinct prompts to coexist,
+/// which is the whole point of retention.
+///
+/// Never below the historical default of 2, so no configuration
+/// records less than it did before.
+const MIN_SHARED_PREFIX_RECORD_LIMIT: u64 = 2;
+const MAX_SHARED_PREFIX_RECORD_LIMIT: u64 = 6;
+
+fn derive_shared_prefix_record_limit(max_entries: usize) -> u64 {
+    let quarter_of_cache = (max_entries as u64) / 4;
+    quarter_of_cache.clamp(
+        MIN_SHARED_PREFIX_RECORD_LIMIT,
+        MAX_SHARED_PREFIX_RECORD_LIMIT,
+    )
 }
 
 /// Cap the prefix-cache `max_entries` so resident prefixes cannot
@@ -927,5 +963,30 @@ mod tests {
 
         assert_eq!(cache.payload, StageKvCachePayload::ResidentKv);
         assert_eq!(cache.max_bytes, 3_211_264);
+    }
+
+    /// A deeper record ladder is what makes cross-session prefix sharing
+    /// reachable, but it must stay bounded by what the cache can actually
+    /// hold, or it just churns the LRU.
+    #[test]
+    fn record_limit_scales_with_cache_capacity() {
+        // Tiny caches keep the historical behaviour.
+        assert_eq!(derive_shared_prefix_record_limit(1), 2);
+        assert_eq!(derive_shared_prefix_record_limit(4), 2);
+        assert_eq!(derive_shared_prefix_record_limit(8), 2);
+        // Roomier caches record a deeper ladder...
+        assert_eq!(derive_shared_prefix_record_limit(16), 4);
+        // ...but never more than a quarter of the cache, and never unbounded.
+        assert_eq!(derive_shared_prefix_record_limit(24), 6);
+        assert_eq!(derive_shared_prefix_record_limit(512), 6);
+    }
+
+    /// The limit must never drop below what shipped previously, so no
+    /// configuration records less than it did before this change.
+    #[test]
+    fn record_limit_never_regresses_below_the_historical_default() {
+        for max_entries in 0..64 {
+            assert!(derive_shared_prefix_record_limit(max_entries) >= 2);
+        }
     }
 }

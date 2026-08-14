@@ -64,7 +64,9 @@ impl KvStageIntegration {
                 self.exact_states
                     .lock()
                     .expect("exact state cache lock poisoned")
-                    .token_counts_at_most(token_ids.len() as u64),
+                    // Include lengths that survive only on disk, otherwise a
+                    // demoted prefix is never probed for and cannot be hit.
+                    .all_token_counts_at_most(token_ids.len() as u64),
             );
             token_counts.sort_unstable_by(|left, right| right.cmp(left));
             token_counts.dedup();

@@ -62,6 +62,7 @@ jobs:
       force_hosted_runners: ${{ steps.meta.outputs.force_hosted_runners }}
       depot_enabled: ${{ steps.runners.outputs.depot_enabled }}
       allow_depot_remote_cache: ${{ steps.runners.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.runners.outputs.allow_native_github_cache }}
       runner: ${{ steps.runners.outputs.runner }}
       runner_4: ${{ steps.runners.outputs.runner_4 }}
       runner_8: ${{ steps.runners.outputs.runner_8 }}
@@ -189,6 +190,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: "true"
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -434,6 +436,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || 'true' }}
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -511,6 +514,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: "true"
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -580,6 +584,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: "true"
       - name: Cache native runtime CUDA backend build
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
@@ -637,7 +642,9 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ startsWith(needs.metadata.outputs.runner_16, 'depot-') && 'false' || 'true' }}
       - name: Cache native runtime ROCm backend build
+        if: ${{ !startsWith(needs.metadata.outputs.runner_16, 'depot-') }}
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
@@ -693,7 +700,9 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ startsWith(needs.metadata.outputs.runner_16, 'depot-') && 'false' || 'true' }}
       - name: Cache native runtime Vulkan backend build
+        if: ${{ !startsWith(needs.metadata.outputs.runner_16, 'depot-') }}
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
@@ -1400,6 +1409,7 @@ jobs:
           backend: cpu
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
           toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
+          allow-native-github-cache: "true"
       - name: Initialize MSVC for native runtime
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
@@ -1479,6 +1489,7 @@ jobs:
           cuda_toolchain_version: ${{ env.WINDOWS_CUDA_VERSION }}
           vulkan_toolchain_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
           rocm_toolchain_version: ${{ env.ROCM_HIP_SDK_FILENAME }}
+          allow-native-github-cache: "true"
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -1536,6 +1547,7 @@ jobs:
         uses: ./.github/actions/setup-windows-rocm-sdk
         with:
           rocm-hip-sdk-filename: ${{ env.ROCM_HIP_SDK_FILENAME }}
+          allow-native-github-cache: "true"
       - name: Initialize MSVC for native runtime
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:

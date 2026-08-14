@@ -1,7 +1,8 @@
 use anyhow::{Result, anyhow};
 use skippy_ffi::{
     ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
-    GenerationSignalWindow as RawGenerationSignalWindow, KvPageDesc as RawKvPageDesc,
+    GenerationSignalWindow as RawGenerationSignalWindow,
+    KvPageComponentDesc as RawKvPageComponentDesc, KvPageDesc as RawKvPageDesc,
     LogitBias as RawLogitBias, SamplingConfig as RawSamplingConfig, TensorRole,
     TokenSignal as RawTokenSignal,
 };
@@ -102,7 +103,68 @@ impl ActivationFrame {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Serde is derived so a descriptor can be persisted alongside an exported KV
+/// page. A page's bytes are meaningless without its row strides and element
+/// types, so a cache that stores the payload without the descriptor cannot
+/// import it back. This is a plain data mirror of the native struct; the
+/// derive does not affect its layout, which is fixed by [`RawKvPageDesc`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RuntimeKvPageComponentDesc {
+    pub version: u32,
+    pub role: u32,
+    pub token_start: u64,
+    pub token_count: u64,
+    pub layer_count: u32,
+    pub k_type: u32,
+    pub v_type: u32,
+    pub k_row_bytes: u32,
+    pub v_row_bytes: u32,
+    pub v_element_bytes: u32,
+    pub payload_offset: u64,
+    pub payload_bytes: u64,
+    pub flags: u64,
+}
+
+impl RuntimeKvPageComponentDesc {
+    fn as_raw(self) -> RawKvPageComponentDesc {
+        RawKvPageComponentDesc {
+            version: self.version,
+            role: self.role,
+            token_start: self.token_start,
+            token_count: self.token_count,
+            layer_count: self.layer_count,
+            k_type: self.k_type,
+            v_type: self.v_type,
+            k_row_bytes: self.k_row_bytes,
+            v_row_bytes: self.v_row_bytes,
+            v_element_bytes: self.v_element_bytes,
+            payload_offset: self.payload_offset,
+            payload_bytes: self.payload_bytes,
+            flags: self.flags,
+        }
+    }
+}
+impl From<RawKvPageComponentDesc> for RuntimeKvPageComponentDesc {
+    fn from(raw: RawKvPageComponentDesc) -> Self {
+        Self {
+            version: raw.version,
+            role: raw.role,
+            token_start: raw.token_start,
+            token_count: raw.token_count,
+            layer_count: raw.layer_count,
+            k_type: raw.k_type,
+            v_type: raw.v_type,
+            k_row_bytes: raw.k_row_bytes,
+            v_row_bytes: raw.v_row_bytes,
+            v_element_bytes: raw.v_element_bytes,
+            payload_offset: raw.payload_offset,
+            payload_bytes: raw.payload_bytes,
+            flags: raw.flags,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeKvPageDesc {
     pub version: u32,
     pub layer_start: i32,
@@ -117,9 +179,47 @@ pub struct RuntimeKvPageDesc {
     pub v_element_bytes: u32,
     pub payload_bytes: u64,
     pub flags: u64,
+    #[serde(default)]
+    pub codec: u32,
+    #[serde(default)]
+    pub component_count: u32,
+    #[serde(default)]
+    pub components: Box<[RuntimeKvPageComponentDesc; 2]>,
 }
 
 impl RuntimeKvPageDesc {
+    pub fn validate_payload(&self, payload_len: usize) -> Result<()> {
+        let payload_len = u64::try_from(payload_len)?;
+        if self.payload_bytes != payload_len {
+            return Err(anyhow!("KV page payload length does not match descriptor"));
+        }
+        match self.codec {
+            0 | skippy_ffi::KV_PAGE_CODEC_SINGLE_V1 if self.component_count == 0 => Ok(()),
+            skippy_ffi::KV_PAGE_CODEC_ISWA_COMPOSITE_V1
+                if self.version == 2 && self.component_count == 2 =>
+            {
+                let [base, swa] = *self.components;
+                if base.version != 1
+                    || base.role != 1
+                    || base.payload_offset != 0
+                    || base.token_start != self.token_start
+                    || base.token_count != self.token_count
+                    || swa.version != 1
+                    || swa.role != 2
+                    || swa.token_start < self.token_start
+                    || swa.token_start.checked_add(swa.token_count)
+                        != self.token_start.checked_add(self.token_count)
+                    || swa.payload_offset != base.payload_bytes
+                    || swa.payload_offset.checked_add(swa.payload_bytes) != Some(payload_len)
+                {
+                    return Err(anyhow!("invalid composite ISWA KV page components"));
+                }
+                Ok(())
+            }
+            _ => Err(anyhow!("unsupported KV page codec {}", self.codec)),
+        }
+    }
+
     pub(crate) fn as_raw(&self) -> RawKvPageDesc {
         RawKvPageDesc {
             version: self.version,
@@ -135,6 +235,12 @@ impl RuntimeKvPageDesc {
             v_element_bytes: self.v_element_bytes,
             payload_bytes: self.payload_bytes,
             flags: self.flags,
+            codec: self.codec,
+            component_count: self.component_count,
+            components: self
+                .components
+                .as_ref()
+                .map(RuntimeKvPageComponentDesc::as_raw),
         }
     }
 }
@@ -155,6 +261,9 @@ impl From<RawKvPageDesc> for RuntimeKvPageDesc {
             v_element_bytes: raw.v_element_bytes,
             payload_bytes: raw.payload_bytes,
             flags: raw.flags,
+            codec: raw.codec,
+            component_count: raw.component_count,
+            components: Box::new(raw.components.map(Into::into)),
         }
     }
 }
@@ -411,4 +520,107 @@ impl Default for ChatTemplateJsonOptions {
 pub struct ChatTemplateJsonResult {
     pub prompt: String,
     pub metadata_json: String,
+}
+
+#[cfg(test)]
+mod kv_page_descriptor_tests {
+    use super::*;
+
+    fn composite() -> RuntimeKvPageDesc {
+        RuntimeKvPageDesc {
+            version: 2,
+            payload_bytes: 12,
+            codec: skippy_ffi::KV_PAGE_CODEC_ISWA_COMPOSITE_V1,
+            component_count: 2,
+            components: Box::new([
+                RuntimeKvPageComponentDesc {
+                    version: 1,
+                    role: 1,
+                    token_start: 0,
+                    token_count: 3,
+                    payload_bytes: 5,
+                    ..Default::default()
+                },
+                RuntimeKvPageComponentDesc {
+                    version: 1,
+                    role: 2,
+                    token_start: 1,
+                    token_count: 2,
+                    payload_offset: 5,
+                    payload_bytes: 7,
+                    ..Default::default()
+                },
+            ]),
+            layer_start: 0,
+            layer_end: 2,
+            token_start: 0,
+            token_count: 3,
+            layer_count: 0,
+            k_type: 0,
+            v_type: 0,
+            k_row_bytes: 0,
+            v_row_bytes: 0,
+            v_element_bytes: 0,
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn accepts_single_v1_and_legacy_codec() {
+        for codec in [0, skippy_ffi::KV_PAGE_CODEC_SINGLE_V1] {
+            let desc = RuntimeKvPageDesc {
+                payload_bytes: 3,
+                codec,
+                component_count: 0,
+                version: 1,
+                layer_start: 0,
+                layer_end: 1,
+                token_start: 0,
+                token_count: 1,
+                layer_count: 1,
+                k_type: 0,
+                v_type: 0,
+                k_row_bytes: 0,
+                v_row_bytes: 0,
+                v_element_bytes: 0,
+                flags: 0,
+                components: Box::default(),
+            };
+            assert!(desc.validate_payload(3).is_ok());
+        }
+    }
+
+    #[test]
+    fn composite_roundtrips_through_json() {
+        let desc = composite();
+        let encoded = serde_json::to_vec(&desc).unwrap();
+        let decoded: RuntimeKvPageDesc = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, desc);
+        assert!(decoded.validate_payload(12).is_ok());
+    }
+
+    #[test]
+    fn rejects_composite_corruption() {
+        let mut gap = composite();
+        gap.components[1].payload_offset = 6;
+        assert!(gap.validate_payload(12).is_err());
+
+        let mut wrong_component_version = composite();
+        wrong_component_version.components[1].version = 2;
+        assert!(wrong_component_version.validate_payload(12).is_err());
+
+        let mut wrong_base_range = composite();
+        wrong_base_range.components[0].token_count = 2;
+        assert!(wrong_base_range.validate_payload(12).is_err());
+
+        let mut wrong_swa_end = composite();
+        wrong_swa_end.components[1].token_count = 1;
+        assert!(wrong_swa_end.validate_payload(12).is_err());
+
+        let mut overflowing_swa = composite();
+        overflowing_swa.components[1].token_start = u64::MAX;
+        overflowing_swa.components[1].token_count = 2;
+        assert!(overflowing_swa.validate_payload(12).is_err());
+        assert!(composite().validate_payload(11).is_err());
+    }
 }

@@ -7,6 +7,10 @@ this repository and the protected workflow allowlist. The checked-in graph and
 collector define the remaining branch/main and same-repository/fork canaries;
 those runtime checks still block PR activation.
 
+Checked-in policy now treats Depot's cache namespace as unused: every Depot
+selection disables both native GitHub Actions cache and Depot remote cache.
+Purge or expiry of existing entries remains an activation prerequisite.
+
 The complete PR/main composition design is in
 `.omo/specs/pr-ci-optimization.md`. This document contains only the durable
 Depot policy and activation gates. It intentionally contains no historical run
@@ -40,10 +44,17 @@ Depot is a placement provider, not a different CI graph.
   remains hosted.
 - Callers never provide a raw Depot label or a separate remote-cache
   permission. Runner and cache policy come from one event-derived decision.
-- The PR isolation audit receives that selected-provider decision. Depot-selected
-  PR jobs require GitHub-owned Actions endpoints; hosted PR jobs allow the
-  runner's approved local transport while still rejecting Depot credentials,
-  `depot.dev` redirects, and URL userinfo.
+- The PR isolation audit receives that selected-provider and cache-policy
+  decision. Depot-selected PR jobs accept only GitHub-owned Actions endpoints
+  or a strict loopback proxy (`http[s]://localhost|127.0.0.1|[::1]:<port>/<path>`);
+  hosted PR jobs retain their approved local transport while still rejecting
+  Depot credentials, `depot.dev` redirects, and URL userinfo.
+- The Depot cache namespace is intentionally unused by trusted workflows:
+  Depot selections disable both native GitHub cache APIs and Depot remote
+  cache. Purge or expire any existing namespace entries before enabling the PR
+  gate. A proxy's presence is inert transport, not proof of authority
+  isolation; activation remains blocked until no trusted consumer uses Depot
+  cache.
 
 Disabling Depot must change placement only. It must not change plan membership,
 commands, artifacts, smoke coverage or required checks.
@@ -88,7 +99,8 @@ when landing the composable graph:
 4. From `main`, manually dispatch `CI · Plan` with `use_depot=true`. This
    exercises the split Quality/Linux graphs as a bounded provider canary
    without changing the plan, commands, artifacts or required summaries.
-   Verify the eligible jobs report Depot labels and Depot cache evidence while
+   Verify the eligible jobs report Depot labels and no Depot cache evidence (the
+   namespace must remain inert) while
    macOS, Windows, credentialed smoke and GPU jobs retain their documented
    providers.
 5. When the canary is green, set `DEPOT_RUNNERS_ENABLED=true` for normal trusted
@@ -199,10 +211,11 @@ without Depot cache, WebDAV, registry, or transparent GitHub-cache authority.
 
 The remaining runtime questions are:
 
-1. Does `actions/cache` on a fresh Depot runner use GitHub's native
-   branch-isolated cache, or must all cache actions remain disabled for PR jobs?
-2. Does a trusted main build retain its intended cache behavior with automatic
-   Depot connectivity disabled, or should it use GitHub native cache only?
+1. Does a fresh Depot runner expose any ambient Depot/WebDAV/cache authority
+   to a PR job even when the checked-in native cache consumers are disabled?
+2. Do hosted release and cache-warmer jobs retain their intended GitHub cache
+   behavior while trusted Depot selections remain cache-inert, and have all
+   existing Depot namespace entries been purged or expired?
 3. Can a same-repository PR and a fork PR both run the protected canary with no
    Depot cache/registry authority and no entry that trusted main later restores?
 4. Does provider parity hold for the same checked plan, commands, artifacts,
@@ -210,12 +223,18 @@ The remaining runtime questions are:
 5. Does the restricted runner group continue to allow only the exact protected
    workflow refs after the PR canary is enabled?
 
-The checked-in selector and negative audit do not prove this boundary. Native
-`actions/cache` consumers on a Depot runner can still read repository/base
-caches, so a canary ref must either target the actual Depot/WebDAV authority
-with an approved non-secret marker protocol or explicitly disable every
-relevant cache consumer before any PR code is placed on Depot. This repository
-does neither yet; the canary remains an external runtime/admin prerequisite.
+The selector now emits provider-derived `allow_native_github_cache` and
+`allow_depot_remote_cache` outputs. Every Depot selection emits
+`allow_native_github_cache=false` and `allow_depot_remote_cache=false`; hosted
+selections retain native GitHub cache (`allow_native_github_cache=true`) while
+Depot remote cache remains disabled (`allow_depot_remote_cache=false`). Every
+eligible Depot-selected direct PR cache consumer is skipped or passed a
+disabled cache input, while installation and build commands remain active;
+cache misses therefore rebuild normally. This closes the checked-in native
+GitHub-cache path but does not prove that a fresh Depot runner cannot reach an
+ambient Depot/WebDAV/cache service. The canary must still target the actual
+authority with an approved non-secret marker protocol and verify no read/write
+or registry token access; it remains an external runtime/admin prerequisite.
 
 Do not introduce a long-lived Depot organization token without a separate
 security review and explicit authorization.
@@ -263,7 +282,8 @@ the untrusted PR probe:
 4. Both must fail to read the trusted sentinel.
 5. Both must fail to publish an entry that trusted main later restores.
 6. Both must receive no cache/registry token and no repository secret.
-7. Trusted main must retain its intended cache behavior.
+7. Hosted release/cache-warmer jobs must retain their intended GitHub cache
+   behavior; trusted Depot selections must remain cache-inert.
 8. Provider rollback must send the identical plan to GitHub-hosted runners.
 
 Cache-key separation alone does not satisfy this test.
