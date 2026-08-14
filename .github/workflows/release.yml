@@ -1400,6 +1400,7 @@ jobs:
           backend: cpu
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
           toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
+          allow-native-github-cache: "true"
       - name: Initialize MSVC for native runtime
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
@@ -1479,6 +1480,7 @@ jobs:
           cuda_toolchain_version: ${{ env.WINDOWS_CUDA_VERSION }}
           vulkan_toolchain_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
           rocm_toolchain_version: ${{ env.ROCM_HIP_SDK_FILENAME }}
+          allow-native-github-cache: "true"
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -1536,6 +1538,7 @@ jobs:
         uses: ./.github/actions/setup-windows-rocm-sdk
         with:
           rocm-hip-sdk-filename: ${{ env.ROCM_HIP_SDK_FILENAME }}
+          allow-native-github-cache: "true"
       - name: Initialize MSVC for native runtime
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:

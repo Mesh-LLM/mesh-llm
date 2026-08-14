@@ -30,7 +30,7 @@ inputs:
   allow-native-github-cache:
     description: Whether the protected provider policy permits native GitHub cache APIs.
     required: false
-    default: "true"
+    default: "false"
 
 outputs:
   cache-hit:

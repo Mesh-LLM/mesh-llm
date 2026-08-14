@@ -618,6 +618,87 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
 
+    def test_windows_native_cache_inputs_fail_closed_and_callers_opt_in(
+        self,
+    ) -> None:
+        for action_name in (
+            "restore-windows-abi-cache",
+            "setup-windows-rocm-sdk",
+        ):
+            with self.subTest(action=action_name):
+                action = self.read_action(action_name)
+                input_start = action.index("  allow-native-github-cache:")
+                input_end = action.find("\n\n", input_start)
+                input_block = action[input_start:input_end]
+                self.assertIn('required: false', input_block)
+                self.assertIn('default: "false"', input_block)
+                self.assertNotIn('default: "true"', input_block)
+
+        expected_callers = {
+            "restore-windows-abi-cache": {
+                "ci-windows-runtime-slice.yml": 1,
+                "release.yml": 2,
+                "windows-warm-caches.yml": 2,
+            },
+            "setup-windows-rocm-sdk": {
+                "ci-windows-runtime-slice.yml": 1,
+                "release.yml": 1,
+                "windows-warm-caches.yml": 1,
+            },
+        }
+        policy_value = (
+            "allow-native-github-cache: "
+            "${{ needs.runner_policy.outputs.allow_native_github_cache }}"
+        )
+        for action_name, expected_counts in expected_callers.items():
+            calls: list[tuple[str, str]] = []
+            for workflow_path in sorted(
+                (ROOT / ".github" / "workflows").glob("*.yml")
+            ):
+                lines = workflow_path.read_text(encoding="utf-8").splitlines()
+                for index, line in enumerate(lines):
+                    marker = f"uses: ./.github/actions/{action_name}"
+                    if marker not in line:
+                        continue
+                    line_indent = len(line) - len(line.lstrip())
+                    step_indent = line_indent
+                    for candidate in reversed(lines[:index]):
+                        candidate_indent = len(candidate) - len(candidate.lstrip())
+                        if candidate_indent <= line_indent and candidate.lstrip().startswith("-"):
+                            step_indent = candidate_indent
+                            break
+                    start = index
+                    while start > 0:
+                        candidate = lines[start - 1]
+                        candidate_indent = len(candidate) - len(candidate.lstrip())
+                        if candidate_indent == step_indent and candidate.lstrip().startswith("-"):
+                            start -= 1
+                            break
+                        if candidate_indent < step_indent:
+                            break
+                        start -= 1
+                    end = index + 1
+                    while end < len(lines):
+                        candidate = lines[end]
+                        candidate_indent = len(candidate) - len(candidate.lstrip())
+                        if candidate_indent == step_indent and candidate.lstrip().startswith("-"):
+                            break
+                        end += 1
+                    calls.append((workflow_path.name, "\n".join(lines[start:end])))
+
+            actual_counts: dict[str, int] = {}
+            for workflow_name, block in calls:
+                actual_counts[workflow_name] = actual_counts.get(workflow_name, 0) + 1
+                with self.subTest(action=action_name, workflow=workflow_name):
+                    if workflow_name == "ci-windows-runtime-slice.yml":
+                        self.assertIn(policy_value, block)
+                    else:
+                        self.assertIn(
+                            'allow-native-github-cache: "true"',
+                            block,
+                        )
+            self.assertEqual(expected_counts, actual_counts)
+
     def test_native_toolchain_epoch_is_exact_and_shared_with_build_stamp(
         self,
     ) -> None:
