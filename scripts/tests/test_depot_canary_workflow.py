@@ -56,21 +56,20 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_RUNTIME_URL; do', self.workflow)
         self.assertIn('endpoint_host() {', self.workflow)
         self.assertIn('is_loopback_endpoint() {', self.workflow)
+        self.assertIn('endpoint_scheme() {', self.workflow)
+        self.assertIn('endpoint_authority_class() {', self.workflow)
+        self.assertIn('endpoint_numeric_port() {', self.workflow)
+        self.assertIn('endpoint_explicit_path() {', self.workflow)
+        self.assertIn('report_endpoint_rejection() {', self.workflow)
         self.assertIn(r"\[::1\]", self.workflow)
         self.assertIn("numeric", self.workflow.lower())
-        self.assertIn("transparently redirected to Depot", self.workflow)
         self.assertIn(
-            'GitHub Actions cache was transparently redirected to Depot ($endpoint_name)',
+            'GitHub Actions endpoint rejected (variable=%s scheme=%s authority=%s numeric_port=%s explicit_path=%s)',
             self.workflow,
         )
-        self.assertIn(
-            'GitHub Actions endpoint contains URL userinfo ($endpoint_name)',
-            self.workflow,
-        )
-        self.assertIn(
-            'GitHub Actions endpoint is not GitHub-owned or loopback ($endpoint_name)',
-            self.workflow,
-        )
+        self.assertNotIn('GitHub Actions cache was transparently redirected to Depot ($endpoint_name)', self.workflow)
+        self.assertNotIn('GitHub Actions endpoint contains URL userinfo ($endpoint_name)', self.workflow)
+        self.assertNotIn('GitHub Actions endpoint is not GitHub-owned or loopback ($endpoint_name)', self.workflow)
         self.assertIn("ACTIONS_RESULTS_URL", self.workflow)
         self.assertIn("actions\\.githubusercontent\\.com", self.workflow)
         self.assertNotIn(",,}", self.workflow)
@@ -325,32 +324,126 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                     (
                         "unsupported host",
                         "https://cache.example.invalid/cache",
-                        "GitHub Actions endpoint is not GitHub-owned or loopback",
+                        "https",
+                        "other",
+                        "absent",
+                        "present",
                     ),
                     (
                         "Depot redirect",
                         "https://cache.depot.dev/cache",
-                        "GitHub Actions cache was transparently redirected to Depot",
+                        "https",
+                        "other",
+                        "absent",
+                        "present",
                     ),
                     (
                         "URL userinfo",
-                        "https://actions.githubusercontent.com:443@attacker.example/",
-                        "GitHub Actions endpoint contains URL userinfo",
+                        "https://user@attacker.example/cache",
+                        "https",
+                        "other",
+                        "absent",
+                        "present",
+                    ),
+                    (
+                        "numeric port",
+                        "https://cache.example.invalid:8443/cache",
+                        "https",
+                        "other",
+                        "present",
+                        "present",
+                    ),
+                    (
+                        "GitHub authority with HTTP",
+                        "http://actions.githubusercontent.com/cache",
+                        "http",
+                        "github",
+                        "absent",
+                        "present",
+                    ),
+                    (
+                        "other scheme",
+                        "ftp://cache.example.invalid/cache",
+                        "other",
+                        "other",
+                        "absent",
+                        "present",
+                    ),
+                    (
+                        "localhost authority",
+                        "http://localhost/cache",
+                        "http",
+                        "localhost",
+                        "absent",
+                        "present",
+                    ),
+                    (
+                        "IPv4 loopback authority",
+                        "http://127.0.0.1:12345",
+                        "http",
+                        "127.0.0.1",
+                        "present",
+                        "absent",
+                    ),
+                    (
+                        "IPv6 loopback authority",
+                        "http://[::1]:65536/cache",
+                        "http",
+                        "ipv6-loopback",
+                        "present",
+                        "present",
                     ),
                 )
-                for diagnostic, endpoint, message in diagnostic_cases:
-                    with self.subTest(script=script_name, diagnostic=diagnostic):
-                        result = run_probe(
-                            script,
-                            endpoint,
-                            valid_endpoints[0][1],
-                        )
-                        self.assertNotEqual(result.returncode, 0)
-                        self.assertIn(
-                            f"{message} (ACTIONS_CACHE_URL)",
-                            result.stderr,
-                        )
-                        self.assertNotIn(endpoint, result.stderr)
+                for endpoint_name in (
+                    "ACTIONS_CACHE_URL",
+                    "ACTIONS_RESULTS_URL",
+                    "ACTIONS_RUNTIME_URL",
+                ):
+                    for (
+                        diagnostic,
+                        endpoint,
+                        scheme,
+                        authority,
+                        numeric_port,
+                        explicit_path,
+                    ) in diagnostic_cases:
+                        with self.subTest(
+                            script=script_name,
+                            endpoint_name=endpoint_name,
+                            diagnostic=diagnostic,
+                        ):
+                            cache_url = endpoint if endpoint_name == "ACTIONS_CACHE_URL" else valid_endpoints[0][0]
+                            results_url = endpoint if endpoint_name == "ACTIONS_RESULTS_URL" else valid_endpoints[0][1]
+                            extra_environment = (
+                                {"ACTIONS_RUNTIME_URL": endpoint}
+                                if endpoint_name == "ACTIONS_RUNTIME_URL"
+                                else {}
+                            )
+                            result = run_probe(
+                                script,
+                                cache_url,
+                                results_url,
+                                **extra_environment,
+                            )
+                            self.assertNotEqual(result.returncode, 0)
+                            expected = (
+                                "GitHub Actions endpoint rejected "
+                                f"(variable={endpoint_name} scheme={scheme} "
+                                f"authority={authority} numeric_port={numeric_port} "
+                                f"explicit_path={explicit_path})"
+                            )
+                            self.assertIn(expected, result.stderr)
+                            self.assertNotIn(endpoint, result.stderr)
+                            for forbidden_fragment in (
+                                "cache.example.invalid",
+                                "cache.depot.dev",
+                                "attacker.example",
+                                "actions.githubusercontent.com",
+                                "/cache",
+                                "8443",
+                                "65536",
+                            ):
+                                self.assertNotIn(forbidden_fragment, result.stderr)
             if script_name == "audit action":
                 with self.subTest(script=script_name, policy="native cache enabled"):
                     result = run_probe(

@@ -127,6 +127,86 @@ jobs:
             (( port >= 1 && port <= 65535 ))
           }
 
+          endpoint_scheme() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            case "$endpoint_lower" in
+              https://*) printf 'https' ;;
+              http://*) printf 'http' ;;
+              *) printf 'other' ;;
+            esac
+          }
+
+          endpoint_authority_class() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            local authority
+            authority="$(endpoint_host "$endpoint_lower")"
+            if [[ "$authority" == *"@"* ]]; then
+              printf 'other'
+              return
+            fi
+            case "$authority" in
+              localhost|localhost:*) printf 'localhost'; return ;;
+              127.0.0.1|127.0.0.1:*) printf '127.0.0.1'; return ;;
+              "[::1]"|"[::1]:"*) printf 'ipv6-loopback'; return ;;
+            esac
+            if [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]; then
+              printf 'github'
+              return
+            fi
+            printf 'other'
+          }
+
+          endpoint_numeric_port() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            local authority
+            authority="$(endpoint_host "$endpoint_lower")"
+            if [[ "$authority" != *"@"* ]] && [[ "$authority" =~ :[0-9]+$ ]]; then
+              printf 'present'
+            else
+              printf 'absent'
+            fi
+          }
+
+          endpoint_explicit_path() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            case "$endpoint_lower" in
+              *://*) ;;
+              *) printf 'absent'; return ;;
+            esac
+            local remainder="${endpoint_lower#*://}"
+            local authority="${remainder%%[/?#]*}"
+            local suffix="${remainder#"$authority"}"
+            if [[ "$suffix" == /* ]]; then
+              printf 'present'
+            else
+              printf 'absent'
+            fi
+          }
+
+          report_endpoint_rejection() {
+            local endpoint_name="$1"
+            local endpoint="$2"
+            local scheme_label
+            scheme_label="$(endpoint_scheme "$endpoint")"
+            local authority_label
+            authority_label="$(endpoint_authority_class "$endpoint")"
+            local numeric_port_label
+            numeric_port_label="$(endpoint_numeric_port "$endpoint")"
+            local explicit_path_label
+            explicit_path_label="$(endpoint_explicit_path "$endpoint")"
+            printf 'GitHub Actions endpoint rejected (variable=%s scheme=%s authority=%s numeric_port=%s explicit_path=%s)\n' \
+              "$endpoint_name" "$scheme_label" "$authority_label" \
+              "$numeric_port_label" "$explicit_path_label" >&2
+          }
+
           for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_RUNTIME_URL; do
             endpoint="${!endpoint_name:-}"
             if [[ -z "$endpoint" ]]; then
@@ -138,16 +218,16 @@ jobs:
             # lookalike host suffixes.
             authority="$(endpoint_host "$endpoint_lower")"
             if [[ "$endpoint_lower" == *depot.dev* ]]; then
-              echo "GitHub Actions cache was transparently redirected to Depot ($endpoint_name)" >&2
+              report_endpoint_rejection "$endpoint_name" "$endpoint"
               exit 1
             fi
             if [[ "$authority" == *"@"* ]]; then
-              echo "GitHub Actions endpoint contains URL userinfo ($endpoint_name)" >&2
+              report_endpoint_rejection "$endpoint_name" "$endpoint"
               exit 1
             fi
             if ! is_github_endpoint "$endpoint" &&
                ! is_loopback_endpoint "$endpoint"; then
-              echo "GitHub Actions endpoint is not GitHub-owned or loopback ($endpoint_name)" >&2
+              report_endpoint_rejection "$endpoint_name" "$endpoint"
               exit 1
             fi
           done
