@@ -1,5 +1,8 @@
 #![recursion_limit = "256"]
 
+// CI authority-sentinel fixture: this comment-only change provides a real
+// pull-request merge ref without changing runtime behavior.
+
 mod api;
 mod capture;
 pub mod command_support;
