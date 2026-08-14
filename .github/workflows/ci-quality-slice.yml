@@ -96,6 +96,8 @@ jobs:
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -131,6 +133,8 @@ jobs:
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -165,6 +169,8 @@ jobs:
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_8, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -174,6 +180,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
@@ -216,6 +223,8 @@ jobs:
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}

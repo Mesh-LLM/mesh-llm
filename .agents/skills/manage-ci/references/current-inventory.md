@@ -105,10 +105,10 @@ from that same catalog.
 - `prepare-static-abi-input`: portable static ABI archive.
 - `compose-product-input`: exact host/runtime verification and composition.
 - `restore-smoke-inputs`: product/model extraction for consumers.
-- `select-ci-runners`: provider labels, Depot cache permission, and the
-  provider-derived `allow_native_github_cache` output. Depot-selected direct
-  PRs set it to false; hosted PR and trusted main/release/manual selections
-  retain native GitHub cache behavior.
+- `select-ci-runners`: provider labels, cache permissions, and the
+  provider-derived `allow_native_github_cache` / `allow_depot_remote_cache`
+  outputs. Every Depot selection sets both outputs to false; hosted PR,
+  release, and cache-warmer selections retain native GitHub cache behavior.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
@@ -124,7 +124,9 @@ under `ci/` or this inventory.
 Artifacts are correctness boundaries; caches only accelerate regeneration.
 PR artifacts generally retain for one day. Protected same-repository and fork
 lanes cannot publish shared trusted-main caches, and Depot cache access is
-denied. Large Cargo target caches restore trusted-main entries but remain
+denied. The Depot namespace is intentionally unused by trusted workflows;
+purge/expiry is required before PR activation, and an inert proxy is not
+authority-isolation proof. Large Cargo target caches restore trusted-main entries but remain
 restore-only on PRs. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
 and Windows native ABI caches may publish into GitHub's isolated PR merge-ref
 scope for same-PR reruns. The Website slice is the sole publisher for the
@@ -170,10 +172,10 @@ Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
 `DEPOT_PR_CANARY_REF` (absent by default; one exact
 `refs/pull/<number>/merge` ref only). The latter is a bounded selector
 canary, not a cache-isolation proof or a replacement for the global PR gate.
-The eligible five-lane Depot-PR graph now disables every native GitHub cache
+The eligible five-lane Depot graph now disables every native GitHub cache
 consumer (explicit cache actions, setup-* package caches, rust-cache, static /
-Metal / Windows / Swift ABI caches and Windows SDK cache toggles) when that
-output is false; cache misses rebuild normally. This checked-in mode does not
+Metal / Windows / Swift ABI caches and Windows SDK cache toggles) and Depot
+remote cache when those outputs are false; cache misses rebuild normally. This checked-in mode does not
 prove the absence of ambient Depot/WebDAV authority, so the runtime sentinel
 and no-secret/no-token canaries remain required. Other variables include `CUDA_VERSION`,
 `VULKAN_SDK_VERSION`, smoke configuration variables, and release/deployment

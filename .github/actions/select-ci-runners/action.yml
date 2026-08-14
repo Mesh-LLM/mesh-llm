@@ -187,7 +187,6 @@ runs:
               "$INPUT_REF" == "refs/heads/main" && \
               "$INPUT_DEPOT_MAIN_ENABLED" == "true" ]]; then
               depot_enabled=true
-              allow_depot_remote_cache=true
             fi
             ;;
           *)
@@ -195,24 +194,13 @@ runs:
             ;;
         esac
 
-        # Depot's repository-scoped cache is never authorized by a PR gate.
-        # Trusted main push/dispatch paths are the only paths that may retain
-        # the existing remote-cache behavior.
-        if [[ "$depot_enabled" == "true" && \
-          "$is_direct_pull_request" != "true" && \
-          "$is_dispatched_pull_request" != "true" && \
-          "$INPUT_EVENT_NAME" == "workflow_dispatch" ]]; then
-          allow_depot_remote_cache=true
-        fi
-
-        # Depot runners do not provide GitHub's branch-isolated cache
-        # authority.  Native GitHub cache APIs are therefore disabled for a
-        # directly selected PR, while hosted PRs and trusted main/release or
-        # manual paths retain their existing cache behavior.  This value is
-        # derived only from the protected provider policy; callers cannot opt
-        # a Depot PR back in by supplying a cache-related input.
-        if [[ "$depot_enabled" == "true" && \
-          "$is_direct_pull_request" == "true" ]]; then
+        # Depot's Actions cache namespace is intentionally inert for every
+        # Depot selection. Native GitHub cache APIs and Depot's remote cache
+        # are both disabled; hosted selections retain native GitHub cache
+        # behavior. These values are derived only from provider policy, so a
+        # caller cannot opt a Depot build back into either cache authority.
+        if [[ "$depot_enabled" == "true" ]]; then
+          allow_depot_remote_cache=false
           allow_native_github_cache=false
         fi
 

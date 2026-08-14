@@ -1263,7 +1263,7 @@ class CiArtifactActionTests(unittest.TestCase):
                     self.assertEqual(outputs["runner"], expected_runner)
                     self.assertEqual(
                         outputs["allow_depot_remote_cache"],
-                        "true",
+                        "false",
                     )
 
             result, outputs = self.run_reusable_runner_policy(
@@ -1315,7 +1315,7 @@ class CiArtifactActionTests(unittest.TestCase):
             )
             self.assertEqual(
                 outputs["allow_depot_remote_cache"],
-                "true",
+                "false",
             )
 
             for event_name, ref, manual_use_depot in (
@@ -1817,6 +1817,8 @@ class CiArtifactActionTests(unittest.TestCase):
 
         self.assertIn("allow_depot_remote_cache", action)
         self.assertIn('default: "false"', action)
+        self.assertIn("allow_native_github_cache", action)
+        self.assertIn('default: "true"', action)
         self.assertIn("SCCACHE_WEBDAV_ENDPOINT", action)
         self.assertIn("DEPOT_CACHE_TOKEN", action)
         self.assertIn("process.env.SCCACHE_DIR", action)
@@ -1831,6 +1833,10 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("'disk'", action)
         self.assertIn(
             "Depot cache is present but disabled for this trust context",
+            action,
+        )
+        self.assertIn(
+            "Native GitHub and Depot cache disabled for this trust context",
             action,
         )
         self.assertIn(
@@ -1901,7 +1907,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "workflow_dispatch",
@@ -1911,7 +1917,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "workflow_dispatch",
@@ -1921,7 +1927,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "workflow_dispatch",
@@ -1931,7 +1937,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "push",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "workflow_dispatch",
@@ -1951,7 +1957,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "push",
@@ -2021,7 +2027,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 )
                 expected_native_cache = (
                     "false"
-                    if enabled == "true" and event_name == "pull_request"
+                    if enabled == "true"
                     else "true"
                 )
                 self.assertEqual(
@@ -2386,6 +2392,12 @@ class CiArtifactActionTests(unittest.TestCase):
         windows = (
             ROOT / ".github" / "workflows" / "ci-windows-runtime-slice.yml"
         ).read_text(encoding="utf-8")
+        release = (
+            ROOT / ".github" / "workflows" / "release.yml"
+        ).read_text(encoding="utf-8")
+        warmer = (
+            ROOT / ".github" / "workflows" / "windows-warm-caches.yml"
+        ).read_text(encoding="utf-8")
         native_cache_expression = (
             "needs.runner_policy.outputs.allow_native_github_cache == 'true'"
         )
@@ -2417,6 +2429,62 @@ class CiArtifactActionTests(unittest.TestCase):
         for action_name in ("restore-windows-abi-cache", "setup-windows-rocm-sdk"):
             action = self.read_action(action_name)
             self.assertIn("inputs.allow-native-github-cache == 'true'", action)
+
+        # Trusted Depot release selections must leave native cache consumers
+        # inert, while the hosted release/cache-warmer paths retain their
+        # existing GitHub cache opt-in.
+        self.assertIn(
+            "allow_native_github_cache: ${{ steps.runners.outputs.allow_native_github_cache }}",
+            release,
+        )
+        for cache_name in (
+            "Cache native runtime ROCm backend build",
+            "Cache native runtime Vulkan backend build",
+        ):
+            cache_start = release.index(f"name: {cache_name}")
+            cache_block = release[cache_start : release.find("\n      - ", cache_start + 1)]
+            self.assertIn(
+                "needs.metadata.outputs.allow_native_github_cache == 'true'",
+                cache_block,
+            )
+        self.assertGreaterEqual(
+            warmer.count('allow-native-github-cache: "true"'),
+            2,
+        )
+
+    def test_depot_sccache_consumers_receive_both_central_cache_outputs(self) -> None:
+        provider_workflows = (
+            "ci-quality-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
+            "ci-rust-tests-slice.yml",
+            "ci-windows-host-slice.yml",
+            "ci-windows-runtime-slice.yml",
+            "static-abi-artifact.yml",
+            "native-sdk-artifact.yml",
+            "swift-sdk-artifact.yml",
+        )
+        for filename in provider_workflows:
+            workflow = (
+                ROOT / ".github" / "workflows" / filename
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}",
+                workflow,
+                filename,
+            )
+            self.assertIn(
+                "allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}",
+                workflow,
+                filename,
+            )
+        release = (
+            ROOT / ".github" / "workflows" / "release.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "allow_native_github_cache: ${{ needs.metadata.outputs.allow_native_github_cache }}",
+            release,
+        )
 
 
 if __name__ == "__main__":

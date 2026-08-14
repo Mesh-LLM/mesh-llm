@@ -9,6 +9,12 @@ inputs:
   depot_selected:
     description: Whether the centralized runner policy selected a Depot executor.
     required: true
+  allow_native_github_cache:
+    description: Central cache policy output for native GitHub Actions cache APIs.
+    required: true
+  allow_depot_remote_cache:
+    description: Central cache policy output for Depot's remote cache.
+    required: true
 
 runs:
   using: composite
@@ -18,18 +24,43 @@ runs:
       env:
         INPUT_ORIGINAL_EVENT_NAME: ${{ inputs.original_event_name }}
         INPUT_DEPOT_SELECTED: ${{ inputs.depot_selected }}
+        INPUT_ALLOW_NATIVE_GITHUB_CACHE: ${{ inputs.allow_native_github_cache }}
+        INPUT_ALLOW_DEPOT_REMOTE_CACHE: ${{ inputs.allow_depot_remote_cache }}
       run: |
         set -euo pipefail
         original_event="${INPUT_ORIGINAL_EVENT_NAME:-${GITHUB_EVENT_NAME:-}}"
+        depot_selected="${INPUT_DEPOT_SELECTED:-}"
+        if [[ "$depot_selected" != "true" && "$depot_selected" != "false" ]]; then
+          echo "depot_selected must be true or false (depot_selected)" >&2
+          exit 1
+        fi
+        allow_native_github_cache="${INPUT_ALLOW_NATIVE_GITHUB_CACHE:-}"
+        if [[ "$allow_native_github_cache" != "true" &&
+              "$allow_native_github_cache" != "false" ]]; then
+          echo "allow_native_github_cache must be true or false (allow_native_github_cache)" >&2
+          exit 1
+        fi
+        allow_depot_remote_cache="${INPUT_ALLOW_DEPOT_REMOTE_CACHE:-}"
+        if [[ "$allow_depot_remote_cache" != "true" &&
+              "$allow_depot_remote_cache" != "false" ]]; then
+          echo "allow_depot_remote_cache must be true or false (allow_depot_remote_cache)" >&2
+          exit 1
+        fi
+
+        if [[ "$depot_selected" == "true" &&
+              "$allow_native_github_cache" != "false" ]]; then
+          echo "Depot selection requires native GitHub cache disabled (allow_native_github_cache)" >&2
+          exit 1
+        fi
+        if [[ "$depot_selected" == "true" &&
+              "$allow_depot_remote_cache" != "false" ]]; then
+          echo "Depot selection requires remote cache disabled (allow_depot_remote_cache)" >&2
+          exit 1
+        fi
+
         if [[ "$original_event" != "pull_request" &&
               "$original_event" != "pull_request_target" ]]; then
           exit 0
-        fi
-
-        depot_selected="${INPUT_DEPOT_SELECTED:-}"
-        if [[ "$depot_selected" != "true" && "$depot_selected" != "false" ]]; then
-          echo "depot_selected must be true or false, got: $depot_selected" >&2
-          exit 1
         fi
 
         forbidden_names=(
@@ -45,50 +76,89 @@ runs:
           SCCACHE_WEBDAV_TOKEN
           SCCACHE_WEBDAV_USERNAME
           SCCACHE_WEBDAV_PASSWORD
+          SCCACHE_BUCKET
+          SCCACHE_ENDPOINT
           TURBO_TOKEN
           TURBO_API
           TURBO_TEAM
           GOCACHEPROG
+          REGISTRY_TOKEN
+          REGISTRY_USERNAME
+          REGISTRY_PASSWORD
+          REGISTRY_AUTH_TOKEN
+          NPM_TOKEN
+          NODE_AUTH_TOKEN
+          CARGO_REGISTRIES_CRATES_IO_TOKEN
         )
         for name in "${forbidden_names[@]}"; do
           if [[ -n "${!name:-}" ]]; then
-            echo "PR runner received forbidden credential/cache authority: $name" >&2
+            echo "PR runner received forbidden credential/cache authority ($name)" >&2
             exit 1
           fi
         done
 
-        for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL; do
+        endpoint_host() {
+          local endpoint="$1"
+          local authority="${endpoint#*://}"
+          authority="${authority%%[/?#]*}"
+          printf '%s' "$authority"
+        }
+
+        is_github_endpoint() {
+          local endpoint="$1"
+          local endpoint_lower="${endpoint,,}"
+          local authority
+          authority="$(endpoint_host "$endpoint_lower")"
+          [[ "$endpoint_lower" == https://* ]] || return 1
+          [[ "$authority" != *"@"* ]] || return 1
+          [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]
+        }
+
+        is_loopback_endpoint() {
+          local endpoint="$1"
+          local endpoint_lower="${endpoint,,}"
+          # Loopback proxies require a numeric TCP port and an explicit path.
+          if [[ ! "$endpoint_lower" =~ ^https?://(localhost|127\.0\.0\.1|\[::1\]):([0-9]{1,5})/[^[:space:]]*$ ]]; then
+            return 1
+          fi
+          local port="${BASH_REMATCH[2]}"
+          (( port >= 1 && port <= 65535 ))
+        }
+
+        for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_RUNTIME_URL; do
           endpoint="${!endpoint_name:-}"
           if [[ -z "$endpoint" ]]; then
             continue
           fi
-          endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+          endpoint_lower="${endpoint,,}"
           if [[ "$endpoint_lower" == *depot.dev* ]]; then
-            echo "PR runner received a Depot Actions endpoint: $endpoint_name" >&2
+            echo "PR runner received a Depot Actions endpoint ($endpoint_name)" >&2
             exit 1
           fi
-          if [[ "$endpoint_lower" =~ ^https?://[^/]*@ ]]; then
-            echo "PR runner received an Actions endpoint with URL userinfo: $endpoint_name" >&2
+          authority="$(endpoint_host "$endpoint_lower")"
+          if [[ "$authority" == *"@"* ]]; then
+            echo "PR runner received an Actions endpoint with URL userinfo ($endpoint_name)" >&2
             exit 1
           fi
           if [[ "$depot_selected" != "true" ]]; then
             continue
           fi
-          if [[ ! "$endpoint_lower" =~ ^https://([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]+)?([/?#]|$) ]]; then
-            echo "PR runner received a non-GitHub Actions endpoint: $endpoint_name" >&2
+          if ! is_github_endpoint "$endpoint" &&
+             ! is_loopback_endpoint "$endpoint"; then
+            echo "PR runner received a non-GitHub/non-loopback Actions endpoint ($endpoint_name)" >&2
             exit 1
           fi
         done
 
         docker_auth_config="${DOCKER_AUTH_CONFIG:-}"
-        if [[ -n "$docker_auth_config" ]] &&
-           printf '%s' "$docker_auth_config" | grep -Eiq 'depot\.dev'; then
-          echo "PR runner has Depot registry authentication configured" >&2
+        if [[ -n "$docker_auth_config" ]]; then
+          echo "PR runner has Docker registry authentication configured (DOCKER_AUTH_CONFIG)" >&2
           exit 1
         fi
 
         docker_config="${DOCKER_CONFIG:-${HOME:-}/.docker}/config.json"
-        if [[ -f "$docker_config" ]] && grep -Eiq 'depot\.dev' "$docker_config"; then
-          echo "PR runner has Depot registry authentication configured" >&2
+        if [[ -f "$docker_config" ]] &&
+           grep -Eiq '"(auths|credHelpers|credsStore)"[[:space:]]*:' "$docker_config"; then
+          echo "PR runner has Docker registry authentication configured (config.json)" >&2
           exit 1
         fi
