@@ -44,6 +44,11 @@ or cache identity.
 - Current PR routing is GitHub-hosted except for the documented uncredentialed
   CUDA smoke on the approved ephemeral GPU scale set; trusted-main Depot
   selection remains behind the existing exact-string policy gate.
+- `ci-quality-slice.yml` contains an additive protected authority-sentinel
+  diagnostic selected by separate `DEPOT_PR_SENTINEL_REF` and
+  `DEPOT_PR_SENTINEL_ID` variables. It does not add a PR entrypoint, planner
+  row, build command, matrix, artifact, producer/consumer edge or required
+  summary; normal Quality jobs continue using the existing provider selector.
 - Current CI docs, inventory, skill and agent instructions describe this graph.
 - `pr_builds.yml` remains reusable-only and inert during the migration so the
   pre-merge protected runner contract can find its legacy filename; it has no
@@ -230,9 +235,16 @@ Callers never provide raw labels or independent remote-cache permission.
 
 Depot PR execution is not enabled. The selector has a bounded
 `DEPOT_PR_CANARY_REF` hook for one exact same-repository merge ref, while the
-global `DEPOT_PR_RUNNERS_ENABLED` gate remains absent/false. Fork heads,
-`pull_request_target`, dispatches and planner-forced hosted paths remain on
-GitHub-hosted runners. Depot's documented GitHub cache path is
+global `DEPOT_PR_RUNNERS_ENABLED` gate remains absent/false. The Quality slice
+also has a separate `DEPOT_PR_SENTINEL_REF` selector and
+`DEPOT_PR_SENTINEL_ID` validation for one no-checkout authority diagnostic;
+the ordinary Quality jobs still use `DEPOT_PR_CANARY_REF`, and a global PR gate
+alone cannot run the sentinel. The diagnostic runs only when the actual and
+original event are `pull_request`, the exact configured merge ref selects
+Depot, and the head repository is this repository. Fork heads,
+`pull_request_target`, dispatches, planner-forced hosted paths, missing or
+non-matching refs remain hosted/no-Depot; malformed selector configuration is
+rejected by the central selector. Depot's documented GitHub cache path is
 repository-scoped and not branch-isolated; automatic cache redirection can
 expose repository-wide cache authority to PR code. Cache-key prefixes are not
 isolation. The central selector now emits both
@@ -246,6 +258,26 @@ or expire before the PR gate. A GitHub-owned or strict loopback proxy is inert
 transport only, not an ambient authority proof; the actual runner sentinel
 and no-token checks remain required before enabling the canary or global PR
 gate.
+
+The sentinel is deliberately outside the planner/build graph and does not
+invoke `audit-depot-pr-isolation`: that audit rejects the ambient endpoint
+before cache access, whereas this diagnostic must exercise the actual restore
+and save authority without executing PR-controlled code. Its job has empty
+permissions, no checkout, no secrets and only the fixed
+`.depot-authority-sentinel` path. Before each cache action it requires the
+provider-injected `ACTIONS_CACHE_URL` and `ACTIONS_RESULTS_URL` to be present
+and structurally attested as HTTP endpoints with a nonempty, non-GitHub,
+non-loopback authority, numeric port and explicit path, plus a nonempty
+`ACTIONS_RUNTIME_TOKEN`; it reports only variable/reason classes and never
+endpoint values. Manual seed/verify inputs bind to the configured sentinel ID
+and exact merge ref. The PR probe restores the trusted seed (not lookup-only),
+validates exact seed marker content on a hit, replaces it with a deterministic
+non-secret poison marker, saves the exact Stage 1 poison key, then fails only
+after saving if the seed was readable. A seed miss passes with the trusted-main
+`verify-pr-write` phase pending; main verify fully restores and validates exact
+poison content before its expected-miss failure. Fork PRs remain hosted and
+provide the no-Depot-authority evidence; only the exact same-repository
+sentinel ref exercises the Depot diagnostic.
 
 Before a PR Depot path is enabled, an administrator must prove:
 

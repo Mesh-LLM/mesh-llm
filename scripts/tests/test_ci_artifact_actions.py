@@ -2341,7 +2341,7 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         expected_jobs = {
             "ci-quality-slice.yml": {
-                "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync",
+                "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync", "authority_sentinel",
             },
             "ci-web-slice.yml": {"runner_policy", "ui_quality", "website"},
             "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},

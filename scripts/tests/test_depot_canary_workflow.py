@@ -1,6 +1,7 @@
 import unittest
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 from textwrap import dedent
@@ -13,6 +14,48 @@ WORKFLOW = ROOT / ".github" / "workflows" / "depot-canary.yml"
 class DepotCanaryWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    def _job_block(self, job_name: str) -> str:
+        jobs = self.workflow.split("\njobs:\n", 1)[1]
+        match = re.search(
+            rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            jobs,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if match is None:
+            raise AssertionError(f"missing job {job_name}")
+        return match.group("body")
+
+    @staticmethod
+    def _step_script(job: str, step_name: str) -> str:
+        start = job.index(f"      - name: {step_name}")
+        body = job[start:].split("        run: |\n", 1)[1]
+        body = body.split("\n      - name:", 1)[0]
+        return dedent(body)
+
+    def _run_attestation(
+        self,
+        script: str,
+        cache_url: str,
+        results_url: str,
+        *,
+        runtime_token: str = "non-secret-runtime-token",
+    ) -> subprocess.CompletedProcess[str]:
+        environment = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "ACTIONS_CACHE_URL": cache_url,
+            "ACTIONS_RESULTS_URL": results_url,
+            "ACTIONS_RUNTIME_TOKEN": runtime_token,
+        }
+        if runtime_token == "":
+            environment.pop("ACTIONS_RUNTIME_TOKEN")
+        return subprocess.run(
+            ["bash", "-c", "set -euo pipefail\n" + script],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
 
     def test_canary_has_no_code_or_credential_access(self) -> None:
         self.assertIn("permissions: {}", self.workflow)
@@ -34,6 +77,250 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                 self.assertIn(f"- {runner}", self.workflow)
         self.assertIn("expected_arch=aarch64", self.workflow)
         self.assertIn('actual_arch="$(uname -m)"', self.workflow)
+
+    def test_canary_sentinel_modes_are_single_runner_and_cache_bounded(self) -> None:
+        self.assertIn("type: choice", self.workflow)
+        self.assertIn("default: audit", self.workflow)
+        for mode in ("audit", "seed", "verify-pr-write"):
+            self.assertIn(f"          - {mode}", self.workflow)
+
+        audit_start = self.workflow.index("  runner:")
+        seed_start = self.workflow.index("  seed_authority_marker:")
+        verify_start = self.workflow.index("  verify_pr_write:")
+        audit = self.workflow[audit_start:seed_start]
+        seed = self.workflow[seed_start:verify_start]
+        verify = self.workflow[verify_start:]
+
+        self.assertIn("github.event.inputs.mode == 'audit'", audit)
+        self.assertIn("github.event.inputs.mode == 'seed'", seed)
+        self.assertIn("github.event.inputs.mode == 'verify-pr-write'", verify)
+        for block in (seed, verify):
+            with self.subTest(block=block.splitlines()[0]):
+                self.assertIn("permissions: {}", block)
+                self.assertIn("runs-on: depot-ubuntu-24.04", block)
+                self.assertNotIn("actions/checkout", block)
+                self.assertNotIn("secrets.", block)
+
+        self.assertIn(
+            "printf 'mesh-llm-depot-authority-marker-v1\\nsentinel_id=%s\\n'",
+            seed,
+        )
+        self.assertIn(
+            "uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25",
+            seed,
+        )
+        self.assertIn(
+            "uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25",
+            seed,
+        )
+        self.assertNotIn("lookup-only: true", seed)
+        self.assertIn("fail-on-cache-miss: true", seed)
+        self.assertIn("Clear local marker before trusted restore", seed)
+        self.assertIn("Validate trusted marker content", seed)
+        self.assertIn("cmp -s", seed)
+        self.assertIn(
+            "key: ${{ steps.validate.outputs.seed_key }}",
+            seed,
+        )
+        self.assertEqual(seed.count("path: .depot-authority-sentinel"), 2)
+        self.assertIn(
+            "key: ${{ steps.validate.outputs.poison_key }}",
+            verify,
+        )
+        self.assertIn("path: .depot-authority-sentinel", verify)
+        self.assertNotIn("lookup-only: true", verify)
+        self.assertIn("fail-on-cache-miss: false", verify)
+        self.assertIn("Clear local poison marker before trusted restore", verify)
+        self.assertIn("Validate PR poison marker content on hit", verify)
+        self.assertIn("cmp -s", verify)
+        self.assertIn("PR poison marker was visible to trusted main", verify)
+
+        for block in (seed, verify):
+            self.assertIn("Attest provider-injected cache backend", block)
+            self.assertIn("ACTIONS_CACHE_URL", block)
+            self.assertIn("ACTIONS_RESULTS_URL", block)
+            self.assertIn("ACTIONS_RUNTIME_TOKEN", block)
+            self.assertIn("cache backend attestation failed", block)
+            self.assertNotIn("${endpoint,,}", block)
+
+    def test_sentinel_inputs_are_strict_and_derive_fixed_keys(self) -> None:
+        seed = self.workflow.split("  seed_authority_marker:", 1)[1].split(
+            "  verify_pr_write:", 1
+        )[0]
+        verify = self.workflow.split("  verify_pr_write:", 1)[1]
+
+        def validation_script(block: str) -> str:
+            run_marker = "        run: |\n"
+            script = block.split(run_marker, 1)[1].split(
+                "\n      - name:", 1
+            )[0]
+            return "set -euo pipefail\n" + dedent(script)
+
+        def run_validation(
+            script: str,
+            sentinel_id: str,
+            pr_number: str,
+            configured_id: str = "0123456789abcdef0123456789abcdef",
+            configured_ref: str = "refs/pull/42/merge",
+        ) -> tuple[subprocess.CompletedProcess[str], str]:
+            with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8") as output:
+                environment = {
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "SENTINEL_ID": sentinel_id,
+                    "PR_NUMBER": pr_number,
+                    "CONFIGURED_SENTINEL_ID": configured_id,
+                    "CONFIGURED_SENTINEL_REF": configured_ref,
+                    "GITHUB_OUTPUT": output.name,
+                }
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+                output.seek(0)
+                return result, output.read()
+
+        valid_id = "0123456789abcdef0123456789abcdef"
+        valid_pr = "42"
+        seed_result, seed_output = run_validation(
+            validation_script(seed), valid_id, valid_pr
+        )
+        self.assertEqual(seed_result.returncode, 0, seed_result.stderr)
+        self.assertEqual(
+            seed_output,
+            "sentinel_id="
+            f"{valid_id}\n"
+            "seed_key=mesh-llm-depot-authority-seed-v1-"
+            f"{valid_id}\n"
+            "poison_key=mesh-llm-depot-authority-pr-v1-"
+            f"{valid_id}-pr-{valid_pr}\n",
+        )
+
+        verify_result, verify_output = run_validation(
+            validation_script(verify), valid_id, valid_pr
+        )
+        self.assertEqual(verify_result.returncode, 0, verify_result.stderr)
+        self.assertEqual(
+            verify_output,
+            "sentinel_id="
+            f"{valid_id}\n"
+            "pr_number=42\n"
+            "poison_key=mesh-llm-depot-authority-pr-v1-"
+            f"{valid_id}-pr-{valid_pr}\n",
+        )
+
+        for sentinel_id in (
+            "",
+            "ABCDEF0123456789abcdef0123456789",
+            "0" * 31,
+            "0" * 33,
+        ):
+            with self.subTest(sentinel_id=sentinel_id):
+                result, _ = run_validation(
+                    validation_script(seed), sentinel_id, valid_pr
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+        for pr_number in ("", "0", "01", "+1", " 1", "1 ", "1" * 10):
+            with self.subTest(pr_number=pr_number):
+                result, _ = run_validation(
+                    validation_script(seed), valid_id, pr_number
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+        for script_name, script in (("seed", seed), ("verify", verify)):
+            with self.subTest(script=script_name, mismatch="id"):
+                result, _ = run_validation(
+                    validation_script(script),
+                    valid_id,
+                    valid_pr,
+                    configured_id="fedcba9876543210fedcba9876543210",
+                )
+                self.assertNotEqual(result.returncode, 0)
+            with self.subTest(script=script_name, mismatch="ref"):
+                result, _ = run_validation(
+                    validation_script(script),
+                    valid_id,
+                    valid_pr,
+                    configured_ref="refs/pull/43/merge",
+                )
+                self.assertNotEqual(result.returncode, 0)
+            with self.subTest(script=script_name, mismatch="number"):
+                result, _ = run_validation(
+                    validation_script(script),
+                    valid_id,
+                    "43",
+                    configured_ref="refs/pull/42/merge",
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_all_cache_phases_attest_non_github_remote_backend(self) -> None:
+        valid_cache = "http://cache.example.invalid:1234/cache"
+        valid_results = "http://results.example.invalid:5678/results"
+        scripts = {
+            "seed": self._step_script(
+                self._job_block("seed_authority_marker"),
+                "Attest provider-injected cache backend",
+            ),
+            "verify-pr-write": self._step_script(
+                self._job_block("verify_pr_write"),
+                "Attest provider-injected cache backend",
+            ),
+        }
+        for phase, script in scripts.items():
+            with self.subTest(phase=phase, backend="valid"):
+                result = self._run_attestation(script, valid_cache, valid_results)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "")
+
+            invalid_cases = (
+                ("ACTIONS_CACHE_URL", "https://cache.example.invalid:1234/cache", "scheme"),
+                ("ACTIONS_CACHE_URL", "http://actions.githubusercontent.com:1234/cache", "github"),
+                ("ACTIONS_CACHE_URL", "http://localhost:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://127.0.0.1:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://[::1]:1234/cache", "loopback"),
+                ("ACTIONS_CACHE_URL", "http://user@cache.example.invalid:1234/cache", "userinfo"),
+                ("ACTIONS_CACHE_URL", "http://cache.example.invalid/cache", "port"),
+                ("ACTIONS_CACHE_URL", "http://cache.example.invalid:0/cache", "port"),
+                ("ACTIONS_CACHE_URL", "http://cache.example.invalid:65536/cache", "port"),
+                ("ACTIONS_CACHE_URL", "http://cache.example.invalid:1234", "path"),
+                ("ACTIONS_CACHE_URL", "http://cache.example.invalid:1234/cache with-space", "whitespace"),
+                ("ACTIONS_RESULTS_URL", "https://results.example.invalid:5678/results", "scheme"),
+                ("ACTIONS_RESULTS_URL", "http://results.example.invalid/results", "port"),
+                ("ACTIONS_RESULTS_URL", "http://results.example.invalid:5678", "path"),
+            )
+            for endpoint_name, endpoint, reason in invalid_cases:
+                with self.subTest(phase=phase, endpoint=endpoint_name, reason=reason):
+                    cache_url = endpoint if endpoint_name == "ACTIONS_CACHE_URL" else valid_cache
+                    results_url = endpoint if endpoint_name == "ACTIONS_RESULTS_URL" else valid_results
+                    result = self._run_attestation(script, cache_url, results_url)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(
+                        f"cache backend attestation failed (variable={endpoint_name} reason={reason})",
+                        result.stderr,
+                    )
+                    self.assertNotIn(endpoint, result.stderr)
+                    self.assertNotIn("cache.example.invalid", result.stderr)
+                    self.assertNotIn("results.example.invalid", result.stderr)
+                    self.assertNotIn("actions.githubusercontent.com", result.stderr)
+                    self.assertNotIn("non-secret-runtime-token", result.stderr)
+
+            with self.subTest(phase=phase, token="missing"):
+                result = self._run_attestation(
+                    script,
+                    valid_cache,
+                    valid_results,
+                    runtime_token="",
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "cache backend attestation failed (variable=ACTIONS_RUNTIME_TOKEN reason=missing)",
+                    result.stderr,
+                )
+                self.assertNotIn("non-secret-runtime-token", result.stderr)
 
     def test_canary_fails_closed_on_cache_and_registry_injection(self) -> None:
         self.assertIn("forbidden_names=", self.workflow)

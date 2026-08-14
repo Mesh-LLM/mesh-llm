@@ -303,6 +303,35 @@ replace the global PR gate. Maintainers must not set it until the external
 isolation protocol proves the actual Depot/WebDAV and Actions-cache authority
 boundary.
 
+The Quality slice also contains a separate, additive authority-sentinel
+selector. It reads `DEPOT_PR_SENTINEL_REF` (not `DEPOT_PR_CANARY_REF`) and
+emits a separate runner/depot decision used only by the no-checkout
+`authority_sentinel` diagnostic job. The ordinary Quality jobs continue to use
+the existing `runner_policy` outputs, so this hook cannot change their provider
+or the normal plan/build graph. The job is eligible only for the exact
+same-repository `pull_request` merge ref with
+`original_event_name=pull_request`; a global `DEPOT_PR_RUNNERS_ENABLED=true`
+value alone is insufficient. Forks, target/dispatch events, force-hosted
+signals, missing/non-matching refs and malformed refs remain hosted/no-Depot
+(malformed selector configuration is rejected by the central selector).
+
+This diagnostic exception intentionally skips `audit-depot-pr-isolation`: the
+audit rejects the ambient non-GitHub endpoint before cache access, while the
+sentinel must exercise the actual restore/save authority without checking out
+PR code. It has empty permissions, no checkout or secrets, validates the
+separate `DEPOT_PR_SENTINEL_ID` and actual PR number, restores the trusted seed
+at `.depot-authority-sentinel`, and gates only after publication. Before any
+cache action, it attests the provider-injected `ACTIONS_CACHE_URL` and
+`ACTIONS_RESULTS_URL` as value-free structural HTTP endpoints with a nonempty
+non-GitHub/non-loopback authority, numeric port and explicit path, and requires
+`ACTIONS_RUNTIME_TOKEN`; malformed/missing inputs fail closed without printing
+endpoint, host, path, port or token values. Seed and poison markers are
+validated byte-for-byte on cache hits. It is outside planner slices and does
+not add build commands, matrices, artifacts, or producer/consumer edges; the
+existing Quality lane summary still gates on its normal `quality` and
+`runner_contract` jobs. Fork PRs remain hosted and provide the
+no-Depot-authority evidence.
+
 The intended PR-Depot end state preserves the same five entry workflows and
 matching protected lane calls. After the external cache and runner-group gates
 in `ci/DEPOT_MIGRATION.md` are proven, provider policy may select ephemeral

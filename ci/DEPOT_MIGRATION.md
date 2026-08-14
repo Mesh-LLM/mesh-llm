@@ -288,6 +288,78 @@ the untrusted PR probe:
 
 Cache-key separation alone does not satisfy this test.
 
+The first checked-in half of this protocol is the manual `depot-canary.yml`
+sentinel. On protected `main`, an operator may dispatch `mode=seed` with a
+fresh lowercase 32-hex `sentinel_id` and canonical positive `pr_number`. The
+workflow derives the only accepted keys internally:
+`mesh-llm-depot-authority-seed-v1-<id>` and
+`mesh-llm-depot-authority-pr-v1-<id>-pr-<number>`. It writes a deterministic,
+non-secret marker at the fixed relative `.depot-authority-sentinel` path. Before
+any cache action, all three cache phases attest that the provider-injected
+`ACTIONS_CACHE_URL` and `ACTIONS_RESULTS_URL` are present, value-free
+structurally validated HTTP endpoints with a non-GitHub/non-loopback authority,
+numeric port and explicit path, and that `ACTIONS_RUNTIME_TOKEN` is present.
+The pinned Actions-cache save/restore actions then exercise that attested
+remote backend. Seed and verify inputs are bound to the configured sentinel ID
+and exact merge ref before cache access. Seed clears its local marker, performs
+a full restore and validates the exact marker content; verify performs a full
+restore and validates exact poison content before its expected-miss check. The
+protected PR probe uses that same path and exact marker grammar so cache-version
+metadata cannot vary across jobs. After the protected PR probe publishes the
+bounded poison key, dispatch `mode=verify-pr-write` with the same validated
+inputs; a hit fails because trusted main saw a PR publication. The existing
+default `mode=audit` remains the negative resource/credential audit across the
+full Depot matrix and is unchanged.
+
+These diagnostic keys are deliberately outside normal build/cache policy and
+must be purged or allowed to expire after each experiment.
+
+The bounded protected PR half is now checked in as an additive diagnostic job
+inside `ci-quality-slice.yml`. It has its own central-selector input variables:
+`DEPOT_PR_SENTINEL_REF` selects one exact same-repository
+`refs/pull/<number>/merge` ref, and `DEPOT_PR_SENTINEL_ID` supplies the same
+validated 32-lowercase-hex identity used by the manual seed. The ordinary
+quality runner policy continues to read `DEPOT_PR_CANARY_REF`, so enabling the
+sentinel selector cannot move the normal Quality jobs or any other build row to
+Depot. The diagnostic job is outside the planner's required slice graph: it
+does not add a plan row, producer, consumer, artifact, matrix, or `needs` edge
+to the existing build jobs, and the protected Quality lane still completes
+through its existing `quality` and `runner_contract` summary dependencies.
+
+The sentinel job runs only when the actual event is `pull_request`, the
+protected lane receives `original_event_name=pull_request`, the central
+selector selects Depot for the exact configured merge ref, and the event's
+head repository is this repository. Fork heads, `pull_request_target`,
+dispatches, planner `force_hosted`, a missing selector variable, or a
+non-matching ref remain hosted/no-Depot; a malformed selector ref is rejected
+by the central selector before any runner is selected. A global
+`DEPOT_PR_RUNNERS_ENABLED=true` value alone does not run the diagnostic job.
+
+This exception deliberately does not invoke `audit-depot-pr-isolation`: that
+audit is designed to reject non-GitHub/loopback endpoints before a build, while
+this no-checkout job must exercise the actual cache restore/save authority and
+record the result without executing PR-controlled code. The job has
+`permissions: {}`, performs no checkout, receives no secrets, and uses only the
+fixed `.depot-authority-sentinel` path. Before the pinned cache restore it
+attests the provider-injected remote backend using the same structural
+non-GitHub/non-loopback HTTP contract and requires a nonempty runtime token; no
+endpoint, host, path, port or token value is printed. It validates the
+repository variable and the actual `github.event.pull_request.number`,
+restores the trusted seed (not lookup-only), validates exact seed marker
+content on a hit, replaces the path with a deterministic non-secret poison
+marker, saves the exact Stage 1 poison key, then fails only if the trusted seed
+was readable. A seed miss passes with a pending trusted-main
+`verify-pr-write` check; a seed hit is reported only after the poison save has
+completed.
+
+Fork PRs remain on the hosted path and provide the no-Depot-authority half of
+the acceptance evidence; only the same-repository exact sentinel ref can
+exercise this protected Depot authority probe. This hook remains inert until
+`DEPOT_PR_SENTINEL_REF` and `DEPOT_PR_SENTINEL_ID` are deliberately set for an
+operator-run experiment. It is not the global PR activation gate, does not
+grant cache or registry authority, and does not authorize setting
+`DEPOT_PR_RUNNERS_ENABLED`.
+
 ## Activation gate
 
 Do not enable Depot for PR content until:

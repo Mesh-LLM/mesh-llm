@@ -46,7 +46,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows host/runtime/product/platform graph with one platform-local UI producer |
-| `ci-quality-slice.yml` | Contracts, format, Clippy and CLI/docs guard |
+| `ci-quality-slice.yml` | Contracts, format, Clippy and CLI/docs guard; additive protected authority sentinel |
 | `ci-web-slice.yml` | Console quality and public website build |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
@@ -164,14 +164,28 @@ the exact protected workflow refs. The repository token cannot independently
 inspect organization runner-group settings through the API (403), so these
 remain external facts rather than checked-in evidence. The protected
 branch/main canary, same-repository PR canary, fork PR canary, provider-parity
-comparison, and rollback run are still pending; `DEPOT_RUNNERS_ENABLED` or a
-successful manual canary does not prove PR isolation.
+comparison, and rollback run are still pending; `DEPOT_PR_SENTINEL_REF` and
+`DEPOT_PR_SENTINEL_ID` are unset by default, and `DEPOT_RUNNERS_ENABLED` or a
+successful manual canary does not prove PR isolation. Fork PR validation
+remains hosted and is the no-Depot-authority half of the sentinel acceptance
+evidence; only the exact same-repository sentinel ref may exercise the
+diagnostic Depot job. All three sentinel cache phases attest the
+provider-injected `ACTIONS_CACHE_URL`/`ACTIONS_RESULTS_URL` structure and
+require a runtime token before invoking `actions/cache`; attestation reports
+only value-free variable/reason classes and fails closed on malformed or
+missing backend data.
 
 Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
-`DEPOT_PR_RUNNERS_ENABLED` (absent/false until protected PR activation), and
+`DEPOT_PR_RUNNERS_ENABLED` (absent/false until protected PR activation),
 `DEPOT_PR_CANARY_REF` (absent by default; one exact
-`refs/pull/<number>/merge` ref only). The latter is a bounded selector
-canary, not a cache-isolation proof or a replacement for the global PR gate.
+`refs/pull/<number>/merge` ref only), `DEPOT_PR_SENTINEL_REF` (absent by
+default; one exact same-repository merge ref used only by the protected
+no-checkout authority diagnostic), and `DEPOT_PR_SENTINEL_ID` (absent by
+default; exactly 32 lowercase hexadecimal characters when the diagnostic is
+deliberately armed). The canary and sentinel variables are bounded selectors,
+not cache-isolation proofs or replacements for the global PR gate. The normal
+Quality runner policy continues to use `DEPOT_PR_CANARY_REF`; the sentinel
+uses a separate selector output and cannot move the normal build jobs.
 The eligible five-lane Depot graph now disables every native GitHub cache
 consumer (explicit cache actions, setup-* package caches, rust-cache, static /
 Metal / Windows / Swift ABI caches and Windows SDK cache toggles) and Depot
