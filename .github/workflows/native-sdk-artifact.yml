@@ -169,16 +169,12 @@ jobs:
                 runner="$RUNNER_MACOS"
               else
                 runner=macos-15
+                ALLOW_NATIVE_GITHUB_CACHE=true
               fi
               ALLOW_DEPOT_REMOTE_CACHE=false
               ;;
             *) echo "unsupported native SDK producer target: $TARGET" >&2; exit 1 ;;
           esac
-          if [[ "$runner" == depot-* ]]; then
-            ALLOW_NATIVE_GITHUB_CACHE=false
-          else
-            ALLOW_NATIVE_GITHUB_CACHE=true
-          fi
           {
             echo "runner=$runner"
             echo "allow_depot_remote_cache=$ALLOW_DEPOT_REMOTE_CACHE"

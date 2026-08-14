@@ -242,9 +242,10 @@ This creates a cache-poisoning path into trusted main/release consumers.
 
 ### Required provider isolation contract
 
-Before any PR runner gate or canary is enabled, Depot must expose a supported,
-server-enforced per-connection/job/ref control for the GitHub Actions cache
-path. The control must choose one of these safe outcomes for an untrusted PR:
+Before permanent PR activation or any context outside the reviewed temporary
+exception, Depot must expose a supported, server-enforced
+per-connection/job/ref control for the GitHub Actions cache path. The control
+must choose one of these safe outcomes for an untrusted PR:
 
 - leave the job on GitHub-native branch-scoped `ACTIONS_CACHE_URL`,
   `ACTIONS_RESULTS_URL` and runtime-token semantics, with no Depot cache proxy
@@ -261,8 +262,8 @@ ephemeral runners, the organization switch above, and runner-group workflow
 restrictions are not substitutes for this server-enforced control. The
 provider must document the control and its trust/ref semantics, and a fresh
 same-repository PR, fork PR and trusted-main seed/verify sentinel must prove
-the selected outcome before `DEPOT_PR_RUNNERS_ENABLED` or any canary selector
-is armed.
+the selected outcome before the exception is made permanent or a canary is
+treated as isolation evidence.
 
 Official references:
 

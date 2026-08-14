@@ -385,6 +385,9 @@ class CiArtifactActionTests(unittest.TestCase):
         target: str,
         runner_size: str,
         manual_use_depot: str = "false",
+        pr_enabled: str = "false",
+        pr_approved_ref: str = "",
+        pr_approved_sha: str = "",
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
         workflow = (
             ROOT / ".github" / "workflows" / workflow_name
@@ -395,6 +398,9 @@ class CiArtifactActionTests(unittest.TestCase):
             main_enabled=depot_enabled,
             manual_enabled=manual_use_depot,
             repository=repository,
+            pr_enabled=pr_enabled,
+            pr_approved_ref=pr_approved_ref,
+            pr_approved_sha=pr_approved_sha,
         )
         policy = workflow.split(
             "      - name: Resolve runner size and target\n",
@@ -424,6 +430,9 @@ class CiArtifactActionTests(unittest.TestCase):
                     "POLICY_EVENT_NAME": event_name,
                     "ALLOW_DEPOT_REMOTE_CACHE": selected[
                         "allow_depot_remote_cache"
+                    ],
+                    "ALLOW_NATIVE_GITHUB_CACHE": selected[
+                        "allow_native_github_cache"
                     ],
                     "RUNNER_DEFAULT": selected["runner"],
                     "RUNNER_4": selected["runner_4"],
@@ -1324,6 +1333,28 @@ class CiArtifactActionTests(unittest.TestCase):
             )
 
             if workflow_name == "native-sdk-artifact.yml":
+                approved_pr_sha = (
+                    "0123456789abcdef0123456789abcdef01234567"
+                )
+                result, outputs = self.run_reusable_runner_policy(
+                    workflow_name,
+                    repository="Mesh-LLM/mesh-llm",
+                    event_name="pull_request",
+                    ref="refs/pull/12/merge",
+                    depot_enabled="false",
+                    target="x86_64-unknown-linux-gnu",
+                    runner_size="8",
+                    pr_enabled="true",
+                    pr_approved_ref="refs/pull/12/merge",
+                    pr_approved_sha=approved_pr_sha,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs["runner"], "depot-ubuntu-24.04-8")
+                self.assertEqual(
+                    outputs["allow_native_github_cache"],
+                    "true",
+                )
+
                 result, outputs = self.run_reusable_runner_policy(
                     workflow_name,
                     repository="Mesh-LLM/mesh-llm",

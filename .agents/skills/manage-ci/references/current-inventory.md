@@ -107,8 +107,11 @@ from that same catalog.
 - `restore-smoke-inputs`: product/model extraction for consumers.
 - `select-ci-runners`: provider labels, cache permissions, and the
   provider-derived `allow_native_github_cache` / `allow_depot_remote_cache`
-  outputs. Every Depot selection sets both outputs to false; hosted PR,
-  release, and cache-warmer selections retain native GitHub cache behavior.
+  outputs. Depot selections disable both cache paths by default. During the
+  bounded approved exception, the exact PR revision and eligible trusted-main
+  Depot jobs enable the GitHub Actions cache API while direct Depot remote
+  cache remains disabled. Hosted PR, release, and cache-warmer selections
+  retain native GitHub cache behavior.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
