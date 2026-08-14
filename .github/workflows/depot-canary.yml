@@ -83,9 +83,12 @@ jobs:
           fi
           for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL; do
             endpoint="${!endpoint_name:-}"
+            if [[ -z "$endpoint" ]]; then
+              continue
+            fi
             endpoint_lower="${endpoint,,}"
             if [[ ! "$endpoint_lower" =~ ^https://([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]+)?([/?#]|$) ]]; then
-              echo "GitHub Actions endpoint is missing or not GitHub-owned: $endpoint_name" >&2
+              echo "GitHub Actions endpoint is not GitHub-owned: $endpoint_name" >&2
               exit 1
             fi
           done

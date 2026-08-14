@@ -38,7 +38,7 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         protected_pre_checkout_action = (
             "Mesh-LLM/mesh-llm/.github/actions/"
-            "audit-depot-pr-isolation@4f9899c0c381b8cc225c9be73980ffa8db525c57"
+            "audit-depot-pr-isolation@98909c0909a947944dd3215ff4ef2c7f431e4ea8"
         )
 
         for path in (*action_files, *workflow_files):
@@ -315,6 +315,7 @@ class CiArtifactActionTests(unittest.TestCase):
         repository: str = "Mesh-LLM/mesh-llm",
         head_repository: str | None = None,
         pr_enabled: str = "false",
+        pr_canary_ref: str = "",
         force_hosted: str = "false",
     ) -> dict[str, str]:
         action = self.read_action("select-ci-runners")
@@ -341,6 +342,7 @@ class CiArtifactActionTests(unittest.TestCase):
                     "GITHUB_REF": ref,
                     "INPUT_DEPOT_MAIN_ENABLED": main_enabled,
                     "INPUT_DEPOT_PR_ENABLED": pr_enabled,
+                    "INPUT_PR_CANARY_REF": pr_canary_ref,
                     "INPUT_FORCE_HOSTED": force_hosted,
                     "INPUT_MANUAL_USE_DEPOT": manual_enabled,
                     "DISPATCH_ORIGINAL_EVENT_NAME": original_event_name,
@@ -615,6 +617,87 @@ class CiArtifactActionTests(unittest.TestCase):
             "value: ${{ steps.identity.outputs.build-dir }}",
             action,
         )
+
+    def test_windows_native_cache_inputs_fail_closed_and_callers_opt_in(
+        self,
+    ) -> None:
+        for action_name in (
+            "restore-windows-abi-cache",
+            "setup-windows-rocm-sdk",
+        ):
+            with self.subTest(action=action_name):
+                action = self.read_action(action_name)
+                input_start = action.index("  allow-native-github-cache:")
+                input_end = action.find("\n\n", input_start)
+                input_block = action[input_start:input_end]
+                self.assertIn('required: false', input_block)
+                self.assertIn('default: "false"', input_block)
+                self.assertNotIn('default: "true"', input_block)
+
+        expected_callers = {
+            "restore-windows-abi-cache": {
+                "ci-windows-runtime-slice.yml": 1,
+                "release.yml": 2,
+                "windows-warm-caches.yml": 2,
+            },
+            "setup-windows-rocm-sdk": {
+                "ci-windows-runtime-slice.yml": 1,
+                "release.yml": 1,
+                "windows-warm-caches.yml": 1,
+            },
+        }
+        policy_value = (
+            "allow-native-github-cache: "
+            "${{ needs.runner_policy.outputs.allow_native_github_cache }}"
+        )
+        for action_name, expected_counts in expected_callers.items():
+            calls: list[tuple[str, str]] = []
+            for workflow_path in sorted(
+                (ROOT / ".github" / "workflows").glob("*.yml")
+            ):
+                lines = workflow_path.read_text(encoding="utf-8").splitlines()
+                for index, line in enumerate(lines):
+                    marker = f"uses: ./.github/actions/{action_name}"
+                    if marker not in line:
+                        continue
+                    line_indent = len(line) - len(line.lstrip())
+                    step_indent = line_indent
+                    for candidate in reversed(lines[:index]):
+                        candidate_indent = len(candidate) - len(candidate.lstrip())
+                        if candidate_indent <= line_indent and candidate.lstrip().startswith("-"):
+                            step_indent = candidate_indent
+                            break
+                    start = index
+                    while start > 0:
+                        candidate = lines[start - 1]
+                        candidate_indent = len(candidate) - len(candidate.lstrip())
+                        if candidate_indent == step_indent and candidate.lstrip().startswith("-"):
+                            start -= 1
+                            break
+                        if candidate_indent < step_indent:
+                            break
+                        start -= 1
+                    end = index + 1
+                    while end < len(lines):
+                        candidate = lines[end]
+                        candidate_indent = len(candidate) - len(candidate.lstrip())
+                        if candidate_indent == step_indent and candidate.lstrip().startswith("-"):
+                            break
+                        end += 1
+                    calls.append((workflow_path.name, "\n".join(lines[start:end])))
+
+            actual_counts: dict[str, int] = {}
+            for workflow_name, block in calls:
+                actual_counts[workflow_name] = actual_counts.get(workflow_name, 0) + 1
+                with self.subTest(action=action_name, workflow=workflow_name):
+                    if workflow_name == "ci-windows-runtime-slice.yml":
+                        self.assertIn(policy_value, block)
+                    else:
+                        self.assertIn(
+                            'allow-native-github-cache: "true"',
+                            block,
+                        )
+            self.assertEqual(expected_counts, actual_counts)
 
     def test_native_toolchain_epoch_is_exact_and_shared_with_build_stamp(
         self,
@@ -1936,6 +2019,15 @@ class CiArtifactActionTests(unittest.TestCase):
                     outputs["allow_depot_remote_cache"],
                     cache_enabled,
                 )
+                expected_native_cache = (
+                    "false"
+                    if enabled == "true" and event_name == "pull_request"
+                    else "true"
+                )
+                self.assertEqual(
+                    outputs["allow_native_github_cache"],
+                    expected_native_cache,
+                )
                 self.assertEqual(outputs["runner"], runner)
                 expected_arm = (
                     "depot-ubuntu-24.04-arm"
@@ -1980,6 +2072,10 @@ class CiArtifactActionTests(unittest.TestCase):
             untrusted_repository["allow_depot_remote_cache"],
             "false",
         )
+        self.assertEqual(
+            untrusted_repository["allow_native_github_cache"],
+            "true",
+        )
 
         fork_head_repository = self.run_runner_selector(
             event_name="pull_request",
@@ -1991,6 +2087,10 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertEqual(fork_head_repository["depot_enabled"], "false")
         self.assertEqual(fork_head_repository["runner"], "ubuntu-24.04")
+        self.assertEqual(
+            fork_head_repository["allow_native_github_cache"],
+            "true",
+        )
 
         runner_contract_change = self.run_runner_selector(
             event_name="pull_request",
@@ -2002,6 +2102,10 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertEqual(runner_contract_change["depot_enabled"], "false")
         self.assertEqual(runner_contract_change["runner"], "ubuntu-24.04")
+        self.assertEqual(
+            runner_contract_change["allow_native_github_cache"],
+            "true",
+        )
 
         non_merge_ref = self.run_runner_selector(
             event_name="pull_request",
@@ -2027,6 +2131,110 @@ class CiArtifactActionTests(unittest.TestCase):
             untrusted_dispatch["allow_depot_remote_cache"],
             "false",
         )
+        self.assertEqual(
+            untrusted_dispatch["allow_native_github_cache"],
+            "true",
+        )
+
+        canary_pr = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="false",
+            manual_enabled="false",
+            pr_enabled="false",
+            pr_canary_ref="refs/pull/12/merge",
+        )
+        self.assertEqual(canary_pr["depot_enabled"], "true")
+        self.assertEqual(canary_pr["runner"], "depot-ubuntu-24.04")
+        self.assertEqual(canary_pr["allow_depot_remote_cache"], "false")
+        self.assertEqual(canary_pr["allow_native_github_cache"], "false")
+
+        for name, kwargs in (
+            (
+                "empty canary ref",
+                {"pr_canary_ref": ""},
+            ),
+            (
+                "different pull-request ref",
+                {"pr_canary_ref": "refs/pull/13/merge"},
+            ),
+            (
+                "fork head",
+                {
+                    "pr_canary_ref": "refs/pull/12/merge",
+                    "head_repository": "attacker/mesh-llm",
+                },
+            ),
+            (
+                "pull_request_target",
+                {
+                    "pr_canary_ref": "refs/pull/12/merge",
+                    "event_name": "pull_request_target",
+                },
+            ),
+            (
+                "forced hosted",
+                {
+                    "pr_canary_ref": "refs/pull/12/merge",
+                    "force_hosted": "true",
+                },
+            ),
+            (
+                "dispatch source",
+                {
+                    "pr_canary_ref": "refs/pull/12/merge",
+                    "event_name": "workflow_dispatch",
+                    "ref": "refs/heads/main",
+                },
+            ),
+        ):
+            with self.subTest(canary_case=name):
+                case = {
+                    "event_name": "pull_request",
+                    "ref": "refs/pull/12/merge",
+                    "main_enabled": "false",
+                    "manual_enabled": "false",
+                    "pr_enabled": "false",
+                    **kwargs,
+                }
+                selected = self.run_runner_selector(**case)
+                self.assertEqual(selected["depot_enabled"], "false")
+                self.assertEqual(selected["runner"], "ubuntu-24.04")
+                self.assertEqual(
+                    selected["allow_depot_remote_cache"],
+                    "false",
+                )
+
+        action = self.read_action("select-ci-runners")
+        run_block = action.split("      run: |\n", maxsplit=1)[1]
+        script = "\n".join(
+            line[8:] if line.startswith("        ") else line
+            for line in run_block.splitlines()
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "github-output"
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "GITHUB_OUTPUT": str(output),
+                    "INPUT_EVENT_NAME": "pull_request",
+                    "INPUT_REPOSITORY": "Mesh-LLM/mesh-llm",
+                    "INPUT_HEAD_REPOSITORY": "Mesh-LLM/mesh-llm",
+                    "INPUT_REF": "refs/pull/12/merge",
+                    "INPUT_DEPOT_MAIN_ENABLED": "false",
+                    "INPUT_DEPOT_PR_ENABLED": "false",
+                    "INPUT_PR_CANARY_REF": "refs/heads/main",
+                    "INPUT_FORCE_HOSTED": "false",
+                    "INPUT_MANUAL_USE_DEPOT": "false",
+                },
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exact pull-request merge ref", result.stderr)
 
     def test_dispatched_pr_cache_writes_remain_blocked_with_depot(
         self,
@@ -2066,6 +2274,149 @@ class CiArtifactActionTests(unittest.TestCase):
             pr = pr_path.read_text(encoding="utf-8")
             self.assertNotIn("depot-ubuntu", pr)
             self.assertNotIn("SCCACHE_GHA_ENABLED: \"false\"", pr)
+
+    def test_depot_pr_native_cache_consumers_are_centrally_disabled(self) -> None:
+        eligible_consumers = {
+            "ci-quality-slice.yml": ("Swatinem/rust-cache@",),
+            "ci-web-slice.yml": (
+                "uses: actions/cache/restore@",
+                "uses: actions/cache/save@",
+            ),
+            "ci-ui-artifact-slice.yml": ("uses: actions/cache/restore@",),
+            "ci-linux-host-slice.yml": ("Swatinem/rust-cache@",),
+            "ci-linux-runtime-slice.yml": ("Swatinem/rust-cache@",),
+            "ci-rust-tests-slice.yml": ("Swatinem/rust-cache@",),
+            "ci-macos-host-slice.yml": ("Swatinem/rust-cache@",),
+            "ci-platform-checks-slice.yml": (
+                "uses: actions/cache/restore@",
+                "uses: actions/cache/save@",
+            ),
+            "ci-windows-host-slice.yml": ("Swatinem/rust-cache@",),
+            "ci-windows-runtime-slice.yml": (
+                "uses: ./.github/actions/restore-windows-abi-cache",
+                "use-github-cache:",
+                "uses: jakoch/install-vulkan-sdk-action@",
+                "uses: ./.github/actions/setup-windows-rocm-sdk",
+                "uses: actions/cache/save@",
+            ),
+            "static-abi-artifact.yml": ("uses: actions/cache@",),
+            "swift-sdk-artifact.yml": (
+                "cache: ${{ needs.runner_policy.outputs.allow_native_github_cache",
+                "Swatinem/rust-cache@",
+                "uses: actions/cache@",
+            ),
+        }
+        expected_jobs = {
+            "ci-quality-slice.yml": {
+                "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync",
+            },
+            "ci-web-slice.yml": {"runner_policy", "ui_quality", "website"},
+            "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},
+            "ci-linux-host-slice.yml": {"runner_policy", "linux_host"},
+            "ci-linux-runtime-slice.yml": {"runner_policy", "linux_runtime"},
+            "ci-rust-tests-slice.yml": {"runner_policy", "rust_tests"},
+            "ci-macos-host-slice.yml": {"runner_policy", "macos_host"},
+            "ci-platform-checks-slice.yml": {"runner_policy", "platform_checks"},
+            "ci-windows-host-slice.yml": {"runner_policy", "windows_host"},
+            "ci-windows-runtime-slice.yml": {"runner_policy", "windows_runtime"},
+            "static-abi-artifact.yml": {"runner_policy", "static_abi_artifact"},
+            "swift-sdk-artifact.yml": {"runner_policy", "swift_sdk_artifact"},
+        }
+
+        def step_block(workflow: str, marker: str) -> str:
+            lines = workflow.splitlines()
+            for index, line in enumerate(lines):
+                if marker not in line:
+                    continue
+                indent = len(line) - len(line.lstrip())
+                step_indent = indent if line.lstrip().startswith("-") else indent - 2
+                start = index
+                while start > 0:
+                    candidate = lines[start - 1]
+                    candidate_indent = len(candidate) - len(candidate.lstrip())
+                    if candidate_indent == step_indent and candidate.lstrip().startswith("-"):
+                        start -= 1
+                        break
+                    if candidate_indent < step_indent:
+                        break
+                    start -= 1
+                end = index + 1
+                while end < len(lines):
+                    candidate = lines[end]
+                    candidate_indent = len(candidate) - len(candidate.lstrip())
+                    if candidate_indent == step_indent and candidate.lstrip().startswith("-"):
+                        break
+                    end += 1
+                return "\n".join(lines[start:end])
+            self.fail(f"missing cache consumer marker: {marker}")
+
+        for filename, markers in eligible_consumers.items():
+            workflow = (
+                ROOT / ".github" / "workflows" / filename
+            ).read_text(encoding="utf-8")
+            with self.subTest(workflow=filename):
+                self.assertIn(
+                    "allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}",
+                    workflow,
+                )
+                for marker in markers:
+                    block = step_block(workflow, marker)
+                    with self.subTest(consumer=marker):
+                        self.assertIn("allow_native_github_cache", block)
+
+        for filename, jobs in expected_jobs.items():
+            workflow = (
+                ROOT / ".github" / "workflows" / filename
+            ).read_text(encoding="utf-8")
+            job_section = workflow.split("\njobs:\n", maxsplit=1)[1]
+            actual_jobs = set(re.findall(r"^  ([A-Za-z0-9_]+):", job_section, re.MULTILINE))
+            with self.subTest(workflow=filename):
+                self.assertEqual(jobs, actual_jobs)
+                self.assertNotRegex(
+                    job_section,
+                    r"^  [A-Za-z0-9_]+:\n(?:    [^\n]*\n){0,4}    if:.*allow_native_github_cache",
+                )
+
+        website = (
+            ROOT / ".github" / "workflows" / "ci-web-slice.yml"
+        ).read_text(encoding="utf-8")
+        swift = (
+            ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml"
+        ).read_text(encoding="utf-8")
+        windows = (
+            ROOT / ".github" / "workflows" / "ci-windows-runtime-slice.yml"
+        ).read_text(encoding="utf-8")
+        native_cache_expression = (
+            "needs.runner_policy.outputs.allow_native_github_cache == 'true'"
+        )
+        self.assertIn(
+            f"cache: ${{{{ {native_cache_expression} && 'npm' || '' }}}}",
+            website,
+        )
+        self.assertIn(
+            f"package-manager-cache: ${{{{ {native_cache_expression} }}}}",
+            website,
+        )
+        self.assertIn(
+            f"cache: ${{{{ {native_cache_expression} && 'pnpm' || '' }}}}",
+            swift,
+        )
+        self.assertIn(
+            f"package-manager-cache: ${{{{ {native_cache_expression} }}}}",
+            swift,
+        )
+        self.assertIn(
+            f"use-github-cache: ${{{{ {native_cache_expression} }}}}",
+            windows,
+        )
+        self.assertIn(
+            f"cache: ${{{{ {native_cache_expression} }}}}",
+            windows,
+        )
+
+        for action_name in ("restore-windows-abi-cache", "setup-windows-rocm-sdk"):
+            action = self.read_action(action_name)
+            self.assertIn("inputs.allow-native-github-cache == 'true'", action)
 
 
 if __name__ == "__main__":
