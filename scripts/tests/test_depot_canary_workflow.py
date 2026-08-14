@@ -61,6 +61,11 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("transparently redirected to Depot", self.workflow)
         self.assertIn("ACTIONS_RESULTS_URL", self.workflow)
         self.assertIn("actions\\.githubusercontent\\.com", self.workflow)
+        self.assertNotIn(",,}", self.workflow)
+        self.assertIn(
+            "printf '%s' \"$endpoint\" | tr '[:upper:]' '[:lower:]'",
+            self.workflow,
+        )
         self.assertIn('docker_auth_config="${DOCKER_AUTH_CONFIG:-}"', self.workflow)
         self.assertIn("Docker registry authentication is configured", self.workflow)
         self.assertIn(
@@ -87,7 +92,11 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             / "audit-depot-pr-isolation"
             / "action.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn('endpoint_lower="${endpoint,,}"', action)
+        self.assertNotIn(",,}", action)
+        self.assertIn(
+            "printf '%s' \"$endpoint\" | tr '[:upper:]' '[:lower:]'",
+            action,
+        )
         self.assertIn("depot_selected", action)
         self.assertIn("INPUT_DEPOT_SELECTED", action)
         self.assertIn('if [[ "$endpoint_lower" == *depot.dev* ]]', action)

@@ -106,7 +106,8 @@ runs:
 
         is_github_endpoint() {
           local endpoint="$1"
-          local endpoint_lower="${endpoint,,}"
+          local endpoint_lower
+          endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
           local authority
           authority="$(endpoint_host "$endpoint_lower")"
           [[ "$endpoint_lower" == https://* ]] || return 1
@@ -116,7 +117,8 @@ runs:
 
         is_loopback_endpoint() {
           local endpoint="$1"
-          local endpoint_lower="${endpoint,,}"
+          local endpoint_lower
+          endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
           # Loopback proxies require a numeric TCP port and an explicit path.
           if [[ ! "$endpoint_lower" =~ ^https?://(localhost|127\.0\.0\.1|\[::1\]):([0-9]{1,5})/[^[:space:]]*$ ]]; then
             return 1
@@ -130,7 +132,7 @@ runs:
           if [[ -z "$endpoint" ]]; then
             continue
           fi
-          endpoint_lower="${endpoint,,}"
+          endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
           if [[ "$endpoint_lower" == *depot.dev* ]]; then
             echo "PR runner received a Depot Actions endpoint ($endpoint_name)" >&2
             exit 1
