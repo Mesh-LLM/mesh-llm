@@ -346,6 +346,14 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                         "present",
                     ),
                     (
+                        "URL userinfo with numeric port",
+                        "https://actions.githubusercontent.com:443@attacker.example/",
+                        "https",
+                        "other",
+                        "absent",
+                        "present",
+                    ),
+                    (
                         "numeric port",
                         "https://cache.example.invalid:8443/cache",
                         "https",
@@ -442,6 +450,7 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                                 "/cache",
                                 "8443",
                                 "65536",
+                                "443",
                             ):
                                 self.assertNotIn(forbidden_fragment, result.stderr)
             if script_name == "audit action":
