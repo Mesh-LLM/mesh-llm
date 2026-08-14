@@ -38,7 +38,7 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         protected_pre_checkout_action = (
             "Mesh-LLM/mesh-llm/.github/actions/"
-            "audit-depot-pr-isolation@98909c0909a947944dd3215ff4ef2c7f431e4ea8"
+            "audit-depot-pr-isolation@9aad044a103125fca53e2fe5877e502a4793ad98"
         )
 
         for path in (*action_files, *workflow_files):
