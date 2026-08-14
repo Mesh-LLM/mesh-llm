@@ -22,13 +22,26 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Inert migration shim for the former main ingress filename; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
-| `release.yml` | release tags, dispatch | Release-only signing, assets and publication |
+| `release.yml` | release tags, dispatch | Canonical version synchronization, release-only signing, assets and publication |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
+
+For a non-canary manual dispatch, `release.yml` runs the checked-in
+`scripts/release-version.sh`, creates one linear release-source commit when the
+tracked version surface changes, and fast-forwards `main` before any release
+build starts. `just release` is a preflight and synchronous dispatcher for that
+same workflow. A tag-push release is read-only with respect to `main` and is
+accepted only when the tag is already reachable from `main` and applying the
+same version script produces no tracked diff. Canary dispatches never update
+`main` or publish. The publish job creates only the release-specific tag commit
+for generated Swift/SDK resources and enables GitHub-generated release notes.
+The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
+target; prerelease tags are excluded so RC and final notes use the same stable
+baseline.
 
 The five PR lifecycle rows and five main push rows above are the complete
 allowed routine validation entry sets. Their separation and direct GitHub log

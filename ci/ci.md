@@ -79,6 +79,27 @@ The temporary `ci.yml` reusable-only shim has no push trigger, dispatcher, or
 lane calls. It can be removed with the other migration shims after the updated
 runner contract is active on protected main.
 
+### Release source and version ownership
+
+`scripts/release-version.sh` is the single owner of the tracked release-version
+surface. On a non-canary `release.yml` dispatch, the metadata job applies that
+script, creates a linear release-source commit when needed, and fast-forwards
+`main` before the build graph begins. `just release` only performs local
+preflight, dispatches that workflow, and waits for its result. A tag push must
+already be reachable from `main` and version-complete; the metadata job applies
+the same script and rejects any tracked diff. Canary dispatches do not mutate
+`main` or publish.
+
+The later publish job checks out the canonical source commit, adds only the
+generated SwiftPM/binding and SDK console resources needed by the immutable
+release tag, publishes the assets, and enables GitHub-generated release notes.
+The metadata job selects the highest stable `vMAJOR.MINOR.PATCH` tag below the
+target as the explicit comparison base. It excludes every prerelease tag, so
+release candidates and their final stable release use the same stable baseline;
+the final notes retain the RC changes and add any post-RC changes.
+The workflow-scoped token push does not fan out another main CI run; the release
+graph is the evidence for that version-only source commit.
+
 ## Graph shape
 
 ```mermaid
