@@ -1,8 +1,8 @@
 # MeshLLM CI inventory
 
-This file records checked-in CI facts. It is not a record of historical runs
-or live GitHub/Depot administration. Read it with `../SKILL.md` and `ci/ci.md`
-before editing CI.
+This file records checked-in CI facts and selected controlled probe evidence.
+It is not a complete historical run log or live GitHub/Depot administration.
+Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 ## Entry workflows
 
@@ -162,14 +162,22 @@ Cache connectivity is disabled, automatic Registry Actions authentication is
 disabled, and the Depot runner group is restricted to `Mesh-LLM/mesh-llm` and
 the exact protected workflow refs. The repository token cannot independently
 inspect organization runner-group settings through the API (403), so these
-remain external facts rather than checked-in evidence. The protected
-branch/main canary, same-repository PR canary, fork PR canary, provider-parity
-comparison, and rollback run are still pending; `DEPOT_PR_SENTINEL_REF` and
-`DEPOT_PR_SENTINEL_ID` are unset by default, and `DEPOT_RUNNERS_ENABLED` or a
-successful manual canary does not prove PR isolation. Fork PR validation
-remains hosted and is the no-Depot-authority half of the sentinel acceptance
-evidence; only the exact same-repository sentinel ref may exercise the
-diagnostic Depot job. All three sentinel cache phases attest the
+remain external facts rather than checked-in evidence. The controlled
+trusted-main seed [run 31816775585](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816775585)
+succeeded at `main` commit `9e977e246`; the same-repository PR authority
+sentinel [run 31816869128 / job 94821057215](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816869128/job/94821057215)
+read and exactly validated the trusted seed, saved/cleared/restored and
+exactly validated the poison, then failed its intended seed-isolation gate;
+trusted-main verify [run 31817111471 / job 94821343605](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31817111471/job/94821343605)
+restored and exactly validated that poison, then failed its intended expected-
+miss gate. This proves unsafe repository-scoped cross-trust authority, so it is
+not a successful isolation result. `DEPOT_PR_RUNNERS_ENABLED`,
+`DEPOT_PR_CANARY_REF`, `DEPOT_PR_SENTINEL_REF` and `DEPOT_PR_SENTINEL_ID`
+remain absent. Fork PR validation, provider-parity/capacity comparison,
+namespace purge/expiry confirmation and rollback remain pending. Fork PR
+validation remains hosted and is the no-Depot-authority half of the sentinel
+acceptance evidence; only the exact same-repository sentinel ref may exercise
+the diagnostic Depot job. All three sentinel cache phases attest the
 provider-injected `ACTIONS_CACHE_URL`/`ACTIONS_RESULTS_URL` structure before
 invoking pinned `actions/cache` restore/save actions. The shell attestation
 does not require ambient `ACTIONS_RUNTIME_TOKEN`: GitHub's
@@ -202,7 +210,9 @@ consumer (explicit cache actions, setup-* package caches, rust-cache, static /
 Metal / Windows / Swift ABI caches and Windows SDK cache toggles) and Depot
 remote cache when those outputs are false; cache misses rebuild normally. This checked-in mode does not
 prove the absence of ambient Depot/WebDAV authority, so the runtime sentinel
-and no-secret/no-token canaries remain required. Other variables include `CUDA_VERSION`,
+has recorded unsafe repository-scoped cross-trust authority and must be
+redesigned and repeated successfully; no-secret/no-token, fork and provider-
+parity canaries remain required. Other variables include `CUDA_VERSION`,
 `VULKAN_SDK_VERSION`, smoke configuration variables, and release/deployment
 variables. Secret values never belong in this inventory;
 known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`

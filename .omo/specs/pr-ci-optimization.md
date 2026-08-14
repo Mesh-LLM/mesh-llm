@@ -255,9 +255,10 @@ install/build commands remain unchanged. Hosted release and cache-warmer
 paths retain their existing GitHub cache behavior. The Depot namespace is
 intentionally unused by trusted workflows, so existing entries must be purged
 or expire before the PR gate. A GitHub-owned or strict loopback proxy is inert
-transport only, not an ambient authority proof; the actual runner sentinel
-and no-token checks remain required before enabling the canary or global PR
-gate.
+transport only, not an ambient authority proof; the completed sentinel has
+shown unsafe repository-scoped cross-trust access, so a provider-isolation
+redesign and a new successful sentinel remain required before enabling the
+canary or global PR gate.
 
 The sentinel is deliberately outside the planner/build graph and does not
 invoke `audit-depot-pr-isolation`: that audit rejects the ambient endpoint
@@ -287,6 +288,21 @@ trusted-main `verify-pr-write` phase pending; main verify's poison miss remains
 the cross-scope proof. Fork PRs remain hosted and
 provide the no-Depot-authority evidence; only the exact same-repository
 sentinel ref exercises the Depot diagnostic.
+
+Controlled evidence now records the authority result: trusted-main seed
+[run 31816775585](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816775585)
+succeeded at `main` commit `9e977e246`; the same-repository PR sentinel
+[run 31816869128 / job 94821057215](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816869128/job/94821057215)
+restored and exactly validated the trusted seed, saved/cleared/restored and
+exactly validated the poison, then failed its intended seed-isolation gate;
+trusted-main verify
+[run 31817111471 / job 94821343605](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31817111471/job/94821343605)
+restored and exactly validated that poison, then failed its intended expected-
+miss gate. This is unsafe repository-scoped cross-trust authority, not a
+successful isolation result. Keep `DEPOT_PR_RUNNERS_ENABLED` and all sentinel /
+canary variables absent. A provider-isolation redesign and a new successful
+sentinel are required before PR Depot can be reconsidered; fork,
+provider-parity, capacity and rollback evidence remain pending.
 
 Before a PR Depot path is enabled, an administrator must prove:
 

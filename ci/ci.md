@@ -400,16 +400,31 @@ external gates are ready. The implemented cache-inert mode prevents the
 checked-in GitHub and Depot cache consumers from reading or writing on any
 Depot run, but it does not prove that a runner has no ambient Depot/WebDAV/cache
 authority. A protected runner-group check, no-secret/no-token execution,
-namespace purge/expiry, and the non-secret sentinel canary in
-`ci/DEPOT_MIGRATION.md` remain prerequisites.
+namespace purge/expiry, provider-isolation redesign and a new successful
+non-secret sentinel in `ci/DEPOT_MIGRATION.md` remain prerequisites.
 Do not change Depot settings or runner groups in a workflow refactor.
 
 The external administrative posture now has automatic Depot Cache and Registry
 Actions connectivity disabled and the Depot runner group restricted to this
-repository and its exact protected workflow refs. The negative main canary,
-branch/main provider-parity check, same-repository PR canary, fork PR canary,
-and rollback evidence remain pending; those runtime checks are distinct from
-the settings verification and must pass before PR placement is enabled.
+repository and its exact protected workflow refs. The controlled trusted-main
+seed [run 31816775585](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816775585)
+at `main` commit `9e977e246`, same-repository PR authority sentinel
+[run 31816869128 / job 94821057215](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816869128/job/94821057215),
+and trusted-main verify
+[run 31817111471 / job 94821343605](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31817111471/job/94821343605)
+are complete. The PR sentinel read and exactly validated the trusted seed,
+published and exactly validated the poison marker, and then failed its
+intended seed-isolation gate; trusted main later restored and exactly validated
+that poison and failed its intended expected-miss gate. This proves unsafe
+repository-scoped cross-trust authority. Do not enable PR Depot without a
+provider-isolation redesign and a new successful sentinel; all
+`DEPOT_PR_RUNNERS_ENABLED`, `DEPOT_PR_CANARY_REF`, `DEPOT_PR_SENTINEL_REF` and
+`DEPOT_PR_SENTINEL_ID` variables remain absent.
+
+Branch/main provider-parity, fork PR canary, capacity/namespace purge or expiry,
+and rollback evidence remain pending; those checks are distinct from the
+settings verification and must pass after the redesign before PR placement is
+enabled.
 
 ## Required extension pattern
 

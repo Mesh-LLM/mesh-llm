@@ -3,18 +3,19 @@
 Status: trusted-main support exists; pull-request execution is future work and
 is disabled. Automatic Depot Cache and Registry Actions connectivity are
 admin-verified off, and the Depot runner group is admin-verified restricted to
-this repository and the protected workflow allowlist. The checked-in graph and
-collector define the remaining branch/main and same-repository/fork canaries;
-those runtime checks still block PR activation.
+this repository and the protected workflow allowlist. The controlled
+trusted-main/PR authority probe is complete and demonstrates unsafe
+repository-scoped cross-trust authority; fork, provider-parity, capacity and
+rollback evidence still block PR activation.
 
 Checked-in policy now treats Depot's cache namespace as unused: every Depot
 selection disables both native GitHub Actions cache and Depot remote cache.
 Purge or expiry of existing entries remains an activation prerequisite.
 
 The complete PR/main composition design is in
-`.omo/specs/pr-ci-optimization.md`. This document contains only the durable
-Depot policy and activation gates. It intentionally contains no historical run
-results or timing conclusions.
+`.omo/specs/pr-ci-optimization.md`. This document contains the durable Depot
+policy, activation gates and the controlled authority-probe evidence below;
+it intentionally contains no timing conclusions.
 
 ## Provider contract
 
@@ -26,9 +27,11 @@ Depot is a placement provider, not a different CI graph.
 - `DEPOT_RUNNERS_ENABLED == 'true'` permits eligible trusted `main` Linux jobs
   to select Depot. Every eligible role retains a GitHub-hosted fallback.
 - `DEPOT_PR_RUNNERS_ENABLED == 'true'` is the independent same-repository PR
-  placement gate. It must remain absent or `false` until the branch/main
-  provider-parity, same-repository, and fork sentinel canaries below pass; a
-  missing value fails closed.
+  placement gate. It must remain absent or `false`: the controlled
+  same-repository authority probe below demonstrated unsafe repository-scoped
+  cross-trust access, and a new successful sentinel after provider-isolation
+  redesign is required before reconsideration. Branch/main provider parity and
+  the fork sentinel remain separate pending gates; a missing value fails closed.
 - `DEPOT_PR_CANARY_REF` is an optional, exact
   `refs/pull/<number>/merge` selector for one protected same-repository canary
   ref. It does not enable the global PR gate, does not grant remote cache
@@ -169,13 +172,41 @@ Re-verify it with organization-admin authority if the group, repository, or
 workflow allowlist changes. A repository token returning `403` is not an
 independent proof of the configuration.
 
-## Why PR canaries remain pending
+## Controlled authority probe: unsafe cross-trust result
+
+The protected seed/verify workflows and reusable PR slice came from `main`
+commit `9e977e246`; the authoritative PR rerun used source head `e0c9be507`.
+The bounded sentinel ID/ref repository variables were temporarily armed for
+the experiment and removed immediately afterward. Its exact evidence is:
+
+| Phase | Evidence | Outcome |
+| --- | --- | --- |
+| Trusted-main seed | [run 31816775585](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816775585), `main` at `9e977e246` | Successful seed publication |
+| Same-repository PR authority sentinel | [run 31816869128](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816869128), [job 94821057215](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31816869128/job/94821057215), PR source `e0c9be507`, protected slice `9e977e246` | The sentinel job failed after restoring and exactly validating the trusted seed, then saving, clearing, restoring and exactly validating the poison marker; the overall superseded probe run was later cancelled during cleanup |
+| Trusted-main verify | [run 31817111471](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31817111471), [job 94821343605](https://github.com/Mesh-LLM/mesh-llm/actions/runs/31817111471/job/94821343605) | Restored and exactly validated the PR poison marker; then failed the intended expected-miss gate |
+
+This is an unsafe repository-scoped cross-trust authority result: the
+same-repository PR path could read the trusted marker and publish a marker that
+trusted main later restored. The intended failures are evidence that the gates
+fired after the probes, not successful isolation. Do not enable PR Depot from
+this result. A provider-isolation redesign and a new successful sentinel are
+required before any reconsideration. `DEPOT_PR_RUNNERS_ENABLED`,
+`DEPOT_PR_CANARY_REF`, `DEPOT_PR_SENTINEL_REF` and `DEPOT_PR_SENTINEL_ID`
+remain absent. No Depot settings or runner groups were changed; the bounded
+repository variables were temporarily armed and then removed. The randomized
+non-secret seed and poison entries may remain until provider expiry or an
+administrator confirms namespace purge.
+
+The fork PR canary, provider-parity/capacity comparison, namespace
+purge/expiry confirmation and rollback evidence remain pending. Fork
+validation must stay hosted and remains the no-Depot-authority half of the
+acceptance evidence.
 
 Disabling automatic Depot Cache and Registry Actions connectivity removes the
-repository-wide credential path that blocked the first canary. It does not by
-itself prove provider parity, branch/main cache behavior, or that a same-
-repository or fork PR cannot publish an entry later restored by trusted main.
-Those runtime isolation checks remain prerequisites for PR execution on Depot.
+repository-wide credential path that blocked the first canary, but it does not
+override this observed authority result or prove provider parity, branch/main
+cache behavior, or fork isolation. Those remaining checks and the isolation
+redesign are prerequisites for PR execution on Depot.
 
 Depot documents these GitHub Actions cache properties:
 
@@ -209,15 +240,18 @@ Actions authentication are now admin-verified off. The negative
 `depot-canary.yml` contract checks that this posture reaches fresh runners
 without Depot cache, WebDAV, registry, or transparent GitHub-cache authority.
 
-The remaining runtime questions are:
+The controlled probe above answers the first question for the current runner:
+the same-repository PR path exposed repository-scoped authority. The remaining
+runtime questions are:
 
-1. Does a fresh Depot runner expose any ambient Depot/WebDAV/cache authority
-   to a PR job even when the checked-in native cache consumers are disabled?
+1. What provider-isolation redesign prevents that observed authority from
+   crossing trust boundaries while preserving the same cache probe contract?
 2. Do hosted release and cache-warmer jobs retain their intended GitHub cache
    behavior while trusted Depot selections remain cache-inert, and have all
    existing Depot namespace entries been purged or expired?
-3. Can a same-repository PR and a fork PR both run the protected canary with no
-   Depot cache/registry authority and no entry that trusted main later restores?
+3. Can a redesigned same-repository PR path and a fork PR both run the
+   protected canary with no Depot cache/registry authority and no entry that
+   trusted main later restores?
 4. Does provider parity hold for the same checked plan, commands, artifacts,
    and required results on GitHub and Depot?
 5. Does the restricted runner group continue to allow only the exact protected
