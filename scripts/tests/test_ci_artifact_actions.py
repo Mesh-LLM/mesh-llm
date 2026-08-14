@@ -315,6 +315,7 @@ class CiArtifactActionTests(unittest.TestCase):
         repository: str = "Mesh-LLM/mesh-llm",
         head_repository: str | None = None,
         pr_enabled: str = "false",
+        pr_canary_ref: str = "",
         force_hosted: str = "false",
     ) -> dict[str, str]:
         action = self.read_action("select-ci-runners")
@@ -341,6 +342,7 @@ class CiArtifactActionTests(unittest.TestCase):
                     "GITHUB_REF": ref,
                     "INPUT_DEPOT_MAIN_ENABLED": main_enabled,
                     "INPUT_DEPOT_PR_ENABLED": pr_enabled,
+                    "INPUT_PR_CANARY_REF": pr_canary_ref,
                     "INPUT_FORCE_HOSTED": force_hosted,
                     "INPUT_MANUAL_USE_DEPOT": manual_enabled,
                     "DISPATCH_ORIGINAL_EVENT_NAME": original_event_name,
@@ -2027,6 +2029,105 @@ class CiArtifactActionTests(unittest.TestCase):
             untrusted_dispatch["allow_depot_remote_cache"],
             "false",
         )
+
+        canary_pr = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="false",
+            manual_enabled="false",
+            pr_enabled="false",
+            pr_canary_ref="refs/pull/12/merge",
+        )
+        self.assertEqual(canary_pr["depot_enabled"], "true")
+        self.assertEqual(canary_pr["runner"], "depot-ubuntu-24.04")
+        self.assertEqual(canary_pr["allow_depot_remote_cache"], "false")
+
+        for name, kwargs in (
+            (
+                "empty canary ref",
+                {"pr_canary_ref": ""},
+            ),
+            (
+                "different pull-request ref",
+                {"pr_canary_ref": "refs/pull/13/merge"},
+            ),
+            (
+                "fork head",
+                {
+                    "pr_canary_ref": "refs/pull/12/merge",
+                    "head_repository": "attacker/mesh-llm",
+                },
+            ),
+            (
+                "pull_request_target",
+                {
+                    "pr_canary_ref": "refs/pull/12/merge",
+                    "event_name": "pull_request_target",
+                },
+            ),
+            (
+                "forced hosted",
+                {
+                    "pr_canary_ref": "refs/pull/12/merge",
+                    "force_hosted": "true",
+                },
+            ),
+            (
+                "dispatch source",
+                {
+                    "pr_canary_ref": "refs/pull/12/merge",
+                    "event_name": "workflow_dispatch",
+                    "ref": "refs/heads/main",
+                },
+            ),
+        ):
+            with self.subTest(canary_case=name):
+                case = {
+                    "event_name": "pull_request",
+                    "ref": "refs/pull/12/merge",
+                    "main_enabled": "false",
+                    "manual_enabled": "false",
+                    "pr_enabled": "false",
+                    **kwargs,
+                }
+                selected = self.run_runner_selector(**case)
+                self.assertEqual(selected["depot_enabled"], "false")
+                self.assertEqual(selected["runner"], "ubuntu-24.04")
+                self.assertEqual(
+                    selected["allow_depot_remote_cache"],
+                    "false",
+                )
+
+        action = self.read_action("select-ci-runners")
+        run_block = action.split("      run: |\n", maxsplit=1)[1]
+        script = "\n".join(
+            line[8:] if line.startswith("        ") else line
+            for line in run_block.splitlines()
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "github-output"
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "GITHUB_OUTPUT": str(output),
+                    "INPUT_EVENT_NAME": "pull_request",
+                    "INPUT_REPOSITORY": "Mesh-LLM/mesh-llm",
+                    "INPUT_HEAD_REPOSITORY": "Mesh-LLM/mesh-llm",
+                    "INPUT_REF": "refs/pull/12/merge",
+                    "INPUT_DEPOT_MAIN_ENABLED": "false",
+                    "INPUT_DEPOT_PR_ENABLED": "false",
+                    "INPUT_PR_CANARY_REF": "refs/heads/main",
+                    "INPUT_FORCE_HOSTED": "false",
+                    "INPUT_MANUAL_USE_DEPOT": "false",
+                },
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exact pull-request merge ref", result.stderr)
 
     def test_dispatched_pr_cache_writes_remain_blocked_with_depot(
         self,

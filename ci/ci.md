@@ -282,6 +282,17 @@ smokes and other hardware-qualified work retain explicit approved placement.
 Provider choice never changes plan membership, commands, artifacts, tests or
 summaries.
 
+The selector also accepts the optional repository variable
+`DEPOT_PR_CANARY_REF`. When it is absent (the default), no canary PR is
+selected and the normal global `DEPOT_PR_RUNNERS_ENABLED` gate is unchanged.
+When it contains one exact `refs/pull/<number>/merge` ref, that same-
+repository PR merge ref is an additive canary path; fork heads,
+`pull_request_target`, dispatches and planner-forced hosted paths still remain
+hosted. The canary gate never grants remote Depot cache permission and does not
+replace the global PR gate. Maintainers must not set it until the external
+isolation protocol proves the actual Depot/WebDAV and Actions-cache authority
+boundary.
+
 The intended PR-Depot end state preserves the same five entry workflows and
 matching protected lane calls. After the external cache and runner-group gates
 in `ci/DEPOT_MIGRATION.md` are proven, provider policy may select ephemeral
@@ -321,10 +332,15 @@ caches have substantially better reuse-to-storage value. Cache hits are always
 an optimization: native stamps/manifests/checksums are verified, and every job
 must still regenerate successfully after a miss.
 
-Depot PR execution is not implemented. Cache isolation, protected
-default-branch runner-owning workflow refs, no-secret/no-token execution and a
-sentinel canary are prerequisites in `ci/DEPOT_MIGRATION.md`. Do not change
-Depot settings or runner groups in a workflow refactor.
+Depot PR execution is not enabled. The bounded `DEPOT_PR_CANARY_REF` selector
+hook exists only to exercise a single protected same-repository ref after the
+external gates are ready. Native `actions/cache` consumers on a Depot runner
+may still read repository/base caches; a selector result, cache-key prefix or
+negative credential audit is not proof of cache isolation. Cache isolation,
+protected default-branch runner-owning workflow refs, no-secret/no-token
+execution and a sentinel canary are prerequisites in
+`ci/DEPOT_MIGRATION.md`. Do not change Depot settings or runner groups in a
+workflow refactor.
 
 The external administrative posture now has automatic Depot Cache and Registry
 Actions connectivity disabled and the Depot runner group restricted to this

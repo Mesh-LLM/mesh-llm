@@ -26,6 +26,10 @@ inputs:
     description: Exact-string repository gate for direct pull-request Depot placement.
     required: false
     default: "false"
+  pr_canary_ref:
+    description: Optional exact pull-request merge ref selected for a protected canary.
+    required: false
+    default: ""
   force_hosted:
     description: Fail-closed planner signal for CI-control or runner-policy changes.
     required: false
@@ -88,6 +92,7 @@ runs:
         INPUT_REF: ${{ inputs.ref }}
         INPUT_DEPOT_MAIN_ENABLED: ${{ inputs.depot_main_enabled }}
         INPUT_DEPOT_PR_ENABLED: ${{ inputs.depot_pr_enabled }}
+        INPUT_PR_CANARY_REF: ${{ inputs.pr_canary_ref }}
         INPUT_FORCE_HOSTED: ${{ inputs.force_hosted }}
         INPUT_MANUAL_USE_DEPOT: ${{ inputs.manual_use_depot }}
       run: |
@@ -106,10 +111,18 @@ runs:
           fi
         done
 
+        pr_canary_ref="${INPUT_PR_CANARY_REF:-}"
+        if [[ -n "$pr_canary_ref" &&
+          ! "$pr_canary_ref" =~ ^refs/pull/[0-9]+/merge$ ]]; then
+          echo "INPUT_PR_CANARY_REF must be an exact pull-request merge ref" >&2
+          exit 1
+        fi
+
         # A direct PR may opt into Depot only when this protected repository
-        # explicitly enables the feature. Both the base and PR-head repository
-        # comparisons remain exact so a fork, mirror, or similarly named
-        # repository cannot opt in.
+        # explicitly enables the feature, or when one exact merge ref is
+        # selected for the protected canary. Both the base and PR-head
+        # repository comparisons remain exact so a fork, mirror, or similarly
+        # named repository cannot opt in.
         trusted_repository="Mesh-LLM/mesh-llm"
         depot_enabled=false
         allow_depot_remote_cache=false
@@ -128,7 +141,8 @@ runs:
               "$INPUT_HEAD_REPOSITORY" == "$trusted_repository" && \
               "$INPUT_REF" =~ ^refs/pull/[0-9]+/merge$ && \
               "$INPUT_FORCE_HOSTED" == "false" && \
-              "$INPUT_DEPOT_PR_ENABLED" == "true" ]]; then
+              ( "$INPUT_DEPOT_PR_ENABLED" == "true" ||
+                ( -n "$pr_canary_ref" && "$INPUT_REF" == "$pr_canary_ref" ) ) ]]; then
               is_direct_pull_request=true
               depot_enabled=true
             fi

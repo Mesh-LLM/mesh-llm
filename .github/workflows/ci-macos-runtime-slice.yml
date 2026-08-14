@@ -65,6 +65,7 @@ jobs:
           ref: ${{ github.ref }}
           depot_main_enabled: 'false'
           depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
           force_hosted: ${{ inputs.force_hosted }}
 
   macos_runtime:

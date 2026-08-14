@@ -163,9 +163,14 @@ comparison, and rollback run are still pending; `DEPOT_RUNNERS_ENABLED` or a
 successful manual canary does not prove PR isolation.
 
 Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
-`DEPOT_PR_RUNNERS_ENABLED` (absent/false until protected PR activation),
-`CUDA_VERSION`, `VULKAN_SDK_VERSION`, smoke configuration variables, and
-release/deployment variables. Secret values never belong in this inventory;
+`DEPOT_PR_RUNNERS_ENABLED` (absent/false until protected PR activation), and
+`DEPOT_PR_CANARY_REF` (absent by default; one exact
+`refs/pull/<number>/merge` ref only). The latter is a bounded selector
+canary, not a cache-isolation proof or a replacement for the global PR gate.
+Native Actions-cache consumers remain a documented unresolved boundary for
+any future Depot PR run. `CUDA_VERSION`, `VULKAN_SDK_VERSION`, smoke
+configuration variables, and release/deployment variables. Secret values
+never belong in this inventory;
 known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`
 and deployment tokens.
 

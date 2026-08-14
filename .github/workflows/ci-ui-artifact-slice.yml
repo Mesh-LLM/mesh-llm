@@ -60,6 +60,7 @@ jobs:
           # producer. PR placement is independently gated and cache-isolated.
           depot_main_enabled: 'false'
           depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
           force_hosted: ${{ inputs.force_hosted }}
 
   ui_artifact:

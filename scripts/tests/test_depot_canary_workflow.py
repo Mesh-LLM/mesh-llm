@@ -175,6 +175,10 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                 valid_endpoints[0][1],
             ),
             (
+                "https://actions.githubusercontent.com@depot.dev/cache",
+                valid_endpoints[0][1],
+            ),
+            (
                 "http://actions.githubusercontent.com/cache",
                 valid_endpoints[0][1],
             ),
@@ -182,6 +186,10 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                 "https://actions.githubusercontent.com.evil/cache",
                 valid_endpoints[0][1],
             ),
+        )
+        absent_endpoints = (
+            ("", ""),
+            (valid_endpoints[0][0], ""),
             ("", valid_endpoints[0][1]),
         )
         for script_name, script in (
@@ -190,6 +198,10 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
         ):
             for endpoints in valid_endpoints:
                 with self.subTest(script=script_name, endpoints=endpoints):
+                    result = run_probe(script, *endpoints)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+            for endpoints in absent_endpoints:
+                with self.subTest(script=script_name, absent_endpoints=endpoints):
                     result = run_probe(script, *endpoints)
                     self.assertEqual(result.returncode, 0, result.stderr)
             for endpoints in invalid_endpoints:

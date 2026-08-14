@@ -49,6 +49,9 @@ runs:
 
         for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL; do
           endpoint="${!endpoint_name:-}"
+          if [[ -z "$endpoint" ]]; then
+            continue
+          fi
           endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
           if [[ ! "$endpoint_lower" =~ ^https://([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]+)?([/?#]|$) ]]; then
             echo "PR runner received a non-GitHub Actions endpoint: $endpoint_name" >&2

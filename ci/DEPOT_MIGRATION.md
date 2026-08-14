@@ -25,6 +25,12 @@ Depot is a placement provider, not a different CI graph.
   placement gate. It must remain absent or `false` until the branch/main
   provider-parity, same-repository, and fork sentinel canaries below pass; a
   missing value fails closed.
+- `DEPOT_PR_CANARY_REF` is an optional, exact
+  `refs/pull/<number>/merge` selector for one protected same-repository canary
+  ref. It does not enable the global PR gate, does not grant remote cache
+  permission, and fails closed for forks, target/dispatch events, malformed or
+  non-matching refs, and planner-forced hosted paths. It remains unset until
+  the external isolation gates pass.
 - Pull requests, feature refs, tags, credential-bearing smokes and
   hardware-qualified GPU work retain their approved non-Depot placement until
   the protected PR executor is separately activated. The intended executor may
@@ -200,6 +206,13 @@ The remaining runtime questions are:
 5. Does the restricted runner group continue to allow only the exact protected
    workflow refs after the PR canary is enabled?
 
+The checked-in selector and negative audit do not prove this boundary. Native
+`actions/cache` consumers on a Depot runner can still read repository/base
+caches, so a canary ref must either target the actual Depot/WebDAV authority
+with an approved non-secret marker protocol or explicitly disable every
+relevant cache consumer before any PR code is placed on Depot. This repository
+does neither yet; the canary remains an external runtime/admin prerequisite.
+
 Do not introduce a long-lived Depot organization token without a separate
 security review and explicit authorization.
 
@@ -234,9 +247,12 @@ grants its own Depot placement.
 
 ## Isolation acceptance canary
 
-Use a non-secret sentinel protocol:
+Use a non-secret sentinel protocol, keeping trusted-main creation separate from
+the untrusted PR probe:
 
-1. Trusted main writes a random sentinel cache entry.
+1. Trusted main creates a random non-secret marker through the actual approved
+   Depot/WebDAV authority (never a repository secret and never a native
+   GitHub-cache claim).
 2. A same-repository PR and a fork PR run through the proposed Depot path.
 3. Both probe `actions/cache`, Depot/WebDAV variables, automatic tool
    configuration, and direct cache access.
