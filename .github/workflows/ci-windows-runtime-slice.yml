@@ -89,6 +89,7 @@ jobs:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@69bb127ee3bc28feee89ceef9a5f8bb9381a02e3
         with:
           original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_windows, 'depot-') }}
       - name: Validate immutable source SHA
         shell: pwsh
         env:

@@ -168,9 +168,9 @@ Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
 `refs/pull/<number>/merge` ref only). The latter is a bounded selector
 canary, not a cache-isolation proof or a replacement for the global PR gate.
 Native Actions-cache consumers remain a documented unresolved boundary for
-any future Depot PR run. `CUDA_VERSION`, `VULKAN_SDK_VERSION`, smoke
-configuration variables, and release/deployment variables. Secret values
-never belong in this inventory;
+any future Depot PR run. Other variables include `CUDA_VERSION`,
+`VULKAN_SDK_VERSION`, smoke configuration variables, and release/deployment
+variables. Secret values never belong in this inventory;
 known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`
 and deployment tokens.
 

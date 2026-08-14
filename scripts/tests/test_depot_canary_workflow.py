@@ -92,11 +92,31 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             "'[:upper:]' '[:lower:]')\"",
             action,
         )
+        self.assertIn("depot_selected", action)
+        self.assertIn("INPUT_DEPOT_SELECTED", action)
+        self.assertIn('if [[ "$endpoint_lower" == *depot.dev* ]]', action)
+        self.assertIn("URL userinfo", action)
         self.assertIn(
             'docker_config="${DOCKER_CONFIG:-${HOME:-}/.docker}/config.json"',
             action,
         )
         self.assertIn("grep -Eiq 'depot\\.dev'", action)
+
+    def test_pr_audit_receives_central_runner_provider_selection(self) -> None:
+        workflow_root = ROOT / ".github" / "workflows"
+        audit_calls = 0
+        for path in sorted(workflow_root.glob("*.yml")):
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for line_number, line in enumerate(lines):
+                if "audit-depot-pr-isolation@" not in line:
+                    continue
+                audit_calls += 1
+                block = "\n".join(lines[line_number : line_number + 5])
+                with self.subTest(path=path.name, line=line_number + 1):
+                    self.assertIn("depot_selected:", block)
+                    self.assertIn("startsWith(", block)
+                    self.assertIn("needs.runner_policy.outputs.", block)
+        self.assertEqual(audit_calls, 22)
 
     def test_endpoint_and_docker_auth_probes_fail_closed(self) -> None:
         action = (
@@ -126,6 +146,8 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             results_url: str,
             docker_auth_config: str | None = None,
             docker_config_content: str | None = None,
+            depot_selected: str = "true",
+            **extra_environment: str,
         ) -> subprocess.CompletedProcess[str]:
             with (
                 tempfile.TemporaryDirectory() as home,
@@ -142,8 +164,10 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                     "DOCKER_CONFIG": docker_config,
                     "GITHUB_EVENT_NAME": "pull_request",
                     "INPUT_ORIGINAL_EVENT_NAME": "pull_request",
+                    "INPUT_DEPOT_SELECTED": depot_selected,
                     "ACTIONS_CACHE_URL": cache_url,
                     "ACTIONS_RESULTS_URL": results_url,
+                    **extra_environment,
                 }
                 if docker_auth_config is not None:
                     environment["DOCKER_AUTH_CONFIG"] = docker_auth_config
@@ -167,6 +191,12 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             (
                 "HTTPS://ACTIONS.GITHUBUSERCONTENT.COM?cache=1",
                 "https://results-receiver.actions.githubusercontent.com#results",
+            ),
+        )
+        hosted_endpoints = (
+            (
+                "http://127.0.0.1:12345/_apis/artifactcache/",
+                "http://localhost:12346/",
             ),
         )
         invalid_endpoints = (
@@ -200,6 +230,25 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                 with self.subTest(script=script_name, endpoints=endpoints):
                     result = run_probe(script, *endpoints)
                     self.assertEqual(result.returncode, 0, result.stderr)
+            if script_name == "audit action":
+                with self.subTest(script=script_name, provider="malformed"):
+                    result = run_probe(
+                        script,
+                        *valid_endpoints[0],
+                        depot_selected="maybe",
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                for endpoints in hosted_endpoints:
+                    with self.subTest(
+                        script=script_name,
+                        hosted_endpoints=endpoints,
+                    ):
+                        result = run_probe(
+                            script,
+                            *endpoints,
+                            depot_selected="false",
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
             for endpoints in absent_endpoints:
                 with self.subTest(script=script_name, absent_endpoints=endpoints):
                     result = run_probe(script, *endpoints)
@@ -207,6 +256,34 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             for endpoints in invalid_endpoints:
                 with self.subTest(script=script_name, endpoints=endpoints):
                     result = run_probe(script, *endpoints)
+                    self.assertNotEqual(result.returncode, 0)
+            if script_name == "audit action":
+                for endpoints in (
+                    (
+                        "https://cache.depot.dev/cache",
+                        hosted_endpoints[0][1],
+                    ),
+                    (
+                        hosted_endpoints[0][0],
+                        "https://results.depot.dev/results",
+                    ),
+                ):
+                    with self.subTest(
+                        script=script_name,
+                        depot_endpoint=endpoints,
+                    ):
+                        result = run_probe(
+                            script,
+                            *endpoints,
+                            depot_selected="false",
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                with self.subTest(script=script_name, userinfo="hosted"):
+                    result = run_probe(
+                        script,
+                        *invalid_endpoints[0],
+                        depot_selected="false",
+                    )
                     self.assertNotEqual(result.returncode, 0)
 
         depot_auth = '{"auths":{"REGISTRY.DEPOT.DEV":{"auth":"secret"}}}'
@@ -240,6 +317,15 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             with self.subTest(script=script_name, auth="unset"):
                 result = run_probe(script, *valid_endpoints[0])
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+            if script_name == "audit action":
+                with self.subTest(script=script_name, auth="DEPOT_CACHE_TOKEN"):
+                    result = run_probe(
+                        script,
+                        *valid_endpoints[0],
+                        DEPOT_CACHE_TOKEN="redacted-test-token",
+                    )
+                    self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

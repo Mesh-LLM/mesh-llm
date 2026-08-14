@@ -78,6 +78,7 @@ jobs:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@69bb127ee3bc28feee89ceef9a5f8bb9381a02e3
         with:
           original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_windows, 'depot-') }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}

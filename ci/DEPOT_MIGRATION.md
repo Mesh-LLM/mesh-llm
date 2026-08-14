@@ -40,6 +40,10 @@ Depot is a placement provider, not a different CI graph.
   remains hosted.
 - Callers never provide a raw Depot label or a separate remote-cache
   permission. Runner and cache policy come from one event-derived decision.
+- The PR isolation audit receives that selected-provider decision. Depot-selected
+  PR jobs require GitHub-owned Actions endpoints; hosted PR jobs allow the
+  runner's approved local transport while still rejecting Depot credentials,
+  `depot.dev` redirects, and URL userinfo.
 
 Disabling Depot must change placement only. It must not change plan membership,
 commands, artifacts, smoke coverage or required checks.

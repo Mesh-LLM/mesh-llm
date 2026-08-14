@@ -6,6 +6,9 @@ inputs:
     description: Original event used to derive the trust boundary.
     required: false
     default: ''
+  depot_selected:
+    description: Whether the centralized runner policy selected a Depot executor.
+    required: true
 
 runs:
   using: composite
@@ -14,12 +17,19 @@ runs:
       shell: bash
       env:
         INPUT_ORIGINAL_EVENT_NAME: ${{ inputs.original_event_name }}
+        INPUT_DEPOT_SELECTED: ${{ inputs.depot_selected }}
       run: |
         set -euo pipefail
         original_event="${INPUT_ORIGINAL_EVENT_NAME:-${GITHUB_EVENT_NAME:-}}"
         if [[ "$original_event" != "pull_request" &&
               "$original_event" != "pull_request_target" ]]; then
           exit 0
+        fi
+
+        depot_selected="${INPUT_DEPOT_SELECTED:-}"
+        if [[ "$depot_selected" != "true" && "$depot_selected" != "false" ]]; then
+          echo "depot_selected must be true or false, got: $depot_selected" >&2
+          exit 1
         fi
 
         forbidden_names=(
@@ -53,6 +63,17 @@ runs:
             continue
           fi
           endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$endpoint_lower" == *depot.dev* ]]; then
+            echo "PR runner received a Depot Actions endpoint: $endpoint_name" >&2
+            exit 1
+          fi
+          if [[ "$endpoint_lower" =~ ^https?://[^/]*@ ]]; then
+            echo "PR runner received an Actions endpoint with URL userinfo: $endpoint_name" >&2
+            exit 1
+          fi
+          if [[ "$depot_selected" != "true" ]]; then
+            continue
+          fi
           if [[ ! "$endpoint_lower" =~ ^https://([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]+)?([/?#]|$) ]]; then
             echo "PR runner received a non-GitHub Actions endpoint: $endpoint_name" >&2
             exit 1
