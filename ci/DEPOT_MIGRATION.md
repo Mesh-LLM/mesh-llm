@@ -223,8 +223,12 @@ The remaining runtime questions are:
 5. Does the restricted runner group continue to allow only the exact protected
    workflow refs after the PR canary is enabled?
 
-The selector now emits a provider-derived `allow_native_github_cache` output.
-Every eligible Depot-selected direct PR cache consumer is skipped or passed a
+The selector now emits provider-derived `allow_native_github_cache` and
+`allow_depot_remote_cache` outputs. Every Depot selection emits
+`allow_native_github_cache=false` and `allow_depot_remote_cache=false`; hosted
+selections retain native GitHub cache (`allow_native_github_cache=true`) while
+Depot remote cache remains disabled (`allow_depot_remote_cache=false`). Every
+eligible Depot-selected direct PR cache consumer is skipped or passed a
 disabled cache input, while installation and build commands remain active;
 cache misses therefore rebuild normally. This closes the checked-in native
 GitHub-cache path but does not prove that a fresh Depot runner cannot reach an
