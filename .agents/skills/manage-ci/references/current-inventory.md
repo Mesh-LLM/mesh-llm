@@ -199,9 +199,10 @@ The provider contract required before PR placement is enabled is a documented,
 server-enforced per-connection/job/ref control for the GitHub Actions cache
 path. It must either leave PR jobs on GitHub-native branch-scoped
 `ACTIONS_CACHE_URL`/`ACTIONS_RESULTS_URL` and runtime-token semantics with no
-Depot proxy or direct cache token, or issue a PR-isolated namespace whose ACL
-denies reads/writes outside that PR and prevents trusted main/release restores,
-without exposing `DEPOT_CACHE_TOKEN`. Key prefixes, loopback proxies,
+Depot proxy or direct cache token, or issue a PR-isolated namespace/token whose
+ACL permits reads/writes only within that PR, denying reads/writes from trusted
+main/release and every other PR namespace, without exposing `DEPOT_CACHE_TOKEN`.
+Key prefixes, loopback proxies,
 ephemeral runners and the org switches are not equivalent controls. A fresh
 same-repository PR, fork PR and trusted-main seed/verify sentinel must prove
 the selected behavior before any PR gate or canary variable is armed.

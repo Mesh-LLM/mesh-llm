@@ -246,9 +246,10 @@ path. The control must choose one of these safe outcomes for an untrusted PR:
 - leave the job on GitHub-native branch-scoped `ACTIONS_CACHE_URL`,
   `ACTIONS_RESULTS_URL` and runtime-token semantics, with no Depot cache proxy
   or direct Depot cache token; or
-- issue a PR-isolated cache namespace and token whose ACL denies reads and
-  writes outside that PR and prevents trusted `main`/release jobs from reading
-  or restoring PR entries, again without exposing a direct `DEPOT_CACHE_TOKEN`.
+- issue a PR-isolated cache namespace and token whose ACL permits reads and
+  writes only within that PR, denying reads and writes from trusted
+  `main`/release jobs and every other PR namespace, again without exposing a
+  direct `DEPOT_CACHE_TOKEN`.
 
 The contract must cover `actions/cache`, setup-* cache consumers and any other
 GitHub Actions cache API caller, including the provider's

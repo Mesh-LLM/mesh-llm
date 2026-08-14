@@ -269,8 +269,9 @@ proved that path remains repository-scoped across the trusted-main/PR boundary.
 The required provider contract is therefore a supported, server-enforced
 per-connection/job/ref control that either leaves PR jobs on GitHub-native
 branch-scoped Actions endpoints/token with no Depot proxy or direct cache
-token, or issues a PR-isolated namespace whose ACL prevents trusted
-main/release reads and restores, without exposing `DEPOT_CACHE_TOKEN`.
+token, or issues a PR-isolated namespace/token whose ACL permits reads and
+writes only within that PR, denying reads and writes from trusted main/release
+and every other PR namespace, without exposing `DEPOT_CACHE_TOKEN`.
 
 The sentinel is deliberately outside the planner/build graph and does not
 invoke `audit-depot-pr-isolation`: that audit rejects the ambient endpoint
@@ -320,7 +321,9 @@ Before a PR Depot path is enabled, an administrator must prove:
 
 1. the provider's documented per-connection/job/ref control selects either
    GitHub-native branch-scoped Actions cache endpoints/token with no Depot
-   cache token, or a PR-isolated namespace inaccessible to trusted main/release;
+   cache token, or a PR-isolated namespace/token whose ACL permits reads and
+   writes only within that PR, denying reads and writes from trusted
+   main/release and every other PR namespace;
 2. same-repository and fork PRs receive no cache, registry or repository secret
    authority;
 3. hostile PRs cannot read a trusted sentinel or publish an entry restored by
