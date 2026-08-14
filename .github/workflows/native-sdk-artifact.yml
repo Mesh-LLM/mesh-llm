@@ -208,7 +208,7 @@ jobs:
     env:
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@69bb127ee3bc28feee89ceef9a5f8bb9381a02e3
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@98909c0909a947944dd3215ff4ef2c7f431e4ea8
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}
@@ -313,7 +313,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@69bb127ee3bc28feee89ceef9a5f8bb9381a02e3
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@98909c0909a947944dd3215ff4ef2c7f431e4ea8
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}
