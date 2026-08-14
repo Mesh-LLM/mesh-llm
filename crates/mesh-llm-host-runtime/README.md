@@ -1,5 +1,7 @@
 # mesh-llm-host-runtime
 
+<!-- Depot PR runner activation canary; intentionally no runtime effect. -->
+
 `mesh-llm-host-runtime` composes the host-side mesh node runtime. It wires
 model resolution, local serving, discovery, networking, runtime state, plugins,
 the management API, and the shipped CLI entrypoint used by the `mesh-llm`

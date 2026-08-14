@@ -1,4 +1,5 @@
 #!/usr/bin/env zsh
+# Depot PR runner activation canary; intentionally no behavioral effect.
 # Compatibility entry point for the unified macOS development product.
 # The host is dynamic; native ABI compilation happens only in runtime packaging.
 

@@ -7,6 +7,8 @@ param(
     [switch]$HostOnly
 )
 
+# Depot PR runner activation canary; intentionally no behavioral effect.
+
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path

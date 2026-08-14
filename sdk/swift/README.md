@@ -1,5 +1,7 @@
 # MeshLLM Swift SDK
 
+<!-- Depot PR runner activation canary; intentionally no runtime effect. -->
+
 Swift Package for connecting to mesh-llm meshes from iOS, Mac Catalyst, and macOS apps.
 
 The SDK usage guide, native runtime packaging notes, examples, and platform

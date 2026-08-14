@@ -1,5 +1,7 @@
 # MeshLLM Kotlin SDK
 
+<!-- Depot PR runner activation canary; intentionally no runtime effect. -->
+
 Kotlin/Android bindings for mesh-llm model management, local serving, and mesh
 inference.
 

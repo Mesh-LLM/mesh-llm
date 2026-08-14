@@ -1,5 +1,7 @@
 # mesh-llm-ui
 
+<!-- Depot PR runner activation canary; intentionally no runtime effect. -->
+
 `mesh-llm-ui` owns the Mesh LLM React console and the Rust asset surface used
 by the host API server and SDK console packages.
 
