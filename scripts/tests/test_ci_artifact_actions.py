@@ -746,9 +746,11 @@ class CiArtifactActionTests(unittest.TestCase):
         for contract in (
             'image_os="${ImageOS:-}"',
             'image_version="${ImageVersion:-}"',
+            'epoch="runner-${RUNNER_OS_VALUE}-${RUNNER_ARCH_VALUE}"',
             'INPUT_PINNED_EPOCH: ${{ inputs.pinned_epoch }}',
             'echo "epoch=$epoch" >> "$GITHUB_OUTPUT"',
             'echo "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH=$epoch" >> "$GITHUB_ENV"',
+            "sw_vers -productVersion",
             "xcodebuild -version",
             "cmake --version",
             "ninja --version",
@@ -795,6 +797,71 @@ class CiArtifactActionTests(unittest.TestCase):
                         "native_toolchain.outputs.epoch",
                         cache_block,
                     )
+
+    def test_native_toolchain_epoch_fingerprints_depot_macos_without_image_vars(
+        self,
+    ) -> None:
+        action = self.read_action("resolve-native-toolchain-epoch")
+        run_block = action.split("      run: |\n", maxsplit=1)[1]
+        script = "\n".join(
+            line[8:] if line.startswith("        ") else line
+            for line in run_block.splitlines()
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            bin_dir = workspace / "bin"
+            bin_dir.mkdir()
+            for command in ("sw_vers", "xcodebuild", "clang", "cmake", "ninja"):
+                executable = bin_dir / command
+                executable.write_text(
+                    "#!/bin/sh\nprintf 'fixture-%s-1\\n' \"${0##*/}\"\n",
+                    encoding="utf-8",
+                )
+                executable.chmod(0o755)
+
+            environment = {
+                **os.environ,
+                "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                "GITHUB_OUTPUT": str(workspace / "github-output"),
+                "GITHUB_ENV": str(workspace / "github-env"),
+                "INPUT_PINNED_EPOCH": "",
+                "INPUT_INCLUDE_TOOL_VERSIONS": "true",
+                "RUNNER_OS_VALUE": "macOS",
+                "RUNNER_ARCH_VALUE": "ARM64",
+            }
+            environment.pop("ImageOS", None)
+            environment.pop("ImageVersion", None)
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = (workspace / "github-output").read_text(encoding="utf-8")
+            self.assertRegex(
+                output,
+                r"^epoch=runner-macOS-ARM64-native-[0-9a-f]{64}\n$",
+            )
+
+            environment["INPUT_INCLUDE_TOOL_VERSIONS"] = "false"
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "ImageOS and ImageVersion are required unless exact native tool versions are included",
+                result.stderr,
+            )
 
     def test_push_routing_diffs_the_complete_event_range(self) -> None:
         action = self.read_action("compute-changes")
