@@ -108,7 +108,7 @@ jobs:
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@6daacb8a15a3e71f4bdfab1e88e417cb5c0017a3
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}

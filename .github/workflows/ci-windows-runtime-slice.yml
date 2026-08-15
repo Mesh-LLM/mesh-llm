@@ -91,7 +91,7 @@ jobs:
       WINDOWS_VULKAN_SDK_VERSION: ${{ vars.VULKAN_SDK_VERSION || '1.4.328.1' }}
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@6daacb8a15a3e71f4bdfab1e88e417cb5c0017a3
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_windows, 'depot-') }}
