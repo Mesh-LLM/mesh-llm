@@ -508,11 +508,13 @@ requires a provider-isolation redesign and a new successful sentinel.
 
 The exact-SHA five-lane candidate, provider-separated comparison, and
 identical-SHA hosted rollback are recorded in
-`.omo/specs/depot-pr-rollout-evidence.md`. Quality and Linux were eligible,
-Website had insufficient samples, and macOS/Windows hit the deterministic
-capacity rollback threshold. The fork PR canary and namespace purge/expiry
-confirmation remain pending; permanent placement still requires a successful
-post-redesign isolation sentinel and acceptable capacity evidence.
+`.omo/specs/depot-pr-rollout-evidence.md`. Quality and Linux had favorable
+queue observations but remain unclassified because execution was
+cache-confounded; Website had insufficient samples, and macOS/Windows hit the
+deterministic capacity rollback threshold. The fork PR canary and namespace
+purge/expiry confirmation remain pending; permanent placement still requires
+a successful post-redesign isolation sentinel and acceptable capacity
+evidence.
 
 ## Required extension pattern
 

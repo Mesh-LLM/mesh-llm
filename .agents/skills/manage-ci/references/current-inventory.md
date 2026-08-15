@@ -200,8 +200,9 @@ that risk for exact ref/SHA-approved same-repository revisions to gain CI
 iteration speed; it is not permanent-isolation evidence. The exact-SHA
 five-lane candidate, provider comparison, and identical-SHA hosted rollback
 are recorded in `.omo/specs/depot-pr-rollout-evidence.md`; Quality and Linux
-were eligible, Website had insufficient samples, and macOS/Windows hit the
-capacity rollback threshold. Fork PR validation and namespace purge/expiry
+had favorable queue observations but remain unclassified because execution
+was cache-confounded, Website had insufficient samples, and macOS/Windows hit
+the capacity rollback threshold. Fork PR validation and namespace purge/expiry
 confirmation remain pending. Fork PR validation remains hosted and is the
 no-Depot-authority half of the sentinel acceptance evidence; only the exact
 same-repository sentinel ref may exercise the diagnostic Depot job. All three

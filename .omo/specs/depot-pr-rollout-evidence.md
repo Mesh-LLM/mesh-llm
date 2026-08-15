@@ -13,16 +13,38 @@ that Depot's Actions-cache authority crosses the PR/main trust boundary.
 - Pull request: `#1335`
 - Head SHA: `631df713d86cd12e89e7e4e7d75b5360ca1de81e`
 - Merge ref: `refs/pull/1335/merge`
-- Workflows: Quality `31856900751`, Website `31856900758`, Linux
-  `31856900875`, macOS `31856900858`, Windows `31856900759`
 - Attempt 1: GitHub-hosted baseline
 - Attempt 2: exact ref/SHA-approved Depot candidate
 - Attempt 3: gate-absent GitHub-hosted rollback
 
-All three attempts use the same source SHA and protected workflow graph. The
-candidate was armed only with `DEPOT_PR_RUNNERS_ENABLED=true` plus the exact
-approved ref and SHA. All three bounded-exception variables were deleted
-immediately after attempt 2 completed and before attempt 3 was requested.
+The source SHA is identical in every row below. `E` is one representative
+ordinary executor job and `S` is the stable lane-summary job.
+
+| Attempt | Lane / workflow run | Relevant job IDs (`E` / `S`) | Protected base SHA |
+| ---: | --- | --- | --- |
+| 1 | Quality `31856900751` | `94943336698` / `94944531916` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 1 | Website `31856900758` | `94943463706` / `94944272901` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 1 | Linux `31856900875` | `94943343184` / `94948475940` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 1 | macOS `31856900858` | `94943361090` / `94946328625` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 1 | Windows `31856900759` | `94943335837` / `94949094847` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 2 | Quality `31856900751` | `94949254565` / `94949627063` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 2 | Website `31856900758` | `94949254364` / `94949620720` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 2 | Linux `31856900875` | `94949255563` / `94951376609` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 2 | macOS `31856900858` | `94949261037` / `94952506197` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 2 | Windows `31856900759` | `94949257612` / `94960217656` | `19dfd731a00454161a486117eca28e9c1bce3dfb` |
+| 3 | Quality `31856900751` | `94965049631` / `94966569930` | `1854b527c417770ed4c651c7afdd398a7bea5fa0` |
+| 3 | Website `31856900758` | `94965041540` / `94966339212` | `1854b527c417770ed4c651c7afdd398a7bea5fa0` |
+| 3 | Linux `31856900875` | `94965140517` / `94969537370` | `1854b527c417770ed4c651c7afdd398a7bea5fa0` |
+| 3 | macOS `31856900858` | `94965516732` / `94968237314` | `1854b527c417770ed4c651c7afdd398a7bea5fa0` |
+| 3 | Windows `31856900759` | `94965087121` / `94968895592` | `1854b527c417770ed4c651c7afdd398a7bea5fa0` |
+
+The protected default branch advanced before attempt 3. A path-limited diff
+between the two protected revisions changed only `.github/workflows/release.yml`;
+none of the PR-referenced lane/slice/action/planner files changed. The complete
+job-name sets were also exactly equal across attempts. The candidate was armed
+only with `DEPOT_PR_RUNNERS_ENABLED=true` plus the exact approved ref and SHA.
+All three bounded-exception variables were deleted immediately after attempt 2
+completed and before attempt 3 was requested.
 
 ## Depot candidate result
 
@@ -48,21 +70,24 @@ Metal/unit epoch was
 
 Schema-v3 reports were generated from the attempt-1 and attempt-2 raw job data
 under `/tmp`; raw reports are intentionally not checked in. Queue values below
-are job runner-queue p95 for common ordinary executor families, and execution
-values are execution p95.
+are job runner-queue p95 for common ordinary executor families.
 
-| Lane | Hosted / Depot jobs | Queue p95 hosted → Depot | Execution p95 hosted → Depot | Deterministic result |
-| --- | ---: | ---: | ---: | --- |
-| Quality | 5 / 5 | 58.0s → 1.0s | 502.4s → 171.8s | `eligible` |
-| Website | 2 / 2 | 170.6s → 1.0s | 188.5s → 165.95s | `hold` (fewer than 3 samples) |
-| Linux | 16 / 16 | 163.25s → 1.0s | 1306.75s → 749.75s | `eligible` |
-| macOS | 7 / 7 | 407.5s → 590.0s | 1026.4s → 808.4s | `rollback` (queue contamination) |
-| Windows | 11 / 11 | 2369.5s → 3419.5s | 1636.5s → 1907.0s | `rollback` (queue contamination) |
+| Lane | Hosted / Depot jobs | Queue p95 hosted → Depot | Queue signal |
+| --- | ---: | ---: | --- |
+| Quality | 5 / 5 | 58.0s → 1.0s | favorable, but full comparison unclassified |
+| Website | 2 / 2 | 170.6s → 1.0s | insufficient sample |
+| Linux | 16 / 16 | 163.25s → 1.0s | favorable, but full comparison unclassified |
+| macOS | 7 / 7 | 407.5s → 590.0s | `rollback` (queue contamination) |
+| Windows | 11 / 11 | 2369.5s → 3419.5s | `rollback` (queue contamination) |
 
 Provider sets were disjoint and job families, OS, architecture, source, plan,
-toolchain policy, and cache mode were comparable. Attempt 2 was a rerun, so
-workflow wall/queue timing is intentionally excluded; job queue and execution
-timing remain valid.
+and toolchain policy matched. Cache authority and actual hit/miss state did
+not: the Depot candidate intentionally used repository-wide cross-branch cache
+entries, while hosted PR cache access remained ref-scoped. Execution timings
+are therefore cache-confounded and are not used for a provider-speed or
+eligibility claim. Runner queue occurs before cache restore and is retained as
+a capacity observation. Attempt 2 was a rerun, so workflow wall/queue timing is
+also intentionally excluded.
 
 The Windows workflow preserves `max-parallel: 1` for both native-runtime and
 product matrices. GitHub therefore leaves sibling matrix rows queued even when
@@ -99,8 +124,9 @@ same-repository revision still requires an explicit maintainer decision under
 the expiry and controls in `ci/DEPOT_PR_RISK_EXCEPTION.md`; the variables stay
 absent between approvals.
 
-Quality and Linux provide positive iteration-speed evidence. Website needs a
-larger sample, and macOS/Windows remain formal rollback classifications. These
-results do not weaken the automatic 2026-09-14 expiry, the
+Quality and Linux provide favorable queue observations, not normalized
+execution-speed evidence. Website needs a larger sample, and macOS/Windows
+remain formal rollback classifications. These results do not weaken the
+automatic 2026-09-14 expiry, the
 no-secret/credential exceptions, or the requirement for provider-enforced
 per-PR cache authority before making the policy permanent.

@@ -212,11 +212,12 @@ docs-only change must not delete them.
 
 The exact-SHA five-lane candidate, provider-separated comparison, and
 identical-SHA hosted rollback are recorded in
-`.omo/specs/depot-pr-rollout-evidence.md`. Quality and Linux were eligible,
-Website had insufficient samples, and macOS/Windows hit the deterministic
-capacity rollback threshold. The fork PR canary and namespace purge/expiry
-confirmation remain pending. Fork validation must stay hosted and remains the
-no-Depot-authority half of the acceptance evidence.
+`.omo/specs/depot-pr-rollout-evidence.md`. Quality and Linux had favorable
+queue observations but remain unclassified because execution was
+cache-confounded; Website had insufficient samples, and macOS/Windows hit the
+deterministic capacity rollback threshold. The fork PR canary and namespace
+purge/expiry confirmation remain pending. Fork validation must stay hosted and
+remains the no-Depot-authority half of the acceptance evidence.
 
 Disabling automatic Depot Cache and Registry Actions connectivity removes the
 direct Depot build-tool/registry credential path that blocked the first canary
