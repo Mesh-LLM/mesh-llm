@@ -107,9 +107,11 @@ struct OpenedDiskTier {
 fn open_disk_tier(config: &StageConfig) -> Option<OpenedDiskTier> {
     let root = disk_tier_root(config);
     if !has_valid_content_digest(config) {
-        eprintln!(
-            "skippy: KV disk tier disabled for stage {}: no valid content digest",
-            config.stage_id
+        tracing::warn!(
+            stage = %config.stage_id,
+            model = %config.model_id,
+            path = %root.display(),
+            "KV disk tier disabled: no valid content digest"
         );
         return None;
     }
@@ -117,7 +119,13 @@ fn open_disk_tier(config: &StageConfig) -> Option<OpenedDiskTier> {
     match PrefixDiskTier::open(&root, reservation.bytes()) {
         Ok(tier) => Some(OpenedDiskTier { tier, reservation }),
         Err(error) => {
-            eprintln!("skippy: KV disk tier unavailable, continuing without it: {error}");
+            tracing::warn!(
+                stage = %config.stage_id,
+                model = %config.model_id,
+                path = %root.display(),
+                error = %error,
+                "KV disk tier unavailable; continuing without it"
+            );
             None
         }
     }
@@ -149,11 +157,14 @@ fn stage_disk_budget(root: &Path, config: &StageConfig) -> Option<disk_budget::B
     };
     let budget = disk_budget::resolve_node_budget(explicit, enabled, free_bytes);
     if let NodeBudget::InsufficientSpace { free_bytes } = budget {
-        eprintln!(
-            "skippy: KV disk tier disabled for stage {}: only {:.1} GiB free on {}",
-            config.stage_id,
-            free_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-            probe.display(),
+        tracing::warn!(
+            stage = %config.stage_id,
+            model = %config.model_id,
+            path = %root.display(),
+            probe = %probe.display(),
+            free_bytes,
+            free_gib = free_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+            "KV disk tier disabled: insufficient free space"
         );
         return None;
     }

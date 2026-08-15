@@ -2,10 +2,10 @@ use super::*;
 use crate::output::formatting::*;
 use crate::output::rendering::*;
 use ratatui::{
-    Terminal,
-    backend::TestBackend,
+    Terminal, TerminalOptions, Viewport,
+    backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize},
     buffer::Buffer,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Position, Rect, Size},
     style::Modifier,
     widgets::{Paragraph, Widget},
 };
@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::{
     io::Write as _,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -39,6 +39,89 @@ impl DashboardSnapshotProvider for StaticDashboardSnapshotProvider {
 #[derive(Default)]
 struct DashboardReducerFixture {
     state: DashboardState,
+}
+
+#[derive(Clone, Default)]
+struct RecordingWriter {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for RecordingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.bytes
+            .lock()
+            .expect("recording writer lock should not be poisoned")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct NoCursorQueryBackend {
+    inner: CrosstermBackend<RecordingWriter>,
+    cursor_queries: usize,
+}
+
+impl NoCursorQueryBackend {
+    fn new(bytes: Arc<Mutex<Vec<u8>>>) -> Self {
+        Self {
+            inner: CrosstermBackend::new(RecordingWriter { bytes }),
+            cursor_queries: 0,
+        }
+    }
+}
+
+impl Backend for NoCursorQueryBackend {
+    type Error = std::io::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> std::io::Result<()> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> std::io::Result<()> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> std::io::Result<Position> {
+        self.cursor_queries += 1;
+        Err(std::io::Error::other(
+            "redraw must not query the physical cursor position",
+        ))
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> std::io::Result<()> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> std::io::Result<()> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> std::io::Result<()> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> std::io::Result<Size> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> std::io::Result<WindowSize> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Backend::flush(&mut self.inner)
+    }
 }
 
 impl DashboardReducerFixture {
@@ -1319,8 +1402,7 @@ pub(super) fn tui_snapshot_renders_full_dashboard_spec() {
 pub(super) fn tui_narrow_terminal_renders_resize_guidance_instead_of_dashboard() {
     let mut state = DashboardState::default();
     state.reduce(DashboardAction::Resize(dashboard_layout_for_terminal_size(
-        PRETTY_TUI_MIN_DASHBOARD_WIDTH - 1,
-        24,
+        64, 24,
     )));
     state.reduce(DashboardAction::SnapshotUpdated(snapshot_fixture(2, 30)));
     state.reduce(DashboardAction::OutputEvent(OutputEvent::RuntimeReady {
@@ -1333,11 +1415,30 @@ pub(super) fn tui_narrow_terminal_renders_resize_guidance_instead_of_dashboard()
         goose_command: None,
     }));
 
-    let rendered = render_tui_frame_snapshot(&state, PRETTY_TUI_MIN_DASHBOARD_WIDTH - 1, 12);
+    let rendered = render_tui_frame_snapshot(&state, 64, 24);
 
-    assert!(rendered.contains(">= 60 columns"));
+    assert!(rendered.contains(&format!(">= {PRETTY_TUI_MIN_DASHBOARD_WIDTH} columns")));
     assert!(rendered.contains("Resize"));
     assert!(!rendered.contains("Mesh Events"));
+    assert!(!rendered.contains("Loaded Models"));
+    assert!(!rendered.contains("Requests"));
+    assert!(!rendered.contains("Q Quit"));
+}
+
+#[test]
+pub(super) fn tui_exact_minimum_width_renders_dashboard() {
+    let mut state = DashboardState::default();
+    state.reduce(DashboardAction::Resize(dashboard_layout_for_terminal_size(
+        PRETTY_TUI_MIN_DASHBOARD_WIDTH,
+        32,
+    )));
+    state.reduce(DashboardAction::SnapshotUpdated(snapshot_fixture(2, 30)));
+
+    let rendered = render_tui_frame_snapshot(&state, PRETTY_TUI_MIN_DASHBOARD_WIDTH, 32);
+
+    assert!(rendered.contains("Mesh Events"));
+    assert!(rendered.contains("Loaded Models"));
+    assert!(rendered.contains("Requests"));
 }
 
 #[test]

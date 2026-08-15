@@ -16,21 +16,46 @@ pub(super) fn tui_event_line_uses_compact_timestamp_level_message_layout() {
         "12:34:56 OK    joined mesh poker-night"
     );
 }
+
+#[test]
+pub(super) fn tui_debug_event_line_keeps_badge_style_out_of_plain_text() {
+    let line = event_line(
+        &MeshEventState {
+            timestamp: "12:34:56".to_string(),
+            level: OutputLevel::Debug,
+            summary: "native backend update".to_string(),
+        },
+        80,
+    );
+
+    let plain_text = spans_plain_text(&line.spans);
+    assert_eq!(plain_text, "12:34:56 DBG   native backend update");
+    assert!(
+        plain_text.chars().all(|character| !character.is_control()),
+        "plain event text must not contain terminal control characters: {plain_text:?}"
+    );
+    assert_eq!(line.spans[2].content, "DBG   ");
+    assert!(
+        line.spans[2].style.add_modifier.contains(Modifier::BOLD),
+        "DBG badge should retain its bold presentation style"
+    );
+}
+
 #[test]
 pub(super) fn tui_full_screen_events_wraps_long_log_lines() {
     let mut formatter = InteractiveDashboardFormatter::default();
     formatter.handle_tui_event(TuiEvent::Resize {
-        columns: 72,
+        columns: 100,
         rows: 10,
     });
     formatter
         .handle_output_event(&info_event(
-            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu unique-wrap-tail",
+            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma unique-wrap-tail",
         ))
         .expect("event render should succeed");
     formatter.handle_tui_event(TuiEvent::Key(TuiKeyEvent::Enter));
 
-    let rendered = render_tui_frame_snapshot(&formatter.state, 72, 10);
+    let rendered = render_tui_frame_snapshot(&formatter.state, 100, 10);
 
     assert!(rendered.contains("fullscreen  Esc=Back"));
     assert!(rendered.contains("alpha beta gamma"));
@@ -270,7 +295,7 @@ pub(super) fn tui_events_scroll_repaints_long_rows_cleanly() {
     events_view.scroll_offset = 0;
     events_view.selected_row = Some(0);
 
-    let backend = TestBackend::new(72, 16);
+    let backend = TestBackend::new(100, 16);
     let mut terminal = Terminal::new(backend).expect("test backend should initialize");
     terminal
         .draw(|frame| render_tui_frame(frame, &initial_state))
@@ -282,7 +307,7 @@ pub(super) fn tui_events_scroll_repaints_long_rows_cleanly() {
     let buffer = terminal.backend().buffer();
     let rendered_lines: Vec<String> = (0..16)
         .map(|y| {
-            (0..72)
+            (0..100)
                 .map(|x| buffer[(x, y)].symbol())
                 .collect::<String>()
                 .trim_end()
@@ -322,7 +347,7 @@ pub(super) fn tui_events_filter_empty_state_repaints_over_previous_rows() {
         .handle_output_event(&info_event("another visible row before-filter"))
         .expect("event render should succeed");
 
-    let backend = TestBackend::new(80, 18);
+    let backend = TestBackend::new(100, 18);
     let mut terminal = Terminal::new(backend).expect("test backend should initialize");
     terminal
         .draw(|frame| render_tui_frame(frame, &formatter.state))
@@ -341,7 +366,7 @@ pub(super) fn tui_events_filter_empty_state_repaints_over_previous_rows() {
     let buffer = terminal.backend().buffer();
     let rendered_lines: Vec<String> = (0..18)
         .map(|y| {
-            (0..80)
+            (0..100)
                 .map(|x| buffer[(x, y)].symbol())
                 .collect::<String>()
                 .trim_end()
@@ -383,7 +408,7 @@ pub(super) fn tui_events_live_filter_repaints_to_matching_badge_rows() {
         })
         .expect("event render should succeed");
 
-    let backend = TestBackend::new(80, 18);
+    let backend = TestBackend::new(100, 18);
     let mut terminal = Terminal::new(backend).expect("test backend should initialize");
     terminal
         .draw(|frame| render_tui_frame(frame, &formatter.state))
@@ -402,7 +427,7 @@ pub(super) fn tui_events_live_filter_repaints_to_matching_badge_rows() {
     let buffer = terminal.backend().buffer();
     let rendered_lines: Vec<String> = (0..18)
         .map(|y| {
-            (0..80)
+            (0..100)
                 .map(|x| buffer[(x, y)].symbol())
                 .collect::<String>()
                 .trim_end()
@@ -630,7 +655,7 @@ pub(super) fn tui_join_token_wraps_and_redraws_in_a_constrained_frame() {
         DashboardPanel::JoinToken,
     ));
 
-    let rendered = render_tui_frame_snapshot(&state, 60, 8);
+    let rendered = render_tui_frame_snapshot(&state, 100, 8);
     assert!(
         rendered.contains("mesh-invite-token-abcdefghijklmnopqrstuvwxyz"),
         "expected the narrow frame to render the first wrapped token line: {rendered}"
@@ -725,6 +750,67 @@ pub(super) fn tui_frame_clears_stale_join_token_rows_between_draws() {
         "full-frame redraw should clear stale token text from previous frames\n{rendered}"
     );
 }
+
+#[test]
+pub(super) fn tui_redraw_invalidates_backend_after_out_of_band_write() {
+    let state = DashboardState::default();
+    let mut terminal =
+        Terminal::new(TestBackend::new(100, 32)).expect("test backend should initialize");
+    draw_tui_dashboard_with_backend(&mut terminal, &state)
+        .expect("initial dashboard draw should succeed");
+
+    let area = terminal.backend().buffer().area;
+    let (x, y) = (0..area.width)
+        .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+        .find(|&(x, y)| terminal.backend().buffer()[(x, y)].symbol() == " ")
+        .expect("dashboard should leave at least one blank cell");
+    let expected_symbol = terminal.backend().buffer()[(x, y)].symbol().to_string();
+    let stale_cell = ratatui::buffer::Cell::new("X");
+    terminal
+        .backend_mut()
+        .draw(std::iter::once((x, y, &stale_cell)))
+        .expect("out-of-band physical write should succeed");
+    assert_eq!(terminal.backend().buffer()[(x, y)].symbol(), "X");
+
+    draw_tui_dashboard_with_backend(&mut terminal, &state)
+        .expect("redraw after out-of-band write should succeed");
+
+    assert_eq!(
+        terminal.backend().buffer()[(x, y)].symbol(),
+        expected_symbol,
+        "physical terminal clear must invalidate ratatui's diff before redraw"
+    );
+}
+
+#[test]
+pub(super) fn tui_redraw_emits_physical_clear_without_cursor_query() {
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let backend = NoCursorQueryBackend::new(Arc::clone(&bytes));
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Fixed(Rect::new(0, 0, 100, 32)),
+        },
+    )
+    .expect("recording backend should initialize");
+
+    draw_tui_dashboard_with_backend(&mut terminal, &DashboardState::default())
+        .expect("dashboard redraw should not query the physical cursor position");
+
+    assert_eq!(terminal.backend().cursor_queries, 0);
+    let output = bytes
+        .lock()
+        .expect("recording writer lock should not be poisoned")
+        .clone();
+    assert!(!output.is_empty(), "redraw should emit terminal commands");
+    assert!(
+        output
+            .windows(b"\x1b[2J".len())
+            .any(|window| window == b"\x1b[2J"),
+        "redraw should emit a physical clear-all escape: {output:?}"
+    );
+}
+
 #[test]
 pub(super) fn loading_progress_bar_keeps_zero_empty_and_positive_visible() {
     assert_eq!(loading_progress_bar(0.0, 8), "░░░░░░░░");

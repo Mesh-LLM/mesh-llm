@@ -49,5 +49,13 @@ Do not reintroduce standalone `kv-server` or `ngram-pool` dependencies into
 mesh. Keep structured outputs, tools, logprobs, and `/v1/responses`
 compatibility in `openai-frontend`.
 
+Embedded-server code reachable while mesh owns the TUI alternate screen must
+not write directly to stdout/stderr (`print!`, `println!`, `eprint!`,
+`eprintln!`, or raw writers). Emit `OutputEvent` or `tracing` instead so the
+host's shared sink can project the message into the dashboard. When changing
+stage startup or diagnostics, run the TUI regression checks: prove a physical
+terminal clear/invalidation, verify narrow resize guidance, and verify `q` or
+Ctrl-C restores the prompt without raw stderr lines.
+
 Stage status exposed by mesh should be backend-neutral at the API boundary.
 Backend-specific details can remain in internal skippy structs.

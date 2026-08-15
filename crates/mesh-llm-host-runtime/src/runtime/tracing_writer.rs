@@ -23,7 +23,7 @@ pub(super) struct MeshTracingStderrWriter {
 }
 
 impl MeshTracingStderrWriter {
-    fn new(level: tracing::Level, target: impl Into<String>) -> Self {
+    pub(super) fn new(level: tracing::Level, target: impl Into<String>) -> Self {
         Self {
             level,
             target: target.into(),
@@ -63,7 +63,7 @@ impl MeshTracingStderrWriter {
         write_stderr_line(&message)
     }
 
-    fn should_route_to_dashboard(&self) -> bool {
+    pub(super) fn should_route_to_dashboard(&self) -> bool {
         !self.target.starts_with("mesh_llm_tui::output")
             && !self.target.starts_with("mesh_llm_events")
             && mesh_llm_events::interactive_tui_active()

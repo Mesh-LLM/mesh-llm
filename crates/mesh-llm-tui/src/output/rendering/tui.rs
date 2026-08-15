@@ -5,20 +5,45 @@ use super::{
     render_model_progress_loader, render_models_panel, render_process_table,
     render_processes_panel, render_requests_panel, render_tui_logo, tui_layout, tui_theme,
 };
-use std::io;
+use ratatui::backend::Backend;
+use std::{fmt::Display, io};
 
 pub(in crate::output) fn draw_tui_dashboard_with_terminal(
     terminal: &mut TuiTerminal,
     state: &DashboardState,
 ) -> io::Result<()> {
-    terminal.hide_cursor().map_err(io::Error::other)?;
+    draw_tui_dashboard_with_backend(terminal, state)
+}
+
+pub(in crate::output) fn draw_tui_dashboard_with_backend<B>(
+    terminal: &mut ratatui::Terminal<B>,
+    state: &DashboardState,
+) -> io::Result<()>
+where
+    B: Backend,
+    B::Error: Display,
+{
+    terminal
+        .hide_cursor()
+        .map_err(|error| io::Error::other(error.to_string()))?;
     terminal
         .set_cursor_position((0, 0))
-        .map_err(io::Error::other)?;
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    terminal
+        .backend_mut()
+        .clear()
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    // A backend clear changes the physical display without touching Ratatui's
+    // diff state. Reset both internal buffers so the following draw emits the
+    // complete dashboard instead of assuming cells are still present.
+    // `swap_buffers` resets the inactive buffer before toggling; two swaps
+    // therefore reset both buffers and restore the original active index.
+    terminal.swap_buffers();
+    terminal.swap_buffers();
     terminal
         .draw(|frame| render_tui_frame(frame, state))
         .map(|_| ())
-        .map_err(io::Error::other)
+        .map_err(|error| io::Error::other(error.to_string()))
 }
 
 pub(in crate::output) fn render_tui_frame(frame: &mut Frame, state: &DashboardState) {

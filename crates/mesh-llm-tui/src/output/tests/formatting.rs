@@ -1414,27 +1414,6 @@ pub(super) fn tui_enter_does_not_enable_mouse_capture() {
 }
 
 #[test]
-pub(super) fn tui_redraw_start_repositions_without_physical_clear() {
-    let mut output = Vec::new();
-
-    write_tui_redraw_start_to_writer(&mut output).expect("redraw start should succeed");
-
-    let rendered = String::from_utf8(output).expect("terminal output should be utf8");
-    assert!(
-        rendered.contains("[?25l"),
-        "redraw start should hide the cursor before repainting: {rendered:?}"
-    );
-    assert!(
-        rendered.contains("[H") || rendered.contains("[1;1H"),
-        "redraw start should move to the top-left before repainting: {rendered:?}"
-    );
-    assert!(
-        !rendered.contains("[2J"),
-        "redraw start should avoid a physical full-screen clear that flickers between frames: {rendered:?}"
-    );
-}
-
-#[test]
 pub(super) fn tui_handles_resize_without_resetting_focus() {
     let mut formatter = InteractiveDashboardFormatter::default();
     formatter.handle_snapshot(snapshot_fixture(12, 30));

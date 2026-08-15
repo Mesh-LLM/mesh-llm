@@ -1526,11 +1526,6 @@ pub(super) fn write_tui_exit() -> io::Result<()> {
     write_tui_exit_to_writer(&mut stderr)
 }
 
-#[cfg(test)]
-pub(super) fn write_tui_redraw_start_to_writer<W: Write>(writer: &mut W) -> io::Result<()> {
-    execute!(writer, Hide, MoveTo(0, 0)).map_err(io::Error::other)
-}
-
 pub fn force_restore_tui_terminal() -> io::Result<()> {
     // Emergency restore path for panic/unwind and failed worker cleanup. This
     // intentionally bypasses the OutputManager so terminal recovery still has a

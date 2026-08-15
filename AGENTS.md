@@ -475,6 +475,15 @@ The patched llama.cpp staged runtime has its own ABI version, tracked in `skippy
 
 For changes in `crates/mesh-llm-ui/`, use components and compose interfaces consistently with shadcn/ui patterns. Prefer extending existing primitives in `src/components/ui/` over ad-hoc markup.
 
+### Terminal dashboard integrity
+
+Runtime/library code reachable while the TUI owns the alternate screen must not
+call `print!`/`println!`/`eprint!`/`eprintln!` or write raw stdout/stderr. Use
+`OutputEvent` or `tracing` routed through the shared sink. A logical ratatui
+`Clear` widget does not repair backend desynchronization; redraw changes must
+test a physical clear/invalidation, narrow-resize guidance, and prompt
+restoration.
+
 ## Testing
 
 Read `docs/design/TESTING.md` before running tests. It has all test scenarios, remote deploy instructions, and cleanup commands.

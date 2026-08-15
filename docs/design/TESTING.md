@@ -156,6 +156,10 @@ For terminal restoration QA:
 - Press `q` and `Ctrl+C`; the cursor should be visible and the shell prompt should not remain in raw mode.
 - A `SIGKILL` (`kill -9`) cannot run in-process cleanup. If a terminal is left corrupted after a hard kill, recover with `reset` or by closing the terminal pane.
 
+#### Capturing evidence
+
+Use `tmux capture-pane -p -t <session>:<window>.<pane> > event-viewer.plain.txt` for human-readable evidence. Use `tmux capture-pane -p -e -t <session>:<window>.<pane> > event-viewer.ansi` only for explicitly labeled ANSI/raw diagnostics. When investigating formatting, capture both from the same frame, compare the plain text with a CSI-stripped copy of the ANSI capture, and do not interpret SGR bytes as event content. Literal warning text in a plain capture is real output corruption; SGR escape bytes visible only in the raw capture are terminal styling.
+
 ### 0d. Agent tool-call reliability
 
 Run the direct tool-call probe when changing OpenAI chat-completions routing,
