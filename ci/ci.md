@@ -324,11 +324,24 @@ too, but an exact maintainer-approved merge ref and head SHA may use Depot under
 the time-bounded cache-risk exception in `ci/DEPOT_PR_RISK_EXCEPTION.md`. The
 other exception is uncredentialed CUDA smoke on the approved ephemeral
 `gpu-nvidia` scale set described above. PRs use the same protected reusable
-lanes and receive no repository secrets. Trusted `main` Linux roles may use Depot only when
-`DEPOT_RUNNERS_ENABLED` is exactly `true`; macOS, Windows, credential-bearing
-smokes and other hardware-qualified work retain explicit approved placement.
-Provider choice never changes plan membership, commands, artifacts, tests or
-summaries.
+lanes and receive no repository secrets. On routine trusted-`main` pushes,
+Linux roles may use Depot only when `DEPOT_RUNNERS_ENABLED` is exactly `true`;
+macOS, Windows, credential-bearing smokes and other hardware-qualified work
+retain explicit approved placement. The separate exact same-repository PR
+exception may also select eligible build/test rows on Depot macOS 15 and
+Windows 2022, subject to the same policy and documented exceptions. Provider
+choice never changes plan membership, commands, artifacts, tests or summaries.
+
+Depot coverage is reported against the selected ordinary-executor denominator,
+not against every job in the Actions run. For a plan, the denominator is every
+ordinary build/test executor row that the same event, trust profile, platform,
+architecture and policy make eligible for Depot; the numerator is the subset
+that actually receives a `depot-*` label. Control-plane planning,
+runner/selector diagnostics and lane summaries are outside the denominator;
+credential-bearing smokes, `gpu-nvidia` hardware, and unsupported or Intel
+macOS rows without a Depot-equivalent remain documented provider exceptions
+and are reported separately. Therefore “100% Depot” means 100% of eligible
+ordinary executor rows, not that every check or job is hosted by Depot.
 
 The central selector normally makes the Depot cache namespace inert by emitting
 `allow_native_github_cache=false` and `allow_depot_remote_cache=false`. During
@@ -456,7 +469,8 @@ those guarded cache consumers on both the selected PR and eligible trusted-main
 Depot jobs. Depot's lack of branch isolation means the cache can cross the PR,
 main, and other-PR trust boundaries. That accepted risk, including the exact
 sentinel evidence and rollback procedure, is documented in
-`ci/DEPOT_PR_RISK_EXCEPTION.md`.
+`ci/DEPOT_PR_RISK_EXCEPTION.md`; the exact-SHA canary, metrics, and hosted
+rollback evidence are recorded in `.omo/specs/depot-pr-rollout-evidence.md`.
 
 This is intentionally not a universal PR write-through policy. Cargo target
 caches are commonly hundreds of megabytes to several gigabytes per row; making
@@ -492,10 +506,15 @@ repository-scoped cross-trust authority. It is the basis of the explicitly
 accepted temporary risk, not evidence of isolation. Permanent enablement still
 requires a provider-isolation redesign and a new successful sentinel.
 
-Branch/main provider-parity, fork PR canary, capacity/namespace purge or expiry,
-and rollback evidence remain pending; those checks are distinct from the
-settings verification and must pass after the redesign before PR placement is
-enabled.
+The exact-SHA five-lane candidate, provider-separated comparison, and
+identical-SHA hosted rollback are recorded in
+`.omo/specs/depot-pr-rollout-evidence.md`. Quality and Linux had favorable
+queue observations but remain unclassified because execution was
+cache-confounded; Website had insufficient samples, and macOS/Windows hit the
+deterministic capacity rollback threshold. The fork PR canary and namespace
+purge/expiry confirmation remain pending; permanent placement still requires
+a successful post-redesign isolation sentinel and acceptable capacity
+evidence.
 
 ## Required extension pattern
 

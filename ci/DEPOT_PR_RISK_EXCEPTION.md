@@ -135,6 +135,15 @@ The selector fails hosted at the start of 2026-09-14 UTC. Extending the window
 requires a reviewed source change to the expiry and this decision record; a
 repository variable cannot extend it.
 
+## Validation record
+
+The exact-SHA five-lane Depot canary, provider-separated schema-v3 metrics,
+macOS toolchain fallback proof, and identical-SHA hosted rollback are recorded
+in `.omo/specs/depot-pr-rollout-evidence.md`. That record preserves the strict
+capacity classifications and the Windows serial-matrix timing caveat. A green
+functional canary or rollback does not supersede the unsafe cache-authority
+sentinel above and does not relax this exception's scope or expiry.
+
 ## Exit criteria
 
 Remove this exception when Depot or GitHub offers and verifies either:

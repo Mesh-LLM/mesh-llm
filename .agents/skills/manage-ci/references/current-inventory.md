@@ -197,12 +197,16 @@ restored and exactly validated that poison, then failed its intended expected-
 miss gate. This proves unsafe repository-scoped cross-trust authority, so it is
 not a successful isolation result. The bounded exception knowingly accepts
 that risk for exact ref/SHA-approved same-repository revisions to gain CI
-iteration speed; it is not permanent-isolation evidence. Fork PR validation,
-provider-parity/capacity comparison,
-namespace purge/expiry confirmation and rollback remain pending. Fork PR
-validation remains hosted and is the no-Depot-authority half of the sentinel
-acceptance evidence; only the exact same-repository sentinel ref may exercise
-the diagnostic Depot job. All three sentinel cache phases attest the
+iteration speed; it is not permanent-isolation evidence. The exact-SHA
+five-lane candidate, provider comparison, and identical-SHA hosted rollback
+are recorded in `.omo/specs/depot-pr-rollout-evidence.md`; Quality and Linux
+had favorable queue observations but remain unclassified because execution
+was cache-confounded, Website had insufficient samples, and macOS/Windows hit
+the capacity rollback threshold. Fork PR validation and namespace purge/expiry
+confirmation remain pending. Fork PR validation remains hosted and is the
+no-Depot-authority half of the sentinel acceptance evidence; only the exact
+same-repository sentinel ref may exercise the diagnostic Depot job. All three
+sentinel cache phases attest the
 provider-injected `ACTIONS_CACHE_URL`/`ACTIONS_RESULTS_URL` structure before
 invoking pinned `actions/cache` restore/save actions. The shell attestation
 does not require ambient `ACTIONS_RUNTIME_TOKEN`: GitHub's

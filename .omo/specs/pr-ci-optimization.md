@@ -318,8 +318,13 @@ successful isolation result. The temporary exception knowingly accepts it only
 when `DEPOT_PR_RUNNERS_ENABLED=true`, `DEPOT_PR_APPROVED_REF` and
 `DEPOT_PR_APPROVED_SHA` match exactly, and the 2026-09-14 UTC deadline is still
 active. A provider-isolation redesign and a new successful sentinel are
-required before that exception can become permanent; fork,
-provider-parity, capacity and rollback evidence remain pending.
+required before that exception can become permanent. The exact-SHA five-lane
+candidate, provider-separated comparison, and identical-SHA hosted rollback
+are recorded in `.omo/specs/depot-pr-rollout-evidence.md`; Quality and Linux
+had favorable queue observations but remain unclassified because execution
+was cache-confounded, Website had insufficient samples, and macOS/Windows hit
+the capacity rollback threshold. Fork validation and namespace purge/expiry
+confirmation remain pending.
 
 Before a permanent PR Depot path is enabled, an administrator must prove:
 

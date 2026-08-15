@@ -210,10 +210,14 @@ present: seed `mesh-llm-depot-authority-seed-v1-4089d6c8551820aa86b7780157729786
 (308 B). Purge or provider-expiry confirmation remains pending; this
 docs-only change must not delete them.
 
-The fork PR canary, provider-parity/capacity comparison, namespace
-purge/expiry confirmation and rollback evidence remain pending. Fork
-validation must stay hosted and remains the no-Depot-authority half of the
-acceptance evidence.
+The exact-SHA five-lane candidate, provider-separated comparison, and
+identical-SHA hosted rollback are recorded in
+`.omo/specs/depot-pr-rollout-evidence.md`. Quality and Linux had favorable
+queue observations but remain unclassified because execution was
+cache-confounded; Website had insufficient samples, and macOS/Windows hit the
+deterministic capacity rollback threshold. The fork PR canary and namespace
+purge/expiry confirmation remain pending. Fork validation must stay hosted and
+remains the no-Depot-authority half of the acceptance evidence.
 
 Disabling automatic Depot Cache and Registry Actions connectivity removes the
 direct Depot build-tool/registry credential path that blocked the first canary
