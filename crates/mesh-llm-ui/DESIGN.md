@@ -17,6 +17,11 @@ colors:
   good-dark: 'oklch(0.78 0.14 150)'
   warn-dark: 'oklch(0.8 0.12 80)'
   bad-dark: 'oklch(0.7 0.18 25)'
+  log-requests-dark: 'oklch(0.8 0.15 193)'
+  log-system-dark: 'oklch(0.84 0.16 78)'
+  log-quic-dark: 'oklch(0.8 0.15 294)'
+  log-gossip-dark: 'oklch(0.78 0.14 150)'
+  log-iroh-dark: 'oklch(0.8 0.16 32)'
   background-light: 'oklch(0.985 0.003 80)'
   foreground-light: 'oklch(0.22 0.02 250)'
   muted-light: 'oklch(0.955 0.005 80)'
@@ -32,6 +37,11 @@ colors:
   good-light: 'oklch(0.58 0.13 150)'
   warn-light: 'oklch(0.62 0.14 55)'
   bad-light: 'oklch(0.62 0.16 28)'
+  log-requests-light: 'oklch(0.56 0.15 193)'
+  log-system-light: 'oklch(0.54 0.14 78)'
+  log-quic-light: 'oklch(0.57 0.15 294)'
+  log-gossip-light: 'oklch(0.53 0.13 150)'
+  log-iroh-light: 'oklch(0.58 0.15 32)'
 typography:
   display:
     fontFamily: 'Inter Tight, -apple-system, system-ui, sans-serif'
@@ -150,6 +160,10 @@ The source of truth is `src/styles/globals.css`. Tokens are semantic CSS variabl
 - **Capacity Green** (`good-*`): Online, serving, healthy, ready, successful operations, and available capacity.
 - **Thermal Amber** (`warn-*`): Degraded, pending, warm, constrained, or needs-attention states.
 - **Fault Red** (`bad-*`, `destructive`): Offline, failed, blocked, destructive, or unrecoverable states.
+
+### Data series
+
+- **Log category series** (`log-*-dark`, `log-*-light`): Stable, theme-aware colors for Requests, System, QUIC, Gossip, and Iroh activity in the logs chart. These encode data roles rather than user preferences, so they remain unchanged across accent themes and are always paired with labels and stack position.
 
 ### Neutral
 

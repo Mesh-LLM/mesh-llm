@@ -4,7 +4,9 @@ use crate::logging::{
     BusEntry, Clock, FailOpenWriter, LoggingDynamicLimits, PersistSink, RegistryConfig,
     TerminalOutcome,
 };
-use crate::logging::{OperationalAuditRecord, ReplayBus, RequestRegistry, RequestSummaryEntry};
+use crate::logging::{
+    OperationalAuditRecord, ReplayBus, RequestRegistry, RequestSummaryEntry, RequestSummaryMetadata,
+};
 use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_events::logging::identifiers::{AttemptId, EventId, RequestId};
 use mesh_llm_events::logging::proxy::ProxyRecord;
@@ -561,6 +563,125 @@ fn canonical_events_reach_the_output_sink_once_with_safe_local_projection() {
             .count(),
         1,
         "terminal lifecycle ownership must still dedupe at the presentation sink"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn canonical_projection_uses_request_summary_context_for_probe_and_terminal_lines() {
+    let sink = Arc::new(RecordingOutputSink::default());
+    let _reset_guard = OutputSinkResetGuard;
+    set_output_sink(sink.clone());
+
+    let service = make_service();
+    let request_id = RequestId::new();
+    let metadata = RequestSummaryMetadata::from_parts(
+        Some("healthz"),
+        None,
+        Some("openai_frontend"),
+        Some("healthz"),
+    )
+    .with_source(Some("direct_http"))
+    .with_method(Some("GET"));
+    let (guard, _) = service.register_request_with_metadata(request_id, metadata);
+
+    let admitted = sink
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            OutputEvent::CanonicalLog(envelope)
+                if matches!(envelope.event, LifecycleEvent::Admitted { .. }) =>
+            {
+                Some(envelope)
+            }
+            _ => None,
+        })
+        .expect("admitted projection");
+    assert_eq!(
+        admitted.presentation_message(),
+        "probe admitted route=healthz source=direct_http provider=openai_frontend engine=healthz method=GET"
+    );
+    assert!(matches!(
+        admitted.event,
+        LifecycleEvent::Admitted {
+            model: None,
+            method: Some(ref method)
+        } if method == "GET"
+    ));
+
+    service
+        .transition_terminal(
+            request_id,
+            &guard,
+            TerminalOutcome::CompletedWithStatus(200),
+        )
+        .expect("probe terminal transition");
+    let completed = sink
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            OutputEvent::CanonicalLog(envelope)
+                if matches!(envelope.event, LifecycleEvent::Completed { .. }) =>
+            {
+                Some(envelope)
+            }
+            _ => None,
+        })
+        .expect("completed projection");
+    assert_eq!(
+        completed.presentation_message(),
+        "probe request completed route=healthz source=direct_http provider=openai_frontend engine=healthz method=GET status=200"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn canonical_projection_classifies_management_polling_without_guessing_the_client() {
+    let sink = Arc::new(RecordingOutputSink::default());
+    let _reset_guard = OutputSinkResetGuard;
+    set_output_sink(sink.clone());
+
+    let service = Arc::new(make_service());
+    let request_id = RequestId::new();
+    let lifecycle = crate::logging::ManagementRequestLifecycle::register(
+        Arc::clone(&service),
+        request_id,
+        "management_get_status",
+    );
+
+    let admitted = sink
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            OutputEvent::CanonicalLog(envelope)
+                if matches!(envelope.event, LifecycleEvent::Admitted { .. }) =>
+            {
+                Some(envelope)
+            }
+            _ => None,
+        })
+        .expect("management admitted projection");
+    assert_eq!(
+        admitted.presentation_message(),
+        "management admitted route=management_get_status source=direct_http provider=management_api engine=management_get_status method=GET"
+    );
+
+    lifecycle.finish_status(200);
+    let completed = sink
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            OutputEvent::CanonicalLog(envelope)
+                if matches!(envelope.event, LifecycleEvent::Completed { .. }) =>
+            {
+                Some(envelope)
+            }
+            _ => None,
+        })
+        .expect("management completed projection");
+    assert_eq!(
+        completed.presentation_message(),
+        "management request completed route=management_get_status source=direct_http provider=management_api engine=management_get_status method=GET status=200"
     );
 }
 

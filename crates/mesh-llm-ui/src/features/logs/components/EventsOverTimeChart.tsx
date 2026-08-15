@@ -1,7 +1,22 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from 'recharts'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  XAxis,
+  YAxis,
+  type MouseHandlerDataParam,
+  type TooltipContentProps
+} from 'recharts'
 import { Card } from '@/components/ui/card'
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart'
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+  type ChartTooltipPayloadItem
+} from '@/components/ui/chart'
 import { NativeSelect } from '@/components/ui/NativeSelect'
 import {
   LOG_EVENT_CATEGORIES,
@@ -18,6 +33,7 @@ import {
   type BucketIntervalKey,
   type VolumeTimeRangeKey
 } from '@/features/logs/lib/log-volume'
+import { hasVisibleEventVolumeTooltip } from '@/features/logs/components/events-over-time-chart-tooltip'
 import { useAdvancingChartClock } from '@/features/logs/lib/use-advancing-chart-clock'
 
 type EventsOverTimeChartProps = {
@@ -27,6 +43,8 @@ type EventsOverTimeChartProps = {
   readonly selectedRange?: VolumeTimeRangeKey
   /** Exact duration for a custom ledger window represented by `selected`. */
   readonly selectedRangeMs?: number
+  /** Promotes the chart selector to the owning page's time-range control. */
+  readonly onSelectedRangeChange?: (range: VolumeTimeRangeKey) => void
   /** Test seam: overrides the wall clock used to anchor the time window. */
   readonly now?: number
 }
@@ -34,29 +52,41 @@ type EventsOverTimeChartProps = {
 const chartConfig = {
   requests: {
     label: 'Requests',
-    color: 'color-mix(in oklab, var(--color-accent) 58%, var(--color-foreground))'
+    color: 'var(--color-log-requests)'
   },
   system: {
     label: 'System',
-    color: 'color-mix(in oklab, var(--color-accent-contrast) 58%, var(--color-foreground))'
+    color: 'var(--color-log-system)'
   },
   quic: {
     label: 'QUIC',
-    color: 'color-mix(in oklab, var(--color-accent) 34%, var(--color-foreground))'
+    color: 'var(--color-log-quic)'
   },
   gossip: {
     label: 'Gossip',
-    color: 'color-mix(in oklab, var(--color-accent-contrast) 34%, var(--color-foreground))'
+    color: 'var(--color-log-gossip)'
   },
-  iroh: { label: 'Iroh', color: 'var(--color-fg-dim)' }
+  iroh: {
+    label: 'Iroh',
+    color: 'var(--color-log-iroh)'
+  }
 } satisfies ChartConfig
+
+const chartMarkerClassNames: Record<LogEventCategory, string> = {
+  requests: 'rounded-[2px]',
+  system: 'rounded-full',
+  quic: 'rounded-[1px] rotate-45',
+  gossip: 'h-1.5 w-2.5 rounded-[1px]',
+  iroh: 'h-1.5 w-2.5 rounded-full'
+}
 
 export function EventsOverTimeChart({
   rows,
   selectedCategories,
   now,
   selectedRange,
-  selectedRangeMs
+  selectedRangeMs,
+  onSelectedRangeChange
 }: EventsOverTimeChartProps) {
   const [intervalKey, setIntervalKey] = useState<BucketIntervalKey>('5m')
   const [rangeSelection, setRangeSelection] = useState<{
@@ -93,8 +123,35 @@ export function EventsOverTimeChart({
   const wasAutoBucketed = effectiveIntervalMs > intervalMs
 
   const [activeIndex, setActiveIndex] = useState<number | undefined>(undefined)
-  const handleBarMouseEnter = useCallback((_entry: unknown, index: number) => setActiveIndex(index), [])
-  const handleBarMouseLeave = useCallback(() => setActiveIndex(undefined), [])
+  const handleChartMouseMove = useCallback(
+    (nextState: MouseHandlerDataParam) => {
+      const rawIndex = nextState.activeTooltipIndex
+      const index =
+        typeof rawIndex === 'number' ? rawIndex : rawIndex === null || rawIndex === '' ? undefined : Number(rawIndex)
+      setActiveIndex(index !== undefined && Number.isInteger(index) && data[index]?.total ? index : undefined)
+    },
+    [data]
+  )
+  const handleChartMouseLeave = useCallback(() => setActiveIndex(undefined), [])
+  const activeBucket = activeIndex === undefined ? undefined : data[activeIndex]
+
+  const renderTooltip = useCallback((tooltipProps: TooltipContentProps) => {
+    if (!hasVisibleEventVolumeTooltip(tooltipProps.payload as readonly ChartTooltipPayloadItem[] | undefined))
+      return null
+    return (
+      <ChartTooltipContent
+        active={tooltipProps.active}
+        label={tooltipProps.label}
+        payload={tooltipProps.payload as unknown as readonly ChartTooltipPayloadItem[]}
+        formatter={(value) => `${String(value)} ${Number(value) === 1 ? 'event' : 'events'}`}
+        labelFormatter={(_label, payload) => {
+          const first = payload[0]?.payload
+          return formatBucketRange(Number(first?.bucketStart), Number(first?.bucketEnd))
+        }}
+        labelKey="label"
+      />
+    )
+  }, [])
 
   return (
     <Card
@@ -125,7 +182,11 @@ export function EventsOverTimeChart({
             ariaLabel="Chart time range"
             className="w-[10rem] min-w-0"
             name="volume-time-range"
-            onValueChange={(value) => setRangeSelection({ filter: selectedRange, value: value as VolumeTimeRangeKey })}
+            onValueChange={(value) => {
+              const range = value as VolumeTimeRangeKey
+              setRangeSelection({ filter: selectedRange, value: range })
+              onSelectedRangeChange?.(range)
+            }}
             options={[
               ...VOLUME_TIME_RANGES.map(({ value, label }) => ({ value, label })),
               ...(selectedRange === 'selected' ? [{ value: 'selected', label: 'Selected range' }] : [])
@@ -141,7 +202,7 @@ export function EventsOverTimeChart({
             <li className="inline-flex items-center gap-1.5 type-caption text-fg-dim" key={category}>
               <span
                 aria-hidden="true"
-                className="size-2 rounded-[2px]"
+                className={`size-2 ${chartMarkerClassNames[category]}`}
                 style={{ backgroundColor: chartConfig[category].color }}
               />
               <span>{chartConfig[category].label}</span>
@@ -169,7 +230,13 @@ export function EventsOverTimeChart({
             config={chartConfig}
             role="img"
           >
-            <BarChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }} barCategoryGap={1.5}>
+            <BarChart
+              data={data}
+              margin={{ top: 8, right: 4, left: 0, bottom: 0 }}
+              barCategoryGap={1.5}
+              onMouseLeave={handleChartMouseLeave}
+              onMouseMove={handleChartMouseMove}
+            >
               <CartesianGrid vertical={false} stroke="var(--color-border-soft)" />
               <XAxis
                 axisLine={false}
@@ -188,17 +255,9 @@ export function EventsOverTimeChart({
                 width={36}
               />
               <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    formatter={(value) => `${String(value)} ${Number(value) === 1 ? 'event' : 'events'}`}
-                    labelFormatter={(_label, payload) => {
-                      const first = payload[0]?.payload
-                      return formatBucketRange(Number(first?.bucketStart), Number(first?.bucketEnd))
-                    }}
-                    labelKey="label"
-                  />
-                }
-                cursor={{ fill: 'var(--color-fg-faint)', fillOpacity: 0.08 }}
+                content={renderTooltip}
+                cursor={activeBucket?.total ? { fill: 'var(--color-fg-faint)', fillOpacity: 0.08 } : false}
+                isAnimationActive={false}
               />
               {activeCategories.map((category, categoryIndex) => (
                 <Bar
@@ -207,17 +266,13 @@ export function EventsOverTimeChart({
                   isAnimationActive={false}
                   key={category}
                   maxBarSize={8}
-                  onMouseEnter={handleBarMouseEnter}
-                  onMouseLeave={handleBarMouseLeave}
                   radius={categoryIndex === activeCategories.length - 1 ? [2, 2, 0, 0] : 0}
                   stackId="events"
-                  stroke="var(--color-panel)"
-                  strokeWidth={1}
                 >
                   {data.map((bucket, index) => (
                     <Cell
                       key={`${category}-${bucket.bucketStart}`}
-                      fillOpacity={activeIndex === undefined || activeIndex === index ? 1 : 0.35}
+                      fillOpacity={activeIndex === undefined || activeIndex === index ? 1 : 0.7}
                     />
                   ))}
                 </Bar>

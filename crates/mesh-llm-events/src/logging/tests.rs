@@ -1,7 +1,8 @@
 //! Cross-module acceptance tests for canonical logging contracts.
 
 use super::envelope::{
-    CanonicalEnvelope, CanonicalEnvelopeParseError, SCHEMA_VERSION, UnsupportedSchemaVersion,
+    CanonicalEnvelope, CanonicalEnvelopeParseError, CanonicalPresentationContext, SCHEMA_VERSION,
+    UnsupportedSchemaVersion,
 };
 use super::events::LifecycleEvent;
 use super::identifiers::{AttemptId, EventId, RequestId};
@@ -59,6 +60,60 @@ fn test_serde_roundtrip_preserves_fields() {
     assert_eq!(parsed.channel, ReplayChannel::Requests);
     assert_eq!(parsed.sequence, 7);
     assert_eq!(parsed.event, env.event);
+}
+
+#[test]
+fn local_presentation_context_classifies_probes_and_is_not_wire_data() {
+    let env = CanonicalEnvelope::new(
+        EventId::new(),
+        RequestId::new(),
+        ReplayChannel::Requests,
+        7,
+        "2025-01-01T00:00:00Z".into(),
+        LifecycleEvent::Completed {
+            status_code: Some(200),
+            duration_ms: Some(3),
+            usage: None,
+        },
+    )
+    .with_presentation_context(CanonicalPresentationContext::from_parts(
+        Some("health"),
+        Some("direct_http"),
+        None,
+        Some("openai_frontend"),
+        Some("health"),
+        Some("GET"),
+    ));
+
+    assert_eq!(env.presentation_request_kind(), "probe");
+    assert_eq!(
+        env.presentation_message(),
+        "probe request completed route=health source=direct_http provider=openai_frontend engine=health method=GET status=200 duration=3ms"
+    );
+    let wire = serde_json::to_value(&env).unwrap();
+    assert!(wire.get("presentation_context").is_none());
+    let parsed: CanonicalEnvelope = serde_json::from_value(wire).unwrap();
+    assert_eq!(parsed.presentation_request_kind(), "unknown");
+}
+
+#[test]
+fn sparse_legacy_envelopes_use_unknown_classification_without_leaking_values() {
+    let env = CanonicalEnvelope::new(
+        EventId::new(),
+        RequestId::new(),
+        ReplayChannel::Requests,
+        0,
+        "2025-01-01T00:00:00Z".into(),
+        LifecycleEvent::Admitted {
+            model: Some("safe-model".into()),
+            method: Some("POST".into()),
+        },
+    );
+    assert_eq!(env.presentation_request_kind(), "unknown");
+    assert!(
+        env.presentation_message()
+            .contains("request admitted model=safe-model method=POST")
+    );
 }
 
 #[test]

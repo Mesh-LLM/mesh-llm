@@ -224,6 +224,29 @@ fn validate_audit_entry_limit(limit: Option<usize>) -> Result<usize, LogStoreErr
     }
 }
 
+fn audit_entry_row(row: &Row<'_>) -> rusqlite::Result<AuditEntryRow> {
+    let detail = StoredAuditDetail::parse(row.get(6)?).bounded();
+    Ok(AuditEntryRow {
+        sequence: row.get(0)?,
+        entry_id: row.get(1)?,
+        request_id: row.get(2)?,
+        occurred_at: row.get(3)?,
+        source: row.get(4)?,
+        code: row.get(5)?,
+        severity: AuditEntrySeverity::parse(detail.severity)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+        context_version: detail.context_version,
+        subject_kind: detail.subject_kind,
+        subject_id: detail.subject_id,
+        operation_id: detail.operation_id,
+        correlation_request_id: detail.request_id,
+        reason_code: detail.reason_code,
+        outcome: detail.outcome,
+        duration_ms: detail.duration_ms,
+        numeric_summaries: detail.numeric_summaries,
+    })
+}
+
 fn audit_entry_query_parts(
     cursor: Option<&(String, String)>,
     filters: AuditEntryFilters,
@@ -1392,29 +1415,7 @@ impl LogStore {
         let conn = self.conn();
         let mut statement = conn.prepare(&sql).map_err(LogStoreError::Sqlite)?;
         let mut items: Vec<AuditEntryRow> = statement
-            .query_map(rusqlite::params_from_iter(parameters), |row| {
-                let detail = StoredAuditDetail::parse(row.get(6)?).bounded();
-                Ok(AuditEntryRow {
-                    sequence: row.get(0)?,
-                    entry_id: row.get(1)?,
-                    request_id: row.get(2)?,
-                    occurred_at: row.get(3)?,
-                    source: row.get(4)?,
-                    code: row.get(5)?,
-                    severity: AuditEntrySeverity::parse(detail.severity).map_err(|error| {
-                        rusqlite::Error::ToSqlConversionFailure(Box::new(error))
-                    })?,
-                    context_version: detail.context_version,
-                    subject_kind: detail.subject_kind,
-                    subject_id: detail.subject_id,
-                    operation_id: detail.operation_id,
-                    correlation_request_id: detail.request_id,
-                    reason_code: detail.reason_code,
-                    outcome: detail.outcome,
-                    duration_ms: detail.duration_ms,
-                    numeric_summaries: detail.numeric_summaries,
-                })
-            })
+            .query_map(rusqlite::params_from_iter(parameters), audit_entry_row)
             .map_err(LogStoreError::Sqlite)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| LogStoreError::QueryFailed(error.to_string()))?;
@@ -1428,6 +1429,40 @@ impl LogStore {
             encode_cursor(&last.occurred_at, &last.entry_id)
         });
         Ok(Page { items, next_cursor })
+    }
+
+    /// Read newly committed audit rows in database sequence order for the
+    /// trusted-local event stream. Unlike the public keyset listing, this is a
+    /// forward-only reconciliation cursor shared by every process writing the
+    /// durable store.
+    pub fn list_audit_entries_after_sequence(
+        &self,
+        after_sequence: u64,
+        limit: usize,
+        filters: AuditEntryFilters,
+    ) -> Result<Vec<AuditEntryRow>, LogStoreError> {
+        let limit = validate_audit_entry_limit(Some(limit))?;
+        let after_sequence = i64::try_from(after_sequence).map_err(|_| {
+            LogStoreError::InvalidQuery("audit sequence is outside the supported range".to_string())
+        })?;
+        let (where_clause, mut parameters) = audit_entry_query_parts(None, filters)?;
+        let predicate = if where_clause.is_empty() {
+            "WHERE sequence > ?".to_string()
+        } else {
+            format!("{where_clause} AND sequence > ?")
+        };
+        parameters.push(Value::Integer(after_sequence));
+        let sql = format!(
+            "SELECT sequence, entry_id, request_id, occurred_at, actor, action, detail_json \
+             FROM audit_entries {predicate} ORDER BY sequence ASC LIMIT {limit}"
+        );
+        let conn = self.conn();
+        let mut statement = conn.prepare(&sql).map_err(LogStoreError::Sqlite)?;
+        statement
+            .query_map(rusqlite::params_from_iter(parameters), audit_entry_row)
+            .map_err(LogStoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LogStoreError::Sqlite)
     }
 
     // ════════════════════════════

@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LogCleanupPreviewRequest, LogCleanupRunRequest, LogDeleteRequest } from '@/features/logs/api/client'
 import { LogAuditId, LogOperationId, LogPageCursor, LogRequestId } from '@/features/logs/api/ids'
 import type { LogCleanupReceipt, LogDeleteReceipt, LogExport } from '@/features/logs/api/schemas'
+import { HARNESS_LOG_FIXTURES } from '@/features/logs/lib/log-fixtures'
+import type { LogEventLedgerRow } from '@/features/logs/lib/log-event-ledger'
 
 const api = vi.hoisted(() => ({
   exportRequests: vi.fn(),
@@ -101,6 +103,18 @@ function exportResult(): LogExport {
   return { items: [], nextCursor: undefined, truncated: true, retryRequired: false, artifactContentIncluded: false }
 }
 
+function requestRow(createdAt: string): LogEventLedgerRow {
+  const request = HARNESS_LOG_FIXTURES[1]
+  if (!request) throw new Error('Missing terminal request fixture')
+  return {
+    type: 'request',
+    id: `request:${request.requestId.toString()}`,
+    occurredAt: createdAt,
+    category: 'requests',
+    request: { ...request, createdAt }
+  }
+}
+
 describe('LogOperations', () => {
   beforeEach(() => {
     api.exportRequests.mockReset()
@@ -160,10 +174,17 @@ describe('LogOperations', () => {
     expect(screen.queryByLabelText('Delete terminal logs before')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Request scope')).not.toBeInTheDocument()
 
-    const requests = screen.getByRole('button', { name: /Requests chart layer.*required for cleanup preview/ })
-    expect(requests).toBeDisabled()
-    expect(screen.getByText(/Request history stays visible for cleanup preview/)).toBeInTheDocument()
+    const requests = screen.getByRole('button', { name: /Requests chart layer.*selected for cleanup preview/ })
+    expect(requests).toBeEnabled()
+    await user.click(requests)
+    expect(
+      screen.getByRole('button', { name: /Requests chart layer.*not selected for cleanup preview/ })
+    ).toHaveAttribute('data-state', 'off')
+    expect(screen.getByText(/Select Requests to include terminal request history/)).toBeInTheDocument()
+    await user.type(screen.getByPlaceholderText('Why are these logs being removed?'), 'retention cleanup')
     expect(screen.getByRole('button', { name: 'Review deletion' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: /Requests chart layer.*not selected for cleanup preview/ }))
+    expect(screen.getByRole('button', { name: 'Review deletion' })).toBeEnabled()
   })
 
   it('keeps an in-flight preview visible until its result is available', async () => {
@@ -187,6 +208,30 @@ describe('LogOperations', () => {
     await act(async () => resolvePreview?.(cleanupReceipt('previewed')))
     const reviewHeading = await screen.findByRole('heading', { name: 'Review log cleanup' })
     await waitFor(() => expect(reviewHeading).toHaveFocus())
+  })
+
+  it('uses the latest loaded window when records arrive before the dialog opens', async () => {
+    const user = userEvent.setup()
+    api.previewCleanup.mockResolvedValue(cleanupReceipt('previewed'))
+    const view = render(
+      <LogOperations operation="cleanup" query={{}} rows={[requestRow('2026-08-01T00:00:00.000100000Z')]} />
+    )
+    view.rerender(
+      <LogOperations operation="cleanup" query={{}} rows={[requestRow('2026-08-01T00:00:02.000740000Z')]} />
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Clean up logs' }))
+    await user.type(screen.getByPlaceholderText('Why are these logs being removed?'), 'retention cleanup')
+    await user.click(screen.getByRole('button', { name: 'Review deletion' }))
+
+    await waitFor(() => expect(api.previewCleanup).toHaveBeenCalledTimes(1))
+    expect(api.previewCleanup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: '2026-08-01T00:00:02.000Z',
+        to: '2026-08-01T01:00:02.001Z',
+        cutoffBefore: '2026-08-01T01:00:02.001Z'
+      })
+    )
   })
 
   it('requires a fresh deletion review after cancellation, then an explicit reasoned confirmation and restores focus', async () => {
@@ -225,11 +270,11 @@ describe('LogOperations', () => {
     await waitFor(() => expect(api.previewCleanup).toHaveBeenCalledTimes(1))
     expect(api.previewCleanup).toHaveBeenCalledWith(
       expect.objectContaining({
-        cutoffBefore: '2026-08-01T00:00:00.000Z',
+        cutoffBefore: '2026-08-01T00:00:00.001Z',
         requestLimit: 100,
         source: 'durable',
         from: '2026-07-01T00:00:00.000Z',
-        to: '2026-08-01T00:00:00.000Z',
+        to: '2026-08-01T00:00:00.001Z',
         route: 'reserve',
         model: 'Qwen/Qwen3',
         provider: 'reserve-a',

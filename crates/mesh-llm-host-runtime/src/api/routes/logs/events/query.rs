@@ -107,6 +107,27 @@ pub(in crate::api::routes::logs) struct AuditSelection {
     pub(super) severity: Option<String>,
 }
 
+impl AuditSelection {
+    pub(super) fn durable_filters(
+        &self,
+    ) -> Result<mesh_llm_log_store::AuditEntryFilters, LogsError> {
+        Ok(mesh_llm_log_store::AuditEntryFilters {
+            source: self
+                .source
+                .as_deref()
+                .map(super::super::parse::audit_source)
+                .transpose()?,
+            severity: self
+                .severity
+                .as_deref()
+                .map(super::super::parse::audit_severity)
+                .transpose()?,
+            from: None,
+            to: None,
+        })
+    }
+}
+
 fn parse_sequence(value: Option<&str>) -> Result<u64, LogsError> {
     value
         .ok_or(LogsError::InvalidCursor)?

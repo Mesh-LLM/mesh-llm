@@ -451,7 +451,7 @@ test('metadata-only export and previewed cleanup stay separated without dead-let
   await expect(cleanupDialog.getByRole('slider', { name: 'Window start' })).toBeVisible()
   await expect(cleanupDialog.getByRole('slider', { name: 'Window end' })).toBeVisible()
   await expect(
-    cleanupDialog.getByRole('button', { name: /Requests chart layer.*required for cleanup preview/ })
+    cleanupDialog.getByRole('button', { name: /Requests chart layer.*selected for cleanup preview/ })
   ).toHaveAttribute('data-state', 'on')
   await expect(
     cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ })

@@ -252,7 +252,11 @@ describe('LogEventInspector', () => {
     expect(title).toBeInTheDocument()
     expect(within(header).getByText(REQUEST_ID)).toHaveClass('break-words')
     expect(within(header).getByRole('button', { name: 'Copy Request ID' })).toBeInTheDocument()
-    expect(within(header).getByText('Completed')).toBeInTheDocument()
+    const outcome = within(header).getByText('Completed')
+    expect(outcome).toBeInTheDocument()
+    expect(title.parentElement).toHaveClass('items-start', 'pr-16', 'lg:pr-12')
+    expect(title.parentElement?.lastElementChild).toBe(outcome)
+    expect(outcome).toHaveClass('shrink-0')
     expect(within(header).getByRole('button', { name: 'Close inspector' })).toHaveFocus()
   })
 

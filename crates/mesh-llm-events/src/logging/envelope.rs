@@ -8,6 +8,141 @@ use super::events::LifecycleEvent;
 use super::identifiers::{EventId, RequestId};
 use super::replay::ReplayChannel;
 
+/// Privacy-bounded context used only when a trusted local producer renders a
+/// canonical lifecycle envelope. The context is deliberately skipped by
+/// serde: durable/replay truth remains the canonical event plus the request
+/// summary metadata, while old envelopes continue to deserialize unchanged.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CanonicalPresentationContext {
+    route: Option<String>,
+    source: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+    engine: Option<String>,
+    method: Option<String>,
+}
+
+impl CanonicalPresentationContext {
+    /// Build a local presentation context from already-classified metadata.
+    /// Route and source are closed vocabularies; free-form or path-shaped
+    /// values are discarded rather than echoed to a console.
+    pub fn from_parts(
+        route: Option<&str>,
+        source: Option<&str>,
+        model: Option<&str>,
+        provider: Option<&str>,
+        engine: Option<&str>,
+        method: Option<&str>,
+    ) -> Self {
+        Self {
+            route: route.and_then(closed_route),
+            source: source.and_then(closed_source),
+            model: model.and_then(bounded_context_value),
+            provider: provider.and_then(bounded_context_value),
+            engine: engine.and_then(bounded_context_value),
+            method: method.and_then(closed_method),
+        }
+    }
+
+    pub fn route(&self) -> Option<&str> {
+        self.route.as_deref()
+    }
+
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    pub fn provider(&self) -> Option<&str> {
+        self.provider.as_deref()
+    }
+
+    pub fn engine(&self) -> Option<&str> {
+        self.engine.as_deref()
+    }
+
+    pub fn method(&self) -> Option<&str> {
+        self.method.as_deref()
+    }
+
+    pub fn request_kind(&self) -> &'static str {
+        match self.route.as_deref() {
+            Some("health" | "healthz" | "readyz") => "probe",
+            Some("models" | "management_get_models") => "model_listing",
+            Some("chat_completions" | "completions" | "responses") => "inference",
+            Some(
+                "management_get_status"
+                | "management_get_events"
+                | "management_get_runtime_events"
+                | "management_get_other"
+                | "management_post"
+                | "management_put"
+                | "management_delete"
+                | "management_other",
+            ) => "management",
+            _ => "unknown",
+        }
+    }
+}
+
+const MAX_PRESENTATION_CONTEXT_CHARS: usize = 64;
+
+fn bounded_context_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > MAX_PRESENTATION_CONTEXT_CHARS
+        || value.starts_with('/')
+        || value.starts_with("~/")
+        || value.contains(['\\', '?'])
+        || value.contains("://")
+        || value.contains("../")
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '-' | '_' | '.' | '/' | ':' | '@' | '#' | '+')
+        })
+    {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
+fn closed_route(value: &str) -> Option<String> {
+    let value = value.trim();
+    let accepted = matches!(
+        value,
+        "health"
+            | "healthz"
+            | "readyz"
+            | "models"
+            | "chat_completions"
+            | "completions"
+            | "responses"
+            | "management_get_status"
+            | "management_get_models"
+            | "management_get_events"
+            | "management_get_runtime_events"
+            | "management_get_other"
+            | "management_post"
+            | "management_put"
+            | "management_delete"
+            | "management_other"
+    );
+    accepted.then(|| value.to_owned())
+}
+
+fn closed_source(value: &str) -> Option<String> {
+    matches!(value.trim(), "direct_http" | "mesh_forwarded" | "other")
+        .then(|| value.trim().to_owned())
+}
+
+fn closed_method(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_uppercase();
+    matches!(value.as_str(), "GET" | "POST" | "PUT" | "DELETE" | "OTHER").then_some(value)
+}
+
 /// Current canonical logging schema version. Bump on additive changes to the envelope shape.
 pub const SCHEMA_VERSION: u16 = 1;
 
@@ -125,6 +260,12 @@ pub struct CanonicalEnvelope {
     pub user_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+
+    /// Process-local projection context. It is reconstructed from trusted
+    /// request-summary metadata and intentionally does not alter the wire
+    /// schema or persistence payload.
+    #[serde(skip)]
+    pub(crate) presentation_context: Option<CanonicalPresentationContext>,
 }
 
 impl CanonicalEnvelope {
@@ -150,7 +291,19 @@ impl CanonicalEnvelope {
             account_id: None,
             user_id: None,
             role: None,
+            presentation_context: None,
         }
+    }
+
+    /// Attach bounded, process-local context for pretty/JSON/TUI output.
+    pub fn with_presentation_context(mut self, context: CanonicalPresentationContext) -> Self {
+        self.presentation_context = Some(context);
+        self
+    }
+
+    /// Return the process-local context, if a trusted producer attached it.
+    pub fn presentation_context(&self) -> Option<&CanonicalPresentationContext> {
+        self.presentation_context.as_ref()
     }
 
     /// Parse a JSON envelope while exposing unsupported schema versions as a typed error.

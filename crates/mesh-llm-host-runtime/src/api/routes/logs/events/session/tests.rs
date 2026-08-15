@@ -36,7 +36,8 @@ fn terminal_snapshots(
     after_metadata: RequestSummaryMetadata,
 ) -> RequestSummaryEventSnapshots {
     let before = summary(created_at, "active", before_metadata);
-    let after = summary(created_at, state, after_metadata);
+    let mut after = summary(created_at, state, after_metadata);
+    after.terminal_at = Some("2026-08-03T00:00:09Z".into());
     RequestSummaryEventSnapshots::terminal(&before, &after)
 }
 
@@ -317,6 +318,10 @@ fn request_filter_selects_only_the_requested_lifecycle() {
     let frames = replay_frames(&bus, &subscription, None);
     assert_eq!(frames.len(), 1);
     assert!(frames[0].contains(&wanted.as_uuid().to_string()));
+    assert!(frames[0].contains("\"request\":"));
+    assert!(frames[0].contains("\"route\":\"chat_completions\""));
+    assert!(frames[0].contains("\"model\":\"Qwen/Qwen3\""));
+    assert!(frames[0].contains("\"source\":\"active\""));
 }
 
 #[test]

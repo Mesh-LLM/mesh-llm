@@ -163,6 +163,27 @@ fn canonical_fields(envelope: &CanonicalEnvelope) -> Map<String, Value> {
         "event_id".to_string(),
         Value::String(envelope.event_id.as_uuid().to_string()),
     );
+    if !matches!(envelope.event, LifecycleEvent::AuditError { .. }) {
+        fields.insert(
+            "request_kind".to_string(),
+            Value::String(envelope.presentation_request_kind().to_string()),
+        );
+        fields.insert(
+            "source".to_string(),
+            Value::String(envelope.presentation_source().to_string()),
+        );
+        for (key, value) in [
+            ("route", envelope.presentation_route()),
+            ("model", envelope.presentation_model()),
+            ("provider", envelope.presentation_provider()),
+            ("engine", envelope.presentation_engine()),
+            ("method", envelope.presentation_method()),
+        ] {
+            if let Some(value) = value {
+                fields.insert(key.to_string(), Value::String(value.to_owned()));
+            }
+        }
+    }
     if let Some(tokens) = envelope.presentation_token_count() {
         fields.insert("tokens".to_string(), json!(tokens));
     }

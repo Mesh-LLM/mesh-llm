@@ -1,11 +1,13 @@
 import '@testing-library/jest-dom/vitest'
 
-import { act, render, renderHook, screen } from '@testing-library/react'
+import { act, render, renderHook, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ChartTooltipPayloadItem } from '@/components/ui/chart'
 import { LogRequestId } from '@/features/logs/api/ids'
 import type { LogRequest } from '@/features/logs/api/schemas'
 import { EventsOverTimeChart } from '@/features/logs/components/EventsOverTimeChart'
+import { hasVisibleEventVolumeTooltip } from '@/features/logs/components/events-over-time-chart-tooltip'
 import {
   LOG_EVENT_CATEGORIES,
   type LogEventCategory,
@@ -65,7 +67,30 @@ const EMPTY_MESSAGE = 'No selected events during the chart time range.'
 describe('EventsOverTimeChart', () => {
   beforeEach(() => {
     class ResizeObserverStub {
-      observe() {}
+      constructor(private readonly callback: ResizeObserverCallback) {}
+
+      observe(target: Element) {
+        this.callback(
+          [
+            {
+              target,
+              contentRect: {
+                width: 640,
+                height: 170,
+                top: 0,
+                right: 640,
+                bottom: 170,
+                left: 0,
+                x: 0,
+                y: 0,
+                toJSON: () => ({})
+              } as DOMRectReadOnly
+            } as ResizeObserverEntry
+          ],
+          this as unknown as ResizeObserver
+        )
+      }
+
       unobserve() {}
       disconnect() {}
     }
@@ -116,6 +141,24 @@ describe('EventsOverTimeChart', () => {
     expect(rangeSelect.value).toBe('12h')
   })
 
+  it('reports time-range changes to an owning page', async () => {
+    const user = userEvent.setup()
+    const onSelectedRangeChange = vi.fn()
+    render(
+      <EventsOverTimeChart
+        onSelectedRangeChange={onSelectedRangeChange}
+        rows={[]}
+        selectedCategories={ALL_CATEGORIES}
+        selectedRange="all"
+        now={NOW}
+      />
+    )
+
+    await user.selectOptions(screen.getByLabelText('Chart time range'), '6h')
+
+    expect(onSelectedRangeChange).toHaveBeenCalledWith('6h')
+  })
+
   it('shows the empty state when there are no rows', () => {
     render(<EventsOverTimeChart rows={[]} selectedCategories={ALL_CATEGORIES} now={NOW} />)
 
@@ -163,6 +206,32 @@ describe('EventsOverTimeChart', () => {
     expect(legend).toHaveTextContent('System1')
     expect(legend).toHaveTextContent('QUIC1')
     expect(legend).toHaveTextContent('Gossip0')
+  })
+
+  it('uses a stable, differentiated series palette and marker shapes', () => {
+    const rows = LOG_EVENT_CATEGORIES.map((category, index) =>
+      eventAt(category, iso(NOW - index * 5 * 60_000), index + 1)
+    )
+    render(<EventsOverTimeChart rows={rows} selectedCategories={ALL_CATEGORIES} now={NOW} />)
+
+    const markers = within(screen.getByRole('list', { name: 'Visible event categories' }))
+      .getAllByRole('listitem')
+      .map((item) => item.querySelector<HTMLElement>('[aria-hidden="true"]'))
+
+    expect(markers.every((marker) => marker !== null)).toBe(true)
+    expect(new Set(markers.map((marker) => marker?.getAttribute('style'))).size).toBe(5)
+    expect(new Set(markers.map((marker) => marker?.className)).size).toBe(5)
+    expect(markers.every((marker) => marker?.getAttribute('style')?.includes('var(--color-log-'))).toBe(true)
+    expect(markers.map((marker) => marker?.getAttribute('style')).join(' ')).not.toContain('var(--color-accent)')
+  })
+
+  it('suppresses zero-volume tooltip payloads while retaining populated buckets', () => {
+    const zeroBucket = { bucketStart: NOW - 60_000, bucketEnd: NOW, total: 0 }
+    const populatedBucket = { bucketStart: NOW - 60_000, bucketEnd: NOW, total: 1 }
+
+    expect(hasVisibleEventVolumeTooltip([{ payload: zeroBucket } as ChartTooltipPayloadItem])).toBe(false)
+    expect(hasVisibleEventVolumeTooltip([{ payload: populatedBucket } as ChartTooltipPayloadItem])).toBe(true)
+    expect(hasVisibleEventVolumeTooltip(undefined)).toBe(false)
   })
 
   it('removes filtered categories from the chart legend and accessible series list', () => {

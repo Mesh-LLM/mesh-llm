@@ -19,7 +19,11 @@ import { LogCleanupWindow } from '@/features/logs/components/LogCleanupWindow'
 import { LogMaintenanceReceiptDiagnostics } from '@/features/logs/components/LogMaintenanceReceiptDiagnostics'
 import { hasRetryableArtifactWork } from '@/features/logs/components/LogMaintenanceReceiptEligibility'
 import type { LogEventCategory, LogEventLedgerRow } from '@/features/logs/lib/log-event-ledger'
-import { cleanupWindowBounds, type CleanupWindow } from '@/features/logs/lib/log-cleanup-window'
+import {
+  cleanupWindowBounds,
+  cleanupWindowExclusiveEnd,
+  type CleanupWindow
+} from '@/features/logs/lib/log-cleanup-window'
 
 type ActionState = { readonly message: string; readonly tone: 'success' | 'warning' | 'error' } | undefined
 
@@ -149,7 +153,7 @@ export function LogCleanupDialog({
     try {
       const nextOperation = { operationId: newOperationId(), reason: reason.trim() }
       const from = new Date(window.start).toISOString()
-      const to = new Date(window.end).toISOString()
+      const to = cleanupWindowExclusiveEnd(window.end)
       const receipt = await new LogsApiClient().previewCleanup({
         operationId: nextOperation.operationId,
         ...cleanupScopeFromQuery(query),

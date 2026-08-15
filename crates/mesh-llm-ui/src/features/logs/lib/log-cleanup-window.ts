@@ -7,6 +7,15 @@ export type CleanupWindow = {
   readonly end: number
 }
 
+/**
+ * Browser dates retain milliseconds while durable log timestamps retain
+ * nanoseconds. Use the next millisecond as an exclusive server cutoff so every
+ * record represented by the selected final millisecond remains eligible.
+ */
+export function cleanupWindowExclusiveEnd(end: number): string {
+  return new Date(end + 1).toISOString()
+}
+
 export function cleanupWindowBounds(
   rows: readonly LogEventLedgerRow[],
   from: string | undefined,

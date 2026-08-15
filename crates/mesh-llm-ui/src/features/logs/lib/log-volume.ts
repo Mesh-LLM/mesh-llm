@@ -21,7 +21,7 @@ export const VOLUME_TIME_RANGES: readonly { value: VolumeTimeRangeKey; label: st
   { value: '12h', label: 'Last 12 hours', ms: 43_200_000 },
   { value: '24h', label: 'Last 24 hours', ms: 86_400_000 },
   { value: '7d', label: 'Last week', ms: 604_800_000 },
-  { value: 'all', label: 'All time', ms: Number.POSITIVE_INFINITY }
+  { value: 'all', label: 'Lifetime', ms: Number.POSITIVE_INFINITY }
 ]
 
 export const MAX_VOLUME_BUCKETS = 480

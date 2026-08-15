@@ -9,12 +9,13 @@ import {
   type LogRequestDetailTabInput
 } from '@/features/logs/lib/log-inspector'
 // Time presets replace raw RFC 3339 inputs per shape plan.
-export type RelativeTimePreset = '1h' | '6h' | '24h' | '7d' | ''
+export type RelativeTimePreset = '1h' | '6h' | '12h' | '24h' | '7d' | ''
 
 export const RELATIVE_TIME_PRESETS: readonly { value: RelativeTimePreset; label: string }[] = [
-  { value: '', label: 'All time' },
+  { value: '', label: 'Lifetime' },
   { value: '1h', label: 'Last hour' },
   { value: '6h', label: 'Last 6 hours' },
+  { value: '12h', label: 'Last 12 hours' },
   { value: '24h', label: 'Last 24 hours' },
   { value: '7d', label: 'Last week' }
 ]
@@ -28,6 +29,7 @@ export function resolveRelativeTime(
   const durationMs: Record<Exclude<RelativeTimePreset, ''>, number> = {
     '1h': hourMs,
     '6h': 6 * hourMs,
+    '12h': 12 * hourMs,
     '24h': 24 * hourMs,
     '7d': 7 * 24 * hourMs
   }

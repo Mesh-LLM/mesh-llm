@@ -231,7 +231,9 @@ fn capture_path_for_request(request: &BufferedHttpRequest) -> &str {
 
 fn attach_request_logging(request: &mut BufferedHttpRequest) -> OpenAiLifecycleAttachment {
     let metadata =
-        crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path);
+        crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path)
+            .with_source(Some("mesh_forwarded"))
+            .with_method(Some(&request.method));
     let lifecycle = crate::logging_runtime_state()
         .map(|state| state.openai_ingress_attachment(request.request_id, metadata))
         .unwrap_or_else(OpenAiLifecycleAttachment::unowned);

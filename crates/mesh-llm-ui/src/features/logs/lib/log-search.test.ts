@@ -69,6 +69,9 @@ describe('logs ledger URL search', () => {
       expect(diffDays).toBeCloseTo(7, 1)
     }
 
+    const bounds12h = resolveRelativeTime('12h', NOW_MS)
+    expect(bounds12h?.from).toBe(new Date(NOW_MS - 12 * 3_600_000).toISOString())
+
     expect(resolveRelativeTime('', NOW_MS)).toBeUndefined()
   })
 

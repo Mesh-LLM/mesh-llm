@@ -77,8 +77,15 @@ function formatWindowInstant(value: number) {
   }).format(value)
 }
 
-function categoryDescription(category: LogEventCategory, count: number) {
-  const disposition = category === 'requests' ? 'required for cleanup preview' : 'retained during cleanup'
+function categoryDescription(category: LogEventCategory, count: number, selected: boolean) {
+  const disposition =
+    category === 'requests'
+      ? selected
+        ? 'selected for cleanup preview'
+        : 'not selected for cleanup preview'
+      : selected
+        ? 'shown in chart and retained during cleanup'
+        : 'hidden from chart and retained during cleanup'
   return `${categoryLabels[category]} chart layer, ${count} loaded ${count === 1 ? 'event' : 'events'}, ${disposition}`
 }
 
@@ -96,6 +103,7 @@ export function LogCleanupWindow({
     (category) => category !== 'iroh' || options.some((option) => option.value === 'iroh')
   )
   const selectedCategories = new Set(categories)
+  const windowRows = rowsInCleanupWindow(rows, window, new Set(LOG_EVENT_CATEGORIES))
   const selectedRows = rowsInCleanupWindow(rows, window, selectedCategories)
   const requestCount = selectedRows.filter((row) => row.category === 'requests').length
   const buckets = cleanupBuckets(rows, bounds)
@@ -179,25 +187,22 @@ export function LogCleanupWindow({
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="type-panel-title text-foreground">Chart layers</h3>
           <span className="type-caption text-fg-dim" role="status">
-            {selectedRows.length} loaded in window
+            {windowRows.length} loaded in window
           </span>
         </div>
         <ToggleGroup
           aria-label="Log categories shown in the chart"
           className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4"
-          onValueChange={(values) =>
-            onCategoriesChange([...new Set<LogEventCategory>(['requests', ...(values as LogEventCategory[])])])
-          }
+          onValueChange={(values) => onCategoriesChange(values as LogEventCategory[])}
           type="multiple"
           value={[...categories]}
         >
           {optionCategories.map((category) => {
-            const count = selectedRows.filter((row) => row.category === category).length
+            const count = windowRows.filter((row) => row.category === category).length
             return (
               <ToggleGroupItem
-                aria-label={categoryDescription(category, count)}
-                className="ui-control h-auto min-h-11 justify-between gap-2 rounded-[var(--radius)] px-2.5 py-2 text-left disabled:cursor-default disabled:opacity-100 data-[state=on]:border-accent data-[state=on]:bg-[color:color-mix(in_oklab,var(--color-accent)_9%,var(--color-panel-strong))] data-[state=on]:text-foreground data-[state=on]:shadow-none"
-                disabled={category === 'requests'}
+                aria-label={categoryDescription(category, count, selectedCategories.has(category))}
+                className="ui-control h-auto min-h-11 justify-between gap-2 rounded-[var(--radius)] px-2.5 py-2 text-left data-[state=on]:border-accent data-[state=on]:bg-[color:color-mix(in_oklab,var(--color-accent)_9%,var(--color-panel-strong))] data-[state=on]:text-foreground data-[state=on]:shadow-none"
                 key={category}
                 value={category}
               >
@@ -211,7 +216,11 @@ export function LogCleanupWindow({
                     {categoryLabels[category]}
                   </span>
                   <span className="mt-0.5 block type-annotation text-fg-faint">
-                    {category === 'requests' ? 'Removable' : 'Retained'}
+                    {category === 'requests'
+                      ? selectedCategories.has(category)
+                        ? 'Selected for removal'
+                        : 'Not selected'
+                      : 'Chart only · retained'}
                   </span>
                 </span>
                 <span className="font-mono text-[length:var(--density-type-caption)] tabular-nums">{count}</span>
@@ -227,7 +236,8 @@ export function LogCleanupWindow({
           </p>
         </div>
         <p className="mt-2 type-caption text-fg-dim">
-          Request history stays visible for cleanup preview. Toggle the retained operational layers to change the chart.
+          Select Requests to include terminal request history in the cleanup preview. Operational layers only change the
+          chart and stay retained.
         </p>
         <span className="sr-only" aria-live="polite">
           {selectedSummary}

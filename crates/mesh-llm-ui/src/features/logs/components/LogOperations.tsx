@@ -28,6 +28,12 @@ type LogOperationsProps = {
   readonly selectedCategories?: ReadonlySet<LogEventCategory>
 }
 
+type CleanupSnapshot = {
+  readonly generation: number
+  readonly rows: readonly LogEventLedgerRow[]
+  readonly selectedCategories: ReadonlySet<LogEventCategory>
+}
+
 const DEFAULT_CLEANUP_CATEGORIES = new Set<LogEventCategory>(['requests', 'system', 'quic', 'gossip'])
 
 function isReasonValid(reason: string) {
@@ -157,6 +163,7 @@ export function LogOperations({
   selectedCategories = DEFAULT_CLEANUP_CATEGORIES
 }: LogOperationsProps) {
   const [open, setOpen] = useState(false)
+  const [cleanupSnapshot, setCleanupSnapshot] = useState<CleanupSnapshot>()
   const triggerRef = useRef<HTMLButtonElement | null>(null)
 
   switch (operation) {
@@ -181,14 +188,22 @@ export function LogOperations({
           <ExportDialog open={open} onOpenChange={setOpen} query={query} returnFocusRef={triggerRef} />
         </div>
       )
-    case 'cleanup':
+    case 'cleanup': {
+      const snapshot = cleanupSnapshot ?? { generation: 0, rows, selectedCategories }
       return (
         <div className="flex flex-wrap items-center gap-2">
           <Button
             ref={triggerRef}
             className="ui-control-destructive h-8 gap-1.5 rounded-[var(--radius)] px-2.5 text-[length:var(--density-type-caption)]"
             disabled={!supportsCleanup(query)}
-            onClick={() => setOpen(true)}
+            onClick={() => {
+              setCleanupSnapshot({
+                generation: Date.now(),
+                rows: [...rows],
+                selectedCategories: new Set(selectedCategories)
+              })
+              setOpen(true)
+            }}
             size="sm"
             type="button"
             variant="outline"
@@ -202,16 +217,20 @@ export function LogOperations({
             </span>
           ) : null}
           <LogCleanupDialog
-            key={`${query.from ?? ''}:${query.to ?? ''}:${[...selectedCategories].join(',')}`}
+            key={`${query.from ?? ''}:${query.to ?? ''}:${[...snapshot.selectedCategories].join(',')}:${snapshot.generation}`}
             open={open}
             onMaintenanceMutationSucceeded={onMaintenanceMutationSucceeded}
-            onOpenChange={setOpen}
+            onOpenChange={(nextOpen) => {
+              setOpen(nextOpen)
+              if (!nextOpen) setCleanupSnapshot(undefined)
+            }}
             query={query}
             returnFocusRef={triggerRef}
-            rows={rows}
-            initialCategories={selectedCategories}
+            rows={snapshot.rows}
+            initialCategories={snapshot.selectedCategories}
           />
         </div>
       )
+    }
   }
 }

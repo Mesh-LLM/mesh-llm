@@ -242,11 +242,14 @@ async fn handle_event_stream(
         return LogsError::unavailable(&state).write(stream).await;
     };
     let recovery_cursor = if subscription.is_audit() {
-        audit_recovery_cursor(&state).await
+        None
     } else {
         event_recovery_cursor(&state).await
     };
-    events::stream(stream, subscription, bus, recovery_cursor).await
+    let Some(query_facade) = state.query_facade() else {
+        return LogsError::unavailable(&state).write(stream).await;
+    };
+    events::stream(stream, subscription, bus, query_facade, recovery_cursor).await
 }
 
 /// A replay gap always points to the durable request listing. Its cursor is a
@@ -261,24 +264,6 @@ async fn event_recovery_cursor(state: &LoggingRuntimeState) -> Option<String> {
     Some(mesh_llm_log_store::encode_cursor(
         newest.created_at(),
         newest.request_id(),
-    ))
-}
-
-/// Best-effort recovery cursor for audit SSE. Points at the newest audit row
-/// so a reconnect can resume from the durable boundary.
-async fn audit_recovery_cursor(state: &LoggingRuntimeState) -> Option<String> {
-    let facade = state.query_facade()?;
-    let page = facade
-        .audit_entries(
-            Some(1),
-            None,
-            mesh_llm_log_store::AuditEntryFilters::default(),
-        )
-        .ok()?;
-    let newest = page.items.first()?;
-    Some(mesh_llm_log_store::encode_cursor(
-        &newest.occurred_at,
-        &newest.entry_id,
     ))
 }
 

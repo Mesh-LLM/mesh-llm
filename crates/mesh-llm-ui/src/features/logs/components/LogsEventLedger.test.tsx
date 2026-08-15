@@ -204,7 +204,7 @@ describe('unified logs event ledger', () => {
     expect(screen.getByRole('table', { name: 'MeshLLM event logs' })).toHaveTextContent(expectedRowText)
   })
 
-  it('omits source-history controls while keeping loaded-row pagination usable', async () => {
+  it('omits source-history controls and paginates loaded rows at page level', async () => {
     const user = userEvent.setup()
     auditQuery.current = supported(
       Array.from({ length: 20 }, (_, index): LogAuditEntry => ({
@@ -230,23 +230,35 @@ describe('unified logs event ledger', () => {
     }
 
     const table = screen.getByRole('table', { name: 'MeshLLM event logs' })
-    const loadedRows = screen.getByRole('navigation', { name: 'Loaded event rows' })
-    expect(loadedRows).toBeVisible()
-    expect(within(loadedRows).getByText('Page 1 of 2')).toBeVisible()
     expect(within(table).queryByText(REQUEST_ID)).not.toBeInTheDocument()
+    expect(within(table).getAllByRole('row', { name: /Inspect operational event runtime_event_/ })).toHaveLength(20)
+    expect(screen.getByRole('combobox', { name: 'Rows per page' })).toHaveValue('20')
+    expect(screen.getByText('Page 1 of 2')).toBeVisible()
+    const pagination = screen.getByRole('navigation', { name: 'Loaded event rows' })
+    await user.click(within(pagination).getByRole('button', { name: 'Go to next page' }))
 
-    await user.click(within(loadedRows).getByRole('button', { name: 'Go to next page' }))
-
-    expect(within(screen.getByRole('table', { name: 'MeshLLM event logs' })).getByText(REQUEST_ID)).toBeVisible()
+    expect(within(table).getByText(REQUEST_ID)).toBeVisible()
+    expect(
+      within(table).queryByRole('row', { name: /Inspect operational event runtime_event_/ })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('Page 2 of 2')).toBeVisible()
   })
 
   it('makes the horizontally scrollable event columns keyboard reachable', () => {
     render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({})} />)
 
-    expect(screen.getByRole('region', { name: 'Scrollable event columns' })).toHaveAttribute('tabindex', '0')
+    const region = screen.getByRole('region', { name: 'Scrollable event columns' })
+    expect(region).toHaveAttribute('tabindex', '0')
+    expect(region).toHaveClass('overflow-x-auto')
+    expect(region).not.toHaveClass('overflow-y-auto')
+    expect(region).not.toHaveClass('max-h-[71rem]')
+    expect(region.querySelector('[data-radix-scroll-area-viewport]')).not.toBeInTheDocument()
+    const table = screen.getByRole('table', { name: 'MeshLLM event logs' })
+    expect(table.parentElement).toHaveClass('overflow-visible')
+    expect(table.parentElement).not.toHaveClass('overflow-auto')
   })
 
-  it('hides loaded-row pagination when filters yield no rows', () => {
+  it('keeps the no-match table state free of pagination controls', () => {
     render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({ categories: 'none' })} />)
 
     expect(screen.getByText('No events match this loaded window.')).toBeVisible()
