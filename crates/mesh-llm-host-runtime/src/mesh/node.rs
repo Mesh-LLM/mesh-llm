@@ -1484,16 +1484,14 @@ impl Node {
         if rtt_ms == 0 {
             return;
         }
-        let (updated_peer, old_rtt) = {
+        let updated_peer = {
             let mut state = self.state.lock().await;
             if let Some(peer) = state.peers.get_mut(&id) {
                 let prev = peer.rtt_ms;
-                // Only accept equal-or-lower RTT. Gossip round-trip timing
-                // can inflate the value when routed via relay, overwriting a
-                // good direct-path measurement. The RTT gate only cares about
-                // "fast enough for split", so keeping the best-seen value is
-                // correct — if the path truly degrades the peer will be
-                // unreachable and removed via the normal liveness path.
+                // Only accept equal-or-lower RTT for planner preference and display.
+                // Gossip round-trip timing can inflate the value when routed via
+                // relay, overwriting a better path measurement. Liveness remains
+                // responsible for detecting an unreachable peer.
                 if prev.is_some_and(|p| rtt_ms > p) {
                     // Store display_rtt regardless (for UI refresh), but don't update best RTT.
                     peer.display_rtt = Some(DirectLatencyObservation {
@@ -1507,29 +1505,13 @@ impl Node {
                     rtt_ms,
                     observed_at: std::time::Instant::now(),
                 });
-                (Some(peer.clone()), prev)
+                Some(peer.clone())
             } else {
-                (None, None)
+                None
             }
         };
         if let Some(peer) = updated_peer {
             tracing::info!("Peer {} RTT: {}ms", id.fmt_short(), rtt_ms);
-            // If RTT dropped from above the configured split threshold to below it
-            // (e.g. relay → direct), trigger a re-election so the peer can now
-            // be included in split mode.
-            let became_split_eligible = old_rtt
-                .map(|old| old > max_split_rtt_ms() && rtt_ms <= max_split_rtt_ms())
-                .unwrap_or(rtt_ms <= max_split_rtt_ms());
-            if became_split_eligible {
-                emit_mesh_info(format!(
-                    "📡 Peer {} RTT improved ({}ms → {}ms) — re-electing for split",
-                    id.fmt_short(),
-                    old_rtt.unwrap_or(0),
-                    rtt_ms
-                ));
-                let count = self.state.lock().await.peers.len();
-                let _ = self.peer_change_tx.send(count);
-            }
             self.emit_plugin_mesh_event(
                 crate::plugin::proto::mesh_event::Kind::PeerUpdated,
                 Some(&peer),
@@ -1767,78 +1749,5 @@ impl Node {
 
     pub async fn explicit_model_interests(&self) -> Vec<String> {
         self.explicit_model_interests.lock().await.clone()
-    }
-}
-
-#[cfg(test)]
-mod node_tests {
-    use super::*;
-
-    fn test_peer_announcement(addr: EndpointAddr) -> PeerAnnouncement {
-        PeerAnnouncement {
-            addr,
-            role: NodeRole::Worker,
-            first_joined_mesh_ts: None,
-            models: Vec::new(),
-            vram_bytes: 0,
-            model_source: None,
-            serving_models: Vec::new(),
-            hosted_models: None,
-            available_models: Vec::new(),
-            requested_models: Vec::new(),
-            explicit_model_interests: Vec::new(),
-            version: None,
-            model_demand: HashMap::new(),
-            mesh_id: None,
-            mesh_policy_hash: None,
-            gpu_name: None,
-            hostname: None,
-            is_soc: None,
-            gpu_vram: None,
-            gpu_reserved_bytes: None,
-            gpu_mem_bandwidth_gbps: None,
-            gpu_compute_tflops_fp32: None,
-            gpu_compute_tflops_fp16: None,
-            available_model_metadata: Vec::new(),
-            experts_summary: None,
-            available_model_sizes: HashMap::new(),
-            served_model_descriptors: Vec::new(),
-            served_model_runtime: Vec::new(),
-            owner_attestation: None,
-            genesis_policy: None,
-            release_attestation: None,
-            direct_admission_proof: None,
-            artifact_transfer_supported: false,
-            stage_protocol_generation_supported: false,
-            stage_status_list_supported: false,
-            advertised_model_throughput: Vec::new(),
-            latency_ms: None,
-            latency_source: None,
-            latency_age_ms: None,
-            latency_observer_id: None,
-            inference_admission_state: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn update_peer_rtt_notifies_when_first_sample_is_split_eligible() {
-        let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
-        let peer_node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
-        let peer_id = peer_node.id();
-        let peer = PeerInfo::from_announcement(
-            peer_id,
-            peer_node.endpoint_addr_for_advertisement(),
-            &test_peer_announcement(peer_node.endpoint_addr_for_advertisement()),
-            OwnershipSummary::default(),
-        );
-        node.insert_test_peer(peer).await;
-
-        let mut peer_changes = node.peer_change_rx.clone();
-        node.update_peer_rtt(peer_id, MAX_SPLIT_RTT_MS).await;
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), peer_changes.changed())
-            .await
-            .expect("first split-eligible RTT should notify election watchers")
-            .expect("peer change channel should stay open");
     }
 }

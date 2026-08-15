@@ -66,23 +66,6 @@ pub(crate) enum SplitStagePathKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SplitStagePathRejection {
-    MissingStagePath,
-    StagePathRelayOnly,
-    StagePathTooSlow,
-}
-
-impl SplitStagePathRejection {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::MissingStagePath => "missing_stage_path",
-            Self::StagePathRelayOnly => "stage_path_relay_only",
-            Self::StagePathTooSlow => "stage_path_too_slow",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SplitStagePathSnapshot {
     pub(crate) kind: SplitStagePathKind,
     pub(crate) rtt_ms: Option<u32>,
@@ -126,24 +109,6 @@ impl SplitStagePathSnapshot {
                 split_stage_path_snapshot_from_observation(observation)
             }
             _ => self,
-        }
-    }
-
-    pub(crate) fn stage_path_rejection(self) -> Option<SplitStagePathRejection> {
-        match self.kind {
-            SplitStagePathKind::Direct => match self.rtt_ms {
-                Some(rtt_ms) if rtt_ms <= super::max_split_rtt_ms() => None,
-                Some(_) => Some(SplitStagePathRejection::StagePathTooSlow),
-                None => Some(SplitStagePathRejection::MissingStagePath),
-            },
-            SplitStagePathKind::Relay => {
-                if super::split_allow_relay_paths() {
-                    None
-                } else {
-                    Some(SplitStagePathRejection::StagePathRelayOnly)
-                }
-            }
-            SplitStagePathKind::Unknown => Some(SplitStagePathRejection::MissingStagePath),
         }
     }
 }
@@ -194,19 +159,6 @@ pub(crate) fn split_stage_path_snapshot_from_connection(
         return SplitStagePathSnapshot::unknown();
     };
     split_stage_path_snapshot_from_observation(observation)
-}
-
-pub(crate) fn stage_transport_path_rejection(
-    conn: &Connection,
-    stream_type: u8,
-    fallback: Option<SelectedPathObservation>,
-) -> Option<SplitStagePathRejection> {
-    if stream_type != skippy_protocol::STAGE_STREAM_TRANSPORT {
-        return None;
-    }
-    split_stage_path_snapshot_from_connection(conn)
-        .with_peer_path_fallback(fallback)
-        .stage_path_rejection()
 }
 
 pub(crate) fn endpoint_id_capture_fields(id: EndpointId) -> serde_json::Value {
@@ -1052,33 +1004,6 @@ impl Node {
         skippy_protocol::validate_stage_transport_open(&open)
             .map_err(|e| anyhow::anyhow!("StageTransportOpen validation error: {e}"))?;
         let conn = self.stage_connection_to_peer(peer_id).await?;
-        // Do NOT re-apply the formation-time RTT/path eligibility ceiling
-        // (MAX_SPLIT_RTT_MS) to operational streams here. This function only runs
-        // from the post-formation stage-transport bridge, and split admission
-        // already gates path eligibility using gossiped, hysteresis-smoothed peer
-        // RTT plus re-election (see api/split_readiness.rs and node RTT handling).
-        //
-        // Re-checking the *instantaneous* per-connection RTT snapshot on every
-        // fresh stream caused transient failures under normal WAN jitter: pooled
-        // forward lanes (opened once at low RTT and reused) kept working, while
-        // per-request direct-prediction-return sinks — which open a fresh bridge
-        // stream each request — were rejected whenever the snapshot briefly read
-        // above the ceiling. That aborted the bridge task, dropped the accepted
-        // return-sink TCP connection, and surfaced as a ready-handshake timeout on
-        // stage 0, degrading/​502-ing an already-admitted split. A transiently slow
-        // or relay path still *works* (just slower); sustained degradation is
-        // handled by re-election, not by killing individual operational streams.
-        if let Some(rejection) = split_stage_path_snapshot_from_connection(&conn)
-            .with_peer_path_fallback(self.peer_stage_path_fallback(peer_id).await)
-            .stage_path_rejection()
-        {
-            tracing::warn!(
-                "stage transport path to {} reports {} on a formed split; proceeding \
-                 (operational streams tolerate transient path degradation)",
-                peer_id.fmt_short(),
-                rejection.as_str()
-            );
-        }
         let (mut send, recv) = conn.open_bi().await?;
         send.write_all(&[skippy_protocol::STAGE_STREAM_TRANSPORT])
             .await?;
@@ -1314,19 +1239,6 @@ impl Node {
                 return StageStreamAccept::Continue;
             }
         };
-        if let Some(rejection) = stage_transport_path_rejection(
-            conn,
-            stream_type,
-            self.peer_stage_path_fallback(remote).await,
-        ) {
-            tracing::warn!(
-                "Rejected skippy stage transport stream from {}: {}",
-                remote.fmt_short(),
-                rejection.as_str()
-            );
-            drop((send, recv));
-            return StageStreamAccept::Continue;
-        }
         StageStreamAccept::Dispatch((send, recv), stream_type)
     }
 }
