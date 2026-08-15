@@ -331,9 +331,41 @@ impl StageOpenAiBackend {
         let mut decoded_prefill_suffix = false;
         if restored_prefill_tokens < prefill_tokens.len() {
             decoded_prefill_suffix = true;
-            runtime
-                .prefill(session_id, &prefill_tokens[restored_prefill_tokens..])
-                .map_err(openai_backend_error)?;
+            if let Some(kv) = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state()) {
+                // Recurrent and full-state payloads cannot reconstruct a shorter
+                // shared prefix from the state at the end of the request. Stop
+                // at the near-tail grid boundary while prefilling and snapshot
+                // native state there; the final exact state is recorded by
+                // `record_and_evict_kv` below. One checkpoint bounds both the
+                // extra prefill split and the very large recurrent-state export.
+                let base = self.local_kv_message_base(session_id, request.ids);
+                let checkpoint =
+                    kv.exact_shared_checkpoint_identity(&self.config, &base, 0, prefill_tokens);
+                if let Some(identity) = checkpoint.filter(|identity| {
+                    identity.identity.token_count as usize > restored_prefill_tokens
+                }) {
+                    let boundary = identity.identity.token_count as usize;
+                    runtime
+                        .prefill(
+                            session_id,
+                            &prefill_tokens[restored_prefill_tokens..boundary],
+                        )
+                        .map_err(openai_backend_error)?;
+                    kv.record_exact_state(&mut runtime, session_id, &identity)
+                        .map_err(openai_backend_error)?;
+                    runtime
+                        .prefill(session_id, &prefill_tokens[boundary..])
+                        .map_err(openai_backend_error)?;
+                } else {
+                    runtime
+                        .prefill(session_id, &prefill_tokens[restored_prefill_tokens..])
+                        .map_err(openai_backend_error)?;
+                }
+            } else {
+                runtime
+                    .prefill(session_id, &prefill_tokens[restored_prefill_tokens..])
+                    .map_err(openai_backend_error)?;
+            }
         }
         cache_stats.matched_prefix_tokens = saturating_u32(restored_prefill_tokens);
         cache_stats.suffix_prefill_tokens =

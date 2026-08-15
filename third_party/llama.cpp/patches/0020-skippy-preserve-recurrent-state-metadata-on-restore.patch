@@ -1,4 +1,4 @@
-From 11f7f23fd34d9076572e19128dd70cba1f2d7af6 Mon Sep 17 00:00:00 2001
+From 80d9f9bfdebc46d6e58213871b9d30d7096768e6 Mon Sep 17 00:00:00 2001
 From: Jimmy
  <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 Date: Sat, 15 Aug 2026 15:06:25 +1000
@@ -7,12 +7,27 @@ Subject: [PATCH] skippy: preserve recurrent state metadata on restore
 Co-authored-by: Jimmy <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 Signed-off-by: Jimmy <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 ---
+ src/llama-kv-cache.cpp                        |   2 +-
  src/skippy/state.cpp                          |  16 +-
  tests/CMakeLists.txt                          |   1 +
+ tests/test-skippy-kv-page-export.cpp          |   8 +-
  .../test-skippy-recurrent-state-roundtrip.cpp | 159 ++++++++++++++++++
- 3 files changed, 163 insertions(+), 13 deletions(-)
+ 5 files changed, 169 insertions(+), 17 deletions(-)
  create mode 100644 tests/test-skippy-recurrent-state-roundtrip.cpp
 
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 190c6aff9..9af3c442e 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1663,7 +1663,7 @@ bool llama_kv_cache::stage_import_kv_page(
+     }
+     if (desc.layer_start < 0 ||
+             desc.layer_end <= desc.layer_start ||
+-            static_cast<uint32_t>(desc.layer_end) > hparams.n_layer() ||
++            static_cast<uint32_t>(desc.layer_end) > hparams.n_layer_all ||
+             desc.token_count == 0) {
+         error = "invalid native KV page descriptor";
+         return false;
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 index a70701844..a5ab006aa 100644
 --- a/src/skippy/state.cpp
@@ -57,6 +72,43 @@ index 6aa8e347a..2bd82bf8b 100644
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
      llama_build_and_test(test-sampling.cpp)
      llama_build_and_test(test-reasoning-budget.cpp)
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+index 82075076c..96937c8dc 100644
+--- a/tests/test-skippy-kv-page-export.cpp
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -16,7 +16,8 @@ int main() {
+         return 1;
+     }
+     llama_hparams hparams = {};
+-    hparams.n_layer_all = 1;
++    hparams.n_layer_all = 2;
++    hparams.n_layer_nextn = 1;
+     hparams.n_embd_head_k_full = 4;
+     hparams.n_embd_head_v_full = 4;
+     hparams.n_embd_head_k_swa = 4;
+@@ -40,7 +41,7 @@ int main() {
+             0,
+             LLAMA_SWA_TYPE_NONE,
+             nullptr,
+-            {},
++            [](int32_t il) { return il == 0; },
+             {},
+             {});
+ 
+@@ -122,11 +123,12 @@ int main() {
+             0,
+             LLAMA_SWA_TYPE_NONE,
+             nullptr,
+-            {},
++            [](int32_t il) { return il == 0; },
+             {},
+             {});
+     restore_kv.apply_ubatch(slot, ubatch);
+ 
++    desc.layer_end = 2;
+     if (!restore_kv.stage_import_kv_page(
+                 0,
+                 desc,
 diff --git a/tests/test-skippy-recurrent-state-roundtrip.cpp b/tests/test-skippy-recurrent-state-roundtrip.cpp
 new file mode 100644
 index 000000000..9ef80a6ce
