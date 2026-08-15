@@ -184,6 +184,39 @@ mod tests {
     }
 
     #[test]
+    fn chat_completion_json_normalizer_preserves_skippy_assigned_tool_call_ids() {
+        // skippy-server now assigns `call_<uuid>` before the body reaches the
+        // proxy. The front door must pass those through untouched rather than
+        // rewriting them to `call_mesh_*`, so a client that already saw the id
+        // in a streamed chunk can still pair its tool result.
+        let body = br#"{"id":"chatcmpl-a","object":"chat.completion","choices":[{"message":{"tool_calls":[{"id":"call_d3af7876d2c44ea19baff5339fb53b1b","type":"function","function":{"name":"read_file","arguments":"{}"}}]}}]}"#;
+        let normalized = normalize_chat_completion_json_body(body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&normalized).unwrap();
+
+        assert_eq!(
+            parsed["choices"][0]["message"]["tool_calls"][0]["id"],
+            "call_d3af7876d2c44ea19baff5339fb53b1b"
+        );
+    }
+
+    #[test]
+    fn chat_stream_normalizer_preserves_skippy_assigned_tool_call_ids() {
+        let mut state = ChatStreamNormalizationState {
+            synthetic_seed: Some(42),
+            ..Default::default()
+        };
+        let normalized = state.normalize_data(
+            r#"{"id":"chatcmpl-a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_d3af7876d2c44ea19baff5339fb53b1b","type":"function","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":null}]}"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&normalized).unwrap();
+
+        assert_eq!(
+            parsed["choices"][0]["delta"]["tool_calls"][0]["id"],
+            "call_d3af7876d2c44ea19baff5339fb53b1b"
+        );
+    }
+
+    #[test]
     fn chat_completion_json_normalizer_keeps_ids_unique_across_choices() {
         let body = br#"{"id":"chatcmpl-a","object":"chat.completion","choices":[{"message":{"tool_calls":[{"type":"function","function":{"name":"first","arguments":"{}"}},{"type":"function","function":{"name":"second","arguments":"{}"}}]}},{"message":{"tool_calls":[{"type":"function","function":{"name":"third","arguments":"{}"}}]}}]}"#;
         let normalized = normalize_chat_completion_json_body(body).unwrap();
