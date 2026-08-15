@@ -16,8 +16,7 @@ use crate::worker::{self, WorkerRole};
 use crate::{
     ForcedToolChoice, GatewayConfig, MOA_ERR_ALL_REDUCERS_FAILED, ReferencePolicy, TurnKind,
     TurnResult, WorkerSummary, chat_response, enforce_tool_call_contract, error_response,
-    fallback_worker_response, selected_tool_names_for_turn, tool_call_response,
-    tool_proposal_response,
+    fallback_worker_response, tool_call_response, tool_names_for_turn, tool_proposal_response,
 };
 use serde_json::Value;
 use std::time::Instant;
@@ -51,7 +50,10 @@ pub(crate) async fn handle_tool_query(
         (Vec::new(), Vec::new())
     };
 
-    let selected = selected_tool_names_for_turn(session, allowed_tools);
+    let selected = forced_tool.map_or_else(
+        || tool_names_for_turn(session, allowed_tools),
+        |tool| vec![tool.name.clone()],
+    );
     let (messages, tools) = context::pack_for_actor(session, &references, true, &selected);
 
     let hedge = hedged_reducer_call(

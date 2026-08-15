@@ -344,7 +344,7 @@ async fn handle_query(
     let selected_tool_names = if let Some(tool) = forced_tool {
         vec![tool.name.clone()]
     } else if query_uses_tools {
-        selected_tool_names_for_turn(session, allowed_tools)
+        tool_names_for_turn(session, allowed_tools)
     } else {
         Vec::new()
     };
@@ -641,210 +641,16 @@ fn looks_like_tool_intent(text: &str) -> bool {
         .any(|phrase| text.contains(phrase))
 }
 
-pub(crate) fn selected_tool_names_for_turn(
-    session: &Session,
-    allowed_tools: &[String],
-) -> Vec<String> {
-    let available = if allowed_tools.is_empty() {
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+pub(crate) fn tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> Vec<String> {
+    if allowed_tools.is_empty() {
         session.tool_names()
     } else {
         allowed_tools.to_vec()
-    };
-    if available.is_empty() {
-        return Vec::new();
     }
-
-    let text = session.last_user_text().to_ascii_lowercase();
-    let explicit = explicitly_requested_tool_names(&available, &text);
-    if !explicit.is_empty() {
-        return with_recent_tool_chain_names(session, &available, explicit);
-    }
-
-    let mut selected = Vec::new();
-    for tool in &available {
-        let tool_lc = tool.to_ascii_lowercase();
-        if tool_is_relevant_to_text(&tool_lc, &text) {
-            selected.push(tool.clone());
-        }
-    }
-
-    with_recent_tool_chain_names(session, &available, selected)
-}
-
-fn with_recent_tool_chain_names(
-    session: &Session,
-    available: &[String],
-    mut selected: Vec<String>,
-) -> Vec<String> {
-    for tool in recent_tool_chain_names(session) {
-        if available.iter().any(|available| available == &tool) && !selected.contains(&tool) {
-            selected.push(tool);
-        }
-    }
-
-    if selected.is_empty() && available.len() == 1 {
-        available.to_vec()
-    } else {
-        selected
-    }
-}
-
-fn explicitly_requested_tool_names(available: &[String], text: &str) -> Vec<String> {
-    available
-        .iter()
-        .filter(|tool| tool_name_is_explicitly_requested(&tool.to_ascii_lowercase(), text))
-        .cloned()
-        .collect()
-}
-
-fn tool_name_is_explicitly_requested(tool: &str, text: &str) -> bool {
-    if tool.len() < 3 {
-        return false;
-    }
-
-    let spaced = tool.replace('_', " ");
-    let patterns = [
-        format!("use {tool}"),
-        format!("use the {tool}"),
-        format!("{tool} tool"),
-        format!("tool {tool}"),
-        format!("call {tool}"),
-        format!("call the {tool}"),
-        format!("use {spaced}"),
-        format!("use the {spaced}"),
-        format!("{spaced} tool"),
-        format!("tool {spaced}"),
-        format!("call {spaced}"),
-        format!("call the {spaced}"),
-    ];
-
-    patterns.iter().any(|pattern| text.contains(pattern))
-}
-
-fn recent_tool_chain_names(session: &Session) -> Vec<String> {
-    let all = session.all_messages();
-    let Some(latest_tool_idx) = all.iter().rposition(|msg| message_role(msg) == "tool") else {
-        return Vec::new();
-    };
-    let start_idx = all[..=latest_tool_idx]
-        .iter()
-        .rposition(|msg| message_role(msg) == "user")
-        .unwrap_or(0);
-
-    let mut names = Vec::new();
-    for msg in &all[start_idx..=latest_tool_idx] {
-        let Some(tool_calls) = msg.get("tool_calls").and_then(Value::as_array) else {
-            continue;
-        };
-        for tool_call in tool_calls {
-            let Some(name) = tool_call
-                .pointer("/function/name")
-                .and_then(Value::as_str)
-                .filter(|name| !name.is_empty())
-            else {
-                continue;
-            };
-            if !names.iter().any(|existing| existing == name) {
-                names.push(name.to_string());
-            }
-        }
-    }
-
-    names
-}
-
-fn message_role(msg: &Value) -> &str {
-    msg.get("role").and_then(Value::as_str).unwrap_or("")
-}
-
-fn tool_is_relevant_to_text(tool_name: &str, text: &str) -> bool {
-    if text.contains(tool_name) {
-        return true;
-    }
-
-    match tool_name {
-        "read" | "read_file" | "file_fetch" => contains_any(
-            text,
-            &["read ", "open ", "inspect ", "fetch file", "show file"],
-        ),
-        "edit" | "edit_file" | "file_write" | "write" => contains_any(
-            text,
-            &[
-                "edit ",
-                "change ",
-                "modify ",
-                "write ",
-                "create ",
-                "implement ",
-                "coding",
-                "fix ",
-            ],
-        ),
-        "exec" | "run_command" | "process" => contains_any(
-            text,
-            &[
-                "run ", "execute ", "shell", "terminal", "command", "process",
-            ],
-        ),
-        "shell" => contains_any(
-            text,
-            &[
-                "run ", "execute ", "shell", "terminal", "command", "process", "test", "read ",
-                "inspect ",
-            ],
-        ),
-        "tree" | "dir_list" | "dir_fetch" | "list_files" => contains_any(
-            text,
-            &[
-                "inspect ",
-                "repository",
-                "project",
-                "list ",
-                "directory",
-                "folder",
-                "dir ",
-            ],
-        ),
-        "web_search" => contains_any(
-            text,
-            &[
-                "search ",
-                "look up",
-                "lookup",
-                "web",
-                "google",
-                "github",
-                "issue",
-                "pull request",
-                "pr ",
-                "weather",
-                "forecast",
-                "current",
-                "latest",
-                "today",
-                "tomorrow",
-            ],
-        ),
-        "web_fetch" => contains_any(
-            text,
-            &[
-                "fetch ",
-                "browse",
-                "url",
-                "http://",
-                "https://",
-                "github.com/",
-            ],
-        ),
-        "image" | "image_generate" => contains_any(text, &["image", "picture", "generate"]),
-        "pdf" => text.contains("pdf"),
-        "memory_search" | "memory_get" => text.contains("memory"),
-        _ => false,
-    }
-}
-
-fn contains_any(text: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| text.contains(needle))
 }
 
 fn forced_tool_choice(
@@ -965,7 +771,7 @@ async fn handle_tool_result(
     let selected_tool_names = if force_answer {
         Vec::new()
     } else {
-        selected_tool_names_for_turn(session, allowed_tools)
+        tool_names_for_turn(session, allowed_tools)
     };
     let tools_enabled_for_reducer = has_tools && !force_answer;
     let (mut messages, tools) = context::pack_for_tool_result_turn_selected(
@@ -1871,143 +1677,39 @@ mod response_builder_tests {
     }
 
     #[test]
-    fn read_prompt_selects_only_read_tool() {
-        let mut session = Session::new();
-        session.ingest(
-            &[serde_json::json!({"role": "user", "content": "Read /tmp/file.txt"})],
-            &Some(serde_json::json!([
-                {"type": "function", "function": {"name": "read"}},
-                {"type": "function", "function": {"name": "web_search"}},
-                {"type": "function", "function": {"name": "exec"}}
-            ])),
-        );
-        assert_eq!(
-            selected_tool_names_for_turn(&session, &[]),
-            vec!["read".to_string()]
-        );
-    }
-
-    #[test]
-    fn weather_prompt_selects_web_search_tool() {
+    fn tool_turn_preserves_all_caller_tools() {
         let mut session = Session::new();
         session.ingest(
             &[serde_json::json!({
                 "role": "user",
-                "content": "Check the current Melbourne weather forecast for today",
+                "content": "Read both data files, calculate the totals, then write the report."
             })],
             &Some(serde_json::json!([
-                {"type": "function", "function": {"name": "read"}},
-                {"type": "function", "function": {"name": "web_search"}},
-                {"type": "function", "function": {"name": "exec"}}
+                {"type": "function", "function": {"name": "read_file"}},
+                {"type": "function", "function": {"name": "write_file"}}
             ])),
         );
+
         assert_eq!(
-            selected_tool_names_for_turn(&session, &[]),
-            vec!["web_search".to_string()]
+            tool_names_for_turn(&session, &[]),
+            vec!["read_file".to_string(), "write_file".to_string()]
         );
     }
 
     #[test]
-    fn tool_result_turn_keeps_active_tool_selected() {
+    fn explicit_allowed_tools_remain_an_authoritative_subset() {
         let mut session = Session::new();
         session.ingest(
-            &[
-                serde_json::json!({"role": "user", "content": "check local auth"}),
-                serde_json::json!({
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_exec",
-                        "type": "function",
-                        "function": {"name": "exec", "arguments": "{\"command\":\"echo ok\"}"}
-                    }]
-                }),
-                serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": "call_exec",
-                    "content": "logged in"
-                }),
-            ],
+            &[serde_json::json!({"role": "user", "content": "Do the task"})],
             &Some(serde_json::json!([
-                {"type": "function", "function": {"name": "read"}},
-                {"type": "function", "function": {"name": "web_search"}},
-                {"type": "function", "function": {"name": "exec"}}
+                {"type": "function", "function": {"name": "read_file"}},
+                {"type": "function", "function": {"name": "write_file"}}
             ])),
         );
 
         assert_eq!(
-            selected_tool_names_for_turn(&session, &[]),
-            vec!["exec".to_string()]
-        );
-    }
-
-    #[test]
-    fn coding_prompt_keeps_common_workflow_tools_selected() {
-        let mut session = Session::new();
-        session.ingest(
-            &[serde_json::json!({
-                "role": "user",
-                "content": "Inspect the repository, read the files, implement the code, and run the tests."
-            })],
-            &Some(serde_json::json!([
-                {"type": "function", "function": {"name": "edit"}},
-                {"type": "function", "function": {"name": "read_image"}},
-                {"type": "function", "function": {"name": "shell"}},
-                {"type": "function", "function": {"name": "tree"}},
-                {"type": "function", "function": {"name": "write"}}
-            ])),
-        );
-
-        assert_eq!(
-            selected_tool_names_for_turn(&session, &[]),
-            vec![
-                "edit".to_string(),
-                "shell".to_string(),
-                "tree".to_string(),
-                "write".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn explicit_exec_request_suppresses_url_broadened_tools() {
-        let mut session = Session::new();
-        session.ingest(
-            &[serde_json::json!({
-                "role": "user",
-                "content": "Use exec exactly once. Command: curl https://api.github.com/repos/Mesh-LLM/mesh-llm/issues"
-            })],
-            &Some(serde_json::json!([
-                {"type": "function", "function": {"name": "exec"}},
-                {"type": "function", "function": {"name": "web_search"}},
-                {"type": "function", "function": {"name": "web_fetch"}}
-            ])),
-        );
-
-        assert_eq!(
-            selected_tool_names_for_turn(&session, &[]),
-            vec!["exec".to_string()]
-        );
-    }
-
-    #[test]
-    fn explicit_multiple_tool_request_keeps_named_tools() {
-        let mut session = Session::new();
-        session.ingest(
-            &[serde_json::json!({
-                "role": "user",
-                "content": "Use the exec tool once to run pwd, then use read to inspect USER.md."
-            })],
-            &Some(serde_json::json!([
-                {"type": "function", "function": {"name": "exec"}},
-                {"type": "function", "function": {"name": "read"}},
-                {"type": "function", "function": {"name": "web_search"}}
-            ])),
-        );
-
-        assert_eq!(
-            selected_tool_names_for_turn(&session, &[]),
-            vec!["exec".to_string(), "read".to_string()]
+            tool_names_for_turn(&session, &["read_file".to_string()]),
+            vec!["read_file".to_string()]
         );
     }
 
@@ -2179,21 +1881,5 @@ mod response_builder_tests {
             "tool_call_id": id,
             "content": text
         })
-    }
-
-    #[test]
-    fn ordinary_prompt_selects_no_tools() {
-        let mut session = Session::new();
-        session.ingest(
-            &[serde_json::json!({"role": "user", "content": "Help"})],
-            &Some(serde_json::json!([
-                {"type": "function", "function": {"name": "read"}},
-                {"type": "function", "function": {"name": "web_search"}}
-            ])),
-        );
-        assert_eq!(
-            selected_tool_names_for_turn(&session, &[]),
-            Vec::<String>::new()
-        );
     }
 }
