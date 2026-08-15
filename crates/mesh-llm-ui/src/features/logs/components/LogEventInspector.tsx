@@ -79,12 +79,7 @@ function AuditInspectorHeader({ code }: { readonly code: string }) {
   return (
     <SharedModalHeader className="relative min-w-0 shrink-0 pr-16 lg:pr-14">
       <SharedModalTitle aria-label={`Operational event ${code}`} className="min-w-0 break-words">
-        <span
-          aria-hidden="true"
-          className="block font-mono text-[length:var(--density-type-display)] font-bold leading-tight tracking-[-0.03em] text-foreground sm:text-[length:var(--density-type-display-lg)] [overflow-wrap:anywhere]"
-        >
-          {code}
-        </span>
+        {code}
       </SharedModalTitle>
       <SharedModalDescription>
         Recorded state, timing, source, and related identifiers for this event.

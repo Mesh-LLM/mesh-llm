@@ -139,16 +139,35 @@ describe('LogEventInspector', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Operational event runtime_ready' })
     const title = within(dialog).getByRole('heading', { name: 'Operational event runtime_ready' })
-    expect(within(title).getByText(AUDIT.code, { exact: true })).toHaveClass(
-      'font-mono',
-      'text-[length:var(--density-type-display)]',
-      '[overflow-wrap:anywhere]'
+    expect(title).toHaveTextContent(AUDIT.code)
+    expect(title).toHaveClass(
+      'text-[length:var(--density-type-headline)]',
+      'font-semibold',
+      'leading-5',
+      'tracking-[-0.02em]',
+      'text-fg'
     )
 
     const state = within(dialog).getByRole('heading', { name: 'Event state' })
     expect(state.parentElement).toContainElement(within(dialog).getByText('info', { exact: true }))
     expect(state.parentElement).toContainElement(within(dialog).getByText('ready', { exact: true }))
     expect(within(dialog).getByRole('heading', { name: 'Event metadata' })).toBeInTheDocument()
+  })
+
+  it('keeps the audit title a 1:1 typography match with the Request Inspector title', () => {
+    const auditView = render(<InspectorHarness initialInspector={{ type: 'audit', id: AUDIT.entryId }} />)
+    const auditDialog = screen.getByRole('dialog', { name: 'Operational event runtime_ready' })
+    const auditTitle = within(auditDialog).getByRole('heading', { name: 'Operational event runtime_ready' })
+    const auditClasses = Array.from(auditTitle.classList)
+
+    auditView.unmount()
+    render(<InspectorHarness initialInspector={{ type: 'request', id: REQUEST_ID }} />)
+    const requestDialog = screen.getByRole('dialog', { name: 'Request Inspector' })
+    const requestTitle = within(requestDialog).getByRole('heading', { name: 'Request Inspector' })
+    // flex-1 is layout for the outcome badge sibling, not title typography.
+    const requestClasses = Array.from(requestTitle.classList).filter((className) => className !== 'flex-1')
+
+    expect(auditClasses).toEqual(requestClasses)
   })
 
   it('keeps unknown outcome values muted instead of inferring a state from substrings', async () => {
