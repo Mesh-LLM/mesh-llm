@@ -87,6 +87,22 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             'python3 scripts/select-release-notes-base.py "$RELEASE_TAG"',
             metadata,
         )
+        manual_version_update = metadata.index(
+            'else\n            scripts/release-version.sh "$RELEASE_TAG"',
+        )
+        format_check = metadata.index(
+            "cargo fmt --all -- --check",
+            manual_version_update,
+        )
+        whitespace_check = metadata.index("git diff --check", format_check)
+        stage_release_source = metadata.index("git add --update", whitespace_check)
+        push_release_source = metadata.index(
+            'git push "$release_remote" "$source_sha:refs/heads/main"',
+        )
+        self.assertLess(manual_version_update, format_check)
+        self.assertLess(format_check, whitespace_check)
+        self.assertLess(whitespace_check, stage_release_source)
+        self.assertLess(stage_release_source, push_release_source)
 
     def test_release_depot_policy_is_main_ref_only_and_selected_once(
         self,

@@ -167,6 +167,8 @@ jobs:
             echo "Canary release: leaving main unchanged."
           else
             scripts/release-version.sh "$RELEASE_TAG"
+            cargo fmt --all -- --check
+            git diff --check
             git add --update
             if ! git diff --quiet; then
               echo "Release version preparation left unstaged tracked changes:" >&2
