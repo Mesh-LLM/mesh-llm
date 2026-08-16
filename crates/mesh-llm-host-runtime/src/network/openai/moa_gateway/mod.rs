@@ -97,6 +97,57 @@ async fn degrade_to_single_model(
     MoaDispatchResult::Passthrough(tcp_stream)
 }
 
+/// Whether a request that named the automatic directive may be served by a
+/// committee.
+enum CommitteeAdmission {
+    /// Convene a committee.
+    Admitted,
+    /// Automatic routing applies, but a committee cannot honour this request.
+    ServeFromSingleModel(automatic::SingleModelReason),
+    /// The request is chat-shaped but malformed; reject it with this message.
+    Reject(&'static str),
+}
+
+/// Decide whether to convene a committee for an automatic chat request.
+///
+/// The three checks are ordered deliberately, and the order is the behaviour:
+///
+/// 1. **Envelope** — could a committee ever fan this out? A committee builds
+///    chat completions from a `messages` array, so a `/v1/completions` request
+///    has nothing to fan out and must not be held to the chat contract below.
+/// 2. **Chat contract** — `messages` must be a present, non-empty array.
+///    Without this a request like `{"model":"mesh"}` or a string `messages`
+///    field reached the workers, which fabricated a 200 answer from nothing
+///    (homelab API-1 defect). This must run *before* the content check so a
+///    malformed chat body gets this precise error rather than being diverted
+///    into single-model routing and failing downstream with a vaguer one.
+/// 3. **Content** — what did the client declare? Media has no aggregation
+///    semantics for a committee, and a committee cannot stream for real.
+fn committee_admission(
+    effective_model: Option<&str>,
+    forwarded_path: &str,
+    body: &serde_json::Value,
+) -> CommitteeAdmission {
+    let request = automatic::AutomaticRequest {
+        model: effective_model,
+        // The forwarded path: `/v1/responses` is normalised onto chat
+        // completions before routing, so it stays committee-eligible.
+        path: forwarded_path,
+        body,
+    };
+    if let automatic::ServingMode::SingleModel(reason) = automatic::envelope_mode(request) {
+        return CommitteeAdmission::ServeFromSingleModel(reason);
+    }
+    match body.get("messages") {
+        Some(serde_json::Value::Array(messages)) if !messages.is_empty() => {}
+        _ => return CommitteeAdmission::Reject("MoA requires a non-empty `messages` array"),
+    }
+    if let automatic::ServingMode::SingleModel(reason) = automatic::content_mode(body) {
+        return CommitteeAdmission::ServeFromSingleModel(reason);
+    }
+    CommitteeAdmission::Admitted
+}
+
 /// Detect `model: "mesh"`, build a mesh-wide MoA config, run the turn,
 /// and write the HTTP response (JSON or SSE) directly to the stream.
 ///
@@ -138,47 +189,28 @@ pub async fn try_handle_moa(
         };
     };
 
-    // Contract check: `messages` must be a present, non-empty array. Without
-    // this a request like `{"model":"mesh"}` or a string `messages` field fell
-    // through to the workers, which fabricated a 200 answer from nothing
-    // (homelab API-1 defect). Reject before any model call.
-    match body_json.get("messages") {
-        Some(serde_json::Value::Array(msgs)) if !msgs.is_empty() => {}
-        _ => {
-            return match proxy::send_400_observed(
-                tcp_stream,
-                "MoA requires a non-empty `messages` array",
-                route_observer,
-            )
-            .await
-            {
+    match committee_admission(effective_model, &request.path, &body_json) {
+        CommitteeAdmission::Admitted => {}
+        CommitteeAdmission::ServeFromSingleModel(reason) => {
+            tracing::info!(
+                reason = reason.as_str(),
+                "MoA: serving {} from a single model",
+                automatic::DIRECTIVE
+            );
+            // The directive stays in the request *unrewritten*. The caller
+            // recognises it as automatic and runs the full selector (media
+            // capability filter, readiness, affinity, context fit). Rewriting
+            // to a concrete model here would make the request look explicitly
+            // addressed and skip exactly the media filter a media request
+            // needs.
+            return MoaDispatchResult::Passthrough(tcp_stream);
+        }
+        CommitteeAdmission::Reject(message) => {
+            return match proxy::send_400_observed(tcp_stream, message, route_observer).await {
                 Ok(()) => MoaDispatchResult::Responded(400),
                 Err(_) => MoaDispatchResult::Dropped("moa_response_write_failed"),
             };
         }
-    }
-
-    // Mode gate. A committee cannot honour every request: it compares and
-    // synthesises drafts as text, so media content has no aggregation
-    // semantics, and it calls workers non-streaming because the arbiter needs
-    // whole drafts to detect divergence. Those requests are served by a single
-    // capability-selected model instead, which the caller resolves through the
-    // ordinary auto selector once we hand the stream back.
-    // The stream is handed back with the directive still in the request, *not*
-    // rewritten to a concrete model. The caller recognises the directive as an
-    // automatic request and runs the full selector (media capability filter,
-    // readiness, affinity, context fit). Rewriting here would make the request
-    // look explicitly addressed and skip exactly the media filter a media
-    // request needs.
-    if let automatic::ServingMode::SingleModel(reason) =
-        automatic::serving_mode(effective_model, &body_json)
-    {
-        tracing::info!(
-            reason = reason.as_str(),
-            "MoA: serving {} from a single model",
-            automatic::DIRECTIVE
-        );
-        return MoaDispatchResult::Passthrough(tcp_stream);
     }
 
     let enable_thinking = effective_enable_thinking_for_moa(&body_json);

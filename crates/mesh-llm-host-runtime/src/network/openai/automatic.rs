@@ -64,6 +64,9 @@ pub(crate) enum SingleModelReason {
     StreamRequested,
     /// The request named no model, so it never opted into committee serving.
     ModelUnspecified,
+    /// The endpoint is not chat-shaped, so a committee has no messages to
+    /// fan out.
+    NonChatRequest,
 }
 
 impl SingleModelReason {
@@ -73,8 +76,24 @@ impl SingleModelReason {
             Self::MediaInput => "media_input",
             Self::StreamRequested => "stream_requested",
             Self::ModelUnspecified => "model_unspecified",
+            Self::NonChatRequest => "non_chat_request",
         }
     }
+}
+
+/// The forwarded endpoint a committee needs in order to fan out.
+///
+/// MoA builds worker calls as chat completions from a `messages` array, so it
+/// can only serve requests that arrive on (or are normalised onto) that
+/// endpoint. `/v1/completions` has a `prompt`, not `messages`.
+const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
+
+/// True when `path` is the forwarded chat-completions endpoint.
+///
+/// Reads the forwarded path, not the client's: `/v1/responses` is normalised
+/// onto chat completions before routing, so it is committee-eligible.
+fn is_chat_shaped_path(path: &str) -> bool {
+    path.split('?').next().unwrap_or(path) == CHAT_COMPLETIONS_PATH
 }
 
 /// True when `model` names the automatic directive under any accepted spelling.
@@ -99,19 +118,66 @@ pub(crate) fn warn_if_deprecated_alias(model: Option<&str>) {
     }
 }
 
+/// A request the mesh has already established is automatic.
+///
+/// Named fields rather than positional arguments because `model` and `path`
+/// are both strings and silently swapping them would change routing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AutomaticRequest<'a> {
+    /// The `model` the client sent, or `None` when it sent none.
+    pub(crate) model: Option<&'a str>,
+    /// The **forwarded** request path, after `/v1/responses` normalisation.
+    pub(crate) path: &'a str,
+    /// The parsed request body.
+    pub(crate) body: &'a Value,
+}
+
 /// Choose the serving mode for a request that is being routed automatically.
 ///
-/// `model` is the name the client sent, or `None` when it sent no `model` at
-/// all. Callers must only reach here once they have established the request is
+/// Callers must only reach here once they have established the request is
 /// automatic; an explicitly named model never has a mode.
 ///
 /// A request that named no model did not opt into committee serving, so it is
 /// served by a single model rather than silently paying committee latency and
 /// cost. Naming the directive is the opt-in.
-pub(crate) fn serving_mode(model: Option<&str>, body: &Value) -> ServingMode {
+///
+/// The MoA gateway evaluates this in two stages, because its `messages`
+/// contract check must stay reachable — see [`envelope_mode`] and
+/// [`content_mode`]. This function is the whole decision for callers that have
+/// no such ordering constraint.
+pub(crate) fn serving_mode(request: AutomaticRequest<'_>) -> ServingMode {
+    match envelope_mode(request) {
+        ServingMode::Committee => content_mode(request.body),
+        single => single,
+    }
+}
+
+/// The part of the mode decision that depends only on the request's envelope:
+/// which endpoint it arrived on and whether it named the directive at all.
+///
+/// Separated from [`content_mode`] so the MoA gateway can answer "could a
+/// committee ever fan this out?" *before* validating the chat body. A
+/// `/v1/completions` request has a `prompt` and no `messages`, so asserting the
+/// chat contract on it would reject a shape `model=auto` used to serve from one
+/// concrete model.
+pub(crate) fn envelope_mode(request: AutomaticRequest<'_>) -> ServingMode {
+    let AutomaticRequest { model, path, .. } = request;
     if model.is_none() {
         return ServingMode::SingleModel(SingleModelReason::ModelUnspecified);
     }
+    if !is_chat_shaped_path(path) {
+        return ServingMode::SingleModel(SingleModelReason::NonChatRequest);
+    }
+    ServingMode::Committee
+}
+
+/// The part of the mode decision that reads what the client declared in the
+/// body of an otherwise committee-eligible chat request.
+///
+/// Runs *after* the chat contract check in the MoA gateway, so a malformed
+/// chat body still gets the gateway's own rejection rather than being diverted
+/// to single-model routing and failing later with a less specific error.
+pub(crate) fn content_mode(body: &Value) -> ServingMode {
     // Media first: a media request that is also streaming still needs a
     // modality-capable model, and reporting the media reason is the more
     // useful diagnostic of the two.
@@ -145,6 +211,16 @@ mod tests {
         })
     }
 
+    /// An automatic chat-completions request. Endpoint shape is fixed here so
+    /// each test varies only the field it is about.
+    fn auto<'a>(model: Option<&'a str>, body: &'a Value) -> AutomaticRequest<'a> {
+        AutomaticRequest {
+            model,
+            path: CHAT_COMPLETIONS_PATH,
+            body,
+        }
+    }
+
     #[test]
     fn both_spellings_are_the_directive() {
         assert!(is_directive(DIRECTIVE));
@@ -162,7 +238,7 @@ mod tests {
     #[test]
     fn plain_text_request_convenes_a_committee() {
         assert_eq!(
-            serving_mode(Some(DIRECTIVE), &text_request()),
+            serving_mode(auto(Some(DIRECTIVE), &text_request())),
             ServingMode::Committee
         );
     }
@@ -174,7 +250,7 @@ mod tests {
         let mut body = text_request();
         body.as_object_mut().unwrap().remove("model");
         assert_eq!(
-            serving_mode(None, &body),
+            serving_mode(auto(None, &body)),
             ServingMode::SingleModel(SingleModelReason::ModelUnspecified)
         );
     }
@@ -184,8 +260,104 @@ mod tests {
         // `auto` and `mesh` are one directive; they must not diverge in mode.
         let body = text_request();
         assert_eq!(
-            serving_mode(Some(DEPRECATED_ALIAS), &body),
-            serving_mode(Some(DIRECTIVE), &body)
+            serving_mode(auto(Some(DEPRECATED_ALIAS), &body)),
+            serving_mode(auto(Some(DIRECTIVE), &body))
+        );
+    }
+
+    #[test]
+    fn a_non_chat_endpoint_takes_a_single_model() {
+        // `/v1/completions` carries `prompt`, not `messages`. A committee has
+        // nothing to fan out, and letting one convene would reject with
+        // "MoA requires a non-empty `messages` array" a request shape that
+        // `model=auto` used to serve from one concrete model.
+        let body = json!({ "model": DIRECTIVE, "prompt": "once upon a time" });
+        assert_eq!(
+            serving_mode(AutomaticRequest {
+                model: Some(DIRECTIVE),
+                path: "/v1/completions",
+                body: &body,
+            }),
+            ServingMode::SingleModel(SingleModelReason::NonChatRequest)
+        );
+    }
+
+    #[test]
+    fn a_malformed_chat_body_stays_committee_eligible_at_the_envelope() {
+        // The MoA gateway rejects a missing or non-array `messages` with a
+        // precise 400. That check must stay reachable, so the envelope stage
+        // must not divert a chat-shaped request on body grounds — even when the
+        // body also declares something `content_mode` would divert on.
+        for body in [
+            json!({ "model": DIRECTIVE, "stream": true }),
+            json!({ "model": DIRECTIVE, "stream": true, "messages": "hello" }),
+            json!({ "model": DIRECTIVE }),
+        ] {
+            assert_eq!(
+                envelope_mode(auto(Some(DIRECTIVE), &body)),
+                ServingMode::Committee,
+                "envelope stage must defer to the gateway's contract check: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_stages_compose_into_the_whole_decision() {
+        // `serving_mode` is the single-stage answer for callers with no
+        // ordering constraint; it must not drift from the staged pair.
+        let mut streaming = text_request();
+        streaming["stream"] = json!(true);
+        let completions = json!({ "model": DIRECTIVE, "prompt": "hi" });
+        for (request, expected) in [
+            (
+                auto(Some(DIRECTIVE), &text_request()),
+                ServingMode::Committee,
+            ),
+            (
+                auto(Some(DIRECTIVE), &streaming),
+                ServingMode::SingleModel(SingleModelReason::StreamRequested),
+            ),
+            (
+                AutomaticRequest {
+                    model: Some(DIRECTIVE),
+                    path: "/v1/completions",
+                    body: &completions,
+                },
+                ServingMode::SingleModel(SingleModelReason::NonChatRequest),
+            ),
+            (
+                auto(None, &text_request()),
+                ServingMode::SingleModel(SingleModelReason::ModelUnspecified),
+            ),
+        ] {
+            assert_eq!(serving_mode(request), expected);
+        }
+    }
+
+    #[test]
+    fn a_normalised_responses_request_still_convenes_a_committee() {
+        // `/v1/responses` is rewritten onto chat completions with a `messages`
+        // array before routing, so gating on the *forwarded* path keeps it
+        // committee-eligible. Gating on the client's path would exclude it.
+        assert_eq!(
+            serving_mode(AutomaticRequest {
+                model: Some(DIRECTIVE),
+                path: CHAT_COMPLETIONS_PATH,
+                body: &text_request(),
+            }),
+            ServingMode::Committee
+        );
+    }
+
+    #[test]
+    fn a_query_string_does_not_hide_the_chat_endpoint() {
+        assert_eq!(
+            serving_mode(AutomaticRequest {
+                model: Some(DIRECTIVE),
+                path: "/v1/chat/completions?trace=1",
+                body: &text_request(),
+            }),
+            ServingMode::Committee
         );
     }
 
@@ -194,7 +366,7 @@ mod tests {
         let mut body = text_request();
         body["stream"] = json!(true);
         assert_eq!(
-            serving_mode(Some(DIRECTIVE), &body),
+            serving_mode(auto(Some(DIRECTIVE), &body)),
             ServingMode::SingleModel(SingleModelReason::StreamRequested)
         );
     }
@@ -203,7 +375,10 @@ mod tests {
     fn stream_false_still_convenes_a_committee() {
         let mut body = text_request();
         body["stream"] = json!(false);
-        assert_eq!(serving_mode(Some(DIRECTIVE), &body), ServingMode::Committee);
+        assert_eq!(
+            serving_mode(auto(Some(DIRECTIVE), &body)),
+            ServingMode::Committee
+        );
     }
 
     #[test]
@@ -213,7 +388,10 @@ mod tests {
         for value in [json!("true"), json!(1), json!(null)] {
             let mut body = text_request();
             body["stream"] = value;
-            assert_eq!(serving_mode(Some(DIRECTIVE), &body), ServingMode::Committee);
+            assert_eq!(
+                serving_mode(auto(Some(DIRECTIVE), &body)),
+                ServingMode::Committee
+            );
         }
     }
 
@@ -230,7 +408,7 @@ mod tests {
             }],
         });
         assert_eq!(
-            serving_mode(Some(DIRECTIVE), &body),
+            serving_mode(auto(Some(DIRECTIVE), &body)),
             ServingMode::SingleModel(SingleModelReason::MediaInput)
         );
     }
@@ -249,7 +427,7 @@ mod tests {
             }],
         });
         assert_eq!(
-            serving_mode(Some(DIRECTIVE), &body),
+            serving_mode(auto(Some(DIRECTIVE), &body)),
             ServingMode::SingleModel(SingleModelReason::MediaInput)
         );
     }
@@ -267,7 +445,7 @@ mod tests {
             }],
         });
         assert_eq!(
-            serving_mode(Some(DIRECTIVE), &body),
+            serving_mode(auto(Some(DIRECTIVE), &body)),
             ServingMode::SingleModel(SingleModelReason::MediaInput)
         );
     }

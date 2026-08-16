@@ -36,13 +36,14 @@ available one.
 
 ## When you get a single model
 
-Three cases, all decided from your request or the mesh's shape:
+Four cases, all decided from your request or the mesh's shape:
 
 | Situation | Why |
 |---|---|
 | Your request includes an image, audio, or a file | A committee compares and merges answers as text, so it has no defined way to combine answers about an image. Your request is routed to a model whose runtime actually supports that input. |
 | You asked for `"stream": true` | Committee members must finish before their answers can be compared, so a committee cannot emit real tokens as they are produced. A single model streams for real. |
 | You sent no `model` field at all | You did not ask for automatic serving, so Mesh does not add committee latency and cost on your behalf. Send `"model": "mesh"` to opt in. |
+| You posted to `/v1/completions` | Committee members are asked a chat question each, and a completions request carries a `prompt` rather than a conversation. `/v1/chat/completions` and `/v1/responses` both convene committees. |
 
 If you send an image and **no** online model supports image input, the request
 fails with `422` rather than quietly answering the text part of your question.

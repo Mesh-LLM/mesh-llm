@@ -512,3 +512,153 @@ async fn an_explicitly_named_model_is_never_reinterpreted() {
         AutoRouteResolution::MediaUnsupported => panic!("explicit routing is untouched"),
     }
 }
+
+/// Forwarded body `model` for an automatic request, after the decision is
+/// committed to the request that will actually be sent.
+async fn forwarded_model_field(
+    model: Option<&str>,
+    body: &serde_json::Value,
+    node: &mesh::Node,
+    targets: &election::ModelTargets,
+    descriptors: &[mesh::ServedModelDescriptor],
+) -> (Option<String>, Option<String>) {
+    let mut request = request_with_body(model, body);
+    let affinity = affinity::AffinityRouter::new();
+    let resolution = resolve_auto_routed_model(
+        node,
+        &mut request,
+        targets,
+        None,
+        descriptors,
+        None,
+        &affinity,
+    )
+    .await;
+    let AutoRouteResolution::Continue {
+        effective_model, ..
+    } = resolution
+    else {
+        panic!("expected an automatic resolution, got MediaUnsupported");
+    };
+    super::super::ingress::maybe_enable_auto_route_hooks(&mut request, effective_model.as_deref());
+    let forwarded = request
+        .raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .and_then(|start| serde_json::from_slice::<serde_json::Value>(&request.raw[start..]).ok())
+        .and_then(|body| {
+            body.get("model")
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
+        });
+    (effective_model, forwarded)
+}
+
+#[tokio::test]
+async fn a_single_model_decision_is_written_into_the_forwarded_body() {
+    // The backend reads `model` from the forwarded bytes and 404s anything that
+    // is not its own advertised identity, so selecting `vision-model` while
+    // still sending `"model":"mesh"` never reaches a model at all.
+    let (node, targets) = node_serving(&["text-model", "vision-model"]).await;
+    let descriptors = vec![
+        descriptor("text-model", false, false),
+        descriptor("vision-model", true, false),
+    ];
+
+    let (effective, forwarded) = forwarded_model_field(
+        Some(automatic::DIRECTIVE),
+        &image_body(automatic::DIRECTIVE),
+        &node,
+        &targets,
+        &descriptors,
+    )
+    .await;
+
+    assert_eq!(effective.as_deref(), Some("vision-model"));
+    assert_eq!(
+        forwarded.as_deref(),
+        Some("vision-model"),
+        "the forwarded body must carry the model the request was routed to"
+    );
+}
+
+#[tokio::test]
+async fn committee_mode_keeps_the_directive_in_the_forwarded_body() {
+    // The MoA gateway self-gates on the body's model, so committee mode must
+    // not have the directive rewritten away.
+    let (node, targets) = node_serving(&["text-model", "other-text-model"]).await;
+    let descriptors = vec![
+        descriptor("text-model", false, false),
+        descriptor("other-text-model", false, false),
+    ];
+
+    let (effective, forwarded) = forwarded_model_field(
+        Some(automatic::DIRECTIVE),
+        &text_body(Some(automatic::DIRECTIVE)),
+        &node,
+        &targets,
+        &descriptors,
+    )
+    .await;
+
+    assert_eq!(effective.as_deref(), Some(automatic::DIRECTIVE));
+    assert_eq!(forwarded.as_deref(), Some(automatic::DIRECTIVE));
+}
+
+#[tokio::test]
+async fn a_non_chat_endpoint_resolves_to_a_single_model() {
+    // `model=auto` on `/v1/completions` selected one concrete model before this
+    // change. Entering committee mode would reject it for having no `messages`
+    // array, breaking a request shape that already worked.
+    let (node, targets) = node_serving(&["text-model", "other-text-model"]).await;
+    let descriptors = vec![
+        descriptor("text-model", false, false),
+        descriptor("other-text-model", false, false),
+    ];
+    let body = serde_json::json!({
+        "model": automatic::DEPRECATED_ALIAS,
+        "prompt": "once upon a time",
+    });
+    let mut request = request_with_body(Some(automatic::DEPRECATED_ALIAS), &body);
+    request.path = "/v1/completions".to_owned();
+    request.client_path = "/v1/completions".to_owned();
+    let affinity = affinity::AffinityRouter::new();
+
+    let resolution = resolve_auto_routed_model(
+        &node,
+        &mut request,
+        &targets,
+        None,
+        &descriptors,
+        None,
+        &affinity,
+    )
+    .await;
+
+    // Pin the reason, not just "left the committee": asserting only
+    // `!= DIRECTIVE` would keep passing if the endpoint gate were deleted and
+    // some unrelated condition happened to divert the request anyway.
+    assert_eq!(
+        automatic::envelope_mode(automatic::AutomaticRequest {
+            model: Some(automatic::DEPRECATED_ALIAS),
+            path: "/v1/completions",
+            body: &body,
+        }),
+        automatic::ServingMode::SingleModel(automatic::SingleModelReason::NonChatRequest)
+    );
+
+    match resolution {
+        AutoRouteResolution::Continue {
+            effective_model, ..
+        } => {
+            let model = effective_model.expect("a completions request must resolve to a model");
+            assert_ne!(
+                model,
+                automatic::DIRECTIVE,
+                "a non-chat request must not convene a committee it cannot fan out"
+            );
+        }
+        AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
+    }
+}

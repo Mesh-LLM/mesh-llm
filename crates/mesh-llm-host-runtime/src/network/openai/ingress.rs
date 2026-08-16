@@ -207,7 +207,14 @@ async fn resolve_auto_routed_model(
 
     automatic::warn_if_deprecated_alias(request.model_name.as_deref());
 
-    match automatic::serving_mode(request.model_name.as_deref(), body_json) {
+    let mode = automatic::serving_mode(automatic::AutomaticRequest {
+        model: request.model_name.as_deref(),
+        // The forwarded path: `/v1/responses` has already been normalised onto
+        // chat completions by this point, so it stays committee-eligible.
+        path: &request.path,
+        body: body_json,
+    });
+    match mode {
         // Committee mode keeps the directive as the effective model so the MoA
         // gateway picks the request up.
         automatic::ServingMode::Committee => {
@@ -342,15 +349,40 @@ async fn auto_route_model_has_ready_ingress_target(
     auto_route::model_is_locally_served(node, model).await
 }
 
+/// Commit an automatic routing decision to the request that will be forwarded.
+///
+/// The backend reads `model` out of `request.raw` and rejects anything that is
+/// not its own advertised identity (`ensure_requested_model`,
+/// `skippy-server/src/frontend/generation/parsing.rs:21-32`), so a selected
+/// model that is not written back 404s. This gate previously matched only
+/// `None` and `auto`, which left a single-model `mesh` request forwarding
+/// `"model":"mesh"` while routing to a concrete target.
+///
+/// The tokenize guard is load-bearing, not a precaution. Tokenize forces
+/// `model_name` to `expected_identity.model_id` (`request_parse.rs:319-330`),
+/// and that string could itself be `mesh` or `auto` — which the widened
+/// predicate below would match and then rewrite, diverging the wire identity
+/// from the authoritative expected identity. `transport.rs` carries the same
+/// guard for the same reason.
 fn maybe_enable_auto_route_hooks(
     request: &mut proxy::BufferedHttpRequest,
     effective_model: Option<&str>,
 ) {
-    if request.model_name.is_none() || request.model_name.as_deref() == Some("auto") {
-        proxy::inject_mesh_hooks_flag(&mut request.raw, true);
-        if let Some(model) = effective_model {
-            proxy::rewrite_model_field(request, model);
-        }
+    if request.is_tokenize_request() {
+        return;
+    }
+    let is_automatic = request
+        .model_name
+        .as_deref()
+        .is_none_or(automatic::is_directive);
+    if !is_automatic {
+        return;
+    }
+    proxy::inject_mesh_hooks_flag(&mut request.raw, true);
+    // The directive itself is not a model. Committee mode keeps it in the body
+    // for the MoA gateway; only a resolved concrete model gets written back.
+    if let Some(model) = effective_model.filter(|name| !automatic::is_directive(name)) {
+        proxy::rewrite_model_field(request, model);
     }
 }
 
