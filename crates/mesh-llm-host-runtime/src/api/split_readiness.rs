@@ -1,6 +1,6 @@
 use super::MeshApi;
 use super::status::{ModelTargetCapacityAdvicePayload, ModelTargetCapacityAdviceState};
-use crate::mesh::{NodeRole, PeerInfo, SplitStagePathRejection, SplitStagePathSnapshot};
+use crate::mesh::{NodeRole, PeerInfo, SplitStagePathSnapshot};
 use serde::Serialize;
 
 const MIN_SPLIT_PARTICIPANTS: usize = 2;
@@ -241,11 +241,6 @@ fn split_node_exclusion_reason(
         return Some(SplitReadinessExclusionReason::StageProtocolGeneration);
     }
     if node.source == SplitReadinessNodeSource::Peer
-        && let Some(rejection) = node.stage_path.stage_path_rejection()
-    {
-        return Some(split_readiness_stage_path_rejection(rejection));
-    }
-    if node.source == SplitReadinessNodeSource::Peer
         && let Some(reason) = split_stage_source_exclusion_reason(model_ref, node)
     {
         return Some(reason);
@@ -264,22 +259,6 @@ fn split_participant(model_ref: &str, node: SplitReadinessNodeInput) -> SplitRea
         artifact_transfer_supported: node.artifact_transfer_supported,
         rtt_ms: node.stage_path.rtt_ms,
         model_source_state,
-    }
-}
-
-const fn split_readiness_stage_path_rejection(
-    rejection: SplitStagePathRejection,
-) -> SplitReadinessExclusionReason {
-    match rejection {
-        SplitStagePathRejection::MissingStagePath => {
-            SplitReadinessExclusionReason::MissingStagePath
-        }
-        SplitStagePathRejection::StagePathRelayOnly => {
-            SplitReadinessExclusionReason::StagePathRelayOnly
-        }
-        SplitStagePathRejection::StagePathTooSlow => {
-            SplitReadinessExclusionReason::StagePathTooSlow
-        }
     }
 }
 
@@ -513,33 +492,6 @@ fn split_readiness_recommendations(
                 .to_string(),
         );
     }
-    if exclusions
-        .iter()
-        .any(|item| item.reason == SplitReadinessExclusionReason::MissingStagePath.as_str())
-    {
-        recommendations.push(
-            "Wait for direct peer latency to be measured before split serving, or check that the nodes can establish a direct QUIC path."
-                .to_string(),
-        );
-    }
-    if exclusions
-        .iter()
-        .any(|item| item.reason == SplitReadinessExclusionReason::StagePathRelayOnly.as_str())
-    {
-        recommendations.push(
-            "Relay-only peers are not admitted for split serving; check firewall/NAT settings so the stage connection can use a direct QUIC path."
-                .to_string(),
-        );
-    }
-    if exclusions
-        .iter()
-        .any(|item| item.reason == SplitReadinessExclusionReason::StagePathTooSlow.as_str())
-    {
-        recommendations.push(format!(
-            "Use lower-latency peers for split serving; direct stage RTT must be at or below {}ms.",
-            crate::mesh::max_split_rtt_ms()
-        ));
-    }
     recommendations
 }
 
@@ -616,16 +568,13 @@ fn split_capacity_shortfall_blocker(
     })
 }
 
-const fn split_readiness_exclusion_reason_order() -> [SplitReadinessExclusionReason; 12] {
+const fn split_readiness_exclusion_reason_order() -> [SplitReadinessExclusionReason; 9] {
     [
         SplitReadinessExclusionReason::StageControlUnreachable,
         SplitReadinessExclusionReason::PackageManifestMismatch,
         SplitReadinessExclusionReason::ArtifactTransferUnavailable,
         SplitReadinessExclusionReason::StageInventoryEmpty,
         SplitReadinessExclusionReason::MissingModelSource,
-        SplitReadinessExclusionReason::MissingStagePath,
-        SplitReadinessExclusionReason::StagePathRelayOnly,
-        SplitReadinessExclusionReason::StagePathTooSlow,
         SplitReadinessExclusionReason::StageProtocolGeneration,
         SplitReadinessExclusionReason::MissingVram,
         SplitReadinessExclusionReason::MissingModelInterest,
@@ -765,9 +714,6 @@ enum SplitReadinessExclusionReason {
     MissingVram,
     MissingModelInterest,
     StageProtocolGeneration,
-    MissingStagePath,
-    StagePathRelayOnly,
-    StagePathTooSlow,
     StageControlUnreachable,
     ArtifactTransferUnavailable,
     StageInventoryEmpty,
@@ -782,9 +728,6 @@ impl SplitReadinessExclusionReason {
             Self::MissingVram => "missing_vram",
             Self::MissingModelInterest => "missing_model_interest",
             Self::StageProtocolGeneration => "stage_protocol_generation",
-            Self::MissingStagePath => "missing_stage_path",
-            Self::StagePathRelayOnly => "stage_path_relay_only",
-            Self::StagePathTooSlow => "stage_path_too_slow",
             Self::StageControlUnreachable => "stage_control_unreachable",
             Self::ArtifactTransferUnavailable => "artifact_transfer_unavailable",
             Self::StageInventoryEmpty => "stage_inventory_empty",
@@ -804,15 +747,6 @@ impl SplitReadinessExclusionReason {
             }
             Self::StageProtocolGeneration => {
                 "Upgrade this peer; its stage protocol generation is too old for split serving."
-            }
-            Self::MissingStagePath => {
-                "Wait for a measured direct path before admitting this peer to split serving."
-            }
-            Self::StagePathRelayOnly => {
-                "Establish a direct QUIC path before admitting this peer to split serving."
-            }
-            Self::StagePathTooSlow => {
-                "Use a lower-latency path or peer before admitting this peer to split serving."
             }
             Self::StageControlUnreachable => {
                 "Check stage-control connectivity and peer runtime logs before retrying."
@@ -1105,91 +1039,36 @@ mod tests {
     }
 
     #[test]
-    fn split_readiness_excludes_peer_without_measured_stage_path() {
-        let mut peer = node(
-            "peer000000000000000000000000000000000",
+    fn split_readiness_does_not_gate_on_transport_path_or_rtt() {
+        let mut unknown_path = node(
+            "unknown00000000000000000000000000000",
             SplitReadinessNodeRole::Worker,
             &["meshllm/Qwen3-8B-Q4_K_M-layers"],
         );
-        peer.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
-        peer.stage_path = crate::mesh::SplitStagePathSnapshot::unknown();
+        unknown_path.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
+        unknown_path.stage_path = crate::mesh::SplitStagePathSnapshot::unknown();
+
+        let mut relay_path = node(
+            "relay000000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        relay_path.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
+        relay_path.stage_path = crate::mesh::SplitStagePathSnapshot::relay(Some(u32::MAX));
 
         let report = build_split_readiness_report(SplitReadinessInput {
             model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
             local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
-            peers: vec![peer],
+            peers: vec![unknown_path, relay_path],
             capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
             active_topology_count: 0,
             active_stage_count: 0,
         });
 
-        assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
-        assert_eq!(report.participant_count, 1);
-        assert_eq!(report.exclusions[0].reason, "missing_stage_path");
-        assert_eq!(report.blockers[0].reason, "missing_stage_path");
-        assert_eq!(report.blockers[0].count, 1);
-        assert!(
-            report
-                .recommendations
-                .iter()
-                .any(|item| item.contains("direct peer latency"))
-        );
-    }
-
-    #[test]
-    fn split_readiness_excludes_peer_with_slow_stage_path() {
-        let mut peer = node(
-            "peer000000000000000000000000000000000",
-            SplitReadinessNodeRole::Worker,
-            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
-        );
-        peer.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
-        peer.stage_path =
-            crate::mesh::SplitStagePathSnapshot::direct(Some(crate::mesh::MAX_SPLIT_RTT_MS + 1));
-
-        let report = build_split_readiness_report(SplitReadinessInput {
-            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
-            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
-            peers: vec![peer],
-            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
-            active_topology_count: 0,
-            active_stage_count: 0,
-        });
-
-        assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
-        assert_eq!(report.participant_count, 1);
-        assert_eq!(report.exclusions[0].reason, "stage_path_too_slow");
-        assert!(
-            report
-                .recommendations
-                .iter()
-                .any(|item| item.contains(&format!("{}ms", crate::mesh::max_split_rtt_ms())))
-        );
-    }
-
-    #[test]
-    fn split_readiness_excludes_relay_only_peer() {
-        let mut peer = node(
-            "peer000000000000000000000000000000000",
-            SplitReadinessNodeRole::Worker,
-            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
-        );
-        peer.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
-        peer.stage_path = crate::mesh::SplitStagePathSnapshot::relay(Some(5));
-
-        let report = build_split_readiness_report(SplitReadinessInput {
-            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
-            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
-            peers: vec![peer],
-            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
-            active_topology_count: 0,
-            active_stage_count: 0,
-        });
-
-        assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
-        assert_eq!(report.participant_count, 1);
-        assert_eq!(report.exclusions[0].reason, "stage_path_relay_only");
-        assert_eq!(report.blockers[0].reason, "stage_path_relay_only");
+        assert_eq!(report.verdict, SplitReadinessVerdict::Ready);
+        assert_eq!(report.participant_count, 3);
+        assert!(report.exclusions.is_empty());
+        assert!(report.blockers.is_empty());
     }
 
     #[test]
@@ -1206,19 +1085,10 @@ mod tests {
             &["meshllm/Qwen3-8B-Q4_K_M-layers"],
         );
         missing_source_b.artifact_transfer_supported = false;
-        let mut slow_path = node(
-            "slowpath000000000000000000000000000",
-            SplitReadinessNodeRole::Worker,
-            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
-        );
-        slow_path.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
-        slow_path.stage_path =
-            crate::mesh::SplitStagePathSnapshot::direct(Some(crate::mesh::MAX_SPLIT_RTT_MS + 1));
-
         let report = build_split_readiness_report(SplitReadinessInput {
             model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
             local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
-            peers: vec![slow_path, missing_source_a, missing_source_b],
+            peers: vec![missing_source_a, missing_source_b],
             capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
             active_topology_count: 0,
             active_stage_count: 0,
@@ -1230,6 +1100,5 @@ mod tests {
             report.blockers[0].short_node_ids,
             vec!["missinga".to_string(), "missingb".to_string()]
         );
-        assert_eq!(report.blockers[1].reason, "stage_path_too_slow");
     }
 }
