@@ -148,7 +148,15 @@ SELECT
         ELSE 'logging_service'
     END,
     action,
-    detail_json
+    json_patch(
+        CASE WHEN json_valid(detail_json) THEN detail_json ELSE '{}' END,
+        json_object(
+            'outcome', result,
+            'source', source,
+            'reason_code', reason,
+            'operation_id', operation_id
+        )
+    )
 FROM legacy_v10_audit_entries;
 
 INSERT INTO webhook_deliveries (
@@ -231,6 +239,31 @@ mod tests {
             )
             .expect("read migrated audit");
         assert_eq!(audit, (1, "logging_service".to_string()));
+        let default_detail: String = connection
+            .query_row(
+                "SELECT detail_json FROM audit_entries WHERE entry_id = 'legacy-audit'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated audit detail");
+        let default_detail: serde_json::Value =
+            serde_json::from_str(&default_detail).expect("migrated detail is valid JSON");
+        assert_eq!(default_detail["outcome"], "succeeded");
+        assert_eq!(default_detail["source"], "system");
+        let explicit_detail: String = connection
+            .query_row(
+                "SELECT detail_json FROM audit_entries WHERE entry_id = 'legacy-audit-explicit'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated explicit audit detail");
+        let explicit_detail: serde_json::Value =
+            serde_json::from_str(&explicit_detail).expect("migrated explicit detail is valid JSON");
+        assert_eq!(explicit_detail["custom"], "kept");
+        assert_eq!(explicit_detail["outcome"], "failed");
+        assert_eq!(explicit_detail["source"], "mesh");
+        assert_eq!(explicit_detail["reason_code"], "model_load_failed");
+        assert_eq!(explicit_detail["operation_id"], "op-42");
         let obsolete_tables: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_v10_%'",
@@ -295,6 +328,12 @@ mod tests {
     );
     INSERT INTO audit_entries (entry_id, occurred_at, actor, action)
     VALUES ('legacy-audit', '2026-08-03T03:50:27Z', 'system', 'cleanup_preview');
+    INSERT INTO audit_entries (entry_id, occurred_at, actor, action, source, reason, result, operation_id, detail_json)
+    VALUES (
+        'legacy-audit-explicit', '2026-08-03T03:50:28Z', 'runtime', 'model_start',
+        'mesh', 'model_load_failed', 'failed', 'op-42',
+        '{"custom":"kept"}'
+    );
     PRAGMA user_version = 10;
     "#;
 }

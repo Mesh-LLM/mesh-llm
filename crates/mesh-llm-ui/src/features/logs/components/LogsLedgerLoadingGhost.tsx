@@ -115,7 +115,7 @@ function LogsLedgerTableRowsLoadingGhost() {
     <div className="divide-y divide-border-soft">
       {LEDGER_ROWS.map((row, index) => (
         <div
-          className="grid grid-cols-[5.25rem_minmax(0,1fr)_4.25rem] items-center gap-3 px-4 py-3 sm:grid-cols-[5rem_minmax(0,1.5fr)_minmax(0,.85fr)_minmax(0,.8fr)_minmax(0,.65fr)_minmax(0,.6fr)]"
+          className="grid min-w-[780px] grid-cols-[5rem_minmax(0,1.5fr)_minmax(0,.85fr)_minmax(0,.8fr)_minmax(0,.65fr)_minmax(0,.6fr)] items-center gap-3 px-4 py-3"
           key={index}
         >
           <LoadingGhostBlock className={`h-3 ${row.time} max-w-full`} />
@@ -155,15 +155,17 @@ function LogsLedgerTableLoadingGhost() {
       </div>
 
       <div data-loading-region="logs-ledger-table">
-        <div className="grid grid-cols-[5.25rem_minmax(0,1fr)_4.25rem] gap-3 border-b border-border-soft px-4 py-2.5 sm:grid-cols-[5rem_minmax(0,1.5fr)_minmax(0,.85fr)_minmax(0,.8fr)_minmax(0,.65fr)_minmax(0,.6fr)]">
-          <LoadingGhostBlock className="h-3 w-12 max-w-full" shimmer />
-          <LoadingGhostBlock className="h-3 w-16 max-w-full" shimmer />
-          <LoadingGhostBlock className="h-3 w-14 max-w-full" />
-          <LoadingGhostBlock className="h-3 w-14 max-w-full" />
-          <LoadingGhostBlock className="h-3 w-16 max-w-full" />
-          <LoadingGhostBlock className="h-3 w-10 max-w-full" />
+        <div className="overflow-x-auto">
+          <div className="grid min-w-[780px] grid-cols-[5rem_minmax(0,1.5fr)_minmax(0,.85fr)_minmax(0,.8fr)_minmax(0,.65fr)_minmax(0,.6fr)] gap-3 border-b border-border-soft px-4 py-2.5">
+            <LoadingGhostBlock className="h-3 w-12 max-w-full" shimmer />
+            <LoadingGhostBlock className="h-3 w-16 max-w-full" shimmer />
+            <LoadingGhostBlock className="h-3 w-14 max-w-full" />
+            <LoadingGhostBlock className="h-3 w-14 max-w-full" />
+            <LoadingGhostBlock className="h-3 w-16 max-w-full" />
+            <LoadingGhostBlock className="h-3 w-10 max-w-full" />
+          </div>
+          <LogsLedgerTableRowsLoadingGhost />
         </div>
-        <LogsLedgerTableRowsLoadingGhost />
       </div>
       <div
         className="flex flex-wrap items-center justify-end gap-3 border-t border-border-soft px-[var(--panel-x)] py-[var(--panel-y)]"

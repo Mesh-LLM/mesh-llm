@@ -2,7 +2,10 @@ import { useState } from 'react'
 import { FolderOpen, LoaderCircle } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { env } from '@/lib/env'
-import type { SchemaSettingControlProps } from '@/features/configuration/components/settings/schema-control-utils'
+import {
+  TEXT_FIELD_BASE_CLASS,
+  type SchemaSettingControlProps
+} from '@/features/configuration/components/settings/schema-control-utils'
 
 export function SchemaPathControl({
   ariaDescribedBy,
@@ -47,7 +50,8 @@ export function SchemaPathControl({
           autoCapitalize="off"
           autoCorrect="off"
           className={cn(
-            'ui-control h-[32px] w-full min-w-0 rounded-[var(--radius)] border bg-surface px-2.5 font-mono text-[length:var(--density-type-control)] text-foreground outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent',
+            TEXT_FIELD_BASE_CLASS,
+            'w-full min-w-0',
             disabled && 'cursor-not-allowed opacity-60',
             invalid && 'border-bad shadow-[var(--shadow-surface-error-inset)]'
           )}

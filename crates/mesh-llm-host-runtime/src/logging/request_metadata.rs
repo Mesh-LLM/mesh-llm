@@ -4,6 +4,7 @@
 //! It never accepts raw paths, query strings, credentials, payloads, or
 //! transport targets.
 
+use mesh_llm_events::logging::envelope::{closed_method, closed_source};
 use openai_frontend::OpenAiFrontendRoute;
 
 use super::policy::{RedactMode, apply_redaction};
@@ -165,13 +166,13 @@ fn bounded_metadata(value: Option<&str>) -> Option<String> {
 }
 
 fn bounded_source(value: &str) -> Option<String> {
-    matches!(value.trim(), "direct_http" | "mesh_forwarded" | "other")
-        .then(|| value.trim().to_owned())
+    closed_source(value)
 }
 
 fn bounded_method(value: &str) -> Option<String> {
-    let value = value.trim().to_ascii_uppercase();
-    matches!(value.as_str(), "GET" | "POST" | "PUT" | "DELETE" | "OTHER").then_some(value)
+    // Unrecognized or empty methods classify as OTHER so the method field is
+    // never silently missing; recognized methods keep their normalized value.
+    closed_method(value).or(Some("OTHER".to_owned()))
 }
 
 fn is_safe_metadata(value: &str) -> bool {
@@ -228,11 +229,25 @@ mod tests {
             .with_method(Some("post"));
         assert_eq!(metadata.source(), Some("direct_http"));
         assert_eq!(metadata.method(), Some("POST"));
+        // Unknown source values are discarded entirely.
         assert!(
             RequestSummaryMetadata::from_parts(None, None, None, None)
                 .with_source(Some("10.0.0.1"))
-                .with_method(Some("PATCH"))
                 .is_empty()
+        );
+        // Unrecognized or empty methods classify as OTHER rather than being
+        // silently dropped, so the method field is never absent.
+        assert_eq!(
+            RequestSummaryMetadata::from_parts(None, None, None, None)
+                .with_method(Some("PATCH"))
+                .method(),
+            Some("OTHER")
+        );
+        assert_eq!(
+            RequestSummaryMetadata::from_parts(None, None, None, None)
+                .with_method(Some(""))
+                .method(),
+            Some("OTHER")
         );
     }
 }

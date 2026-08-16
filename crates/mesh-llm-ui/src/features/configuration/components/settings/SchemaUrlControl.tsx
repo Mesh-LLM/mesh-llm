@@ -1,5 +1,8 @@
 import { cn } from '@/lib/cn'
-import type { SchemaSettingControlProps } from '@/features/configuration/components/settings/schema-control-utils'
+import {
+  TEXT_FIELD_BASE_CLASS,
+  type SchemaSettingControlProps
+} from '@/features/configuration/components/settings/schema-control-utils'
 
 function validUrl(value: string) {
   if (value.trim().length === 0) return true
@@ -30,7 +33,8 @@ export function SchemaUrlControl({
       autoCapitalize="off"
       autoCorrect="off"
       className={cn(
-        'ui-control h-[32px] w-full min-w-[280px] rounded-[var(--radius)] border bg-surface px-2.5 font-mono text-[length:var(--density-type-control)] text-foreground outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent',
+        TEXT_FIELD_BASE_CLASS,
+        'w-full min-w-[280px]',
         disabled && 'cursor-not-allowed opacity-60',
         invalidUrl && 'border-bad shadow-[var(--shadow-surface-error-inset)]'
       )}

@@ -1,5 +1,5 @@
 import * as SliderPrimitive from '@radix-ui/react-slider'
-import type { RefObject } from 'react'
+import { useMemo, type RefObject } from 'react'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   LOG_EVENT_CATEGORIES,
@@ -98,18 +98,31 @@ export function LogCleanupWindow({
   startThumbRef,
   window
 }: LogCleanupWindowProps) {
-  const options = logEventCategoryOptions(rows)
+  const options = useMemo(() => logEventCategoryOptions(rows), [rows])
   const optionCategories = LOG_EVENT_CATEGORIES.filter(
     (category) => category !== 'iroh' || options.some((option) => option.value === 'iroh')
   )
-  const selectedCategories = new Set(categories)
-  const windowRows = rowsInCleanupWindow(rows, window, new Set(LOG_EVENT_CATEGORIES))
-  const selectedRows = rowsInCleanupWindow(rows, window, selectedCategories)
-  const requestCount = selectedRows.filter((row) => row.category === 'requests').length
-  const buckets = cleanupBuckets(rows, bounds)
-  const maxBucketTotal = Math.max(1, ...buckets.map((bucket) => bucket.total))
-  const step = Math.max(1, Math.round((bounds.end - bounds.start) / 240))
-  const selectedSummary = `${selectedRows.length} loaded ${selectedRows.length === 1 ? 'event' : 'events'} shown; ${requestCount} request ${requestCount === 1 ? 'event' : 'events'} in the loaded view. Server preview identifies removable terminal request groups.`
+  const selectedCategories = useMemo(() => new Set(categories), [categories])
+  const windowRows = useMemo(
+    () => rowsInCleanupWindow(rows, window, new Set(LOG_EVENT_CATEGORIES)),
+    [rows, window]
+  )
+  const selectedRows = useMemo(
+    () => rowsInCleanupWindow(rows, window, selectedCategories),
+    [rows, window, selectedCategories]
+  )
+  const requestCount = useMemo(
+    () => selectedRows.filter((row) => row.category === 'requests').length,
+    [selectedRows]
+  )
+  const buckets = useMemo(() => cleanupBuckets(rows, bounds), [rows, bounds])
+  const maxBucketTotal = useMemo(() => Math.max(1, ...buckets.map((bucket) => bucket.total)), [buckets])
+  const step = useMemo(() => Math.max(1, Math.round((bounds.end - bounds.start) / 240)), [bounds])
+  const selectedSummary = useMemo(
+    () =>
+      `${selectedRows.length} loaded ${selectedRows.length === 1 ? 'event' : 'events'} shown; ${requestCount} request ${requestCount === 1 ? 'event' : 'events'} in the loaded view. Server preview identifies removable terminal request groups.`,
+    [selectedRows, requestCount]
+  )
 
   return (
     <section aria-labelledby="cleanup-window-title" className="space-y-3">

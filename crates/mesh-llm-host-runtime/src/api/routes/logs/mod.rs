@@ -246,8 +246,9 @@ async fn handle_event_stream(
     } else {
         event_recovery_cursor(&state).await
     };
-    let Some(query_facade) = state.query_facade() else {
-        return LogsError::unavailable(&state).write(stream).await;
+    let query_facade = match query_facade(&state) {
+        Ok(query_facade) => query_facade,
+        Err(error) => return error.write(stream).await,
     };
     events::stream(stream, subscription, bus, query_facade, recovery_cursor).await
 }

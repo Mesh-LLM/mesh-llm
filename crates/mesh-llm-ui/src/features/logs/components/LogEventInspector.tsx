@@ -148,9 +148,15 @@ function InspectorContent({
 }
 
 function AuditMetadata({ audit }: { readonly audit: LogAuditEntry }) {
-  const statusFields: Array<readonly [string, string]> = [
-    ['Severity', audit.severity ?? 'Not provided'],
-    ...(audit.outcome ? ([['Outcome', audit.outcome]] as const) : [])
+  const statusFields: Array<{
+    readonly kind: 'severity' | 'outcome'
+    readonly label: string
+    readonly value: string
+  }> = [
+    { kind: 'severity', label: 'Severity', value: audit.severity ?? 'Not provided' },
+    ...(audit.outcome
+      ? ([{ kind: 'outcome' as const, label: 'Outcome', value: audit.outcome }] as const)
+      : [])
   ]
   const metadataFields: Array<readonly [string, string]> = [
     ['Entry ID', audit.entryId],
@@ -176,11 +182,11 @@ function AuditMetadata({ audit }: { readonly audit: LogAuditEntry }) {
           Event state
         </h2>
         <dl className="mt-3 flex min-w-0 flex-wrap gap-x-8 gap-y-3">
-          {statusFields.map(([label, value]) => (
+          {statusFields.map(({ kind, label, value }) => (
             <div className="min-w-[8rem]" key={label}>
               <dt className="type-label text-fg-faint">{label}</dt>
               <dd className="mt-1">
-                <StatusBadge dot size="caption" tone={statusTone(label, value)}>
+                <StatusBadge dot size="caption" tone={statusTone(kind, value)}>
                   {value}
                 </StatusBadge>
               </dd>
@@ -219,10 +225,9 @@ function AuditOutsideWindow() {
   )
 }
 
-function statusTone(label: string, value: string): StatusBadgeTone {
+function statusTone(kind: 'severity' | 'outcome', value: string): StatusBadgeTone {
   const normalized = value.trim().toLowerCase()
-  if (label === 'Severity') return SEVERITY_TONES[normalized] ?? 'muted'
-  return OUTCOME_TONES[normalized] ?? 'muted'
+  return kind === 'severity' ? SEVERITY_TONES[normalized] ?? 'muted' : OUTCOME_TONES[normalized] ?? 'muted'
 }
 
 const SEVERITY_TONES: Readonly<Record<string, StatusBadgeTone>> = {

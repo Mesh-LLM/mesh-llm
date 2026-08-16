@@ -19,6 +19,11 @@ function requireHarnessValue(value: string | undefined, name: string) {
   return value
 }
 
+function requireObservedRequest(value: string | undefined): string {
+  if (!value) throw new Error('real console harness did not observe a durable request id')
+  return value
+}
+
 test.describe('real embedded logging console', () => {
   test.skip(!enabled, 'runs only under scripts/qa-logging-console-e2e.sh')
   test.describe.configure({ mode: 'serial' })
@@ -78,11 +83,10 @@ test.describe('real embedded logging console', () => {
         return match?.requestId
       })
       .toBeTruthy()
-    const lifecycleRequestId = observedRequests.at(-1)
-    expect(lifecycleRequestId).toBeTruthy()
-    await expect(requestRow(page, lifecycleRequestId ?? '')).toBeVisible()
+    const lifecycleRequestId = requireObservedRequest(observedRequests.at(-1))
+    await expect(requestRow(page, lifecycleRequestId)).toBeVisible()
     expect(ledgerGets).toBe(connectedLedgerGets)
-    await requestRow(page, lifecycleRequestId ?? '').click()
+    await requestRow(page, lifecycleRequestId).click()
     await expect(page.getByRole('dialog', { name: 'Request Inspector' })).toBeVisible()
     await page.getByRole('tab', { name: 'Diagnostics' }).click()
     await expect(page.getByText('rejected', { exact: true }).first()).toBeVisible()
@@ -114,7 +118,7 @@ test.describe('real embedded logging console', () => {
     await exportDialog.getByRole('button', { name: 'Cancel' }).click()
 
     await page.getByRole('button', { name: 'Clean up logs' }).click()
-    const cleanupDialog = page.getByRole('dialog', { name: 'Choose logs to remove' })
+    const cleanupDialog = page.getByRole('dialog', { name: 'Review log cleanup' })
     await cleanupDialog.getByLabel('Reason for removal').fill('real scoped cleanup certification')
     const previewResponse = page.waitForResponse(
       (response) => response.url().endsWith('/api/logs/cleanup/preview') && response.request().method() === 'POST'
@@ -125,7 +129,7 @@ test.describe('real embedded logging console', () => {
       body: JSON.stringify(previewReceipt, null, 2),
       contentType: 'application/json'
     })
-    const confirmDialog = page.getByRole('dialog')
+    const confirmDialog = page.getByRole('dialog', { name: 'Review log cleanup' })
     await expect(confirmDialog.getByRole('heading', { name: 'Review log cleanup' })).toBeVisible()
     await confirmDialog.getByText('Audit details').click()
     await expect(confirmDialog.getByText('Operation ID', { exact: true })).toBeVisible()
@@ -143,7 +147,7 @@ test.describe('real embedded logging console', () => {
       /Log cleanup completed(\.| with diagnostics\.)/
     )
     await confirmDialog.getByRole('button', { name: 'Close' }).click()
-    await expect(requestRow(page, lifecycleRequestId ?? '')).toHaveCount(0)
+    await expect(requestRow(page, lifecycleRequestId)).toHaveCount(0)
     await expect
       .poll(async () => {
         const response = await page.request.get('/api/logs/requests?limit=100')
@@ -167,12 +171,14 @@ test.describe('real embedded logging console', () => {
 
     const current = await page.request.get('/api/logs/requests?limit=10')
     const currentPage = (await current.json()) as LogPage
-    const deleteId = currentPage.items.find(
-      (item) => item.requestId !== persistedId && item.requestId !== lifecycleRequestId
-    )?.requestId
+    const deleteId = requireObservedRequest(
+      currentPage.items.find(
+        (item) => item.requestId !== persistedId && item.requestId !== lifecycleRequestId
+      )?.requestId
+    )
     expect(deleteId).toBeTruthy()
     await page.reload()
-    await requestRow(page, deleteId ?? '').click()
+    await requestRow(page, deleteId).click()
     await page.getByRole('button', { name: 'Delete terminal request' }).click()
     const deleteDialog = page.getByRole('dialog', { name: 'Delete terminal request?' })
     await deleteDialog.getByLabel('Required audit reason').fill('real delete receipt certification')

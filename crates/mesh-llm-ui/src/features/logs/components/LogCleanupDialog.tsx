@@ -6,14 +6,13 @@ import {
   SharedModalBody,
   SharedModalContent,
   SharedModalDescription,
-  SharedModalHeader,
-  SharedModalTitle
+  SharedModalHeader
 } from '@/components/ui/SharedModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { LogsApiClient, type LogsRequestQuery } from '@/features/logs/api/client'
 import { LogOperationId } from '@/features/logs/api/ids'
-import type { LogCleanupReceipt } from '@/features/logs/api/schemas'
+import type { LogCleanupReceipt, LogMaintenanceCounts } from '@/features/logs/api/schemas'
 import { cleanupScopeFromQuery, supportsCleanup } from '@/features/logs/components/LogCleanupScope'
 import { LogCleanupWindow } from '@/features/logs/components/LogCleanupWindow'
 import { LogMaintenanceReceiptDiagnostics } from '@/features/logs/components/LogMaintenanceReceiptDiagnostics'
@@ -65,6 +64,10 @@ function formatWindow(value: string) {
 
 function countLabel(value: number, singular: string, plural = `${singular}s`) {
   return `${value} ${value === 1 ? singular : plural}`
+}
+
+function linkedRecordTotal(counts: LogMaintenanceCounts) {
+  return counts.events + counts.artifacts + counts.proxyRecords
 }
 
 function actionToneClass(tone: NonNullable<ActionState>['tone']) {
@@ -201,6 +204,7 @@ export function LogCleanupDialog({
   return (
     <SharedModal open={open} onOpenChange={handleOpenChange}>
       <SharedModalContent
+        aria-label="Review log cleanup"
         className="flex max-h-[min(820px,calc(100dvh-2rem))] w-[min(640px,calc(100vw-1.5rem))] flex-col"
         onCloseAutoFocus={(event) => {
           if (!returnFocusRef.current) return
@@ -209,9 +213,13 @@ export function LogCleanupDialog({
         }}
       >
         <SharedModalHeader>
-          <SharedModalTitle ref={titleRef} tabIndex={-1}>
+          <h2
+            className="text-[length:var(--density-type-headline)] font-semibold leading-5 tracking-[-0.02em] text-fg"
+            ref={titleRef}
+            tabIndex={-1}
+          >
             {cleanupDialogTitle(preview)}
-          </SharedModalTitle>
+          </h2>
           <SharedModalDescription>{cleanupDialogDescription(preview)}</SharedModalDescription>
         </SharedModalHeader>
         <SharedModalBody aria-busy={pending} className="min-h-0 flex-1 space-y-4 overflow-y-auto">
@@ -271,9 +279,7 @@ export function LogCleanupDialog({
                         </h3>
                         <p className="mt-1 type-caption text-fg-dim">
                           {countLabel(
-                            preview.state === 'previewed'
-                              ? preview.planned.events + preview.planned.artifacts + preview.planned.proxyRecords
-                              : preview.executed.events + preview.executed.artifacts + preview.executed.proxyRecords,
+                            linkedRecordTotal(preview.state === 'previewed' ? preview.planned : preview.executed),
                             'linked record'
                           )}{' '}
                           {preview.state === 'previewed' ? 'will be removed with them.' : 'removed with them.'}

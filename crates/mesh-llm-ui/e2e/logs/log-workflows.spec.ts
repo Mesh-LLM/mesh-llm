@@ -151,10 +151,10 @@ async function tabTo(page: Page, locator: ReturnType<Page['getByLabel']>, maxTab
 
 async function previewScopedCleanup(page: Page, reason = 'retention review') {
   await page.getByRole('button', { name: 'Clean up logs' }).click()
-  const cleanupDialog = page.getByRole('dialog', { name: 'Choose logs to remove' })
+  const cleanupDialog = page.getByRole('dialog', { name: 'Review log cleanup' })
   await cleanupDialog.getByLabel('Reason for removal').fill(reason)
   await cleanupDialog.getByRole('button', { name: 'Review deletion' }).click()
-  const reviewDialog = page.getByRole('dialog')
+  const reviewDialog = page.getByRole('dialog', { name: 'Review log cleanup' })
   await expect(reviewDialog.getByRole('heading', { name: 'Review log cleanup' })).toBeVisible()
   return reviewDialog
 }
@@ -447,7 +447,7 @@ test('metadata-only export and previewed cleanup stay separated without dead-let
   await exportDialog.getByRole('button', { name: 'Cancel' }).click()
 
   await infoBanner.getByRole('button', { name: 'Clean up logs' }).click()
-  const cleanupDialog = browserPage.getByRole('dialog', { name: 'Choose logs to remove' })
+  const cleanupDialog = browserPage.getByRole('dialog', { name: 'Review log cleanup' })
   await expect(cleanupDialog.getByRole('slider', { name: 'Window start' })).toBeVisible()
   await expect(cleanupDialog.getByRole('slider', { name: 'Window end' })).toBeVisible()
   await expect(
@@ -463,7 +463,7 @@ test('metadata-only export and previewed cleanup stay separated without dead-let
   await cleanupDialog.getByLabel('Reason for removal').fill('retention review')
   await cleanupDialog.getByRole('button', { name: 'Review deletion' }).click()
   expect(JSON.parse(backend.operationBodies[1] ?? '')).toMatchObject({ requestLimit: 100 })
-  const confirmDialog = browserPage.getByRole('dialog')
+  const confirmDialog = browserPage.getByRole('dialog', { name: 'Review log cleanup' })
   await expect(confirmDialog.getByRole('heading', { name: 'Review log cleanup' })).toBeVisible()
   await expect(confirmDialog.getByText('Operational events stay retained.')).toBeVisible()
   await confirmDialog.getByRole('button', { name: 'Delete this batch' }).click()

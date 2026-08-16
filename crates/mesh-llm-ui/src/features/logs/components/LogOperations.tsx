@@ -1,6 +1,6 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { Download, Trash2 } from 'lucide-react'
-import { useRef, useState, type RefObject } from 'react'
+import { useMemo, useRef, useState, type RefObject } from 'react'
 import {
   SharedModal,
   SharedModalActionStrip,
@@ -165,6 +165,10 @@ export function LogOperations({
   const [open, setOpen] = useState(false)
   const [cleanupSnapshot, setCleanupSnapshot] = useState<CleanupSnapshot>()
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const fallbackSnapshot = useMemo<CleanupSnapshot>(() => ({ generation: 0, rows, selectedCategories }), [
+    rows,
+    selectedCategories
+  ])
 
   switch (operation) {
     case 'export':
@@ -189,7 +193,7 @@ export function LogOperations({
         </div>
       )
     case 'cleanup': {
-      const snapshot = cleanupSnapshot ?? { generation: 0, rows, selectedCategories }
+      const snapshot = cleanupSnapshot ?? fallbackSnapshot
       return (
         <div className="flex flex-wrap items-center gap-2">
           <Button

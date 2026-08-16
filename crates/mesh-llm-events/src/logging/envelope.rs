@@ -133,12 +133,18 @@ fn closed_route(value: &str) -> Option<String> {
     accepted.then(|| value.to_owned())
 }
 
-fn closed_source(value: &str) -> Option<String> {
+/// Trim and accept only the closed source vocabulary
+/// (`direct_http` | `mesh_forwarded` | `other`). Unknown or empty sources are
+/// discarded rather than echoed to a console.
+pub fn closed_source(value: &str) -> Option<String> {
     matches!(value.trim(), "direct_http" | "mesh_forwarded" | "other")
         .then(|| value.trim().to_owned())
 }
 
-fn closed_method(value: &str) -> Option<String> {
+/// Trim, uppercase, and accept only the closed HTTP method vocabulary
+/// (`GET` | `POST` | `PUT` | `DELETE` | `OTHER`). Unknown or empty methods are
+/// discarded rather than echoed to a console.
+pub fn closed_method(value: &str) -> Option<String> {
     let value = value.trim().to_ascii_uppercase();
     matches!(value.as_str(), "GET" | "POST" | "PUT" | "DELETE" | "OTHER").then_some(value)
 }
@@ -236,7 +242,7 @@ impl TryFrom<u16> for CanonicalSchemaVersion {
 }
 
 /// Top-level event envelope carrying all metadata required for persistence and replay.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CanonicalEnvelope {
     pub schema_version: CanonicalSchemaVersion,
     pub event_id: EventId,
@@ -267,6 +273,27 @@ pub struct CanonicalEnvelope {
     #[serde(skip)]
     pub(crate) presentation_context: Option<CanonicalPresentationContext>,
 }
+
+/// Equality follows the wire representation: the process-local
+/// `presentation_context` projection is excluded, so envelopes that serialize
+/// identically compare equal.
+impl PartialEq for CanonicalEnvelope {
+    fn eq(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.event_id == other.event_id
+            && self.request_id == other.request_id
+            && self.channel == other.channel
+            && self.sequence == other.sequence
+            && self.occurred_at == other.occurred_at
+            && self.event == other.event
+            && self.tenant_id == other.tenant_id
+            && self.account_id == other.account_id
+            && self.user_id == other.user_id
+            && self.role == other.role
+    }
+}
+
+impl Eq for CanonicalEnvelope {}
 
 impl CanonicalEnvelope {
     /// Create a new envelope with the given fields. Identity fields default to None.
@@ -469,5 +496,66 @@ mod tests {
         let json = serde_json::to_string(&env).unwrap();
         assert!(json.contains("user_id"));
         assert!(json.contains("role"));
+    }
+
+    #[test]
+    fn test_envelope_equality_ignores_presentation_context() {
+        let base = CanonicalEnvelope::new(
+            EventId::new(),
+            RequestId::new(),
+            ReplayChannel::Requests,
+            7,
+            "2025-01-01T00:00:00Z".into(),
+            LifecycleEvent::Admitted {
+                model: Some("llama-3".into()),
+                method: Some("POST".into()),
+            },
+        );
+        let with_context =
+            base.clone()
+                .with_presentation_context(CanonicalPresentationContext::from_parts(
+                    Some("health"),
+                    Some("direct_http"),
+                    None,
+                    None,
+                    None,
+                    None,
+                ));
+
+        assert_eq!(base, with_context);
+        // The process-local context is skipped on the wire, so the two
+        // envelopes also serialize identically.
+        assert_eq!(
+            serde_json::to_value(&base).unwrap(),
+            serde_json::to_value(&with_context).unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_envelope_equality_compares_wire_fields() {
+        let base = CanonicalEnvelope::new(
+            EventId::from(uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap()),
+            RequestId::from(uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap()),
+            ReplayChannel::Requests,
+            7,
+            "2025-01-01T00:00:00Z".into(),
+            LifecycleEvent::Admitted {
+                model: None,
+                method: None,
+            },
+        );
+        let different_request_id = CanonicalEnvelope::new(
+            EventId::from(uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap()),
+            RequestId::from(uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000009").unwrap()),
+            ReplayChannel::Requests,
+            7,
+            "2025-01-01T00:00:00Z".into(),
+            LifecycleEvent::Admitted {
+                model: None,
+                method: None,
+            },
+        );
+
+        assert_ne!(base, different_request_id);
     }
 }

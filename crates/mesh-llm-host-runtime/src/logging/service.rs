@@ -620,12 +620,14 @@ fn enqueue_event_with_delivery(
         occurred_at.unwrap_or_else(|| canonical_clock_timestamp(event_delivery.clock.as_ref()));
     let event_id = EventId::new();
     let request_id_string = request_id.as_uuid().to_string();
+    let registry_entry = event_delivery
+        .registry
+        .get_active(&request_id_string)
+        .or_else(|| event_delivery.registry.get_recent(&request_id_string));
     let summary_snapshots = summary_snapshots.or_else(|| {
-        event_delivery
-            .registry
-            .get_active(&request_id_string)
-            .or_else(|| event_delivery.registry.get_recent(&request_id_string))
-            .map(|entry| RequestSummaryEventSnapshots::current(&entry))
+        registry_entry
+            .as_ref()
+            .map(RequestSummaryEventSnapshots::current)
     });
     let metadata = terminal_summary
         .as_ref()
@@ -642,11 +644,10 @@ fn enqueue_event_with_delivery(
             })
         })
         .or_else(|| {
-            event_delivery
-                .registry
-                .get_active(&request_id_string)
-                .or_else(|| event_delivery.registry.get_recent(&request_id_string))
-                .map(|entry| entry.metadata().clone())
+            registry_entry
+                .as_ref()
+                .map(RequestSummaryEntry::metadata)
+                .cloned()
         });
     let canonical_envelope = serde_json::from_str::<LifecycleEvent>(&payload_json)
         .ok()

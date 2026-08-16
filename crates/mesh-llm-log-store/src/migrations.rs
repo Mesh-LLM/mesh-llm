@@ -269,6 +269,10 @@ ALTER TABLE artifact_pointers ADD COLUMN unavailable_reason TEXT
 pub fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_ver: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
 
+    if !accepted_schema_version(conn, current_ver as u32)? {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+
     match current_ver {
         0 => {
             apply_migration_transactionally(conn, 1, MIGRATIONS_V1)?;
@@ -286,9 +290,8 @@ pub fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
             mark_current(conn)
         }
         3 => mark_current(conn),
-        legacy_v10::LEGACY_VERSION if legacy_v10::matches(conn)? => legacy_v10::migrate(conn),
-        version if version == CURRENT_VERSION as i32 => Ok(()),
-        _ => Err(rusqlite::Error::InvalidQuery),
+        legacy_v10::LEGACY_VERSION => legacy_v10::migrate(conn),
+        _ => Ok(()),
     }
 }
 
@@ -302,10 +305,17 @@ pub(crate) fn incompatible_schema(
 ) -> Result<Option<(u32, u32)>, rusqlite::Error> {
     let found: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     let supported = CURRENT_VERSION;
-    let compatible = matches!(found, 0..=3)
-        || found == supported
-        || (found == legacy_v10::LEGACY_VERSION as u32 && legacy_v10::matches(conn)?);
+    let compatible = accepted_schema_version(conn, found)?;
     Ok((!compatible).then_some((found, supported)))
+}
+
+/// Whether `version` is a schema the store can open: a blank-slate version
+/// the migration steps can upgrade, the current version, or the
+/// fingerprint-guarded v10 development lineage.
+fn accepted_schema_version(conn: &Connection, version: u32) -> Result<bool, rusqlite::Error> {
+    Ok(matches!(version, 0..=3)
+        || version == CURRENT_VERSION
+        || (version == legacy_v10::LEGACY_VERSION as u32 && legacy_v10::matches(conn)?))
 }
 
 fn mark_current(conn: &Connection) -> Result<(), rusqlite::Error> {

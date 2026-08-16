@@ -96,9 +96,87 @@ fn picker_command(program: &str, args: &[&str]) -> Result<Option<String>, String
             "The system directory picker could not open; enter the host path manually".to_string(),
         );
     }
-    let path = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .trim_end_matches(std::path::MAIN_SEPARATOR)
-        .to_string();
+    let path = trim_trailing_separators(String::from_utf8_lossy(&output.stdout).trim());
     Ok((!path.is_empty()).then_some(path))
+}
+
+/// Trim trailing path separators while preserving a root path.
+///
+/// Both `/` and `\` count as separators regardless of host platform so the
+/// Windows drive-root case (`C:\`) stays unit-testable on any host. A root
+/// (`/`, `C:\`) is preserved; an all-separator path collapses to `/`.
+fn trim_trailing_separators(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+    if path.ends_with(['/', '\\']) && is_drive_root(trimmed) {
+        let separator = &path[path.len() - 1..];
+        return format!("{trimmed}{separator}");
+    }
+    trimmed.to_string()
+}
+
+fn is_drive_root(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(letter), Some(':'), None) if letter.is_ascii_alphabetic()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trim_trailing_separators;
+
+    #[test]
+    fn forward_slash_root_is_preserved() {
+        assert_eq!(trim_trailing_separators("/"), "/");
+    }
+
+    #[test]
+    fn windows_drive_root_is_preserved() {
+        assert_eq!(trim_trailing_separators(r"C:\"), r"C:\");
+    }
+
+    #[test]
+    fn all_separators_collapse_to_root() {
+        assert_eq!(trim_trailing_separators("//"), "/");
+    }
+
+    #[test]
+    fn trims_trailing_forward_slash() {
+        assert_eq!(trim_trailing_separators("/foo/bar/"), "/foo/bar");
+    }
+
+    #[test]
+    fn trims_trailing_windows_separators() {
+        assert_eq!(trim_trailing_separators(r"C:\foo\bar\"), r"C:\foo\bar");
+    }
+
+    #[test]
+    fn bare_drive_letter_is_unchanged() {
+        assert_eq!(trim_trailing_separators("C:"), "C:");
+    }
+
+    #[test]
+    fn trims_relative_trailing_slash() {
+        assert_eq!(trim_trailing_separators("foo/"), "foo");
+    }
+
+    #[test]
+    fn path_without_trailing_separator_is_unchanged() {
+        assert_eq!(
+            trim_trailing_separators("/home/user/logs"),
+            "/home/user/logs"
+        );
+    }
+
+    #[test]
+    fn empty_path_is_unchanged() {
+        assert_eq!(trim_trailing_separators(""), "");
+    }
 }

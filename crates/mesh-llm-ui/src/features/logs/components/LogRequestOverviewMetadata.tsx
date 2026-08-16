@@ -7,6 +7,7 @@ import {
   type RetainedQueryState
 } from '@/features/logs/components/LogRequestOverviewDerivations'
 import { LogRequestOverviewPanel } from '@/features/logs/components/LogRequestOverviewPanel'
+import { deriveArtifactCounts } from '@/features/logs/lib/log-artifact-counts'
 import { trailingRowSpanClass } from '@/features/logs/lib/log-grid'
 import { cn } from '@/lib/cn'
 
@@ -19,13 +20,6 @@ type MetadataField = {
   readonly label: string
   readonly value: ReactNode
 }
-
-const CONTENT_STATES = [
-  'available',
-  'unavailable',
-  'missing',
-  'corrupt'
-] as const satisfies readonly LogArtifact['contentState'][]
 
 function MetadataGrid({
   fields,
@@ -105,24 +99,14 @@ function ArtifactSummary({
   }
 
   const items = artifacts.items
-  const contentStates = CONTENT_STATES.map((state) => ({
-    state,
-    count: items.filter((item) => item.contentState === state).length
-  }))
-    .filter(({ count }) => count > 0)
-    .map(({ state, count }) => `${count.toLocaleString()} ${state}`)
-    .join(' · ')
-  const redacted = items.filter((item) => item.redacted).length
-  const truncated = items.filter((item) => item.truncated).length
-  const bytes = items.reduce((total, item) => total + item.bytes, 0)
-  const versions = [...new Set(items.map((item) => item.version))].sort((left, right) => left - right)
+  const counts = deriveArtifactCounts(items)
   const fields: readonly MetadataField[] = [
-    { label: 'Artifact records', value: items.length.toLocaleString() },
-    { label: 'Content states', value: contentStates },
-    { label: 'Redacted', value: `${redacted.toLocaleString()} of ${items.length.toLocaleString()}` },
-    { label: 'Truncated', value: `${truncated.toLocaleString()} of ${items.length.toLocaleString()}` },
-    { label: 'Stored bytes', value: `${bytes.toLocaleString()} B` },
-    { label: 'Versions', value: versions.map((version) => `v${version}`).join(' · ') },
+    { label: 'Artifact records', value: counts.total.toLocaleString() },
+    { label: 'Content states', value: counts.contentStates },
+    { label: 'Redacted', value: `${counts.redacted.toLocaleString()} of ${counts.total.toLocaleString()}` },
+    { label: 'Truncated', value: `${counts.truncated.toLocaleString()} of ${counts.total.toLocaleString()}` },
+    { label: 'Stored bytes', value: `${counts.bytes.toLocaleString()} B` },
+    { label: 'Versions', value: counts.versions.map((version) => `v${version}`).join(' · ') },
     { label: 'Request source', value: source }
   ]
   return <MetadataGrid fields={fields} />

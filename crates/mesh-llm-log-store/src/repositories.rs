@@ -191,15 +191,12 @@ impl AuditEntrySeverity {
         }
     }
 
-    fn parse(value: Option<String>) -> Result<Option<Self>, LogStoreError> {
+    fn parse(value: Option<String>) -> Option<Self> {
         match value.as_deref() {
-            None => Ok(None),
-            Some("info") => Ok(Some(Self::Info)),
-            Some("warning") => Ok(Some(Self::Warning)),
-            Some("error") => Ok(Some(Self::Error)),
-            Some(_) => Err(LogStoreError::QueryFailed(
-                "audit entry severity is invalid".to_string(),
-            )),
+            Some("info") => Some(Self::Info),
+            Some("warning") => Some(Self::Warning),
+            Some("error") => Some(Self::Error),
+            _ => None,
         }
     }
 }
@@ -233,8 +230,7 @@ fn audit_entry_row(row: &Row<'_>) -> rusqlite::Result<AuditEntryRow> {
         occurred_at: row.get(3)?,
         source: row.get(4)?,
         code: row.get(5)?,
-        severity: AuditEntrySeverity::parse(detail.severity)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+        severity: AuditEntrySeverity::parse(detail.severity),
         context_version: detail.context_version,
         subject_kind: detail.subject_kind,
         subject_id: detail.subject_id,
@@ -1462,7 +1458,7 @@ impl LogStore {
             .query_map(rusqlite::params_from_iter(parameters), audit_entry_row)
             .map_err(LogStoreError::Sqlite)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(LogStoreError::Sqlite)
+            .map_err(|error| LogStoreError::QueryFailed(error.to_string()))
     }
 
     // ════════════════════════════

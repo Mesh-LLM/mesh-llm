@@ -210,7 +210,7 @@ export function useLogsLiveRecovery({
   useEffect(() => {
     const previous = previousAuthoritativeSnapshotRef.current
     previousAuthoritativeSnapshotRef.current = authoritativeSnapshot
-    if (previous === undefined || previous === authoritativeSnapshot) return
+    if (previous === authoritativeSnapshot) return
     const authoritativeRevision = liveRevisionRef.current
     setLiveRequests((current) => ({
       subscriptionKey: current.subscriptionKey,

@@ -101,24 +101,29 @@ impl CanonicalEnvelope {
         self.presentation_local_summary_with_limit(DEFAULT_PRESENTATION_SUMMARY_LIMIT)
     }
 
-    /// A deterministic, character-bounded local presentation summary.
+    /// A deterministic local presentation summary with a bounded message body.
     ///
-    /// The source summary is already payload-free. Limiting happens only after
-    /// that safe projection has been constructed, so callers cannot accidentally
-    /// truncate and expose a raw lifecycle payload instead.
+    /// Only the message/context portion is bounded. The trailing correlation
+    /// metadata (request/event IDs, channel, sequence, token counts) is
+    /// appended afterward so operator correlation survives even at the
+    /// smallest limits. The source summary is already payload-free. Limiting
+    /// happens only after that safe projection has been constructed, so
+    /// callers cannot accidentally truncate and expose a raw lifecycle payload
+    /// instead.
     pub fn presentation_local_summary_with_limit(&self, limit: usize) -> String {
-        let mut message = format!(
-            "{} request_id={} event_id={} channel={} sequence={}",
-            self.presentation_message(),
+        let mut correlation = format!(
+            " request_id={} event_id={} channel={} sequence={}",
             self.request_id.as_uuid(),
             self.event_id.as_uuid(),
             presentation_channel_name(self.channel),
             self.sequence,
         );
         if let Some(tokens) = self.presentation_token_count() {
-            message.push_str(&format!(" tokens={tokens}"));
+            correlation.push_str(&format!(" tokens={tokens}"));
         }
-        truncate_presentation_summary(message, limit)
+        let mut message = truncate_presentation_message(self.presentation_message(), limit);
+        message.push_str(&correlation);
+        message
     }
 
     /// Numeric token counters are safe local operational metadata; token
@@ -235,8 +240,17 @@ impl CanonicalEnvelope {
 /// or larger validated limit at runtime.
 pub const DEFAULT_PRESENTATION_SUMMARY_LIMIT: usize = 2_048;
 
-fn truncate_presentation_summary(summary: String, limit: usize) -> String {
-    summary.chars().take(limit).collect()
+/// Marker appended to a message body that was truncated to its character
+/// budget. Correlation metadata is never part of this budget.
+const ELLIPSIS: &str = "...";
+
+fn truncate_presentation_message(message: String, limit: usize) -> String {
+    if message.chars().count() <= limit {
+        return message;
+    }
+    let keep = limit.saturating_sub(ELLIPSIS.len());
+    let truncated: String = message.chars().take(keep).collect();
+    format!("{truncated}{ELLIPSIS}")
 }
 
 fn append_status(mut message: String, status_code: Option<u16>) -> String {
@@ -253,10 +267,58 @@ fn append_duration(mut message: String, duration_ms: Option<u64>) -> String {
     message
 }
 
+/// The closed request classification used by local presentation rendering.
+///
+/// This is the typed counterpart of the string vocabulary produced by
+/// [`CanonicalEnvelope::presentation_request_kind`]; rendering matches on the
+/// enum so an unknown or misspelled kind falls through explicitly instead of
+/// silently dropping the phase prefix or context classification.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequestKind {
+    Probe,
+    ModelListing,
+    Inference,
+    Management,
+    Unknown,
+}
+
+impl std::str::FromStr for RequestKind {
+    type Err = std::convert::Infallible;
+
+    /// Parse the compact request-kind vocabulary; anything unrecognized maps
+    /// to [`RequestKind::Unknown`].
+    fn from_str(kind: &str) -> Result<Self, Self::Err> {
+        Ok(match kind {
+            "probe" => Self::Probe,
+            "model_listing" => Self::ModelListing,
+            "inference" => Self::Inference,
+            "management" => Self::Management,
+            _ => Self::Unknown,
+        })
+    }
+}
+
+impl RequestKind {
+    /// The human-readable label used as a request phase prefix.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Probe => "probe",
+            Self::ModelListing => "model listing",
+            Self::Inference => "inference",
+            Self::Management => "management",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 fn append_context(message: impl Into<String>, envelope: &CanonicalEnvelope) -> String {
     let mut message = contextual_phase_prefix(message.into(), envelope);
     if envelope.presentation_context().is_some() {
-        if envelope.presentation_request_kind() == "unknown" {
+        let kind = envelope
+            .presentation_request_kind()
+            .parse::<RequestKind>()
+            .unwrap_or(RequestKind::Unknown);
+        if kind == RequestKind::Unknown {
             message.push_str(" kind=unknown");
         }
         if let Some(route) = envelope.presentation_route() {
@@ -291,18 +353,22 @@ fn contextual_phase_prefix(mut message: String, envelope: &CanonicalEnvelope) ->
     let Some(_) = envelope.presentation_context() else {
         return message;
     };
-    let kind = match envelope.presentation_request_kind() {
-        "probe" => "probe",
-        "model_listing" => "model listing",
-        "inference" => "inference",
-        "management" => "management",
-        _ => return message,
+    let kind = envelope
+        .presentation_request_kind()
+        .parse::<RequestKind>()
+        .unwrap_or(RequestKind::Unknown);
+    let phase = match kind {
+        RequestKind::Unknown => return message,
+        RequestKind::Probe
+        | RequestKind::ModelListing
+        | RequestKind::Inference
+        | RequestKind::Management => kind.as_str(),
     };
     if message == "request admitted" {
-        return format!("{kind} admitted");
+        return format!("{phase} admitted");
     }
-    message.insert_str(0, kind);
-    message.insert(kind.len(), ' ');
+    message.insert_str(0, phase);
+    message.insert(phase.len(), ' ');
     message
 }
 
@@ -311,5 +377,198 @@ fn presentation_channel_name(channel: super::replay::ReplayChannel) -> &'static 
         super::replay::ReplayChannel::Requests => "requests",
         super::replay::ReplayChannel::Operations => "operations",
         super::replay::ReplayChannel::System => "system",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::identifiers::{EventId, RequestId};
+    use super::super::replay::ReplayChannel;
+    use super::*;
+
+    fn completed_envelope() -> CanonicalEnvelope {
+        CanonicalEnvelope::new(
+            EventId::new(),
+            RequestId::new(),
+            ReplayChannel::Requests,
+            7,
+            "2025-01-01T00:00:00Z".into(),
+            LifecycleEvent::Completed {
+                status_code: Some(200),
+                duration_ms: Some(3),
+                usage: None,
+            },
+        )
+        .with_presentation_context(CanonicalPresentationContext::from_parts(
+            Some("health"),
+            Some("direct_http"),
+            Some("llama-3"),
+            Some("openai_frontend"),
+            Some("health"),
+            Some("GET"),
+        ))
+    }
+
+    fn admitted_envelope_with_kind(route: Option<&str>) -> CanonicalEnvelope {
+        let mut envelope = CanonicalEnvelope::new(
+            EventId::new(),
+            RequestId::new(),
+            ReplayChannel::Requests,
+            1,
+            "2025-01-01T00:00:00Z".into(),
+            LifecycleEvent::Admitted {
+                model: Some("llama-3".into()),
+                method: Some("POST".into()),
+            },
+        );
+        if let Some(route) = route {
+            envelope =
+                envelope.with_presentation_context(CanonicalPresentationContext::from_parts(
+                    Some(route),
+                    Some("direct_http"),
+                    Some("llama-3"),
+                    Some("openai_frontend"),
+                    None,
+                    Some("POST"),
+                ));
+        }
+        envelope
+    }
+
+    #[test]
+    fn local_summary_within_limit_keeps_full_message_and_correlation() {
+        let envelope = completed_envelope();
+        let summary = envelope.presentation_local_summary_with_limit(2_048);
+
+        assert!(summary.starts_with("probe request completed"));
+        assert!(summary.contains(" status=200"));
+        assert!(summary.contains(" duration=3ms"));
+        assert!(summary.contains("request_id="));
+        assert!(summary.contains("event_id="));
+        assert!(summary.contains("channel=requests"));
+        assert!(summary.contains("sequence=7"));
+    }
+
+    #[test]
+    fn local_summary_truncates_message_but_keeps_correlation() {
+        let envelope = completed_envelope();
+        let summary = envelope.presentation_local_summary_with_limit(40);
+
+        let message_portion = summary.split(" request_id=").next().unwrap();
+        assert!(message_portion.chars().count() <= 40);
+        assert!(summary.contains("..."));
+        assert!(summary.contains("request_id="));
+        assert!(summary.contains("event_id="));
+        assert!(summary.contains("channel=requests"));
+        assert!(summary.contains("sequence=7"));
+        assert!(!summary.contains("duration=3ms"));
+        assert!(!summary.contains("engine=health"));
+    }
+
+    #[test]
+    fn local_summary_at_limit_one_keeps_only_correlation_metadata() {
+        let envelope = completed_envelope();
+        let summary = envelope.presentation_local_summary_with_limit(1);
+
+        assert!(summary.starts_with("..."));
+        assert!(summary.contains("request_id="));
+        assert!(summary.contains("event_id="));
+        assert!(summary.contains("channel=requests"));
+        assert!(summary.contains("sequence=7"));
+        assert!(!summary.contains("request completed"));
+        assert!(!summary.contains(" route="));
+    }
+
+    #[test]
+    fn request_kind_parses_known_kinds_and_unknown_fallback() {
+        assert_eq!("probe".parse::<RequestKind>().unwrap(), RequestKind::Probe);
+        assert_eq!(
+            "model_listing".parse::<RequestKind>().unwrap(),
+            RequestKind::ModelListing
+        );
+        assert_eq!(
+            "inference".parse::<RequestKind>().unwrap(),
+            RequestKind::Inference
+        );
+        assert_eq!(
+            "management".parse::<RequestKind>().unwrap(),
+            RequestKind::Management
+        );
+        assert_eq!("typo".parse::<RequestKind>().unwrap(), RequestKind::Unknown);
+        assert_eq!("".parse::<RequestKind>().unwrap(), RequestKind::Unknown);
+    }
+
+    #[test]
+    fn request_kind_labels_render_expected_vocabulary() {
+        for (kind, label) in [
+            (RequestKind::Probe, "probe"),
+            (RequestKind::ModelListing, "model listing"),
+            (RequestKind::Inference, "inference"),
+            (RequestKind::Management, "management"),
+            (RequestKind::Unknown, "unknown"),
+        ] {
+            assert_eq!(kind.as_str(), label);
+        }
+    }
+
+    #[test]
+    fn contextual_phase_prefix_uses_typed_kind_labels() {
+        assert_eq!(
+            admitted_envelope_with_kind(Some("health")).presentation_message(),
+            "probe admitted route=health source=direct_http model=llama-3 \
+             provider=openai_frontend method=POST"
+        );
+        assert_eq!(
+            admitted_envelope_with_kind(Some("models")).presentation_message(),
+            "model listing admitted route=models source=direct_http model=llama-3 \
+             provider=openai_frontend method=POST"
+        );
+        assert_eq!(
+            admitted_envelope_with_kind(Some("chat_completions")).presentation_message(),
+            "inference admitted route=chat_completions source=direct_http model=llama-3 \
+             provider=openai_frontend method=POST"
+        );
+        assert_eq!(
+            admitted_envelope_with_kind(Some("management_get_status")).presentation_message(),
+            "management admitted route=management_get_status source=direct_http model=llama-3 \
+             provider=openai_frontend method=POST"
+        );
+    }
+
+    #[test]
+    fn contextual_phase_prefix_falls_back_without_kind_label() {
+        let envelope = admitted_envelope_with_kind(None);
+        assert_eq!(
+            envelope.presentation_message(),
+            "request admitted model=llama-3 method=POST"
+        );
+    }
+
+    #[test]
+    fn contextual_phase_prefix_with_unknown_kind_marks_kind_unknown() {
+        let envelope = CanonicalEnvelope::new(
+            EventId::new(),
+            RequestId::new(),
+            ReplayChannel::Requests,
+            1,
+            "2025-01-01T00:00:00Z".into(),
+            LifecycleEvent::Admitted {
+                model: None,
+                method: None,
+            },
+        )
+        .with_presentation_context(CanonicalPresentationContext::from_parts(
+            Some("not_a_closed_route"),
+            Some("direct_http"),
+            None,
+            None,
+            None,
+            None,
+        ));
+
+        assert_eq!(
+            envelope.presentation_message(),
+            "request admitted kind=unknown source=direct_http"
+        );
     }
 }

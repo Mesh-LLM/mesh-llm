@@ -203,7 +203,7 @@ describe('LogOperations', () => {
 
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
     await user.keyboard('{Escape}')
-    expect(screen.getByRole('dialog', { name: 'Choose logs to remove' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Review log cleanup' })).toBeInTheDocument()
 
     await act(async () => resolvePreview?.(cleanupReceipt('previewed')))
     const reviewHeading = await screen.findByRole('heading', { name: 'Review log cleanup' })

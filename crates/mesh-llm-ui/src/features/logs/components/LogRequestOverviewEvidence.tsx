@@ -1,5 +1,5 @@
 import { Route, Workflow } from 'lucide-react'
-import type { LogLifecycleEvent, LogProxyAttempt } from '@/features/logs/api/schemas'
+import type { LogEventKind, LogLifecycleEvent, LogProxyAttempt } from '@/features/logs/api/schemas'
 import { tokenUsageEntries } from '@/features/logs/lib/log-token-usage'
 import {
   attemptDurationMs,
@@ -56,10 +56,28 @@ function lifecycleElapsed(events: readonly LogLifecycleEvent[], index: number): 
   return Number.isFinite(elapsed) && elapsed >= 0 ? `+${formatDurationMs(elapsed)}` : undefined
 }
 
+const LIFECYCLE_TONES: Readonly<Record<LogEventKind, 'accent' | 'bad' | 'good'>> = {
+  admitted: 'accent',
+  route_selected: 'accent',
+  attempt_started: 'accent',
+  attempt_completed: 'good',
+  attempt_failed: 'bad',
+  backend_stream_first_item: 'accent',
+  stream_started: 'accent',
+  stream_chunk: 'accent',
+  stream_completed: 'good',
+  usage_recorded: 'accent',
+  stream_error: 'bad',
+  audit_error: 'bad',
+  completed: 'good',
+  failed: 'bad',
+  rejected: 'bad',
+  cancelled: 'bad',
+  dropped: 'bad'
+}
+
 function lifecycleTone(kind: LogLifecycleEvent['kind']): 'accent' | 'bad' | 'good' {
-  if (/(error|failed|rejected|cancelled|dropped)/u.test(kind)) return 'bad'
-  if (/(completed|finished|succeeded)/u.test(kind)) return 'good'
-  return 'accent'
+  return LIFECYCLE_TONES[kind]
 }
 
 const LIFECYCLE_NODE_CLASS = {

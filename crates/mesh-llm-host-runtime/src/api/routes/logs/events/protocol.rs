@@ -178,6 +178,19 @@ pub(super) fn error_frame(cursor: Cursor) -> String {
     .expect("fixed stream error frame fits the SSE bound")
 }
 
+/// Fixed `stream_error` frame emitted exactly once when the durable audit
+/// reconcile query fails. The audit cursor keeps the client's replay position
+/// stable while the code distinguishes a failed reconcile from the
+/// `invalid_event` frame used for malformed entries.
+pub(super) fn audit_reconcile_error_frame(sequence: u64) -> String {
+    frame(
+        "stream_error",
+        &AuditCursor(sequence).event_id(),
+        &serde_json::json!({"code":"audit_reconcile_failed"}),
+    )
+    .expect("fixed audit reconcile error frame fits the SSE bound")
+}
+
 pub(in crate::api::routes::logs) fn heartbeat_frame() -> &'static str {
     ": keepalive\n\n"
 }
