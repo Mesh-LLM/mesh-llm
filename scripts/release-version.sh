@@ -141,7 +141,7 @@ JS
     if [[ "$before" == "$after" ]]; then
         return
     fi
-    printf '%s' "$after" >"$file"
+    printf '%s\n' "$after" >"$file"
 }
 
 update_known_mesh_versions() {
@@ -159,7 +159,7 @@ update_known_mesh_versions() {
     ' "$next" "$file"; then
         return
     fi
-    after="$(perl -0777 -pe 's/(fn known_mesh_llm_versions\(\).*?\&\[\r?\n\s*)/${1}"'"$next"'", /s' "$file")"
+    after="$(perl -0777 -pe 's/(fn known_mesh_llm_versions\(\).*?\&\[\r?\n)([ \t]*)/${1}${2}"'"$next"'",\n${2}/s' "$file")"
     if [[ "$before" == "$after" ]]; then
         echo "failed to add $next to known mesh-llm versions in $file" >&2
         exit 1
@@ -267,6 +267,7 @@ literal_version_files=(
     "docs/sdk/rust.md"
     "docs/sdk/swift.md"
     "docs/SDK.md"
+    "docs/plugins/exemplars/web-ui/Cargo.lock"
     "sdk/swift/README.md"
     "sdk/swift/scripts/generate-swift-bindings.sh"
     "website/src/docs/pages/CLI.md"
@@ -274,6 +275,8 @@ literal_version_files=(
     "sdk/kotlin/README.md"
     "sdk/kotlin/example/example-jvm/build.gradle.kts"
     "crates/mesh-llm-config/src/model/built_in_schema/presentation.rs"
+    "crates/mesh-llm-host-runtime/tests/fixtures/config_schema_reference.json"
+    "website/src/docs/pages/developing-plugins.md"
 )
 
 for relative_file in "${literal_version_files[@]}"; do

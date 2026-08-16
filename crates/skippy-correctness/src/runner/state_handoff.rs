@@ -1192,7 +1192,7 @@ fn export_local_state_payload(
             )?;
             let recurrent = session.export_recurrent_state()?;
             Ok(LocalStatePayload::KvRecurrent {
-                kv_desc: page.as_ref().map(|page| page.desc),
+                kv_desc: page.as_ref().map(|page| page.desc.clone()),
                 kv: page.map(|page| page.payload).unwrap_or_default(),
                 recurrent,
             })

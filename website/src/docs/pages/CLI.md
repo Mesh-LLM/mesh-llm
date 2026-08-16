@@ -41,8 +41,8 @@ For the trusted-local ledger, retention, and capture guidance, see
 mesh-llm --version
 ```
 
-Release builds report the released package version, such as `mesh-llm 0.72.1`.
-Local source builds may include build metadata, such as `mesh-llm 0.72.1+gABCDEF.dirty`, so you can tell exactly which commit produced the binary. Compatibility checks, native-runtime cache paths, and release identity still use the plain release version.
+Release builds report the released package version, such as `mesh-llm 0.76.0-rc1`.
+Local source builds may include build metadata, such as `mesh-llm 0.76.0-rc1+gABCDEF.dirty`, so you can tell exactly which commit produced the binary. Compatibility checks, native-runtime cache paths, and release identity still use the plain release version.
 
 ## Start here (common tasks)
 

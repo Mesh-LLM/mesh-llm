@@ -10,23 +10,6 @@ pub struct ModelDemand {
 
 pub const DEMAND_TTL_SECS: u64 = 86400;
 
-pub const MAX_SPLIT_RTT_MS: u32 = 80;
-
-/// Split admission RTT ceiling in milliseconds. Defaults to
-/// [`MAX_SPLIT_RTT_MS`]; the `MESH_SPLIT_MAX_RTT_MS` environment variable
-/// overrides it for long-haul WAN experiments where the fixed ceiling would
-/// reject every peer.
-pub fn max_split_rtt_ms() -> u32 {
-    static VALUE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MESH_SPLIT_MAX_RTT_MS")
-            .ok()
-            .and_then(|raw| raw.trim().parse().ok())
-            .filter(|ms| *ms > 0)
-            .unwrap_or(MAX_SPLIT_RTT_MS)
-    })
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelSourceKind {
@@ -432,16 +415,4 @@ fn identity_hash_for(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     hex::encode(hasher.finalize())
-}
-
-/// Whether relay-only stage paths may participate in splits. Off by default;
-/// `MESH_SPLIT_ALLOW_RELAY=1` enables it for WAN experiments where NAT
-/// prevents direct QUIC paths between stage peers.
-pub fn split_allow_relay_paths() -> bool {
-    static VALUE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MESH_SPLIT_ALLOW_RELAY")
-            .map(|raw| raw.trim() == "1")
-            .unwrap_or(false)
-    })
 }

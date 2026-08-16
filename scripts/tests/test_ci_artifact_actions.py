@@ -38,7 +38,7 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         protected_pre_checkout_action = (
             "Mesh-LLM/mesh-llm/.github/actions/"
-            "audit-depot-pr-isolation@98909c0909a947944dd3215ff4ef2c7f431e4ea8"
+            "audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16"
         )
 
         for path in (*action_files, *workflow_files):
@@ -314,9 +314,13 @@ class CiArtifactActionTests(unittest.TestCase):
         original_event_name: str = "",
         repository: str = "Mesh-LLM/mesh-llm",
         head_repository: str | None = None,
+        head_sha: str = "0123456789abcdef0123456789abcdef01234567",
         pr_enabled: str = "false",
         pr_canary_ref: str = "",
+        pr_approved_ref: str = "",
+        pr_approved_sha: str = "",
         force_hosted: str = "false",
+        current_date: str = "2026-08-14",
     ) -> dict[str, str]:
         action = self.read_action("select-ci-runners")
         run_block = action.split("      run: |\n", maxsplit=1)[1]
@@ -326,23 +330,36 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "github-output"
+            bin_dir = Path(temp_dir) / "bin"
+            bin_dir.mkdir()
+            date = bin_dir / "date"
+            date.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$SELECTOR_TEST_DATE\"\n",
+                encoding="utf-8",
+            )
+            date.chmod(0o755)
             result = subprocess.run(
                 ["bash", "-c", script],
                 cwd=ROOT,
                 env={
                     **os.environ,
+                    "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                    "SELECTOR_TEST_DATE": current_date,
                     "GITHUB_OUTPUT": str(output),
                     "INPUT_EVENT_NAME": event_name,
                     "INPUT_ORIGINAL_EVENT_NAME": original_event_name,
                     "GITHUB_EVENT_NAME": event_name,
                     "INPUT_REPOSITORY": repository,
                     "INPUT_HEAD_REPOSITORY": head_repository or repository,
+                    "INPUT_HEAD_SHA": head_sha,
                     "GITHUB_REPOSITORY": repository,
                     "INPUT_REF": ref,
                     "GITHUB_REF": ref,
                     "INPUT_DEPOT_MAIN_ENABLED": main_enabled,
                     "INPUT_DEPOT_PR_ENABLED": pr_enabled,
                     "INPUT_PR_CANARY_REF": pr_canary_ref,
+                    "INPUT_PR_APPROVED_REF": pr_approved_ref,
+                    "INPUT_PR_APPROVED_SHA": pr_approved_sha,
                     "INPUT_FORCE_HOSTED": force_hosted,
                     "INPUT_MANUAL_USE_DEPOT": manual_enabled,
                     "DISPATCH_ORIGINAL_EVENT_NAME": original_event_name,
@@ -368,6 +385,9 @@ class CiArtifactActionTests(unittest.TestCase):
         target: str,
         runner_size: str,
         manual_use_depot: str = "false",
+        pr_enabled: str = "false",
+        pr_approved_ref: str = "",
+        pr_approved_sha: str = "",
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
         workflow = (
             ROOT / ".github" / "workflows" / workflow_name
@@ -378,6 +398,9 @@ class CiArtifactActionTests(unittest.TestCase):
             main_enabled=depot_enabled,
             manual_enabled=manual_use_depot,
             repository=repository,
+            pr_enabled=pr_enabled,
+            pr_approved_ref=pr_approved_ref,
+            pr_approved_sha=pr_approved_sha,
         )
         policy = workflow.split(
             "      - name: Resolve runner size and target\n",
@@ -408,6 +431,9 @@ class CiArtifactActionTests(unittest.TestCase):
                     "ALLOW_DEPOT_REMOTE_CACHE": selected[
                         "allow_depot_remote_cache"
                     ],
+                    "ALLOW_NATIVE_GITHUB_CACHE": selected[
+                        "allow_native_github_cache"
+                    ],
                     "RUNNER_DEFAULT": selected["runner"],
                     "RUNNER_4": selected["runner_4"],
                     "RUNNER_8": selected["runner_8"],
@@ -433,6 +459,10 @@ class CiArtifactActionTests(unittest.TestCase):
             outputs.setdefault(
                 "allow_depot_remote_cache",
                 selected["allow_depot_remote_cache"],
+            )
+            outputs.setdefault(
+                "allow_native_github_cache",
+                selected["allow_native_github_cache"],
             )
             return result, outputs
 
@@ -716,9 +746,11 @@ class CiArtifactActionTests(unittest.TestCase):
         for contract in (
             'image_os="${ImageOS:-}"',
             'image_version="${ImageVersion:-}"',
+            'epoch="runner-${RUNNER_OS_VALUE}-${RUNNER_ARCH_VALUE}"',
             'INPUT_PINNED_EPOCH: ${{ inputs.pinned_epoch }}',
             'echo "epoch=$epoch" >> "$GITHUB_OUTPUT"',
             'echo "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH=$epoch" >> "$GITHUB_ENV"',
+            "sw_vers -productVersion",
             "xcodebuild -version",
             "cmake --version",
             "ninja --version",
@@ -765,6 +797,71 @@ class CiArtifactActionTests(unittest.TestCase):
                         "native_toolchain.outputs.epoch",
                         cache_block,
                     )
+
+    def test_native_toolchain_epoch_fingerprints_depot_macos_without_image_vars(
+        self,
+    ) -> None:
+        action = self.read_action("resolve-native-toolchain-epoch")
+        run_block = action.split("      run: |\n", maxsplit=1)[1]
+        script = "\n".join(
+            line[8:] if line.startswith("        ") else line
+            for line in run_block.splitlines()
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            bin_dir = workspace / "bin"
+            bin_dir.mkdir()
+            for command in ("sw_vers", "xcodebuild", "clang", "cmake", "ninja"):
+                executable = bin_dir / command
+                executable.write_text(
+                    "#!/bin/sh\nprintf 'fixture-%s-1\\n' \"${0##*/}\"\n",
+                    encoding="utf-8",
+                )
+                executable.chmod(0o755)
+
+            environment = {
+                **os.environ,
+                "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                "GITHUB_OUTPUT": str(workspace / "github-output"),
+                "GITHUB_ENV": str(workspace / "github-env"),
+                "INPUT_PINNED_EPOCH": "",
+                "INPUT_INCLUDE_TOOL_VERSIONS": "true",
+                "RUNNER_OS_VALUE": "macOS",
+                "RUNNER_ARCH_VALUE": "ARM64",
+            }
+            environment.pop("ImageOS", None)
+            environment.pop("ImageVersion", None)
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = (workspace / "github-output").read_text(encoding="utf-8")
+            self.assertRegex(
+                output,
+                r"^epoch=runner-macOS-ARM64-native-[0-9a-f]{64}\n$",
+            )
+
+            environment["INPUT_INCLUDE_TOOL_VERSIONS"] = "false"
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "ImageOS and ImageVersion are required unless exact native tool versions are included",
+                result.stderr,
+            )
 
     def test_push_routing_diffs_the_complete_event_range(self) -> None:
         action = self.read_action("compute-changes")
@@ -1167,8 +1264,20 @@ class CiArtifactActionTests(unittest.TestCase):
                     "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
                     workflow,
                 )
+                self.assertIn(
+                    "head_sha: ${{ github.event.pull_request.head.sha || github.sha }}",
+                    workflow,
+                )
                 self.assertIn("ref: ${{ github.ref }}", workflow)
                 self.assertIn("depot_pr_enabled:", workflow)
+                self.assertIn(
+                    "pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}",
+                    workflow,
+                )
+                self.assertIn(
+                    "pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}",
+                    workflow,
+                )
                 self.assertIn("default) runner=", workflow)
                 self.assertIn("RUNNER_ARM", workflow)
 
@@ -1262,8 +1371,12 @@ class CiArtifactActionTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(outputs["runner"], expected_runner)
                     self.assertEqual(
+                        outputs["allow_native_github_cache"],
+                        "false",
+                    )
+                    self.assertEqual(
                         outputs["allow_depot_remote_cache"],
-                        "true",
+                        "false",
                     )
 
             result, outputs = self.run_reusable_runner_policy(
@@ -1278,9 +1391,50 @@ class CiArtifactActionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(outputs["runner"], "ubuntu-24.04-arm")
             self.assertEqual(
+                outputs["allow_native_github_cache"],
+                "true",
+            )
+            self.assertEqual(
                 outputs["allow_depot_remote_cache"],
                 "false",
             )
+
+            if workflow_name == "native-sdk-artifact.yml":
+                approved_pr_sha = (
+                    "0123456789abcdef0123456789abcdef01234567"
+                )
+                result, outputs = self.run_reusable_runner_policy(
+                    workflow_name,
+                    repository="Mesh-LLM/mesh-llm",
+                    event_name="pull_request",
+                    ref="refs/pull/12/merge",
+                    depot_enabled="false",
+                    target="x86_64-unknown-linux-gnu",
+                    runner_size="8",
+                    pr_enabled="true",
+                    pr_approved_ref="refs/pull/12/merge",
+                    pr_approved_sha=approved_pr_sha,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs["runner"], "depot-ubuntu-24.04-8")
+                self.assertEqual(
+                    outputs["allow_native_github_cache"],
+                    "true",
+                )
+
+                result, outputs = self.run_reusable_runner_policy(
+                    workflow_name,
+                    repository="Mesh-LLM/mesh-llm",
+                    event_name="push",
+                    ref="refs/heads/main",
+                    depot_enabled="true",
+                    target="aarch64-apple-darwin",
+                    runner_size="8",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs["runner"], "macos-15")
+                self.assertEqual(outputs["allow_native_github_cache"], "true")
+                self.assertEqual(outputs["allow_depot_remote_cache"], "false")
 
             result, outputs = self.run_reusable_runner_policy(
                 workflow_name,
@@ -1315,7 +1469,7 @@ class CiArtifactActionTests(unittest.TestCase):
             )
             self.assertEqual(
                 outputs["allow_depot_remote_cache"],
-                "true",
+                "false",
             )
 
             for event_name, ref, manual_use_depot in (
@@ -1817,6 +1971,8 @@ class CiArtifactActionTests(unittest.TestCase):
 
         self.assertIn("allow_depot_remote_cache", action)
         self.assertIn('default: "false"', action)
+        self.assertIn("allow_native_github_cache", action)
+        self.assertIn('default: "false"', action)
         self.assertIn("SCCACHE_WEBDAV_ENDPOINT", action)
         self.assertIn("DEPOT_CACHE_TOKEN", action)
         self.assertIn("process.env.SCCACHE_DIR", action)
@@ -1831,6 +1987,10 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("'disk'", action)
         self.assertIn(
             "Depot cache is present but disabled for this trust context",
+            action,
+        )
+        self.assertIn(
+            "Native GitHub and Depot cache disabled for this trust context",
             action,
         )
         self.assertIn(
@@ -1861,6 +2021,28 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("depot-ubuntu-24.04-arm-16", action)
         self.assertIn("depot-macos-15", action)
         self.assertIn("depot-windows-2022", action)
+        self.assertIn('depot_pr_exception_expires="2026-09-14"', action)
+        self.assertIn("INPUT_PR_APPROVED_REF", action)
+        self.assertIn("INPUT_PR_APPROVED_SHA", action)
+
+        selector_calls = 0
+        approved_policy_calls = 0
+        for workflow_path in sorted(
+            (ROOT / ".github" / "workflows").glob("*.yml")
+        ):
+            lines = workflow_path.read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                if "uses: ./.github/actions/select-ci-runners" not in line:
+                    continue
+                selector_calls += 1
+                block = "\n".join(lines[index : index + 20])
+                with self.subTest(selector_caller=workflow_path.name):
+                    self.assertIn("head_sha:", block)
+                if "pr_approved_ref:" in block:
+                    approved_policy_calls += 1
+                    self.assertIn("pr_approved_sha:", block)
+        self.assertEqual(selector_calls, 19)
+        self.assertEqual(approved_policy_calls, 18)
 
         cases = (
             (
@@ -1901,7 +2083,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "workflow_dispatch",
@@ -1911,7 +2093,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "workflow_dispatch",
@@ -1921,7 +2103,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "workflow_dispatch",
@@ -1931,7 +2113,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "push",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "workflow_dispatch",
@@ -1951,7 +2133,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "",
                 "false",
                 "depot-ubuntu-24.04",
-                "true",
+                "false",
             ),
             (
                 "push",
@@ -2012,6 +2194,20 @@ class CiArtifactActionTests(unittest.TestCase):
                     manual_enabled=manual,
                     original_event_name=original_event_name,
                     pr_enabled=pr_enabled,
+                    pr_approved_ref=(
+                        ref
+                        if event_name == "pull_request"
+                        and pr_enabled == "true"
+                        and runner.startswith("depot-")
+                        else ""
+                    ),
+                    pr_approved_sha=(
+                        "0123456789abcdef0123456789abcdef01234567"
+                        if event_name == "pull_request"
+                        and pr_enabled == "true"
+                        and runner.startswith("depot-")
+                        else ""
+                    ),
                 )
                 enabled = "true" if runner.startswith("depot-") else "false"
                 self.assertEqual(outputs["depot_enabled"], enabled)
@@ -2020,9 +2216,9 @@ class CiArtifactActionTests(unittest.TestCase):
                     cache_enabled,
                 )
                 expected_native_cache = (
-                    "false"
-                    if enabled == "true" and event_name == "pull_request"
-                    else "true"
+                    "true"
+                    if event_name == "pull_request" and enabled == "true"
+                    else "false" if enabled == "true" else "true"
                 )
                 self.assertEqual(
                     outputs["allow_native_github_cache"],
@@ -2064,6 +2260,8 @@ class CiArtifactActionTests(unittest.TestCase):
             main_enabled="true",
             manual_enabled="true",
             pr_enabled="true",
+            pr_approved_ref="refs/pull/12/merge",
+            pr_approved_sha="0123456789abcdef0123456789abcdef01234567",
             repository="attacker/mesh-llm",
         )
         self.assertEqual(untrusted_repository["depot_enabled"], "false")
@@ -2083,6 +2281,8 @@ class CiArtifactActionTests(unittest.TestCase):
             main_enabled="true",
             manual_enabled="true",
             pr_enabled="true",
+            pr_approved_ref="refs/pull/12/merge",
+            pr_approved_sha="0123456789abcdef0123456789abcdef01234567",
             head_repository="attacker/mesh-llm",
         )
         self.assertEqual(fork_head_repository["depot_enabled"], "false")
@@ -2098,6 +2298,8 @@ class CiArtifactActionTests(unittest.TestCase):
             main_enabled="true",
             manual_enabled="true",
             pr_enabled="true",
+            pr_approved_ref="refs/pull/12/merge",
+            pr_approved_sha="0123456789abcdef0123456789abcdef01234567",
             force_hosted="true",
         )
         self.assertEqual(runner_contract_change["depot_enabled"], "false")
@@ -2113,6 +2315,8 @@ class CiArtifactActionTests(unittest.TestCase):
             main_enabled="true",
             manual_enabled="true",
             pr_enabled="true",
+            pr_approved_ref="refs/pull/12/merge",
+            pr_approved_sha="0123456789abcdef0123456789abcdef01234567",
         )
         self.assertEqual(non_merge_ref["depot_enabled"], "false")
         self.assertEqual(non_merge_ref["runner"], "ubuntu-24.04")
@@ -2148,6 +2352,73 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertEqual(canary_pr["runner"], "depot-ubuntu-24.04")
         self.assertEqual(canary_pr["allow_depot_remote_cache"], "false")
         self.assertEqual(canary_pr["allow_native_github_cache"], "false")
+
+        unapproved_pr = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="false",
+            manual_enabled="false",
+            pr_enabled="true",
+        )
+        self.assertEqual(unapproved_pr["depot_enabled"], "false")
+        self.assertEqual(unapproved_pr["runner"], "ubuntu-24.04")
+
+        stale_approval = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="false",
+            manual_enabled="false",
+            pr_enabled="true",
+            pr_approved_ref="refs/pull/12/merge",
+            pr_approved_sha="fedcba9876543210fedcba9876543210fedcba98",
+        )
+        self.assertEqual(stale_approval["depot_enabled"], "false")
+
+        stale_ref_approval = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="false",
+            manual_enabled="false",
+            pr_enabled="true",
+            pr_approved_ref="refs/pull/13/merge",
+            pr_approved_sha="0123456789abcdef0123456789abcdef01234567",
+        )
+        self.assertEqual(stale_ref_approval["depot_enabled"], "false")
+        self.assertEqual(stale_ref_approval["runner"], "ubuntu-24.04")
+        self.assertEqual(
+            stale_ref_approval["allow_native_github_cache"],
+            "true",
+        )
+        self.assertEqual(
+            stale_ref_approval["allow_depot_remote_cache"],
+            "false",
+        )
+
+        expired_approval = self.run_runner_selector(
+            event_name="pull_request",
+            ref="refs/pull/12/merge",
+            main_enabled="false",
+            manual_enabled="false",
+            pr_enabled="true",
+            pr_approved_ref="refs/pull/12/merge",
+            pr_approved_sha="0123456789abcdef0123456789abcdef01234567",
+            current_date="2026-09-14",
+        )
+        self.assertEqual(expired_approval["depot_enabled"], "false")
+        self.assertEqual(expired_approval["allow_native_github_cache"], "true")
+
+        trusted_main_cross_branch_cache = self.run_runner_selector(
+            event_name="push",
+            ref="refs/heads/main",
+            main_enabled="true",
+            manual_enabled="false",
+            pr_enabled="true",
+        )
+        self.assertEqual(trusted_main_cross_branch_cache["depot_enabled"], "true")
+        self.assertEqual(
+            trusted_main_cross_branch_cache["allow_native_github_cache"],
+            "true",
+        )
 
         for name, kwargs in (
             (
@@ -2222,10 +2493,13 @@ class CiArtifactActionTests(unittest.TestCase):
                     "INPUT_EVENT_NAME": "pull_request",
                     "INPUT_REPOSITORY": "Mesh-LLM/mesh-llm",
                     "INPUT_HEAD_REPOSITORY": "Mesh-LLM/mesh-llm",
+                    "INPUT_HEAD_SHA": "0123456789abcdef0123456789abcdef01234567",
                     "INPUT_REF": "refs/pull/12/merge",
                     "INPUT_DEPOT_MAIN_ENABLED": "false",
                     "INPUT_DEPOT_PR_ENABLED": "false",
                     "INPUT_PR_CANARY_REF": "refs/heads/main",
+                    "INPUT_PR_APPROVED_REF": "",
+                    "INPUT_PR_APPROVED_SHA": "",
                     "INPUT_FORCE_HOSTED": "false",
                     "INPUT_MANUAL_USE_DEPOT": "false",
                 },
@@ -2275,7 +2549,7 @@ class CiArtifactActionTests(unittest.TestCase):
             self.assertNotIn("depot-ubuntu", pr)
             self.assertNotIn("SCCACHE_GHA_ENABLED: \"false\"", pr)
 
-    def test_depot_pr_native_cache_consumers_are_centrally_disabled(self) -> None:
+    def test_depot_pr_native_cache_consumers_obey_central_policy(self) -> None:
         eligible_consumers = {
             "ci-quality-slice.yml": ("Swatinem/rust-cache@",),
             "ci-web-slice.yml": (
@@ -2308,7 +2582,7 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         expected_jobs = {
             "ci-quality-slice.yml": {
-                "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync",
+                "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync", "authority_sentinel",
             },
             "ci-web-slice.yml": {"runner_policy", "ui_quality", "website"},
             "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},
@@ -2386,6 +2660,12 @@ class CiArtifactActionTests(unittest.TestCase):
         windows = (
             ROOT / ".github" / "workflows" / "ci-windows-runtime-slice.yml"
         ).read_text(encoding="utf-8")
+        release = (
+            ROOT / ".github" / "workflows" / "release.yml"
+        ).read_text(encoding="utf-8")
+        warmer = (
+            ROOT / ".github" / "workflows" / "windows-warm-caches.yml"
+        ).read_text(encoding="utf-8")
         native_cache_expression = (
             "needs.runner_policy.outputs.allow_native_github_cache == 'true'"
         )
@@ -2417,6 +2697,86 @@ class CiArtifactActionTests(unittest.TestCase):
         for action_name in ("restore-windows-abi-cache", "setup-windows-rocm-sdk"):
             action = self.read_action(action_name)
             self.assertIn("inputs.allow-native-github-cache == 'true'", action)
+
+        # Trusted Depot release selections must leave native cache consumers
+        # inert, while the hosted release/cache-warmer paths retain their
+        # existing GitHub cache opt-in.
+        self.assertIn(
+            "allow_native_github_cache: ${{ steps.runners.outputs.allow_native_github_cache }}",
+            release,
+        )
+        for cache_name in (
+            "Cache native runtime ROCm backend build",
+            "Cache native runtime Vulkan backend build",
+        ):
+            cache_start = release.index(f"name: {cache_name}")
+            cache_block = release[cache_start : release.find("\n      - ", cache_start + 1)]
+            self.assertIn(
+                "!startsWith(needs.metadata.outputs.runner_16, 'depot-')",
+                cache_block,
+            )
+        self.assertGreaterEqual(
+            warmer.count('allow-native-github-cache: "true"'),
+            2,
+        )
+
+    def test_authority_sentinel_is_explicit_cache_gate_exemption(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "ci-quality-slice.yml"
+        ).read_text(encoding="utf-8")
+        jobs = workflow.split("\njobs:\n", maxsplit=1)[1]
+        match = re.search(
+            r"^  authority_sentinel:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            jobs,
+            re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        sentinel = match.group("body")
+        self.assertIn(
+            "# Explicit diagnostic exception: this no-checkout job attests the",
+            workflow,
+        )
+        self.assertIn("authority_sentinel", jobs)
+        self.assertIn("Attest provider-injected cache backend", sentinel)
+        self.assertIn("actions/cache/restore@", sentinel)
+        self.assertIn("actions/cache/save@", sentinel)
+        self.assertNotIn("allow_native_github_cache", sentinel)
+        self.assertNotIn("allow_depot_remote_cache", sentinel)
+        self.assertNotIn("audit-depot-pr-isolation@", sentinel)
+
+    def test_depot_sccache_consumers_receive_both_central_cache_outputs(self) -> None:
+        provider_workflows = (
+            "ci-quality-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
+            "ci-rust-tests-slice.yml",
+            "ci-windows-host-slice.yml",
+            "ci-windows-runtime-slice.yml",
+            "static-abi-artifact.yml",
+            "native-sdk-artifact.yml",
+            "swift-sdk-artifact.yml",
+        )
+        for filename in provider_workflows:
+            workflow = (
+                ROOT / ".github" / "workflows" / filename
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}",
+                workflow,
+                filename,
+            )
+            self.assertIn(
+                "allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}",
+                workflow,
+                filename,
+            )
+        release = (
+            ROOT / ".github" / "workflows" / "release.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "allow_native_github_cache: ${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || 'true' }}",
+            release,
+        )
 
 
 if __name__ == "__main__":

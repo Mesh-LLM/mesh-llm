@@ -204,7 +204,8 @@ owning source, and update the inventory and topology in the same change.
 - A caller may not choose a privileged runner label or independently grant
   remote-cache access. The workflow that owns `runs-on` must derive both from
   repository, event, ref, trust profile, architecture, and a bounded size.
-- Ordinary PR jobs remain GitHub-hosted; an explicitly approved ephemeral,
+- Ordinary PR jobs remain GitHub-hosted unless the bounded same-repository
+  Depot risk exception below is active; an explicitly approved ephemeral,
   uncredentialed hardware runner may own a documented GPU smoke exception.
   Eligible trusted main jobs may use
   Depot only through the exact-string `DEPOT_RUNNERS_ENABLED` gate and retain a
@@ -222,14 +223,14 @@ owning source, and update the inventory and topology in the same change.
 - Provider changes must not alter source checkout, commands, profile,
   artifacts, tests, required checks, or plan membership.
 
-### Depot PR prohibition and future gate
+### Bounded Depot PR cache-risk exception
 
 Depot Cache currently scopes entries by repository but not by branch and
 automatically connects GitHub-cache API consumers on Depot runners. Cache-key
 prefixes, job-local sccache, and a trusted caller do not prevent checked-out PR
 code from using injected cache authority directly.
 
-Do not enable Depot for PR code until all of the following are proven:
+The provider-isolation requirements below remain the desired end state:
 
 1. Automatic Depot Cache connectivity is disabled for the PR runner context,
    or Depot supplies a comparably strong per-PR namespace and read/write policy.
@@ -245,16 +246,42 @@ Do not enable Depot for PR code until all of the following are proven:
 6. GitHub-hosted rollback remains one checked provider-policy change and does
    not change the plan or artifact graph.
 
-This is future work. Do not mutate Depot organization settings, runner groups,
-or PR runner routing as part of ordinary workflow refactoring.
+Until the provider supplies that end state, maintainers may deliberately accept
+the documented repository-wide cache risk for one exact same-repository PR
+head under all of these controls:
+
+- the exception has a checked-in UTC expiry and fails hosted after it;
+- `DEPOT_PR_RUNNERS_ENABLED` is exactly `true`;
+- `DEPOT_PR_APPROVED_REF` exactly matches `refs/pull/<number>/merge` and
+  `DEPOT_PR_APPROVED_SHA` exactly matches the current PR head SHA;
+- the head repository is exactly `Mesh-LLM/mesh-llm`; forks remain hosted;
+- CI-control, workflow, runner-policy and cache-policy changes force hosted;
+- the protected default-branch runner-owning workflows remain the executor;
+- PR jobs receive no repository secrets or registry credentials; and
+- rollback is deletion/false of the PR gate or either exact approval value.
+
+This is an explicit speed-versus-isolation decision, not evidence that Depot
+cache is isolated. While active, GitHub Actions cache API consumers on selected
+Depot PR and trusted-main jobs may share Depot's repository-wide namespace.
+Treat that namespace as attacker-controlled and keep release, publishing,
+deployment and credential-bearing jobs off it. Record the rationale, known
+failure modes, owner, start, expiry and rollback in
+`ci/DEPOT_PR_RISK_EXCEPTION.md`.
+
+GitHub's `all_external_contributors` workflow-approval policy does not cover a
+same-repository branch pushed by a collaborator. Do not describe that setting
+as the approval boundary for this exception. The exact maintainer-controlled
+ref and head-SHA variables are the checked-in per-PR approval boundary and must
+be refreshed after every PR synchronization.
 
 ## Cache contract
 
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
-- GitHub-hosted PR writes remain isolated from trusted main: protected
+- GitHub-hosted PR writes remain isolated from trusted main: normal protected
   same-repository and fork lanes explicitly force restore-only cache mode even
-  though their workflow ref is the default branch. Trusted
+  though their workflow ref is the default branch. The bounded Depot exception
+  is the documented cross-branch deviation. Trusted
   main/release/warmers own shared publication. Do not save large shared
   Rust/native caches from PRs.
 - GitHub scopes caches created by `pull_request` runs to that PR's merge ref.

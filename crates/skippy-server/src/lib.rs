@@ -38,5 +38,6 @@ pub use frontend::{
     OpaqueProposalDecisionId, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
     OpenAiGuardrailsTarget, SpeculativeDecodeConfig, VerifyWindowConfig, embedded_openai_backend,
 };
+pub use kv_integration::{KvDiskCacheBudget, KvDiskCacheConfig, configure_kv_disk_cache};
 pub use skippy_protocol::StageConfig;
 pub use tokenizer::{MAX_TOKENIZE_TOKENS, TokenizerCapability, TokenizerCapabilityError};

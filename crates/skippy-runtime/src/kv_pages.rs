@@ -236,6 +236,10 @@ impl StageSession {
     }
 
     pub fn import_kv_page(&mut self, desc: &RuntimeKvPageDesc, payload: &[u8]) -> Result<()> {
+        desc.validate_payload(payload.len())?;
+        if desc.codec == skippy_ffi::KV_PAGE_CODEC_ISWA_COMPOSITE_V1 && self.token_count != 0 {
+            anyhow::bail!("composite ISWA KV page import requires a fresh session");
+        }
         let raw = desc.as_raw();
         let mut error = ptr::null_mut();
         let status = unsafe {
