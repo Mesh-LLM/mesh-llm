@@ -630,6 +630,15 @@ jobs:
       LLAMA_STAGE_BACKEND: cuda
       LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-cuda-sm${{ matrix.cuda_architectures_cache }}
+      # These are the memory-heaviest compiles in the release graph: every CUDA
+      # translation unit runs one nvcc frontend per target architecture, and the
+      # CUDA 13 row targets ten. Container jobs on the self-hosted GPU pool see
+      # the host CPU count with no cgroup memory limit, so autodetected
+      # parallelism overcommits memory and the host compiler dies mid-build with
+      # no diagnostic about our source. Observed: failing runs reached 5-7
+      # concurrent compile starts per second, while the last fully green run of
+      # these lanes stayed at 3.
+      CMAKE_BUILD_PARALLEL_LEVEL: "4"
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
       MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
       SCCACHE_GHA_ENABLED: "false"

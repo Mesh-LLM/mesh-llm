@@ -11,12 +11,17 @@ LLAMA_BUILD_ROOT="${MESH_LLM_LLAMA_BUILD_ROOT:-$ROOT/.deps/llama-build}"
 LLAMA_BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-${LLAMA_BACKEND:-cpu}}}"
 LLAMA_LINK_MODE="${LLAMA_STAGE_LINK_MODE:-${SKIPPY_LLAMA_LINK_MODE:-static}}"
 PRINT_BUILD_DIR=0
+PRINT_JOBS=0
 REQUIRE_EXISTING=0
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --print-build-dir)
       PRINT_BUILD_DIR=1
+      shift
+      ;;
+    --print-jobs)
+      PRINT_JOBS=1
       shift
       ;;
     --require-existing)
@@ -47,6 +52,13 @@ case "$LLAMA_LINK_MODE" in
     ;;
 esac
 
+if [[ -n "${MESH_LLM_LLAMA_BUILD_MEMORY_BYTES:-}" ]] &&
+  ! [[ "$MESH_LLM_LLAMA_BUILD_MEMORY_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MESH_LLM_LLAMA_BUILD_MEMORY_BYTES must be a positive integer byte count" >&2
+  echo "  got: $MESH_LLM_LLAMA_BUILD_MEMORY_BYTES" >&2
+  exit 2
+fi
+
 sanitize_build_component() {
   printf '%s' "$1" | tr ';, /:' '_____' | tr -cd 'A-Za-z0-9_.-'
 }
@@ -69,16 +81,111 @@ default_build_dir_for_backend() {
   printf '%s/build-stage-abi-%s-%s\n' "$LLAMA_BUILD_ROOT" "$LLAMA_LINK_MODE" "$suffix"
 }
 
-detect_jobs() {
-  if [[ -n "${CMAKE_BUILD_PARALLEL_LEVEL:-}" ]]; then
-    echo "$CMAKE_BUILD_PARALLEL_LEVEL"
-  elif command -v nproc >/dev/null 2>&1; then
+detect_cpu_jobs() {
+  if command -v nproc >/dev/null 2>&1; then
     nproc
   elif command -v sysctl >/dev/null 2>&1; then
     sysctl -n hw.ncpu
   else
     echo 4
   fi
+}
+
+# Memory this build may actually use, in bytes, or empty when unknown.
+#
+# nproc reports the host CPU count even inside a memory-limited container, so
+# CPU count alone overcommits memory on containerized CI runners. Prefer the
+# cgroup limit that will actually kill the compiler, then fall back to the
+# kernel's view of available memory.
+detect_memory_budget_bytes() {
+  local value cgroup_limit
+  if [[ -n "${MESH_LLM_LLAMA_BUILD_MEMORY_BYTES:-}" ]]; then
+    printf '%s\n' "$MESH_LLM_LLAMA_BUILD_MEMORY_BYTES"
+    return 0
+  fi
+
+  for cgroup_limit in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+    if [[ -r "$cgroup_limit" ]]; then
+      value="$(cat "$cgroup_limit" 2>/dev/null || true)"
+      # cgroup v2 reports "max" when unlimited; v1 reports a saturated value.
+      if [[ "$value" =~ ^[0-9]+$ ]] && ((value > 0)) && ((value < 1 << 62)); then
+        printf '%s\n' "$value"
+        return 0
+      fi
+    fi
+  done
+
+  if [[ -r /proc/meminfo ]]; then
+    value="$(awk '/^MemTotal:/ { print $2 * 1024; exit }' /proc/meminfo)"
+    if [[ "$value" =~ ^[0-9]+$ ]] && ((value > 0)); then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  fi
+
+  if command -v sysctl >/dev/null 2>&1; then
+    value="$(sysctl -n hw.memsize 2>/dev/null || true)"
+    if [[ "$value" =~ ^[0-9]+$ ]] && ((value > 0)); then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  fi
+
+  return 0
+}
+
+# Peak resident memory one compile job may need for this backend, in bytes.
+#
+# CUDA translation units run the host compiler plus one cicc frontend per
+# target architecture, so they need several times what a CPU translation unit
+# needs. These are deliberately conservative: the failure mode of a too-small
+# number is a slower build, and of a too-large number is a SIGSEGV or an
+# internal compiler error with no diagnostic about our code.
+memory_per_job_bytes() {
+  case "$LLAMA_BACKEND" in
+    cuda|rocm|hip)
+      echo $((3 * 1024 * 1024 * 1024))
+      ;;
+    *)
+      echo $((1024 * 1024 * 1024))
+      ;;
+  esac
+}
+
+detect_jobs() {
+  if [[ -n "${CMAKE_BUILD_PARALLEL_LEVEL:-}" ]]; then
+    echo "$CMAKE_BUILD_PARALLEL_LEVEL"
+    return 0
+  fi
+
+  local cpu_jobs memory_budget per_job memory_jobs
+  cpu_jobs="$(detect_cpu_jobs)"
+  if ! [[ "$cpu_jobs" =~ ^[0-9]+$ ]] || ((cpu_jobs < 1)); then
+    cpu_jobs=4
+  fi
+
+  memory_budget="$(detect_memory_budget_bytes)"
+  if [[ -z "$memory_budget" ]]; then
+    echo "$cpu_jobs"
+    return 0
+  fi
+
+  per_job="$(memory_per_job_bytes)"
+  memory_jobs=$((memory_budget / per_job))
+  if ((memory_jobs < 1)); then
+    memory_jobs=1
+  fi
+
+  if ((memory_jobs < cpu_jobs)); then
+    echo "capping llama.cpp build parallelism at $memory_jobs of $cpu_jobs CPUs" >&2
+    echo "  backend:        $LLAMA_BACKEND" >&2
+    echo "  memory budget:  $((memory_budget / 1024 / 1024)) MiB" >&2
+    echo "  assumed per job: $((per_job / 1024 / 1024)) MiB" >&2
+    echo "$memory_jobs"
+    return 0
+  fi
+
+  echo "$cpu_jobs"
 }
 
 required_static_archives() {
@@ -154,6 +261,11 @@ fi
 
 if [[ "$PRINT_BUILD_DIR" == "1" ]]; then
   printf '%s\n' "$LLAMA_BUILD_DIR"
+  exit 0
+fi
+
+if [[ "$PRINT_JOBS" == "1" ]]; then
+  printf '%s\n' "$(detect_jobs)"
   exit 0
 fi
 
