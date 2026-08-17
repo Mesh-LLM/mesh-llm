@@ -16,8 +16,10 @@ mod local_package;
 mod local_split;
 mod model_lifecycle;
 pub(crate) mod model_reconciliation;
+mod operational_logging;
 mod options;
 mod provider_supervisor;
+mod plugin_host_role;
 mod proxy;
 mod publication;
 mod release_attestation;
@@ -82,6 +84,10 @@ use self::control_loop::*;
 use self::dashboard::*;
 pub use self::discovery::nostr_relays;
 use self::model_lifecycle::*;
+pub(crate) use self::operational_logging::{
+    NativeSkippyOperationalEvent, RuntimeOperationalEvent, record_native_skippy_operational_event,
+    record_runtime_operational_event, record_runtime_operational_event_with_context,
+};
 use self::provider_supervisor::*;
 use self::publication::*;
 pub use self::run_auto::load_resolved_plugins;
