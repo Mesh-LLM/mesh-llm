@@ -7,7 +7,11 @@ PACKAGE_ROOT="$REPO_ROOT/target/apple-runtime/package/meshllm-apple-runtime-darw
 BINARY="$PACKAGE_ROOT/bin/mesh-apple-runtime"
 OUTPUT_DIR="$REPO_ROOT/target/apple-runtime/launchd"
 LABEL="com.mesh-llm.apple-runtime.experimental.$$"
-DOMAIN="gui/$(id -u)"
+if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+    DOMAIN="gui/$(id -u)"
+else
+    DOMAIN="user/$(id -u)"
+fi
 PLIST="$OUTPUT_DIR/$LABEL.plist"
 STDOUT_LOG="$OUTPUT_DIR/stdout.jsonl"
 STDERR_LOG="$OUTPUT_DIR/stderr.log"

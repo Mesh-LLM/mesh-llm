@@ -44,6 +44,7 @@ public struct FixtureLookupTool: Tool {
 
 public actor SystemModelProvider {
   private let model: SystemLanguageModel
+  private var preparedSession: LanguageModelSession?
 
   public init() {
     model = .default
@@ -85,6 +86,7 @@ public actor SystemModelProvider {
     try requireAvailable()
     let session = LanguageModelSession(model: model)
     session.prewarm(promptPrefix: promptPrefix.map(Prompt.init))
+    preparedSession = session
   }
 
   public func generate(
@@ -92,11 +94,16 @@ public actor SystemModelProvider {
     onEvent: @Sendable (AppleRuntimeEvent) -> Void
   ) async throws -> AppleGenerationResult {
     try requireAvailable()
-    let session = LanguageModelSession(
-      model: model,
-      instructions: request.instructions
-    )
-    session.prewarm(promptPrefix: Prompt(request.prompt))
+    let session: LanguageModelSession
+    if let preparedSession, request.instructions == nil {
+      session = preparedSession
+    } else {
+      session = LanguageModelSession(
+        model: model,
+        instructions: request.instructions
+      )
+      session.prewarm(promptPrefix: Prompt(request.prompt))
+    }
     let options = GenerationOptions(
       temperature: request.temperature,
       maximumResponseTokens: request.maximumResponseTokens

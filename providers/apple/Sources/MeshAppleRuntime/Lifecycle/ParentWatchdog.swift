@@ -17,7 +17,11 @@ public enum ParentWatchdog {
         if Darwin.kill(watchedPID, 0) == -1, errno == ESRCH {
           Darwin._exit(0)
         }
-        try? await Task.sleep(for: .milliseconds(50))
+        do {
+          try await Task.sleep(for: .milliseconds(50))
+        } catch {
+          return
+        }
       }
     }
   }

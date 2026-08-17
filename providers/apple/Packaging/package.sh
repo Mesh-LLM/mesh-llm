@@ -45,7 +45,7 @@ cp "$PACKAGE_PATH/Packaging/Entitlements/background-inference.entitlements" \
 
 codesign_args=(--force --sign "$IDENTITY")
 if [[ "$IDENTITY" != "-" ]]; then
-    codesign_args+=(--options runtime --timestamp=none)
+    codesign_args+=(--options runtime --timestamp)
 fi
 if [[ -n "$ENTITLEMENTS" ]]; then
     codesign_args+=(--entitlements "$ENTITLEMENTS")
@@ -133,7 +133,7 @@ PY
 
 ARCHIVE="$OUTPUT_ROOT/$BUNDLE_ID.zip"
 ditto -c -k --keepParent "$BUNDLE_DIR" "$ARCHIVE"
-shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+(cd "$OUTPUT_ROOT" && shasum -a 256 "$BUNDLE_ID.zip" > "$BUNDLE_ID.zip.sha256")
 
 echo "packaged experimental Apple runtime:"
 echo "  bundle: $BUNDLE_DIR"
