@@ -40,10 +40,187 @@ runs:
   using: composite
   steps:
     - name: Download built mesh-llm artifact
-      uses: actions/download-artifact@v7
+      uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:
         name: ${{ inputs.artifact_name }}
         path: ${{ inputs.artifact_path }}
+
+    - name: Extract and verify composed product
+      shell: bash
+      run: |
+        set -euo pipefail
+        artifact_path="${{ inputs.artifact_path }}"
+        archive=""
+        archive_count=0
+        while IFS= read -r candidate; do
+          archive="$candidate"
+          archive_count=$((archive_count + 1))
+        done < <(find "$artifact_path" -mindepth 1 -maxdepth 1 -type f -name '*.tar.gz' -print)
+        if [[ "$archive_count" -ne 1 ]]; then
+          echo "expected exactly one composed product archive in $artifact_path; found $archive_count" >&2
+          exit 1
+        fi
+
+        extract_root="$(mktemp -d)"
+        trap 'rm -rf -- "$extract_root"' EXIT
+        python3 scripts/safe-extract-tar.py "$archive" "$extract_root"
+
+        product_manifest="$extract_root/product-manifest.json"
+        test -s "$product_manifest"
+        IFS=$'\t' read -r version backend host_path runtime_path < <(
+          python3 - \
+            "$product_manifest" \
+            "$extract_root" \
+            "${{ inputs.binary_name }}" <<'PY'
+        import json
+        from pathlib import Path, PurePosixPath
+        import re
+        import sys
+
+        manifest_path, product_root_raw, binary_name = sys.argv[1:4]
+        product_root = Path(product_root_raw).resolve(strict=True)
+        windows_drive = re.compile(r"^[A-Za-z]:")
+
+
+        def product_path(label, raw_path, *, require_directory):
+            if (
+                not isinstance(raw_path, str)
+                or not raw_path
+                or any(character in raw_path for character in ("\0", "\r", "\n", "\t"))
+                or "\\" in raw_path
+            ):
+                raise SystemExit(f"{label} must be a portable relative path")
+            relative = PurePosixPath(raw_path)
+            if (
+                relative.is_absolute()
+                or windows_drive.match(raw_path)
+                or ".." in relative.parts
+            ):
+                raise SystemExit(
+                    f"{label} escapes the composed product: {raw_path}"
+                )
+            candidate = product_root.joinpath(*relative.parts)
+            try:
+                resolved = candidate.resolve(strict=True)
+                resolved.relative_to(product_root)
+            except (OSError, ValueError):
+                raise SystemExit(
+                    f"{label} is missing or escapes the composed product: "
+                    f"{raw_path}"
+                ) from None
+            if candidate.is_symlink():
+                raise SystemExit(f"{label} cannot be a symlink: {raw_path}")
+            if require_directory != resolved.is_dir():
+                expected = "directory" if require_directory else "file"
+                raise SystemExit(f"{label} must resolve to a {expected}: {raw_path}")
+            return relative.as_posix()
+
+
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        if not isinstance(manifest, dict):
+            raise SystemExit("product manifest must be an object")
+        if manifest.get("schema_version") != 2:
+            raise SystemExit("product manifest schema_version must be 2")
+        if manifest.get("contract") != "mesh-llm-product-v2":
+            raise SystemExit("product manifest contract is invalid")
+
+        version = manifest.get("mesh_version")
+        backend = manifest.get("backend")
+        if not isinstance(version, str) or not version:
+            raise SystemExit("product mesh_version must be a non-empty string")
+        if backend not in {
+            "cpu",
+            "metal",
+            "cuda",
+            "cuda-blackwell",
+            "rocm",
+            "hip",
+            "vulkan",
+        }:
+            raise SystemExit(f"unsupported product backend: {backend!r}")
+
+        host = manifest.get("host")
+        runtime = manifest.get("runtime")
+        if not isinstance(host, dict) or not isinstance(runtime, dict):
+            raise SystemExit("product host and runtime entries must be objects")
+        host_path = product_path(
+            "product host",
+            host.get("path"),
+            require_directory=False,
+        )
+        if host_path != binary_name:
+            raise SystemExit(
+                f"product host path must be {binary_name!r}, got {host_path!r}"
+            )
+        product_path(
+            "host import report",
+            "host-imports.json",
+            require_directory=False,
+        )
+        runtime_path = product_path(
+            "product runtime",
+            runtime.get("path"),
+            require_directory=True,
+        )
+        runtime_parts = PurePosixPath(runtime_path).parts
+        if len(runtime_parts) != 2 or runtime_parts[0] != "native-runtimes":
+            raise SystemExit(
+                "product runtime must be one direct child of native-runtimes"
+            )
+        allowed_top_level = {
+            binary_name,
+            "host-imports.json",
+            "native-runtimes",
+            "product-manifest.json",
+        }
+        actual_top_level = {entry.name for entry in product_root.iterdir()}
+        if actual_top_level != allowed_top_level:
+            unexpected = sorted(actual_top_level - allowed_top_level)
+            missing = sorted(allowed_top_level - actual_top_level)
+            raise SystemExit(
+                "product top-level contents are not canonical: "
+                f"unexpected={unexpected}, missing={missing}"
+            )
+        top_level_links = sorted(
+            entry.name for entry in product_root.iterdir() if entry.is_symlink()
+        )
+        if top_level_links:
+            raise SystemExit(
+                f"product top-level entries cannot be symlinks: {top_level_links}"
+            )
+        runtime_entries = list((product_root / "native-runtimes").iterdir())
+        selected_runtime = product_root.joinpath(
+            *PurePosixPath(runtime_path).parts
+        )
+        if (
+            len(runtime_entries) != 1
+            or runtime_entries[0].resolve(strict=True)
+            != selected_runtime.resolve(strict=True)
+        ):
+            raise SystemExit(
+                "product must contain exactly its manifest-selected runtime"
+            )
+        print(
+            version,
+            backend,
+            host_path,
+            runtime_path,
+            sep="\t",
+        )
+        PY
+        )
+        scripts/verify-native-runtime-package.sh "$extract_root/$runtime_path"
+        python3 scripts/compose-product-bundle.py \
+          --bundle "$extract_root" \
+          --host "$extract_root/$host_path" \
+          --runtime "$extract_root/$runtime_path" \
+          --version "$version" \
+          --backend "$backend" \
+          --check
+
+        rm -f -- "$archive"
+        cp -a "$extract_root/." "$artifact_path/"
 
     - name: Stage mesh-llm binary
       shell: bash
@@ -54,25 +231,78 @@ runs:
         chmod +x "${{ inputs.staged_binary_path }}"
         test -x "${{ inputs.staged_binary_path }}"
 
+    - name: Stage packaged native runtime
+      shell: bash
+      run: |
+        set -euo pipefail
+        source_runtime_root="${{ inputs.artifact_path }}/native-runtimes"
+        staged_runtime_root="$(dirname "${{ inputs.staged_binary_path }}")/native-runtimes"
+        [[ -d "$source_runtime_root" ]] || {
+          echo "artifact does not contain native-runtimes: $source_runtime_root" >&2
+          exit 1
+        }
+        rm -rf "$staged_runtime_root"
+        cp -a "$source_runtime_root" "$staged_runtime_root"
+        find "$staged_runtime_root" -type f -name manifest.json -print -quit | grep -q . || {
+          echo "staged native runtime has no manifest.json: $staged_runtime_root" >&2
+          exit 1
+        }
+
     - name: Restore integration model cache
+      if: ${{ inputs.model_url != '' && inputs.model_file != '' }}
       id: cache-model
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: ~/.models/${{ inputs.model_file }}
         key: ${{ inputs.cache_key_prefix }}mesh-llm-${{ runner.os }}-${{ inputs.model_cache_scope }}-${{ inputs.model_file }}-${{ hashFiles('.github/cache-version.txt') }}
+        restore-keys: |
+          ${{ inputs.cache_key_prefix }}mesh-llm-${{ runner.os }}-${{ inputs.model_cache_scope }}-${{ inputs.model_file }}-
+
+    - name: Check restored integration model
+      if: ${{ inputs.model_url != '' && inputs.model_file != '' }}
+      id: model-file
+      shell: bash
+      run: |
+        set -euo pipefail
+        model_path="$HOME/.models/${{ inputs.model_file }}"
+        if [[ -s "$model_path" ]]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=false" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Download integration model
-      if: ${{ steps.cache-model.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.model_url != '' && inputs.model_file != '' && steps.model-file.outputs.present != 'true' }}
       shell: bash
       run: |
         set -euo pipefail
         mkdir -p ~/.models
-        curl -fSL "${{ inputs.model_url }}" -o "$HOME/.models/${{ inputs.model_file }}"
-        ls -lh "$HOME/.models/${{ inputs.model_file }}"
+        retry_attempts="${MODEL_DOWNLOAD_RETRY_ATTEMPTS:-12}"
+        retry_delay="${MODEL_DOWNLOAD_RETRY_DELAY_SECS:-20}"
+        retry_max_time="${MODEL_DOWNLOAD_RETRY_MAX_TIME_SECS:-600}"
+        token="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
+        curl_args=(
+          --fail --location --show-error
+          --retry "$retry_attempts"
+          --retry-delay "$retry_delay"
+          --retry-max-time "$retry_max_time"
+          --retry-all-errors
+        )
+        if [[ -n "$token" ]]; then
+          curl_args+=(--header "Authorization: Bearer ${token}")
+        fi
+        output="$HOME/.models/${{ inputs.model_file }}"
+        partial="${output}.download"
+        rm -f "$partial"
+        curl "${curl_args[@]}" \
+          "${{ inputs.model_url }}" \
+          -o "$partial"
+        mv "$partial" "$output"
+        ls -lh "$output"
 
     - name: Save integration model cache
-      if: ${{ inputs.save_model_cache == 'true' && steps.cache-model.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v5
+      if: ${{ inputs.model_url != '' && inputs.model_file != '' && inputs.save_model_cache == 'true' && steps.cache-model.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: ~/.models/${{ inputs.model_file }}
         key: ${{ steps.cache-model.outputs.cache-primary-key }}

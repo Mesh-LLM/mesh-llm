@@ -2,9 +2,10 @@ import { containerUsedGB } from '@/features/configuration/lib/config-math'
 import type { ConfigAssign, ConfigModel, ConfigNode } from '@/features/app-tabs/types'
 
 export function formatGB(value: number, options: { fixedFractionDigits?: number } = {}) {
-  if (options.fixedFractionDigits !== undefined) return value.toFixed(options.fixedFractionDigits)
+  const safeValue = Number.isFinite(value) ? value : 0
+  if (options.fixedFractionDigits !== undefined) return safeValue.toFixed(options.fixedFractionDigits)
 
-  return Number.isInteger(value) ? value.toString() : value.toFixed(1)
+  return Number.isInteger(safeValue) ? safeValue.toString() : safeValue.toFixed(1)
 }
 
 export function nodeUsedGB(node: ConfigNode, assigns: ConfigAssign[], models?: ConfigModel[]) {

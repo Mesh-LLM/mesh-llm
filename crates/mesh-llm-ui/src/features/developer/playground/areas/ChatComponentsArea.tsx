@@ -45,6 +45,8 @@ Use the [local status endpoint](http://localhost:3131/api/status) before changin
 
 const STREAMING_THINKING_RESPONSE = `<think>Inspecting peer load, model warmth, and route latency.`
 
+const MESH_CONSULTATION_RESPONSE = `<think>Routing through mesh…</think>`
+
 export function ChatComponentsArea({ state }: { state: DeveloperPlaygroundState }) {
   const transparencyTabEnabled = useBooleanFeatureFlag('chat/transparencyTab')
   const [transparencyPreview, setTransparencyPreview] = useState<TransparencyPreview>('empty')
@@ -290,7 +292,7 @@ export function ChatComponentsArea({ state }: { state: DeveloperPlaygroundState 
 
               <PlaygroundPanel
                 title="Message row states"
-                description="Queue removal, streaming stop, stopped stats, error copy, markdown, thinking traces, and attachment actions are visible without sending a live request."
+                description="Queue removal, streaming stop, stopped stats, error copy, markdown, thinking content, and attachment actions are visible without sending a live request."
               >
                 <div className="space-y-4">
                   <MessageRow
@@ -325,6 +327,15 @@ export function ChatComponentsArea({ state }: { state: DeveloperPlaygroundState 
                     tokens="42 tok"
                     tokPerSec="18.4 tok/s"
                     ttft="181ms"
+                  />
+                  <MessageRow
+                    body={MESH_CONSULTATION_RESPONSE}
+                    messageRole="assistant"
+                    model="mesh"
+                    onStopStreaming={() => undefined}
+                    route="public mesh"
+                    state="streaming"
+                    timestamp="14:33"
                   />
                   <MessageRow
                     body={MARKDOWN_THINKING_RESPONSE}

@@ -1,25 +1,55 @@
 use crate::inference::skippy;
 use anyhow::{Context, Result};
 use skippy_coordinator::topology::{
-    TopologyNode, TopologyPlanningInput, TopologyStagePlan, minimum_valid_context, plan_topology,
+    LockedTopologyStage, TopologyNode, TopologyPlanningInput, TopologyStagePlan,
+    minimum_valid_context, plan_locked_topology, plan_topology, plan_topology_with_stage0,
 };
 use std::collections::HashMap;
 
 use super::local::{SplitParticipant, SplitParticipantExclusion};
+use super::split_topology_lock::LockedSplitStageAssignment;
 
-// VRAM budget already accounts for OS/runtime reservations (e.g. Metal's
-// recommendedMaxWorkingSetSize on macOS).  No additional headroom deduction.
-const RUNTIME_NODE_HEADROOM_NUMERATOR: u64 = 0;
+// Fixed per-node reserve the split planner will not fill with weights or KV.
+//
+// This is the *context-independent* half of the overhead model. The
+// *context-scaled* half — compute-graph buffers and scratch that grow with
+// `n_ctx` — is charged inside the topology planner, which bills KV at 100/85
+// (see `skippy_coordinator::topology`), holding back 15% of each node's
+// post-weight space exactly like the single-node context planner's
+// `usable_kv_cache_budget`.
+//
+// This fixed reserve covers what that KV-scaled term does not: the OpenAI
+// frontend, per-session runtime state, and — most importantly — margin between
+// the advertised budget and physical memory. On Apple Silicon the advertised
+// budget (Metal's `recommendedMaxWorkingSetSize`) can sit near 90% of total
+// unified memory, so packing a node to it starves the OS and swaps the whole
+// machine (observed: it made split hosts unusable). A flat 1/10 (10%) mirrors
+// the single-node fit cushion in `runtime::capacity` (which requires 110% of
+// model bytes) and, combined with the topology KV compute reserve, keeps a
+// split host healthy. Users who want to push a node harder can raise its share
+// with `--max-vram`.
+const RUNTIME_NODE_HEADROOM_NUMERATOR: u64 = 1;
 const RUNTIME_NODE_HEADROOM_DENOMINATOR: u64 = 10;
+const DEFAULT_TARGET_DECODE_TPOT_MS: u32 = 33;
+
+// KV compute reserve, mirroring `skippy_coordinator::topology`'s
+// `KV_COMPUTE_RESERVE_*`. Charging KV at 100/85 holds back 15% of post-weight
+// space for llama.cpp compute-graph buffers/scratch. Kept in sync with the
+// planner so the `split_capacity_shortfall` diagnostic reports the same
+// per-layer cost the real planner uses.
+const KV_COMPUTE_RESERVE_NUMERATOR: u128 = 100;
+const KV_COMPUTE_RESERVE_DENOMINATOR: u128 = 85;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyPlanInput {
     pub(super) native_context_length: u32,
     pub(super) layer_count: u32,
     pub(super) model_weight_bytes: u64,
+    pub(super) layer_weight_bytes: Vec<u64>,
     pub(super) kv_bytes_per_token: u64,
     pub(super) context_length_override: Option<u32>,
     pub(super) parallel_lanes_override: Option<usize>,
+    pub(super) target_decode_tpot_ms: Option<u32>,
     pub(super) minimum_nodes: usize,
     pub(super) nodes: Vec<SplitTopologyPlanNode>,
 }
@@ -30,12 +60,15 @@ pub(super) struct SplitTopologyPlanNode {
     pub(super) detected_vram_bytes: u64,
     pub(super) max_vram_bytes: Option<u64>,
     pub(super) runtime_headroom_bytes: u64,
+    pub(super) stage_transfer_latency_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyPlan {
     pub(super) context_length: u32,
     pub(super) parallel_lanes: usize,
+    pub(super) estimated_decode_network_ms_per_token: Option<u32>,
+    pub(super) decode_tpot_target_met: Option<bool>,
     pub(super) stages: Vec<TopologyStagePlan>,
 }
 
@@ -65,10 +98,38 @@ pub(super) struct PlannedRuntimeSliceTopology {
 }
 
 pub(super) fn plan_split_topology(input: SplitTopologyPlanInput) -> Result<SplitTopologyPlan> {
-    let plan = plan_topology(&TopologyPlanningInput {
+    let plan =
+        plan_topology(&topology_planning_input(input)).context("plan skippy split topology")?;
+    Ok(split_topology_plan(plan))
+}
+
+fn plan_split_topology_with_stage0(
+    input: SplitTopologyPlanInput,
+    required_stage0: iroh::EndpointId,
+) -> Result<SplitTopologyPlan> {
+    let input = topology_planning_input(input);
+    let required_stage0 = required_stage0.to_string();
+    let plan = plan_topology_with_stage0(&input, &required_stage0)
+        .context("plan skippy split topology with canonical stage 0")?;
+    Ok(split_topology_plan(plan))
+}
+
+fn split_topology_plan(plan: skippy_coordinator::topology::TopologyPlan) -> SplitTopologyPlan {
+    SplitTopologyPlan {
+        context_length: plan.context_length,
+        parallel_lanes: plan.parallel_lanes,
+        estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
+        decode_tpot_target_met: plan.decode_tpot_target_met,
+        stages: plan.stages,
+    }
+}
+
+fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInput {
+    TopologyPlanningInput {
         native_context_length: input.native_context_length,
         layer_count: input.layer_count,
         model_weight_bytes: input.model_weight_bytes,
+        layer_weight_bytes: input.layer_weight_bytes,
         kv_bytes_per_token: input.kv_bytes_per_token,
         minimum_nodes: input.minimum_nodes,
         nodes: input
@@ -79,18 +140,13 @@ pub(super) fn plan_split_topology(input: SplitTopologyPlanInput) -> Result<Split
                 detected_vram_bytes: node.detected_vram_bytes,
                 max_vram_bytes: node.max_vram_bytes,
                 runtime_headroom_bytes: node.runtime_headroom_bytes,
+                stage_transfer_latency_ms: node.stage_transfer_latency_ms,
             })
             .collect(),
         context_length_override: input.context_length_override,
         parallel_lanes_override: input.parallel_lanes_override,
-    })
-    .context("plan skippy split topology")?;
-
-    Ok(SplitTopologyPlan {
-        context_length: plan.context_length,
-        parallel_lanes: plan.parallel_lanes,
-        stages: plan.stages,
-    })
+        target_decode_tpot_ms: input.target_decode_tpot_ms,
+    }
 }
 
 pub(super) fn default_runtime_headroom_bytes(vram_bytes: u64) -> u64 {
@@ -122,6 +178,26 @@ pub(super) fn plan_runtime_slice_topology_with_resources(
     excluded: &[SplitParticipantExclusion],
     resources: SplitTopologyResourceInputs,
 ) -> Result<PlannedRuntimeSliceTopology> {
+    plan_runtime_slice_topology_with_resources_and_stage0(
+        topology_id,
+        model_ref,
+        package,
+        participants,
+        excluded,
+        resources,
+        None,
+    )
+}
+
+pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
+    topology_id: &str,
+    model_ref: &str,
+    package: &skippy::SkippyPackageIdentity,
+    participants: &[SplitParticipant],
+    excluded: &[SplitParticipantExclusion],
+    resources: SplitTopologyResourceInputs,
+    required_stage0: Option<iroh::EndpointId>,
+) -> Result<PlannedRuntimeSliceTopology> {
     tracing::info!(
         topology_id,
         model_ref,
@@ -134,13 +210,16 @@ pub(super) fn plan_runtime_slice_topology_with_resources(
     let participant_by_id = participant_index_by_id(participants);
     let plan_input = runtime_slice_plan_input(package, participants, resources);
     let plan = plan_runtime_slice_topology_result(
-        topology_id,
-        model_ref,
-        package,
-        participants,
-        excluded,
-        resources,
+        SplitPlanAttempt {
+            topology_id,
+            model_ref,
+            package,
+            participants,
+            excluded,
+            resources,
+        },
         plan_input,
+        required_stage0,
     )?;
 
     let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
@@ -151,6 +230,8 @@ pub(super) fn plan_runtime_slice_topology_with_resources(
         model_ref,
         context_length = plan.context_length,
         slots = plan.parallel_lanes,
+        estimated_decode_network_ms_per_token = plan.estimated_decode_network_ms_per_token,
+        decode_tpot_target_met = plan.decode_tpot_target_met,
         stages = ?split_stage_plan_labels(&stages),
         "planned resource-aware split runtime topology"
     );
@@ -161,32 +242,91 @@ pub(super) fn plan_runtime_slice_topology_with_resources(
     })
 }
 
-fn plan_runtime_slice_topology_result(
+pub(super) fn plan_locked_runtime_slice_topology_with_resources(
     topology_id: &str,
     model_ref: &str,
     package: &skippy::SkippyPackageIdentity,
     participants: &[SplitParticipant],
     excluded: &[SplitParticipantExclusion],
     resources: SplitTopologyResourceInputs,
+    locked_stages: &[LockedSplitStageAssignment],
+) -> Result<PlannedRuntimeSliceTopology> {
+    tracing::info!(
+        topology_id,
+        model_ref,
+        participants = ?split_participant_labels(participants),
+        layer_count = package.layer_count,
+        native_context_length = resources.native_context_length,
+        "planning locked resource-aware split runtime topology"
+    );
+
+    let participant_by_id = participant_index_by_id(participants);
+    let locked_stages = locked_stages
+        .iter()
+        .map(|stage| LockedTopologyStage {
+            node_id: stage.node_id.to_string(),
+            layer_start: stage.layer_start,
+            layer_end: stage.layer_end,
+        })
+        .collect::<Vec<_>>();
+    let input = runtime_slice_plan_input(package, participants, resources);
+    let plan = plan_locked_topology(&topology_planning_input(input), &locked_stages)
+        .context("validate locked skippy split topology")?;
+    let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
+    stages.sort_by_key(|stage| stage.stage_index);
+    validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
+    tracing::info!(
+        topology_id,
+        model_ref,
+        context_length = plan.context_length,
+        slots = plan.parallel_lanes,
+        estimated_decode_network_ms_per_token = plan.estimated_decode_network_ms_per_token,
+        decode_tpot_target_met = plan.decode_tpot_target_met,
+        stages = ?split_stage_plan_labels(&stages),
+        "validated locked split runtime topology"
+    );
+    Ok(PlannedRuntimeSliceTopology {
+        stages,
+        context_length: plan.context_length,
+        slots: plan.parallel_lanes,
+    })
+}
+
+struct SplitPlanAttempt<'a> {
+    topology_id: &'a str,
+    model_ref: &'a str,
+    package: &'a skippy::SkippyPackageIdentity,
+    participants: &'a [SplitParticipant],
+    excluded: &'a [SplitParticipantExclusion],
+    resources: SplitTopologyResourceInputs,
+}
+
+fn plan_runtime_slice_topology_result(
+    attempt: SplitPlanAttempt<'_>,
     plan_input: SplitTopologyPlanInput,
+    required_stage0: Option<iroh::EndpointId>,
 ) -> Result<SplitTopologyPlan> {
-    match plan_split_topology(plan_input) {
+    let result = match required_stage0 {
+        Some(node_id) => plan_split_topology_with_stage0(plan_input, node_id),
+        None => plan_split_topology(plan_input),
+    };
+    match result {
         Ok(plan) => Ok(plan),
         Err(err) => {
             let reason = split_topology_failure_reason(
-                model_ref,
-                package,
-                participants,
-                excluded,
-                resources,
+                attempt.model_ref,
+                attempt.package,
+                attempt.participants,
+                attempt.excluded,
+                attempt.resources,
             );
             tracing::warn!(
-                topology_id,
-                model_ref,
+                topology_id = attempt.topology_id,
+                model_ref = attempt.model_ref,
                 error = %err,
                 reason = %reason,
-                participants = ?split_participant_labels(participants),
-                excluded = ?split_participant_exclusion_labels(excluded),
+                participants = ?split_participant_labels(attempt.participants),
+                excluded = ?split_participant_exclusion_labels(attempt.excluded),
                 "failed to plan resource-aware split runtime topology"
             );
             Err(err.context(reason))
@@ -211,9 +351,11 @@ fn runtime_slice_plan_input(
         native_context_length: resources.native_context_length,
         layer_count: package.layer_count,
         model_weight_bytes: package.source_model_bytes,
+        layer_weight_bytes: package_layer_weight_bytes(package),
         kv_bytes_per_token: resources.kv_bytes_per_token,
         context_length_override: resources.ctx_size_override,
         parallel_lanes_override: resources.parallel_override,
+        target_decode_tpot_ms: Some(DEFAULT_TARGET_DECODE_TPOT_MS),
         minimum_nodes: super::local::SPLIT_DEFAULT_MIN_PARTICIPANTS,
         nodes: participants
             .iter()
@@ -222,9 +364,17 @@ fn runtime_slice_plan_input(
                 detected_vram_bytes: participant.vram_bytes,
                 max_vram_bytes: Some(participant.vram_bytes),
                 runtime_headroom_bytes: default_runtime_headroom_bytes(participant.vram_bytes),
+                stage_transfer_latency_ms: participant.rtt_ms,
             })
             .collect(),
     }
+}
+
+fn package_layer_weight_bytes(package: &skippy::SkippyPackageIdentity) -> Vec<u64> {
+    if package.layer_weight_bytes.len() == package.layer_count as usize {
+        return package.layer_weight_bytes.clone();
+    }
+    Vec::new()
 }
 
 fn map_runtime_slice_stages(
@@ -292,7 +442,7 @@ fn split_topology_failure_reason(
     let estimated_total_bytes = bytes_per_layer.saturating_mul(u64::from(package.layer_count));
 
     format!(
-        "unable to plan split topology for {model_ref}: native_context={}, minimum_context={}, evaluated_context={}, evaluated_lanes={}, layer_count={}, estimated_bytes_per_layer={}, estimated_total_bytes={}, total_usable_vram={}, max_placeable_layers_at_evaluated_shape={}/{}; participants [{}]; excluded [{}]",
+        "split_capacity_shortfall: unable to plan split topology for {model_ref}: native_context={}, minimum_context={}, evaluated_context={}, evaluated_lanes={}, layer_count={}, estimated_bytes_per_layer={}, estimated_total_bytes={}, total_usable_vram={}, max_placeable_layers_at_evaluated_shape={}/{}; participants [{}]; excluded [{}]",
         resources.native_context_length,
         minimum_context,
         evaluated_context,
@@ -314,10 +464,17 @@ fn split_candidate_bytes_per_layer(
     context_length: u32,
     _parallel_lanes: usize,
 ) -> u64 {
-    // KV cache is a single unified allocation shared across all parallel
-    // lanes with eviction — lane count does not multiply KV memory cost.
+    // Mirror of `skippy_coordinator::topology::candidate_bytes_per_layer` so the
+    // `split_capacity_shortfall` diagnostic reports the same per-layer cost the
+    // real planner uses. KV cache is a single unified allocation shared across
+    // all parallel lanes with eviction — lane count does not multiply KV cost.
+    // KV is charged at KV_COMPUTE_RESERVE_NUMERATOR/DENOMINATOR (100/85) to hold
+    // back 15% of post-weight space for compute-graph buffers/scratch.
     let kv_bytes = u128::from(kv_per_layer).saturating_mul(u128::from(context_length));
-    let total = u128::from(weight_per_layer).saturating_add(kv_bytes);
+    let kv_with_compute_reserve = kv_bytes
+        .saturating_mul(KV_COMPUTE_RESERVE_NUMERATOR)
+        .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
+    let total = u128::from(weight_per_layer).saturating_add(kv_with_compute_reserve);
     total.min(u128::from(u64::MAX)) as u64
 }
 
@@ -494,7 +651,7 @@ impl SplitCapacityReadinessReport {
 
     fn error_message(&self, model_ref: &str) -> String {
         let mut message = format!(
-            "aggregate split capacity for {model_ref} requires {}, mesh has {} across {} participant(s), short by {}",
+            "split_capacity_shortfall: aggregate split capacity for {model_ref} requires {}, mesh has {} across {} participant(s), short by {}",
             format_gb(self.required_bytes),
             format_gb(self.available_bytes),
             self.participants.len(),
@@ -516,7 +673,7 @@ impl SplitCapacityReadinessReport {
 
 #[cfg(test)]
 mod tests {
-    use super::super::local::SplitParticipantExclusionReason;
+    use super::super::local_package::SplitParticipantExclusionReason;
     use super::*;
     use iroh::SecretKey;
     use std::path::PathBuf;
@@ -535,9 +692,11 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes,
             source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
             layer_count,
             activation_width: 896,
             tensor_count: 100,
+            generation: None,
         }
     }
 
@@ -545,10 +704,38 @@ mod tests {
         SplitParticipant::new(make_id(seed), vram_bytes, None)
     }
 
+    fn participant_with_rtt(seed: u8, vram_bytes: u64, rtt_ms: u32) -> SplitParticipant {
+        let mut participant = participant(seed, vram_bytes);
+        participant.rtt_ms = Some(rtt_ms);
+        participant
+    }
+
     #[test]
-    fn default_runtime_headroom_is_zero() {
-        assert_eq!(default_runtime_headroom_bytes(100), 0);
-        assert_eq!(default_runtime_headroom_bytes(101), 0);
+    fn default_runtime_headroom_reserves_decode_margin() {
+        // This fixed reserve is 1/10 (10%) of the advertised budget — the
+        // context-independent half of the overhead model (OS/frontend margin +
+        // advertised-vs-physical slack). The context-scaled half (compute-graph
+        // buffers) is charged separately in the topology planner's KV term.
+        // Regression guard for the zero-headroom bug that OOM'd stages / swapped
+        // hosts.
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(default_runtime_headroom_bytes(0), 0);
+        assert_eq!(
+            default_runtime_headroom_bytes(20 * GIB),
+            2 * GIB,
+            "1/10 of a 20 GiB budget should be reserved"
+        );
+        // A ~115 GB advertised budget should reserve ~11 GB of headroom.
+        let budget = 115_000_000_000u64;
+        let headroom = default_runtime_headroom_bytes(budget);
+        assert!(
+            headroom >= 11_000_000_000 && headroom < budget,
+            "expected ~11 GB headroom under the budget, got {headroom}"
+        );
+        // Headroom must scale with the budget so bigger nodes reserve more.
+        assert!(
+            default_runtime_headroom_bytes(64 * GIB) < default_runtime_headroom_bytes(128 * GIB)
+        );
     }
 
     #[test]
@@ -616,6 +803,110 @@ mod tests {
     }
 
     #[test]
+    fn resource_planner_uses_exact_package_layer_weights() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let participants = vec![participant(1, 12 * GIB), participant(2, 11 * GIB)];
+        let mut package = package(4, 18 * GIB);
+        package.layer_weight_bytes = vec![GIB / 8, GIB / 8, 9 * GIB, 8 * GIB];
+
+        let plan = plan_runtime_slice_topology_with_resources(
+            "topology-test",
+            "model-a",
+            &package,
+            &participants,
+            &[],
+            SplitTopologyResourceInputs {
+                native_context_length: 1,
+                kv_bytes_per_token: 1,
+                ctx_size_override: Some(1),
+                parallel_override: Some(1),
+            },
+        )
+        .expect("resource-aware topology with exact layer weights");
+
+        assert_eq!(
+            plan.stages
+                .iter()
+                .map(|stage| (stage.layer_start, stage.layer_end))
+                .collect::<Vec<_>>(),
+            vec![(0, 3), (3, 4)]
+        );
+        assert_eq!(plan.stages[0].parameter_bytes, 9 * GIB + GIB / 4);
+        assert_eq!(plan.stages[1].parameter_bytes, 8 * GIB);
+    }
+
+    #[test]
+    fn resource_planner_assigns_mi300x_a_capacity_weighted_share() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let mi300x = participant(1, 192 * GIB);
+        let smaller_accelerator = participant(2, 48 * GIB);
+        let participants = vec![mi300x, smaller_accelerator];
+        let package = package(100, 200 * GIB);
+
+        let plan = plan_runtime_slice_topology_with_resources(
+            "mi300x-topology-test",
+            "unsloth/Qwen3.5-122B-A10B-MTP-GGUF:UD-Q8_K_XL",
+            &package,
+            &participants,
+            &[],
+            SplitTopologyResourceInputs {
+                native_context_length: 1,
+                kv_bytes_per_token: 1,
+                ctx_size_override: Some(1),
+                parallel_override: Some(1),
+            },
+        )
+        .expect("MI300X and smaller accelerator should form a valid topology");
+
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(plan.stages[0].node_id, mi300x.node_id);
+        assert_eq!(plan.stages[1].node_id, smaller_accelerator.node_id);
+        assert!(
+            plan.stages[0].parameter_bytes >= plan.stages[1].parameter_bytes * 3,
+            "the 192 GiB MI300X should receive most of the model weight: {:?}",
+            plan.stages
+        );
+    }
+
+    #[test]
+    fn resource_planner_prefers_lower_tpot_stage_count_from_participant_rtt() {
+        // Node VRAM is sized so the 40GB model fits on two nodes at the minimum
+        // context (65536) but needs three at the native context (262144), so
+        // latency-aware planning should prefer the two-stage/min-context shape.
+        // The budget must clear the two-node fit *after* both halves of the
+        // overhead model: the 1/10 fixed node headroom (see
+        // default_runtime_headroom_bytes) and the topology planner's KV compute
+        // reserve (KV billed at 100/85). 26GB usable ≈ 23.4GB fits 20 layers at
+        // 65536 (~22.5GB) but not at 131072 (~25GB), preserving the invariant.
+        let participants = vec![
+            participant_with_rtt(1, 26_000_000_000, 10),
+            participant_with_rtt(2, 26_000_000_000, 10),
+            participant_with_rtt(3, 26_000_000_000, 10),
+            participant_with_rtt(4, 26_000_000_000, 10),
+        ];
+
+        let plan = plan_runtime_slice_topology_with_resources(
+            "topology-test",
+            "model-a",
+            &package(40, 40_000_000_000),
+            &participants,
+            &[],
+            SplitTopologyResourceInputs {
+                native_context_length: 262_144,
+                kv_bytes_per_token: 64 * 1024,
+                ctx_size_override: None,
+                parallel_override: None,
+            },
+        )
+        .expect("latency-aware runtime topology");
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(plan.stages.first().unwrap().layer_start, 0);
+        assert_eq!(plan.stages.last().unwrap().layer_end, 40);
+    }
+
+    #[test]
     fn capacity_report_includes_participants_and_exclusions() {
         let participants = vec![participant(1, 40_000_000_000)];
         let excluded = vec![SplitParticipantExclusion {
@@ -631,6 +922,7 @@ mod tests {
             &excluded,
         );
 
+        assert!(message.contains("split_capacity_shortfall"));
         assert!(message.contains("model-a"));
         assert!(message.contains("short by 60.0GB"));
         assert!(message.contains("participants ["));

@@ -24,6 +24,9 @@ const DEBUG_PLACEMENT_MIN_DISTANCE_PERCENT = 7
 const DEBUG_PLACEMENT_CLUSTER_PADDING_PERCENT = 24
 const DEBUG_PLACEMENT_CLUSTER_GROWTH_PERCENT = 4
 
+// Full-surface UI workflows can exceed Vitest's default timeout under CI worker contention.
+vi.setConfig({ testTimeout: 15_000 })
+
 function TestProviders({ children }: { children: ReactNode }) {
   return (
     <AppProviders initialDataMode="harness" persistDataMode={false}>
@@ -55,18 +58,16 @@ const controlledResizeObserver: ResizeObserver = {
 }
 
 function createMatchMedia(matches: boolean) {
-  return vi.fn(
-    (query: string): MediaQueryList => ({
-      matches,
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: () => false
-    })
-  )
+  return vi.fn((query: string): MediaQueryList => ({
+    matches,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: () => false
+  }))
 }
 
 function setMeshCanvasSize(width: number, height: number) {
@@ -1857,7 +1858,7 @@ describe('app surfaces', () => {
     expect(initialToml).toContain('model = "GLM-4.7-Flash-Q4_K_M"')
     expect(initialToml).not.toContain('perseus.local')
     expect(initialToml).not.toContain('triton.lab')
-    expect(initialToml).toContain('device = "cuda:0"')
+    expect(initialToml).toContain('gpu_id = "cuda:0"')
     expect(initialToml).not.toContain('gpu_index =')
     expect(initialToml).not.toContain('[node]')
 

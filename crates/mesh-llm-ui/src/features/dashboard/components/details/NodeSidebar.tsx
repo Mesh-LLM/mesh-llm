@@ -28,6 +28,7 @@ import type {
   Ownership
 } from '@/features/app-shell/lib/status-types'
 import { SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import type { GpuInfo } from '@/lib/api/types'
 
 import { ModelFactCard } from '@/features/dashboard/components/details/ModelFactCard'
 import { ModelMetaItem } from '@/features/dashboard/components/details/ModelMetaItem'
@@ -44,7 +45,7 @@ type NodeSidebarRecord = {
   vramGb: number
   vramSharePct: number | null
   isSoc?: boolean
-  gpus: { name: string; vram_bytes: number; bandwidth_gbps?: number }[]
+  gpus: GpuInfo[]
   hostedModels: string[]
   hotModels: string[]
   servingModels: string[]
@@ -262,9 +263,9 @@ export function NodeSidebar({
               <div className="grid gap-3">
                 {node.gpus.map((gpu, index) => (
                   <ModelMetaItem
-                    key={`${node.id}-${gpu.name}-${gpu.vram_bytes}-${gpu.bandwidth_gbps ?? 'unknown'}`}
+                    key={`${node.id}-gpu-${gpu.idx ?? index}`}
                     label={node.isSoc ? `SoC ${index + 1}` : `GPU ${index + 1}`}
-                    value={`${trimGpuVendor(gpu.name) || gpu.name} · ${formatGpuMemory(gpu.vram_bytes)}${gpu.bandwidth_gbps ? ` · ${gpu.bandwidth_gbps.toFixed(0)} GB/s` : ''}`}
+                    value={`${trimGpuVendor(gpu.name) || gpu.name} · ${formatGpuMemory(gpu)}${gpu.bandwidth_gbps ? ` · ${gpu.bandwidth_gbps.toFixed(0)} GB/s` : ''}`}
                     icon={node.isSoc ? <Cpu className="h-3.5 w-3.5" /> : <Gpu className="h-3.5 w-3.5" />}
                   />
                 ))}

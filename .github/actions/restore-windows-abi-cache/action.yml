@@ -1,0 +1,214 @@
+name: Restore Windows native ABI cache
+description: Validate and restore one architecture- and toolchain-specific Windows native ABI build tree outside the replaceable llama.cpp worktree.
+
+inputs:
+  backend:
+    description: Native backend to restore (cpu, cuda, rocm, or vulkan).
+    required: true
+  build_dir:
+    description: Repository-relative Windows native ABI build directory.
+    required: true
+  toolchain_epoch:
+    description: Exact hosted Windows image/toolchain identity shared with the build stamp.
+    required: true
+  architecture_set:
+    description: Canonical backend architecture set; CUDA and ROCm require a non-empty value.
+    required: false
+    default: ""
+  cuda_toolchain_version:
+    description: CUDA toolkit version; required for the CUDA backend.
+    required: false
+    default: ""
+  vulkan_toolchain_version:
+    description: Vulkan SDK version; required for the Vulkan backend.
+    required: false
+    default: ""
+  rocm_toolchain_version:
+    description: Windows ROCm HIP SDK filename/version; required for the ROCm backend.
+    required: false
+    default: ""
+  allow-native-github-cache:
+    description: Whether the protected provider policy permits native GitHub cache APIs.
+    required: false
+    default: "false"
+
+outputs:
+  cache-hit:
+    description: Whether an exact Windows native ABI cache entry was restored.
+    value: ${{ steps.restore.outputs.cache-hit }}
+  cache-primary-key:
+    description: Exact primary key used for restore and a later cache save.
+    value: ${{ steps.restore.outputs.cache-primary-key }}
+  cache-path:
+    description: Validated absolute build path shared by restore and save.
+    value: ${{ steps.identity.outputs.build-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate Windows ABI cache identity
+      id: identity
+      shell: pwsh
+      env:
+        INPUT_BACKEND: ${{ inputs.backend }}
+        INPUT_BUILD_DIR: ${{ inputs.build_dir }}
+        INPUT_TOOLCHAIN_EPOCH: ${{ inputs.toolchain_epoch }}
+        INPUT_ARCHITECTURE_SET: ${{ inputs.architecture_set }}
+        INPUT_CUDA_TOOLCHAIN_VERSION: ${{ inputs.cuda_toolchain_version }}
+        INPUT_VULKAN_TOOLCHAIN_VERSION: ${{ inputs.vulkan_toolchain_version }}
+        INPUT_ROCM_TOOLCHAIN_VERSION: ${{ inputs.rocm_toolchain_version }}
+        CACHE_INPUT_HASH: ${{ hashFiles('.github/actions/restore-windows-abi-cache/action.yml', '.github/actions/save-and-verify-actions-cache/action.yml', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/actions/prepare-native-runtime-input/action.yml', '.github/actions/setup-windows-rocm-sdk/action.yml', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        function Normalize-KeySegment {
+          param(
+            [string]$Value,
+            [string]$Name,
+            [bool]$AllowEmpty = $false
+          )
+
+          $segment = "$Value".Trim()
+          if ($segment.Contains("`r") -or $segment.Contains("`n")) {
+            throw "$Name must be a single-line cache-key segment"
+          }
+          $segment = ($segment -replace '[,;:\s/\\]+', '_').Trim("_")
+          if (-not $segment) {
+            if ($AllowEmpty) {
+              return ""
+            }
+            throw "$Name must not be empty"
+          }
+          if ($segment -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]*$') {
+            throw "$Name contains unsupported cache-key characters: $segment"
+          }
+          return $segment
+        }
+
+        $backend = "$env:INPUT_BACKEND".Trim().ToLowerInvariant()
+        if ($backend -notin @("cpu", "cuda", "rocm", "vulkan")) {
+          throw "unsupported Windows ABI cache backend: $backend"
+        }
+        $toolchainEpoch = Normalize-KeySegment `
+          -Value "$env:INPUT_TOOLCHAIN_EPOCH" `
+          -Name "toolchain_epoch"
+        $buildStampEpoch = Normalize-KeySegment `
+          -Value "$env:MESH_LLM_LLAMA_TOOLCHAIN_EPOCH" `
+          -Name "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH"
+        if ($toolchainEpoch -ne $buildStampEpoch) {
+          throw (
+            "toolchain_epoch must match MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: " +
+            "$toolchainEpoch != $buildStampEpoch"
+          )
+        }
+
+        $buildDir = "$env:INPUT_BUILD_DIR".Trim()
+        if (-not $buildDir) {
+          throw "build_dir must not be empty"
+        }
+        if (
+          $buildDir.Contains("`r") -or
+          $buildDir.Contains("`n") -or
+          $buildDir.Contains("*") -or
+          $buildDir.Contains("?") -or
+          $buildDir.Contains("[") -or
+          $buildDir.Contains("]")
+        ) {
+          throw "build_dir must name one exact directory without newlines or glob characters"
+        }
+        if (-not $env:GITHUB_WORKSPACE) {
+          throw "GITHUB_WORKSPACE must be set"
+        }
+
+        $workspace = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd(
+          [System.IO.Path]::DirectorySeparatorChar,
+          [System.IO.Path]::AltDirectorySeparatorChar
+        )
+        $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($buildDir)) {
+          [System.IO.Path]::GetFullPath($buildDir)
+        } else {
+          [System.IO.Path]::GetFullPath((Join-Path $workspace $buildDir))
+        }
+        $workspacePrefix = "$workspace$([System.IO.Path]::DirectorySeparatorChar)"
+        if (
+          $resolvedBuildDir -eq $workspace -or
+          -not $resolvedBuildDir.StartsWith(
+            $workspacePrefix,
+            [System.StringComparison]::OrdinalIgnoreCase
+          )
+        ) {
+          throw "build_dir must resolve inside GITHUB_WORKSPACE: $resolvedBuildDir"
+        }
+        $llamaWorktree = [System.IO.Path]::GetFullPath(
+          (Join-Path $workspace ".deps\llama.cpp")
+        ).TrimEnd(
+          [System.IO.Path]::DirectorySeparatorChar,
+          [System.IO.Path]::AltDirectorySeparatorChar
+        )
+        $llamaWorktreePrefix = (
+          "$llamaWorktree$([System.IO.Path]::DirectorySeparatorChar)"
+        )
+        if (
+          $resolvedBuildDir -eq $llamaWorktree -or
+          $resolvedBuildDir.StartsWith(
+            $llamaWorktreePrefix,
+            [System.StringComparison]::OrdinalIgnoreCase
+          )
+        ) {
+          throw (
+            "build_dir must remain outside the replaceable llama.cpp " +
+            "worktree: $resolvedBuildDir"
+          )
+        }
+
+        $architectureSet = Normalize-KeySegment `
+          -Value "$env:INPUT_ARCHITECTURE_SET" `
+          -Name "architecture_set" `
+          -AllowEmpty $true
+        if ($backend -in @("cuda", "rocm") -and -not $architectureSet) {
+          throw "architecture_set is required for the $backend backend"
+        }
+
+        $toolchain = switch ($backend) {
+          "cpu" {
+            "cpu"
+          }
+          "cuda" {
+            $version = Normalize-KeySegment `
+              -Value "$env:INPUT_CUDA_TOOLCHAIN_VERSION" `
+              -Name "cuda_toolchain_version"
+            "cuda-$version-Jimver-v0.2.35"
+          }
+          "vulkan" {
+            $version = Normalize-KeySegment `
+              -Value "$env:INPUT_VULKAN_TOOLCHAIN_VERSION" `
+              -Name "vulkan_toolchain_version"
+            "vulkan-$version-jakoch-v1.5.2"
+          }
+          "rocm" {
+            $version = Normalize-KeySegment `
+              -Value "$env:INPUT_ROCM_TOOLCHAIN_VERSION" `
+              -Name "rocm_toolchain_version"
+            "rocm-$version"
+          }
+        }
+
+        $inputHash = "$env:CACHE_INPUT_HASH".Trim().ToLowerInvariant()
+        if ($inputHash -notmatch '^[0-9a-f]{64}$') {
+          throw "Windows ABI cache input hash is missing or invalid"
+        }
+
+        New-Item -ItemType Directory -Force -Path $resolvedBuildDir | Out-Null
+        $cacheKey = "mesh-llm-windows-2022-skippy-abi-$backend-$architectureSet-$toolchain-$toolchainEpoch-$inputHash"
+        @(
+          "build-dir=$resolvedBuildDir"
+          "cache-key=$cacheKey"
+        ) | Add-Content -Path $env:GITHUB_OUTPUT
+
+    - name: Restore exact Windows ABI cache
+      id: restore
+      if: ${{ inputs.allow-native-github-cache == 'true' }}
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ steps.identity.outputs.build-dir }}
+        key: ${{ steps.identity.outputs.cache-key }}

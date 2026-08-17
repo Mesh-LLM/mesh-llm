@@ -220,7 +220,7 @@ pub(crate) struct RoutingCollectorSnapshot {
 /// Values are fixed-point milli tokens/second to keep gossip deterministic and
 /// avoid protobuf floating-point edge cases. They are advisory only; routing
 /// clamps and local observations take precedence.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ModelThroughputHint {
     pub(crate) model_name: String,
     pub(crate) avg_tokens_per_second_milli: u64,

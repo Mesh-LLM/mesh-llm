@@ -83,24 +83,19 @@ fn build_config(
     moa::GatewayConfig {
         backends: vec![backend.clone() as Arc<dyn moa::ModelBackend>],
         models: vec![
-            moa::ModelEntry {
-                name: "test-fast".into(),
-                backend_index: 0,
-            },
-            moa::ModelEntry {
-                name: "test-specialist".into(),
-                backend_index: 0,
-            },
-            moa::ModelEntry {
-                name: "test-strong".into(),
-                backend_index: 0,
-            },
+            moa::ModelEntry::new("test-fast", 0),
+            moa::ModelEntry::new("test-specialist", 0),
+            moa::ModelEntry::new("test-strong", 0),
         ],
         worker_timeout: Duration::from_secs(5),
         reducer_timeout: Duration::from_secs(5),
         hedge_delay: Duration::from_secs(1),
         first_answer_grace: Duration::ZERO,
+        strong_patience: Duration::ZERO,
         enable_thinking,
+        actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     }
 }
 

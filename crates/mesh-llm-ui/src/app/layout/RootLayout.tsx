@@ -5,6 +5,7 @@ import { resolveHarnessTopNavData, resolveLiveTopNavData } from '@/app/layout/sh
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { Footer } from '@/features/shell/components/Footer'
 import { TopNav } from '@/features/shell/components/TopNav'
+import type { TopNavPluginPageItem } from '@/features/shell/components/TopNavPluginPages'
 import { PreferencesPanel } from '@/features/shell/components/PreferencesPanel'
 import {
   getEnabledConfigurationTabIds,
@@ -13,6 +14,11 @@ import {
 } from '@/features/configuration/components/configuration-tab-ids'
 import { DEFAULT_DEVELOPER_PLAYGROUND_TAB } from '@/features/developer/playground/developer-playground-tabs'
 import { useStatusQuery } from '@/features/network/api/use-status-query'
+import {
+  adaptPluginSummariesToWebUiEntries,
+  buildPluginWebUiNavItems,
+  usePluginSummariesQuery
+} from '@/features/plugins/api/plugin-web-ui'
 import { useUIPreferences } from '@/features/shell/hooks/useUiPreferences'
 import { SHELL_HARNESS } from '@/features/app-tabs/data'
 import { env, hrefWithBasePath, stripBasePath } from '@/lib/env'
@@ -23,14 +29,17 @@ import type { ShellHarnessData, AppTab } from '@/features/app-tabs/types'
 function pathToTab(pathname: string): AppTab | null {
   if (pathname.startsWith('/chat')) return 'chat'
   if (pathname.startsWith('/reserves')) return 'reserves'
+  if (pathname.startsWith('/logs')) return 'logs'
   if (pathname.startsWith('/configuration')) return 'configuration'
+  if (pathname.startsWith('/plugins/')) return null
   if (env.isDevelopment && pathname.startsWith('/__playground')) return null
   return 'network'
 }
 
-function tabToPath(tab: Exclude<AppTab, 'configuration'>): '/' | '/chat' | '/reserves' {
+function tabToPath(tab: Exclude<AppTab, 'configuration'>): '/' | '/chat' | '/reserves' | '/logs' {
   if (tab === 'chat') return '/chat'
   if (tab === 'reserves') return '/reserves'
+  if (tab === 'logs') return '/logs'
   return '/'
 }
 
@@ -62,12 +71,15 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
   const { mode } = useDataMode()
   const liveMode = mode === 'live'
   const statusQuery = useStatusQuery({ enabled: liveMode })
+  const pluginSummariesQuery = usePluginSummariesQuery({ enabled: liveMode })
   const { theme, accent, density, panelStyle, setTheme, setAccent, setDensity, setPanelStyle } = useUIPreferences()
   const newConfigurationPageEnabled = useBooleanFeatureFlag('global/newConfigurationPage')
   const newReservesPageEnabled = useBooleanFeatureFlag('global/newReservesPage')
+  const logsPageEnabled = useBooleanFeatureFlag('global/logsPage')
   const signingAttestationEnabled = useBooleanFeatureFlag('configuration/signingAttestation')
   const integrationsEnabled = useBooleanFeatureFlag('configuration/integrations')
   const wakePolicyConfigurationEnabled = useBooleanFeatureFlag('configuration/wakePolicyConfiguration')
+  const logsSettingsEnabled = useBooleanFeatureFlag('configuration/logsSettings')
   const activeTab = pathToTab(pathname)
   const [preferencesOpen, setPreferencesOpen] = useState(false)
   const topNavData = useMemo(
@@ -79,19 +91,21 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
   const enabledConfigurationTabs = useMemo(
     () =>
       getEnabledConfigurationTabIds({
-        integrationsEnabled,
+        pluginsEnabled: integrationsEnabled,
         signingAttestationEnabled,
-        wakePolicyEnabled: wakePolicyConfigurationEnabled
+        wakePolicyEnabled: wakePolicyConfigurationEnabled,
+        logsSettingsEnabled
       }),
-    [integrationsEnabled, signingAttestationEnabled, wakePolicyConfigurationEnabled]
+    [integrationsEnabled, signingAttestationEnabled, wakePolicyConfigurationEnabled, logsSettingsEnabled]
   )
   const tabHrefs = useMemo(
     () => ({
       network: hrefWithBasePath('/'),
       reserves: hrefWithBasePath('/reserves'),
+      logs: hrefWithBasePath('/logs'),
       chat: hrefWithBasePath('/chat'),
       configuration: hrefWithBasePath(
-        `/configuration/${pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'defaults'}`
+        `/configuration/${pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'general'}`
       )
     }),
     [enabledConfigurationTabs, pathname]
@@ -101,23 +115,26 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
       ? null
       : activeTab === 'reserves' && !newReservesPageEnabled
         ? null
-        : activeTab
+        : activeTab === 'logs' && !logsPageEnabled
+          ? null
+          : activeTab
   const showDevelopmentNavControls = env.isDevelopment
 
   const onTabChange = useCallback(
     (tab: AppTab | null) => {
+      if (tab === 'logs' && !logsPageEnabled) return
       if (tab === 'reserves' && !newReservesPageEnabled) return
       if (tab === 'configuration' && !newConfigurationPageEnabled) return
       if (tab === 'configuration') {
         void router.navigate({
           to: '/configuration/$configurationTab',
-          params: { configurationTab: pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'defaults' }
+          params: { configurationTab: pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'general' }
         })
         return
       }
       void router.navigate({ to: tabToPath(tab!) })
     },
-    [router, pathname, enabledConfigurationTabs, newConfigurationPageEnabled, newReservesPageEnabled]
+    [router, pathname, enabledConfigurationTabs, newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled]
   )
 
   const onTogglePreferences = useCallback(() => setPreferencesOpen((value) => !value), [])
@@ -129,8 +146,29 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
   const onOpenIdentity = useCallback(() => setPreferencesOpen(true), [])
 
   const enabledTabs = useMemo(
-    () => ({ reserves: newReservesPageEnabled, configuration: newConfigurationPageEnabled }),
-    [newConfigurationPageEnabled, newReservesPageEnabled]
+    () => ({ reserves: newReservesPageEnabled, logs: logsPageEnabled, configuration: newConfigurationPageEnabled }),
+    [newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled]
+  )
+
+  const pluginNavItems = useMemo<readonly TopNavPluginPageItem[]>(() => {
+    if (!liveMode || !Array.isArray(pluginSummariesQuery.data)) return []
+    return buildPluginWebUiNavItems(adaptPluginSummariesToWebUiEntries(pluginSummariesQuery.data)).map((item) => ({
+      pluginName: item.pluginName,
+      pageId: item.pageId,
+      label: item.label,
+      href: hrefWithBasePath(`/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`),
+      active: pathname === `/plugins/${item.pluginName}/${item.pageId}`
+    }))
+  }, [liveMode, pathname, pluginSummariesQuery.data])
+
+  const onPluginPageChange = useCallback(
+    (item: TopNavPluginPageItem) => {
+      void router.navigate({
+        to: '/plugins/$pluginName/$pageId',
+        params: { pluginName: item.pluginName, pageId: item.pageId }
+      })
+    },
+    [router]
   )
 
   return (
@@ -153,6 +191,8 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
           apiAccessLinks={topNavData.topNavApiAccessLinks}
           joinCommands={topNavData.topNavJoinCommands}
           joinLinks={topNavData.topNavJoinLinks}
+          pluginNavItems={pluginNavItems}
+          onPluginPageChange={onPluginPageChange}
           showDeveloperPlayground={showDevelopmentNavControls}
           onOpenDeveloperPlayground={showDevelopmentNavControls ? onOpenDeveloperPlayground : undefined}
           onOpenIdentity={onOpenIdentity}

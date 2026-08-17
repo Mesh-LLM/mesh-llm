@@ -1,15 +1,24 @@
 {
-  "name": "@meshllm/sdk",
-  "version": "0.68.0",
+  "name": "@mesh-llm/sdk",
+  "version": "0.76.0-rc2",
   "description": "Node.js SDK for MeshLLM client and local serving applications",
   "main": "index.js",
   "types": "index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mesh-LLM/mesh-packaging.git"
+  },
+  "homepage": "https://github.com/Mesh-LLM/mesh-llm/tree/main/sdk/node",
+  "bugs": {
+    "url": "https://github.com/Mesh-LLM/mesh-llm/issues"
+  },
   "files": [
     "index.js",
     "index.d.ts",
     "native-runtime.js",
     "console/",
     "native/",
+    "LICENSE",
     "README.md"
   ],
   "scripts": {
@@ -28,5 +37,10 @@
     "arm64",
     "x64"
   ],
-  "license": "MIT OR Apache-2.0"
+  "license": "MIT OR Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  }
 }

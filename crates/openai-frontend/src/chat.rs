@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 
 use crate::{
     common::{
-        FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort, StopSequence,
-        StreamOptions, Usage, completion_id, now_unix_secs,
+        AgentSessionIdentity, FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort,
+        StopSequence, StreamOptions, Usage, agent_session_metadata, agent_session_source_metadata,
+        completion_id, now_unix_secs, set_agent_session_metadata,
     },
     errors::OpenAiError,
 };
@@ -45,6 +46,20 @@ pub struct ChatCompletionRequest {
 }
 
 impl ChatCompletionRequest {
+    pub(crate) fn set_agent_session(&mut self, identity: Option<AgentSessionIdentity>) {
+        set_agent_session_metadata(&mut self.extra, identity);
+    }
+
+    #[must_use]
+    pub fn agent_session(&self) -> Option<&str> {
+        agent_session_metadata(&self.extra)
+    }
+
+    #[must_use]
+    pub fn agent_session_source(&self) -> Option<&str> {
+        agent_session_source_metadata(&self.extra)
+    }
+
     pub fn effective_max_tokens(&self) -> Option<u32> {
         self.max_completion_tokens.or(self.max_tokens)
     }
@@ -118,9 +133,26 @@ fn invalid_tools_value(value: &Value) -> bool {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ChatMessage {
     pub role: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_message_content",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub content: Option<MessageContent>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+fn deserialize_present_message_content<'de, D>(
+    deserializer: D,
+) -> Result<Option<MessageContent>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(D::Error::custom)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -174,6 +206,8 @@ pub struct ChatCompletionResponse {
     pub model: String,
     pub choices: Vec<ChatCompletionChoice>,
     pub usage: Usage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timings: Option<BTreeMap<String, Value>>,
 }
 
 impl ChatCompletionResponse {
@@ -204,7 +238,13 @@ impl ChatCompletionResponse {
                 finish_reason: Some(finish_reason),
             }],
             usage,
+            timings: None,
         }
+    }
+
+    pub fn with_timings(mut self, timings: Option<BTreeMap<String, Value>>) -> Self {
+        self.timings = timings;
+        self
     }
 }
 
@@ -378,5 +418,16 @@ mod tests {
         let value = serde_json::to_value(delta).unwrap();
 
         assert_eq!(value, json!({ "reasoning_content": "Still thinking." }));
+    }
+
+    #[test]
+    fn chat_message_round_trip_preserves_missing_and_null_content() {
+        for expected in [
+            json!({"role": "assistant", "tool_calls": []}),
+            json!({"role": "assistant", "content": null, "tool_calls": []}),
+        ] {
+            let message: ChatMessage = serde_json::from_value(expected.clone()).unwrap();
+            assert_eq!(serde_json::to_value(message).unwrap(), expected);
+        }
     }
 }

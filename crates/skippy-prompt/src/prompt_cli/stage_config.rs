@@ -64,12 +64,15 @@ fn write_local_configs(
             n_batch: None,
             n_ubatch: None,
             n_gpu_layers: args.n_gpu_layers,
+            mmap: None,
+            mlock: false,
             cache_type_k: args.cache_type_k.clone(),
             cache_type_v: args.cache_type_v.clone(),
             flash_attn_type: StageFlashAttentionType::Auto,
             filter_tensors_on_load: true,
             selected_device: None,
             kv_cache,
+            native_mtp_enabled: true,
             load_mode,
             bind_addr: stage.bind_addr.clone(),
             upstream,
@@ -153,9 +156,10 @@ fn prompt_stage_cache_max_bytes(
             &args.cache_type_k,
             &args.cache_type_v,
             &meta,
-        ) {
-            return Ok(bytes);
-        }
+        )
+    {
+        return Ok(bytes);
+    }
 
     estimate_prompt_stage_cache_max_bytes_from_width(
         stage.layer_start,
@@ -497,7 +501,7 @@ fn package_artifact_available(path: &Path) -> Result<bool> {
                     "stat package manifest {}",
                     path.join("model-package.json").display()
                 )
-            })
+            });
         }
     }
     match fs::metadata(path.join(".complete")) {

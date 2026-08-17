@@ -9,7 +9,7 @@ This file covers local build and development workflows for this repository.
 - `just`
 - `cmake`
 - Rust toolchain (`cargo`)
-- Node.js 24 + pnpm (for UI development)
+- Node.js 24 + npm (for UI development)
 
 **macOS**: Apple Silicon. Metal is used automatically.
 
@@ -19,90 +19,63 @@ This file covers local build and development workflows for this repository.
 
 **Linux Vulkan**: Vulkan is supported when the Vulkan development files and `glslc` are installed. On Ubuntu/Debian, install `libvulkan-dev glslc`. On Arch Linux, install `vulkan-headers shaderc`.
 
-**Windows**: `just build` auto-detects `cuda`, `hip`/`rocm`, `vulkan`, or `cpu`. You can override with `just build backend=cuda` (or `rocm`, `vulkan`, `cpu`). Metal is not supported on Windows.
+**Windows**: native runtime builds support `cuda`, `hip`/`rocm`, `vulkan`, or
+`cpu`. Metal is not supported on Windows.
 
 ## Build from source
 
-Build everything (patched llama.cpp, mesh binary, and UI production build):
+Build the normal debug product: a backend-neutral dynamic host, its adjacent
+locally packaged native runtime, and the UI:
 
 ```bash
 just build
 ```
 
-`just build` builds the mesh binary in release mode. For day-to-day iteration
-where the final release link is the slow step, use the debug-profile shortcut:
+Release and packaging use the same host/runtime boundary. The only lower-level
+static compilation primitive is runtime packaging; it never builds a host.
+Build a release host once:
 
 ```bash
-just build-dev
+just release-host-build
 ```
 
-You can also keep the normal recipe shape and select the profile explicitly:
+Then build the backend runtime you are changing:
 
 ```bash
-MESH_LLM_BUILD_PROFILE=dev just build
+just release-runtime-build cpu
+just release-runtime-build metal
+just release-runtime-build cuda
+just release-runtime-build rocm
+just release-runtime-build vulkan
 ```
 
-On Linux, `just build` auto-detects CUDA vs ROCm vs Vulkan. For NVIDIA, make sure `nvcc` is in your `PATH` first:
+Backend toolchains must be available for the corresponding runtime build. For
+NVIDIA on Linux, put `nvcc` on `PATH`; runtime packaging detects the selected
+CUDA major and architecture from the toolchain/environment.
 
 ```bash
-# Arch Linux
-PATH=/opt/cuda/bin:$PATH just build
-
-# Ubuntu/Debian
-PATH=/usr/local/cuda/bin:$PATH just build
+PATH=/opt/cuda/bin:$PATH just release-runtime-build cuda
+# or
+PATH=/usr/local/cuda/bin:$PATH just release-runtime-build cuda
 ```
 
-For NVIDIA builds, the script auto-detects your GPU's CUDA architecture. To override:
+Exercise the exact release discovery boundary with an isolated cache:
 
 ```bash
-just build cuda_arch=90   # e.g. H100
+runtime_cache="$(mktemp -d)"
+MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes" \
+MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$runtime_cache" \
+  ./target/release/mesh-llm runtime list
 ```
 
-For AMD ROCm builds, you can force the backend explicitly:
+The resolver validates version, Skippy ABI, OS, architecture, and backend. It
+does not search the current working directory or copy a matching bundled
+runtime into the user cache.
+
+Create a portable product bundle after building both layers:
 
 ```bash
-just build backend=rocm
-```
-
-To override the AMD GPU target list:
-
-```bash
-just build backend=rocm rocm_arch="gfx90a;gfx942;gfx1100"
-```
-
-For Vulkan builds, force the backend explicitly:
-
-```bash
-just build backend=vulkan
-```
-
-For CPU-only builds (no GPU acceleration):
-
-```bash
-just build backend=cpu
-```
-
-On Windows, you can override the detected backend if needed:
-
-```powershell
-just build backend=vulkan
-just build backend=cpu
-just build backend=cuda cuda_arch=90
-```
-
-Windows release bundles use dedicated Windows release recipes:
-
-```powershell
-just release-build-cuda-windows
-just release-bundle-cuda-windows v0.X.0
-```
-
-GitHub Actions uses Blacksmith Windows 2025 runners for compile-only Windows CI and release bundle validation.
-
-Create a portable bundle:
-
-```bash
-just bundle
+just release-bundle v0.X.0 dist
 ```
 
 ## UI development workflow
@@ -165,29 +138,81 @@ On native Windows, `just check-release` runs the host-safe Rust/doc invariant su
 
 ## CI / GitHub Actions
 
-CI uses [`dorny/paths-filter`](https://github.com/dorny/paths-filter) to skip jobs when unchanged areas of the repo are modified. A `changes` detection job runs first on every push and PR, then each build job gates on its output.
+For the current PR and main topology, read [`ci/ci.md`](ci/ci.md), the
+[optimization spec](.omo/specs/pr-ci-optimization.md), and the canonical
+[`manage-ci` skill](.agents/skills/manage-ci/SKILL.md) before editing CI.
+`.github/AGENTS.md` enforces that sequence.
 
-For the current PR build topology, see [`ci/ci.md`](ci/ci.md). For workflow-editing rules agents must follow, see [`.github/AGENTS.md`](.github/AGENTS.md).
+The five `pr_{quality,website,linux,macos,windows}.yml` files are focused PR
+entrypoints, while `ci.yml` is the thin main entrypoint. On protected main,
+`ci-control.yml` computes one versioned plan from `ci/ownership.yml` and
+`ci/slices.yml`, then dispatches separate Quality, Website, Linux, macOS and
+Windows workflow graphs with bounded native inputs. Each PR entry invokes only
+its matching protected reusable lane, keeping platform/topic logs in separate
+PR-associated runs.
+A PR selects representative rows from the same catalog that `main` runs; it
+does not maintain a second build graph. GitHub-hosted runners are the PR
+provider.
+Trusted main Linux jobs may use Depot only through the checked runner policy;
+PR Depot execution and cache isolation are future work documented in
+[`ci/DEPOT_MIGRATION.md`](ci/DEPOT_MIGRATION.md).
 
-### What triggers what
+Linux CI uses prebuilt public and self-hosted images from
+[`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).
+CPU, Vulkan, versioned CUDA, and versioned ROCm images share a core environment,
+warm dependencies from MeshLLM's checked-in manifests, and allow container
+runtimes to reuse cached layers where the runner host or K3s node retains them
+instead of reinstalling host packages in every job.
 
-| Changed paths | `PR Quality Checks` | `PR Builds` CPU rows | Backend target rows |
-| --- | --- | --- | --- |
-| Rust crate or build-script changes | ✅ fmt/clippy | ✅ Linux/macOS/Windows CPU routing as needed | ⏭ skipped unless backend inputs changed |
-| `third_party/llama.cpp/**`, backend build scripts, `.github/workflows/pr_*.yml`, cache-version, `Justfile` | ✅ fmt/clippy | ✅ runs | ✅ CUDA/ROCm/Vulkan rows run where supported |
-| `crates/mesh-llm-ui/**` | ✅ UI quality | ✅ Linux/macOS UI build paths | ⏭ skipped |
-| `**/*.md`, `docs/**`, anything docs-only | ✅ changes summary only | ⏭ skipped | ⏭ skipped |
-| Manual `workflow_dispatch` | ✅ runs | ✅ runs | ✅ runs |
+If CI is missing a dependency, update the appropriate MeshLLM manifest and
+lockfile or the runner image's YAML profile/installer, then publish the image
+and pin its OCI digest. Do not add a one-off `apt-get`, `pip`, global `npm`,
+`cargo install`, downloaded binary, or similar setup step to an individual
+workflow. Existing workflow-local setup is migration debt, not a pattern for
+new jobs.
 
-### Verifying path filtering works
+### Routing and profiles
 
-To confirm builds are skipped on a docs-only change, open a PR and push a commit that touches only a `.md` file (e.g. add a blank line to `README.md`). All build jobs should appear as **Skipped** in the Actions tab — only the `changes` job runs.
+| Change class | PR profile | Main profile |
+| --- | --- | --- |
+| Draft pull request | `pr-draft`: quality plus the smallest affected signal and core smoke | n/a |
+| Ready pull request | `pr-ready`: complete targeted rows and affected Rust dependents | n/a |
+| Push to `main` | n/a | `main`: every workspace crate and supported product/platform/backend/SDK row |
+| Manual dispatch | `manual-full` when invoked from the PR entrypoint | `main`-equivalent full validation from `ci.yml` |
 
-To confirm UI-only changes skip backend jobs, push a commit touching only `crates/mesh-llm-ui/**`. UI quality and the CPU producer rows run, while Linux/Windows CUDA, ROCm, and Vulkan backend rows stay skipped.
+Docs-only changes select the quality contract slice. UI, website, Rust,
+protocol, split-serving, model, backend, platform and SDK ownership selects the
+corresponding typed rows. CI-control and runner-infrastructure changes fail
+open to the control rows and supported product rows. Paths mapping only to
+documentation plus `ci-control` retain limited documentation routing instead
+of forcing all product rows. Unknown paths fail closed.
 
-### Adding new paths
+### Local validation and extensions
 
-If you add a new Rust crate, build script, or test directory, update `.github/actions/compute-changes`, `scripts/affected-crates.sh`, and the relevant `pr_*.yml` path filters so PR and main routing agree.
+Run the narrow checks that match the change, plus the full contract suite for
+workflow changes:
+
+```bash
+just ci-validate
+```
+
+The canonical complete local gate is `just test-all`; it includes repository
+consistency, Rust formatting, Clippy, Rust tests, UI/docs builds, and E2E smoke.
+Use `just ci-shellcheck <changed-script>...` for changed shell scripts and
+`just check-release` when release-target consistency is in scope. These are the
+complete CI-definition and worktree checks; narrow checks do not replace
+`just test-all` when full repository validation is required.
+
+Planner fixtures and the CI repository-consistency recipes are included in
+`just ci-validate`. Use `just ci-crate-lists`, `just check-release`, or
+`just publish-crates` when iterating on the corresponding narrower contract.
+
+To add coverage, extend one typed reusable slice or local action, update the
+ownership/dependency/row catalog and planner fixtures, preserve immutable
+producer-to-consumer reachability, and add the slice to its lane's stable
+summary. Keep the controller's bounded projection and aggregate check contract
+in sync. Never copy a PR job into an entrypoint or accept a raw runner label.
+Validate the GitHub fallback before any provider rollout.
 
 ## GPU benchmark execution
 

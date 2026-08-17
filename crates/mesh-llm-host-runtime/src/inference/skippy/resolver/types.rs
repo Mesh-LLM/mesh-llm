@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload};
-use skippy_server::EmbeddedOpenAiRequestDefaults;
+use skippy_runtime::package::PackageGenerationInfo;
+use skippy_server::{EmbeddedOpenAiRequestDefaults, SpeculativeDecodeConfig};
 
 use super::super::StageWireDType;
 use crate::plugin::{MeshConfig, ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig};
@@ -24,6 +25,7 @@ pub(crate) struct SkippyConfigResolveRequest<'a> {
     pub(crate) model_bytes: u64,
     pub(crate) allocatable_memory_bytes: Option<u64>,
     pub(crate) request_defaults: Option<&'a RequestDefaultsConfig>,
+    pub(crate) package_generation: Option<&'a PackageGenerationInfo>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,6 +57,8 @@ pub(crate) struct ResolvedModelFitConfig {
 pub(crate) struct ResolvedHardwareConfig {
     pub(crate) device: Option<String>,
     pub(crate) gpu_layers: i32,
+    pub(crate) mmap: Option<bool>,
+    pub(crate) mlock: bool,
     pub(crate) fit_target_mib: Option<u64>,
     pub(crate) resolved_model_path: PathBuf,
     pub(crate) projector_path: Option<PathBuf>,
@@ -87,12 +91,16 @@ pub(crate) struct ResolvedSkippyExecutionConfig {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedSpeculativeConfig {
+    pub(crate) strategy: String,
+    pub(crate) native_mtp_enabled: bool,
     pub(crate) mode: String,
     pub(crate) draft_model_path: Option<PathBuf>,
     pub(crate) pairing_fault: String,
     pub(crate) draft_max_tokens: u32,
+    pub(crate) draft_min_tokens: u32,
     pub(crate) explicit: bool,
     pub(crate) draft_n_gpu_layers: Option<i32>,
+    pub(crate) decode: SpeculativeDecodeConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +156,11 @@ pub(crate) struct ResolvedEmbeddedOpenAiArgs {
     pub(crate) speculative_window: usize,
     pub(crate) adaptive_speculative_window: bool,
     pub(crate) draft_n_gpu_layers: Option<i32>,
+    pub(crate) speculative: SpeculativeDecodeConfig,
+    pub(crate) native_mtp_enabled: bool,
+    pub(crate) native_mtp_draft_model_path: Option<PathBuf>,
+    pub(crate) native_mtp_max_tokens: usize,
+    pub(crate) native_mtp_min_tokens: usize,
     pub(crate) activation_width: i32,
     pub(crate) wire_dtype: skippy_protocol::binary::WireActivationDType,
     pub(crate) reply_credit_limit: Option<usize>,

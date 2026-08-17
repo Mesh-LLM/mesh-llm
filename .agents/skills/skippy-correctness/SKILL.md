@@ -20,6 +20,21 @@ execution.
 - Recurrent/hybrid family behavior and topology affinity.
 - Multimodal projector handling once native media execution is wired.
 
+When native code moves between Skippy modules, preserve the existing capability
+boundary during validation:
+
+- `execution` and `activation` changes require direct, two-stage, and
+  multi-stage parity coverage.
+- `state` changes require KV import/export, checkpoint, trim, and exact-prefix
+  cache coverage.
+- `sampling` and `speculative_decoding` changes require deterministic sampling,
+  draft acceptance, rejection recovery, and checkpoint cleanup coverage.
+- `model_package` changes require inspection, tensor filtering, and artifact
+  writer coverage.
+
+Do not put a test-only implementation hook back into `src/skippy.cpp`; keep the
+test with the capability that owns the behavior.
+
 ## Commands
 
 First check whether standalone correctness crates have been imported:

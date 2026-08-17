@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meshllm.ai/schemas/product-v2.schema.json",
+  "title": "MeshLLM composed product bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract",
+    "mesh_version",
+    "backend",
+    "host",
+    "runtime"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "contract": {
+      "const": "mesh-llm-product-v2"
+    },
+    "mesh_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "host": {
+      "$ref": "#/$defs/host_artifact"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime_artifact"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "host_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:/|$))[^/\\\\]+)(?:/(?:(?!\\.{1,2}(?:/|$))[^/\\\\]+))*$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "runtime_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path",
+        "sha256",
+        "manifest_sha256"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^native-runtimes/[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

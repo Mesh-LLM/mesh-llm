@@ -129,7 +129,14 @@ mod tests {
 
     #[test]
     fn embedded_script_writes_rich_model_card() {
-        assert!(EMBEDDED_SCRIPT.contains("pipeline_tag: text-generation"));
+        assert!(EMBEDDED_SCRIPT.contains("SOURCE_PIPELINE_TAG"));
+        assert!(EMBEDDED_SCRIPT.contains("PACKAGE_EXPERIMENTAL"));
+        assert!(EMBEDDED_SCRIPT.contains("pipeline_tag: {yaml_quote(source_pipeline_tag)}"));
+        assert!(EMBEDDED_SCRIPT.contains("- experimental"));
+        assert!(EMBEDDED_SCRIPT.contains("Experimental package:"));
+        assert!(EMBEDDED_SCRIPT.contains("resolve_upstream_license"));
+        assert!(EMBEDDED_SCRIPT.contains("license_frontmatter"));
+        assert!(EMBEDDED_SCRIPT.contains("could not resolve upstream license metadata"));
         assert!(EMBEDDED_SCRIPT.contains("- openai-compatible"));
         assert!(EMBEDDED_SCRIPT.contains("## Model Overview"));
         assert!(EMBEDDED_SCRIPT.contains("## Highlights"));
@@ -138,7 +145,9 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains("## Package Variant"));
         assert!(EMBEDDED_SCRIPT.contains("## What Is Included"));
         assert!(EMBEDDED_SCRIPT.contains("## Validation"));
-        assert!(EMBEDDED_SCRIPT.contains("docs/mesh-llm-logo.svg"));
+        assert!(
+            EMBEDDED_SCRIPT.contains("https://meshllm.cloud/assets/images/jelly-logo-wordmark.png")
+        );
         assert!(EMBEDDED_SCRIPT.contains("style=for-the-badge"));
         assert!(EMBEDDED_SCRIPT.contains("https://www.meshllm.cloud"));
         assert!(EMBEDDED_SCRIPT.contains("https://discord.gg/rs6fmc63eN"));
@@ -196,7 +205,20 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains(r#"MOUNTED_SOURCE_PATH="/source/${SOURCE_FILE}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"WRITE_PACKAGE_INPUT="$MOUNTED_SOURCE_PATH""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"--source-file "$SOURCE_FILE""#));
+        assert!(EMBEDDED_SCRIPT.contains("SOURCE_PROJECTOR_FILES"));
+        assert!(
+            EMBEDDED_SCRIPT
+                .contains(r#"WRITE_PACKAGE_PROJECTOR_ARGS+=(--projector "$PROJECTOR_PATH")"#)
+        );
+        assert!(EMBEDDED_SCRIPT.contains(r#""${WRITE_PACKAGE_PROJECTOR_ARGS[@]}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"time "$SLICER" write-package "$WRITE_PACKAGE_INPUT""#));
         assert!(!EMBEDDED_SCRIPT.contains(r#"time $SLICER write-package "$SOURCE_PATH""#));
+    }
+
+    #[test]
+    fn embedded_script_preserves_catalog_source_revision() {
+        assert!(EMBEDDED_SCRIPT.contains(r#""source_revision": source_revision"#));
+        assert!(EMBEDDED_SCRIPT.contains(r#"variants[variant_name]["source"] = source_entry"#));
+        assert!(EMBEDDED_SCRIPT.contains(r#"existing_variant["source"] = source_entry"#));
     }
 }

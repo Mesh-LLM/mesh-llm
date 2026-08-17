@@ -19,6 +19,9 @@ pub struct NormalizationOutcome {
     pub changed: bool,
     pub rewritten_path: Option<String>,
     pub response_adapter: ResponseAdapterMode,
+    /// Stable Responses conversation identity captured before compatibility
+    /// fields are removed from the translated Chat Completions body.
+    pub agent_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -121,10 +124,10 @@ fn normalize_chat_reasoning_template_options(
     if let Some(effort) = optional_string_field(object, "reasoning_effort")? {
         enable_thinking = Some(match effort {
             "none" => false,
-            "minimal" | "low" | "medium" | "high" | "xhigh" => true,
+            "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => true,
             _ => {
                 return Err(OpenAiError::invalid_request(
-                    "reasoning_effort must be one of none, minimal, low, medium, high, xhigh",
+                    "reasoning_effort must be one of none, minimal, low, medium, high, xhigh, max",
                 ));
             }
         });
@@ -164,12 +167,12 @@ fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, Open
     let enabled = optional_bool_field(object, "enabled")?;
     let effort = optional_string_field(object, "effort")?;
     let effort_is_valid = match effort {
-        Some("none" | "minimal" | "low" | "medium" | "high" | "xhigh") | None => true,
+        Some("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | None => true,
         Some(_) => false,
     };
     if !effort_is_valid {
         return Err(OpenAiError::invalid_request(
-            "reasoning.effort must be one of none, minimal, low, medium, high, xhigh",
+            "reasoning.effort must be one of none, minimal, low, medium, high, xhigh, max",
         ));
     }
     let max_tokens = optional_u32_field(object, "max_tokens")?;
@@ -498,7 +501,7 @@ fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<b
     if state_cache_key.is_none()
         && let Some(value) = object.get("conversation")
     {
-        state_cache_key = responses_conversation_cache_key(value);
+        state_cache_key = responses_conversation_id(value);
     }
     if let Some(cache_key) = state_cache_key {
         object
@@ -524,7 +527,7 @@ fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<b
     Ok(changed)
 }
 
-fn responses_conversation_cache_key(value: &Value) -> Option<String> {
+fn responses_conversation_id(value: &Value) -> Option<String> {
     if let Some(id) = value.as_str() {
         return Some(id.to_string());
     }
@@ -546,15 +549,20 @@ pub fn normalize_openai_compat_request(
             changed: false,
             rewritten_path: None,
             response_adapter: ResponseAdapterMode::None,
+            agent_session_id: None,
         });
     };
 
     let mut changed = alias_max_tokens(object);
     let mut rewritten_path = None;
     let mut response_adapter = ResponseAdapterMode::None;
+    let mut agent_session_id = None;
 
     let path_only = path_only(path);
     if path_only == "/v1/responses" {
+        agent_session_id = object
+            .get("conversation")
+            .and_then(responses_conversation_id);
         let is_stream = object
             .get("stream")
             .and_then(Value::as_bool)
@@ -575,6 +583,7 @@ pub fn normalize_openai_compat_request(
         changed,
         rewritten_path,
         response_adapter,
+        agent_session_id,
     })
 }
 
@@ -1227,6 +1236,7 @@ mod tests {
                     finish_reason: Some(FinishReason::ToolCalls),
                 }],
                 usage: Usage::new(6, 3),
+                timings: None,
             })
         }
 
@@ -1319,6 +1329,21 @@ mod tests {
             json!(false)
         );
         assert_eq!(body["reasoning_effort"], json!("none"));
+    }
+
+    #[test]
+    fn normalize_chat_reasoning_effort_max_is_preserved() {
+        let mut body = json!({
+            "model": "direct-model",
+            "messages": [{"role": "user", "content": "What is 2+2?"}],
+            "reasoning_effort": "max"
+        });
+
+        normalize_openai_compat_request("/v1/chat/completions", &mut body)
+            .expect("chat request should normalize");
+
+        assert_eq!(body["reasoning_effort"], json!("max"));
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], json!(true));
     }
 
     #[test]
@@ -1537,12 +1562,15 @@ mod tests {
                     }
                 }
             }),
-            Some("guarded-responses-req"),
+            Some("2ca6dfee-5382-4b7f-81dd-6bc859c58665"),
         )
         .await;
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers()["x-request-id"], "guarded-responses-req");
+        assert_eq!(
+            response.headers()["x-request-id"],
+            "2ca6dfee-5382-4b7f-81dd-6bc859c58665"
+        );
         let body = response_body_json(response).await;
         assert_eq!(body["object"], "response");
         assert_eq!(body["output_text"], "{\"answer\":42}");

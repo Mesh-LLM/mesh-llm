@@ -38,11 +38,8 @@ Correctness options:
 
 Speculative options:
   --draft-model GGUF          draft GGUF for draft speculative lanes
-  --with-ngram                rejected in mesh-llm; standalone n-gram pools are not imported
-  --spec-modes CSV            rejected in mesh-llm; use llama-spec-bench for draft checks
   --corpus JSONL              corpus path; default: target/bench-corpora/smoke/corpus.jsonl
   --corpus-limit N            prompt limit for llama-spec-bench
-  --per-family-limit N        accepted for compatibility but not used by llama-spec-bench
   --spec-window N             speculative window; default: 8
   --max-tokens N              max new tokens per prompt; default: 24
   --decode-timeout N          decode timeout seconds; default: 120
@@ -120,11 +117,8 @@ SKIP_BUILD=0
 SKIP_CORRECTNESS=0
 SKIP_DTYPE=0
 SKIP_STATE=0
-WITH_NGRAM=0
-SPEC_MODES=""
 CORPUS="target/bench-corpora/smoke/corpus.jsonl"
 CORPUS_LIMIT=""
-PER_FAMILY_LIMIT=""
 SPEC_WINDOW="8"
 MAX_TOKENS="24"
 DECODE_TIMEOUT="120"
@@ -164,11 +158,8 @@ while [[ $# -gt 0 ]]; do
     --skip-correctness) SKIP_CORRECTNESS=1; shift ;;
     --skip-dtype) SKIP_DTYPE=1; shift ;;
     --skip-state) SKIP_STATE=1; shift ;;
-    --with-ngram) WITH_NGRAM=1; shift ;;
-    --spec-modes) SPEC_MODES="$2"; shift 2 ;;
     --corpus) CORPUS="$2"; shift 2 ;;
     --corpus-limit) CORPUS_LIMIT="$2"; shift 2 ;;
-    --per-family-limit) PER_FAMILY_LIMIT="$2"; shift 2 ;;
     --spec-window) SPEC_WINDOW="$2"; shift 2 ;;
     --max-tokens) MAX_TOKENS="$2"; shift 2 ;;
     --decode-timeout) DECODE_TIMEOUT="$2"; shift 2 ;;
@@ -445,11 +436,6 @@ else
   fi
 fi
 
-if [[ "$WITH_NGRAM" == "1" || -n "$SPEC_MODES" ]]; then
-  echo "mesh-llm does not import standalone n-gram prompt-spec corpus modes" >&2
-  exit 2
-fi
-
 if [[ -n "$DRAFT_MODEL_PATH" ]]; then
   SPEC_DIR="$OUT_DIR/speculative"
   mkdir -p "$SPEC_DIR"
@@ -655,7 +641,6 @@ jq -n \
   --arg prefix_token_count "$PREFIX_TOKEN_COUNT" \
   --arg cache_hit_repeats "$CACHE_HIT_REPEATS" \
   --arg corpus "$(abs_path "$CORPUS")" \
-  --arg spec_modes "$SPEC_MODES" \
   --arg capability_draft "$CAPABILITY_DRAFT_JSON" \
   --argjson commands "$(jq -s '.' "$COMMANDS_JSONL")" \
   '{
@@ -680,10 +665,7 @@ jq -n \
       prefix_token_count:($prefix_token_count | if length > 0 then . else null end),
       cache_hit_repeats:$cache_hit_repeats
     },
-    speculative:{
-      corpus:$corpus,
-      modes:$spec_modes
-    },
+    speculative:{corpus:$corpus},
     capability_draft:$capability_draft,
     commands:$commands
   }' > "$MANIFEST_JSON"

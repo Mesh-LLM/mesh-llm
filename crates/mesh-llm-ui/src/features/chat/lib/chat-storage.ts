@@ -7,6 +7,7 @@ import {
   type ChatStorageScope
 } from '@/features/chat/api/chat-storage'
 import type { ChatConversation, ChatMessage, ChatState } from '@/features/chat/lib/chat-types'
+import { createBrowserId } from '@/lib/api/browser-id'
 export type { ChatState as ChatStateExported } from '@/features/chat/lib/chat-types'
 export { MAX_CHAT_CONVERSATIONS, loadChatState, saveChatState, trimThreadMessages, type ChatStorageScope }
 
@@ -27,7 +28,7 @@ export function chatToConversation(chat: {
 
 export function createConversation(): ChatConversation {
   return {
-    id: crypto.randomUUID(),
+    id: createBrowserId('conversation'),
     title: 'New chat',
     subtitle: '',
     createdAt: Date.now(),

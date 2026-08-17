@@ -40,6 +40,10 @@ pub(crate) fn status_payload(snapshot: StatusViewSnapshot) -> StatusPayload {
             openai_guardrails: None,
             models: vec![],
             stages: vec![],
+            daemon_state: None,
+            capabilities: None,
+            lifecycle_instances: vec![],
+            intent_summary: None,
         },
         model_name: snapshot.model_name,
         models: snapshot.models,
@@ -73,6 +77,7 @@ pub(crate) fn status_payload(snapshot: StatusViewSnapshot) -> StatusPayload {
         first_joined_mesh_ts: snapshot.hardware.first_joined_mesh_ts,
         mesh_requirements: None,
         recent_mesh_rejections: vec![],
+        logging: None,
     }
 }
 
@@ -181,6 +186,10 @@ mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
@@ -228,6 +237,7 @@ mod tests {
             first_joined_mesh_ts: Some(123),
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         assert_eq!(
@@ -243,6 +253,7 @@ mod tests {
             model_names: HashSet::from(["Example-Model".to_string()]),
             size_by_name: HashMap::from([("Example-Model".to_string(), 8_000_000_000)]),
             metadata_by_name: HashMap::new(),
+            display_name_by_name: HashMap::new(),
         };
         let snapshot = collector.build_model_view(ModelViewInput {
             peers: vec![],

@@ -1,5 +1,5 @@
 import { ShieldAlert } from 'lucide-react'
-import { MetaPill } from '@/features/configuration/components/MetaPill'
+import { MetaPill } from '@/components/ui/MetaPill'
 import { formatGB } from '@/features/configuration/lib/config-display'
 
 type ReservedConfigCardProps = {

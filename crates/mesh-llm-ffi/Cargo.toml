@@ -10,12 +10,10 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [features]
 default = []
 host = ["mesh-llm-node"]
-embedded-runtime = ["mesh-llm-host-runtime"]
+embedded-runtime = []
 
 [dependencies]
-mesh-llm-api-server = { path = "../mesh-llm-api-server" }
-mesh-llm-console-server = { path = "../mesh-llm-console-server" }
-mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", default-features = false, optional = true }
+mesh-llm-sdk = { path = "../mesh-llm-sdk", default-features = false, features = ["client", "node", "console", "serving"] }
 mesh-llm-node = { path = "../mesh-llm-node", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
@@ -25,4 +23,4 @@ uniffi = "=0.31.0"
 uniffi = { version = "=0.31.0", features = ["build"] }
 
 [dev-dependencies]
-mesh-llm-api-server = { path = "../mesh-llm-api-server" }
+mesh-llm-sdk = { path = "../mesh-llm-sdk", default-features = false, features = ["client", "node", "console"] }

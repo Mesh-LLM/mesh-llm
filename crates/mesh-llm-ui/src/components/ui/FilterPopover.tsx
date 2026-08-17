@@ -29,6 +29,7 @@ export type FilterPopoverProps<Key extends string> = {
   onSelectAll: (key: Key) => void
   onSelectNone: (key: Key) => void
   onClear: () => void
+  triggerClassName?: string
 }
 
 export function FilterPopover<Key extends string>({
@@ -47,7 +48,8 @@ export function FilterPopover<Key extends string>({
   onValueChange,
   onSelectAll,
   onSelectNone,
-  onClear
+  onClear,
+  triggerClassName
 }: FilterPopoverProps<Key>) {
   const filtersActive = activeFilterGroups > 0
   const triggerAriaLabel = filtersActive ? `${triggerLabel}, ${activeFilterGroups} active` : triggerLabel
@@ -61,10 +63,11 @@ export function FilterPopover<Key extends string>({
           aria-haspopup="dialog"
           aria-label={triggerAriaLabel}
           className={cn(
-            'ui-control inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius)] px-2 text-[length:var(--density-type-caption)] outline-none transition-[border-color,background,color,box-shadow]',
+            'ui-control inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[var(--radius)] px-2.5 text-[length:var(--density-type-caption)] outline-none transition-[border-color,background,color,box-shadow]',
             'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
             filtersActive &&
-              'border-accent/45 bg-[color-mix(in_oklab,var(--color-accent)_12%,var(--color-panel))] text-fg shadow-surface-selected'
+              'border-accent/45 bg-[color-mix(in_oklab,var(--color-accent)_12%,var(--color-panel))] text-fg shadow-surface-selected',
+            triggerClassName
           )}
         >
           <Funnel aria-hidden={true} className="size-3.5" strokeWidth={1.8} />
@@ -147,11 +150,11 @@ export function FilterPopover<Key extends string>({
                       return (
                         <label
                           key={option.value}
-                          className="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 transition-colors hover:bg-panel-strong focus-within:bg-panel-strong"
+                          className="relative flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 transition-colors hover:bg-panel-strong focus-within:bg-panel-strong"
                         >
                           <input
                             type="checkbox"
-                            className="sr-only"
+                            className="absolute inset-0 z-10 cursor-pointer opacity-0"
                             aria-label={`${label}, ${option.count} ${itemLabel}`}
                             checked={checked}
                             onChange={(event) => onValueChange(category.key, option.value, event.currentTarget.checked)}
@@ -159,7 +162,7 @@ export function FilterPopover<Key extends string>({
                           <span
                             aria-hidden={true}
                             className={cn(
-                              'grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors',
+                              'pointer-events-none grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors',
                               checked
                                 ? 'border-accent bg-accent text-accent-ink'
                                 : 'border-border bg-panel-strong text-transparent'

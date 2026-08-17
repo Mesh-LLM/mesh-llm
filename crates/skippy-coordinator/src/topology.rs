@@ -1,5 +1,9 @@
 use std::cmp::Ordering;
 
+mod locked;
+
+pub use locked::{LockedTopologyStage, plan_locked_topology};
+
 /// Default auto lane cap.  Matches llama-server's default of `--parallel 4`.
 /// Users can override via `gpu.parallel` in config.toml or the per-model
 /// `parallel` setting.
@@ -7,16 +11,31 @@ const MAX_AUTO_PARALLEL_LANES: usize = 4;
 const MINIMUM_AUTO_CONTEXT_LENGTH: u32 = 65_536;
 const CONTEXT_STEPS: &[u32] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072];
 
+/// Compute-buffer reserve applied to the KV term of each layer's placement
+/// cost. Charging KV at 100/85 holds back 15% of a node's post-weight space for
+/// llama.cpp compute-graph buffers and scratch — algebraically identical to the
+/// single-node context planner's `usable_kv_cache_budget`, which grants KV 85%
+/// of post-weight space (`context_planning.rs`). Without this, placement packed
+/// a node with `weights + KV` alone and left the decode's transient buffers
+/// nowhere to go, OOM-ing the stage or swapping the host. Because the reserve
+/// rides on the KV term it scales with context length, matching how compute
+/// buffers grow with `n_ctx`. A fixed per-node floor (see the coordinator's
+/// node headroom) covers the context-independent minimum on top of this.
+const KV_COMPUTE_RESERVE_NUMERATOR: u128 = 100;
+const KV_COMPUTE_RESERVE_DENOMINATOR: u128 = 85;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TopologyPlanningInput {
     pub native_context_length: u32,
     pub layer_count: u32,
     pub model_weight_bytes: u64,
+    pub layer_weight_bytes: Vec<u64>,
     pub kv_bytes_per_token: u64,
     pub minimum_nodes: usize,
     pub nodes: Vec<TopologyNode>,
     pub context_length_override: Option<u32>,
     pub parallel_lanes_override: Option<usize>,
+    pub target_decode_tpot_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,6 +44,7 @@ pub struct TopologyNode {
     pub detected_vram_bytes: u64,
     pub max_vram_bytes: Option<u64>,
     pub runtime_headroom_bytes: u64,
+    pub stage_transfer_latency_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,6 +52,8 @@ pub struct TopologyPlan {
     pub context_length: u32,
     pub parallel_lanes: usize,
     pub stages: Vec<TopologyStagePlan>,
+    pub estimated_decode_network_ms_per_token: Option<u32>,
+    pub decode_tpot_target_met: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,9 +86,47 @@ pub enum TopologyPlanError {
     ZeroParallelLanes,
     #[error("no topology can distribute all layers and keep context >= {minimum_context}")]
     NoValidTopology { minimum_context: u32 },
+    #[error("locked topology must contain at least {minimum} stages; found {actual}")]
+    LockedStageCount { minimum: usize, actual: usize },
+    #[error("locked topology references unknown node {node_id}")]
+    LockedUnknownNode { node_id: String },
+    #[error("locked topology assigns node {node_id} more than once")]
+    LockedDuplicateNode { node_id: String },
+    #[error(
+        "locked topology stage {stage_index} must start at layer {expected_start}; found {actual_start}"
+    )]
+    LockedNonContiguousRange {
+        stage_index: usize,
+        expected_start: u32,
+        actual_start: u32,
+    },
+    #[error("locked topology stage {stage_index} has empty or reversed range {start}..{end}")]
+    LockedInvalidRange {
+        stage_index: usize,
+        start: u32,
+        end: u32,
+    },
+    #[error("locked topology ends at layer {actual_end}; model has {layer_count} layers")]
+    LockedIncompleteCoverage { actual_end: u32, layer_count: u32 },
+    #[error("locked topology cannot fit context >= {minimum_context}")]
+    LockedTopologyDoesNotFit { minimum_context: u32 },
 }
 
 pub fn plan_topology(input: &TopologyPlanningInput) -> Result<TopologyPlan, TopologyPlanError> {
+    plan_topology_with_required_stage0(input, None)
+}
+
+pub fn plan_topology_with_stage0(
+    input: &TopologyPlanningInput,
+    stage0_node_id: &str,
+) -> Result<TopologyPlan, TopologyPlanError> {
+    plan_topology_with_required_stage0(input, Some(stage0_node_id))
+}
+
+fn plan_topology_with_required_stage0(
+    input: &TopologyPlanningInput,
+    required_stage0_node_id: Option<&str>,
+) -> Result<TopologyPlan, TopologyPlanError> {
     validate_input(input)?;
 
     let minimum_context = minimum_valid_context(input.native_context_length);
@@ -77,27 +137,47 @@ pub fn plan_topology(input: &TopologyPlanningInput) -> Result<TopologyPlan, Topo
     )?;
     let lane_candidates = parallel_lane_candidates(input.parallel_lanes_override)?;
     let nodes = usable_nodes(&input.nodes);
+    let latency_aware = latency_aware_planning(input, &nodes);
 
     let minimum_nodes = input.minimum_nodes.max(1);
+    let mut best_latency_candidate: Option<CandidatePlan> = None;
     for context_length in context_candidates {
         for node_count in minimum_nodes..=nodes.len().min(input.layer_count as usize) {
             for parallel_lanes in lane_candidates.iter().copied() {
                 let mut best_for_count: Option<CandidatePlan> = None;
                 for_each_node_subset(&nodes, node_count, |subset| {
-                    if let Some(candidate) =
+                    let Some(candidate) =
                         fit_candidate(input, subset, context_length, parallel_lanes)
-                        && best_for_count
-                            .as_ref()
-                            .is_none_or(|current| candidate.cmp(current) == Ordering::Greater)
+                    else {
+                        return;
+                    };
+                    if !candidate_has_required_stage0(&candidate, required_stage0_node_id) {
+                        return;
+                    }
+                    if best_for_count
+                        .as_ref()
+                        .is_none_or(|current| candidate_better_for_same_shape(&candidate, current))
                     {
                         best_for_count = Some(candidate);
                     }
                 });
                 if let Some(candidate) = best_for_count {
+                    if latency_aware {
+                        if best_latency_candidate.as_ref().is_none_or(|current| {
+                            latency_candidate_better(&candidate, current, input)
+                        }) {
+                            best_latency_candidate = Some(candidate);
+                        }
+                        continue;
+                    }
                     return Ok(candidate.plan);
                 }
             }
         }
+    }
+
+    if let Some(candidate) = best_latency_candidate {
+        return Ok(candidate.plan);
     }
 
     Err(TopologyPlanError::NoValidTopology { minimum_context })
@@ -132,12 +212,6 @@ fn context_candidates(
             return Err(TopologyPlanError::ContextExceedsNative {
                 requested,
                 native: native_context,
-            });
-        }
-        if requested < minimum_context {
-            return Err(TopologyPlanError::ContextBelowMinimum {
-                requested,
-                minimum: minimum_context,
             });
         }
         return Ok(vec![requested]);
@@ -175,6 +249,7 @@ pub fn minimum_valid_context(native_context: u32) -> u32 {
 struct UsableNode {
     node_id: String,
     usable_vram_bytes: u64,
+    stage_transfer_latency_ms: Option<u32>,
 }
 
 fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
@@ -188,6 +263,7 @@ fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
             UsableNode {
                 node_id: node.node_id.clone(),
                 usable_vram_bytes: capped.saturating_sub(node.runtime_headroom_bytes),
+                stage_transfer_latency_ms: node.stage_transfer_latency_ms,
             }
         })
         .collect::<Vec<_>>();
@@ -274,71 +350,46 @@ fn fit_candidate(
         return None;
     }
 
-    let weight_per_layer = input
-        .model_weight_bytes
-        .div_ceil(u64::from(input.layer_count));
+    let layer_weights = layer_weight_bytes(input);
     let kv_per_layer = input
         .kv_bytes_per_token
         .div_ceil(u64::from(input.layer_count));
-    let bytes_per_layer = candidate_bytes_per_layer(
-        weight_per_layer,
-        kv_per_layer,
-        context_length,
-        parallel_lanes,
-    )?;
+    let layer_required_bytes =
+        layer_required_bytes(&layer_weights, kv_per_layer, context_length, parallel_lanes)?;
 
-    let mut capacities = nodes
-        .iter()
-        .map(|node| {
-            let max_layers = node.usable_vram_bytes / bytes_per_layer;
-            (
-                node.clone(),
-                max_layers.min(u64::from(input.layer_count)) as usize,
-            )
-        })
-        .collect::<Vec<_>>();
-    capacities.sort_by(|(left_node, left_layers), (right_node, right_layers)| {
-        right_layers
-            .cmp(left_layers)
-            .then_with(|| {
-                right_node
-                    .usable_vram_bytes
-                    .cmp(&left_node.usable_vram_bytes)
-            })
-            .then_with(|| left_node.node_id.cmp(&right_node.node_id))
+    let mut capacities = nodes.to_vec();
+    capacities.sort_by(|left, right| {
+        right
+            .usable_vram_bytes
+            .cmp(&left.usable_vram_bytes)
+            .then_with(|| left.node_id.cmp(&right.node_id))
     });
-
-    if capacities.iter().any(|(_, max_layers)| *max_layers == 0) {
-        return None;
-    }
-    if capacities
-        .iter()
-        .map(|(_, max_layers)| *max_layers)
-        .sum::<usize>()
-        < layer_count
-    {
-        return None;
-    }
 
     let mut next_layer = 0u32;
     let mut stages = Vec::with_capacity(capacities.len());
     let mut minimum_remaining_vram = u64::MAX;
     let mut total_remaining_vram = 0u128;
 
-    for (stage_index, (node, max_layers)) in capacities.iter().enumerate() {
+    for (stage_index, node) in capacities.iter().enumerate() {
         let remaining_layers = input.layer_count - next_layer;
         let remaining_nodes = capacities.len() - stage_index;
         let min_for_later = remaining_nodes.saturating_sub(1) as u32;
         let assignable = remaining_layers.saturating_sub(min_for_later);
-        let layer_span = assignable.min(*max_layers as u32);
+        let layer_span = assignable.min(max_contiguous_layers_from(
+            &layer_required_bytes,
+            next_layer as usize,
+            assignable as usize,
+            node.usable_vram_bytes,
+        ) as u32);
         if layer_span == 0 {
             return None;
         }
 
         let layer_start = next_layer;
         let layer_end = layer_start + layer_span;
-        let parameter_bytes = u64::from(layer_span).saturating_mul(weight_per_layer);
-        let required_bytes = u64::from(layer_span).saturating_mul(bytes_per_layer);
+        let range = layer_start as usize..layer_end as usize;
+        let parameter_bytes = sum_u64(&layer_weights[range.clone()]);
+        let required_bytes = sum_u64(&layer_required_bytes[range]);
         if required_bytes > node.usable_vram_bytes {
             return None;
         }
@@ -356,15 +407,119 @@ fn fit_candidate(
         next_layer = layer_end;
     }
 
-    (next_layer == input.layer_count).then_some(CandidatePlan {
+    if next_layer != input.layer_count {
+        return None;
+    }
+
+    let estimated_decode_network_ms_per_token = estimate_decode_network_ms_per_token(nodes);
+    Some(CandidatePlan {
         plan: TopologyPlan {
             context_length,
             parallel_lanes,
             stages,
+            estimated_decode_network_ms_per_token,
+            decode_tpot_target_met: decode_tpot_target_met(
+                estimated_decode_network_ms_per_token,
+                input.target_decode_tpot_ms,
+            ),
         },
         minimum_remaining_vram,
         total_remaining_vram,
     })
+}
+
+fn latency_aware_planning(_input: &TopologyPlanningInput, nodes: &[UsableNode]) -> bool {
+    nodes
+        .iter()
+        .any(|node| node.stage_transfer_latency_ms.is_some())
+}
+
+fn candidate_has_required_stage0(
+    candidate: &CandidatePlan,
+    required_stage0_node_id: Option<&str>,
+) -> bool {
+    required_stage0_node_id.is_none_or(|required| {
+        candidate
+            .plan
+            .stages
+            .first()
+            .is_some_and(|stage| stage.node_id == required)
+    })
+}
+
+fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
+    let candidate_estimate = candidate
+        .plan
+        .estimated_decode_network_ms_per_token
+        .unwrap_or_default();
+    let current_estimate = current
+        .plan
+        .estimated_decode_network_ms_per_token
+        .unwrap_or_default();
+    candidate_estimate < current_estimate
+        || (candidate_estimate == current_estimate && candidate.cmp(current) == Ordering::Greater)
+}
+
+fn latency_candidate_better(
+    candidate: &CandidatePlan,
+    current: &CandidatePlan,
+    input: &TopologyPlanningInput,
+) -> bool {
+    latency_candidate_ordering(candidate, current, input) == Ordering::Greater
+}
+
+fn latency_candidate_ordering(
+    left: &CandidatePlan,
+    right: &CandidatePlan,
+    input: &TopologyPlanningInput,
+) -> Ordering {
+    let left_estimate = left
+        .plan
+        .estimated_decode_network_ms_per_token
+        .unwrap_or_default();
+    let right_estimate = right
+        .plan
+        .estimated_decode_network_ms_per_token
+        .unwrap_or_default();
+    let left_target_met = decode_tpot_target_met(
+        left.plan.estimated_decode_network_ms_per_token,
+        input.target_decode_tpot_ms,
+    )
+    .unwrap_or(true);
+    let right_target_met = decode_tpot_target_met(
+        right.plan.estimated_decode_network_ms_per_token,
+        input.target_decode_tpot_ms,
+    )
+    .unwrap_or(true);
+
+    left_target_met
+        .cmp(&right_target_met)
+        .then_with(|| right_estimate.cmp(&left_estimate))
+        .then_with(|| left.plan.context_length.cmp(&right.plan.context_length))
+        .then_with(|| left.plan.parallel_lanes.cmp(&right.plan.parallel_lanes))
+        .then_with(|| left.cmp(right))
+}
+
+fn estimate_decode_network_ms_per_token(nodes: &[UsableNode]) -> Option<u32> {
+    let hop_latency = nodes
+        .iter()
+        .filter_map(|node| node.stage_transfer_latency_ms)
+        .max()?;
+    Some(hop_latency.saturating_mul(nodes.len() as u32))
+}
+
+fn decode_tpot_target_met(estimate: Option<u32>, target: Option<u32>) -> Option<bool> {
+    Some(estimate? <= target?)
+}
+
+fn layer_weight_bytes(input: &TopologyPlanningInput) -> Vec<u64> {
+    if input.layer_weight_bytes.len() == input.layer_count as usize {
+        return input.layer_weight_bytes.clone();
+    }
+    let weight_per_layer = input
+        .model_weight_bytes
+        .div_ceil(u64::from(input.layer_count));
+    vec![weight_per_layer; input.layer_count as usize]
 }
 
 fn candidate_bytes_per_layer(
@@ -377,8 +532,54 @@ fn candidate_bytes_per_layer(
     // share one unified cache via sequence IDs (kv_unified=true in
     // llama.cpp when lane_count > 1).  Do not multiply by lanes.
     let kv_bytes = u128::from(kv_per_layer).checked_mul(u128::from(context_length))?;
-    let total = u128::from(weight_per_layer).checked_add(kv_bytes)?;
+    // Charge KV at 100/85 so 15% of the node's post-weight space is held back
+    // for llama.cpp compute-graph buffers/scratch (mirrors the single-node
+    // context planner's `usable_kv_cache_budget`). This scales the reserve with
+    // context length, matching how compute buffers grow with `n_ctx`.
+    let kv_with_compute_reserve = kv_bytes
+        .checked_mul(KV_COMPUTE_RESERVE_NUMERATOR)?
+        .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
+    let total = u128::from(weight_per_layer).checked_add(kv_with_compute_reserve)?;
     total.try_into().ok()
+}
+
+fn layer_required_bytes(
+    layer_weights: &[u64],
+    kv_per_layer: u64,
+    context_length: u32,
+    parallel_lanes: usize,
+) -> Option<Vec<u64>> {
+    layer_weights
+        .iter()
+        .map(|weight| {
+            candidate_bytes_per_layer(*weight, kv_per_layer, context_length, parallel_lanes)
+        })
+        .collect()
+}
+
+fn max_contiguous_layers_from(
+    layer_required_bytes: &[u64],
+    start: usize,
+    limit: usize,
+    capacity: u64,
+) -> u64 {
+    let mut total = 0u64;
+    let mut count = 0u64;
+    for bytes in layer_required_bytes.iter().skip(start).take(limit) {
+        let next = total.saturating_add(*bytes);
+        if next > capacity {
+            break;
+        }
+        total = next;
+        count += 1;
+    }
+    count
+}
+
+fn sum_u64(values: &[u64]) -> u64 {
+    values
+        .iter()
+        .fold(0u64, |total, value| total.saturating_add(*value))
 }
 
 #[cfg(test)]
@@ -400,6 +601,14 @@ mod tests {
             detected_vram_bytes: gib * GIB,
             max_vram_bytes: None,
             runtime_headroom_bytes: 0,
+            stage_transfer_latency_ms: None,
+        }
+    }
+
+    fn latency_node(id: &str, gib: u64, stage_transfer_latency_ms: u32) -> TopologyNode {
+        TopologyNode {
+            stage_transfer_latency_ms: Some(stage_transfer_latency_ms),
+            ..node(id, gib)
         }
     }
 
@@ -408,11 +617,13 @@ mod tests {
             native_context_length: 65_536,
             layer_count: 40,
             model_weight_bytes: 40 * GIB,
+            layer_weight_bytes: Vec::new(),
             kv_bytes_per_token: 64 * 1024,
             minimum_nodes: 1,
             nodes,
             context_length_override: None,
             parallel_lanes_override: None,
+            target_decode_tpot_ms: None,
         }
     }
 
@@ -421,11 +632,13 @@ mod tests {
             native_context_length: QWEN_CODER_480B_NATIVE_CONTEXT,
             layer_count: QWEN_CODER_480B_LAYERS,
             model_weight_bytes: QWEN_CODER_480B_WEIGHT_BYTES,
+            layer_weight_bytes: Vec::new(),
             kv_bytes_per_token: QWEN_CODER_480B_Q8_KV_BYTES_PER_TOKEN,
             minimum_nodes: 2,
             nodes,
             context_length_override: None,
             parallel_lanes_override: None,
+            target_decode_tpot_ms: None,
         }
     }
 
@@ -445,6 +658,7 @@ mod tests {
             // Metal recommendedMaxWorkingSetSize is already the usable budget
             // reported by the local runtime.
             runtime_headroom_bytes: 0,
+            stage_transfer_latency_ms: None,
         }
     }
 
@@ -495,6 +709,49 @@ mod tests {
     }
 
     #[test]
+    fn exact_layer_weights_allow_uneven_package_fit() {
+        let mut request = input(vec![node("large", 12), node("small", 9)]);
+        request.layer_count = 4;
+        request.model_weight_bytes = 18 * GIB;
+        request.layer_weight_bytes = vec![GIB / 8, GIB / 8, 9 * GIB, 8 * GIB];
+        request.kv_bytes_per_token = 1;
+        request.minimum_nodes = 2;
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(
+            plan.stages
+                .iter()
+                .map(|stage| (stage.node_id.as_str(), stage.layer_start, stage.layer_end))
+                .collect::<Vec<_>>(),
+            vec![("large", 0, 3), ("small", 3, 4)]
+        );
+        assert_eq!(plan.stages[0].parameter_bytes, 9 * GIB + GIB / 4);
+        assert_eq!(plan.stages[1].parameter_bytes, 8 * GIB);
+    }
+
+    #[test]
+    fn exact_layer_capacity_is_evaluated_at_each_stage_boundary() {
+        let mut request = input(vec![node("large", 11), node("small", 3)]);
+        request.layer_count = 4;
+        request.model_weight_bytes = 12 * GIB;
+        request.layer_weight_bytes = vec![9 * GIB, GIB, GIB, GIB];
+        request.kv_bytes_per_token = 1;
+        request.minimum_nodes = 2;
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(
+            plan.stages
+                .iter()
+                .map(|stage| (stage.layer_start, stage.layer_end))
+                .collect::<Vec<_>>(),
+            vec![(0, 2), (2, 4)]
+        );
+    }
+
+    #[test]
     fn applies_max_vram_and_runtime_headroom_per_node() {
         let mut capped = node("capped", 80);
         capped.max_vram_bytes = Some(24 * GIB);
@@ -509,6 +766,43 @@ mod tests {
             .find(|stage| stage.node_id == "capped")
             .unwrap();
         assert!(capped_stage.layer_end - capped_stage.layer_start < 20);
+    }
+
+    #[test]
+    fn latency_aware_planner_prefers_lower_tpot_over_native_context() {
+        let mut request = input(vec![
+            latency_node("a", 23, 10),
+            latency_node("b", 23, 10),
+            latency_node("c", 23, 10),
+            latency_node("d", 23, 10),
+        ]);
+        request.native_context_length = 262_144;
+        request.minimum_nodes = 2;
+        request.target_decode_tpot_ms = Some(33);
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(20));
+        assert_eq!(plan.decode_tpot_target_met, Some(true));
+    }
+
+    #[test]
+    fn latency_aware_planner_reports_target_miss_when_memory_requires_more_stages() {
+        let mut request = qwen_coder_480b_input(qwen_nodes(4, 80));
+        request
+            .nodes
+            .iter_mut()
+            .for_each(|node| node.stage_transfer_latency_ms = Some(10));
+        request.target_decode_tpot_ms = Some(33);
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.stages.len(), 4);
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(40));
+        assert_eq!(plan.decode_tpot_target_met, Some(false));
     }
 
     #[test]
@@ -532,18 +826,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_context_override_below_minimum_floor() {
+    fn accepts_explicit_context_override_below_auto_floor() {
         let mut request = input(vec![node("a", 80), node("b", 80)]);
         request.native_context_length = 262_144;
         request.context_length_override = Some(32_768);
 
-        assert_eq!(
-            plan_topology(&request),
-            Err(TopologyPlanError::ContextBelowMinimum {
-                requested: 32_768,
-                minimum: 65_536,
-            })
-        );
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.context_length, 32_768);
     }
 
     #[test]
@@ -595,12 +885,20 @@ mod tests {
         //   part of the fixture, but the planner must use Metal working set
         //   size, not total RAM.
         //
-        // Expected topology: possible, 262_144 context, 4 lanes.
+        // Expected topology: possible, 131_072 context, 4 lanes.
         //
         // Why: this is a fixture-driven simulation. The model package metadata
         // and each machine's Metal working-set budget are passed into the same
         // planner used by runtime orchestration, and the planner reports
         // whether a topology can be formed plus its context and lane count.
+        //
+        // Context is 131_072 rather than the model's 262_144 native maximum
+        // because the planner reserves compute-buffer headroom (KV billed at
+        // 100/85). The ~316 GB of weights plus full-native KV would pack the
+        // combined ~354.6 GB working-set budget to within a few GB, leaving no
+        // room for llama.cpp compute graphs; halving the context restores ~18 GB
+        // of headroom across the two stages. This is the fix for stages that
+        // previously loaded at native context and then OOM'd on the first token.
         assert_eq!(STUDIO_RAM_BYTES, 274_877_906_944);
 
         let planned = plan_topology(&qwen_coder_480b_input(vec![
@@ -613,7 +911,7 @@ mod tests {
         };
 
         assert!(split_possible, "{planned:?}");
-        assert_eq!(context_length, Some(QWEN_CODER_480B_NATIVE_CONTEXT));
+        assert_eq!(context_length, Some(131_072));
         assert_eq!(parallel_lanes, Some(4));
 
         let plan = planned.expect("studio-james and studio-mic should form a split topology");

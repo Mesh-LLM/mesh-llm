@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncRead, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PartialArtifactSelection {
@@ -9,7 +9,7 @@ pub(super) struct PartialArtifactSelection {
     pub(super) offset: u64,
 }
 
-pub(super) struct PartialArtifactGuard {
+pub(crate) struct PartialArtifactGuard {
     path: PathBuf,
     cleanup_on_drop: bool,
 }
@@ -95,6 +95,23 @@ where
     Ok(read)
 }
 
+pub(super) async fn write_artifact_transfer_chunk<W>(
+    writer: &mut W,
+    bytes: &[u8],
+    idle_timeout: std::time::Duration,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    tokio::time::timeout(idle_timeout, writer.write_all(bytes))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("artifact transfer body write idle timeout after {idle_timeout:?}")
+        })?
+        .context("write artifact transfer bytes")?;
+    Ok(())
+}
+
 pub(super) async fn append_artifact_transfer_body<R>(
     reader: &mut R,
     partial_path: &Path,
@@ -139,7 +156,7 @@ where
     Ok(())
 }
 
-fn largest_resumable_partial(
+pub(crate) fn largest_resumable_partial(
     destination: &Path,
     max_resume_size: u64,
 ) -> Result<Option<(PathBuf, u64)>> {
@@ -179,17 +196,17 @@ fn largest_resumable_partial(
     Ok(best)
 }
 
-fn is_partial_for_destination(path: &Path, prefix: &str) -> bool {
+pub(crate) fn is_partial_for_destination(path: &Path, prefix: &str) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".part"))
 }
 
-fn partial_file_prefix(destination: &Path) -> String {
+pub(crate) fn partial_file_prefix(destination: &Path) -> String {
     format!(".{}.", artifact_file_name(destination))
 }
 
-fn artifact_file_name(destination: &Path) -> String {
+pub(crate) fn artifact_file_name(destination: &Path) -> String {
     destination
         .file_name()
         .and_then(|name| name.to_str())
@@ -202,7 +219,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn append_artifact_transfer_body_resumes_existing_partial() {
+    pub(crate) async fn append_artifact_transfer_body_resumes_existing_partial() {
         let temp = tempfile::tempdir().unwrap();
         let partial = temp.path().join(".artifact.gguf.123.part");
         std::fs::write(&partial, b"layer").unwrap();
@@ -225,8 +242,28 @@ mod tests {
         assert_eq!(std::fs::read(partial).unwrap(), b"layer000");
     }
 
+    #[tokio::test(start_paused = true)]
+    pub(crate) async fn write_artifact_transfer_chunk_has_idle_timeout() {
+        let (mut writer, _reader) = tokio::io::duplex(1);
+        let bytes = [1u8; 1024];
+
+        let error = write_artifact_transfer_chunk(
+            &mut writer,
+            &bytes,
+            std::time::Duration::from_millis(10),
+        )
+        .await
+        .expect_err("stalled body write must time out");
+
+        assert!(
+            error
+                .to_string()
+                .contains("artifact transfer body write idle timeout")
+        );
+    }
+
     #[test]
-    fn partial_artifact_guard_removes_armed_partial_file() {
+    pub(crate) fn partial_artifact_guard_removes_armed_partial_file() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(".artifact.part");
         std::fs::write(&path, b"partial").unwrap();
@@ -239,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_artifact_guard_preserves_disarmed_installed_file() {
+    pub(crate) fn partial_artifact_guard_preserves_disarmed_installed_file() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(".artifact.part");
         std::fs::write(&path, b"partial").unwrap();
@@ -253,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_artifact_guard_can_preserve_partial_after_transfer_error() {
+    pub(crate) fn partial_artifact_guard_can_preserve_partial_after_transfer_error() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(".artifact.part");
         std::fs::write(&path, b"partial").unwrap();
@@ -266,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn select_partial_artifact_reuses_largest_valid_partial() {
+    pub(crate) fn select_partial_artifact_reuses_largest_valid_partial() {
         let temp = tempfile::tempdir().unwrap();
         let destination = temp.path().join("layer-000.gguf");
         let small = temp.path().join(".layer-000.gguf.small.part");

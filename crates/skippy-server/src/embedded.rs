@@ -1,10 +1,12 @@
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::atomic::{AtomicBool, Ordering},
+    sync::{Arc, Mutex, OnceLock, TryLockError},
 };
 
 use anyhow::{Context, Result};
-use openai_frontend::OpenAiBackend;
+use axum::Router;
+use openai_frontend::{OpenAiBackend, OpenAiFrontendConfig, OpenAiLifecycleObserver};
 use skippy_protocol::{StageConfig, StageTopology};
 use tokio::{sync::oneshot, task::JoinHandle};
 
@@ -15,8 +17,10 @@ use crate::{
     http::{StageHttpOptions, serve_stage_http_with_shutdown},
     runtime_state::{
         RuntimeLaunchOverrides, RuntimeSessionStats, RuntimeState, load_runtime_with_overrides,
+        load_runtime_with_overrides_and_open_events,
     },
     telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
+    tokenizer::{TokenizerCapability, TokenizerCapabilityError, tokenizer_http_router},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +46,15 @@ pub struct EmbeddedRuntimeStatus {
     pub started_at_unix_nanos: i64,
     pub stopped_at_unix_nanos: Option<i64>,
     pub last_error: Option<String>,
+    /// Session stats, possibly a cached snapshot rather than a live read.
+    ///
+    /// `lane_count` is authoritative (it comes from `StageConfig`); everything
+    /// else may be frozen. Display only — never gate a decision on it.
     pub sessions: RuntimeSessionStats,
+    /// When [`Self::sessions`] was actually read, which may be arbitrarily
+    /// earlier than this status. Derive any freshness signal from this rather
+    /// than from the current time.
+    pub sessions_captured_at_unix_nanos: i64,
     pub telemetry: TelemetryStats,
 }
 
@@ -73,6 +85,23 @@ pub struct SkippyRuntimeHandle {
     runtime: Arc<Mutex<RuntimeState>>,
     telemetry: Telemetry,
     status: Arc<Mutex<RuntimeHandleState>>,
+    tokenizer_active: Arc<AtomicBool>,
+    tokenizer_capability: OnceLock<Result<TokenizerCapability, TokenizerCapabilityError>>,
+    /// Last session stats read out of [`Self::runtime`], and when.
+    ///
+    /// A native call (long prefill, decode batch) holds the runtime lock while
+    /// it runs, so status reads take it opportunistically and fall back to
+    /// this cache rather than queueing behind inference. The capture time
+    /// travels with the value so a stalled runtime is distinguishable from an
+    /// idle one.
+    last_session_stats: Arc<Mutex<Captured<RuntimeSessionStats>>>,
+}
+
+/// A value together with when it was actually read from its source.
+#[derive(Clone, Debug)]
+struct Captured<V> {
+    value: V,
+    captured_at_unix_nanos: i64,
 }
 
 #[derive(Debug)]
@@ -84,6 +113,42 @@ struct RuntimeHandleState {
 }
 
 impl SkippyRuntimeHandle {
+    /// Assemble a ready handle around an already-loaded runtime.
+    ///
+    /// Shared by both loaders so the stats cache is primed exactly once, in one
+    /// place: priming has to happen while `runtime` is still unshared and
+    /// uncontended, so that a status read which loses the race to the very
+    /// first generation reports real lanes instead of zeros.
+    fn ready(
+        config: StageConfig,
+        topology: Option<StageTopology>,
+        runtime: Arc<Mutex<RuntimeState>>,
+        telemetry: Telemetry,
+    ) -> Self {
+        let initial_session_stats = Captured {
+            value: runtime
+                .lock()
+                .expect("runtime lock poisoned")
+                .session_stats(),
+            captured_at_unix_nanos: now_unix_nanos(),
+        };
+        Self {
+            config: Arc::new(config),
+            topology: topology.map(Arc::new),
+            runtime,
+            telemetry,
+            status: Arc::new(Mutex::new(RuntimeHandleState {
+                state: EmbeddedState::Ready,
+                started_at_unix_nanos: now_unix_nanos(),
+                stopped_at_unix_nanos: None,
+                last_error: None,
+            })),
+            tokenizer_active: Arc::new(AtomicBool::new(true)),
+            tokenizer_capability: OnceLock::new(),
+            last_session_stats: Arc::new(Mutex::new(initial_session_stats)),
+        }
+    }
+
     pub fn load(options: EmbeddedRuntimeOptions) -> Result<Self> {
         validate_config(&options.config, options.topology.as_ref())?;
         let telemetry = Telemetry::new(
@@ -101,6 +166,7 @@ impl SkippyRuntimeHandle {
             &RuntimeLaunchOverrides {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
+                mtp_source: skippy_runtime::MtpSource::Disabled,
             },
         )?
         .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;
@@ -108,18 +174,51 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
         );
-        Ok(Self {
-            config: Arc::new(options.config),
-            topology: options.topology.map(Arc::new),
+        Ok(Self::ready(
+            options.config,
+            options.topology,
             runtime,
             telemetry,
-            status: Arc::new(Mutex::new(RuntimeHandleState {
-                state: EmbeddedState::Ready,
-                started_at_unix_nanos: now_unix_nanos(),
-                stopped_at_unix_nanos: None,
-                last_error: None,
-            })),
-        })
+        ))
+    }
+
+    pub fn load_with_open_events(
+        options: EmbeddedRuntimeOptions,
+        mut model_open_event_reporter: Option<Box<dyn FnMut(skippy_runtime::RuntimeEvent) + Send>>,
+    ) -> Result<Self> {
+        validate_config(&options.config, options.topology.as_ref())?;
+        let telemetry = Telemetry::new(
+            options.metrics_otlp_grpc,
+            options.telemetry_queue_capacity,
+            options.config.clone(),
+            options.telemetry_level,
+        );
+        telemetry.emit(
+            "stage.embedded_runtime_load_start",
+            lifecycle_attrs(&options.config),
+        );
+        let runtime = load_runtime_with_overrides_and_open_events(
+            &options.config,
+            &RuntimeLaunchOverrides {
+                n_threads: options.n_threads,
+                n_threads_batch: options.n_threads_batch,
+                mtp_source: skippy_runtime::MtpSource::Disabled,
+            },
+            model_open_event_reporter.as_mut().map(|reporter| {
+                reporter.as_mut() as &mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)
+            }),
+        )?
+        .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;
+        telemetry.emit(
+            "stage.embedded_runtime_ready",
+            lifecycle_attrs(&options.config),
+        );
+        Ok(Self::ready(
+            options.config,
+            options.topology,
+            runtime,
+            telemetry,
+        ))
     }
 
     pub fn config(&self) -> &StageConfig {
@@ -138,13 +237,34 @@ impl SkippyRuntimeHandle {
         self.telemetry.clone()
     }
 
+    /// Session stats without ever waiting on the inference lock, and when they
+    /// were read. A cached value carries the earlier read's time, not now.
+    fn session_stats_non_blocking(&self) -> Captured<RuntimeSessionStats> {
+        read_without_blocking(&self.runtime, &self.last_session_stats, |runtime| {
+            runtime.session_stats()
+        })
+    }
+
+    /// Returns the stateless tokenizer capability backed by this already-loaded
+    /// stage-zero runtime. This never opens a second model.
+    pub fn tokenizer_capability(&self) -> Result<TokenizerCapability, TokenizerCapabilityError> {
+        self.tokenizer_capability
+            .get_or_init(|| {
+                TokenizerCapability::from_stage_zero_with_lifecycle(
+                    &self.config,
+                    self.runtime.clone(),
+                    self.tokenizer_active.clone(),
+                )
+            })
+            .clone()
+    }
+
     pub fn status(&self) -> EmbeddedRuntimeStatus {
         let handle = self.status.lock().expect("runtime status lock poisoned");
-        let sessions = self
-            .runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .session_stats();
+        let Captured {
+            value: sessions,
+            captured_at_unix_nanos: sessions_captured_at_unix_nanos,
+        } = self.session_stats_non_blocking();
         EmbeddedRuntimeStatus {
             state: handle.state,
             run_id: self.config.run_id.clone(),
@@ -159,11 +279,15 @@ impl SkippyRuntimeHandle {
             stopped_at_unix_nanos: handle.stopped_at_unix_nanos,
             last_error: handle.last_error.clone(),
             sessions,
+            sessions_captured_at_unix_nanos,
             telemetry: self.telemetry.stats(),
         }
     }
 
     pub fn shutdown(&self) {
+        self.tokenizer_active.store(false, Ordering::Release);
+        let runtime = self.runtime.lock().expect("runtime lock poisoned");
+        drop(runtime);
         let mut status = self.status.lock().expect("runtime status lock poisoned");
         if status.state == EmbeddedState::Stopped {
             return;
@@ -263,15 +387,96 @@ pub fn start_openai_backend(
     bind_addr: SocketAddr,
     backend: Arc<dyn OpenAiBackend>,
 ) -> EmbeddedServerHandle {
-    spawn_async_server("openai-backend", bind_addr, move |shutdown| async move {
-        let listener = tokio::net::TcpListener::bind(bind_addr).await?;
-        axum::serve(listener, openai_frontend::router_for(backend))
-            .with_graceful_shutdown(async move {
-                let _ = shutdown.await;
-            })
-            .await?;
-        Ok(())
-    })
+    spawn_openai_backend(bind_addr, openai_frontend::router_for(backend))
+}
+
+pub fn start_openai_backend_with_tokenizer(
+    bind_addr: SocketAddr,
+    backend: Arc<dyn OpenAiBackend>,
+    tokenizer: TokenizerCapability,
+) -> EmbeddedServerHandle {
+    spawn_openai_backend(bind_addr, openai_backend_router(backend, tokenizer))
+}
+
+fn spawn_openai_backend(bind_addr: SocketAddr, router: Router) -> EmbeddedServerHandle {
+    let status = Arc::new(Mutex::new(ServerHandleState {
+        name: "openai-backend",
+        bind_addr,
+        state: EmbeddedState::Starting,
+        started_at_unix_nanos: now_unix_nanos(),
+        stopped_at_unix_nanos: None,
+        last_error: None,
+    }));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let task_status = status.clone();
+    let task = tokio::spawn(async move {
+        let result = async {
+            let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+            {
+                let mut status = task_status.lock().expect("server status lock poisoned");
+                status.state = EmbeddedState::Ready;
+            }
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await?;
+            Ok(())
+        }
+        .await;
+        finish_server_status(&task_status, &result);
+        result
+    });
+    EmbeddedServerHandle {
+        status,
+        shutdown: Some(shutdown_tx),
+        task: Some(task),
+    }
+}
+
+pub(crate) fn openai_backend_router(
+    backend: Arc<dyn OpenAiBackend>,
+    tokenizer: TokenizerCapability,
+) -> Router {
+    openai_frontend::router_for(backend).merge(tokenizer_http_router(tokenizer))
+}
+
+/// Start an OpenAI backend with an optional metadata-only lifecycle observer.
+///
+/// The existing [`start_openai_backend`] entry point retains the no-observer
+/// behavior for embedders that do not own a logging runtime.
+pub fn start_openai_backend_with_lifecycle_observer(
+    bind_addr: SocketAddr,
+    backend: Arc<dyn OpenAiBackend>,
+    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+) -> EmbeddedServerHandle {
+    spawn_openai_backend(
+        bind_addr,
+        openai_backend_router_with_lifecycle_observer(backend, lifecycle_observer),
+    )
+}
+
+/// Start a tokenizer-aware OpenAI backend with an optional metadata-only
+/// lifecycle observer.
+pub fn start_openai_backend_with_tokenizer_and_lifecycle_observer(
+    bind_addr: SocketAddr,
+    backend: Arc<dyn OpenAiBackend>,
+    tokenizer: TokenizerCapability,
+    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+) -> EmbeddedServerHandle {
+    let router = openai_backend_router_with_lifecycle_observer(backend, lifecycle_observer)
+        .merge(tokenizer_http_router(tokenizer));
+    spawn_openai_backend(bind_addr, router)
+}
+
+fn openai_backend_router_with_lifecycle_observer(
+    backend: Arc<dyn OpenAiBackend>,
+    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+) -> Router {
+    let config = lifecycle_observer.map_or_else(OpenAiFrontendConfig::default, |observer| {
+        OpenAiFrontendConfig::default().with_lifecycle_observer(observer)
+    });
+    openai_frontend::router_for_with_config(backend, config)
 }
 
 pub fn start_binary_stage(options: BinaryStageOptions) -> EmbeddedServerHandle {
@@ -351,5 +556,399 @@ fn finish_server_status(status: &Arc<Mutex<ServerHandleState>>, result: &Result<
             status.state = EmbeddedState::Failed;
             status.last_error = Some(error.to_string());
         }
+    }
+}
+
+/// Read a value derived from `source` without waiting on its lock, reporting
+/// when it was actually read.
+///
+/// `source` is the inference runtime, whose mutex a native call holds for as
+/// long as it runs. Blocking on it from an observability path makes status
+/// reads queue behind that work, and since those reads happen on async
+/// executor threads it also parks a worker. So: take the lock only when free,
+/// refreshing `cache`; otherwise serve the last published value.
+///
+/// Staleness is unbounded — under sustained load every read can lose the race.
+/// That is only safe because the capture time makes it visible, so callers
+/// must propagate it rather than stamp the value as freshly observed. Nothing
+/// may gate admission, routing, eviction or shutdown on these values.
+///
+/// A poisoned `source` still panics, as the previous blocking `lock().expect`
+/// did: cached stats over a panicked runtime would hide a real failure.
+fn read_without_blocking<S, V>(
+    source: &Mutex<S>,
+    cache: &Mutex<Captured<V>>,
+    read: impl FnOnce(&S) -> V,
+) -> Captured<V>
+where
+    V: Clone,
+{
+    match source.try_lock() {
+        Ok(guard) => {
+            let value = read(&guard);
+            drop(guard);
+            let captured = Captured {
+                value,
+                captured_at_unix_nanos: now_unix_nanos(),
+            };
+            *cache.lock().expect("stats cache lock poisoned") = captured.clone();
+            captured
+        }
+        // Inference holds the runtime: serve the last published snapshot,
+        // carrying the time it was taken, instead of blocking.
+        Err(TryLockError::WouldBlock) => cache.lock().expect("stats cache lock poisoned").clone(),
+        Err(TryLockError::Poisoned(error)) => panic!("runtime lock poisoned: {error}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    use skippy_protocol::LoadMode;
+
+    use super::*;
+
+    /// A ready handle over a modelless runtime.
+    ///
+    /// `status()` only reads lane bookkeeping and handle state, so it is
+    /// exercisable without loading a GGUF. Built through
+    /// [`SkippyRuntimeHandle::ready`] rather than by hand, so these tests cover
+    /// the real cache-priming path both loaders use.
+    fn test_handle(lane_count: u32) -> SkippyRuntimeHandle {
+        let config = StageConfig {
+            run_id: "run".to_string(),
+            topology_id: "topology".to_string(),
+            model_id: "org/model:Q4_K_M".to_string(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: None,
+            projector_path: None,
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 1,
+            ctx_size: 512,
+            lane_count,
+            n_batch: None,
+            n_ubatch: None,
+            n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: Default::default(),
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: false,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_string(),
+            upstream: None,
+            downstream: None,
+        };
+        let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(lane_count)));
+        SkippyRuntimeHandle::ready(config, None, runtime, telemetry)
+    }
+
+    #[test]
+    fn status_does_not_block_while_inference_holds_the_runtime() {
+        // The actual regression, pinned at the call site rather than on the
+        // helper: `status()` must stay responsive while a decode loop owns the
+        // runtime mutex for the whole turn. Asserting on the helper alone does
+        // not catch `status()` being rewired back to a blocking `lock()`.
+        let handle = Arc::new(test_handle(3));
+
+        // Inference takes the runtime for the length of the turn.
+        let held = handle.runtime.lock().expect("lock runtime");
+
+        // Probe from a detached thread. It must not be joined: if `status()`
+        // regresses to a blocking acquire the probe never returns, and joining
+        // it would hang the suite instead of reporting a failure. The timeout
+        // below is the assertion.
+        let (tx, rx) = mpsc::channel();
+        thread::spawn({
+            let handle = Arc::clone(&handle);
+            move || {
+                let _ = tx.send(handle.status());
+            }
+        });
+        let probe = rx.recv_timeout(Duration::from_secs(5));
+
+        let status = probe.expect("status() must return while the runtime lock is held");
+        assert_eq!(
+            status.sessions.lane_count, 3,
+            "a contended read must serve the primed snapshot, not zeros"
+        );
+        assert_eq!(status.state, EmbeddedState::Ready);
+
+        drop(held);
+    }
+
+    #[test]
+    fn status_reports_primed_lanes_before_any_generation() {
+        // Regression for the zeros-on-the-first-turn defect: the cache is
+        // primed during construction, so even a read that never wins the
+        // runtime lock reports real lane counts.
+        let handle = test_handle(2);
+        let held = handle.runtime.lock().expect("lock runtime");
+
+        let cached = handle.session_stats_non_blocking();
+
+        assert_eq!(
+            cached.value.lane_count, 2,
+            "priming must publish real lanes"
+        );
+        assert_eq!(cached.value.lanes.len(), 2);
+        assert!(
+            cached.captured_at_unix_nanos > 0,
+            "priming must record when it captured"
+        );
+        drop(held);
+    }
+
+    #[test]
+    fn status_does_not_claim_a_fresh_capture_while_the_runtime_is_busy() {
+        // The false-freshness defect: a contended read must report the time of
+        // the earlier successful read, so a runtime wedged inside a native
+        // call shows a capture time that stops advancing rather than looking
+        // freshly observed on every tick.
+        let handle = test_handle(2);
+
+        let live = handle.status();
+        assert!(live.sessions_captured_at_unix_nanos > 0);
+
+        let held = handle.runtime.lock().expect("lock runtime");
+        let while_busy = handle.status();
+        drop(held);
+
+        assert_eq!(
+            while_busy.sessions_captured_at_unix_nanos, live.sessions_captured_at_unix_nanos,
+            "a cached read must not advance the capture time"
+        );
+    }
+
+    #[test]
+    fn status_reads_live_stats_when_the_runtime_is_idle() {
+        let handle = test_handle(4);
+
+        let status = handle.status();
+
+        assert_eq!(status.sessions.lane_count, 4);
+        assert_eq!(status.sessions.active_sessions, 0);
+        assert!(status.runtime_loaded);
+    }
+
+    #[test]
+    fn shutdown_waits_for_runtime_lock_after_invalidating_tokenizer() {
+        let handle = Arc::new(test_handle(1));
+        let held = handle.runtime.lock().expect("runtime lock");
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let shutdown_handle = Arc::clone(&handle);
+        thread::spawn(move || {
+            shutdown_handle.shutdown();
+            shutdown_tx.send(()).expect("send shutdown result");
+        });
+
+        assert!(
+            shutdown_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "shutdown should synchronize with an in-flight runtime operation"
+        );
+        drop(held);
+        shutdown_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("shutdown should complete after the runtime lock is released");
+        assert_eq!(handle.status().state, EmbeddedState::Stopped);
+    }
+
+    fn empty_cache(value: u32) -> Mutex<Captured<u32>> {
+        Mutex::new(Captured {
+            value,
+            captured_at_unix_nanos: 0,
+        })
+    }
+
+    #[test]
+    fn read_without_blocking_refreshes_cache_when_lock_is_free() {
+        let source = Mutex::new(7u32);
+        let cache = empty_cache(0);
+
+        let read = read_without_blocking(&source, &cache, |v| *v);
+
+        assert_eq!(read.value, 7);
+        assert!(
+            read.captured_at_unix_nanos > 0,
+            "a live read must report when it happened"
+        );
+        assert_eq!(
+            cache.lock().unwrap().value,
+            7,
+            "a free lock must refresh cache"
+        );
+    }
+
+    #[test]
+    fn read_without_blocking_serves_cache_instead_of_waiting_on_inference() {
+        // The regression: a long native call holds the runtime for as long as
+        // it runs. A status read must return the last published value
+        // immediately rather than block behind it.
+        let source = Mutex::new(7u32);
+        let cache = empty_cache(0);
+
+        // Prime the cache while the runtime is idle.
+        let live = read_without_blocking(&source, &cache, |v| *v);
+        assert_eq!(live.value, 7);
+
+        // Now inference holds the runtime lock.
+        let held = source.lock().expect("lock runtime");
+
+        let observed = read_without_blocking(&source, &cache, |v| *v);
+        assert_eq!(
+            observed.value, 7,
+            "a contended runtime must serve the cached snapshot, never block"
+        );
+        assert_eq!(
+            observed.captured_at_unix_nanos, live.captured_at_unix_nanos,
+            "a cached read must report the earlier capture time, not now"
+        );
+
+        drop(held);
+
+        // Once the call ends, reads go live again.
+        *source.lock().unwrap() = 9;
+        let refreshed = read_without_blocking(&source, &cache, |v| *v);
+        assert_eq!(refreshed.value, 9);
+        assert!(
+            refreshed.captured_at_unix_nanos >= live.captured_at_unix_nanos,
+            "a fresh read must advance the capture time"
+        );
+        assert_eq!(cache.lock().unwrap().value, 9);
+    }
+
+    #[test]
+    #[should_panic(expected = "runtime lock poisoned")]
+    fn read_without_blocking_still_panics_on_a_poisoned_runtime() {
+        // A poisoned runtime means inference panicked. Serving cached stats
+        // over the top of that would report a healthy node, so this must keep
+        // the pre-existing panic behaviour rather than fall back to the cache.
+        let source = Mutex::new(7u32);
+        let cache = empty_cache(0);
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = source.lock().unwrap();
+            panic!("inference exploded");
+        });
+        assert!(source.is_poisoned(), "precondition: source is poisoned");
+        let _ = read_without_blocking(&source, &cache, |v| *v);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use openai_frontend::{
+        ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, ModelObject,
+        OpenAiFrontendRoute, OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRequestContext,
+        OpenAiResult,
+    };
+    use tower::ServiceExt;
+
+    use super::*;
+
+    struct ModelsBackend;
+
+    #[async_trait]
+    impl OpenAiBackend for ModelsBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(vec![ModelObject::new("embedded-model")])
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            Err(openai_frontend::OpenAiError::unsupported(
+                "not used by this test",
+            ))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            Err(openai_frontend::OpenAiError::unsupported(
+                "not used by this test",
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingObserver(Mutex<Vec<OpenAiLifecycleEvent>>);
+
+    impl OpenAiLifecycleObserver for RecordingObserver {
+        fn observe(&self, event: &OpenAiLifecycleEvent) {
+            self.0
+                .lock()
+                .expect("recording observer lock poisoned")
+                .push(event.clone());
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_observer_reaches_frontend_router_and_legacy_path_stays_available() {
+        let observer = Arc::new(RecordingObserver::default());
+        let observed_response = openai_backend_router_with_lifecycle_observer(
+            Arc::new(ModelsBackend),
+            Some(Arc::clone(&observer) as Arc<dyn OpenAiLifecycleObserver>),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/v1/models")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+        assert_eq!(observed_response.status(), StatusCode::OK);
+        assert!(
+            observer
+                .0
+                .lock()
+                .expect("recording observer lock poisoned")
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    OpenAiLifecycleEvent::Admitted {
+                        context: openai_frontend::OpenAiLifecycleContext {
+                            route: OpenAiFrontendRoute::Models,
+                            ..
+                        }
+                    }
+                ))
+        );
+
+        let legacy_response =
+            openai_backend_router_with_lifecycle_observer(Arc::new(ModelsBackend), None)
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/models")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("router response");
+        assert_eq!(legacy_response.status(), StatusCode::OK);
     }
 }

@@ -21,6 +21,14 @@ const toneColor: Record<StatusBadgeTone, string> = {
   bad: 'var(--color-bad)'
 }
 
+const toneTextColor: Record<StatusBadgeTone, string> = {
+  muted: 'var(--color-fg-dim)',
+  accent: 'var(--color-accent-text)',
+  good: 'var(--color-good-text)',
+  warn: 'var(--color-warn-text)',
+  bad: 'var(--color-bad-text)'
+}
+
 const sizeClass: Record<StatusBadgeSize, string> = {
   label: 'text-[length:var(--density-type-label)]',
   caption: 'text-[length:var(--density-type-caption)]'
@@ -38,7 +46,7 @@ function statusBadgeStyle(tone: StatusBadgeTone = 'muted'): CSSProperties {
       tone === 'muted'
         ? '1px solid color-mix(in oklab, var(--color-border) 80%, var(--color-background))'
         : `1px solid color-mix(in oklab, ${color} 30%, var(--color-background))`,
-    color: tone === 'muted' ? 'var(--color-fg-dim)' : color
+    color: toneTextColor[tone]
   }
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "web-ui-exemplar"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+mesh-llm-plugin = { path = "../../../../crates/mesh-llm-plugin" }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[workspace]

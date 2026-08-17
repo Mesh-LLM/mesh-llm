@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# Build the backend-neutral MeshLLM host. Native code belongs in a separately
+# packaged runtime; this script must never prepare or link a llama.cpp backend.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+UI_DIR="$REPO_ROOT/crates/mesh-llm-ui"
+BUILD_PROFILE="${MESH_LLM_BUILD_PROFILE:-debug}"
+
+usage() {
+    echo "usage: scripts/build-host.sh [--profile debug|dev|release]" >&2
+}
+
+while (($# > 0)); do
+    case "$1" in
+        --profile)
+            BUILD_PROFILE="${2:-}"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+case "$BUILD_PROFILE" in
+    debug|dev|release) ;;
+    *)
+        echo "unsupported host build profile: $BUILD_PROFILE" >&2
+        exit 1
+        ;;
+esac
+
+append_rustflag() {
+    local flag="$1"
+    case " ${RUSTFLAGS:-} " in
+        *" $flag "*) ;;
+        *) export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$flag" ;;
+    esac
+}
+
+configure_lld_linker() {
+    case "$(uname -s)" in
+        Linux)
+            command -v ld.lld >/dev/null 2>&1 || {
+                echo "Error: LLVM ld.lld was not found; install lld and retry." >&2
+                exit 1
+            }
+            append_rustflag "-C link-arg=-fuse-ld=lld"
+            ;;
+        Darwin)
+            local lld=""
+            if command -v ld64.lld >/dev/null 2>&1; then
+                lld="$(command -v ld64.lld)"
+            elif command -v brew >/dev/null 2>&1; then
+                local prefix
+                prefix="$(brew --prefix lld 2>/dev/null || true)"
+                [[ -x "$prefix/bin/ld64.lld" ]] && lld="$prefix/bin/ld64.lld"
+            fi
+            [[ -n "$lld" ]] || {
+                echo "Error: LLVM ld64.lld was not found; run 'brew install lld'." >&2
+                exit 1
+            }
+            append_rustflag "-C link-arg=-fuse-ld=$lld"
+            ;;
+        *)
+            echo "unsupported OS for a dynamic host build: $(uname -s)" >&2
+            exit 1
+            ;;
+    esac
+}
+
+configure_rust_cache() {
+    if [[ -z "${RUSTC_WRAPPER:-}" ]] && command -v sccache >/dev/null 2>&1; then
+        RUSTC_WRAPPER="$(command -v sccache)"
+        export RUSTC_WRAPPER
+    fi
+}
+
+stamp_build_version() {
+    local release_version=""
+    local pkgid=""
+    local sha=""
+    local dirty_suffix=""
+
+    if [[ -n "${MESH_LLM_BUILD_VERSION:-}" ]]; then
+        echo "Using preset MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+        return 0
+    fi
+
+    if ! pkgid="$(cd "$REPO_ROOT" && cargo pkgid -p mesh-llm 2>/dev/null)"; then
+        echo "Warning: unable to derive build version; cargo pkgid unavailable." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+    release_version="${pkgid##*#}"
+    if [[ -z "$release_version" || "$release_version" == "$pkgid" ]]; then
+        echo "Warning: unable to derive build version; cargo pkgid output was unexpected." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+
+    # A release product reports the plain workspace version. Non-release builds
+    # append the commit SHA so `mesh-llm --version` cannot be mistaken for a
+    # release binary, and so is_sha_build() resolves native runtimes from the
+    # latest release rather than a pinned tag. This mirrors build-windows.ps1.
+    if [[ "$BUILD_PROFILE" == "release" ]]; then
+        export MESH_LLM_BUILD_VERSION="$release_version"
+        echo "Using release MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+        return 0
+    fi
+
+    if ! sha="$(git -C "$REPO_ROOT" rev-parse --short=6 HEAD 2>/dev/null)" || [[ -z "$sha" ]]; then
+        echo "Warning: unable to derive build version; git SHA unavailable." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+    sha="$(printf '%s' "$sha" | tr '[:lower:]' '[:upper:]')"
+
+    local status_output=""
+    if ! status_output="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all 2>/dev/null)"; then
+        echo "Warning: unable to derive build version; git status unavailable." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+    if [[ -n "$status_output" ]]; then
+        dirty_suffix=".dirty"
+    fi
+
+    export MESH_LLM_BUILD_VERSION="${release_version}+g${sha}${dirty_suffix}"
+    echo "Derived MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+}
+
+if [[ "${MESH_LLM_DYNAMIC_NATIVE_RUNTIME:-1}" != "1" ]]; then
+    echo "Host builds must use dynamic native runtimes; MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 is unsupported." >&2
+    exit 1
+fi
+
+configure_lld_linker
+configure_rust_cache
+
+echo "Building backend-neutral MeshLLM host (profile: $BUILD_PROFILE)."
+if [[ "${MESH_LLM_SKIP_UI:-0}" != "1" ]]; then
+    MESH_LLM_BUILD_PROFILE="$BUILD_PROFILE" "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
+else
+    echo "Skipping mesh-llm UI build because MESH_LLM_SKIP_UI=1."
+fi
+
+stamp_build_version
+
+cargo_args=(build --locked -p mesh-llm --bin mesh-llm --no-default-features \
+    --features "web-ui,dynamic-native-runtime")
+if [[ "$BUILD_PROFILE" == "release" ]]; then
+    cargo_args=(build --release --locked -p mesh-llm --bin mesh-llm --no-default-features \
+        --features "web-ui,dynamic-native-runtime")
+fi
+(cd "$REPO_ROOT" && cargo "${cargo_args[@]}")
+
+if [[ "$BUILD_PROFILE" == "release" ]]; then
+    echo "Mesh host: target/release/mesh-llm"
+else
+    echo "Mesh host: target/debug/mesh-llm"
+fi

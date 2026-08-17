@@ -123,4 +123,6 @@ pub struct GitHubReleaseAsset {
     pub browser_download_url: String,
     #[serde(default)]
     pub size: Option<u64>,
+    #[serde(default)]
+    pub digest: Option<String>,
 }

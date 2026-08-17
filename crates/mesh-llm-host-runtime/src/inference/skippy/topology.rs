@@ -162,6 +162,7 @@ pub(crate) fn plan_package_identity_topology(
         source_model_bytes: Some(package.source_model_bytes),
         layer_count: package.layer_count,
         activation_width: package.activation_width,
+        generation: package.generation.clone(),
         projector_path: None,
         layers: Vec::new(),
     };
@@ -233,6 +234,7 @@ mod tests {
             source_model_bytes: Some(120),
             layer_count,
             activation_width: 1024,
+            generation: None,
             projector_path: None,
             layers: (0..layer_count)
                 .map(|layer_index| StagePackageLayerInfo {

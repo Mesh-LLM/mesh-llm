@@ -10,8 +10,6 @@ pub struct ModelDemand {
 
 pub const DEMAND_TTL_SECS: u64 = 86400;
 
-pub const MAX_SPLIT_RTT_MS: u32 = 80;
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelSourceKind {

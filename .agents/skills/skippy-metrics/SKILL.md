@@ -14,7 +14,7 @@ benchmark/report integration.
 
 `crates/skippy-metrics` owns shared attribute names. Stage servers may emit
 OTLP/telemetry, but request-path serving must not block on telemetry export.
-`crates/metrics-server` owns benchmark/debug telemetry ingest, DuckDB storage,
+`crates/metrics-server` owns benchmark/debug telemetry ingest, SQLite storage,
 run lifecycle, and canonical report export.
 
 Mesh API runtime status is not a telemetry dump. Keep public runtime status

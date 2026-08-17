@@ -29,9 +29,7 @@ export function NodeRail({
       className="panel-shell static self-start rounded-[var(--radius-lg)] border border-border bg-panel p-2.5 lg:sticky lg:top-[70px]"
       aria-label="Configuration nodes"
     >
-      <div className="mb-2 px-0.5 text-[length:var(--density-type-annotation)] font-semibold uppercase tracking-[0.06em] text-fg-faint">
-        Nodes · {nodes.length}
-      </div>
+      <div className="mb-2 px-0.5 type-label text-fg-faint">Nodes · {nodes.length}</div>
       {nodes.map((node) => {
         const usable = nodeUsableGB(node)
         const used = nodeUsedGB(node, assigns, models)
@@ -53,7 +51,7 @@ export function NodeRail({
                     boxShadow: node.status === 'online' ? 'var(--shadow-status-good)' : 'none'
                   }}
                 />
-                <span className="flex-1 truncate font-mono text-[length:var(--density-type-caption-lg)] font-medium">
+                <span className="flex-1 truncate font-mono text-[length:var(--density-type-control)] font-medium">
                   {node.hostname}
                 </span>
               </button>
@@ -70,14 +68,14 @@ export function NodeRail({
             <div className="mx-2 h-[3px] overflow-hidden rounded-sm bg-panel-strong">
               <div className="h-full bg-accent" style={{ width: `${pct}%`, opacity: 0.65 }} />
             </div>
-            <div className="px-2 py-0.5 font-mono text-[length:var(--density-type-annotation)] text-fg-faint">
+            <div className="px-2 py-0.5 font-mono text-[length:var(--density-type-caption-lg)] text-fg-dim">
               {deviceLabel}
             </div>
           </div>
         )
       })}
       {keyboardHint ? (
-        <div className="panel-divider mt-2 border-t border-border-soft px-0.5 pt-2 text-[length:var(--density-type-caption)] text-fg-faint">
+        <div className="panel-divider mt-2 border-t border-border-soft px-0.5 pt-2 type-caption text-fg-dim">
           {keyboardHint}
         </div>
       ) : null}

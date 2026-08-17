@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/base'
 
 const BREAKPOINT_WIDTHS = [360, 420, 500, 640, 767, 768, 800, 840, 900, 1023, 1024, 1133, 1280, 1440]
 
@@ -47,16 +47,38 @@ async function readTopNavMetrics(page: Page) {
   })
 }
 
-test.skip('top navigation stays on one row at every responsive breakpoint', async ({ page }) => {
+test('top navigation stays on one row at every responsive breakpoint', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Your private mesh' })).toBeVisible()
 
   for (const width of BREAKPOINT_WIDTHS) {
     await page.setViewportSize({ width, height: 1133 })
-    await page.waitForTimeout(100)
+    await expect
+      .poll(async () => {
+        const metrics = await readTopNavMetrics(page)
+        let responsiveControlsReady: boolean
+        if (width < 768) {
+          responsiveControlsReady = !metrics.apiTargetVisible && metrics.actionsMenuVisible
+        } else if (width < 1024) {
+          responsiveControlsReady = metrics.apiTargetVisible && metrics.actionsMenuVisible
+        } else {
+          responsiveControlsReady =
+            metrics.apiTargetVisible &&
+            !metrics.actionsMenuVisible &&
+            metrics.joinButtonVisible &&
+            metrics.themeButtonVisible
+        }
+
+        return (
+          metrics.headerHeight <= 60 &&
+          metrics.controlTopSpread <= 3 &&
+          !metrics.horizontalOverflow &&
+          responsiveControlsReady
+        )
+      })
+      .toBe(true)
 
     const metrics = await readTopNavMetrics(page)
-
     expect(metrics.headerHeight, `${width}px header should remain a single row`).toBeLessThanOrEqual(60)
     expect(metrics.controlTopSpread, `${width}px controls should not split onto separate rows`).toBeLessThanOrEqual(3)
     expect(metrics.horizontalOverflow, `${width}px should not create horizontal document overflow`).toBe(false)
@@ -64,9 +86,14 @@ test.skip('top navigation stays on one row at every responsive breakpoint', asyn
     if (width < 768) {
       expect(metrics.apiTargetVisible, `${width}px compact state hides API target chip`).toBe(false)
       expect(metrics.actionsMenuVisible, `${width}px compact state keeps actions in the menu`).toBe(true)
-    } else {
+    } else if (width < 1024) {
       expect(metrics.apiTargetVisible, `${width}px shows the API target chip`).toBe(true)
       expect(metrics.actionsMenuVisible, `${width}px middle state uses the actions menu`).toBe(true)
+    } else {
+      expect(metrics.apiTargetVisible, `${width}px shows the API target chip`).toBe(true)
+      expect(metrics.actionsMenuVisible, `${width}px desktop state shows direct actions`).toBe(false)
+      expect(metrics.joinButtonVisible, `${width}px desktop state shows join actions`).toBe(true)
+      expect(metrics.themeButtonVisible, `${width}px desktop state shows theme controls`).toBe(true)
     }
   }
 })

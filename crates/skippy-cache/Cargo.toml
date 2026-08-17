@@ -3,6 +3,9 @@ name = "skippy-cache"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "Cache primitives for Skippy staged runtime serving"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [lib]
 name = "skippy_cache"
@@ -11,4 +14,11 @@ path = "src/lib.rs"
 [dependencies]
 anyhow.workspace = true
 blake3.workspace = true
-skippy-protocol = { path = "../skippy-protocol" }
+memmap2.workspace = true
+libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc2"  }
+
+[dev-dependencies]
+tempfile = "3"

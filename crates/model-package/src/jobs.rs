@@ -41,6 +41,8 @@ pub struct JobVolume {
     pub mount_path: String,
     #[serde(rename = "readOnly", skip_serializing_if = "Option::is_none")]
     pub read_only: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

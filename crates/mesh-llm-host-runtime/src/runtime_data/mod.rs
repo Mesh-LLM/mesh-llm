@@ -7,6 +7,8 @@ mod api_views;
 mod collector;
 mod inventory;
 mod metrics;
+#[cfg(test)]
+mod plugin_tests;
 mod plugins;
 mod processes;
 mod producers;
@@ -15,6 +17,11 @@ mod subscriptions;
 
 pub(crate) use self::api_views::{collect_views, mesh_models, status_payload};
 pub(crate) use self::collector::RuntimeDataCollector;
+#[cfg(test)]
+pub(crate) use self::inventory::InventoryScanError;
+pub(crate) use self::inventory::{
+    InventoryScanDisposition, InventoryScanOutcome, InventoryScanResult, sorted_inventory_entries,
+};
 #[cfg(test)]
 pub(crate) use self::metrics::RuntimeLlamaMetricSample;
 pub(crate) use self::metrics::{
@@ -34,12 +41,14 @@ pub(crate) use self::subscriptions::RuntimeDataDirty;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    mod inventory;
     use super::api_views::{collect_views, mesh_models, status_payload};
     use super::processes::{RuntimeProcessSnapshot, runtime_process_payloads};
     use super::snapshots::{
         HardwareViewInput, ModelViewInput, PluginDataKey, PluginEndpointKey, StatusViewInput,
     };
     use super::subscriptions::{RuntimeDataDirty, RuntimeDataVersion};
+    use super::{InventoryScanDisposition, InventoryScanError, InventoryScanResult};
     use super::{RuntimeDataCollector, RuntimeDataSource};
     use super::{RuntimeLlamaEndpointStatus, RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot};
     use crate::api::RuntimeProcessPayload;
@@ -51,9 +60,7 @@ pub(crate) mod tests {
     use crate::mesh::{MeshCatalogEntry, NodeRole, PeerInfo};
     use crate::models::LocalModelInventorySnapshot;
     use crate::network::openai::transport::{self, ResponseAdapter};
-    use crate::plugin::{
-        PluginCapabilityProvider, PluginEndpointSummary, PluginManifestOverview, PluginSummary,
-    };
+    use crate::plugin::{PluginEndpointSummary, PluginSummary, PluginWebUiState};
     use crate::runtime::instance::LocalInstanceSnapshot;
     use crate::{ReleaseAttestationStatus, ReleaseAttestationSummary};
     use iroh::{EndpointAddr, EndpointId, SecretKey};
@@ -172,6 +179,7 @@ pub(crate) mod tests {
             local_processes.push(RuntimeProcessSnapshot {
                 model: "Qwen3-8B".into(),
                 instance_id: None,
+                profile: String::new(),
                 backend: "metal".into(),
                 pid: 4242,
                 port: 9337,
@@ -303,6 +311,7 @@ pub(crate) mod tests {
             RuntimeProcessPayload {
                 name: "Zulu".into(),
                 instance_id: None,
+                profile: String::new(),
                 backend: "llama".into(),
                 status: "ready".into(),
                 port: 9444,
@@ -313,6 +322,7 @@ pub(crate) mod tests {
             RuntimeProcessPayload {
                 name: "Alpha".into(),
                 instance_id: None,
+                profile: String::new(),
                 backend: "llama".into(),
                 status: "starting".into(),
                 port: 9337,
@@ -424,6 +434,10 @@ pub(crate) mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
@@ -471,6 +485,7 @@ pub(crate) mod tests {
             first_joined_mesh_ts: Some(123),
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         assert_eq!(
@@ -535,6 +550,7 @@ pub(crate) mod tests {
             selected_path: None,
             propagated_latency: None,
             owner_summary: crate::crypto::OwnershipSummary::default(),
+            inference_admission_state: None,
         };
         let hardware = collector.build_hardware_view(HardwareViewInput {
             gpu_name: None,
@@ -619,12 +635,150 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn status_payload_exposes_peer_advertised_model_throughput() {
+        let collector = RuntimeDataCollector::new();
+        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x44; 32]).public());
+        let peer = PeerInfo {
+            id: peer_id,
+            addr: EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            },
+            mesh_id: None,
+            mesh_policy_hash: None,
+            genesis_policy: None,
+            role: NodeRole::Worker,
+            first_joined_mesh_ts: Some(456),
+            models: vec!["Qwen/Qwen3-Coder".into()],
+            vram_bytes: 32_000_000_000,
+            rtt_ms: Some(7),
+            model_source: None,
+            admitted: true,
+            serving_models: vec!["Qwen/Qwen3-Coder".into()],
+            hosted_models: vec!["Qwen/Qwen3-Coder".into()],
+            hosted_models_known: true,
+            available_models: vec!["Qwen/Qwen3-Coder".into()],
+            requested_models: vec![],
+            explicit_model_interests: vec![],
+            last_seen: std::time::Instant::now(),
+            last_mentioned: std::time::Instant::now(),
+            version: Some("0.70.0".into()),
+            gpu_name: None,
+            hostname: Some("peer.local".into()),
+            is_soc: Some(false),
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+            release_attestation_summary: ReleaseAttestationSummary::default(),
+            artifact_transfer_supported: false,
+            stage_protocol_generation_supported: false,
+            stage_status_list_supported: false,
+            advertised_model_throughput: vec![crate::network::metrics::ModelThroughputHint {
+                model_name: "Qwen/Qwen3-Coder".into(),
+                avg_tokens_per_second_milli: 13_400,
+                throughput_samples: 27,
+            }],
+            display_rtt: None,
+            selected_path: None,
+            propagated_latency: None,
+            owner_summary: crate::crypto::OwnershipSummary::default(),
+            inference_admission_state: None,
+        };
+        let hardware = collector.build_hardware_view(HardwareViewInput {
+            gpu_name: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            my_hostname: Some("node.local".into()),
+            my_is_soc: Some(false),
+            my_vram_gb: 24.0,
+            model_size_gb: 8.0,
+            first_joined_mesh_ts: Some(123),
+        });
+        let snapshot = collector.build_status_view(StatusViewInput {
+            version: "0.70.0".into(),
+            latest_version: Some("0.70.0".into()),
+            node_id: "node-1".into(),
+            owner: crate::crypto::OwnershipSummary::default(),
+            release_attestation: ReleaseAttestationSummary::default(),
+            token: "invite-token".into(),
+            is_host: true,
+            is_client: false,
+            llama_ready: true,
+            model_name: "Self-Model".into(),
+            models: vec!["Self-Model".into()],
+            available_models: vec!["Self-Model".into()],
+            requested_models: vec![],
+            serving_models: vec!["Self-Model".into()],
+            hosted_models: vec!["Self-Model".into()],
+            draft_name: None,
+            api_port: 3131,
+            inflight_requests: 1,
+            mesh_id: Some("mesh-1".into()),
+            mesh_name: Some("test-mesh".into()),
+            mesh_discovery_mode: "nostr".into(),
+            discovery_scope: "public".into(),
+            discovery_source: "nostr-relay".into(),
+            nostr_discovery: false,
+            publication_state: "private".into(),
+            local_processes: vec![],
+            peers: vec![peer],
+            wakeable_nodes: vec![],
+            routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
+            hardware,
+        });
+
+        assert_eq!(
+            snapshot.peers[0].advertised_model_throughput[0].model_name,
+            "Qwen/Qwen3-Coder"
+        );
+
+        let payload = status_payload(snapshot);
+        assert_eq!(payload.peers[0].advertised_model_throughput.len(), 1);
+
+        let json = serde_json::to_value(&payload).expect("serialize status payload");
+        assert_eq!(
+            json["peers"][0]["advertised_model_throughput"],
+            json!([
+                {
+                    "model_name": "Qwen/Qwen3-Coder",
+                    "avg_tokens_per_second_milli": 13400,
+                    "throughput_samples": 27,
+                }
+            ])
+        );
+    }
+
+    #[test]
     fn runtime_data_model_snapshot_matches_api_payloads() {
         let collector = RuntimeDataCollector::new();
         let local_inventory = LocalModelInventorySnapshot {
             model_names: HashSet::from(["Example-Model".to_string()]),
             size_by_name: HashMap::from([("Example-Model".to_string(), 8_000_000_000)]),
-            metadata_by_name: HashMap::new(),
+            metadata_by_name: HashMap::from([(
+                "Example-Model".to_string(),
+                crate::proto::node::CompactModelMetadata {
+                    model_key: "Example-Model".to_string(),
+                    context_length: 131_072,
+                    embedding_size: 4096,
+                    head_count: 32,
+                    layer_count: 36,
+                    tokenizer_model_name: "gpt2".to_string(),
+                    quantization_type: "Q4_K_M".to_string(),
+                    ..Default::default()
+                },
+            )]),
+            display_name_by_name: HashMap::new(),
         };
         let snapshot = collector.build_model_view(ModelViewInput {
             peers: vec![],
@@ -649,6 +803,12 @@ pub(crate) mod tests {
         assert_eq!(payload[0].name, "Example-Model");
         assert_eq!(payload[0].status, "cold");
         assert_eq!(payload[0].size_gb, 8.0);
+        assert_eq!(payload[0].context_length, Some(131_072));
+        assert_eq!(payload[0].quantization, Some("Q4_K_M".to_string()));
+        assert_eq!(payload[0].tokenizer, Some("gpt2".to_string()));
+        assert_eq!(payload[0].layer_count, Some(36));
+        assert_eq!(payload[0].head_count, Some(32));
+        assert_eq!(payload[0].embedding_size, Some(4096));
         assert_eq!(
             payload[0].download_command,
             "mesh-llm models download Example-Model"
@@ -662,6 +822,57 @@ pub(crate) mod tests {
             "mesh-llm serve --auto --model Example-Model"
         );
         assert_eq!(payload[0].fit_label, "Likely comfortable");
+    }
+
+    #[test]
+    fn runtime_data_model_snapshot_uses_local_display_name_for_synthetic_refs() {
+        let collector = RuntimeDataCollector::new();
+        let synthetic_ref = "local-gguf/sha256-66243256b95c5f7c".to_string();
+        let local_inventory = LocalModelInventorySnapshot {
+            model_names: HashSet::from([synthetic_ref.clone()]),
+            size_by_name: HashMap::from([(synthetic_ref.clone(), 8_000_000_000)]),
+            metadata_by_name: HashMap::from([(
+                synthetic_ref.clone(),
+                crate::proto::node::CompactModelMetadata {
+                    model_key: synthetic_ref.clone(),
+                    context_length: 32_768,
+                    quantization_type: "Q4_K_M".to_string(),
+                    ..Default::default()
+                },
+            )]),
+            display_name_by_name: HashMap::from([(
+                synthetic_ref.clone(),
+                "MyModel-7B-Q4_K_M".to_string(),
+            )]),
+        };
+        let snapshot = collector.build_model_view(ModelViewInput {
+            peers: vec![],
+            catalog: vec![MeshCatalogEntry {
+                model_name: synthetic_ref.clone(),
+                descriptor: None,
+            }],
+            served_models: vec![],
+            active_demand: HashMap::new(),
+            my_serving_models: vec![],
+            my_hosted_models: vec![],
+            local_inventory,
+            node_hostname: Some("node.local".into()),
+            my_vram_gb: 24.0,
+            model_name: "Another-Model".into(),
+            model_size_bytes: 0,
+            now_unix_secs: 1_700_000_000,
+        });
+
+        let payload = mesh_models(snapshot);
+        assert_eq!(payload.len(), 1);
+        // The canonical name stays the synthetic ref.
+        assert_eq!(payload[0].name, synthetic_ref);
+        // The display name is the GGUF file stem, not the synthetic ref.
+        assert_eq!(payload[0].display_name, "MyModel-7B-Q4_K_M");
+        // Local metadata still flows through.
+        assert_eq!(payload[0].size_gb, 8.0);
+        assert_eq!(payload[0].context_length, Some(32_768));
+        assert_eq!(payload[0].quantization, Some("Q4_K_M".to_string()));
     }
 
     #[test]
@@ -725,6 +936,7 @@ pub(crate) mod tests {
                 model_names: HashSet::from([model_name.clone()]),
                 size_by_name: HashMap::new(),
                 metadata_by_name: HashMap::new(),
+                display_name_by_name: HashMap::new(),
             },
             node_hostname: Some("node.local".into()),
             my_vram_gb: 24.0,
@@ -774,6 +986,7 @@ pub(crate) mod tests {
                 model_names: HashSet::from([model_name.clone()]),
                 size_by_name: HashMap::new(),
                 metadata_by_name: HashMap::new(),
+                display_name_by_name: HashMap::new(),
             },
             node_hostname: Some("node.local".into()),
             my_vram_gb: 24.0,
@@ -826,6 +1039,7 @@ pub(crate) mod tests {
                 model_names: HashSet::from([model_name.clone()]),
                 size_by_name: HashMap::new(),
                 metadata_by_name: HashMap::new(),
+                display_name_by_name: HashMap::new(),
             },
             node_hostname: Some("node.local".into()),
             my_vram_gb: 24.0,
@@ -841,57 +1055,6 @@ pub(crate) mod tests {
         assert_eq!(payload[0].multimodal_status, Some("supported"));
         assert!(payload[0].vision);
         assert_eq!(payload[0].vision_status, Some("supported"));
-    }
-
-    #[tokio::test]
-    async fn runtime_data_inventory_single_flight_scan_coalesces() {
-        let collector = RuntimeDataCollector::new();
-        let scan_count = Arc::new(AtomicUsize::new(0));
-
-        let first = {
-            let collector = collector.clone();
-            let scan_count = scan_count.clone();
-            tokio::spawn(async move {
-                collector
-                    .coalesce_local_inventory_scan(move || {
-                        scan_count.fetch_add(1, Ordering::SeqCst);
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        let mut snapshot = LocalModelInventorySnapshot::default();
-                        snapshot.model_names.insert("Qwen3-8B".into());
-                        snapshot
-                            .size_by_name
-                            .insert("Qwen3-8B".into(), 8_000_000_000);
-                        snapshot
-                    })
-                    .await
-            })
-        };
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let second = {
-            let collector = collector.clone();
-            tokio::spawn(async move {
-                collector
-                    .coalesce_local_inventory_scan(LocalModelInventorySnapshot::default)
-                    .await
-            })
-        };
-
-        let first_snapshot = first.await.expect("first inventory scan task should join");
-        let second_snapshot = second
-            .await
-            .expect("second inventory scan task should join");
-
-        assert_eq!(scan_count.load(Ordering::SeqCst), 1);
-        assert_eq!(first_snapshot, second_snapshot);
-        assert_eq!(collector.local_inventory_snapshot(), first_snapshot);
-        assert!(
-            collector
-                .local_inventory_snapshot()
-                .model_names
-                .contains("Qwen3-8B")
-        );
     }
 
     #[test]
@@ -1129,196 +1292,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn runtime_data_plugin_reports_are_scoped_by_name_and_endpoint() {
-        let collector = RuntimeDataCollector::new();
-        let alpha = collector.producer(RuntimeDataSource {
-            scope: "plugin",
-            plugin_data_key: Some(PluginDataKey {
-                plugin_name: "alpha".into(),
-                data_key: "summary".into(),
-            }),
-            plugin_endpoint_key: None,
-        });
-        let alpha_endpoint = collector.producer(RuntimeDataSource {
-            scope: "plugin",
-            plugin_data_key: None,
-            plugin_endpoint_key: Some(PluginEndpointKey {
-                plugin_name: "alpha".into(),
-                endpoint_id: "chat".into(),
-            }),
-        });
-        let beta = collector.producer(RuntimeDataSource {
-            scope: "plugin",
-            plugin_data_key: Some(PluginDataKey {
-                plugin_name: "beta".into(),
-                data_key: "summary".into(),
-            }),
-            plugin_endpoint_key: None,
-        });
-        let beta_endpoint = collector.producer(RuntimeDataSource {
-            scope: "plugin",
-            plugin_data_key: None,
-            plugin_endpoint_key: Some(PluginEndpointKey {
-                plugin_name: "beta".into(),
-                endpoint_id: "embed".into(),
-            }),
-        });
-
-        alpha.publish_plugin_summary(PluginSummary {
-            name: "alpha".into(),
-            kind: "external".into(),
-            enabled: true,
-            status: "running".into(),
-            pid: Some(1001),
-            version: Some("1.0.0".into()),
-            capabilities: vec!["chat".into()],
-            command: Some("alpha-plugin".into()),
-            args: vec!["--serve".into()],
-            tools: Vec::new(),
-            manifest: Some(PluginManifestOverview {
-                operations: 1,
-                resources: 0,
-                resource_templates: 0,
-                prompts: 0,
-                completions: 0,
-                http_bindings: 0,
-                endpoints: 1,
-                mesh_channels: 0,
-                mesh_event_subscriptions: 0,
-                capabilities: vec!["chat".into()],
-            }),
-            error: None,
-        });
-        alpha.publish_plugin_manifest(PluginManifestOverview {
-            operations: 1,
-            resources: 0,
-            resource_templates: 0,
-            prompts: 0,
-            completions: 0,
-            http_bindings: 0,
-            endpoints: 1,
-            mesh_channels: 0,
-            mesh_event_subscriptions: 0,
-            capabilities: vec!["chat".into()],
-        });
-        alpha.publish_plugin_providers(vec![PluginCapabilityProvider {
-            capability: "chat".into(),
-            plugin_name: "alpha".into(),
-            plugin_status: "running".into(),
-            endpoint_id: Some("chat".into()),
-            available: true,
-            detail: None,
-        }]);
-        alpha.publish_plugin_payload("metrics", json!({"requests": 2}));
-        alpha_endpoint.publish_plugin_endpoint(PluginEndpointSummary {
-            plugin_name: "alpha".into(),
-            plugin_status: "running".into(),
-            endpoint_id: "chat".into(),
-            state: "healthy".into(),
-            available: true,
-            kind: "mcp".into(),
-            transport_kind: "http".into(),
-            protocol: Some("http".into()),
-            address: Some("http://127.0.0.1:9000/mcp".into()),
-            args: Vec::new(),
-            namespace: Some("alpha.chat".into()),
-            supports_streaming: true,
-            managed_by_plugin: true,
-            detail: None,
-            models: vec!["alpha-model".into()],
-        });
-
-        beta.publish_plugin_summary(PluginSummary {
-            name: "beta".into(),
-            kind: "external".into(),
-            enabled: true,
-            status: "disabled".into(),
-            pid: None,
-            version: None,
-            capabilities: vec!["embed".into()],
-            command: Some("beta-plugin".into()),
-            args: Vec::new(),
-            tools: Vec::new(),
-            manifest: None,
-            error: Some("disabled".into()),
-        });
-        beta.publish_plugin_payload("metrics", json!({"requests": 5}));
-        beta_endpoint.publish_plugin_endpoint(PluginEndpointSummary {
-            plugin_name: "beta".into(),
-            plugin_status: "disabled".into(),
-            endpoint_id: "embed".into(),
-            state: "unavailable".into(),
-            available: false,
-            kind: "inference".into(),
-            transport_kind: "tcp".into(),
-            protocol: None,
-            address: Some("127.0.0.1:9444".into()),
-            args: Vec::new(),
-            namespace: None,
-            supports_streaming: false,
-            managed_by_plugin: false,
-            detail: Some("disabled".into()),
-            models: vec!["beta-model".into()],
-        });
-
-        let all = collector.plugins_snapshot();
-        assert_eq!(
-            all.plugins
-                .iter()
-                .map(|plugin| plugin.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["alpha", "beta"]
-        );
-        assert_eq!(
-            all.endpoints
-                .iter()
-                .map(|endpoint| (endpoint.plugin_name.as_str(), endpoint.endpoint_id.as_str()))
-                .collect::<Vec<_>>(),
-            vec![("alpha", "chat"), ("beta", "embed")]
-        );
-
-        let alpha_snapshot = collector.plugin_snapshot("alpha");
-        assert_eq!(alpha_snapshot.plugin_name, "alpha");
-        assert_eq!(
-            alpha_snapshot
-                .summary
-                .as_ref()
-                .map(|summary| summary.name.as_str()),
-            Some("alpha")
-        );
-        assert_eq!(
-            alpha_snapshot
-                .manifest
-                .as_ref()
-                .map(|manifest| manifest.endpoints),
-            Some(1)
-        );
-        assert_eq!(alpha_snapshot.providers.len(), 1);
-        assert_eq!(
-            alpha_snapshot.payloads.get("metrics"),
-            Some(&json!({"requests": 2}))
-        );
-        assert_eq!(alpha_snapshot.endpoints.len(), 1);
-        assert_eq!(alpha_snapshot.endpoints[0].endpoint_id, "chat");
-
-        assert!(collector.plugin_snapshot("gamma").summary.is_none());
-        assert!(collector.plugin_snapshot("gamma").endpoints.is_empty());
-        assert_eq!(
-            collector
-                .plugin_endpoint_snapshot("alpha", "chat")
-                .as_ref()
-                .map(|endpoint| endpoint.address.as_deref()),
-            Some(Some("http://127.0.0.1:9000/mcp"))
-        );
-        assert!(
-            collector
-                .plugin_endpoint_snapshot("alpha", "embed")
-                .is_none()
-        );
-        assert!(collector.plugin_endpoint_snapshot("beta", "chat").is_none());
-    }
-
-    #[test]
     fn runtime_data_plugin_clear_removes_only_target_plugin_reports() {
         let collector = RuntimeDataCollector::new();
         let alpha = collector.producer(RuntimeDataSource {
@@ -1366,6 +1339,8 @@ pub(crate) mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            web_ui: PluginWebUiState::default(),
+            startup: None,
             error: None,
         });
         alpha.publish_plugin_payload("metrics", json!({"requests": 1}));
@@ -1398,6 +1373,8 @@ pub(crate) mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            web_ui: PluginWebUiState::default(),
+            startup: None,
             error: None,
         });
         beta.publish_plugin_payload("metrics", json!({"requests": 7}));
@@ -1504,7 +1481,7 @@ pub(crate) mod tests {
             .unwrap();
         let collector = node.runtime_data_collector();
         let upstream_port = start_local_http_server(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 33\r\n\r\n{\"usage\":{\"completion_tokens\":7}}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 69\r\n\r\n{\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":7,\"total_tokens\":10}}",
         )
         .await;
         let (proxy_stream, client_reader) = connected_proxy_stream().await;
@@ -1515,11 +1492,15 @@ pub(crate) mod tests {
             Some("glm"),
             election::InferenceTarget::Local(upstream_port),
             b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}",
-            ResponseAdapter::None,
+            crate::network::openai::transport::RouteTargetContext {
+                request_id: mesh_llm_events::logging::identifiers::RequestId::default(),
+                response_adapter: ResponseAdapter::None,
+                route_observer: crate::logging::OpenAiRouteObserver::default(),
+            },
         )
         .await;
 
-        assert!(routed);
+        assert!(routed.response_written());
         let response = String::from_utf8(client_reader.await.unwrap()).unwrap();
         assert!(response.starts_with("HTTP/1.1 200 OK"));
 

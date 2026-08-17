@@ -8,11 +8,14 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 |---|---|
 | Install, run, service mode, model storage | [USAGE.md](USAGE.md) |
 | Private meshes, published meshes, public joining | [MESHES.md](MESHES.md) |
+| Local routing reputation and target cooldowns | [NODE_REP.md](NODE_REP.md) |
 | SDK usage, examples, errors, lifecycle, platform support | [SDK.md](SDK.md) |
+| Language-specific SDK examples | [Rust](sdk/rust.md), [Node.js](sdk/node.md), [Swift](sdk/swift.md), [Kotlin/Android](sdk/kotlin.md) |
 | Run big models with Skippy layer splits | [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) |
 | Contribute or publish layer package repositories | [LAYER_PACKAGE_REPOS.md](LAYER_PACKAGE_REPOS.md) |
 | Goose, Claude Code, OpenCode, Pi, curl, blackboard | [AGENTS.md](AGENTS.md) |
 | Command-by-command CLI reference | [CLI.md](CLI.md) |
+| Local request ledger, retention, artifacts, and maintenance | [LOGGING.md](LOGGING.md) |
 | Exo comparison | [EXO_COMPARISON.md](EXO_COMPARISON.md) |
 
 ## Skippy and model-package docs
@@ -24,9 +27,13 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | [skippy/FAMILY_CERTIFY.md](skippy/FAMILY_CERTIFY.md) | Certification workflow for new families |
 | [skippy/TOPOLOGY_PLANNER.md](skippy/TOPOLOGY_PLANNER.md) | Stage topology planning behavior |
 | [skippy/CONFIGURATION.md](skippy/CONFIGURATION.md) | Authoritative operator matrix for Skippy config keys and rejection boundaries |
+| [skippy/PROMPT_CACHE.md](skippy/PROMPT_CACHE.md) | OpenAI prompt-prefix cache behavior, defaults, telemetry, and benchmark flow |
+| [skippy/PIPELINED_VERIFY_WINDOW.md](skippy/PIPELINED_VERIFY_WINDOW.md) | Native MTP, anchored N-gram extension, VerifyWindow protocol, pipeline behavior, and telemetry |
+| [skippy/SUFFIX_NGRAM_PROPOSER.md](skippy/SUFFIX_NGRAM_PROPOSER.md) | Long exact-suffix proposer design, invariants, telemetry, and benchmark contract |
 | [skippy/DATA_FLOW.md](skippy/DATA_FLOW.md) | Stage data flow and transport details |
 | [skippy/LLAMA_PARITY.md](skippy/LLAMA_PARITY.md) | Remaining llama.cpp parity queue |
 | [specs/layer-package-repos.md](specs/layer-package-repos.md) | Manifest schema and package artifact rules |
+| [specs/mesh-setup-installer.md](specs/mesh-setup-installer.md) | Bootstrap installer and `mesh-llm setup` ownership boundary |
 | [SKIPPY.md](SKIPPY.md) | Skippy integration readiness and parity notes |
 
 Use [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) for Skippy split-serving workflows.
@@ -38,8 +45,10 @@ Use [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) for Skippy split-serving workflows.
 | [BENCHMARKS.md](BENCHMARKS.md) | Current benchmark numbers and performance context |
 | [SWARM_CAPTURE.md](SWARM_CAPTURE.md) | Opt-in local debug capture for mesh membership and connection diagnostics |
 | [design/](design/) | Architecture notes, protocol design, testing playbooks, carried llama.cpp patch documentation |
+| [design/NATIVE_RUNTIMES.md](design/NATIVE_RUNTIMES.md) | Native runtime artifact packaging, exact version matching, resolver behavior, and SDK/autoupdater ownership |
 | [design/NODE_OWNER_IDENTITY.md](design/NODE_OWNER_IDENTITY.md) | Owner identity, trust policy, and how owner trust stays separate from release attestation |
-| [plugins/](plugins/) | Plugin architecture and implementation planning |
+| [design/EMITTER_HOOKS.md](design/EMITTER_HOOKS.md) | Inventory of hook, callback, and emitter surfaces plus readiness ownership. |
+| [plugins/](plugins/) | Plugin architecture, web UI projection contract, exemplars, and implementation planning |
 | [plans/](plans/) | Narrow implementation plans that are not yet general design docs |
 | [specs/](specs/) | Focused behavior specs for individual features |
 | [design/OPENAI_GUARDRAILS.md](design/OPENAI_GUARDRAILS.md) | OpenAI guardrail rollout defaults, v1 limits, telemetry privacy, and evidence scaffolding |
@@ -56,3 +65,10 @@ Shared wire protocol ownership lives at
 [../crates/mesh-llm-protocol/README.md](../crates/mesh-llm-protocol/README.md).
 Shared routing target ownership lives at
 [../crates/mesh-llm-routing/README.md](../crates/mesh-llm-routing/README.md).
+
+Developers migrating from backend-linked release commands should use the
+host/runtime/product commands in
+[design/NATIVE_RUNTIMES.md](design/NATIVE_RUNTIMES.md#development-loop-boundary).
+Installed and portable products keep their selected runtime beside the neutral
+host or in the documented package-owned directory, with the user cache only as
+a fallback.

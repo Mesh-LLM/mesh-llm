@@ -11,10 +11,14 @@
 //! (`send_moa_as_*_sse_inner`), and the chunking helpers that this
 //! module hands the final answer off to.
 
-use super::is_moa_failure_body;
-use super::send_moa_as_responses_sse_inner;
-use super::send_moa_as_sse_inner;
+use super::MoaDispatchResult;
+use super::moa_token_usage;
+use super::streaming::{
+    ProgressContinuation, final_text_stream_mode_for_result, is_moa_failure_body,
+    send_moa_as_responses_sse_inner, send_moa_as_sse_inner,
+};
 use crate::network::openai::transport as proxy;
+use mesh_llm_events::logging::events::TokenUsage;
 use mesh_mixture_of_agents as moa;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -41,7 +45,7 @@ pub(super) async fn run_moa_turn_with_progress(
     moa_body: serde_json::Value,
     config: &moa::GatewayConfig,
     response_adapter: proxy::ResponseAdapter,
-) {
+) -> MoaDispatchResult {
     // Generate a single completion id up front so progress chunks,
     // the (eventual) final body, and any failure tail all share the
     // same `chat.completion.chunk.id` — clients correlate the stream
@@ -54,7 +58,7 @@ pub(super) async fn run_moa_turn_with_progress(
     let completion_id = format!("chatcmpl-moa-{}", short_hex_nanos());
 
     if !send_progress_headers(&mut tcp_stream).await {
-        return;
+        return MoaDispatchResult::Dropped("moa_progress_header_write_failed");
     }
 
     let Some(progress_created_at) = send_progress_response_created_if_responses(
@@ -64,7 +68,7 @@ pub(super) async fn run_moa_turn_with_progress(
     )
     .await
     else {
-        return;
+        return MoaDispatchResult::Dropped("moa_progress_created_write_failed");
     };
 
     let Some((moa_result, continuation)) = drip_progress_phase(
@@ -77,12 +81,14 @@ pub(super) async fn run_moa_turn_with_progress(
     )
     .await
     else {
-        return;
+        return MoaDispatchResult::Dropped("moa_progress_client_disconnected");
     };
 
+    let failed = is_moa_failure_body(&moa_result.response_body);
+    let usage = moa_token_usage(&moa_result);
     if let Err(e) = write_progress_body(
         tcp_stream,
-        &moa_result.response_body,
+        &moa_result,
         response_adapter,
         &completion_id,
         continuation,
@@ -90,6 +96,24 @@ pub(super) async fn run_moa_turn_with_progress(
     .await
     {
         tracing::warn!("MoA progress: body write failed: {e}");
+        return MoaDispatchResult::Dropped("moa_progress_body_write_failed");
+    }
+    completed_progress_response(failed, usage)
+}
+
+fn completed_progress_response(failed: bool, usage: Option<TokenUsage>) -> MoaDispatchResult {
+    if failed {
+        MoaDispatchResult::FailedWithStatus {
+            status_code: 200,
+            reason: "moa_turn_failed_after_commit",
+        }
+    } else {
+        usage.map_or(MoaDispatchResult::Responded(200), |usage| {
+            MoaDispatchResult::RespondedWithUsage {
+                status_code: 200,
+                usage,
+            }
+        })
     }
 }
 
@@ -167,20 +191,6 @@ fn overwrite_response_id(body: &mut serde_json::Value, completion_id: &str) {
             serde_json::Value::String(completion_id.to_string()),
         );
     }
-}
-
-/// Carries Responses-API streaming state from the progress phase to
-/// the body writer so the full stream maintains monotonic
-/// sequence_number and a stable created_at across both phases.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ProgressContinuation {
-    /// `created_at` baked into the early `response.created` event;
-    /// must be reused for the final `response.completed` so clients
-    /// see one consistent timestamp for the response.
-    pub(super) created_at: i64,
-    /// Next `sequence_number` to use — strictly greater than the last
-    /// `sequence_number` emitted by the progress phase.
-    pub(super) next_sequence_number: i32,
 }
 
 /// Marker for "client disconnected mid-progress; cancel MoA work".
@@ -359,19 +369,29 @@ where
 /// so the body writer can emit a wire-monotonic stream.
 async fn write_progress_body(
     mut tcp_stream: TcpStream,
-    body: &serde_json::Value,
+    moa_result: &moa::TurnResult,
     adapter: proxy::ResponseAdapter,
     completion_id: &str,
     continuation: Option<ProgressContinuation>,
 ) -> std::io::Result<()> {
+    let body = &moa_result.response_body;
     if is_moa_failure_body(body) {
         return write_failure_as_sse_tail(&mut tcp_stream, body, adapter, completion_id).await;
     }
+    let text_stream_mode = final_text_stream_mode_for_result(moa_result);
     match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
-            send_moa_as_responses_sse_inner(tcp_stream, body, &[], true, continuation).await
+            send_moa_as_responses_sse_inner(
+                tcp_stream,
+                body,
+                &[],
+                true,
+                text_stream_mode,
+                continuation,
+            )
+            .await
         }
-        _ => send_moa_as_sse_inner(tcp_stream, body, &[], true).await,
+        _ => send_moa_as_sse_inner(tcp_stream, body, &[], true, text_stream_mode).await,
     }
 }
 
@@ -527,11 +547,46 @@ async fn write_failure_as_sse_tail(
 
 #[cfg(test)]
 mod tests {
+    use super::super::streaming::MoaFinalTextStreamMode;
     use super::*;
 
     /// Test fixture: a stable completion id with the same shape as
     /// MoA's real ids, so tests can assert correlation behaviour.
     const TEST_COMPLETION_ID: &str = "chatcmpl-moa-deadbeef";
+
+    #[test]
+    fn progress_failure_preserves_committed_status_and_discards_usage() {
+        let usage = Some(TokenUsage {
+            prompt_tokens: Some(8),
+            completion_tokens: Some(5),
+            total_tokens: Some(13),
+        });
+
+        assert!(matches!(
+            completed_progress_response(true, usage),
+            MoaDispatchResult::FailedWithStatus {
+                status_code: 200,
+                reason: "moa_turn_failed_after_commit",
+            }
+        ));
+    }
+
+    #[test]
+    fn progress_success_preserves_authoritative_usage() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(8),
+            completion_tokens: Some(5),
+            total_tokens: Some(13),
+        };
+
+        assert!(matches!(
+            completed_progress_response(false, Some(usage)),
+            MoaDispatchResult::RespondedWithUsage {
+                status_code: 200,
+                usage: recorded,
+            } if recorded == usage
+        ));
+    }
 
     #[test]
     fn progress_line_walks_opening_then_cycles_tail() {
@@ -799,7 +854,7 @@ mod tests {
             // Imitate run_moa_turn_with_progress on the Responses path:
             // headers → response.created → one progress delta → body
             // writer with header_already_sent=true.
-            super::super::write_sse_response_headers(&mut socket, &[])
+            super::super::streaming::write_sse_response_headers(&mut socket, &[])
                 .await
                 .unwrap();
             let created_at = write_progress_response_created(&mut socket, TEST_COMPLETION_ID)
@@ -841,6 +896,7 @@ mod tests {
                 &body,
                 &[],
                 /*header_already_sent=*/ true,
+                MoaFinalTextStreamMode::ChunkedCommittedText,
                 continuation,
             )
             .await
@@ -907,7 +963,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
-            super::super::write_sse_response_headers(&mut socket, &[])
+            super::super::streaming::write_sse_response_headers(&mut socket, &[])
                 .await
                 .unwrap();
             let created_at = write_progress_response_created(&mut socket, TEST_COMPLETION_ID)
@@ -957,9 +1013,16 @@ mod tests {
                 created_at,
                 next_sequence_number: seq,
             });
-            send_moa_as_responses_sse_inner(socket, &body, &[], true, continuation)
-                .await
-                .expect("send_moa_as_responses_sse_inner failed");
+            send_moa_as_responses_sse_inner(
+                socket,
+                &body,
+                &[],
+                true,
+                MoaFinalTextStreamMode::ChunkedCommittedText,
+                continuation,
+            )
+            .await
+            .expect("send_moa_as_responses_sse_inner failed");
         });
 
         let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");

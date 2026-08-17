@@ -1,5 +1,8 @@
 use super::{
     MeshApi,
+    access::{
+        is_trusted_local_request, request_host, request_origin, requires_trusted_local_access,
+    },
     assets::{respond_console_asset, respond_console_index},
     http::{http_body_text, respond_error},
     routes::dispatch_request,
@@ -29,6 +32,10 @@ pub(crate) async fn start_with_listener(
     let Some(listener) = bind_management_listener(port, listen_all, existing_listener).await else {
         return;
     };
+    {
+        let mut inner = state.inner.lock().await;
+        inner.listeners_ready = true;
+    }
     let management_url = management_url(&listener, port);
     tracing::info!("Management API on {management_url}");
 
@@ -166,14 +173,19 @@ pub(crate) fn is_console_index_route(path: &str) -> bool {
         path,
         "/" | "/dashboard"
             | "/dashboard/"
+            | "/logs"
+            | "/logs/"
             | "/chat"
             | "/chat/"
             | "/configuration"
             | "/configuration/"
+            | "/plugins"
             | "/__playground"
             | "/__meshviz-perf"
     ) || path.starts_with("/chat/")
         || path.starts_with("/configuration/")
+        || path.starts_with("/logs/")
+        || path.starts_with("/plugins/")
 }
 
 pub(crate) fn is_console_asset_route(path: &str) -> bool {
@@ -211,39 +223,98 @@ pub(crate) async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> an
             });
     }
 
+    let dispatch = dispatch_management_request(
+        &mut stream,
+        state,
+        source_addr,
+        method,
+        path,
+        path_only,
+        body,
+        req.as_ref(),
+        &request.raw,
+    );
+    if super::management_lifecycle::eligible_management_route(method, path_only) {
+        let request_id = super::management_lifecycle::request_id_from_raw(&request.raw);
+        if let Some(lifecycle) = crate::logging_runtime_state().and_then(|state| {
+            state.register_management_request(
+                request_id,
+                super::management_lifecycle::method_route_label(method, path_only),
+            )
+        }) {
+            return super::management_lifecycle::scope(lifecycle, dispatch).await;
+        }
+    }
+    dispatch.await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_management_request(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    source_addr: Option<std::net::SocketAddr>,
+    method: &str,
+    path: &str,
+    path_only: &str,
+    body: &str,
+    req: &str,
+    raw_request: &[u8],
+) -> anyhow::Result<()> {
     if method == "GET" && state.is_headless().await && is_ui_only_route(path_only) {
-        respond_error(&mut stream, 404, "Not found").await?;
+        respond_error(stream, 404, "Not found").await?;
         return Ok(());
+    }
+
+    if requires_trusted_local_access(method, path_only) {
+        let trusted_local_request = match (request_origin(raw_request), request_host(raw_request)) {
+            (Ok(origin), Ok(host)) => is_trusted_local_request(source_addr, origin, host),
+            _ => false,
+        };
+        if !trusted_local_request {
+            if path_only == "/api/logs/events" {
+                super::routes::logs::LogsError::Forbidden
+                    .write(stream)
+                    .await?;
+                return Ok(());
+            }
+            respond_error(
+                stream,
+                403,
+                "This management route requires a trusted local caller",
+            )
+            .await?;
+            return Ok(());
+        }
     }
 
     match (method, path_only) {
         ("GET", p) if is_console_index_route(p) => {
-            if !respond_console_index(&mut stream).await? {
-                respond_error(&mut stream, 500, "Dashboard bundle missing").await?;
+            if !respond_console_index(stream).await? {
+                respond_error(stream, 500, "Dashboard bundle missing").await?;
             }
         }
 
         // ── Frontend static assets (bundled UI dist) ──
         ("GET", p) if is_console_asset_route(p) => {
-            if !respond_console_asset(&mut stream, p).await? {
-                respond_error(&mut stream, 404, "Not found").await?;
+            if !respond_console_asset(stream, p).await? {
+                respond_error(stream, 404, "Not found").await?;
             }
         }
 
         _ => {
             if !dispatch_request(
-                &mut stream,
+                stream,
                 state,
                 method,
                 path,
                 path_only,
                 body,
-                req.as_ref(),
-                &request.raw,
+                req,
+                raw_request,
             )
             .await?
             {
-                respond_error(&mut stream, 404, "Not found").await?;
+                respond_error(stream, 404, "Not found").await?;
             }
         }
     }

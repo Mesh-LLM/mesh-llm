@@ -3,7 +3,16 @@ import { act, fireEvent, render as rtlRender, screen, waitFor, within } from '@t
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppProviders } from '@/app/providers/AppProviders'
+import * as configAdapterModule from '@/features/configuration/api/config-adapter'
 import * as configQueryModule from '@/features/configuration/api/use-config-query'
+import {
+  adaptStatusToConfiguration,
+  createConfigurationDefaultsValuesFromMeshConfig,
+  type RuntimeConfigSchemaReference,
+  type RuntimeControlMeshConfig
+} from '@/features/configuration/api/config-adapter'
+import type { ConfigurationHarnessData } from '@/features/app-tabs/types'
+import type { StatusPayload } from '@/lib/api/types'
 
 const blockedBlocker = vi.hoisted(() => ({ status: 'blocked', proceed: vi.fn(), reset: vi.fn() }))
 const idleBlocker = vi.hoisted(() => ({ status: 'idle', proceed: vi.fn(), reset: vi.fn() }))
@@ -16,6 +25,20 @@ const featureFlagMocks = vi.hoisted(() => ({
   integrationsEnabled: false,
   signingAttestationEnabled: false,
   wakePolicyConfigurationEnabled: false
+}))
+const pluginQueryMocks = vi.hoisted(() => ({
+  summaries: [] as import('@/lib/api/plugin-types').PluginSummaryRaw[],
+  toggle: vi.fn(),
+  importBundle: vi.fn(),
+  register: vi.fn(),
+  mountConfig: vi.fn(),
+  unmountConfig: vi.fn(),
+  visibleConfig: {
+    plugin: 'blackboard',
+    settings: { endpoint_url: 'https://blackboard.local/v1', retention_days: 30 },
+    schema: { plugin_name: 'blackboard' }
+  },
+  mutateConfig: vi.fn()
 }))
 
 vi.mock('@tanstack/react-router', () => ({
@@ -36,9 +59,46 @@ vi.mock('@/lib/feature-flags', async (importOriginal) => {
   }
 })
 
-import { ConfigurationPage } from '@/features/configuration/pages/ConfigurationPage'
+vi.mock('@/features/plugins/api/plugin-web-ui', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/plugins/api/plugin-web-ui')>()
+
+  return {
+    ...actual,
+    usePluginSummariesQuery: vi.fn(() => ({
+      data: pluginQueryMocks.summaries,
+      isError: false,
+      isPending: false
+    })),
+    useSetPluginWebUiEnabledMutation: vi.fn(() => ({
+      isPending: false,
+      mutate: pluginQueryMocks.toggle
+    })),
+    usePluginWebUiConfigQuery: vi.fn((pluginName: string) => ({
+      data: { ...pluginQueryMocks.visibleConfig, plugin: pluginName },
+      isError: false,
+      isPending: false
+    })),
+    usePluginWebUiConfigMutation: vi.fn((pluginName: string) => ({
+      isPending: false,
+      mutateAsync: (request: unknown) => pluginQueryMocks.mutateConfig(pluginName, request)
+    }))
+  }
+})
+
+vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
+  importPluginUiBundle: pluginQueryMocks.importBundle,
+  assertPluginUiRegistration: vi.fn(),
+  assertPluginUiMountHandle: vi.fn()
+}))
+
+import {
+  ConfigurationFixturePage as ConfigurationPage,
+  ConfigurationPage as LiveConfigurationPage
+} from '@/features/configuration/pages/ConfigurationPage'
 import { CONFIGURATION_HARNESS } from '@/features/app-tabs/data'
 import type { DataMode } from '@/lib/data-mode/data-mode-context'
+import type { MeshPluginUiConfigMountContext, MeshPluginUiMountHandle } from '@/features/plugins/web-ui/host-contract'
+import type { PluginSummaryRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
 
 function TestProviders({ children, dataMode = 'harness' }: { children: ReactNode; dataMode?: DataMode }) {
   return (
@@ -101,6 +161,165 @@ function liveControlConfigData() {
   }
 }
 
+const STATUS_PAYLOAD: StatusPayload = {
+  node_id: 'self',
+  node_state: 'serving',
+  model_name: '',
+  peers: [],
+  models: [],
+  my_vram_gb: 0,
+  gpus: [],
+  serving_models: []
+}
+
+const PLUGIN_ONLY_SCHEMA: RuntimeConfigSchemaReference = {
+  plugin_instances: [
+    {
+      name: 'blackboard',
+      enabled: true,
+      source_repository: 'mesh-llm/blackboard',
+      installed_version: '0.1.0',
+      has_config_schema: true,
+      allow_unvalidated_config: false
+    }
+  ],
+  settings: [
+    {
+      canonical_path: 'plugin.blackboard.settings.endpoint_url',
+      owner: 'plugin',
+      source: { kind: 'plugin', plugin_name: 'blackboard', allow_unvalidated_config: false },
+      value_schema: { kind: 'string' },
+      support: 'supported',
+      control_surfaces: ['config_file', 'owner_control', 'plugin_manifest'],
+      apply_mode: 'dynamic_apply',
+      restart_scope: 'none',
+      visibility: 'user',
+      description: 'Endpoint used by the blackboard plugin.',
+      presentation: {
+        label: 'Endpoint URL',
+        help: 'Endpoint used by the blackboard plugin.',
+        category_id: 'connection',
+        category_label: 'Connection',
+        category_summary: 'Blackboard plugin connection settings',
+        category_order: 10,
+        setting_order: 10,
+        control_hint: 'text'
+      }
+    }
+  ]
+}
+
+function pluginOnlyMeshConfig(): RuntimeControlMeshConfig {
+  return {
+    version: 1,
+    plugin: [
+      {
+        name: 'blackboard',
+        settings: {
+          endpoint_url: 'https://blackboard.local/v1'
+        }
+      }
+    ]
+  }
+}
+
+function pluginOnlyConfigurationData(config = pluginOnlyMeshConfig()): ConfigurationHarnessData {
+  const defaultsValues = createConfigurationDefaultsValuesFromMeshConfig(config, PLUGIN_ONLY_SCHEMA)
+  return adaptStatusToConfiguration(STATUS_PAYLOAD, [], defaultsValues, PLUGIN_ONLY_SCHEMA, config)
+}
+
+function integrationsOnlyConfigurationData(): ConfigurationHarnessData {
+  const { plugins, ...data } = pluginOnlyConfigurationData()
+  return { ...data, integrations: plugins }
+}
+
+type PluginSummaryOptions = {
+  readonly description?: string
+  readonly enabled?: boolean
+  readonly status?: string
+}
+
+function pluginSummary(name: string, webUi: PluginWebUiStateRaw, options: PluginSummaryOptions = {}): PluginSummaryRaw {
+  return {
+    name,
+    kind: 'bridge',
+    enabled: options.enabled ?? true,
+    status: options.status ?? 'running',
+    description: options.description,
+    capabilities: [],
+    args: [],
+    tools: [],
+    web_ui: webUi
+  }
+}
+
+function readyPluginWebUi(
+  section: { readonly parent_tab?: string } = { parent_tab: 'integrations' }
+): PluginWebUiStateRaw {
+  return {
+    state: 'ready',
+    declared: true,
+    enabled: true,
+    available: true,
+    pages: [
+      {
+        id: 'dashboard',
+        label: 'Dashboard',
+        route: 'dashboard',
+        bundle_id: 'main',
+        entry_script: 'dashboard.js'
+      }
+    ],
+    config_sections: [
+      {
+        id: 'settings',
+        title: 'Settings',
+        entry_script: 'settings.js',
+        parent_tab: section.parent_tab,
+        bundle_id: 'main'
+      }
+    ],
+    asset_base_url: '/api/plugins/blackboard/web-ui/assets/'
+  }
+}
+
+function disabledPluginWebUi(): PluginWebUiStateRaw {
+  return {
+    ...readyPluginWebUi(),
+    state: 'disabled',
+    enabled: false,
+    available: false,
+    unavailable_reason: 'web UI disabled by configuration'
+  }
+}
+
+function invalidPluginWebUi(): PluginWebUiStateRaw {
+  return {
+    ...readyPluginWebUi(),
+    state: 'invalid',
+    available: false,
+    unavailable_reason: 'bundle missing'
+  }
+}
+
+function pluginNotRunningWebUi(): PluginWebUiStateRaw {
+  return {
+    ...readyPluginWebUi(),
+    state: 'plugin_not_running',
+    available: false,
+    unavailable_reason: 'plugin process unavailable'
+  }
+}
+
+function nonePluginWebUi(): PluginWebUiStateRaw {
+  return {
+    state: 'none',
+    declared: false,
+    enabled: false,
+    available: false
+  }
+}
+
 describe('ConfigurationPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -108,13 +327,46 @@ describe('ConfigurationPage', () => {
     featureFlagMocks.integrationsEnabled = false
     featureFlagMocks.signingAttestationEnabled = false
     featureFlagMocks.wakePolicyConfigurationEnabled = false
+    pluginQueryMocks.summaries = []
+    pluginQueryMocks.visibleConfig = {
+      plugin: 'blackboard',
+      settings: { endpoint_url: 'https://blackboard.local/v1', retention_days: 30 },
+      schema: { plugin_name: 'blackboard' }
+    }
+    pluginQueryMocks.mutateConfig.mockResolvedValue(pluginQueryMocks.visibleConfig)
+    pluginQueryMocks.importBundle.mockResolvedValue({ registerMeshPluginUi: pluginQueryMocks.register })
+    pluginQueryMocks.register.mockReturnValue({ configSections: { settings: pluginQueryMocks.mountConfig } })
+    pluginQueryMocks.mountConfig.mockImplementation(
+      ({ element, host, section }: MeshPluginUiConfigMountContext): MeshPluginUiMountHandle => {
+        const node = document.createElement('div')
+        node.textContent = `Mounted ${host.plugin.name} ${section.id}`
+        const setting = document.createElement('output')
+        setting.textContent = String(host.config.visible.settings.endpoint_url)
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.textContent = 'Save retention'
+        button.addEventListener('click', () => {
+          void host.config.requestMutation({
+            plugin: host.plugin.name,
+            settings: { retention_days: 45 }
+          })
+        })
+        element.append(node, setting, button)
+        return {
+          unmount: () => {
+            pluginQueryMocks.unmountConfig()
+            node.remove()
+          }
+        }
+      }
+    )
     mockUseBlocker.mockImplementation(
       ({ shouldBlockFn }: { shouldBlockFn: (transition: typeof defaultBlockerTransition) => boolean }) =>
         shouldBlockFn(defaultBlockerTransition) ? blockedBlocker : idleBlocker
     )
   })
 
-  it('renders the persistent header, shared tab bar, and defaults workspace first', () => {
+  it('renders the persistent header, shared tab bar, and model settings workspace first', () => {
     render(<ConfigurationPage enableNavigationBlocker={false} />)
 
     expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument()
@@ -123,19 +375,83 @@ describe('ConfigurationPage', () => {
     expect(screen.getByText('~/.mesh-llm/config.toml')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /save config/i })).toBeDisabled()
 
-    for (const label of ['Defaults', 'Model Deployment', 'TOML Output']) {
+    for (const label of ['General', 'Runtime', 'Models', 'Network', 'Model Deployment', 'TOML Output']) {
       expect(screen.getByRole('tab', { name: label })).toBeInTheDocument()
     }
     expect(screen.queryByRole('tab', { name: 'Reserves' })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Signing / Attestation' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('tab', { name: 'Integrations' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Plugins' })).not.toBeInTheDocument()
 
-    expect(screen.getByRole('heading', { name: /inherited defaults/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /model settings/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /runtime/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /speculative decoding/i })).toBeInTheDocument()
     expect(screen.getByText('Default slots / parallel requests')).toBeInTheDocument()
-    expect(screen.getByRole('complementary', { name: /\[defaults\]/i })).toBeInTheDocument()
+    expect(screen.getByRole('complementary', { name: /\[defaults/i })).toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: 'Model catalog' })).not.toBeInTheDocument()
+  })
+
+  it('updates the general preview heading after gpu settings move to models', async () => {
+    const schema: RuntimeConfigSchemaReference = {
+      plugin_instances: [],
+      settings: [
+        {
+          canonical_path: 'runtime.debug',
+          owner: 'built_in',
+          source: { kind: 'built_in' },
+          value_schema: { kind: 'boolean' },
+          support: 'supported',
+          control_surfaces: ['config_file', 'api'],
+          apply_mode: 'dynamic_validation_only',
+          restart_scope: 'model_reload',
+          visibility: 'user',
+          presentation: {
+            label: 'Debug output',
+            help: 'Enable debug output on startup.',
+            category_id: 'meshllm',
+            category_label: 'General',
+            category_summary: 'Local process settings',
+            category_order: 10,
+            setting_order: 10,
+            control_hint: 'toggle'
+          }
+        }
+      ]
+    }
+    const config: RuntimeControlMeshConfig = {
+      version: 1,
+      runtime: {
+        debug: true
+      }
+    }
+    const defaultsValues = createConfigurationDefaultsValuesFromMeshConfig(config, schema)
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: adaptStatusToConfiguration(STATUS_PAYLOAD, [], defaultsValues, schema, config),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema,
+          snapshot: {
+            revision: 7,
+            config
+          }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="general" />, { dataMode: 'live' })
+
+    expect(screen.getByRole('complementary', { name: /\[runtime\] \/ \[telemetry\]/i })).toBeInTheDocument()
+
+    useConfigQuerySpy.mockRestore()
   })
 
   it('shows reserves and temporary configuration sections only when their feature flags are enabled', async () => {
@@ -148,10 +464,10 @@ describe('ConfigurationPage', () => {
 
     const wakePolicyTab = screen.getByRole('tab', { name: 'Reserves' })
     const signingTab = screen.getByRole('tab', { name: 'Signing / Attestation' })
-    const integrationsTab = screen.getByRole('tab', { name: 'Integrations' })
+    const pluginsTab = screen.getByRole('tab', { name: 'Plugins' })
     expect(wakePolicyTab).toBeInTheDocument()
     expect(signingTab).toBeInTheDocument()
-    expect(integrationsTab).toBeInTheDocument()
+    expect(pluginsTab).toBeInTheDocument()
 
     await user.click(wakePolicyTab)
     expect(screen.getByRole('heading', { level: 2, name: 'Reserves' })).toBeInTheDocument()
@@ -159,26 +475,26 @@ describe('ConfigurationPage', () => {
 
     await user.click(signingTab)
     expect(screen.getByRole('heading', { name: 'Signing / Attestation' })).toBeInTheDocument()
-    expect(screen.getByText(/key binding, attestation receipts/i)).toBeInTheDocument()
+    expect(screen.getByText(/no writable attestation settings/i)).toBeInTheDocument()
 
-    await user.click(integrationsTab)
-    expect(screen.getByRole('heading', { name: 'Integrations' })).toBeInTheDocument()
-    expect(screen.getByText(/plugin and external endpoint defaults/i)).toBeInTheDocument()
+    await user.click(pluginsTab)
+    expect(screen.getByRole('heading', { name: 'Plugins' })).toBeInTheDocument()
+    expect(screen.getByText(/plugin settings will appear here/i)).toBeInTheDocument()
   })
 
-  it('keeps directly requested gated sections on the defaults workspace', () => {
+  it('keeps directly requested gated sections on the General workspace', () => {
     const { rerender } = render(<ConfigurationPage initialTab="wake-policy" enableNavigationBlocker={false} />)
 
     expect(screen.queryByRole('tab', { name: 'Reserves' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Reserves' })).not.toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Defaults' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('heading', { name: /inherited defaults/i })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('heading', { name: /general settings/i })).toBeInTheDocument()
 
     rerender(<ConfigurationPage initialTab="signing" enableNavigationBlocker={false} />)
 
     expect(screen.queryByRole('heading', { name: 'Signing / Attestation' })).not.toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Defaults' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('heading', { name: /inherited defaults/i })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('heading', { name: /general settings/i })).toBeInTheDocument()
   })
 
   it('applies configuration section feature flags independently', () => {
@@ -189,7 +505,7 @@ describe('ConfigurationPage', () => {
     const { rerender } = render(<ConfigurationPage enableNavigationBlocker={false} />)
 
     expect(screen.getByRole('tab', { name: 'Signing / Attestation' })).toBeInTheDocument()
-    expect(screen.queryByRole('tab', { name: 'Integrations' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Plugins' })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Reserves' })).not.toBeInTheDocument()
 
     featureFlagMocks.signingAttestationEnabled = false
@@ -198,11 +514,11 @@ describe('ConfigurationPage', () => {
     rerender(<ConfigurationPage enableNavigationBlocker={false} />)
 
     expect(screen.queryByRole('tab', { name: 'Signing / Attestation' })).not.toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Integrations' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Plugins' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Reserves' })).toBeInTheDocument()
   })
 
-  it('renders the Defaults sections and updates the active sidebar category', async () => {
+  it('renders the model settings sections and updates the active sidebar category', async () => {
     const user = userEvent.setup()
 
     render(<ConfigurationPage enableNavigationBlocker={false} />)
@@ -216,7 +532,7 @@ describe('ConfigurationPage', () => {
     expect(screen.getByRole('heading', { name: 'Memory' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Speculative Decoding' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Request Defaults' })).toBeInTheDocument()
-    expect(screen.getByText('Model Runtime')).toBeInTheDocument()
+    expect(screen.queryByText('Model Runtime')).not.toBeInTheDocument()
     expect(screen.getByText('Default GPU device')).toBeInTheDocument()
     expect(screen.getByText('GPU layers')).toBeInTheDocument()
     expect(screen.getByText('KV cache policy')).toBeInTheDocument()
@@ -225,13 +541,13 @@ describe('ConfigurationPage', () => {
     expect(screen.getByText('Temperature')).toBeInTheDocument()
   })
 
-  it('includes Defaults edits in dirty state, save, revert, and TOML review', async () => {
+  it('includes model settings edits in dirty state, save, revert, and TOML review', async () => {
     const user = userEvent.setup()
 
     render(<ConfigurationPage enableNavigationBlocker={false} />)
 
     const saveButton = screen.getByRole('button', { name: /save config/i })
-    const defaultsTab = screen.getByRole('tab', { name: 'Defaults' })
+    const defaultsTab = screen.getByRole('tab', { name: 'Models' })
     const tomlReviewTab = screen.getByRole('tab', { name: 'TOML Output' })
     expect(saveButton).toBeDisabled()
     expect(defaultsTab).not.toHaveAttribute('data-tab-dirty')
@@ -255,7 +571,7 @@ describe('ConfigurationPage', () => {
     expect(defaultsTab).not.toHaveAttribute('data-tab-dirty')
     expect(tomlReviewTab).not.toHaveAttribute('data-tab-dirty')
 
-    await user.click(screen.getByRole('tab', { name: 'Defaults' }))
+    await user.click(screen.getByRole('tab', { name: 'Models' }))
     await user.click(screen.getAllByRole('radio', { name: 'saver' })[0])
     expect(defaultsTab).toHaveAttribute('data-tab-dirty', 'true')
 
@@ -264,6 +580,360 @@ describe('ConfigurationPage', () => {
     expect(defaultsTab).not.toHaveAttribute('data-tab-dirty')
     await user.click(tomlReviewTab)
     expect(getTomlSource().value).toContain('tuning_profile = "throughput"')
+  })
+
+  it('waits for runtime schema before rendering live defaults', () => {
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: undefined,
+      isError: false,
+      isFetching: true,
+      isPending: true,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: undefined,
+        isError: false,
+        isFetching: true,
+        isPending: true,
+        refetch: vi.fn()
+      } as never,
+      applyDefaults: vi.fn()
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} />, { dataMode: 'live' })
+
+    expect(document.querySelector('[data-loading-ghost-shimmer]')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /model settings/i })).not.toBeInTheDocument()
+    expect(screen.queryByText('Default slots / parallel requests')).not.toBeInTheDocument()
+
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('renders and resets a live schema that exposes only plugin settings', async () => {
+    const user = userEvent.setup()
+    const config = pluginOnlyMeshConfig()
+    const applyDefaults = vi.fn()
+    featureFlagMocks.integrationsEnabled = true
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: pluginOnlyConfigurationData(config),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema: PLUGIN_ONLY_SCHEMA,
+          snapshot: {
+            revision: 7,
+            config
+          }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />, { dataMode: 'live' })
+
+    expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Plugin settings' })).toBeInTheDocument()
+    expect(screen.queryByText(/no runtime configuration schema/i)).not.toBeInTheDocument()
+    const pluginsTab = screen.getByRole('tab', { name: 'Plugins' })
+    const saveButton = screen.getByRole('button', { name: /save config/i })
+    const endpointInput = screen.getByRole('textbox', { name: 'Endpoint URL' })
+    expect(endpointInput).toHaveValue('https://blackboard.local/v1')
+    expect(pluginsTab).not.toHaveAttribute('data-tab-dirty')
+    expect(saveButton).toBeDisabled()
+
+    await user.clear(endpointInput)
+    await user.type(endpointInput, 'https://blackboard.example/v2')
+
+    expect(pluginsTab).toHaveAttribute('data-tab-dirty', 'true')
+    expect(saveButton).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: /reset all/i }))
+
+    expect(screen.getByRole('textbox', { name: 'Endpoint URL' })).toHaveValue('https://blackboard.local/v1')
+    expect(pluginsTab).not.toHaveAttribute('data-tab-dirty')
+    expect(saveButton).toBeDisabled()
+    expect(applyDefaults).not.toHaveBeenCalled()
+
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('preserves reset and dirty state for integrations-only compatibility payloads', async () => {
+    const user = userEvent.setup()
+    const config = pluginOnlyMeshConfig()
+    featureFlagMocks.integrationsEnabled = true
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: integrationsOnlyConfigurationData(),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema: PLUGIN_ONLY_SCHEMA,
+          snapshot: {
+            revision: 7,
+            config
+          }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />, { dataMode: 'live' })
+
+    const pluginsTab = screen.getByRole('tab', { name: 'Plugins' })
+    const saveButton = screen.getByRole('button', { name: /save config/i })
+    const endpointInput = screen.getByRole('textbox', { name: 'Endpoint URL' })
+    expect(endpointInput).toHaveValue('https://blackboard.local/v1')
+    expect(pluginsTab).not.toHaveAttribute('data-tab-dirty')
+
+    await user.clear(endpointInput)
+    await user.type(endpointInput, 'https://blackboard.example/v2')
+    expect(pluginsTab).toHaveAttribute('data-tab-dirty', 'true')
+    expect(saveButton).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: /revert/i }))
+
+    expect(screen.getByRole('textbox', { name: 'Endpoint URL' })).toHaveValue('https://blackboard.local/v1')
+    expect(pluginsTab).not.toHaveAttribute('data-tab-dirty')
+    expect(saveButton).toBeDisabled()
+
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('projects ready plugin web UI metadata, toggle, config section, and schema settings into Plugins', async () => {
+    const user = userEvent.setup()
+    const config = pluginOnlyMeshConfig()
+    featureFlagMocks.integrationsEnabled = true
+    pluginQueryMocks.summaries = [
+      pluginSummary('blackboard', readyPluginWebUi(), { description: 'Team scratchpad plugin' })
+    ]
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: pluginOnlyConfigurationData(config),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema: PLUGIN_ONLY_SCHEMA,
+          snapshot: { revision: 7, config }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />, { dataMode: 'live' })
+
+    expect(await screen.findByRole('heading', { name: 'blackboard' })).toBeInTheDocument()
+    const settingsBannerHeading = screen.getByRole('heading', { name: 'Plugin settings' })
+    const installedPluginsHeading = screen.getByRole('heading', { name: 'Installed plugins' })
+    expect(
+      settingsBannerHeading.compareDocumentPosition(installedPluginsHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(screen.getByText('Team scratchpad plugin')).toBeInTheDocument()
+    expect(screen.getByText('Process enabled')).toBeInTheDocument()
+    expect(screen.getByText('running')).toBeInTheDocument()
+    expect(screen.getByText('Web UI ready')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    expect(await screen.findByText('Mounted blackboard settings')).toBeInTheDocument()
+    expect(screen.getByText('https://blackboard.local/v1')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Endpoint URL' })).toHaveValue('https://blackboard.local/v1')
+
+    const toggle = screen.getByRole('switch', { name: 'blackboard web UI projection' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(toggle)
+
+    expect(pluginQueryMocks.toggle).toHaveBeenCalledWith(false)
+    await user.click(screen.getByRole('button', { name: 'Save retention' }))
+    await waitFor(() =>
+      expect(pluginQueryMocks.mutateConfig).toHaveBeenCalledWith('blackboard', {
+        plugin: 'blackboard',
+        settings: { retention_days: 45 }
+      })
+    )
+    expect(await screen.findByText('Plugin settings saved.')).toBeInTheDocument()
+    expect(pluginQueryMocks.importBundle).toHaveBeenCalledWith(
+      'http://localhost:3000/api/plugins/blackboard/web-ui/assets/settings.js'
+    )
+    expect(pluginQueryMocks.mountConfig).toHaveBeenCalledTimes(1)
+
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('keeps failure and nondeclaring plugin web UI states visible without mounting config sections', async () => {
+    const config = pluginOnlyMeshConfig()
+    featureFlagMocks.integrationsEnabled = true
+    pluginQueryMocks.summaries = [
+      pluginSummary('disabled-ui', disabledPluginWebUi()),
+      pluginSummary('invalid-ui', invalidPluginWebUi()),
+      pluginSummary('stopped-ui', pluginNotRunningWebUi()),
+      pluginSummary('legacy-plugin', nonePluginWebUi()),
+      pluginSummary('other-parent', readyPluginWebUi({ parent_tab: 'advanced' }))
+    ]
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: pluginOnlyConfigurationData(config),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema: PLUGIN_ONLY_SCHEMA,
+          snapshot: { revision: 7, config }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />, { dataMode: 'live' })
+
+    for (const name of ['disabled-ui', 'invalid-ui', 'stopped-ui', 'legacy-plugin', 'other-parent']) {
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument()
+    }
+    expect(screen.getByText('web UI disabled by configuration')).toBeInTheDocument()
+    expect(screen.getByText('bundle missing')).toBeInTheDocument()
+    expect(screen.getByText('plugin process unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Web UI not declared')).toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'legacy-plugin web UI projection' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Mounted disabled-ui settings')).not.toBeInTheDocument()
+    expect(screen.queryByText('Mounted other-parent settings')).not.toBeInTheDocument()
+    expect(pluginQueryMocks.importBundle).not.toHaveBeenCalled()
+
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('unmounts plugin config sections on disable, tab change, and teardown', async () => {
+    const user = userEvent.setup()
+    const config = pluginOnlyMeshConfig()
+    featureFlagMocks.integrationsEnabled = true
+    pluginQueryMocks.summaries = [pluginSummary('blackboard', readyPluginWebUi())]
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: pluginOnlyConfigurationData(config),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema: PLUGIN_ONLY_SCHEMA,
+          snapshot: { revision: 7, config }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+    const { rerender, unmount } = render(
+      <LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />,
+      {
+        dataMode: 'live'
+      }
+    )
+
+    expect(await screen.findByText('Mounted blackboard settings')).toBeInTheDocument()
+
+    pluginQueryMocks.summaries = [pluginSummary('blackboard', disabledPluginWebUi())]
+    rerender(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />)
+
+    await waitFor(() => expect(screen.queryByText('Mounted blackboard settings')).not.toBeInTheDocument())
+    expect(pluginQueryMocks.unmountConfig).toHaveBeenCalledTimes(1)
+
+    pluginQueryMocks.summaries = [pluginSummary('blackboard', readyPluginWebUi())]
+    rerender(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />)
+    expect(await screen.findByText('Mounted blackboard settings')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Models' }))
+    await waitFor(() => expect(pluginQueryMocks.unmountConfig).toHaveBeenCalledTimes(2))
+
+    await user.click(screen.getByRole('tab', { name: 'Plugins' }))
+    expect(await screen.findByText('Mounted blackboard settings')).toBeInTheDocument()
+    unmount()
+
+    expect(pluginQueryMocks.unmountConfig).toHaveBeenCalledTimes(3)
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('renders live local node placement data in Model Deployment', async () => {
+    const user = userEvent.setup()
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: {
+        ...CONFIGURATION_HARNESS,
+        nodes: [
+          {
+            id: 'self',
+            hostname: 'carrack.local',
+            region: 'tor-1',
+            status: 'online',
+            cpu: 'Local runtime',
+            ramGB: 0,
+            placement: 'separate',
+            gpus: [
+              { idx: 0, name: 'RTX 5090', totalGB: 34.2, reservedGB: 0.9 },
+              { idx: 1, name: 'RTX 6000 Pro', totalGB: 48, reservedGB: 1.1 }
+            ]
+          }
+        ],
+        assigns: []
+      },
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: liveControlConfigData(),
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="models" />, { dataMode: 'live' })
+
+    await user.click(screen.getByRole('tab', { name: 'Model Deployment' }))
+
+    const nodeRail = screen.getByRole('navigation', { name: /configuration nodes/i })
+    expect(within(nodeRail).getByText('Nodes · 1')).toHaveClass('type-label', 'text-fg-faint')
+    expect(within(nodeRail).getByText('carrack.local')).toHaveClass(
+      'font-mono',
+      'text-[length:var(--density-type-control)]'
+    )
+    expect(within(nodeRail).getByText('2 devices')).toHaveClass(
+      'font-mono',
+      'text-[length:var(--density-type-caption-lg)]',
+      'text-fg-dim'
+    )
+
+    useConfigQuerySpy.mockRestore()
   })
 
   it('saves live defaults through useConfigQuery.applyDefaults only when Save config is clicked', async () => {
@@ -289,7 +959,7 @@ describe('ConfigurationPage', () => {
       applyDefaults
     })
 
-    render(<ConfigurationPage enableNavigationBlocker={false} />, { dataMode: 'live' })
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="models" />, { dataMode: 'live' })
 
     const tuningProfileControl = within(screen.getByRole('radiogroup', { name: 'Default tuning profile' }))
     const saveButton = screen.getByRole('button', { name: /save config/i })
@@ -305,7 +975,9 @@ describe('ConfigurationPage', () => {
     await waitFor(() => expect(applyDefaults).toHaveBeenCalledTimes(1))
     expect(applyDefaults).toHaveBeenCalledWith(
       expect.objectContaining({
-        'tuning-profile': 'saver'
+        values: expect.objectContaining({
+          'tuning-profile': 'saver'
+        })
       })
     )
 
@@ -343,21 +1015,22 @@ describe('ConfigurationPage', () => {
       applyDefaults
     })
 
-    render(<ConfigurationPage enableNavigationBlocker={false} />, { dataMode: 'live' })
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="models" />, { dataMode: 'live' })
 
     const readOnlyHeading = screen.getByRole('heading', { name: 'Configuration UI is read-only' })
-    const inheritedDefaultsHeading = screen.getByRole('heading', { name: /inherited defaults/i })
-    const defaultsTab = screen.getByRole('tab', { name: 'Defaults' })
-    expect(readOnlyHeading).toBeInTheDocument()
+    const inheritedDefaultsHeading = screen.getByRole('heading', { name: /model settings/i })
+    const defaultsTab = screen.getByRole('tab', { name: 'Models' })
+    expect(readOnlyHeading).toHaveClass('type-panel-title', 'text-foreground')
     expect(defaultsTab.compareDocumentPosition(readOnlyHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(
       inheritedDefaultsHeading.compareDocumentPosition(readOnlyHeading) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
-    expect(
-      screen.getByText('No owner-control identity on this node, run both commands to unlock saving.')
-    ).toBeInTheDocument()
+    expect(screen.getByText('No owner-control identity on this node, run both commands to unlock saving.')).toHaveClass(
+      'type-caption',
+      'text-fg-dim'
+    )
     expect(screen.getByText('missing owner identity')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /docs/i })).toHaveAttribute('href', 'https://docs.meshllm.cloud/')
+    expect(screen.getByRole('link', { name: /docs/i })).toHaveAttribute('href', 'https://meshllm.cloud/')
     expect(screen.queryByRole('button', { name: /copy both/i })).not.toBeInTheDocument()
     expect(screen.getAllByText('mesh-llm')).toHaveLength(2)
     expect(screen.getByText('auth')).toBeInTheDocument()
@@ -365,8 +1038,12 @@ describe('ConfigurationPage', () => {
     expect(screen.getByText('serve')).toBeInTheDocument()
     expect(screen.getByText('--no-passphrase')).toBeInTheDocument()
     expect(screen.getByText('--owner-required')).toBeInTheDocument()
-    expect(screen.getByText('Initialize owner identity (creates a local keypair)')).toBeInTheDocument()
-    expect(screen.getByText('Restart the daemon so the new identity takes effect')).toBeInTheDocument()
+    const authHintRow = screen.getByText('Initialize owner identity (creates a local keypair)').closest('div')
+    const restartHintRow = screen.getByText('Restart the daemon so the new identity takes effect').closest('div')
+    if (!(authHintRow instanceof HTMLElement)) throw new Error('Expected auth command hint row')
+    if (!(restartHintRow instanceof HTMLElement)) throw new Error('Expected restart command hint row')
+    expect(authHintRow).toHaveClass('type-caption', 'text-fg-dim')
+    expect(restartHintRow).toHaveClass('type-caption', 'text-fg-dim')
     expect(screen.getByRole('button', { name: 'Copy mesh-llm auth init --no-passphrase' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Copy mesh-llm serve --owner-required' })).toBeInTheDocument()
 
@@ -411,7 +1088,7 @@ describe('ConfigurationPage', () => {
       applyDefaults
     })
 
-    render(<ConfigurationPage enableNavigationBlocker={false} />, { dataMode: 'live' })
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="models" />, { dataMode: 'live' })
 
     fireEvent.click(screen.getByRole('radio', { name: 'throughput' }))
     fireEvent.click(screen.getByRole('button', { name: /save config/i }))
@@ -422,7 +1099,7 @@ describe('ConfigurationPage', () => {
       'Config was not saved. Runtime control rejected the update: revision conflict: current revision is 9'
     )
     expect(alert).not.toHaveTextContent('missing owner identity')
-    expect(screen.getByRole('tab', { name: 'Defaults' })).toHaveAttribute('data-tab-dirty', 'true')
+    expect(screen.getByRole('tab', { name: 'Models' })).toHaveAttribute('data-tab-dirty', 'true')
 
     useConfigQuerySpy.mockRestore()
   })
@@ -461,7 +1138,7 @@ describe('ConfigurationPage', () => {
       applyDefaults
     })
 
-    render(<ConfigurationPage enableNavigationBlocker={false} />, { dataMode: 'live' })
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="models" />, { dataMode: 'live' })
 
     fireEvent.click(screen.getByRole('radio', { name: 'throughput' }))
     fireEvent.click(screen.getByRole('button', { name: /save config/i }))
@@ -477,6 +1154,133 @@ describe('ConfigurationPage', () => {
     expect(screen.getByRole('button', { name: /save config/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /save config/i })).not.toHaveAttribute('aria-busy', 'true')
 
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('shows backend validation diagnostics for contradictory TOML even when the schema would disable the field in the UI', async () => {
+    const user = userEvent.setup()
+    const schema: RuntimeConfigSchemaReference = {
+      plugin_instances: [],
+      settings: [
+        {
+          canonical_path: 'defaults.speculative.mode',
+          owner: 'built_in',
+          source: { kind: 'built_in' },
+          value_schema: { kind: 'enum', values: ['draft', 'disabled'] },
+          support: 'supported',
+          control_surfaces: ['config_file', 'owner_control'],
+          apply_mode: 'dynamic_apply',
+          restart_scope: 'none',
+          visibility: 'user',
+          description: 'Controls speculative mode.',
+          presentation: {
+            label: 'Default speculation mode',
+            help: 'Controls speculative mode.',
+            category_id: 'speculative-decoding',
+            category_label: 'Speculative Decoding',
+            category_summary: 'Speculative defaults',
+            category_order: 10,
+            setting_order: 10,
+            control_hint: 'segmented'
+          }
+        },
+        {
+          canonical_path: 'defaults.speculative.draft_max_tokens',
+          owner: 'built_in',
+          source: { kind: 'built_in' },
+          value_schema: { kind: 'integer' },
+          support: 'supported',
+          control_surfaces: ['config_file', 'owner_control'],
+          apply_mode: 'dynamic_apply',
+          restart_scope: 'none',
+          visibility: 'user',
+          description: 'Draft token cap.',
+          control_behavior: {
+            enable_when: [
+              {
+                path: { segments: ['defaults', 'speculative', 'mode'] },
+                operator: 'equals',
+                values: [{ kind: 'string', value: 'draft' }]
+              }
+            ]
+          },
+          presentation: {
+            label: 'Default draft max tokens',
+            help: 'Draft token cap.',
+            category_id: 'speculative-decoding',
+            category_label: 'Speculative Decoding',
+            category_summary: 'Speculative defaults',
+            category_order: 10,
+            setting_order: 20,
+            control_hint: 'number'
+          }
+        }
+      ]
+    }
+    const config: RuntimeControlMeshConfig = {
+      version: 1,
+      defaults: {
+        speculative: {
+          mode: 'disabled',
+          draft_max_tokens: 16
+        }
+      }
+    }
+    const defaultsValues = createConfigurationDefaultsValuesFromMeshConfig(config, schema)
+    const validationSpy = vi.spyOn(configAdapterModule, 'validateRuntimeConfigToml').mockResolvedValue({
+      ok: false,
+      diagnostics: [
+        {
+          code: 'invalid_value',
+          severity: 'error',
+          source: 'backend',
+          path: 'defaults.speculative.draft_max_tokens',
+          canonical_path: 'defaults.speculative.draft_max_tokens',
+          message: 'draft_max_tokens requires defaults.speculative.mode = draft'
+        }
+      ]
+    })
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: adaptStatusToConfiguration(STATUS_PAYLOAD, [], defaultsValues, schema, config),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema,
+          snapshot: {
+            revision: 7,
+            config
+          }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="models" />, { dataMode: 'live' })
+
+    await user.click(screen.getByRole('button', { name: /speculative decoding/i }))
+    expect(screen.getByRole('spinbutton', { name: 'Default draft max tokens' })).toBeDisabled()
+
+    await user.click(screen.getByRole('tab', { name: 'TOML Output' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('draft_max_tokens requires defaults.speculative.mode = draft')).toHaveClass(
+        'toml-warning-message'
+      )
+    )
+    expect(screen.getByText('defaults.speculative.draft_max_tokens')).toHaveClass('toml-warning-path')
+    expect(getTomlSource().value).toContain('[defaults.speculative]')
+    expect(getTomlSource().value).toContain('mode = "disabled"')
+    expect(getTomlSource().value).toContain('draft_max_tokens = 16')
+
+    validationSpy.mockRestore()
     useConfigQuerySpy.mockRestore()
   })
 
@@ -511,7 +1315,9 @@ describe('ConfigurationPage', () => {
       applyDefaults: currentApplyDefaults
     }))
 
-    const { rerender } = render(<ConfigurationPage enableNavigationBlocker={false} />, { dataMode: 'live' })
+    const { rerender } = render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="models" />, {
+      dataMode: 'live'
+    })
 
     fireEvent.click(screen.getByRole('radio', { name: 'throughput' }))
     fireEvent.click(screen.getByRole('button', { name: /save config/i }))
@@ -519,7 +1325,7 @@ describe('ConfigurationPage', () => {
     await waitFor(() => expect(firstApplyDefaults).toHaveBeenCalledTimes(1))
 
     currentApplyDefaults = secondApplyDefaults
-    rerender(<ConfigurationPage enableNavigationBlocker={false} />)
+    rerender(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="models" />)
 
     expect(firstApplyDefaults).toHaveBeenCalledTimes(1)
     expect(secondApplyDefaults).not.toHaveBeenCalled()
@@ -535,6 +1341,7 @@ describe('ConfigurationPage', () => {
         setting.id === 'temperature'
           ? {
               ...setting,
+              baselineValue: setting.control.value,
               control: {
                 ...setting.control,
                 value: '0.8'
@@ -543,6 +1350,7 @@ describe('ConfigurationPage', () => {
           : setting.id === 'server-alias'
             ? {
                 ...setting,
+                baselineValue: setting.control.value,
                 control: {
                   ...setting.control,
                   value: 'carrack-mesh'
@@ -551,6 +1359,7 @@ describe('ConfigurationPage', () => {
             : setting.id === 'activation-wire-dtype'
               ? {
                   ...setting,
+                  baselineValue: setting.control.value,
                   control: {
                     ...setting.control,
                     value: 'q8'
@@ -559,6 +1368,7 @@ describe('ConfigurationPage', () => {
               : setting.id === 'image-min-tokens'
                 ? {
                     ...setting,
+                    baselineValue: setting.control.value,
                     control: {
                       ...setting.control,
                       value: '64'
@@ -583,7 +1393,7 @@ describe('ConfigurationPage', () => {
       applyDefaults: vi.fn()
     })
 
-    render(<ConfigurationPage enableNavigationBlocker={false} />, { dataMode: 'live' })
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="models" />, { dataMode: 'live' })
 
     const initialTomlSource = await openTomlOutput(user)
     expect(initialTomlSource.value).toContain('[defaults.request_defaults]')
@@ -595,7 +1405,7 @@ describe('ConfigurationPage', () => {
     expect(initialTomlSource.value).toContain('[defaults.advanced.server]')
     expect(initialTomlSource.value).toContain('alias = "carrack-mesh"')
 
-    await user.click(screen.getByRole('tab', { name: 'Defaults' }))
+    await user.click(screen.getByRole('tab', { name: 'Models' }))
     await user.click(screen.getByRole('button', { name: /request defaults/i }))
     expect(screen.getByRole('slider', { name: 'Temperature' })).toHaveValue('0.8')
     const skippyTransport = within(screen.getByRole('radiogroup', { name: 'Binary stage transport' }))
@@ -639,12 +1449,15 @@ describe('ConfigurationPage', () => {
     useConfigQuerySpy.mockRestore()
   })
 
-  it('uses an interactive slot meter instead of a Defaults slot slider', async () => {
+  it('renders the interactive slot meter as the only default slots control', async () => {
     const user = userEvent.setup()
 
     render(<ConfigurationPage enableNavigationBlocker={false} />)
 
-    expect(screen.queryByRole('slider', { name: /default slots/i })).not.toBeInTheDocument()
+    const slotRow = screen.getByText('Default slots / parallel requests').closest('[data-settings-row]')
+    expect(slotRow).not.toBeNull()
+    expect(within(slotRow as HTMLElement).queryByRole('slider')).not.toBeInTheDocument()
+    expect(within(slotRow as HTMLElement).queryByRole('spinbutton')).not.toBeInTheDocument()
     expect(screen.getByRole('radio', { name: '4 slots' })).toBeChecked()
 
     await user.click(screen.getByRole('radio', { name: '12 slots' }))
@@ -654,7 +1467,7 @@ describe('ConfigurationPage', () => {
     expect(screen.getByRole('button', { name: /save config/i })).toBeEnabled()
 
     await user.click(screen.getByRole('tab', { name: 'TOML Output' }))
-    expect(getTomlSource().value).toContain('[defaults.throughput]')
+    expect(getTomlSource().value).toContain('[defaults]')
     expect(getTomlSource().value).toContain('parallel = 12')
   })
 
@@ -677,7 +1490,7 @@ describe('ConfigurationPage', () => {
     fireEvent.pointerDown(slotMeter, { buttons: 1, clientX: 10, pointerId: 1 })
     expect(screen.getByRole('radio', { name: '1 slot' })).toBeChecked()
 
-    fireEvent.pointerMove(slotMeter, { buttons: 1, clientX: 238, pointerId: 1 })
+    fireEvent.pointerMove(slotMeter, { buttons: 1, clientX: 225, pointerId: 1 })
     expect(screen.getByRole('radio', { name: '12 slots' })).toBeChecked()
     expect(screen.getByText('3.6 GB · 12 × 0.30 GB')).toBeInTheDocument()
   })
@@ -696,13 +1509,13 @@ describe('ConfigurationPage', () => {
     expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual(['true', 'true', 'true'])
 
     await user.click(policyControl.getByRole('radio', { name: 'quality' }))
-    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual(['true', 'false', 'false'])
+    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual(['true', undefined, undefined])
 
     await user.click(policyControl.getByRole('radio', { name: 'balanced' }))
-    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual(['false', 'true', 'false'])
+    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual([undefined, 'true', undefined])
 
     await user.click(policyControl.getByRole('radio', { name: 'saver' }))
-    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual(['false', 'false', 'true'])
+    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual([undefined, undefined, 'true'])
   })
 
   it('renders speculative decoding defaults and writes them to TOML', async () => {
@@ -722,18 +1535,20 @@ describe('ConfigurationPage', () => {
     expect(screen.getByText('Incompatible pairing behavior')).toBeInTheDocument()
 
     const modeControl = within(screen.getByRole('radiogroup', { name: 'Default speculation mode' }))
-    const draftPolicyControl = within(screen.getByRole('radiogroup', { name: 'Default draft selection policy' }))
-    const pairingBehaviorControl = within(screen.getByRole('radiogroup', { name: 'Incompatible pairing behavior' }))
-    const defaultsPreview = screen.getByRole('complementary', { name: /\[defaults\]/i })
+    const defaultsPreview = screen.getByRole('complementary', { name: /\[defaults/i })
     expect(modeControl.getByRole('radio', { name: 'auto' })).toBeChecked()
     expect(modeControl.getByRole('radio', { name: 'disabled' })).toBeInTheDocument()
     expect(defaultsPreview).not.toHaveTextContent('pairing_fault')
     expect(defaultsPreview).not.toHaveTextContent('draft_selection_policy')
 
     await user.click(modeControl.getByRole('radio', { name: 'draft' }))
-    expect(draftPolicyControl.getByRole('radio', { name: 'auto' })).not.toBeDisabled()
-    await user.click(pairingBehaviorControl.getByRole('radio', { name: 'Fail launch' }))
-    expect(pairingBehaviorControl.getByRole('radio', { name: 'Fail launch' })).toBeChecked()
+    const enabledDraftPolicyControl = within(screen.getByRole('radiogroup', { name: 'Default draft selection policy' }))
+    const enabledPairingBehaviorControl = within(
+      screen.getByRole('radiogroup', { name: 'Incompatible pairing behavior' })
+    )
+    expect(enabledDraftPolicyControl.getByRole('radio', { name: 'auto' })).not.toBeDisabled()
+    await user.click(enabledPairingBehaviorControl.getByRole('radio', { name: 'Fail launch' }))
+    expect(enabledPairingBehaviorControl.getByRole('radio', { name: 'Fail launch' })).toBeChecked()
     expect(defaultsPreview).toHaveTextContent('pairing_fault = "fail_closed"')
     fireEvent.change(screen.getByRole('slider', { name: 'Default draft max tokens' }), { target: { value: '32' } })
 
@@ -762,25 +1577,26 @@ describe('ConfigurationPage', () => {
 
     await user.click(screen.getByRole('button', { name: /speculative decoding/i }))
 
-    const modeControl = within(screen.getByRole('radiogroup', { name: 'Default speculation mode' }))
-    const draftPolicyControl = within(screen.getByRole('radiogroup', { name: 'Default draft selection policy' }))
-    const pairingBehaviorControl = within(screen.getByRole('radiogroup', { name: 'Incompatible pairing behavior' }))
+    const modeControl = () => within(screen.getByRole('radiogroup', { name: 'Default speculation mode' }))
+    const draftPolicyControl = () => within(screen.getByRole('radiogroup', { name: 'Default draft selection policy' }))
+    const pairingBehaviorControl = () =>
+      within(screen.getByRole('radiogroup', { name: 'Incompatible pairing behavior' }))
 
     expect(screen.queryByRole('combobox', { name: 'Default draft selection policy' })).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Incompatible pairing behavior' })).not.toBeInTheDocument()
-    expect(draftPolicyControl.queryByRole('radio', { name: 'Catalog recommended' })).not.toBeInTheDocument()
-    expect(draftPolicyControl.queryByRole('radio', { name: 'Auto-detect' })).not.toBeInTheDocument()
-    expect(draftPolicyControl.getByRole('radio', { name: 'auto' })).toBeChecked()
-    expect(pairingBehaviorControl.getByRole('radio', { name: 'Warn & Disable' })).toBeChecked()
-    expect(pairingBehaviorControl.getByRole('radio', { name: 'Fail launch' })).toBeInTheDocument()
+    expect(draftPolicyControl().queryByRole('radio', { name: 'Catalog recommended' })).not.toBeInTheDocument()
+    expect(draftPolicyControl().queryByRole('radio', { name: 'Auto-detect' })).not.toBeInTheDocument()
+    expect(draftPolicyControl().getByRole('radio', { name: 'auto' })).toBeChecked()
+    expect(pairingBehaviorControl().getByRole('radio', { name: 'Warn & Disable' })).toBeChecked()
+    expect(pairingBehaviorControl().getByRole('radio', { name: 'Fail launch' })).toBeInTheDocument()
 
-    await user.click(modeControl.getByRole('radio', { name: 'disabled' }))
+    await user.click(modeControl().getByRole('radio', { name: 'disabled' }))
 
-    expect(modeControl.getByRole('radio', { name: 'disabled' })).toBeChecked()
-    expect(modeControl.getByRole('radio', { name: 'draft' })).not.toBeDisabled()
-    expect(draftPolicyControl.getByRole('radio', { name: 'auto' })).toBeDisabled()
-    expect(pairingBehaviorControl.getByRole('radio', { name: 'Warn & Disable' })).toBeDisabled()
-    expect(pairingBehaviorControl.getByRole('radio', { name: 'Fail launch' })).toBeDisabled()
+    expect(modeControl().getByRole('radio', { name: 'disabled' })).toBeChecked()
+    expect(modeControl().getByRole('radio', { name: 'draft' })).not.toBeDisabled()
+    expect(draftPolicyControl().getByRole('radio', { name: 'auto' })).toBeDisabled()
+    expect(pairingBehaviorControl().getByRole('radio', { name: 'Warn & Disable' })).toBeDisabled()
+    expect(pairingBehaviorControl().getByRole('radio', { name: 'Fail launch' })).toBeDisabled()
     expect(screen.getByRole('slider', { name: 'Default draft max tokens' })).toBeDisabled()
     expect(screen.getByRole('slider', { name: 'Default draft minimum tokens' })).toBeDisabled()
     expect(screen.queryByRole('slider', { name: 'Default draft acceptance threshold' })).not.toBeInTheDocument()
@@ -789,14 +1605,9 @@ describe('ConfigurationPage', () => {
     await user.click(screen.getByRole('button', { name: /show advanced/i }))
     expect(screen.getByRole('slider', { name: 'Default draft acceptance threshold' })).toBeDisabled()
 
-    await user.click(modeControl.getByRole('radio', { name: 'n-gram' }))
-    expect(draftPolicyControl.getByRole('radio', { name: 'auto' })).toBeDisabled()
-    expect(pairingBehaviorControl.getByRole('radio', { name: 'Warn & Disable' })).toBeDisabled()
-    expect(screen.getByRole('slider', { name: 'Default draft max tokens' })).toBeDisabled()
-
-    await user.click(modeControl.getByRole('radio', { name: 'draft' }))
-    expect(draftPolicyControl.getByRole('radio', { name: 'auto' })).not.toBeDisabled()
-    expect(pairingBehaviorControl.getByRole('radio', { name: 'Warn & Disable' })).not.toBeDisabled()
+    await user.click(modeControl().getByRole('radio', { name: 'draft' }))
+    expect(draftPolicyControl().getByRole('radio', { name: 'auto' })).not.toBeDisabled()
+    expect(pairingBehaviorControl().getByRole('radio', { name: 'Warn & Disable' })).not.toBeDisabled()
     expect(screen.getByRole('slider', { name: 'Default draft max tokens' })).not.toBeDisabled()
   })
 
@@ -919,6 +1730,25 @@ describe('ConfigurationPage', () => {
     expect(tabEvent.defaultPrevented).toBe(true)
     expect(screen.getByRole('button', { name: /remove llama-3\.3-70b-q4_k_m from gpu 1/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /remove glm-4\.7-flash-q4_k_m from gpu 0/i })).not.toBeInTheDocument()
+  })
+
+  it('keeps model configuration open when clicking undo but closes it on page background', async () => {
+    const user = userEvent.setup()
+
+    render(<ConfigurationPage initialTab="local-deployment" enableNavigationBlocker={false} />)
+
+    await user.keyboard('{ArrowDown}')
+    const contextEvent = await dispatchShortcut('ArrowRight', { altKey: true })
+    expect(contextEvent.defaultPrevented).toBe(true)
+    expect(screen.getByRole('button', { name: /remove qwen3\.5-27b-q4_k_m from gpu 2/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /undo/i }))
+
+    expect(screen.getByRole('button', { name: /remove qwen3\.5-27b-q4_k_m from gpu 2/i })).toBeInTheDocument()
+
+    fireEvent.pointerDown(document.body)
+
+    expect(screen.queryByRole('button', { name: /remove qwen3\.5-27b-q4_k_m from gpu 2/i })).not.toBeInTheDocument()
   })
 
   it('keeps keyboard edits scoped to the local node when remote assignments exist', async () => {
@@ -1076,6 +1906,32 @@ describe('ConfigurationPage', () => {
     expect(saveButton).toBeDisabled()
     expect(countTomlOccurrences('[models.hardware]')).toBe(0)
     expect(screen.queryByRole('button', { name: /phi-4-mini, .* weights/i })).not.toBeInTheDocument()
+  })
+
+  it('preserves dirty edits when refreshed configuration data arrives', async () => {
+    const user = userEvent.setup()
+    const refreshedData: ConfigurationHarnessData = {
+      ...CONFIGURATION_HARNESS,
+      nodes: CONFIGURATION_HARNESS.nodes.map((node) =>
+        node.id === 'carrack'
+          ? {
+              ...node,
+              gpus: node.gpus.map((gpu) => ({ ...gpu, reservedGB: (gpu.reservedGB ?? 0) + 1 }))
+            }
+          : node
+      )
+    }
+
+    const { rerender } = render(<ConfigurationPage initialTab="local-deployment" enableNavigationBlocker={false} />)
+
+    await user.click(within(getCarrackSection()).getByRole('radio', { name: 'pooled' }))
+    expect(within(getCarrackSection()).getByRole('radio', { name: 'pooled' })).toBeChecked()
+    expect(screen.getByRole('button', { name: /save config/i })).toBeEnabled()
+
+    rerender(<ConfigurationPage data={refreshedData} initialTab="local-deployment" enableNavigationBlocker={false} />)
+
+    expect(within(getCarrackSection()).getByRole('radio', { name: 'pooled' })).toBeChecked()
+    expect(screen.getByRole('button', { name: /save config/i })).toBeEnabled()
   })
 
   it('tracks configuration history with Ctrl+Z and Ctrl+R', async () => {

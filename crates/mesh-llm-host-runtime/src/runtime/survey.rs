@@ -1,3 +1,4 @@
+use crate::logging::{LoggingMetric, LoggingMetricsSink};
 use crate::network::metrics::{
     AttemptOutcome, AttemptTarget, RequestOutcome, RequestService, RoutingTelemetrySink,
 };
@@ -17,6 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
+mod logging_metrics;
+
 const DEFAULT_SERVICE_NAME: &str = "mesh-llm";
 const DEFAULT_EXPORT_INTERVAL_SECS: u64 = 15;
 const DEFAULT_QUEUE_SIZE: usize = 2048;
@@ -24,6 +27,11 @@ const OTLP_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 const OTLP_METRICS_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
 #[cfg(any(debug_assertions, test))]
 const TELEMETRY_ATTRIBUTE_ALLOWLIST: &[&str] = &[
+    "llama_stage.verify_window.direct_return_reverse_fallback",
+    "llama_stage.verify_window.direct_return_upstream_opened",
+    "llama_stage.linear_proposal.source_callback_us",
+    "llama_stage.linear_proposal.source_outcome",
+    "llama_stage.linear_proposal.source_queue_wait_us",
     "mesh_llm.architecture",
     "mesh_llm.attempt_outcome",
     "mesh_llm.backend",
@@ -36,12 +44,16 @@ const TELEMETRY_ATTRIBUTE_ALLOWLIST: &[&str] = &[
     "mesh_llm.guardrail.decision",
     "mesh_llm.guardrail.mode",
     "mesh_llm.guardrail.outcome",
-    "mesh_llm.guardrail.parser_stage",
     "mesh_llm.gpu_count",
     "mesh_llm.gpu_name",
     "mesh_llm.gpu_stable_id",
     "mesh_llm.is_soc",
     "mesh_llm.launch_kind",
+    "mesh_llm.logging_artifact_capture_status",
+    "mesh_llm.logging_cleanup_outcome",
+    "mesh_llm.logging_terminal_outcome",
+    "mesh_llm.logging_webhook_attempt_state",
+    "mesh_llm.logging_webhook_delivery_outcome",
     "mesh_llm.model",
     "mesh_llm.quantization",
     "mesh_llm.request_outcome",
@@ -220,6 +232,11 @@ impl SurveyTelemetry {
         Some(Arc::new(self.clone()))
     }
 
+    pub(crate) fn logging_sink(&self) -> Option<Arc<dyn LoggingMetricsSink>> {
+        self.inner.as_ref()?;
+        Some(Arc::new(self.clone()))
+    }
+
     pub(super) fn model(&self, spec: SurveyModelSpec<'_>) -> SurveyLoadedModel {
         let attrs = if let Some(inner) = self.inner.as_ref() {
             SurveyAttributes::from_spec(spec, &inner.hardware)
@@ -318,7 +335,6 @@ impl GuardrailTelemetrySink for SurveyTelemetry {
         mode: GuardrailMode,
         contract: Option<&'static str>,
         outcome: &'static str,
-        parser_stage: Option<&'static str>,
         attempt_bucket: Option<&'static str>,
     ) {
         let Some(inner) = self.inner.as_ref() else {
@@ -338,13 +354,6 @@ impl GuardrailTelemetrySink for SurveyTelemetry {
                 outcome: match guardrail_outcome_attr(outcome) {
                     Some(value) => value,
                     None => return,
-                },
-                parser_stage: match parser_stage {
-                    Some(value) => match guardrail_parser_stage_attr(value) {
-                        Some(label) => Some(label),
-                        None => return,
-                    },
-                    None => None,
                 },
                 attempt_bucket: match attempt_bucket {
                     Some(value) => match guardrail_attempt_bucket_attr(value) {
@@ -836,16 +845,7 @@ fn guardrail_bypass_reason_attr(value: &'static str) -> Option<&'static str> {
 
 fn guardrail_outcome_attr(value: &'static str) -> Option<&'static str> {
     match value {
-        "pass_through" | "valid" | "rescued" | "retried" | "failed" | "metrics_only_failure" => {
-            Some(value)
-        }
-        _ => None,
-    }
-}
-
-fn guardrail_parser_stage_attr(value: &'static str) -> Option<&'static str> {
-    match value {
-        "none" | "json_exact" | "json_fenced" | "json_substring" => Some(value),
+        "pass_through" | "valid" | "retried" | "failed" | "metrics_only_failure" => Some(value),
         _ => None,
     }
 }
@@ -888,7 +888,6 @@ struct GuardrailOutcomeAttributes {
     mode: &'static str,
     contract: Option<&'static str>,
     outcome: &'static str,
-    parser_stage: Option<&'static str>,
     attempt_bucket: Option<&'static str>,
 }
 
@@ -899,12 +898,6 @@ impl GuardrailOutcomeAttributes {
         attrs.push(KeyValue::new("mesh_llm.guardrail.outcome", self.outcome));
         if let Some(contract) = self.contract {
             attrs.push(KeyValue::new("mesh_llm.guardrail.contract", contract));
-        }
-        if let Some(parser_stage) = self.parser_stage {
-            attrs.push(KeyValue::new(
-                "mesh_llm.guardrail.parser_stage",
-                parser_stage,
-            ));
         }
         if let Some(attempt_bucket) = self.attempt_bucket {
             attrs.push(KeyValue::new(
@@ -952,6 +945,9 @@ enum SurveyEvent {
         source: SurveyTelemetrySource,
         current: u64,
     },
+    LoggingMetric {
+        metric: LoggingMetric,
+    },
 }
 
 #[derive(Debug)]
@@ -975,6 +971,21 @@ impl SurveyEventQueue {
             .events
             .lock()
             .expect("telemetry event queue lock poisoned");
+        if events.len() == self.capacity {
+            events.pop_front();
+        }
+        events.push_back(event);
+        drop(events);
+        self.notify.notify_one();
+    }
+
+    /// Logging metrics use this path so a contended telemetry queue cannot
+    /// delay logging or request-serving work. The loss is intentionally
+    /// fail-open because telemetry is observational only.
+    fn try_push(&self, event: SurveyEvent) {
+        let Ok(mut events) = self.events.try_lock() else {
+            return;
+        };
         if events.len() == self.capacity {
             events.pop_front();
         }
@@ -1011,6 +1022,18 @@ struct SurveyRecorder {
     guardrail_decision_total: Counter<u64>,
     guardrail_outcome_total: Counter<u64>,
     requests_inflight: Gauge<u64>,
+    logging_lifecycle_terminal_total: Counter<u64>,
+    logging_persistence_queue_dropped_total: Counter<u64>,
+    logging_persistence_failure_total: Counter<u64>,
+    logging_persistence_shutdown_loss_total: Counter<u64>,
+    logging_persistence_outstanding: Gauge<u64>,
+    logging_replay_evicted_total: Counter<u64>,
+    logging_replay_gap_total: Counter<u64>,
+    logging_replay_dropped_total: Counter<u64>,
+    logging_cleanup_total: Counter<u64>,
+    logging_webhook_delivery_total: Counter<u64>,
+    logging_webhook_attempt_total: Counter<u64>,
+    logging_artifact_capture_total: Counter<u64>,
     launch_duration_ms: Histogram<f64>,
     uptime_s: Histogram<f64>,
     loaded_count: u64,
@@ -1104,6 +1127,58 @@ impl SurveyRecorder {
                 .u64_gauge("mesh_llm_requests_inflight")
                 .with_description("Current in-flight requests fronted by this node.")
                 .build(),
+            logging_lifecycle_terminal_total: meter
+                .u64_counter("mesh_llm_logging_lifecycle_terminal_total")
+                .with_description("Logging lifecycle terminal outcomes.")
+                .build(),
+            logging_persistence_queue_dropped_total: meter
+                .u64_counter("mesh_llm_logging_persistence_queue_dropped_total")
+                .with_description("Logging persistence queue entries dropped.")
+                .build(),
+            logging_persistence_failure_total: meter
+                .u64_counter("mesh_llm_logging_persistence_failure_total")
+                .with_description("Logging persistence sink failures.")
+                .build(),
+            logging_persistence_shutdown_loss_total: meter
+                .u64_counter("mesh_llm_logging_persistence_shutdown_loss_total")
+                .with_description("Logging persistence entries lost after bounded shutdown.")
+                .build(),
+            logging_persistence_outstanding: meter
+                .u64_gauge("mesh_llm_logging_persistence_outstanding")
+                .with_description(
+                    "Logging persistence entries currently owned by a queue or worker.",
+                )
+                .build(),
+            logging_replay_evicted_total: meter
+                .u64_counter("mesh_llm_logging_replay_evicted_total")
+                .with_description("Logging replay entries evicted by the bounded window.")
+                .build(),
+            logging_replay_gap_total: meter
+                .u64_counter("mesh_llm_logging_replay_gap_total")
+                .with_description("Replay recovery gaps emitted by the logging SSE session.")
+                .build(),
+            logging_replay_dropped_total: meter
+                .u64_counter("mesh_llm_logging_replay_dropped_total")
+                .with_description(
+                    "Logging replay entries rejected because the replay window is disabled.",
+                )
+                .build(),
+            logging_cleanup_total: meter
+                .u64_counter("mesh_llm_logging_cleanup_total")
+                .with_description("Logging retention cleanup outcomes.")
+                .build(),
+            logging_webhook_delivery_total: meter
+                .u64_counter("mesh_llm_logging_webhook_delivery_total")
+                .with_description("Durable logging webhook delivery outcomes.")
+                .build(),
+            logging_webhook_attempt_total: meter
+                .u64_counter("mesh_llm_logging_webhook_attempt_total")
+                .with_description("Durable logging webhook attempt states.")
+                .build(),
+            logging_artifact_capture_total: meter
+                .u64_counter("mesh_llm_logging_artifact_capture_total")
+                .with_description("Logging artifact capture outcomes.")
+                .build(),
             launch_duration_ms: meter
                 .f64_histogram("mesh_llm_model_launch_duration_ms")
                 .with_description("Local model launch duration.")
@@ -1180,6 +1255,7 @@ impl SurveyRecorder {
             SurveyEvent::InflightRequests { source, current } => {
                 self.requests_inflight.record(current, &source.key_values());
             }
+            SurveyEvent::LoggingMetric { metric } => self.record_logging_metric(metric),
         }
     }
 }
@@ -1408,6 +1484,11 @@ mod tests {
         assert_eq!(
             keys,
             BTreeSet::from([
+                "llama_stage.linear_proposal.source_callback_us",
+                "llama_stage.linear_proposal.source_outcome",
+                "llama_stage.linear_proposal.source_queue_wait_us",
+                "llama_stage.verify_window.direct_return_reverse_fallback",
+                "llama_stage.verify_window.direct_return_upstream_opened",
                 "mesh_llm.architecture",
                 "mesh_llm.attempt_outcome",
                 "mesh_llm.backend",
@@ -1420,12 +1501,16 @@ mod tests {
                 "mesh_llm.guardrail.decision",
                 "mesh_llm.guardrail.mode",
                 "mesh_llm.guardrail.outcome",
-                "mesh_llm.guardrail.parser_stage",
                 "mesh_llm.gpu_count",
                 "mesh_llm.gpu_name",
                 "mesh_llm.gpu_stable_id",
                 "mesh_llm.is_soc",
                 "mesh_llm.launch_kind",
+                "mesh_llm.logging_artifact_capture_status",
+                "mesh_llm.logging_cleanup_outcome",
+                "mesh_llm.logging_terminal_outcome",
+                "mesh_llm.logging_webhook_attempt_state",
+                "mesh_llm.logging_webhook_delivery_outcome",
                 "mesh_llm.model",
                 "mesh_llm.quantization",
                 "mesh_llm.request_outcome",
@@ -1491,7 +1576,6 @@ mod tests {
                 mode: "metrics",
                 contract: Some("structured"),
                 outcome: "metrics_only_failure",
-                parser_stage: Some("json_fenced"),
                 attempt_bucket: Some("2"),
             }
             .key_values(),
@@ -1531,8 +1615,7 @@ mod tests {
             source: test_source(),
             mode: "enforce",
             contract: Some("structured"),
-            outcome: "rescued",
-            parser_stage: Some("json_substring"),
+            outcome: "valid",
             attempt_bucket: Some("3_plus"),
         };
         let outcome_kv: HashMap<_, _> = outcome
@@ -1545,12 +1628,6 @@ mod tests {
                 .get("mesh_llm.guardrail.contract")
                 .map(String::as_str),
             Some("structured")
-        );
-        assert_eq!(
-            outcome_kv
-                .get("mesh_llm.guardrail.parser_stage")
-                .map(String::as_str),
-            Some("json_substring")
         );
         assert!(outcome_kv.values().all(|value| {
             !value.contains("prompt")

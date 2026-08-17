@@ -108,7 +108,7 @@ export function buildLineMesh({ positions, colors, lineWidthPx, devicePixelRatio
     })
   }
 
-  for (let segmentIndex = 0; segmentIndex < segments.length; ) {
+  for (let segmentIndex = 0; segmentIndex < segments.length;) {
     const chainStart = segmentIndex
     let chainLength = segments[segmentIndex].length
     while (

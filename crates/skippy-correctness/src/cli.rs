@@ -17,6 +17,9 @@ pub enum CommandKind {
     SplitScan(SplitScanArgs),
     DtypeMatrix(DtypeMatrixArgs),
     StateHandoff(StateHandoffArgs),
+    NativeMtpOpenAiAb(Box<NativeMtpOpenAiAbArgs>),
+    GlmDsaStage0Trace(Box<GlmDsaStage0TraceArgs>),
+    StageFaParity(StageFaParityArgs),
 }
 
 #[derive(Args, Clone)]
@@ -72,6 +75,17 @@ pub struct ServerArgs {
     pub child_logs: bool,
     #[arg(long, default_value_t = 60)]
     pub startup_timeout_secs: u64,
+    #[arg(long, default_value_t = 4)]
+    pub max_inflight: usize,
+}
+
+#[derive(Args, Clone, Copy)]
+pub struct NativeMtpArgs {
+    #[arg(
+        long,
+        help = "Fail the correctness run unless the final stage returns a native MTP draft sideband"
+    )]
+    pub require_native_mtp_draft: bool,
 }
 
 #[derive(Args)]
@@ -86,6 +100,8 @@ pub struct SingleStepArgs {
     pub runtime: RuntimeArgs,
     #[command(flatten)]
     pub server: ServerArgs,
+    #[command(flatten)]
+    pub native_mtp: NativeMtpArgs,
     #[command(flatten)]
     pub output: OutputArgs,
     #[arg(long, default_value_t = 15)]
@@ -104,6 +120,8 @@ pub struct ChainArgs {
     pub runtime: RuntimeArgs,
     #[command(flatten)]
     pub server: ServerArgs,
+    #[command(flatten)]
+    pub native_mtp: NativeMtpArgs,
     #[command(flatten)]
     pub output: OutputArgs,
     #[arg(long, default_value = "10,20")]
@@ -125,6 +143,8 @@ pub struct SplitScanArgs {
     #[command(flatten)]
     pub server: ServerArgs,
     #[command(flatten)]
+    pub native_mtp: NativeMtpArgs,
+    #[command(flatten)]
     pub output: OutputArgs,
     #[arg(long, default_value = "1..30")]
     pub splits: String,
@@ -142,6 +162,8 @@ pub struct DtypeMatrixArgs {
     pub runtime: RuntimeArgs,
     #[command(flatten)]
     pub server: ServerArgs,
+    #[command(flatten)]
+    pub native_mtp: NativeMtpArgs,
     #[command(flatten)]
     pub output: OutputArgs,
     #[arg(long, default_value_t = 15)]
@@ -189,11 +211,110 @@ pub struct StateHandoffArgs {
     #[arg(long)]
     pub cache_decoded_result_hits: bool,
     #[arg(long)]
+    pub skip_suffix_prefill_check: bool,
+    #[arg(long)]
     pub synthetic_input_activation: bool,
     #[arg(long)]
     pub binary_control: bool,
     #[arg(long)]
     pub allow_mismatch: bool,
+}
+
+#[derive(Args)]
+pub struct NativeMtpOpenAiAbArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+    #[command(flatten)]
+    pub server: ServerArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    #[arg(long, default_value_t = 24)]
+    pub split_layer: u32,
+    #[arg(long, default_value = "127.0.0.1:19170")]
+    pub openai_bind_addr: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:19171")]
+    pub stage0_bind_addr: SocketAddr,
+    #[arg(long)]
+    pub stage0_endpoint_addr: Option<SocketAddr>,
+    #[arg(long, default_value = "127.0.0.1:19172")]
+    pub stage1_bind_addr: SocketAddr,
+    #[arg(long)]
+    pub stage1_endpoint_addr: Option<SocketAddr>,
+    #[arg(long)]
+    pub stage0_model: Option<PathBuf>,
+    #[arg(long)]
+    pub stage1_model: Option<PathBuf>,
+    #[arg(long)]
+    pub case_root: Option<PathBuf>,
+    #[arg(long)]
+    pub external_stage1: bool,
+    #[arg(long)]
+    pub stage1_ssh_host: Option<String>,
+    #[arg(long)]
+    pub stage1_remote_stage_server_bin: Option<String>,
+    #[arg(long, default_value = "/tmp/skippy-native-mtp-openai-ab")]
+    pub stage1_remote_root: String,
+    #[arg(long)]
+    pub stage1_remote_workdir: Option<String>,
+    #[arg(long, default_value_t = 10)]
+    pub batched_port_offset: u16,
+    #[arg(long, default_value_t = 2048)]
+    pub activation_width: i32,
+    #[arg(long, default_value = "f16")]
+    pub activation_wire_dtype: String,
+    #[arg(long, default_value_t = 12)]
+    pub max_tokens: u32,
+    #[arg(long, default_value_t = 60)]
+    pub request_timeout_secs: u64,
+    #[arg(long)]
+    pub allow_missing_batched_events: bool,
+    #[arg(long)]
+    pub allow_mismatch: bool,
+}
+
+#[derive(Args)]
+pub struct GlmDsaStage0TraceArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+    #[command(flatten)]
+    pub server: ServerArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    #[arg(long, default_value = "target/debug/skippy-prompt")]
+    pub prompt_bin: PathBuf,
+    #[arg(long, default_value = "127.0.0.1:19285")]
+    pub stage0_bind_addr: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:19286")]
+    pub fake_downstream_bind_addr: SocketAddr,
+    #[arg(long, default_value_t = 2)]
+    pub stage_layer_end: u32,
+    #[arg(long, default_value_t = 6144)]
+    pub activation_width: i32,
+    #[arg(long, default_value = "f16")]
+    pub activation_wire_dtype: String,
+    #[arg(long, default_value_t = 128)]
+    pub prefill_chunk_size: u32,
+    #[arg(long, default_value_t = 1)]
+    pub max_new_tokens: u32,
+    #[arg(long, default_value_t = 16)]
+    pub trace_values: u32,
+    #[arg(long, default_value_t = 256)]
+    pub trace_nodes: u32,
+    #[arg(long, default_value = "kqv_out-0,dsa_sparse_attn-0,indexer_score-1")]
+    pub trace_filter: String,
+    #[arg(long, default_value_t = 64 * 1024 * 1024)]
+    pub trace_stats_max_bytes: u32,
+    #[arg(
+        long,
+        help = "Allow fused/direct traced tensor digest mismatches. By default, matching trace points must be byte-identical."
+    )]
+    pub allow_trace_mismatch: bool,
+    #[arg(long, default_value_t = 2e-4)]
+    pub activation_atol: f32,
+    #[arg(long, default_value_t = 5e-4)]
+    pub activation_relative_rmse_tolerance: f64,
+    #[arg(long)]
+    pub case_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -203,4 +324,28 @@ pub enum StatePayloadKind {
     FullState,
     RecurrentOnly,
     KvRecurrent,
+}
+
+#[derive(Args)]
+pub struct StageFaParityArgs {
+    #[arg(long)]
+    pub model: PathBuf,
+    #[arg(long, default_value = "unsloth/inkling-GGUF:UD-Q2_K_XL")]
+    pub model_id: String,
+    #[arg(long, default_value_t = 0)]
+    pub layer_start: u32,
+    #[arg(long)]
+    pub layer_end: u32,
+    #[arg(long, default_value_t = 2048)]
+    pub ctx_size: u32,
+    #[arg(long, default_value_t = 99)]
+    pub n_gpu_layers: i32,
+    #[arg(long, default_value = "Hello")]
+    pub prompt: String,
+    #[arg(long, default_value_t = 5e-3)]
+    pub max_abs: f32,
+    #[arg(long)]
+    pub enabled_output: Option<PathBuf>,
+    #[arg(long)]
+    pub disabled_output: Option<PathBuf>,
 }

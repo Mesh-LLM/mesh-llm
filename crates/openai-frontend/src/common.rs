@@ -8,6 +8,99 @@ use serde_json::Value;
 
 use crate::errors::OpenAiError;
 
+const MAX_AGENT_SESSION_ID_BYTES: usize = 512;
+const INTERNAL_AGENT_SESSION_ID: &str = "mesh_internal_agent_session_id";
+const INTERNAL_AGENT_SESSION_SOURCE: &str = "mesh_internal_agent_session_source";
+const INTERNAL_AGENT_SESSION_TRUSTED: &str = "mesh_internal_agent_session_trusted";
+
+/// Where the OpenAI frontend obtained a stable, caller-authenticated session
+/// identity. The identity is routing/lifecycle metadata, not a request ID. A
+/// protocol-native conversation ID may also be used to derive a prompt-cache
+/// key, but the two uses remain separate policy decisions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentSessionSource {
+    /// A header explicitly configured as trusted by the endpoint operator.
+    TrustedHeader(String),
+    /// The protocol-native `conversation.id` from an OpenAI Responses request.
+    ResponsesConversation,
+}
+
+/// Stable opaque identity supplied by the agent or its trusted upstream proxy.
+/// Authentication remains the endpoint operator's responsibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSessionIdentity {
+    id: String,
+    source: AgentSessionSource,
+}
+
+impl AgentSessionIdentity {
+    pub fn new(id: impl Into<String>, source: AgentSessionSource) -> Result<Self, OpenAiError> {
+        let id = id.into();
+        let trimmed = id.trim();
+        if trimmed.is_empty()
+            || trimmed.len() > MAX_AGENT_SESSION_ID_BYTES
+            || trimmed.chars().any(char::is_control)
+        {
+            return Err(OpenAiError::invalid_request(
+                "agent session identity must be non-empty, printable, and at most 512 bytes",
+            ));
+        }
+        Ok(Self {
+            id: trimmed.to_owned(),
+            source,
+        })
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &AgentSessionSource {
+        &self.source
+    }
+}
+
+impl AgentSessionSource {
+    #[must_use]
+    pub(crate) fn label(&self) -> &str {
+        match self {
+            Self::TrustedHeader(header) => header,
+            Self::ResponsesConversation => "responses.conversation",
+        }
+    }
+}
+
+pub(crate) fn set_agent_session_metadata(
+    extra: &mut BTreeMap<String, Value>,
+    identity: Option<AgentSessionIdentity>,
+) {
+    extra.remove(INTERNAL_AGENT_SESSION_ID);
+    extra.remove(INTERNAL_AGENT_SESSION_SOURCE);
+    extra.remove(INTERNAL_AGENT_SESSION_TRUSTED);
+    if let Some(identity) = identity {
+        extra.insert(
+            INTERNAL_AGENT_SESSION_SOURCE.to_owned(),
+            Value::String(identity.source().label().to_owned()),
+        );
+        extra.insert(
+            INTERNAL_AGENT_SESSION_ID.to_owned(),
+            Value::String(identity.id().to_owned()),
+        );
+    }
+}
+
+pub(crate) fn agent_session_metadata(extra: &BTreeMap<String, Value>) -> Option<&str> {
+    extra.get(INTERNAL_AGENT_SESSION_ID).and_then(Value::as_str)
+}
+
+pub(crate) fn agent_session_source_metadata(extra: &BTreeMap<String, Value>) -> Option<&str> {
+    extra
+        .get(INTERNAL_AGENT_SESSION_SOURCE)
+        .and_then(Value::as_str)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum StopSequence {
@@ -56,11 +149,13 @@ pub enum ReasoningEffort {
     Medium,
     High,
     Xhigh,
+    Max,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReasoningTemplateOptions {
     pub enable_thinking: Option<bool>,
+    pub chat_template_kwargs: BTreeMap<String, Value>,
 }
 
 pub const THINKING_BOOLEAN_ALIASES: &[&str] = &[
@@ -83,6 +178,11 @@ pub fn normalize_reasoning_template_options(
     let mut options = ReasoningTemplateOptions::default();
 
     if let Some(reasoning) = reasoning {
+        if let Some(effort) = reasoning.effort {
+            options
+                .chat_template_kwargs
+                .insert("reasoning_effort".to_string(), Value::from(effort.as_str()));
+        }
         if reasoning.enabled == Some(false)
             || matches!(reasoning.effort, Some(ReasoningEffort::None))
             || reasoning.max_tokens == Some(0)
@@ -97,6 +197,9 @@ pub fn normalize_reasoning_template_options(
     }
 
     if let Some(effort) = reasoning_effort {
+        options
+            .chat_template_kwargs
+            .insert("reasoning_effort".to_string(), Value::from(effort.as_str()));
         options.enable_thinking = Some(!matches!(effort, ReasoningEffort::None));
     }
 
@@ -113,6 +216,11 @@ pub fn normalize_reasoning_template_options(
         let object = value.as_object().ok_or_else(|| {
             OpenAiError::invalid_request("chat_template_kwargs must be an object")
         })?;
+        for (field, value) in object {
+            options
+                .chat_template_kwargs
+                .insert(field.clone(), value.clone());
+        }
         for field in THINKING_BOOLEAN_ALIASES {
             if let Some(value) = object.get(*field) {
                 let enabled = value.as_bool().ok_or_else(|| {
@@ -126,6 +234,20 @@ pub fn normalize_reasoning_template_options(
     }
 
     Ok(options)
+}
+
+impl ReasoningEffort {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
 }
 
 fn optional_u32_extra(
@@ -288,6 +410,28 @@ mod tests {
         let options = normalize_reasoning_template_options(None, None, &extra).unwrap();
 
         assert_eq!(options.enable_thinking, Some(false));
+    }
+
+    #[test]
+    fn normalize_reasoning_effort_preserves_template_kwarg_and_explicit_kwargs_win() {
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            "chat_template_kwargs".to_string(),
+            json!({"reasoning_effort": "custom", "temperature": 0.2}),
+        );
+
+        let options =
+            normalize_reasoning_template_options(None, Some(ReasoningEffort::Max), &extra).unwrap();
+
+        assert_eq!(options.enable_thinking, Some(true));
+        assert_eq!(
+            options.chat_template_kwargs.get("reasoning_effort"),
+            Some(&json!("custom"))
+        );
+        assert_eq!(
+            options.chat_template_kwargs.get("temperature"),
+            Some(&json!(0.2))
+        );
     }
 
     #[test]

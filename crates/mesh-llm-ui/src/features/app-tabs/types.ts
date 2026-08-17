@@ -10,7 +10,7 @@ export type Theme = 'auto' | ResolvedTheme
 export type Accent = 'blue' | 'cyan' | 'violet' | 'green' | 'amber' | 'pink'
 export type Density = 'compact' | 'normal' | 'sparse'
 export type PanelStyle = 'solid' | 'soft'
-export type AppTab = 'network' | 'reserves' | 'chat' | 'configuration'
+export type AppTab = 'network' | 'reserves' | 'logs' | 'chat' | 'configuration'
 
 export type StatusBadgeTone = 'good' | 'warn' | 'bad' | 'muted' | 'accent'
 export type StatusMetric = {
@@ -62,14 +62,7 @@ export type PeerDTO = Omit<Peer, 'hostedModels'> & {
   hostedModels: PeerHostedModel[]
 }
 export type ModelFamilyColorKey =
-  | 'family-0'
-  | 'family-1'
-  | 'family-2'
-  | 'family-3'
-  | 'family-4'
-  | 'family-5'
-  | 'family-6'
-  | 'family-7'
+  'family-0' | 'family-1' | 'family-2' | 'family-3' | 'family-4' | 'family-5' | 'family-6' | 'family-7'
 export type ModelCapabilities = Partial<Record<string, boolean>>
 export type ModelSummary = {
   name: string
@@ -217,7 +210,14 @@ export type ChatHarnessData = {
   actionMetrics: ChatActionMetric[]
   modelLabel: string
 }
-export type ConfigGpu = { idx: number; name: string; totalGB: number; reservedGB?: number }
+export type ConfigGpu = {
+  idx: number
+  name: string
+  totalGB: number
+  systemTotalGB?: number
+  reservedGB?: number
+  allocatableGB?: number
+}
 export type Placement = 'separate' | 'pooled'
 export type ConfigNode = {
   id: string
@@ -250,8 +250,33 @@ export type ConfigModel = {
   vision: boolean
   tags: string[]
 }
-export type ConfigAssign = { id: string; modelId: string; nodeId: string; containerIdx: number; ctx: number }
+export type ConfigAssignModelConfig = {
+  slots?: number
+  batchProfile?: 'auto' | 'balanced' | 'throughput' | 'saver'
+  splitMode?: 'auto' | 'layer' | 'row'
+  tensorSplit?: string
+  mmproj?: string
+  draftModelPath?: string
+  flashAttention?: 'auto' | 'enabled' | 'disabled'
+  cacheTypeK?: string
+  cacheTypeV?: string
+  kvCachePolicy?: 'auto' | 'quality' | 'balanced' | 'saver'
+}
+export type ConfigAssign = {
+  id: string
+  modelId: string
+  nodeId: string
+  containerIdx: number
+  ctx: number
+  config?: ConfigAssignModelConfig
+}
 export type ConfigurationDefaultsCategoryId =
+  | 'meshllm'
+  | 'network'
+  | 'attestation'
+  | 'audit'
+  | 'telemetry'
+  | 'runtime-policy'
   | 'runtime'
   | 'memory'
   | 'speculative-decoding'
@@ -260,7 +285,16 @@ export type ConfigurationDefaultsCategoryId =
   | 'skippy-transport'
   | 'multimodal'
   | 'advanced-server'
+  | (string & {})
 export type ConfigurationTomlSectionId =
+  | 'gpu'
+  | 'runtime'
+  | 'owner_control'
+  | 'mesh_requirements'
+  | 'telemetry'
+  | 'telemetry.metrics'
+  | 'logging'
+  | 'defaults'
   | 'defaults.model_fit'
   | 'defaults.hardware'
   | 'defaults.throughput'
@@ -274,9 +308,107 @@ export type ConfigurationDefaultsCategory = {
   label: string
   summary: string
   help: string
-  tomlSection?: ConfigurationTomlSectionId
+  tomlSection?: string
+  order?: number
 }
 export type ConfigurationDefaultsChoice = { value: string; label: string; description?: string }
+export type ConfigurationControlTextFormat =
+  'plain' | 'path' | 'url' | 'socket_addr' | 'semver' | 'ed25519_key' | 'csv_positive_ints'
+export type ConfigurationControlOptionsSource =
+  | 'static'
+  | 'runtime_gpus'
+  | 'runtime_native_backends'
+  | 'runtime_local_models'
+  | 'runtime_installed_plugins'
+  | 'runtime_mesh_peers'
+export type ConfigurationControlAvailabilitySource = 'static' | 'runtime' | 'dependency' | 'conflict'
+export type ConfigurationDisabledWritePolicy = 'preserve_existing' | 'omit_when_disabled' | 'reject_when_disabled'
+export type ConfigurationControlConditionOperator =
+  'equals' | 'not_equals' | 'in' | 'not_in' | 'present' | 'absent' | 'truthy' | 'falsy' | 'range'
+export type ConfigurationControlConditionValue =
+  | { kind: 'bool'; value: boolean }
+  | { kind: 'integer'; value: number }
+  | { kind: 'float'; value: number }
+  | { kind: 'string'; value: string }
+export type ConfigurationControlPath = {
+  segments: readonly unknown[]
+}
+export type ConfigurationNumericControl = {
+  min?: number
+  max?: number
+  step?: number
+  soft_min?: number
+  soft_max?: number
+  unit?: string
+}
+export type ConfigurationControlAvailability = {
+  enabled: boolean
+  reason?: string
+  note?: string
+  source: ConfigurationControlAvailabilitySource
+}
+export type ConfigurationControlCondition = {
+  path: ConfigurationControlPath
+  operator: ConfigurationControlConditionOperator
+  values?: readonly ConfigurationControlConditionValue[]
+}
+export type ConfigurationConditionalDisable = {
+  condition: ConfigurationControlCondition
+  reason: string
+  note?: string
+  write_policy: ConfigurationDisabledWritePolicy
+}
+export type ConfigurationConflictRule = {
+  group: string
+  condition: ConfigurationControlCondition
+  reason: string
+  preferred_path?: ConfigurationControlPath
+}
+export type ConfigurationSettingControlBehavior = {
+  numeric?: ConfigurationNumericControl
+  text_format?: ConfigurationControlTextFormat
+  options_source?: ConfigurationControlOptionsSource
+  availability?: ConfigurationControlAvailability
+  enable_when?: readonly ConfigurationControlCondition[]
+  disable_when?: readonly ConfigurationConditionalDisable[]
+  conflicts?: readonly ConfigurationConflictRule[]
+  write_policy?: ConfigurationDisabledWritePolicy
+}
+export type ConfigurationSettingValidationConstraint =
+  | { readonly kind: 'non_empty' }
+  | { readonly kind: 'positive' }
+  | { readonly kind: 'range'; readonly min?: string; readonly max?: string }
+  | { readonly kind: 'requires'; readonly path: unknown }
+  | { readonly kind: 'allowed_values'; readonly values: readonly string[] }
+  | { readonly kind: 'allowed_pattern'; readonly pattern: string }
+export type ConfigurationRuntimeControlOption = {
+  value: ConfigurationControlConditionValue
+  label?: string
+  note?: string
+  disabled: boolean
+  reason?: string
+  source: ConfigurationControlOptionsSource
+}
+export type ConfigurationRuntimeControlStateEntry = {
+  enabled: boolean
+  reason?: string
+  note?: string
+  source: ConfigurationControlAvailabilitySource
+  write_policy: ConfigurationDisabledWritePolicy
+  options?: readonly ConfigurationRuntimeControlOption[]
+}
+export type ConfigurationSettingValueSchema =
+  | { kind: 'boolean' }
+  | { kind: 'integer' }
+  | { kind: 'float' }
+  | { kind: 'string' }
+  | { kind: 'path' }
+  | { kind: 'url' }
+  | { kind: 'socket_addr' }
+  | { kind: 'enum'; values: string[] }
+  | { kind: 'one_of'; variants: ConfigurationSettingValueSchema[] }
+  | { kind: 'array'; items: ConfigurationSettingValueSchema }
+  | { kind: 'object' }
 export type ConfigurationDefaultsControl =
   | {
       kind: 'choice'
@@ -305,15 +437,27 @@ export type ConfigurationDefaultsSettingIcon =
 export type ConfigurationDefaultsSetting = {
   id: string
   categoryId: ConfigurationDefaultsCategoryId
-  tomlSection?: ConfigurationTomlSectionId
+  canonicalPath?: string
+  tomlSection?: string
   tomlKey?: string
+  rendererId?: string
+  controlHint?: string
+  categoryOrder?: number
+  settingOrder?: number
   icon: ConfigurationDefaultsSettingIcon
   label: string
   description: string
   inheritedLabel: string
+  valueSchema?: ConfigurationSettingValueSchema
   control: ConfigurationDefaultsControl
+  baselineValue?: string
   visibility?: 'standard' | 'advanced'
   mutability?: 'runtime' | 'restart-required'
+  applyMode?: 'static_on_load' | 'dynamic_validation_only' | 'dynamic_apply'
+  restartScope?: 'none' | 'model_reload' | 'process_restart' | 'mesh_restart'
+  controlBehavior?: ConfigurationSettingControlBehavior
+  validationConstraints?: readonly ConfigurationSettingValidationConstraint[]
+  controlState?: ConfigurationRuntimeControlStateEntry
   dependsOn?: { settingId: string; condition: (value: string) => boolean }
 }
 export type ConfigurationDefaultsPreviewItem = { label: string; value: string; meta?: string }
@@ -323,6 +467,37 @@ export type ConfigurationDefaultsHarnessData = {
   settings: readonly ConfigurationDefaultsSetting[]
   preview: readonly ConfigurationDefaultsPreviewItem[]
 }
+export type ConfigurationIntegrationsHarnessData = ConfigurationDefaultsHarnessData
+export type ConfigurationSettingsHarnessData = ConfigurationDefaultsHarnessData
+export type ConfigurationModelPlacementPaths = {
+  model: string
+  ctxSize: string
+  device: string
+  gpuLayers: string
+  cacheTypeK?: string
+  cacheTypeV?: string
+  kvCachePolicy?: string
+  flashAttention?: string
+  mmproj?: string
+}
+export type ConfigurationModelPlacementOptions = {
+  cacheTypeK?: string[]
+  cacheTypeV?: string[]
+}
+export type RuntimeStatus = {
+  daemon_state: 'stopping' | 'degraded' | 'ready_serving' | 'ready_proxying' | 'ready_idle' | 'starting'
+  capabilities: {
+    worker_capable: boolean
+    local_serving: boolean
+    proxying: boolean
+    plugin_ingress: boolean
+    accepting_local: boolean
+    accepting_remote: boolean
+  }
+  lifecycle_instances: Array<{ instance_id: string; model_ref: string; lifecycle_state: string }>
+  intent_summary: { durable_count: number; session_count: number; recent_errors: number }
+}
+
 export type ConfigurationHarnessData = {
   title: string
   description: string
@@ -334,4 +509,20 @@ export type ConfigurationHarnessData = {
   configFilePath?: string
   validationWarnings?: TomlValidationWarning[]
   launchSummaryConfig?: { httpBind?: string; mmap?: string }
+  meshllm?: ConfigurationSettingsHarnessData
+  audit?: ConfigurationSettingsHarnessData
+  runtimeSettings?: ConfigurationSettingsHarnessData
+  modelSettings?: ConfigurationSettingsHarnessData
+  network?: ConfigurationSettingsHarnessData
+  attestation?: ConfigurationSettingsHarnessData
+  plugins?: ConfigurationIntegrationsHarnessData
+  integrations?: ConfigurationIntegrationsHarnessData
+  modelConfigEntries?: readonly Record<string, unknown>[]
+  modelPlacementPaths?: ConfigurationModelPlacementPaths
+  modelPlacementOptions?: ConfigurationModelPlacementOptions
+  attestationStatus?: {
+    owner?: string | { status?: string; verified?: boolean; name?: string; display_name?: string }
+    release_attestation?: import('@/lib/api/types').ReleaseAttestationSummary
+  }
+  runtime?: Partial<RuntimeStatus>
 }

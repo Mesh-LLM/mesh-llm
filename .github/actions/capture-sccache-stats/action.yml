@@ -1,0 +1,57 @@
+name: Capture sccache statistics
+description: Validate sccache counters and upload machine-readable build-cache evidence.
+
+inputs:
+  artifact_name:
+    description: Unique artifact name for this workflow job and matrix row.
+    required: true
+
+outputs:
+  stats_file:
+    description: Absolute path to the captured sccache JSON document.
+    value: ${{ steps.capture.outputs.stats_file }}
+  compile_requests:
+    description: Number of compiler requests observed since sccache was configured.
+    value: ${{ steps.capture.outputs.compile_requests }}
+  requests_executed:
+    description: Number of compiler requests executed since sccache was configured.
+    value: ${{ steps.capture.outputs.requests_executed }}
+  cache_hits:
+    description: Number of cache hits observed since sccache was configured.
+    value: ${{ steps.capture.outputs.cache_hits }}
+  cache_misses:
+    description: Number of cache misses observed since sccache was configured.
+    value: ${{ steps.capture.outputs.cache_misses }}
+  cache_writes:
+    description: Number of cache writes observed since sccache was configured.
+    value: ${{ steps.capture.outputs.cache_writes }}
+  cache_read_errors:
+    description: Number of cache read errors observed since sccache was configured.
+    value: ${{ steps.capture.outputs.cache_read_errors }}
+  cache_write_errors:
+    description: Number of cache write errors observed since sccache was configured.
+    value: ${{ steps.capture.outputs.cache_write_errors }}
+
+runs:
+  using: composite
+  steps:
+    - name: Capture and validate sccache counters
+      id: capture
+      shell: bash
+      env:
+        SCCACHE_STATS_ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        SCCACHE_STATS_OUTPUT_DIR: ${{ runner.temp }}/mesh-llm-sccache-evidence
+      run: |
+        set -euo pipefail
+        python3 "$GITHUB_ACTION_PATH/capture.py" \
+          --artifact-name "$SCCACHE_STATS_ARTIFACT_NAME" \
+          --output "$SCCACHE_STATS_OUTPUT_DIR/$SCCACHE_STATS_ARTIFACT_NAME/sccache-stats.json" \
+          --github-output "$GITHUB_OUTPUT"
+
+    - name: Upload machine-readable sccache evidence
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ steps.capture.outputs.stats_file }}
+        if-no-files-found: error
+        retention-days: 14

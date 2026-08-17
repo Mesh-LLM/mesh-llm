@@ -7,6 +7,15 @@ The package uses a native N-API addon built from `crates/mesh-llm-nodejs`. It is
 not a mock wrapper around the CLI. Local serving uses the same embedded runtime
 path as the Swift and Kotlin SDKs.
 
+## Install
+
+```bash
+npm install @mesh-llm/sdk
+```
+
+Release packages include prebuilt addons for macOS arm64/x64, Linux arm64/x64,
+and Windows x64.
+
 ## Build From Source
 
 ```bash
@@ -26,7 +35,7 @@ packaged Node addon is renamed to `mesh_llm_nodejs.node`.
 ## Client Mode
 
 ```js
-const { Client, generateOwnerKeypairHex } = require('@meshllm/sdk')
+const { Client, generateOwnerKeypairHex } = require('@mesh-llm/sdk')
 
 const client = Client.create({
   ownerKeypairHex: generateOwnerKeypairHex(),
@@ -40,11 +49,12 @@ await client.stop()
 
 ## Local Serving Mode
 
-Set `MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR` to a verified native runtime artifact
-for the target machine:
+Resolve or install a native runtime before loading a local model. The SDK can
+use a packaged artifact directory, or download the recommended runtime when
+`MESH_SDK_RUNTIME_ALLOW_DOWNLOAD=1` is set:
 
 ```bash
-MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-sdk/meshllm-native-linux-x86_64-cuda \
+MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-runtimes/meshllm-native-runtime-linux-x86_64-cuda \
 MESH_SDK_MODEL_REF=Qwen2.5-3B-Instruct-Q4_K_M \
 node sdk/node/example/local-inference.js
 ```
@@ -53,7 +63,17 @@ Use `Node` instead of `Client` when the app needs local model management or
 serving:
 
 ```js
-const { Node, generateOwnerKeypairHex } = require('@meshllm/sdk')
+const {
+  Node,
+  generateOwnerKeypairHex,
+  resolveNativeRuntime
+} = require('@mesh-llm/sdk')
+
+const runtime = await resolveNativeRuntime({
+  artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,
+  allowDownload: process.env.MESH_SDK_RUNTIME_ALLOW_DOWNLOAD === '1'
+})
+console.log(`using ${runtime.nativeRuntimeId} from ${runtime.path}`)
 
 const node = Node.create({
   ownerKeypairHex: generateOwnerKeypairHex(),
@@ -65,11 +85,11 @@ const node = Node.create({
 In an Electron app, package both:
 
 - `native/<platform>-<arch>/mesh_llm_nodejs.node`
-- the selected `meshllm-native-*` runtime artifact directory
+- the selected `meshllm-native-runtime-*` runtime artifact directory
 - optional `console/` assets when using `node.startConsole()`
 
-Then set `MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR` to the packaged artifact
-directory before creating a serving-enabled node.
+Then pass the packaged artifact directory to `resolveNativeRuntime()` before
+creating a serving-enabled node.
 
 ## Optional Console
 
@@ -86,6 +106,13 @@ For development builds, pass an explicit asset directory:
 
 ```js
 await node.startConsole({ assetDir: 'crates/mesh-llm-ui/dist', port: 3131 })
+```
+
+Release packages prepare that directory with:
+
+```bash
+scripts/package-sdk-console-assets.sh --sdk node
+scripts/verify-sdk-console-assets.sh --sdk node
 ```
 
 ## Windows

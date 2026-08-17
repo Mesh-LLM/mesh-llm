@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use super::super::{KvCachePolicy, StageWireDType, family_policy_for_model_path};
 use super::request_defaults::resolve_request_defaults;
@@ -18,7 +18,9 @@ use super::types::{
     ResolvedSkippyConfig, ResolvedSkippyExecutionConfig, ResolvedThroughputConfig,
     SkippyConfigResolveRequest,
 };
-use crate::plugin::{ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig};
+use crate::plugin::{
+    BoolOrAuto, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig,
+};
 
 pub(crate) fn resolve_skippy_config(
     request: SkippyConfigResolveRequest<'_>,
@@ -27,12 +29,13 @@ pub(crate) fn resolve_skippy_config(
     validate_supported_model_fit_controls(&context)?;
     validate_supported_hardware_controls(&context)?;
 
-    let family_policy =
-        family_policy_for_model_path(context.request.model_path, Some(context.request.model_id));
     let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes);
-
-    let model_fit = resolve_model_fit_config(&context, kv_policy)?;
     let hardware = resolve_hardware_config(&context)?;
+    let family_policy = family_policy_for_model_path(
+        &hardware.resolved_model_path,
+        Some(context.request.model_id),
+    );
+    let model_fit = resolve_model_fit_config(&context, kv_policy, &family_policy)?;
     let throughput = resolve_throughput_config(&context);
     let skippy = resolve_execution_config(&context, family_policy.activation_wire_dtype);
     let speculative = resolve_speculative_config(
@@ -43,7 +46,8 @@ pub(crate) fn resolve_skippy_config(
             .defaults
             .and_then(|value| value.speculative.as_ref()),
         context.request.model_id,
-        context.request.model_path,
+        &hardware.resolved_model_path,
+        context.request.package_generation,
     )?;
     let resolved_request = resolve_request_defaults(
         context.defaults,
@@ -79,7 +83,8 @@ impl<'a> ResolverContext<'a> {
         let model_entry = mesh_config
             .models
             .iter()
-            .find(|entry| entry.model == request.model_id);
+            .find(|entry| entry.model == request.model_id)
+            .or_else(|| find_model_entry_by_resolved_path(mesh_config, request.model_path));
         let defaults = mesh_config.defaults.as_ref();
         let model_fit = model_entry.and_then(|entry| entry.model_fit.as_ref());
         let global_model_fit = defaults.and_then(|value| value.model_fit.as_ref());
@@ -94,6 +99,32 @@ impl<'a> ResolverContext<'a> {
             global_model_fit,
             model_throughput,
             global_throughput,
+        }
+    }
+}
+
+fn find_model_entry_by_resolved_path<'a>(
+    mesh_config: &'a crate::plugin::MeshConfig,
+    model_path: &Path,
+) -> Option<&'a ModelConfigEntry> {
+    let requested_path = comparable_path(model_path);
+    mesh_config.models.iter().find(|entry| {
+        entry
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.model_path.as_deref())
+            .is_some_and(|configured| comparable_path(Path::new(configured)) == requested_path)
+    })
+}
+
+fn comparable_path(path: &Path) -> PathBuf {
+    match path.canonicalize() {
+        Ok(canonical) => canonical,
+        Err(e) => {
+            tracing::warn!(
+                "failed to canonicalize path {path:?}: {e}; using raw path for config entry lookup, which may miss entries"
+            );
+            path.to_path_buf()
         }
     }
 }
@@ -121,6 +152,7 @@ fn validate_supported_hardware_controls(context: &ResolverContext<'_>) -> Result
 fn resolve_model_fit_config(
     context: &ResolverContext<'_>,
     kv_policy: KvCachePolicy,
+    family_policy: &super::super::family_policy::FamilyPolicy,
 ) -> Result<ResolvedModelFitConfig> {
     let kv = resolve_kv_defaults(context, kv_policy);
     let throughput = resolve_throughput_defaults(context);
@@ -156,8 +188,8 @@ fn resolve_model_fit_config(
             .and_then(|defaults| defaults.ubatch),
         BUILTIN_UBATCH,
     );
-    let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy);
-    let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy);
+    let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy, family_policy);
+    let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy, family_policy);
     let kv_offload = resolve_kv_offload(context, &kv);
     let flash_attention = context
         .model_fit
@@ -205,17 +237,31 @@ fn resolve_cache_type_k(
     context: &ResolverContext<'_>,
     kv: &KvDefaults,
     kv_policy: KvCachePolicy,
+    family_policy: &super::super::family_policy::FamilyPolicy,
 ) -> String {
+    if let Some(explicit) = context
+        .model_fit
+        .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
+    {
+        return explicit.to_string();
+    }
+    if let Some(family_default) = family_policy.default_kv_cache_type {
+        if let Some(explicit) = context
+            .global_model_fit
+            .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
+        {
+            return explicit.to_string();
+        }
+        return family_default.to_string();
+    }
     resolve_field_string(
-        context
-            .model_fit
-            .and_then(|fit| fit.cache_type_k.as_deref()),
+        None,
         kv.model_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_k.as_deref()),
         context
             .global_model_fit
-            .and_then(|fit| fit.cache_type_k.as_deref()),
+            .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref())),
         kv.global_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_k.as_deref()),
@@ -227,22 +273,40 @@ fn resolve_cache_type_v(
     context: &ResolverContext<'_>,
     kv: &KvDefaults,
     kv_policy: KvCachePolicy,
+    family_policy: &super::super::family_policy::FamilyPolicy,
 ) -> String {
+    if let Some(explicit) = context
+        .model_fit
+        .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))
+    {
+        return explicit.to_string();
+    }
+    if let Some(family_default) = family_policy.default_kv_cache_type {
+        if let Some(explicit) = context
+            .global_model_fit
+            .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))
+        {
+            return explicit.to_string();
+        }
+        return family_default.to_string();
+    }
     resolve_field_string(
-        context
-            .model_fit
-            .and_then(|fit| fit.cache_type_v.as_deref()),
+        None,
         kv.model_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_v.as_deref()),
         context
             .global_model_fit
-            .and_then(|fit| fit.cache_type_v.as_deref()),
+            .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref())),
         kv.global_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_v.as_deref()),
         kv_policy.cache_type_v(),
     )
+}
+
+fn non_auto_string(value: Option<&str>) -> Option<&str> {
+    value.filter(|item| !item.eq_ignore_ascii_case("auto"))
 }
 
 fn resolve_kv_offload(context: &ResolverContext<'_>, kv: &KvDefaults) -> String {
@@ -283,6 +347,15 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         global_hardware.and_then(|hardware| hardware.gpu_layers.as_ref()),
     )?
     .unwrap_or(-1);
+    let mmap = resolve_mmap_override(
+        model_hardware.and_then(|hardware| hardware.mmap.as_ref()),
+        global_hardware.and_then(|hardware| hardware.mmap.as_ref()),
+    )?;
+    let mlock = pick_owned(
+        model_hardware.and_then(|hardware| hardware.mlock),
+        global_hardware.and_then(|hardware| hardware.mlock),
+    )
+    .unwrap_or(false);
     let safety_margin_gb = pick_owned(
         model_hardware.and_then(|hardware| hardware.safety_margin_gb),
         global_hardware.and_then(|hardware| hardware.safety_margin_gb),
@@ -312,11 +385,25 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
     Ok(ResolvedHardwareConfig {
         device,
         gpu_layers,
+        mmap,
+        mlock,
         fit_target_mib,
         resolved_model_path,
         projector_path,
         stage_layer_start,
         stage_layer_end,
+    })
+}
+
+fn resolve_mmap_override(
+    model_mmap: Option<&BoolOrAuto>,
+    global_mmap: Option<&BoolOrAuto>,
+) -> Result<Option<bool>> {
+    Ok(match model_mmap.or(global_mmap) {
+        None => None,
+        Some(BoolOrAuto::Bool(value)) => Some(*value),
+        Some(BoolOrAuto::String(value)) if value.eq_ignore_ascii_case("auto") => None,
+        Some(BoolOrAuto::String(_)) => bail!("hardware.mmap must be a boolean or \"auto\""),
     })
 }
 

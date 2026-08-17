@@ -2,30 +2,37 @@ use std::{
     fs::File,
     io::{BufReader, Read},
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use skippy_ffi::TensorRole;
+use skippy_runtime::package::PackageGenerationInfo;
+
+use super::hash_cache::{self, SidecarDigestCache};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SkippyPackageIdentity {
-    pub(crate) package_ref: String,
-    pub(crate) manifest_sha256: String,
-    pub(crate) source_model_path: PathBuf,
-    pub(crate) source_model_sha256: String,
-    pub(crate) source_model_bytes: u64,
-    pub(crate) source_files: Vec<SkippyPackageSourceFile>,
-    pub(crate) layer_count: u32,
-    pub(crate) activation_width: u32,
-    pub(crate) tensor_count: u64,
+pub struct SkippyPackageIdentity {
+    pub package_ref: String,
+    pub manifest_sha256: String,
+    pub source_model_path: PathBuf,
+    pub source_model_sha256: String,
+    pub source_model_bytes: u64,
+    pub source_files: Vec<SkippyPackageSourceFile>,
+    pub layer_weight_bytes: Vec<u64>,
+    pub layer_count: u32,
+    pub activation_width: u32,
+    pub tensor_count: u64,
+    pub generation: Option<PackageGenerationInfo>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub(crate) struct SkippyPackageSourceFile {
-    pub(crate) path: PathBuf,
-    pub(crate) bytes: u64,
-    pub(crate) sha256: String,
+pub struct SkippyPackageSourceFile {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub sha256: String,
 }
 
 #[derive(Serialize)]
@@ -52,11 +59,12 @@ struct SyntheticGgufManifestFile {
     sha256: String,
 }
 
-pub(crate) fn synthetic_direct_gguf_package(
+pub fn synthetic_direct_gguf_package(
     model_id: &str,
     model_path: &Path,
 ) -> Result<SkippyPackageIdentity> {
-    let source_files = direct_gguf_source_files(model_path)?;
+    let digest_cache = SidecarDigestCache::open_default();
+    let source_files = direct_gguf_source_files(model_path, digest_cache.as_ref())?;
 
     let source_model_path = source_files
         .first()
@@ -80,6 +88,13 @@ pub(crate) fn synthetic_direct_gguf_package(
         source_model_path.display()
     );
     let source_model_bytes = source_files.iter().map(|file| file.bytes).sum();
+    let layer_weight_bytes = direct_gguf_layer_weight_bytes(&source_files, compact.layer_count)
+        .with_context(|| {
+            format!(
+                "inspect GGUF tensor weights {}",
+                source_model_path.display()
+            )
+        })?;
 
     let source_model_sha256 = aggregate_source_sha256(&source_files);
 
@@ -106,9 +121,11 @@ pub(crate) fn synthetic_direct_gguf_package(
         source_model_sha256,
         source_model_bytes,
         source_files,
+        layer_weight_bytes,
         layer_count: compact.layer_count,
         activation_width: compact.embedding_size,
         tensor_count,
+        generation: None,
     })
 }
 
@@ -155,7 +172,7 @@ fn synthetic_manifest_sha256(input: SyntheticManifestInput<'_>) -> Result<String
     Ok(hex_lower(&Sha256::digest(bytes)))
 }
 
-fn direct_gguf_source_files(model_path: &Path) -> Result<Vec<SkippyPackageSourceFile>> {
+pub(crate) fn direct_gguf_source_paths(model_path: &Path) -> Result<Vec<PathBuf>> {
     let canonical = model_path
         .canonicalize()
         .with_context(|| format!("canonicalize GGUF path {}", model_path.display()))?;
@@ -163,8 +180,7 @@ fn direct_gguf_source_files(model_path: &Path) -> Result<Vec<SkippyPackageSource
         anyhow::bail!("GGUF path has no UTF-8 filename: {}", canonical.display());
     };
     let Some(shard) = model_ref::split_gguf_shard_info(file_name) else {
-        let file = source_file(&canonical)?;
-        return Ok(vec![file]);
+        return Ok(vec![canonical]);
     };
     anyhow::ensure!(
         shard.part == "00001",
@@ -186,7 +202,7 @@ fn direct_gguf_source_files(model_path: &Path) -> Result<Vec<SkippyPackageSource
     for index in 1..=total {
         let shard_name = format!("{}-{index:05}-of-{:05}.gguf", shard.prefix, total);
         let path = parent.join(shard_name);
-        files.push(source_file(&path).with_context(|| {
+        files.push(path.canonicalize().with_context(|| {
             format!(
                 "read split GGUF shard {index}/{total} for {}",
                 canonical.display()
@@ -196,7 +212,20 @@ fn direct_gguf_source_files(model_path: &Path) -> Result<Vec<SkippyPackageSource
     Ok(files)
 }
 
-fn source_file(path: &Path) -> Result<SkippyPackageSourceFile> {
+fn direct_gguf_source_files(
+    model_path: &Path,
+    digest_cache: Option<&SidecarDigestCache>,
+) -> Result<Vec<SkippyPackageSourceFile>> {
+    direct_gguf_source_paths(model_path)?
+        .into_iter()
+        .map(|path| source_file(&path, digest_cache))
+        .collect()
+}
+
+fn source_file(
+    path: &Path,
+    digest_cache: Option<&SidecarDigestCache>,
+) -> Result<SkippyPackageSourceFile> {
     let canonical = path
         .canonicalize()
         .with_context(|| format!("canonicalize GGUF source {}", path.display()))?;
@@ -208,12 +237,41 @@ fn source_file(path: &Path) -> Result<SkippyPackageSourceFile> {
         "GGUF source is not a file: {}",
         canonical.display()
     );
-    let sha256 = file_sha256(&canonical)?;
+    let sha256 = source_file_sha256(&canonical, &metadata, digest_cache)?;
     Ok(SkippyPackageSourceFile {
         path: canonical.clone(),
         bytes: metadata.len(),
         sha256,
     })
+}
+
+/// SHA-256 of a source file, served from the sidecar cache when the file's
+/// `(size, mtime, ctime)` is unchanged and recomputed (then cached) otherwise.
+fn source_file_sha256(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    digest_cache: Option<&SidecarDigestCache>,
+) -> Result<String> {
+    let mtime_nanos = hash_cache::file_mtime_nanos(metadata);
+    let ctime_nanos = hash_cache::file_ctime_nanos(metadata);
+    if let (Some(cache), Some(mtime_nanos)) = (digest_cache, mtime_nanos)
+        && let Some(sha256) = cache.lookup(path, metadata.len(), mtime_nanos, ctime_nanos)
+    {
+        tracing::debug!(path = %path.display(), "GGUF source sha256 cache hit");
+        return Ok(sha256);
+    }
+    let started = Instant::now();
+    let sha256 = file_sha256(path)?;
+    tracing::debug!(
+        path = %path.display(),
+        bytes = metadata.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "computed GGUF source sha256"
+    );
+    if let (Some(cache), Some(mtime_nanos)) = (digest_cache, mtime_nanos) {
+        cache.store(path, metadata.len(), mtime_nanos, ctime_nanos, &sha256);
+    }
+    Ok(sha256)
 }
 
 fn file_sha256(path: &Path) -> Result<String> {
@@ -267,6 +325,96 @@ fn gguf_tensor_count(path: &Path) -> Result<u64> {
     read_gguf_count(&mut reader, version)
 }
 
+fn direct_gguf_layer_weight_bytes(
+    source_files: &[SkippyPackageSourceFile],
+    layer_count: u32,
+) -> Result<Vec<u64>> {
+    if !skippy_runtime::native_runtime_loaded() {
+        tracing::debug!(
+            "GGUF tensor layout unavailable because the native runtime is not loaded; \
+             using capacity-based split planning"
+        );
+        return Ok(Vec::new());
+    }
+
+    let mut tensors = Vec::new();
+    for source_file in source_files {
+        let info = match skippy_runtime::ModelInfo::open(&source_file.path) {
+            Ok(info) => info,
+            Err(error) => {
+                tracing::debug!(
+                    path = %source_file.path.display(),
+                    error = %error,
+                    "GGUF tensor layout unavailable; using capacity-based split planning"
+                );
+                return Ok(Vec::new());
+            }
+        };
+        tensors.extend(
+            info.tensors()
+                .with_context(|| format!("read GGUF tensors {}", source_file.path.display()))?,
+        );
+    }
+    Ok(layer_weight_bytes_from_tensors(&tensors, layer_count))
+}
+
+fn layer_weight_bytes_from_tensors(
+    tensors: &[skippy_runtime::TensorInfo],
+    layer_count: u32,
+) -> Vec<u64> {
+    let Ok(layer_count) = usize::try_from(layer_count) else {
+        return Vec::new();
+    };
+    if layer_count == 0 {
+        return Vec::new();
+    }
+
+    let mut weights = vec![0_u64; layer_count];
+    let mut shared_bytes = 0_u64;
+    let mut seen = std::collections::BTreeSet::new();
+
+    for tensor in tensors {
+        if !seen.insert(tensor.name.as_str()) {
+            continue;
+        }
+        let bytes = tensor.byte_size;
+        match tensor.layer_index {
+            Some(layer) if (layer as usize) < layer_count => {
+                weights[layer as usize] = weights[layer as usize].saturating_add(bytes);
+            }
+            // Native MTP blocks are appended after the trunk's declared layer
+            // count and must stay with the final stage that owns logits.
+            Some(_) => {
+                let last = weights.len() - 1;
+                weights[last] = weights[last].saturating_add(bytes);
+            }
+            None => match tensor.role {
+                TensorRole::Embedding => {
+                    weights[0] = weights[0].saturating_add(bytes);
+                }
+                TensorRole::FinalNorm | TensorRole::Output => {
+                    let last = weights.len() - 1;
+                    weights[last] = weights[last].saturating_add(bytes);
+                }
+                TensorRole::Unknown
+                | TensorRole::Metadata
+                | TensorRole::Tokenizer
+                | TensorRole::Layer => {
+                    shared_bytes = shared_bytes.saturating_add(bytes);
+                }
+            },
+        }
+    }
+
+    // Metadata is loaded at every stage but is normally tiny. Split it between
+    // endpoints so total model weight stays conserved without biasing a middle
+    // stage in multi-node plans.
+    weights[0] = weights[0].saturating_add(shared_bytes.div_ceil(2));
+    let last = weights.len() - 1;
+    weights[last] = weights[last].saturating_add(shared_bytes / 2);
+    weights
+}
+
 fn read_u32_le(reader: &mut impl Read) -> Result<u32> {
     let mut bytes = [0u8; 4];
     reader.read_exact(&mut bytes).context("read u32")?;
@@ -300,7 +448,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 /// the manifest and shared metadata that the resolver requires, but not layer
 /// files. Layer artifacts are fetched later by the node that materializes or
 /// loads its assigned stage.
-pub(crate) fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIdentity> {
+pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIdentity> {
     // Resolve hf:// to a local package dir for lightweight package inspection.
     let local_ref =
         super::materialization::resolve_hf_package_to_local(package_ref, 0, 0, false, false)?;
@@ -312,6 +460,7 @@ pub(crate) fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPac
     let source_model_bytes = info
         .source_model_bytes
         .unwrap_or_else(|| info.layers.iter().map(|l| l.artifact_bytes).sum::<u64>());
+    let layer_weight_bytes = layer_weight_bytes_from_info(&info);
 
     // For local paths inside an HF cache, convert to an exact hf:// ref so all
     // nodes resolve the same snapshot independently. HF cache dirs look like:
@@ -325,10 +474,43 @@ pub(crate) fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPac
         source_model_sha256: info.source_model_sha256,
         source_model_bytes,
         source_files: Vec::new(),
+        layer_weight_bytes,
         layer_count: info.layer_count,
         activation_width,
         tensor_count: info.layers.iter().map(|l| l.tensor_count as u64).sum(),
+        generation: info.generation,
     })
+}
+
+fn layer_weight_bytes_from_info(info: &skippy_runtime::package::LayerPackageInfo) -> Vec<u64> {
+    let mut layers = info.layers.clone();
+    layers.sort_by_key(|layer| layer.layer_index);
+    if layers.len() != info.layer_count as usize
+        || layers
+            .iter()
+            .enumerate()
+            .any(|(index, layer)| layer.layer_index as usize != index)
+    {
+        return Vec::new();
+    }
+    let mut weights = layers
+        .into_iter()
+        .map(|layer| layer.tensor_bytes.max(layer.artifact_bytes))
+        .collect::<Vec<_>>();
+    let accounted = weights.iter().copied().sum::<u64>();
+    let unaccounted = info
+        .source_model_bytes
+        .unwrap_or_default()
+        .saturating_sub(accounted);
+    if let Some((first, rest)) = weights.split_first_mut() {
+        *first = first.saturating_add(unaccounted.div_ceil(2));
+        if let Some(last) = rest.last_mut() {
+            *last = last.saturating_add(unaccounted / 2);
+        } else {
+            *first = first.saturating_add(unaccounted / 2);
+        }
+    }
+    weights
 }
 
 /// Detect if a local path is inside an HF cache directory and convert to `hf://` ref.
@@ -385,6 +567,7 @@ fn required_layer_package_activation_width(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skippy_runtime::TensorInfo;
 
     #[test]
     fn synthetic_manifest_identity_is_stable_and_metadata_sensitive() {
@@ -453,7 +636,7 @@ mod tests {
         )
         .unwrap();
 
-        let files = direct_gguf_source_files(&first).unwrap();
+        let files = direct_gguf_source_files(&first, None).unwrap();
 
         assert_eq!(files.len(), 3);
         assert_eq!(
@@ -470,7 +653,9 @@ mod tests {
         let first = dir.path().join("Model-Q4_K_M-00001-of-00002.gguf");
         std::fs::write(&first, b"one").unwrap();
 
-        let error = direct_gguf_source_files(&first).unwrap_err().to_string();
+        let error = direct_gguf_source_files(&first, None)
+            .unwrap_err()
+            .to_string();
 
         assert!(error.contains("split GGUF shard 2/2"));
     }
@@ -481,9 +666,110 @@ mod tests {
         let second = dir.path().join("Model-Q4_K_M-00002-of-00002.gguf");
         std::fs::write(&second, b"two").unwrap();
 
-        let error = direct_gguf_source_files(&second).unwrap_err().to_string();
+        let error = direct_gguf_source_files(&second, None)
+            .unwrap_err()
+            .to_string();
 
         assert!(error.contains("first shard"));
+    }
+
+    #[test]
+    fn source_file_sha256_is_stable_and_content_sensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.gguf");
+        std::fs::write(&path, b"content-a").unwrap();
+
+        let first = source_file(&path, None).unwrap();
+        let second = source_file(&path, None).unwrap();
+        assert_eq!(first.sha256, second.sha256);
+        assert_eq!(first.sha256.len(), 64);
+        assert!(first.sha256.chars().all(|c| c.is_ascii_hexdigit()));
+
+        std::fs::write(&path, b"content-b-longer").unwrap();
+        let changed = source_file(&path, None).unwrap();
+        assert_ne!(first.sha256, changed.sha256);
+    }
+
+    #[test]
+    fn source_file_reuses_cached_sha256_while_metadata_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.gguf");
+        std::fs::write(&path, b"content").unwrap();
+        let cache = SidecarDigestCache::open_in(dir.path().join("hashes"));
+
+        let computed = source_file(&path, Some(&cache)).unwrap();
+
+        // A matching (size, mtime, ctime) record now exists; prove the second
+        // call serves it by making the cached value observably distinct while
+        // still shaped like a real SHA-256.
+        let distinct_sha256 = "f".repeat(64);
+        let canonical = path.canonicalize().unwrap();
+        let metadata = canonical.metadata().unwrap();
+        let mtime_nanos = hash_cache::file_mtime_nanos(&metadata).unwrap();
+        let ctime_nanos = hash_cache::file_ctime_nanos(&metadata);
+        cache.store(
+            &canonical,
+            metadata.len(),
+            mtime_nanos,
+            ctime_nanos,
+            &distinct_sha256,
+        );
+
+        let cached = source_file(&path, Some(&cache)).unwrap();
+        assert_eq!(cached.sha256, distinct_sha256);
+        assert_ne!(computed.sha256, cached.sha256);
+    }
+
+    /// Regression test for the review concern on the sidecar cache: a GGUF
+    /// replaced with different same-size content while tooling restores its
+    /// mtime must not reuse the stale hash. The inode ctime moves on any
+    /// rewrite and cannot be restored from userspace, so the cache misses.
+    #[cfg(unix)]
+    #[test]
+    fn source_file_recomputes_when_same_size_content_replaced_with_restored_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.gguf");
+        std::fs::write(&path, b"content-a").unwrap();
+        let cache = SidecarDigestCache::open_in(dir.path().join("hashes"));
+
+        let first = source_file(&path, Some(&cache)).unwrap();
+        let original_mtime = path.metadata().unwrap().modified().unwrap();
+
+        // Inode timestamps use a coarse clock; wait long enough that the
+        // rewrite lands on a later ctime tick than the original write.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Replace with different content of identical size, then restore the
+        // original mtime the way rsync/tar/cp --preserve style tooling does.
+        std::fs::write(&path, b"content-b").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(original_mtime)
+            .unwrap();
+        let metadata = path.metadata().unwrap();
+        assert_eq!(metadata.len(), first.bytes);
+        assert_eq!(metadata.modified().unwrap(), original_mtime);
+
+        let replaced = source_file(&path, Some(&cache)).unwrap();
+        assert_ne!(first.sha256, replaced.sha256);
+        assert_eq!(replaced.sha256, file_sha256(&path).unwrap());
+    }
+
+    #[test]
+    fn source_file_recomputes_when_size_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.gguf");
+        std::fs::write(&path, b"content-a").unwrap();
+        let cache = SidecarDigestCache::open_in(dir.path().join("hashes"));
+
+        let first = source_file(&path, Some(&cache)).unwrap();
+
+        std::fs::write(&path, b"content-b-longer").unwrap();
+        let changed = source_file(&path, Some(&cache)).unwrap();
+        assert_ne!(first.sha256, changed.sha256);
+        assert_eq!(changed.sha256, file_sha256(&path).unwrap());
     }
 
     #[test]
@@ -516,5 +802,119 @@ mod tests {
 
         assert!(error.contains("missing activation_width"));
         assert!(error.contains("rebuild the package manifest"));
+    }
+
+    #[test]
+    fn package_layer_weights_include_shared_model_bytes_at_endpoints() {
+        let info = skippy_runtime::package::LayerPackageInfo {
+            package_dir: PathBuf::from("/models/package"),
+            manifest_sha256: "manifest".to_string(),
+            model_id: "org/model".to_string(),
+            source_model_path: "model.gguf".to_string(),
+            source_model_sha256: "source".to_string(),
+            source_model_bytes: Some(120),
+            layer_count: 2,
+            activation_width: Some(1024),
+            generation: None,
+            projectors: Vec::new(),
+            layers: vec![
+                skippy_runtime::package::LayerPackageLayerInfo {
+                    layer_index: 0,
+                    tensor_count: 1,
+                    tensor_bytes: 30,
+                    artifact_bytes: 30,
+                },
+                skippy_runtime::package::LayerPackageLayerInfo {
+                    layer_index: 1,
+                    tensor_count: 1,
+                    tensor_bytes: 40,
+                    artifact_bytes: 40,
+                },
+            ],
+        };
+
+        assert_eq!(layer_weight_bytes_from_info(&info), vec![55, 65]);
+    }
+
+    #[test]
+    fn package_layer_weights_require_contiguous_indices() {
+        let mut info = skippy_runtime::package::LayerPackageInfo {
+            package_dir: PathBuf::from("/models/package"),
+            manifest_sha256: "manifest".to_string(),
+            model_id: "org/model".to_string(),
+            source_model_path: "model.gguf".to_string(),
+            source_model_sha256: "source".to_string(),
+            source_model_bytes: Some(70),
+            layer_count: 2,
+            activation_width: Some(1024),
+            generation: None,
+            projectors: Vec::new(),
+            layers: vec![
+                skippy_runtime::package::LayerPackageLayerInfo {
+                    layer_index: 0,
+                    tensor_count: 1,
+                    tensor_bytes: 30,
+                    artifact_bytes: 30,
+                },
+                skippy_runtime::package::LayerPackageLayerInfo {
+                    layer_index: 2,
+                    tensor_count: 1,
+                    tensor_bytes: 40,
+                    artifact_bytes: 40,
+                },
+            ],
+        };
+
+        assert!(layer_weight_bytes_from_info(&info).is_empty());
+        info.layers[1].layer_index = 1;
+        assert_eq!(layer_weight_bytes_from_info(&info), vec![30, 40]);
+    }
+
+    #[test]
+    fn direct_gguf_weights_charge_native_mtp_block_to_final_stage() {
+        let tensors = vec![
+            tensor("token_embd.weight", None, TensorRole::Embedding, 5),
+            tensor("blk.0.attn_norm.weight", Some(0), TensorRole::Layer, 10),
+            tensor("blk.1.attn_norm.weight", Some(1), TensorRole::Layer, 10),
+            tensor("blk.2.nextn.eh_proj.weight", Some(2), TensorRole::Layer, 7),
+            tensor("output_norm.weight", None, TensorRole::FinalNorm, 1),
+            tensor("output.weight", None, TensorRole::Output, 9),
+            tensor("general.alignment", None, TensorRole::Metadata, 3),
+        ];
+
+        assert_eq!(layer_weight_bytes_from_tensors(&tensors, 2), vec![17, 28]);
+    }
+
+    #[cfg(feature = "dynamic-native-runtime")]
+    #[test]
+    fn direct_gguf_weights_fall_back_when_dynamic_runtime_is_unloaded() {
+        assert!(!skippy_runtime::native_runtime_loaded());
+        let source_files = vec![SkippyPackageSourceFile {
+            path: PathBuf::from("/models/not-opened.gguf"),
+            bytes: 12,
+            sha256: "abc123".to_string(),
+        }];
+
+        assert!(
+            direct_gguf_layer_weight_bytes(&source_files, 2)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    fn tensor(
+        name: &str,
+        layer_index: Option<u32>,
+        role: TensorRole,
+        byte_size: u64,
+    ) -> TensorInfo {
+        TensorInfo {
+            name: name.to_string(),
+            layer_index,
+            role,
+            ggml_type: 0,
+            byte_size,
+            element_count: byte_size,
+        }
     }
 }

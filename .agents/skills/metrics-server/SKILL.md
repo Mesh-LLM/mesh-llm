@@ -1,6 +1,6 @@
 ---
 name: metrics-server
-description: Use this skill when working on benchmark telemetry ingest, metrics-server run lifecycle, OTLP collection, DuckDB storage, benchmark report export, or separating telemetry/reporting ownership from staged runtime servers.
+description: Use this skill when working on benchmark telemetry ingest, metrics-server run lifecycle, OTLP collection, SQLite storage, benchmark report export, or separating telemetry/reporting ownership from staged runtime servers.
 metadata:
   short-description: Work on benchmark telemetry and reports
 ---
@@ -16,7 +16,7 @@ report export.
 cargo build -p metrics-server
 
 target/debug/metrics-server serve \
-  --db /tmp/metrics.duckdb \
+  --db /tmp/metrics.sqlite \
   --http-addr 127.0.0.1:18080 \
   --otlp-grpc-addr 127.0.0.1:14317
 ```

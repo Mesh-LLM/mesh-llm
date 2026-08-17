@@ -1,0 +1,224 @@
+name: Reusable Static ABI Artifact
+
+on:
+  workflow_call:
+    outputs:
+      toolchain_epoch:
+        description: Exact toolchain identity recorded in the static ABI artifact.
+        value: ${{ jobs.static_abi_artifact.outputs.toolchain_epoch }}
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
+      backend:
+        description: Static llama ABI backend.
+        required: true
+        type: string
+      target:
+        description: Native target triple represented by the ABI.
+        required: true
+        type: string
+      artifact_name:
+        description: Immutable GitHub artifact name.
+        required: true
+        type: string
+      runner_size:
+        description: Eligible Linux runner size (default, 4, 8, or 16).
+        required: false
+        default: '8'
+        type: string
+      retention_days:
+        description: Artifact retention in days.
+        required: false
+        default: 1
+        type: number
+      timeout_minutes:
+        description: Producer timeout in minutes.
+        required: false
+        default: 45
+        type: number
+      use_depot:
+        description: Opt into the guarded main-only Depot canary.
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+
+jobs:
+  runner_policy:
+    name: Select protected static ABI runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
+      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the static ABI role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
+          force_hosted: ${{ inputs.force_hosted }}
+          manual_use_depot: ${{ inputs.use_depot }}
+      - name: Resolve runner size and target
+        id: resolve
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          RUNNER_SIZE: ${{ inputs.runner_size }}
+          RUNNER_DEFAULT: ${{ steps.policy.outputs.runner }}
+          RUNNER_4: ${{ steps.policy.outputs.runner_4 }}
+          RUNNER_8: ${{ steps.policy.outputs.runner_8 }}
+          RUNNER_16: ${{ steps.policy.outputs.runner_16 }}
+          RUNNER_ARM: ${{ steps.policy.outputs.runner_arm }}
+          RUNNER_ARM_4: ${{ steps.policy.outputs.runner_arm_4 }}
+          RUNNER_ARM_8: ${{ steps.policy.outputs.runner_arm_8 }}
+          RUNNER_ARM_16: ${{ steps.policy.outputs.runner_arm_16 }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_SIZE" in
+            default) runner="$RUNNER_DEFAULT" ;;
+            4) runner="$RUNNER_4" ;;
+            8) runner="$RUNNER_8" ;;
+            16) runner="$RUNNER_16" ;;
+            *) echo "runner_size must be one of: default, 4, 8, 16" >&2; exit 1 ;;
+          esac
+          case "$TARGET" in
+            x86_64-unknown-linux-gnu) ;;
+            aarch64-unknown-linux-gnu)
+              case "$RUNNER_SIZE" in
+                default) runner="$RUNNER_ARM" ;;
+                4) runner="$RUNNER_ARM_4" ;;
+                8) runner="$RUNNER_ARM_8" ;;
+                16) runner="$RUNNER_ARM_16" ;;
+              esac
+              ;;
+            *) echo "unsupported static ABI producer target: $TARGET" >&2; exit 1 ;;
+          esac
+          echo "runner=$runner" >> "$GITHUB_OUTPUT"
+
+  static_abi_artifact:
+    needs: runner_policy
+    name: Static ABI input (${{ inputs.target }}, ${{ inputs.backend }})
+    runs-on: ${{ needs.runner_policy.outputs.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BACKEND: ${{ inputs.backend }}
+      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify prebuilt static ABI environment
+        run: verify-runner-image public
+
+      - name: Resolve static ABI toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+
+      # Prepare before restoring the nested build cache. prepare-llama replaces
+      # an unowned .deps/llama.cpp directory, so doing this after cache restore
+      # would discard the restored build tree.
+      - name: Prepare patched llama.cpp checkout
+        run: scripts/prepare-llama.sh pinned
+
+      - name: Cache portable static ABI input
+        id: static_abi_cache
+        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: static-abi-artifact-output
+          key: ${{ format('{0}-{1}-skippy-abi-{2}-{3}-{4}-{5}', env.CACHE_NAMESPACE, runner.os, inputs.backend, inputs.target, steps.native_toolchain.outputs.epoch, hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/restore-static-abi-input.sh', 'scripts/safe-extract-tar.py', 'scripts/verify-checksum-sidecar.py', 'scripts/verify-static-abi-build-stamp.py', '.github/actions/prepare-static-abi-input/action.yml', '.github/actions/resolve-native-toolchain-epoch/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt')) }}
+
+      - name: Restore and verify cached portable static ABI
+        if: ${{ steps.static_abi_cache.outputs.cache-hit == 'true' }}
+        env:
+          STATIC_ABI_TARGET: ${{ inputs.target }}
+          STATIC_ABI_BACKEND: ${{ inputs.backend }}
+        run: |
+          scripts/restore-static-abi-input.sh \
+            static-abi-artifact-output \
+            "$LLAMA_STAGE_BUILD_DIR" \
+            "$STATIC_ABI_TARGET" \
+            "$STATIC_ABI_BACKEND"
+
+      - name: Build and archive immutable static ABI input
+        id: static-abi
+        if: ${{ steps.static_abi_cache.outputs.cache-hit != 'true' }}
+        uses: ./.github/actions/prepare-static-abi-input
+        with:
+          backend: ${{ inputs.backend }}
+          target: ${{ inputs.target }}
+          build: "true"
+
+      - name: Upload immutable static ABI input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: static-abi-artifact-output/*
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Capture static ABI sccache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-static-abi-${{ inputs.target }}-${{ inputs.backend }}-${{ github.run_attempt }}

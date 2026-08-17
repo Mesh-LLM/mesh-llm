@@ -12,16 +12,28 @@ set -euo pipefail
 
 WORKSPACE_MEMBERS=(
   "mesh-llm"
+  "mesh-llm-build-info"
+  "mesh-llm-cli"
+  "mesh-llm-commands"
   "mesh-llm-config"
+  "mesh-llm-events"
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
+  "mesh-llm-hardware-profile"
   "mesh-llm-identity"
+  "mesh-llm-log-store"
+  "mesh-llm-native-runtime"
   "mesh-llm-protocol"
+  "mesh-llm-release-footer"
   "mesh-llm-routing"
+  "mesh-llm-runtime-install"
+  "mesh-llm-sdk"
   "mesh-llm-guardrails"
   "mesh-llm-system"
   "mesh-llm-types"
   "mesh-llm-console-server"
+  "mesh-llm-embedded-runtime"
+  "mesh-llm-tui"
   "mesh-llm-ui"
   "mesh-llm-plugin"
   "mesh-llm-skills"
@@ -39,6 +51,7 @@ WORKSPACE_MEMBERS=(
   "model-hf"
   "model-resolver"
   "skippy-protocol"
+  "skippy-tokenizer"
   "skippy-coordinator"
   "skippy-topology"
   "skippy-cache"
@@ -49,12 +62,16 @@ WORKSPACE_MEMBERS=(
   "skippy-server"
   "metrics-server"
   "skippy-model-package"
+  "skippy-quantize"
   "model-package"
   "skippy-correctness"
+  "llama-quant-ffi"
   "llama-spec-bench"
   "skippy-bench"
   "skippy-prompt"
   "mesh-mixture-of-agents"
+  "mesh-native-serving-plugin-api"
+  "mesh-native-serving-plugin-host"
   "xtask"
 )
 
@@ -121,6 +138,10 @@ crates = json.loads(sys.argv[2])
 # Unknown crates intentionally default to 1 so new crates still get scheduled.
 weights = {
     "mesh-llm": 10,
+    "mesh-llm-build-info": 1,
+    "mesh-llm-cli": 1,
+    "mesh-llm-commands": 1,
+    "mesh-llm-events": 1,
     "mesh-llm-host-runtime": 8,
     "mesh-llm-client": 6,
     "mesh-llm-ffi": 5,
@@ -130,6 +151,7 @@ weights = {
     "model-package": 5,
     "skippy-bench": 4,
     "skippy-model-package": 4,
+    "skippy-quantize": 4,
     "openai-frontend": 4,
     "model-artifact": 4,
     "model-fit": 2,
@@ -142,14 +164,23 @@ weights = {
     "llama-spec-bench": 3,
     "skippy-prompt": 3,
     "mesh-llm-system": 3,
+    "mesh-llm-runtime-install": 2,
+    "mesh-llm-native-runtime": 2,
+    "mesh-llm-hardware-profile": 1,
     "mesh-llm-routing": 2,
+    "mesh-llm-sdk": 2,
     "mesh-llm-protocol": 2,
+    "mesh-llm-release-footer": 1,
     "mesh-llm-types": 2,
     "mesh-llm-console-server": 2,
+    "mesh-llm-embedded-runtime": 8,
+    "mesh-llm-tui": 3,
     "mesh-llm-ui": 2,
     "mesh-llm-plugin": 2,
     "mesh-llm-skills": 1,
     "mesh-llm-plugin-manager": 1,
+    "mesh-native-serving-plugin-api": 1,
+    "mesh-native-serving-plugin-host": 2,
     "mesh-llm-node": 2,
     "mesh-llm-nodejs": 2,
     "skippy-protocol": 2,

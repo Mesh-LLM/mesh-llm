@@ -3,6 +3,11 @@ name: Reusable Scripted Binary Smoke Tests
 on:
   workflow_call:
     inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
       artifact_name:
         required: true
         type: string
@@ -36,26 +41,35 @@ on:
       smoke_script:
         required: true
         type: string
-      runs_on:
-        required: false
-        default: '"blacksmith-4vcpu-ubuntu-2404"'
-        type: string
       timeout_minutes:
         required: false
         default: 20
         type: number
+    secrets:
+      HF_TOKEN:
+        required: false
 
 env:
   MODEL_URL: ${{ inputs.model_url }}
   MODEL_FILE: ${{ inputs.model_file }}
 
+permissions:
+  contents: read
+
 jobs:
   scripted_binary_smoke:
     name: Scripted Binary Smoke
-    runs-on: ${{ fromJson(inputs.runs_on) }}
+    # Model credentials stay on an isolated GitHub-hosted runner.
+    runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
 
       - name: Install smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y curl jq lsof
@@ -70,7 +84,7 @@ jobs:
           model_file: ${{ inputs.model_file }}
           model_cache_scope: ${{ inputs.model_cache_scope }}
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
-          save_model_cache: ${{ github.ref == 'refs/heads/main' }}
+          save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
 
       - name: Run scripted smoke
         run: ${{ inputs.smoke_script }} "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ inputs.model_file }}"

@@ -8,15 +8,15 @@ use std::{
     collections::HashSet,
     fs,
     path::{Component, Path, PathBuf},
-    sync::{Mutex, RwLock},
-    time::{Duration, SystemTime},
+    sync::{
+        Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant, SystemTime},
 };
 
 #[cfg(test)]
-use std::sync::{
-    Arc, LazyLock,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, LazyLock};
 
 use anyhow::{Context, Result, bail};
 use model_resolver::{
@@ -44,7 +44,17 @@ pub use model_resolver::{
 static CATALOG_ENTRIES: RwLock<Option<Vec<CatalogEntry>>> = RwLock::new(None);
 static CATALOG_ENSURE_LOCK: Mutex<()> = Mutex::new(());
 
-#[cfg(test)]
+/// Tracks the most recent failed catalog refresh so we don't re-attempt a slow
+/// network refresh on every request when the cache is already loaded but the
+/// staleness marker can't be refreshed (e.g. a download error). Without this,
+/// a persistently failing refresh turns every `/api/models` call into a fresh
+/// multi-second download attempt.
+static CATALOG_REFRESH_BACKOFF_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// How long to suppress repeated refresh attempts after a failure when a stale
+/// cached catalog is already available.
+const CATALOG_REFRESH_BACKOFF: Duration = Duration::from_secs(5 * 60);
+
 static CATALOG_ENTRIES_OVERRIDE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
@@ -54,8 +64,8 @@ type HfModelFileProbe = Arc<dyn Fn(&str, &str, &str) -> bool + Send + Sync>;
 static HF_MODEL_FILE_PROBE_OVERRIDE: LazyLock<Mutex<Option<HfModelFileProbe>>> =
     LazyLock::new(|| Mutex::new(None));
 
-#[cfg(test)]
-pub(crate) struct CatalogEntriesOverrideGuard {
+#[doc(hidden)]
+pub struct CatalogEntriesOverrideGuard {
     previous_entries: Option<Vec<CatalogEntry>>,
     previous_override_active: bool,
 }
@@ -65,10 +75,8 @@ pub(crate) struct HfModelFileProbeOverrideGuard {
     previous_probe: Option<HfModelFileProbe>,
 }
 
-#[cfg(test)]
-pub(crate) fn set_catalog_entries_for_test(
-    entries: Vec<CatalogEntry>,
-) -> CatalogEntriesOverrideGuard {
+#[doc(hidden)]
+pub fn set_catalog_entries_for_test(entries: Vec<CatalogEntry>) -> CatalogEntriesOverrideGuard {
     let previous_override_active = CATALOG_ENTRIES_OVERRIDE_ACTIVE.swap(true, Ordering::SeqCst);
     let mut lock = CATALOG_ENTRIES.write().unwrap();
     let previous = lock.replace(entries);
@@ -78,7 +86,6 @@ pub(crate) fn set_catalog_entries_for_test(
     }
 }
 
-#[cfg(test)]
 impl Drop for CatalogEntriesOverrideGuard {
     fn drop(&mut self) {
         *CATALOG_ENTRIES.write().unwrap() = self.previous_entries.take();
@@ -234,15 +241,12 @@ pub fn load_catalog_from_disk() -> Result<()> {
 
 /// Ensures the catalog is loaded — refreshes if stale, otherwise loads from disk.
 pub fn ensure_catalog() -> Result<()> {
-    #[cfg(test)]
-    {
-        if CATALOG_ENTRIES_OVERRIDE_ACTIVE.load(Ordering::SeqCst) {
-            let lock = CATALOG_ENTRIES
-                .read()
-                .map_err(|_| anyhow::anyhow!("catalog lock poisoned"))?;
-            if lock.is_some() {
-                return Ok(());
-            }
+    if CATALOG_ENTRIES_OVERRIDE_ACTIVE.load(Ordering::SeqCst) {
+        let lock = CATALOG_ENTRIES
+            .read()
+            .map_err(|_| anyhow::anyhow!("catalog lock poisoned"))?;
+        if lock.is_some() {
+            return Ok(());
         }
     }
 
@@ -269,12 +273,25 @@ pub fn ensure_catalog() -> Result<()> {
     }
 
     if is_catalog_stale() {
+        // If a recent refresh failed and we already have a (stale) catalog
+        // loaded, don't hammer the network on every request — serve the loaded
+        // catalog until the backoff window elapses.
+        if catalog_entries().is_some() && refresh_in_backoff() {
+            return Ok(());
+        }
+
         match refresh_catalog() {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                clear_refresh_backoff();
+                Ok(())
+            }
             Err(refresh_err) => {
                 if catalog_entries().is_some() {
+                    set_refresh_backoff();
                     tracing::warn!(
-                        "failed to refresh stale meshllm/catalog; using already-loaded stale catalog: {refresh_err:#}"
+                        "failed to refresh stale meshllm/catalog; using already-loaded stale catalog \
+                         (suppressing retries for {}s): {refresh_err:#}",
+                        CATALOG_REFRESH_BACKOFF.as_secs()
                     );
                     return Ok(());
                 }
@@ -288,6 +305,31 @@ pub fn ensure_catalog() -> Result<()> {
         }
     } else {
         load_catalog_from_disk()
+    }
+}
+
+/// Returns true if a recent refresh failure means we should skip another
+/// refresh attempt for now.
+fn refresh_in_backoff() -> bool {
+    let guard = CATALOG_REFRESH_BACKOFF_UNTIL.lock();
+    match guard {
+        Ok(until) => until.map(|t| Instant::now() < t).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// Records that a refresh just failed, suppressing retries for the backoff
+/// window.
+fn set_refresh_backoff() {
+    if let Ok(mut guard) = CATALOG_REFRESH_BACKOFF_UNTIL.lock() {
+        *guard = Some(Instant::now() + CATALOG_REFRESH_BACKOFF);
+    }
+}
+
+/// Clears any active refresh backoff after a successful refresh.
+fn clear_refresh_backoff() {
+    if let Ok(mut guard) = CATALOG_REFRESH_BACKOFF_UNTIL.lock() {
+        *guard = None;
     }
 }
 
@@ -793,6 +835,33 @@ mod tests {
     use std::collections::HashMap;
 
     use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn refresh_backoff_suppresses_then_clears() {
+        clear_refresh_backoff();
+        assert!(!refresh_in_backoff(), "no backoff initially");
+
+        set_refresh_backoff();
+        assert!(refresh_in_backoff(), "backoff active after a failure");
+
+        clear_refresh_backoff();
+        assert!(!refresh_in_backoff(), "backoff cleared after success");
+    }
+
+    /// Hits the network: verifies that the live meshllm/catalog dataset
+    /// downloads successfully with the patched hf-hub (redirect Content-Length
+    /// no longer mistaken for the file size). Run with:
+    ///   cargo test -p mesh-llm-host-runtime refresh_catalog_live -- --ignored --nocapture
+    #[test]
+    #[ignore = "network: downloads the live meshllm/catalog dataset"]
+    #[serial]
+    fn refresh_catalog_live() {
+        refresh_catalog().expect("live catalog refresh should succeed");
+        let entries = catalog_entries().expect("catalog entries loaded");
+        assert!(!entries.is_empty(), "expected at least one catalog entry");
+        println!("refresh_catalog_live: {} entries", entries.len());
+    }
 
     #[test]
     fn deserializes_catalog_entry() {

@@ -1,4 +1,24 @@
-use super::*;
+use crate::frontend::EmbeddedOpenAiRequestDefaults;
+use crate::frontend::EmbeddedReasoningBudget;
+use crate::frontend::EmbeddedReasoningEnabled;
+use crate::frontend::EmbeddedReasoningFormat;
+use base64::Engine;
+use openai_frontend::ChatCompletionRequest;
+use openai_frontend::CompletionRequest;
+use openai_frontend::MessageContent;
+use openai_frontend::MessageContentPart;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use serde_json::Value;
+use skippy_protocol::binary::MAX_STAGE_LOGIT_BIAS;
+use skippy_protocol::binary::StageLogitBias as WireLogitBias;
+use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
+use skippy_runtime::ChatReasoningFormat;
+use skippy_runtime::ChatTemplateOptions;
+use skippy_runtime::LogitBias as RuntimeLogitBias;
+use skippy_runtime::MAX_LOGIT_BIAS;
+use skippy_runtime::MediaInput;
+use skippy_runtime::SamplingConfig;
 
 struct SharedRequestFields<'a> {
     presence_penalty: &'a mut Option<f32>,
@@ -8,8 +28,6 @@ struct SharedRequestFields<'a> {
     temperature: &'a mut Option<f32>,
     top_p: &'a mut Option<f32>,
     stop: &'a mut Option<openai_frontend::StopSequence>,
-    reasoning: &'a mut Option<openai_frontend::ReasoningConfig>,
-    reasoning_effort: &'a mut Option<openai_frontend::ReasoningEffort>,
     extra: &'a mut std::collections::BTreeMap<String, serde_json::Value>,
 }
 
@@ -26,8 +44,6 @@ pub(super) fn apply_chat_request_defaults(
             temperature: &mut request.temperature,
             top_p: &mut request.top_p,
             stop: &mut request.stop,
-            reasoning: &mut request.reasoning,
-            reasoning_effort: &mut request.reasoning_effort,
             extra: &mut request.extra,
         },
         defaults,
@@ -47,8 +63,6 @@ pub(super) fn apply_completion_request_defaults(
             temperature: &mut request.temperature,
             top_p: &mut request.top_p,
             stop: &mut request.stop,
-            reasoning: &mut request.reasoning,
-            reasoning_effort: &mut request.reasoning_effort,
             extra: &mut request.extra,
         },
         defaults,
@@ -126,8 +140,11 @@ pub(super) fn media_url(part: &MessageContentPart) -> Option<String> {
 
 pub(super) fn media_data(part: &MessageContentPart) -> Option<String> {
     for key in ["input_audio", "audio", "image", "input_image", "image_url"] {
-        if let Some(value) = part.extra.get(key)
-            && let Some(data) = value.get("data").and_then(Value::as_str)
+        if let Some(data) = part
+            .extra
+            .get(key)
+            .and_then(|value| value.get("data"))
+            .and_then(Value::as_str)
         {
             return Some(data.to_string());
         }
@@ -136,11 +153,11 @@ pub(super) fn media_data(part: &MessageContentPart) -> Option<String> {
 }
 
 pub(super) fn decode_media_url(url: &str) -> OpenAiResult<Vec<u8>> {
-    if let Some((prefix, payload)) = url.split_once(',')
-        && prefix.starts_with("data:")
-        && prefix.contains(";base64")
-    {
-        return decode_base64_payload(payload);
+    match url.split_once(',') {
+        Some((prefix, payload)) if prefix.starts_with("data:") && prefix.contains(";base64") => {
+            return decode_base64_payload(payload);
+        }
+        _ => {}
     }
     if url.starts_with("http://") || url.starts_with("https://") {
         return Err(OpenAiError::unsupported(
@@ -169,8 +186,6 @@ fn apply_shared_request_defaults(
         temperature,
         top_p,
         stop,
-        reasoning,
-        reasoning_effort,
         extra,
     } = fields;
     if presence_penalty.is_none() {
@@ -197,107 +212,25 @@ fn apply_shared_request_defaults(
             .as_ref()
             .map(|values| stop_sequence_from_defaults(values.clone()));
     }
-    if extra_value_is_omitted(extra, "top_k")
-        && let Some(value) = defaults.top_k
-    {
+    if let (true, Some(value)) = (extra_value_is_omitted(extra, "top_k"), defaults.top_k) {
         extra.insert("top_k".to_string(), serde_json::json!(value));
     }
-    if extra_value_is_omitted(extra, "min_p")
-        && let Some(value) = defaults.min_p
-    {
+    if let (true, Some(value)) = (extra_value_is_omitted(extra, "min_p"), defaults.min_p) {
         extra.insert("min_p".to_string(), serde_json::json!(value));
     }
-    if extra_value_is_omitted(extra, "repeat_penalty")
-        && extra_value_is_omitted(extra, "repetition_penalty")
-        && let Some(value) = defaults.repeat_penalty
-    {
+    if let (true, Some(value)) = (
+        extra_value_is_omitted(extra, "repeat_penalty")
+            && extra_value_is_omitted(extra, "repetition_penalty"),
+        defaults.repeat_penalty,
+    ) {
         extra.insert("repeat_penalty".to_string(), serde_json::json!(value));
     }
-    if extra_value_is_omitted(extra, "repeat_last_n")
-        && let Some(value) = defaults.repeat_last_n
-    {
+    if let (true, Some(value)) = (
+        extra_value_is_omitted(extra, "repeat_last_n"),
+        defaults.repeat_last_n,
+    ) {
         extra.insert("repeat_last_n".to_string(), serde_json::json!(value));
     }
-    apply_reasoning_defaults(reasoning, reasoning_effort, extra, defaults);
-}
-
-fn apply_reasoning_defaults(
-    reasoning: &mut Option<openai_frontend::ReasoningConfig>,
-    reasoning_effort: &mut Option<openai_frontend::ReasoningEffort>,
-    extra: &mut std::collections::BTreeMap<String, serde_json::Value>,
-    defaults: &EmbeddedOpenAiRequestDefaults,
-) {
-    if explicit_reasoning_toggle_present(reasoning.as_ref(), *reasoning_effort, extra) {
-        return;
-    }
-
-    match defaults.reasoning_enabled {
-        Some(EmbeddedReasoningEnabled::Disabled) => {
-            reasoning.get_or_insert_with(Default::default).enabled = Some(false);
-            return;
-        }
-        Some(EmbeddedReasoningEnabled::Enabled) => {
-            reasoning.get_or_insert_with(Default::default).enabled = Some(true);
-        }
-        Some(EmbeddedReasoningEnabled::Auto) | None => {}
-    }
-
-    match defaults.reasoning_format {
-        Some(EmbeddedReasoningFormat::None) => {
-            reasoning.get_or_insert_with(Default::default).enabled = Some(false);
-            return;
-        }
-        Some(EmbeddedReasoningFormat::Deepseek)
-        | Some(EmbeddedReasoningFormat::DeepseekLegacy)
-        | Some(EmbeddedReasoningFormat::Hidden) => {
-            reasoning.get_or_insert_with(Default::default).enabled = Some(true);
-        }
-        Some(EmbeddedReasoningFormat::Auto) | None => {}
-    }
-
-    if explicit_reasoning_budget_present(reasoning.as_ref(), *reasoning_effort, extra) {
-        return;
-    }
-
-    match defaults.reasoning_budget {
-        Some(EmbeddedReasoningBudget::Tokens(value)) => {
-            reasoning.get_or_insert_with(Default::default).max_tokens = Some(value);
-        }
-        Some(EmbeddedReasoningBudget::Effort(value)) => {
-            reasoning.get_or_insert_with(Default::default).effort = Some(value);
-        }
-        Some(EmbeddedReasoningBudget::Auto) | None => {}
-    }
-}
-
-fn explicit_reasoning_toggle_present(
-    reasoning: Option<&openai_frontend::ReasoningConfig>,
-    reasoning_effort: Option<openai_frontend::ReasoningEffort>,
-    extra: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> bool {
-    reasoning.is_some_and(|value| value.enabled.is_some() || value.effort.is_some())
-        || reasoning_effort.is_some()
-        || openai_frontend::THINKING_BOOLEAN_ALIASES
-            .iter()
-            .any(|field| !extra_value_is_omitted(extra, field))
-        || extra
-            .get("chat_template_kwargs")
-            .and_then(Value::as_object)
-            .is_some_and(|object| {
-                openai_frontend::THINKING_BOOLEAN_ALIASES
-                    .iter()
-                    .any(|field| object.get(*field).is_some_and(|value| !value.is_null()))
-            })
-}
-
-fn explicit_reasoning_budget_present(
-    reasoning: Option<&openai_frontend::ReasoningConfig>,
-    reasoning_effort: Option<openai_frontend::ReasoningEffort>,
-    extra: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> bool {
-    reasoning.is_some_and(|value| value.max_tokens.is_some() || value.effort.is_some())
-        || reasoning_effort.is_some()
-        || !extra_value_is_omitted(extra, "thinking_budget")
 }
 
 fn extra_value_is_omitted(
@@ -345,16 +278,57 @@ pub(super) fn completion_sampling_config(
 
 pub(super) fn chat_template_options(
     request: &ChatCompletionRequest,
+    defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> OpenAiResult<ChatTemplateOptions> {
-    let reasoning_options = normalize_reasoning_template_options(
+    let reasoning = openai_frontend::normalize_reasoning_template_options(
         request.reasoning.as_ref(),
         request.reasoning_effort,
         &request.extra,
     )?;
     Ok(ChatTemplateOptions {
-        enable_thinking: reasoning_options.enable_thinking,
+        reasoning_format: Some(chat_reasoning_format(defaults.reasoning_format)),
+        enable_thinking: reasoning
+            .enable_thinking
+            .or_else(|| default_reasoning_enabled(defaults.reasoning_enabled))
+            .or_else(|| default_reasoning_budget_enabled(defaults.reasoning_budget)),
+        chat_template_kwargs: (!reasoning.chat_template_kwargs.is_empty())
+            .then(|| serde_json::to_string(&reasoning.chat_template_kwargs))
+            .transpose()
+            .map_err(|error| {
+                OpenAiError::backend(format!("serialize chat template kwargs: {error}"))
+            })?,
         ..ChatTemplateOptions::default()
     })
+}
+
+fn default_reasoning_enabled(value: Option<EmbeddedReasoningEnabled>) -> Option<bool> {
+    match value {
+        Some(EmbeddedReasoningEnabled::Disabled) => Some(false),
+        Some(EmbeddedReasoningEnabled::Enabled) => Some(true),
+        Some(EmbeddedReasoningEnabled::Auto) | None => None,
+    }
+}
+
+fn default_reasoning_budget_enabled(value: Option<EmbeddedReasoningBudget>) -> Option<bool> {
+    match value {
+        Some(EmbeddedReasoningBudget::Tokens(0)) => Some(false),
+        Some(EmbeddedReasoningBudget::Tokens(_)) => Some(true),
+        Some(EmbeddedReasoningBudget::Effort(openai_frontend::ReasoningEffort::None)) => {
+            Some(false)
+        }
+        Some(EmbeddedReasoningBudget::Effort(_)) => Some(true),
+        Some(EmbeddedReasoningBudget::Auto) | None => None,
+    }
+}
+
+fn chat_reasoning_format(value: Option<EmbeddedReasoningFormat>) -> ChatReasoningFormat {
+    match value.unwrap_or(EmbeddedReasoningFormat::Hidden) {
+        EmbeddedReasoningFormat::Auto => ChatReasoningFormat::Auto,
+        EmbeddedReasoningFormat::None => ChatReasoningFormat::None,
+        EmbeddedReasoningFormat::Deepseek => ChatReasoningFormat::Deepseek,
+        EmbeddedReasoningFormat::DeepseekLegacy => ChatReasoningFormat::DeepseekLegacy,
+        EmbeddedReasoningFormat::Hidden => ChatReasoningFormat::Hidden,
+    }
 }
 
 pub(super) fn ensure_chat_runtime_features_supported(
@@ -363,15 +337,6 @@ pub(super) fn ensure_chat_runtime_features_supported(
     if request.logprobs.unwrap_or(false) || request.top_logprobs.is_some() {
         return Err(OpenAiError::unsupported(
             "chat logprobs are parsed by openai-frontend but not yet implemented by skippy runtime",
-        ));
-    }
-    if request
-        .response_format
-        .as_ref()
-        .is_some_and(requires_structured_output)
-    {
-        return Err(OpenAiError::unsupported(
-            "structured output is parsed by openai-frontend but not yet implemented by skippy runtime",
         ));
     }
     Ok(())
@@ -390,14 +355,6 @@ pub(super) fn ensure_completion_runtime_features_supported(
 
 pub(super) fn has_requested_tools(value: &Value) -> bool {
     !matches!(value, Value::Array(items) if items.is_empty())
-}
-
-pub(super) fn requires_structured_output(value: &Value) -> bool {
-    value
-        .as_object()
-        .and_then(|object| object.get("type"))
-        .and_then(Value::as_str)
-        .is_some_and(|format_type| format_type != "text")
 }
 
 pub(super) fn ensure_extra_generation_fields_absent(

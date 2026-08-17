@@ -51,7 +51,7 @@ The default of 4 is a fixed number with no relationship to available VRAM, conte
    ```
    kv_bytes_per_token = 2 × n_kv_heads × head_dim × bytes_per_element × n_layers
    ```
-   With GQA and Q4/Q8 KV quantization, this can be 4–8× cheaper than naive F16 assumptions. A model with 8 KV heads at Q4 has vastly different headroom than a full-attention F16 model of the same size.
+   With GQA and Q4/Q8 KV quantization, this can be 4–8× cheaper than naive F16 assumptions. A model with 8 KV heads at Q4 has vastly different headroom than a full-attention F16 model of the same size. It is also highly variable based on the model family, so tuning for 1 is not applicable to others.
 
 3. **VRAM thresholds are not anchored to real KV math.** The `30 GB → 65 536` bracket was hand-tuned for a specific generation of models (likely 7-13B dense). A 70B model filling 30 GB free VRAM has 4× more layers and larger heads, so 65 536 tokens will OOM where the heuristic says it won't.
 

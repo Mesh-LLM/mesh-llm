@@ -4,7 +4,7 @@ struct DecodeStepReply {
     elapsed_ms: f64,
 }
 
-struct VerifySpanReply {
+struct VerifyWindowReply {
     predicted_tokens: Vec<i32>,
     stats: StageReplyStats,
     write_ms: f64,
@@ -56,9 +56,7 @@ fn send_decode_step(
         .with_context(|| format!("send decode step {decode_index}"))?;
     let reply = recv_reply(&mut *stream)
         .with_context(|| format!("receive decode step {decode_index} reply"))?;
-    if reply.kind != WireReplyKind::PredictedToken {
-        bail!("expected predicted-token reply, got {:?}", reply.kind);
-    }
+    ensure_reply_kind(&reply, WireReplyKind::PredictedToken)?;
     Ok(DecodeStepReply {
         predicted: reply.predicted,
         stats: reply.stats,
@@ -67,36 +65,31 @@ fn send_decode_step(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn send_verify_span(
+fn send_verify_window(
     stream: &mut TcpStream,
     wire_dtype: WireActivationDType,
-    prompt_index: usize,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,
     pos_start: usize,
     decode_index: usize,
     tokens: &[i32],
-    checkpoint: bool,
-) -> Result<VerifySpanReply> {
+) -> Result<VerifyWindowReply> {
     if tokens.is_empty() {
-        bail!("verify span requires at least one token");
+        bail!("verify window requires at least one token");
     }
     let verify_started = Instant::now();
-    let mut state = StageStateHeader::new(WireMessageKind::VerifySpan, wire_dtype);
-    state.seq_id = i32::try_from(prompt_index).context("prompt index exceeds i32")?;
+    let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow, wire_dtype);
+    state.seq_id = i32::try_from(decode_index).context("decode step exceeds i32")?;
     state.prompt_token_count =
         i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?;
     state.decode_step = i32::try_from(decode_index).context("decode step exceeds i32")?;
     state.current_token = tokens[0];
     state.source_stage_index = -1;
-    if !checkpoint {
-        state.flags |= state_flags::SKIP_VERIFY_CHECKPOINT;
-    }
     let message = StageWireMessage {
-        kind: WireMessageKind::VerifySpan,
-        pos_start: i32::try_from(pos_start).context("verify span position exceeds i32")?,
-        token_count: i32::try_from(tokens.len()).context("verify span exceeds i32")?,
+        kind: WireMessageKind::VerifyWindow,
+        pos_start: i32::try_from(pos_start).context("verify window position exceeds i32")?,
+        token_count: i32::try_from(tokens.len()).context("verify window exceeds i32")?,
         state,
         request_id,
         session_id,
@@ -109,21 +102,53 @@ fn send_verify_span(
     };
     let write_started = Instant::now();
     write_stage_message(&mut *stream, &message, wire_dtype)
-        .with_context(|| format!("send verify span at decode step {decode_index}"))?;
+        .with_context(|| format!("send verify window at decode step {decode_index}"))?;
     let write_ms = elapsed_ms(write_started);
     let wait_started = Instant::now();
     let reply = recv_reply(&mut *stream)
-        .with_context(|| format!("receive verify span {decode_index} reply"))?;
+        .with_context(|| format!("receive verify window {decode_index} reply"))?;
+    ensure_reply_kind(&reply, WireReplyKind::PredictedTokens)?;
     let wait_ms = elapsed_ms(wait_started);
-    if reply.kind != WireReplyKind::PredictedTokens {
-        bail!("expected predicted-tokens reply, got {:?}", reply.kind);
-    }
-    Ok(VerifySpanReply {
+    Ok(VerifyWindowReply {
         predicted_tokens: reply.predicted_tokens,
         stats: reply.stats,
         write_ms,
         wait_ms,
         elapsed_ms: elapsed_ms(verify_started),
+    })
+}
+
+fn ensure_reply_kind(reply: &StageReply, expected: WireReplyKind) -> Result<()> {
+    if reply.kind != expected {
+        bail!("expected {expected:?} reply, got {:?}", reply.kind);
+    }
+    Ok(())
+}
+
+fn send_generation_config(
+    stream: &mut TcpStream,
+    wire_dtype: WireActivationDType,
+    request_id: u64,
+    session_id: u64,
+    prompt_token_count: usize,
+) -> Result<SessionControlReply> {
+    let started = Instant::now();
+    let message = StageWireMessage::configure_generation(
+        wire_dtype,
+        request_id,
+        session_id,
+        i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?,
+        None,
+        None,
+    );
+    write_stage_message(&mut *stream, &message, wire_dtype).context("send configure-generation")?;
+    let reply = recv_reply(&mut *stream).context("receive configure-generation ACK")?;
+    if reply.kind != WireReplyKind::Ack {
+        bail!("expected configure-generation ACK, got {:?}", reply.kind);
+    }
+    Ok(SessionControlReply {
+        stats: reply.stats,
+        elapsed_ms: elapsed_ms(started),
     })
 }
 
@@ -220,30 +245,6 @@ fn print_stats(stats: Stats) {
             format_stage_mask(stats.reply_stats.kv_hit_stage_mask),
             format_stage_mask(stats.reply_stats.kv_record_stage_mask)
         );
-        if stats.reply_stats.restore_total_us > 0 {
-            eprintln!(
-                "  kv       restore_ms total={:.2} flush={:.2} prefill_drain={:.2} local={:.2} downstream_write={:.2} downstream_wait={:.2} drained_replies={}",
-                us_to_ms(stats.reply_stats.restore_total_us),
-                us_to_ms(stats.reply_stats.restore_flush_us),
-                us_to_ms(stats.reply_stats.restore_prefill_drain_us),
-                us_to_ms(stats.reply_stats.restore_local_us),
-                us_to_ms(stats.reply_stats.restore_downstream_write_us),
-                us_to_ms(stats.reply_stats.restore_downstream_wait_us),
-                stats.reply_stats.restore_prefill_drained_replies
-            );
-        }
-        if stats.reply_stats.checkpoint_total_us > 0 {
-            eprintln!(
-                "  kv       checkpoint_ms total={:.2} flush={:.2} prefill_drain={:.2} local={:.2} downstream_write={:.2} downstream_wait={:.2} drained_replies={}",
-                us_to_ms(stats.reply_stats.checkpoint_total_us),
-                us_to_ms(stats.reply_stats.checkpoint_flush_us),
-                us_to_ms(stats.reply_stats.checkpoint_prefill_drain_us),
-                us_to_ms(stats.reply_stats.checkpoint_local_us),
-                us_to_ms(stats.reply_stats.checkpoint_downstream_write_us),
-                us_to_ms(stats.reply_stats.checkpoint_downstream_wait_us),
-                stats.reply_stats.checkpoint_prefill_drained_replies
-            );
-        }
     } else {
         eprintln!("  reuse    exact_prefix=not_reported record=not_reported");
         eprintln!("  kv       no lookup/record events reported");
@@ -270,14 +271,13 @@ fn print_stats(stats: Stats) {
                 / stats.speculative_stats.rejected_windows as f64
         };
         eprintln!(
-            "  spec     full_accept_windows={} accepted_stop_windows={} rejected_windows={} early_reject_windows={} tail_reject_windows={} early_reject_stop_windows={} repair_required_windows={} avg_reject_pos={:.2}",
+            "  spec     full_accept_windows={} accepted_stop_windows={} rejected_windows={} early_reject_windows={} tail_reject_windows={} early_reject_stop_windows={} avg_reject_pos={:.2}",
             stats.speculative_stats.full_accept_windows,
             stats.speculative_stats.accepted_stop_windows,
             stats.speculative_stats.rejected_windows,
             stats.speculative_stats.early_reject_windows,
             stats.speculative_stats.tail_reject_windows,
             stats.speculative_stats.early_reject_stop_windows,
-            stats.speculative_stats.repair_required_windows,
             avg_reject_pos
         );
         if stats.speculative_stats.adaptive_window_max > 0 {
@@ -336,59 +336,8 @@ fn print_stats(stats: Stats) {
                 primary_verify_tok_s
             );
         }
-        if stats.speculative_stats.recovery_restores > 0 {
-            if stats.speculative_stats.checkpoint_ms > 0.0 {
-                eprintln!(
-                    "  spec     checkpoint_ms={:.2} recovery_restores={} recovery_decode_repairs={} recovery_decode_ms={:.2} recovery_reverify_tokens={} recovery_ms={:.2}",
-                    stats.speculative_stats.checkpoint_ms,
-                    stats.speculative_stats.recovery_restores,
-                    stats.speculative_stats.recovery_decode_repairs,
-                    stats.speculative_stats.recovery_decode_elapsed_ms,
-                    stats.speculative_stats.recovery_reverify_tokens,
-                    stats.speculative_stats.recovery_ms
-                );
-            } else {
-                eprintln!(
-                    "  spec     recovery_restores={} recovery_decode_repairs={} recovery_decode_ms={:.2} recovery_reverify_tokens={} recovery_ms={:.2}",
-                    stats.speculative_stats.recovery_restores,
-                    stats.speculative_stats.recovery_decode_repairs,
-                    stats.speculative_stats.recovery_decode_elapsed_ms,
-                    stats.speculative_stats.recovery_reverify_tokens,
-                    stats.speculative_stats.recovery_ms
-                );
-            }
-        } else if stats.speculative_stats.checkpoint_ms > 0.0 {
-            eprintln!(
-                "  spec     checkpoint_ms={:.2}",
-                stats.speculative_stats.checkpoint_ms
-            );
-        }
-        if stats.reply_stats.checkpoint_total_us > 0 {
-            eprintln!(
-                "  spec     checkpoint_breakdown_ms total={:.2} flush={:.2} prefill_drain={:.2} local={:.2} downstream_write={:.2} downstream_wait={:.2} drained_replies={}",
-                us_to_ms(stats.reply_stats.checkpoint_total_us),
-                us_to_ms(stats.reply_stats.checkpoint_flush_us),
-                us_to_ms(stats.reply_stats.checkpoint_prefill_drain_us),
-                us_to_ms(stats.reply_stats.checkpoint_local_us),
-                us_to_ms(stats.reply_stats.checkpoint_downstream_write_us),
-                us_to_ms(stats.reply_stats.checkpoint_downstream_wait_us),
-                stats.reply_stats.checkpoint_prefill_drained_replies
-            );
-        }
-        if stats.reply_stats.restore_total_us > 0 {
-            eprintln!(
-                "  spec     restore_breakdown_ms total={:.2} flush={:.2} prefill_drain={:.2} local={:.2} downstream_write={:.2} downstream_wait={:.2} drained_replies={}",
-                us_to_ms(stats.reply_stats.restore_total_us),
-                us_to_ms(stats.reply_stats.restore_flush_us),
-                us_to_ms(stats.reply_stats.restore_prefill_drain_us),
-                us_to_ms(stats.reply_stats.restore_local_us),
-                us_to_ms(stats.reply_stats.restore_downstream_write_us),
-                us_to_ms(stats.reply_stats.restore_downstream_wait_us),
-                stats.reply_stats.restore_prefill_drained_replies
-            );
-        }
-        if stats.reply_stats.verify_span_total_us > 0 {
-            let verify_total_ms = us_to_ms(stats.reply_stats.verify_span_total_us);
+        if stats.reply_stats.verify_window_total_us > 0 {
+            let verify_total_ms = us_to_ms(stats.reply_stats.verify_window_total_us);
             let verify_tok_s = if verify_total_ms > 0.0 {
                 1000.0 * stats.speculative_stats.draft_tokens as f64 / verify_total_ms
             } else {
@@ -397,83 +346,27 @@ fn print_stats(stats: Stats) {
             eprintln!(
                 "  spec     verify_breakdown_ms total={:.2} compute={:.2} forward={:.2} downstream_wait={:.2} stages={} proposed_tok_s={:.2}",
                 verify_total_ms,
-                us_to_ms(stats.reply_stats.verify_span_compute_us),
-                us_to_ms(stats.reply_stats.verify_span_forward_write_us),
-                us_to_ms(stats.reply_stats.verify_span_downstream_wait_us),
-                stats.reply_stats.verify_span_stage_count,
+                us_to_ms(stats.reply_stats.verify_window_compute_us),
+                us_to_ms(stats.reply_stats.verify_window_forward_write_us),
+                us_to_ms(stats.reply_stats.verify_window_downstream_wait_us),
+                stats.reply_stats.verify_window_stage_count,
                 verify_tok_s
             );
-            let protocol_avg_span = if stats.reply_stats.verify_span_request_count > 0 {
-                stats.reply_stats.verify_span_token_count as f64
-                    / stats.reply_stats.verify_span_request_count as f64
+            let protocol_avg_span = if stats.reply_stats.verify_window_request_count > 0 {
+                stats.reply_stats.verify_window_token_count as f64
+                    / stats.reply_stats.verify_window_request_count as f64
             } else {
                 0.0
             };
             eprintln!(
-                "  spec     verify_batch_stats protocol_requests={} protocol_tokens={} max_span={} avg_span={:.2} checkpointed_requests={} skip_checkpoint_requests={}",
-                stats.reply_stats.verify_span_request_count,
-                stats.reply_stats.verify_span_token_count,
-                stats.reply_stats.verify_span_max_tokens,
-                protocol_avg_span,
-                stats.reply_stats.verify_span_checkpointed_requests,
-                stats.reply_stats.verify_span_skip_checkpoint_requests
-            );
-        }
-        if stats.speculative_stats.recovery_reverify_elapsed_ms > 0.0 {
-            eprintln!(
-                "  spec     recovery_reverify_breakdown_ms elapsed={:.2} write={:.2} wait={:.2} stage_compute={:.2} stage_forward={:.2} stage_downstream_wait={:.2} stages={}",
-                stats.speculative_stats.recovery_reverify_elapsed_ms,
-                stats.speculative_stats.recovery_reverify_write_ms,
-                stats.speculative_stats.recovery_reverify_wait_ms,
-                us_to_ms(stats.speculative_stats.recovery_reverify_compute_us),
-                us_to_ms(stats.speculative_stats.recovery_reverify_forward_write_us),
-                us_to_ms(stats.speculative_stats.recovery_reverify_downstream_wait_us),
-                stats.speculative_stats.recovery_reverify_stage_count
+                "  spec     verify_batch_stats protocol_requests={} protocol_tokens={} max_span={} avg_span={:.2}",
+                stats.reply_stats.verify_window_request_count,
+                stats.reply_stats.verify_window_token_count,
+                stats.reply_stats.verify_window_max_tokens,
+                protocol_avg_span
             );
         }
     }
-}
-
-fn send_session_control(
-    stream: &mut TcpStream,
-    wire_dtype: WireActivationDType,
-    prompt_index: usize,
-    request_id: u64,
-    session_id: u64,
-    kind: WireMessageKind,
-) -> Result<SessionControlReply> {
-    if !kind.is_session_control() {
-        bail!("session control requires a session-control message kind");
-    }
-    let started = Instant::now();
-    let mut state = StageStateHeader::new(kind, wire_dtype);
-    state.seq_id = i32::try_from(prompt_index).context("prompt index exceeds i32")?;
-    state.source_stage_index = -1;
-    let message = StageWireMessage {
-        kind,
-        pos_start: 0,
-        token_count: 0,
-        state,
-        request_id,
-        session_id,
-        sampling: None,
-        chat_sampling_metadata: None,
-        tokens: Vec::new(),
-        positions: Vec::new(),
-        activation: Vec::new(),
-        raw_bytes: Vec::new(),
-    };
-    write_stage_message(&mut *stream, &message, wire_dtype)
-        .with_context(|| format!("send session control {kind:?}"))?;
-    let reply =
-        recv_reply(&mut *stream).with_context(|| format!("receive session control {kind:?}"))?;
-    if reply.kind != WireReplyKind::Ack {
-        bail!("expected session-control ACK, got {:?}", reply.kind);
-    }
-    Ok(SessionControlReply {
-        stats: reply.stats,
-        elapsed_ms: elapsed_ms(started),
-    })
 }
 
 fn send_try_restore_prefill(
@@ -601,9 +494,5 @@ fn stable_wire_id(parts: &[&[u8]]) -> u64 {
             .try_into()
             .expect("8-byte digest prefix"),
     );
-    if id == 0 {
-        1
-    } else {
-        id
-    }
+    if id == 0 { 1 } else { id }
 }

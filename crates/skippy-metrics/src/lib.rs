@@ -6,6 +6,12 @@ pub mod attr {
     pub const TOPOLOGY_ID: &str = "skippy.topology_id";
     pub const REQUEST_ID: &str = "skippy.request_id";
     pub const SESSION_ID: &str = "skippy.session_id";
+    pub const PROMPT_INDEX: &str = "skippy.prompt_index";
+    pub const MESSAGE_KIND: &str = "skippy.message_kind";
+    pub const TOKEN_COUNT: &str = "skippy.token_count";
+    pub const CHECKPOINT_GENERATION: &str = "skippy.checkpoint_generation";
+    pub const PROMPT_TOKEN_COUNT: &str = "skippy.prompt_token_count";
+    pub const DECODE_STEP: &str = "skippy.decode_step";
     pub const STAGE_ID: &str = "skippy.stage_id";
     pub const STAGE_INDEX: &str = "skippy.stage_index";
     pub const LAYER_START: &str = "skippy.layer_start";
@@ -17,6 +23,10 @@ pub mod attr {
         "skippy.kv.proactive_eviction_target_tokens";
     pub const KV_PROACTIVE_EVICTED_ENTRIES: &str = "skippy.kv.proactive_evicted_entries";
     pub const KV_PROACTIVE_EVICTED_TOKENS: &str = "skippy.kv.proactive_evicted_tokens";
+    pub const VERIFY_WINDOW_DIRECT_RETURN_UPSTREAM_OPENED: &str =
+        "llama_stage.verify_window.direct_return_upstream_opened";
+    pub const VERIFY_WINDOW_DIRECT_RETURN_REVERSE_FALLBACK: &str =
+        "llama_stage.verify_window.direct_return_reverse_fallback";
 }
 
 pub mod metric {

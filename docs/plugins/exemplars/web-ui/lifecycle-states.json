@@ -1,0 +1,63 @@
+{
+  "plugin": "web-ui-exemplar",
+  "non_ui_capabilities": ["exemplar.notes.v1"],
+  "states": {
+    "none": {
+      "state": "none",
+      "declared": false,
+      "enabled": false,
+      "available": false,
+      "non_ui_capabilities": ["exemplar.notes.v1"]
+    },
+    "ready": {
+      "state": "ready",
+      "declared": true,
+      "enabled": true,
+      "available": true,
+      "asset_base_url": "/api/plugins/web-ui-exemplar/web-ui/assets/",
+      "pages": [
+        {
+          "id": "overview",
+          "label": "Exemplar Notes",
+          "route": "overview",
+          "bundle_id": "main",
+          "entry_script": "register-mesh-plugin-ui.js"
+        }
+      ],
+      "config_sections": [
+        {
+          "id": "page-actions",
+          "title": "Exemplar page",
+          "entry_script": "register-mesh-plugin-ui.js",
+          "parent_tab": "integrations",
+          "bundle_id": "main"
+        }
+      ],
+      "non_ui_capabilities": ["exemplar.notes.v1"]
+    },
+    "disabled": {
+      "state": "disabled",
+      "declared": true,
+      "enabled": false,
+      "available": false,
+      "unavailable_reason": "web UI disabled by configuration",
+      "non_ui_capabilities": ["exemplar.notes.v1"]
+    },
+    "invalid": {
+      "state": "invalid",
+      "declared": true,
+      "enabled": true,
+      "available": false,
+      "unavailable_reason": "web UI bundle root `bundle` is missing from the installed package",
+      "non_ui_capabilities": ["exemplar.notes.v1"]
+    },
+    "plugin_not_running": {
+      "state": "plugin_not_running",
+      "declared": true,
+      "enabled": true,
+      "available": false,
+      "unavailable_reason": "plugin process is disabled or not running",
+      "non_ui_capabilities": ["exemplar.notes.v1"]
+    }
+  }
+}

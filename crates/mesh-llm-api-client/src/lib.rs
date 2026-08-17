@@ -7,8 +7,8 @@ mod identity;
 mod token;
 
 pub use client::{
-    ChatMessage, ChatRequest, ClientBuilder, ClientConfig, MAX_RECONNECT_ATTEMPTS, MeshApiError,
-    MeshClient, Model, RequestId, ResponsesRequest, Status,
+    ChatMessage, ChatRequest, ClientBuilder, ClientConfig, ClientTransport, MAX_RECONNECT_ATTEMPTS,
+    MeshApiError, MeshClient, Model, RequestId, ResponsesRequest, Status,
 };
 pub use discover::{
     AutoConnectResult, PublicMesh, PublicMeshQuery, create_auto_client, discover_public_meshes,

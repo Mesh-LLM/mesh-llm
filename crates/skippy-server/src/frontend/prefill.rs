@@ -1,4 +1,15 @@
-use super::*;
+use crate::frontend::generation::PhaseTimer;
+use crate::frontend::util::openai_io_error;
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::anyhow;
+use anyhow::bail;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use skippy_protocol::binary::StageReplyStats;
+use skippy_protocol::binary::WireReplyKind;
+use skippy_protocol::binary::recv_reply;
+use std::net::TcpStream;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PrefillChunkSchedule {
@@ -193,10 +204,17 @@ impl PrefillChunkPolicy {
 }
 
 impl PrefillChunkPlanner {
-    pub(super) fn chunk_size_for(&mut self, chunk_index: usize) -> usize {
+    pub(super) fn chunk_size_for(
+        &mut self,
+        chunk_index: usize,
+        prefill_token_count: usize,
+    ) -> usize {
         match &self.policy {
             PrefillChunkPolicy::Fixed { chunk_size } => *chunk_size,
             PrefillChunkPolicy::Schedule { schedule, .. } => schedule.chunk_size_for(chunk_index),
+            PrefillChunkPolicy::AdaptiveRamp {
+                fixed_chunk_size, ..
+            } if chunk_index == 0 && prefill_token_count <= *fixed_chunk_size => *fixed_chunk_size,
             PrefillChunkPolicy::AdaptiveRamp { .. } => self.next_adaptive_size,
         }
     }
@@ -211,7 +229,8 @@ impl PrefillChunkPlanner {
         let compute_ms = observation.compute_ms.max(0.001);
         let downstream_hidden = observation.downstream_wait_ms <= compute_ms * 0.75
             && observation.forward_write_ms <= compute_ms * 0.25;
-        let downstream_exposed = observation.downstream_wait_ms > compute_ms * 1.25;
+        let downstream_exposed = observation.downstream_wait_ms > compute_ms * 1.25
+            || observation.forward_write_ms > compute_ms * 0.75;
         if downstream_hidden {
             self.next_adaptive_size = self.next_adaptive_size.saturating_add(*step).min(*max);
         } else if downstream_exposed {
@@ -219,6 +238,7 @@ impl PrefillChunkPlanner {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn advance_without_observation(&mut self) {
         let PrefillChunkPolicy::AdaptiveRamp { step, max, .. } = &self.policy else {
             return;

@@ -8,15 +8,21 @@ describe('configuration-tab-ids', () => {
   it('omits gated configuration tabs when their flags are disabled', () => {
     expect(
       getEnabledConfigurationTabIds({
-        integrationsEnabled: false,
+        pluginsEnabled: false,
         signingAttestationEnabled: false,
-        wakePolicyEnabled: false
+        wakePolicyEnabled: false,
+        logsSettingsEnabled: false
       })
-    ).toEqual(['defaults', 'local-deployment', 'toml-review'])
+    ).toEqual(['general', 'runtime', 'models', 'network', 'local-deployment', 'toml-review'])
   })
 
   it('treats the Reserves tab as invalid when its feature flag is disabled', () => {
     expect(isConfigurationTabId('wake-policy', { wakePolicyEnabled: false })).toBe(false)
     expect(isConfigurationTabId('wake-policy', { wakePolicyEnabled: true })).toBe(true)
+  })
+
+  it('treats the Logs tab as invalid when its feature flag is disabled', () => {
+    expect(isConfigurationTabId('audit', { logsSettingsEnabled: false })).toBe(false)
+    expect(isConfigurationTabId('audit', { logsSettingsEnabled: true })).toBe(true)
   })
 })

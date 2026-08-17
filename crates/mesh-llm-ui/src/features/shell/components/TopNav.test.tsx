@@ -76,6 +76,17 @@ describe('TopNav', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
   })
 
+  it('includes Logs in primary navigation and marks its route selected', () => {
+    renderTopNav({ tab: 'logs', tabHrefs: { logs: '/logs?provider=reserve-a' } })
+
+    const logsLink = screen
+      .getAllByRole('link', { name: 'Logs' })
+      .find((link) => link.getAttribute('href') === '/logs?provider=reserve-a')
+    if (!logsLink) throw new Error('Logs link was not rendered')
+    expect(logsLink).toHaveAttribute('href', '/logs?provider=reserve-a')
+    expect(logsLink).toHaveAttribute('aria-current', 'page')
+  })
+
   it('opens API instructions and keeps copy state scoped to the clicked row', async () => {
     const user = userEvent.setup()
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
@@ -188,8 +199,8 @@ describe('TopNav', () => {
     renderTopNav({
       apiUrl: 'http://mesh.local:3131/v1',
       apiAccessLinks: [
-        { href: 'https://docs.meshllm.cloud/', label: 'Docs' },
-        { href: 'https://docs.meshllm.cloud/#install', label: 'Install' }
+        { href: 'https://meshllm.cloud/', label: 'Docs' },
+        { href: 'https://meshllm.cloud/#install', label: 'Install' }
       ],
       joinCommands: [
         {
@@ -210,9 +221,9 @@ describe('TopNav', () => {
         }
       ],
       joinLinks: [
-        { href: 'https://docs.meshllm.cloud/', label: 'Setup' },
-        { href: 'https://docs.meshllm.cloud/#install', label: 'Install' },
-        { href: 'https://docs.meshllm.cloud/#blackboard', label: 'Blackboard' }
+        { href: 'https://meshllm.cloud/', label: 'Setup' },
+        { href: 'https://meshllm.cloud/#install', label: 'Install' },
+        { href: 'https://meshllm.cloud/#blackboard', label: 'Blackboard' }
       ]
     })
 
@@ -334,6 +345,67 @@ describe('TopNav', () => {
     expect(onTabChange).toHaveBeenCalledWith('configuration')
   })
 
+  it('renders a single auxiliary plugin page as a direct navigation item', async () => {
+    const user = userEvent.setup()
+    const onPluginPageChange = vi.fn()
+
+    renderTopNav({
+      onPluginPageChange,
+      pluginNavItems: [
+        {
+          pluginName: 'blackboard',
+          pageId: 'dashboard',
+          label: 'Blackboard dashboard',
+          href: '/plugins/blackboard/dashboard',
+          active: true
+        }
+      ]
+    })
+
+    expect(screen.getByRole('link', { name: 'Network' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Chat' })).toBeInTheDocument()
+
+    const pluginLink = screen.getByRole('link', { name: 'Blackboard dashboard' })
+    expect(pluginLink).toHaveAttribute('href', '/plugins/blackboard/dashboard')
+    expect(pluginLink).toHaveAttribute('aria-current', 'page')
+
+    await user.click(pluginLink)
+
+    expect(onPluginPageChange).toHaveBeenCalledWith({
+      pluginName: 'blackboard',
+      pageId: 'dashboard',
+      label: 'Blackboard dashboard',
+      href: '/plugins/blackboard/dashboard',
+      active: true
+    })
+  })
+
+  it('groups multiple plugin pages in the auxiliary navigation menu', async () => {
+    const user = userEvent.setup()
+
+    renderTopNav({
+      pluginNavItems: [
+        {
+          pluginName: 'blackboard',
+          pageId: 'dashboard',
+          label: 'Blackboard dashboard',
+          href: '/plugins/blackboard/dashboard'
+        },
+        {
+          pluginName: 'notes',
+          pageId: 'notes',
+          label: 'Notes',
+          href: '/plugins/notes/notes'
+        }
+      ]
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Plugin pages' }))
+
+    expect(await screen.findByRole('link', { name: /Blackboard dashboard/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Notes/ })).toBeInTheDocument()
+  })
+
   it('selects auto, dark, and light from the nav theme menu', async () => {
     const user = userEvent.setup()
     const onThemeChange = vi.fn()
@@ -395,11 +467,12 @@ describe('TopNav', () => {
   })
 
   it('hides disabled primary tabs while keeping enabled tabs available', () => {
-    renderTopNav({ enabledTabs: { reserves: false, configuration: false } })
+    renderTopNav({ enabledTabs: { reserves: false, configuration: false, logs: false } })
 
     expect(screen.getByRole('link', { name: 'Network' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Chat' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Reserves' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Logs' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Configuration' })).not.toBeInTheDocument()
   })
 

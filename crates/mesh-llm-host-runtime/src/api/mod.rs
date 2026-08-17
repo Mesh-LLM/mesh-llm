@@ -15,6 +15,8 @@
 //!   GET  /api/runtime/endpoints — registered plugin endpoint state (JSON)
 //!   GET  /api/runtime/processes — local inference process state (JSON)
 //!   GET  /api/runtime/stages — backend-neutral staged-serving state (JSON)
+//!   GET  /api/runtime/config-schema — merged built-in and installed-plugin config schema (JSON)
+//!   GET  /api/runtime/config-control-state — local-only runtime config availability/options overlay (JSON)
 //!   GET  /api/runtime/control-bootstrap — local-only owner-control bootstrap policy (JSON)
 //!   POST /api/runtime/control/get-config — run local owner-control get-config against an explicit endpoint
 //!   POST /api/runtime/control/refresh-inventory — run local owner-control refresh-inventory against an explicit endpoint
@@ -23,7 +25,8 @@
 //!   DELETE /api/runtime/models/{model} — unload a local model
 //!   DELETE /api/runtime/instances/{instance_id} — unload one local runtime instance
 //!   GET  /api/events    — SSE stream of status updates
-//!   GET  /api/discover  — browse Nostr-published meshes
+//!   GET  /api/discover  — browse Nostr meshes or LAN mDNS advertisements
+//!   POST /api/discovery/lan-details — invite-token proof-gated LAN detail
 //!   POST /api/chat      — proxy to chat completions API
 //!   POST /api/responses — proxy to responses API
 //!   POST /api/objects   — upload a request-scoped media object
@@ -40,8 +43,10 @@
 //! and `/api/models` per-model `routing_metrics.targets` are measured on the
 //! current node only; not mesh-wide aggregates.
 
+mod access;
 mod assets;
 mod http;
+mod management_lifecycle;
 mod model_target_capacity;
 mod model_targets;
 mod routes;
@@ -62,10 +67,11 @@ pub(crate) use self::status::classify_runtime_error;
 
 use self::state::ApiInner;
 use self::status::{
-    MeshModelPayload, OpenAiGuardrailsPayload, RuntimeLlamaPayload, RuntimeProcessesPayload,
+    IntentSummary, LifecycleInstancePayload, LoggingStatusPayload, MeshModelPayload,
+    OpenAiGuardrailsPayload, RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload,
     RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
-    build_runtime_stage_payloads, build_runtime_status_payload, runtime_stage_state_label,
-    runtime_stage_wire_dtype_label,
+    build_runtime_stage_payloads, build_runtime_status_payload, derive_daemon_state,
+    runtime_stage_state_label, runtime_stage_wire_dtype_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
@@ -83,7 +89,7 @@ use tokio::sync::Mutex;
 #[cfg(test)]
 use self::http::http_body_text;
 #[cfg(test)]
-use self::status::{LocalInstance, NodeState, WakeableNode, WakeableNodeState, build_gpus};
+use self::status::{NodeState, WakeableNode, WakeableNodeState, build_gpus};
 #[cfg(test)]
 use crate::inference::election;
 #[cfg(test)]
@@ -91,7 +97,7 @@ use crate::network::proxy;
 #[cfg(test)]
 use crate::runtime::wakeable::{WakeableInventoryEntry, WakeableState};
 
-const MESH_LLM_VERSION: &str = crate::VERSION;
+const MESH_LLM_BUILD_VERSION: &str = crate::BUILD_VERSION;
 
 async fn external_inference_models(plugin_manager: &plugin::PluginManager) -> Vec<String> {
     plugin_manager
@@ -231,6 +237,7 @@ impl MeshApi {
                 is_host: false,
                 is_client: false,
                 llama_ready: false,
+                listeners_ready: false,
                 llama_port: None,
                 model_name,
                 primary_backend: None,
@@ -239,6 +246,8 @@ impl MeshApi {
                 api_port,
                 model_size_bytes,
                 mesh_name: None,
+                mesh_region: None,
+                mesh_max_clients: None,
                 latest_version: None,
                 nostr_relays: nostr::DEFAULT_RELAYS
                     .iter()
@@ -361,6 +370,10 @@ impl MeshApi {
         self.inner.lock().await.draft_name = Some(name);
     }
 
+    #[expect(
+        dead_code,
+        reason = "retained for embedded callers that toggle client presentation state"
+    )]
     pub async fn set_client(&self, is_client: bool) {
         let mut inner = self.inner.lock().await;
         inner.is_client = is_client;
@@ -375,8 +388,16 @@ impl MeshApi {
             });
     }
 
-    pub async fn set_mesh_name(&self, name: String) {
-        self.inner.lock().await.mesh_name = Some(name);
+    pub async fn set_mesh_publication_metadata(
+        &self,
+        name: Option<String>,
+        region: Option<String>,
+        max_clients: Option<usize>,
+    ) {
+        let mut inner = self.inner.lock().await;
+        inner.mesh_name = name;
+        inner.mesh_region = region;
+        inner.mesh_max_clients = max_clients;
     }
 
     pub async fn set_nostr_relays(&self, relays: Vec<String>) {
@@ -687,6 +708,7 @@ impl MeshApi {
                 crate::models::scan_local_inventory_snapshot_with_progress(|_| {})
             })
             .await
+            .unwrap_or_else(|_| runtime_data_collector.local_inventory_snapshot())
     }
 
     async fn mesh_models(&self) -> Vec<MeshModelPayload> {
@@ -728,9 +750,8 @@ impl MeshApi {
         ));
         for model in &mut models {
             let target = target_lookup
-                .by_model_name
-                .get(&model.name)
-                .or_else(|| target_lookup.by_model_ref.get(&model.name));
+                .target_by_model_name(&model.name)
+                .or_else(|| target_lookup.target_by_model_ref(&model.name));
             if let Some(target) = target {
                 model.target_rank = Some(target.rank);
                 model.explicit_interest_count = Some(target.explicit_interest_count);
@@ -842,6 +863,7 @@ impl MeshApi {
             wakeable_inventory,
             openai_guardrails,
             plugin_manager,
+            listeners_ready,
         ) = {
             let inner = self.inner.lock().await;
             (
@@ -863,6 +885,7 @@ impl MeshApi {
                 inner.wakeable_inventory.clone(),
                 inner.openai_guardrails.clone(),
                 inner.plugin_manager.clone(),
+                inner.listeners_ready,
             )
         };
         let token = node.invite_token().await;
@@ -894,10 +917,56 @@ impl MeshApi {
         append_external_inference_models(&mut serving_models, &plugin_models);
         let mut hosted_models = node.hosted_models().await;
         append_external_inference_models(&mut hosted_models, &plugin_models);
+        let peers = node.peers().await;
+
+        let local_serving = local_processes
+            .iter()
+            .any(|process| matches!(process.status.as_str(), "serving" | "ready"));
+        let plugin_ingress = !plugin_models.is_empty();
+        let proxying = plugin_ingress
+            || peers
+                .iter()
+                .any(|peer| !peer.http_routable_models().is_empty());
+        let lifecycle_instances = build_lifecycle_instances(&local_processes);
+        let has_terminal_failure = lifecycle_instances
+            .iter()
+            .any(|instance| instance.lifecycle_state == "failed");
+        let accepting_local = node
+            .activity_policy_guard
+            .check_admission(crate::runtime::IngressType::LocalOpenAi)
+            == crate::runtime::AdmissionResult::Allowed;
+        let accepting_remote = node
+            .activity_policy_guard
+            .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
+            == crate::runtime::AdmissionResult::Allowed;
+        let intents = node
+            .runtime_intents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let intent_summary = summarize_intents(&intents);
+        runtime.daemon_state = Some(derive_daemon_state(
+            crate::system::backend::runtime_shutting_down(),
+            has_terminal_failure,
+            node.activity_policy_guard.priority_degraded(),
+            local_serving,
+            proxying,
+            listeners_ready,
+        ));
+        runtime.capabilities = Some(derive_capability_flags(
+            is_client,
+            local_serving,
+            proxying,
+            plugin_ingress,
+            accepting_local,
+            accepting_remote,
+        ));
+        runtime.lifecycle_instances = lifecycle_instances;
+        runtime.intent_summary = Some(intent_summary);
 
         let mut payload = runtime_data::status_payload(runtime_data_collector.build_status_view(
             runtime_data::StatusViewInput {
-                version: MESH_LLM_VERSION.to_string(),
+                version: MESH_LLM_BUILD_VERSION.to_string(),
                 latest_version,
                 node_id,
                 owner: node.owner_summary().await,
@@ -923,7 +992,7 @@ impl MeshApi {
                 nostr_discovery,
                 publication_state: publication_state.as_str().into(),
                 local_processes,
-                peers: node.peers().await,
+                peers,
                 wakeable_nodes,
                 routing_affinity,
                 hardware,
@@ -933,6 +1002,8 @@ impl MeshApi {
         payload.wanted_model_refs = self.wanted_model_refs().await;
         payload.mesh_requirements = node.mesh_requirement_policy_summary().await;
         payload.recent_mesh_rejections = node.recent_mesh_requirement_rejections().await;
+        payload.logging =
+            crate::logging_runtime_state().map(|state| LoggingStatusPayload::from(state.status()));
         payload
     }
 
@@ -940,6 +1011,69 @@ impl MeshApi {
         let mut inner = self.inner.lock().await;
         inner.runtime_data_producer.mark_status_dirty();
         inner.sse_clients.retain(|tx| !tx.is_closed());
+    }
+}
+
+fn build_lifecycle_instances(
+    local_processes: &[RuntimeProcessPayload],
+) -> Vec<LifecycleInstancePayload> {
+    local_processes
+        .iter()
+        .filter_map(|process| {
+            process
+                .instance_id
+                .as_ref()
+                .map(|instance_id| LifecycleInstancePayload {
+                    instance_id: instance_id.clone(),
+                    model_ref: process.name.clone(),
+                    lifecycle_state: match process.status.as_str() {
+                        "ready" | "serving" => "serving",
+                        "shutting down" => "draining",
+                        "exited" => "failed",
+                        "starting" => "loading",
+                        other => other,
+                    }
+                    .to_string(),
+                })
+        })
+        .take(256)
+        .collect()
+}
+
+fn summarize_intents(intents: &[crate::runtime::DesiredRuntimeIntent]) -> IntentSummary {
+    IntentSummary {
+        durable_count: intents
+            .iter()
+            .filter(|intent| intent.persistence == crate::runtime::IntentPersistence::Process)
+            .count(),
+        session_count: intents
+            .iter()
+            .filter(|intent| intent.persistence == crate::runtime::IntentPersistence::Session)
+            .count(),
+        recent_errors: intents
+            .iter()
+            .rev()
+            .filter_map(|intent| intent.last_error.clone())
+            .take(16)
+            .collect(),
+    }
+}
+
+fn derive_capability_flags(
+    is_client: bool,
+    local_serving: bool,
+    proxying: bool,
+    plugin_ingress: bool,
+    accepting_local: bool,
+    accepting_remote: bool,
+) -> RuntimeCapabilityFlags {
+    RuntimeCapabilityFlags {
+        worker_capable: !is_client,
+        local_serving,
+        proxying,
+        plugin_ingress,
+        accepting_local,
+        accepting_remote,
     }
 }
 
@@ -963,6 +1097,7 @@ impl ServingController for MeshApi {
             control_tx
                 .send(RuntimeControlRequest::Load {
                     spec: model_ref.clone(),
+                    profile: request.profile.clone(),
                     resp: resp_tx,
                 })
                 .map_err(|_| runtime_unavailable("runtime control unavailable"))?;
@@ -978,6 +1113,7 @@ impl ServingController for MeshApi {
             let capabilities = infer_served_model_capabilities(&model_ref, &loaded.model);
             Ok(ServedModel {
                 model_ref: loaded.model_ref,
+                profile: loaded.profile,
                 model_id: loaded.model,
                 instance_id: Some(loaded.instance_id),
                 state: ServingModelState::Ready,
@@ -1060,8 +1196,15 @@ impl ServingController for MeshApi {
 
 fn served_model_from_runtime_payload(model: RuntimeModelPayload) -> ServedModel {
     let capabilities = infer_served_model_capabilities(&model.name, &model.name);
+    // Build model_ref with profile suffix for non-default profiles
+    let model_ref = if model.profile.is_empty() {
+        model.name.clone()
+    } else {
+        format!("{}#{}", model.name, model.profile)
+    };
     ServedModel {
-        model_ref: model.name.clone(),
+        model_ref,
+        profile: model.profile,
         model_id: model.name,
         instance_id: model.instance_id,
         state: serving_model_state_from_runtime_status(&model.status),

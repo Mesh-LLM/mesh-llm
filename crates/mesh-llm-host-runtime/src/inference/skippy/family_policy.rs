@@ -9,6 +9,7 @@ use crate::models::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FamilyPolicy {
     pub(crate) activation_wire_dtype: StageWireDType,
+    pub(crate) default_kv_cache_type: Option<&'static str>,
     pub(crate) prefix_cache: FamilyPrefixCachePolicy,
 }
 
@@ -51,6 +52,24 @@ impl FamilyPolicy {
         &self,
         config: &StageConfig,
     ) -> Option<StageKvCacheConfig> {
+        self.stage_kv_cache_config_for_stage_with_meta(config, None)
+    }
+
+    pub(crate) fn stage_kv_cache_config_for_package(
+        &self,
+        config: &StageConfig,
+        package_dir: &Path,
+    ) -> Option<StageKvCacheConfig> {
+        let metadata_path = package_dir.join("shared/metadata.gguf");
+        let metadata = scan_gguf_compact_meta(&metadata_path);
+        self.stage_kv_cache_config_for_stage_with_meta(config, metadata.as_ref())
+    }
+
+    fn stage_kv_cache_config_for_stage_with_meta(
+        &self,
+        config: &StageConfig,
+        package_meta: Option<&GgufCompactMeta>,
+    ) -> Option<StageKvCacheConfig> {
         match self.prefix_cache {
             FamilyPrefixCachePolicy::Disabled { .. } => None,
             FamilyPrefixCachePolicy::Auto {
@@ -58,7 +77,14 @@ impl FamilyPolicy {
                 min_tokens,
                 max_entries,
             } => {
-                let max_bytes = derive_stage_cache_max_bytes(config)?;
+                // Layer-package configs can be resolved before their GGUF
+                // parts are materialized, so there may be no scannable model
+                // metadata here yet. Keep the certified family cache enabled
+                // in that case: the resident cache still enforces its
+                // ctx-derived token budget, while zero means no additional
+                // byte cap. Disabling the cache entirely made every packaged
+                // model silently miss the family default.
+                let max_bytes = derive_stage_cache_max_bytes(config, package_meta).unwrap_or(0);
                 // The family policy's `max_entries` is a generous
                 // upper bound on cache cardinality. The real ceiling
                 // is the unified KV cell pool size: each resident
@@ -80,11 +106,47 @@ impl FamilyPolicy {
                     max_bytes,
                     min_tokens,
                     shared_prefix_stride_tokens: 128,
-                    shared_prefix_record_limit: 2,
+                    shared_prefix_record_limit: derive_shared_prefix_record_limit(bounded_entries),
                 })
             }
         }
     }
+}
+
+/// How many prefix lengths a single request may record.
+///
+/// Recording only the two longest candidates makes cross-session
+/// sharing unreachable in practice: for an 8000-token agentic prompt
+/// the recorded lengths are `[8000, 7936]`, both in the request's
+/// tail. A second session with the same system prompt and tool
+/// schemas but a different tail probes the shared region, finds
+/// nothing, and pays a full cold prefill — even though the lookup
+/// grid already probes 62 different lengths for it.
+///
+/// A deeper ladder lets `PrefixCandidatePolicy` keep the near-tail
+/// continuation pages *and* reach down into the shared
+/// system-prompt/tool-schema region. See the ladder documentation in
+/// `skippy-cache/src/config.rs` for the selection strategy.
+///
+/// The limit is bounded by cache cardinality for the same reason
+/// `max_entries` is bounded by the cell pool: every recorded
+/// candidate pins KV cells, so a ladder deeper than the cache can
+/// hold just churns the LRU and evicts the entries it recorded a
+/// moment earlier. Recording at most a quarter of the cache per
+/// request leaves room for several distinct prompts to coexist,
+/// which is the whole point of retention.
+///
+/// Never below the historical default of 2, so no configuration
+/// records less than it did before.
+const MIN_SHARED_PREFIX_RECORD_LIMIT: u64 = 2;
+const MAX_SHARED_PREFIX_RECORD_LIMIT: u64 = 6;
+
+fn derive_shared_prefix_record_limit(max_entries: usize) -> u64 {
+    let quarter_of_cache = (max_entries as u64) / 4;
+    quarter_of_cache.clamp(
+        MIN_SHARED_PREFIX_RECORD_LIMIT,
+        MAX_SHARED_PREFIX_RECORD_LIMIT,
+    )
 }
 
 /// Cap the prefix-cache `max_entries` so resident prefixes cannot
@@ -135,6 +197,18 @@ pub(crate) fn family_policy_for_stage_config(config: &StageConfig) -> FamilyPoli
     .unwrap_or_else(|| family_policy_for_model_id(&config.model_id))
 }
 
+/// Family policy derived from already-scanned GGUF metadata.
+///
+/// Split topology planning uses this so it applies the same family K/V
+/// defaults that stage loading will apply, instead of re-deriving a
+/// size-tiered guess that can badly under-estimate the KV budget.
+pub(crate) fn family_policy_for_compact_meta(
+    meta: &GgufCompactMeta,
+    model_id: Option<&str>,
+) -> FamilyPolicy {
+    family_policy_for_gguf_meta(meta, model_id)
+}
+
 pub(crate) fn family_policy_for_model_path(
     path: impl AsRef<Path>,
     model_id: Option<&str>,
@@ -159,10 +233,14 @@ fn family_policy_for_gguf_meta(meta: &GgufCompactMeta, model_id: Option<&str>) -
 }
 
 fn family_policy_for_capability(capability: &FamilyCapabilityRecord) -> FamilyPolicy {
-    family_policy_for_normalized_family_id(
+    let mut policy = family_policy_for_normalized_family_id(
         capability.family_id.as_str(),
         wire_dtype_from_capability(capability.default_wire_dtype),
-    )
+    );
+    if capability.family_id == "inkling" {
+        policy.default_kv_cache_type = Some("q4_0");
+    }
+    policy
 }
 
 fn family_policy_for_model_id(model_id: &str) -> FamilyPolicy {
@@ -225,7 +303,7 @@ fn family_policy_for_normalized_family_id(
         | "gptneox" | "bloom" | "stablelm" | "starcoder2" | "mpt" | "phi" | "phi2" | "phimoe"
         | "gpt2" | "mistral" | "internlm2" | "baichuan" | "exaone" | "exaone4" | "cohere2"
         | "command_r" | "falcon" | "qwen2vl" | "qwen3vl" | "deepseek2ocr" | "qwen3vlmoe"
-        | "openai_moe" | "ernie4_5_moe" | "llama4" | "mistral4" | "seed_oss" => {
+        | "openai_moe" | "ernie4_5_moe" | "llama4" | "mistral4" | "seed_oss" | "muse_glimmer" => {
             resident_kv_policy(activation_wire_dtype)
         }
         "qwen3next" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2" | "rwkv6" | "rwkv7"
@@ -239,6 +317,7 @@ fn family_policy_for_normalized_family_id(
 fn resident_kv_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
     FamilyPolicy {
         activation_wire_dtype,
+        default_kv_cache_type: None,
         prefix_cache: FamilyPrefixCachePolicy::Auto {
             payload: FamilyPrefixCachePayload::ResidentKv,
             min_tokens: 256,
@@ -276,6 +355,7 @@ fn resident_kv_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
 fn kv_recurrent_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
     FamilyPolicy {
         activation_wire_dtype,
+        default_kv_cache_type: None,
         prefix_cache: FamilyPrefixCachePolicy::Auto {
             payload: FamilyPrefixCachePayload::KvRecurrent,
             min_tokens: 256,
@@ -304,6 +384,7 @@ fn disabled_family_policy(
 ) -> FamilyPolicy {
     FamilyPolicy {
         activation_wire_dtype,
+        default_kv_cache_type: None,
         prefix_cache: FamilyPrefixCachePolicy::Disabled { reason },
     }
 }
@@ -316,7 +397,16 @@ fn wire_dtype_from_capability(dtype: WireDType) -> StageWireDType {
     }
 }
 
-fn derive_stage_cache_max_bytes(config: &StageConfig) -> Option<u64> {
+fn derive_stage_cache_max_bytes(
+    config: &StageConfig,
+    package_meta: Option<&GgufCompactMeta>,
+) -> Option<u64> {
+    if let Some(max_bytes) =
+        package_meta.and_then(|meta| estimate_stage_cache_max_bytes(config, meta))
+    {
+        return Some(max_bytes);
+    }
+
     [
         config.materialized_path.as_deref(),
         config.source_model_path.as_deref(),
@@ -324,8 +414,13 @@ fn derive_stage_cache_max_bytes(config: &StageConfig) -> Option<u64> {
     ]
     .into_iter()
     .flatten()
-    .find_map(|path| scan_gguf_compact_meta(Path::new(path)))
+    .find_map(|path| scan_stage_cache_meta(Path::new(path)))
     .and_then(|meta| estimate_stage_cache_max_bytes(config, &meta))
+}
+
+fn scan_stage_cache_meta(path: &Path) -> Option<GgufCompactMeta> {
+    scan_gguf_compact_meta(path)
+        .or_else(|| scan_gguf_compact_meta(&path.join("shared/metadata.gguf")))
 }
 
 fn estimate_stage_cache_max_bytes(config: &StageConfig, meta: &GgufCompactMeta) -> Option<u64> {
@@ -403,6 +498,8 @@ fn ggml_block_bytes(elements: u64, block_size: u64, type_size: u64) -> Option<u6
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use skippy_protocol::{FlashAttentionType, LoadMode};
     use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, reviewed_capability_records};
@@ -439,12 +536,15 @@ mod tests {
             n_batch: None,
             n_ubatch: None,
             n_gpu_layers: -1,
+            mmap: None,
+            mlock: false,
             cache_type_k: "f16".to_string(),
             cache_type_v: "q8_0".to_string(),
             flash_attn_type: FlashAttentionType::Disabled,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
+            native_mtp_enabled: true,
             load_mode: LoadMode::RuntimeSlice,
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
@@ -465,6 +565,42 @@ mod tests {
         }
     }
 
+    fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value.as_bytes());
+    }
+
+    fn push_gguf_u32(bytes: &mut Vec<u8>, key: &str, value: u32) {
+        push_gguf_string(bytes, key);
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_gguf_string_kv(bytes: &mut Vec<u8>, key: &str, value: &str) {
+        push_gguf_string(bytes, key);
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        push_gguf_string(bytes, value);
+    }
+
+    fn write_package_metadata(package_dir: &Path) {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&8i64.to_le_bytes());
+        push_gguf_string_kv(&mut bytes, "general.architecture", "llama");
+        push_gguf_u32(&mut bytes, "llama.context_length", 8192);
+        push_gguf_u32(&mut bytes, "llama.embedding_length", 4096);
+        push_gguf_u32(&mut bytes, "llama.block_count", 32);
+        push_gguf_u32(&mut bytes, "llama.attention.head_count", 32);
+        push_gguf_u32(&mut bytes, "llama.attention.head_count_kv", 8);
+        push_gguf_u32(&mut bytes, "llama.attention.key_length", 128);
+        push_gguf_u32(&mut bytes, "llama.attention.value_length", 128);
+        let shared_dir = package_dir.join("shared");
+        fs::create_dir_all(&shared_dir).expect("create package shared directory");
+        fs::write(shared_dir.join("metadata.gguf"), bytes).expect("write package metadata");
+    }
+
     #[test]
     fn qwen_policy_comes_from_gguf_architecture() {
         let policy = family_policy_for_gguf_meta(&meta("qwen3"), None);
@@ -478,6 +614,40 @@ mod tests {
                 max_entries: 16,
             }
         );
+    }
+
+    /// Regression: Muse-Glimmer must get the resident-KV prefix cache.
+    ///
+    /// The arch is supported by the pinned llama.cpp, but the family was
+    /// missing from the cache certification list, so every agent turn
+    /// re-prefilled the full context (`cached_tokens=0`, ~10x turn latency
+    /// on long agent transcripts).
+    #[test]
+    fn muse_glimmer_policy_comes_from_gguf_architecture() {
+        let policy = family_policy_for_gguf_meta(&meta("muse-glimmer"), None);
+
+        assert_eq!(policy.activation_wire_dtype, StageWireDType::F16);
+        assert_eq!(
+            policy.prefix_cache,
+            FamilyPrefixCachePolicy::Auto {
+                payload: FamilyPrefixCachePayload::ResidentKv,
+                min_tokens: 256,
+                max_entries: 16,
+            }
+        );
+    }
+
+    #[test]
+    fn muse_glimmer_policy_comes_from_model_id() {
+        let policy = family_policy_for_model_id("meta-models/Muse-Glimmer-30B-GGUF:Q4_K_M");
+
+        assert!(matches!(
+            policy.prefix_cache,
+            FamilyPrefixCachePolicy::Auto {
+                payload: FamilyPrefixCachePayload::ResidentKv,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -605,7 +775,7 @@ mod tests {
                 | "minicpm3" | "plamo" | "plamo3" | "plm" | "refact" | "smallthinker"
                 | "smollm3" | "arcee" | "chatglm" | "codeshell" | "deci" | "xverse" | "apertus"
                 | "bitnet" | "command_r" | "starcoder" | "ernie4_5" | "ernie4_5_moe" | "qwen"
-                | "jais" | "jais2" | "nemotron" | "llama4" | "mistral4" | "seed_oss" => {
+                | "jais" | "jais2" | "nemotron" | "llama4" | "mistral4" | "seed_oss" | "laguna" => {
                     assert_eq!(
                         policy.prefix_cache,
                         FamilyPrefixCachePolicy::Auto {
@@ -618,7 +788,7 @@ mod tests {
                 }
                 "qwen3next" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2" | "rwkv6"
                 | "rwkv7" | "granite_hybrid" | "qwen35" | "qwen35moe" | "plamo2" | "nemotron_h"
-                | "nemotron_h_moe" | "lfm2moe" | "kimi_linear" => assert_eq!(
+                | "nemotron_h_moe" | "lfm2moe" | "kimi_linear" | "inkling" => assert_eq!(
                     policy.prefix_cache,
                     FamilyPrefixCachePolicy::Auto {
                         payload: FamilyPrefixCachePayload::KvRecurrent,
@@ -700,6 +870,16 @@ mod tests {
             "latestissue/rwkv-6-finch-1b6-gguf:Q4_K",
             "Mungert/rwkv7-191M-world-GGUF:Q4_K",
             "mradermacher/UnifiedReward-Edit-qwen35-4b-i1-GGUF:IQ2_M",
+            // Qwen3.6 and Qwen3.8 load as the qwen35/qwen35moe recurrent pair,
+            // so every uploader and quant must select KvRecurrent rather than
+            // ResidentKv.
+            "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
+            "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M",
+            "bartowski/Qwen3.6-35B-A3B-GGUF:Q4_K_M",
+            "unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL",
+            "unsloth/Qwen3.5-35B-A3B-GGUF:Q4_K_M",
+            "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-Q1_0",
+            "meshllm/Qwen3.8-2.4T-A95B-UD-Q1_0-layers",
         ] {
             let policy = family_policy_for_model_id(model_id);
             assert!(
@@ -757,5 +937,56 @@ mod tests {
         config.cache_type_k = "mystery".to_string();
 
         assert!(estimate_stage_cache_max_bytes(&config, &kv_meta()).is_none());
+    }
+
+    #[test]
+    fn package_metadata_enables_cache_for_remote_package_paths() {
+        let package_dir = tempfile::tempdir().expect("package directory");
+        write_package_metadata(package_dir.path());
+        let mut config = stage_config();
+        config.materialized_path = None;
+        config.source_model_path = Some("/source/not-downloaded/model.gguf".to_string());
+        config.model_path = Some("hf://mesh-llm/laguna-layers".to_string());
+        let policy = FamilyPolicy {
+            activation_wire_dtype: StageWireDType::F16,
+            default_kv_cache_type: None,
+            prefix_cache: FamilyPrefixCachePolicy::Auto {
+                payload: FamilyPrefixCachePayload::ResidentKv,
+                min_tokens: 256,
+                max_entries: 16,
+            },
+        };
+
+        let cache = policy
+            .stage_kv_cache_config_for_package(&config, package_dir.path())
+            .expect("package metadata should provide the cache byte budget");
+
+        assert_eq!(cache.payload, StageKvCachePayload::ResidentKv);
+        assert_eq!(cache.max_bytes, 3_211_264);
+    }
+
+    /// A deeper record ladder is what makes cross-session prefix sharing
+    /// reachable, but it must stay bounded by what the cache can actually
+    /// hold, or it just churns the LRU.
+    #[test]
+    fn record_limit_scales_with_cache_capacity() {
+        // Tiny caches keep the historical behaviour.
+        assert_eq!(derive_shared_prefix_record_limit(1), 2);
+        assert_eq!(derive_shared_prefix_record_limit(4), 2);
+        assert_eq!(derive_shared_prefix_record_limit(8), 2);
+        // Roomier caches record a deeper ladder...
+        assert_eq!(derive_shared_prefix_record_limit(16), 4);
+        // ...but never more than a quarter of the cache, and never unbounded.
+        assert_eq!(derive_shared_prefix_record_limit(24), 6);
+        assert_eq!(derive_shared_prefix_record_limit(512), 6);
+    }
+
+    /// The limit must never drop below what shipped previously, so no
+    /// configuration records less than it did before this change.
+    #[test]
+    fn record_limit_never_regresses_below_the_historical_default() {
+        for max_entries in 0..64 {
+            assert!(derive_shared_prefix_record_limit(max_entries) >= 2);
+        }
     }
 }

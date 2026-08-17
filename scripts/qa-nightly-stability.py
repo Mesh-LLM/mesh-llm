@@ -372,6 +372,7 @@ def run_surface_probes(
 
 def run_models_probe(base_url: str, timeout: float) -> ProbeResult:
     started = time.monotonic()
+    status_code = None
     try:
         response, status_code = get_json(base_url, "/models", timeout)
         data = response.get("data")
@@ -379,11 +380,14 @@ def run_models_probe(base_url: str, timeout: float) -> ProbeResult:
             raise ValueError("models response did not contain any models")
         return _probe_result(None, None, "models", True, f"{len(data)} models", started, status_code)
     except Exception as exc:
-        return _probe_result(None, None, "models", False, str(exc), started)
+        return _probe_result(None, None, "models", False, str(exc), started, status_code)
 
 
 def run_chat_probe(base_url: str, model: str, attempt: int, timeout: float) -> ProbeResult:
     started = time.monotonic()
+    status_code = None
+    actual_model = None
+    tok_per_sec = None
     try:
         response, status_code = post_json(
             base_url,
@@ -404,13 +408,18 @@ def run_chat_probe(base_url: str, model: str, attempt: int, timeout: float) -> P
     except Exception as exc:
         return _probe_result(
             model, attempt, "chat", False, str(exc), started,
-            actual_model=actual_model,  # type: ignore[union-attr]
-            tok_per_sec=tok_per_sec,  # type: ignore[union-attr]
+            status_code,
+            actual_model=actual_model,
+            tok_per_sec=tok_per_sec,
         )
 
 
 def run_stream_chat_probe(base_url: str, model: str, attempt: int, timeout: float) -> ProbeResult:
     started = time.monotonic()
+    status_code = None
+    ttft_ms = None
+    actual_model = None
+    tok_per_sec = None
     try:
         chunks, status_code, ttft_ms = post_json_stream(
             base_url,
@@ -420,7 +429,6 @@ def run_stream_chat_probe(base_url: str, model: str, attempt: int, timeout: floa
         )
         # Extract model name and usage from stream chunks (before sentinel
         # validation so these are available even on failure).
-        actual_model = None
         completion_tokens = 0
         for chunk in chunks:
             if not actual_model and chunk.get("model"):
@@ -451,8 +459,10 @@ def run_stream_chat_probe(base_url: str, model: str, attempt: int, timeout: floa
             False,
             str(exc),
             started,
-            actual_model=actual_model,  # type: ignore[union-attr]
-            tok_per_sec=tok_per_sec,  # type: ignore[union-attr]
+            status_code,
+            ttft_ms,
+            actual_model=actual_model,
+            tok_per_sec=tok_per_sec,
         )
 
 
@@ -473,6 +483,7 @@ def build_chat_request(model: str, attempt: int, stream: bool) -> dict[str, Any]
         "stream": stream,
         "max_tokens": 32,
         "temperature": 0,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     if stream:
         body["stream_options"] = {"include_usage": True}

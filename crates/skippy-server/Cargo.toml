@@ -3,12 +3,20 @@ name = "skippy-server"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "Embedded Skippy staged runtime server"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [lib]
 name = "skippy_server"
 path = "src/lib.rs"
 
+[features]
+default = []
+dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime"]
+
 [dependencies]
+ahash.workspace = true
 anyhow.workspace = true
 async-trait = "0.1"
 axum = "0.8"
@@ -16,11 +24,15 @@ base64 = "0.22"
 blake3.workspace = true
 clap.workspace = true
 futures-util = "0.3"
-skippy-runtime = { path = "../skippy-runtime" }
-skippy-protocol = { path = "../skippy-protocol" }
-skippy-cache = { path = "../skippy-cache" }
-skippy-metrics = { path = "../skippy-metrics" }
-openai-frontend = { path = "../openai-frontend" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc2"  }
+skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.0-rc2" }
+model-artifact = { path = "../model-artifact", version = "0.76.0-rc2" }
+mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.76.0-rc2" }
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc2"  }
+skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc2"  }
+skippy-metrics = { path = "../skippy-metrics", version = "0.76.0-rc2"  }
+skippy-topology = { path = "../skippy-topology", version = "0.76.0-rc2" }
+openai-frontend = { path = "../openai-frontend", version = "0.76.0-rc2"  }
 opentelemetry-proto = "0.31.0"
 serde.workspace = true
 serde_json.workspace = true
@@ -30,6 +42,8 @@ libc = "0.2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync"] }
 tokio-stream = "0.1"
 tonic = "0.14"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

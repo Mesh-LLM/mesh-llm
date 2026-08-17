@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatShortDuration } from '@/lib/format-duration'
+import { formatModelSizeGB } from '@/lib/format-model-size'
 import { cn } from '@/lib/utils'
 import { modelStatusTooltip } from '@/features/app-shell/lib/status-helpers'
 import type { MeshModel } from '@/features/app-shell/lib/status-types'
@@ -110,7 +111,7 @@ export function ModelSidebar({
           />
           <ModelFactCard
             title="File size"
-            value={model.size_gb > 0 ? `${model.size_gb.toFixed(1)} GB` : 'Unknown'}
+            value={formatModelSizeGB(model.size_gb)}
             icon={<MemoryStick className="h-4 w-4" />}
             tooltip={fileSizeTooltip(model.source_file)}
           />

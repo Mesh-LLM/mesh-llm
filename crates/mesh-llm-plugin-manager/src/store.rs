@@ -8,9 +8,233 @@ use serde::{Deserialize, Serialize};
 
 use crate::source_ref::is_valid_name;
 
+mod control_behavior;
+
+pub use control_behavior::{
+    InstalledPluginConditionOperator, InstalledPluginConditionValue,
+    InstalledPluginConditionalDisable, InstalledPluginConflictRule,
+    InstalledPluginControlAvailability, InstalledPluginControlAvailabilitySource,
+    InstalledPluginControlBehavior, InstalledPluginControlCondition,
+    InstalledPluginDisabledWritePolicy, InstalledPluginNumericControl,
+    InstalledPluginOptionsSource, InstalledPluginTextFormat,
+};
+
 const METADATA_FILE: &str = "plugin-install.json";
+pub const SUPPORTED_PLUGIN_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InstalledPluginManifestMetadata {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub config_schema: Option<InstalledPluginConfigSchema>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub web_ui: Option<InstalledPluginWebUiMetadata>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiMetadata {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<InstalledPluginWebUiPageMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_sections: Vec<InstalledPluginWebUiConfigSectionMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bundles: Vec<InstalledPluginWebUiBundleMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub asset_root: Option<PathBuf>,
+    #[serde(default)]
+    pub validation: InstalledPluginWebUiValidation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiPageMetadata {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub icon: Option<String>,
+    pub route: String,
+    pub bundle_id: String,
+    pub entry_script: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiConfigSectionMetadata {
+    pub id: String,
+    pub title: String,
+    pub entry_script: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parent_tab: Option<String>,
+    pub bundle_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiBundleMetadata {
+    pub id: String,
+    pub root_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiValidation {
+    pub status: InstalledPluginWebUiValidationStatus,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reason: Option<String>,
+}
+
+impl Default for InstalledPluginWebUiValidation {
+    fn default() -> Self {
+        Self {
+            status: InstalledPluginWebUiValidationStatus::Invalid,
+            reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledPluginWebUiValidationStatus {
+    Valid,
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InstalledPluginConfigSchema {
+    pub plugin_name: String,
+    pub schema_version: u32,
+    #[serde(default)]
+    pub allow_unvalidated_config: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<InstalledPluginSettingSchema>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InstalledPluginSettingSchema {
+    pub key: String,
+    pub value_schema: InstalledPluginValueSchema,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<InstalledPluginConstraint>,
+    pub apply_mode: InstalledPluginApplyMode,
+    pub restart_scope: InstalledPluginRestartScope,
+    pub visibility: InstalledPluginVisibility,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub presentation: Option<InstalledPluginPresentationMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub control_behavior: Option<InstalledPluginControlBehavior>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginPresentationMetadata {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub help: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category_order: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub setting_order: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub placeholder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub control_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub renderer_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginValueSchema {
+    pub kind: InstalledPluginValueKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enum_values: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub items: Option<Box<InstalledPluginValueSchema>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_properties: Vec<InstalledPluginObjectProperty>,
+    #[serde(default)]
+    pub allow_additional_properties: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginObjectProperty {
+    pub key: String,
+    pub value_schema: InstalledPluginValueSchema,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledPluginValueKind {
+    Boolean,
+    Integer,
+    Float,
+    String,
+    Path,
+    Url,
+    Enum,
+    Array,
+    Object,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledPluginApplyMode {
+    StaticOnLoad,
+    DynamicValidationOnly,
+    DynamicApply,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledPluginRestartScope {
+    None,
+    ModelReload,
+    ProcessRestart,
+    MeshRestart,
+    PluginProcess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledPluginVisibility {
+    User,
+    Advanced,
+    Hidden,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InstalledPluginConstraint {
+    NonEmpty,
+    Positive,
+    Range {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        min: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        max: Option<String>,
+    },
+    AllowedValues {
+        values: Vec<String>,
+    },
+    Requires {
+        key: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginMetadata {
     pub name: String,
     pub source_repository: String,
@@ -19,6 +243,8 @@ pub struct InstalledPluginMetadata {
     pub downloaded_asset_name: String,
     pub install_path: PathBuf,
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub manifest: Option<InstalledPluginManifestMetadata>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_protocol_version: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -31,6 +257,17 @@ impl InstalledPluginMetadata {
     pub fn executable_path(&self) -> PathBuf {
         self.install_path
             .join(format!("{}{}", self.name, std::env::consts::EXE_SUFFIX))
+    }
+
+    pub fn web_ui_asset_root_path(&self) -> Option<PathBuf> {
+        let web_ui = self.manifest.as_ref()?.web_ui.as_ref()?;
+        if web_ui.validation.status != InstalledPluginWebUiValidationStatus::Valid {
+            return None;
+        }
+        web_ui
+            .asset_root
+            .as_ref()
+            .map(|asset_root| self.install_path.join(asset_root))
     }
 }
 
@@ -185,6 +422,48 @@ mod tests {
             downloaded_asset_name: "blackboard-v1.0.0-aarch64-apple-darwin.tar.gz".to_string(),
             install_path: PathBuf::from("/tmp/plugins/blackboard"),
             enabled: true,
+            manifest: Some(InstalledPluginManifestMetadata {
+                config_schema: Some(InstalledPluginConfigSchema {
+                    plugin_name: name.to_string(),
+                    schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,
+                    allow_unvalidated_config: false,
+                    settings: vec![InstalledPluginSettingSchema {
+                        key: "retention_days".to_string(),
+                        value_schema: InstalledPluginValueSchema {
+                            kind: InstalledPluginValueKind::Integer,
+                            enum_values: Vec::new(),
+                            items: None,
+                            object_properties: Vec::new(),
+                            allow_additional_properties: false,
+                        },
+                        required: true,
+                        default_json: Some("14".to_string()),
+                        constraints: vec![InstalledPluginConstraint::Range {
+                            min: Some("1".to_string()),
+                            max: Some("365".to_string()),
+                        }],
+                        apply_mode: InstalledPluginApplyMode::DynamicValidationOnly,
+                        restart_scope: InstalledPluginRestartScope::PluginProcess,
+                        visibility: InstalledPluginVisibility::User,
+                        description: Some("How long to retain entries.".to_string()),
+                        presentation: Some(InstalledPluginPresentationMetadata {
+                            label: Some("Retention days".to_string()),
+                            help: Some("How long to retain entries.".to_string()),
+                            category_id: Some("retention".to_string()),
+                            category_label: Some("Retention".to_string()),
+                            category_summary: Some("Retention settings".to_string()),
+                            category_order: Some(10),
+                            setting_order: Some(20),
+                            unit: Some("days".to_string()),
+                            placeholder: None,
+                            control_hint: Some("number".to_string()),
+                            renderer_id: None,
+                        }),
+                        control_behavior: None,
+                    }],
+                }),
+                web_ui: None,
+            }),
             last_protocol_version: Some(2),
             last_status: Some("running".to_string()),
             last_error: None,
@@ -202,6 +481,24 @@ mod tests {
         let loaded = store.load("blackboard").unwrap();
         assert_eq!(loaded.name, "blackboard");
         assert!(loaded.enabled);
+        assert_eq!(
+            loaded
+                .manifest
+                .as_ref()
+                .and_then(|manifest| manifest.config_schema.as_ref())
+                .map(|schema| schema.schema_version),
+            Some(SUPPORTED_PLUGIN_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            loaded
+                .manifest
+                .as_ref()
+                .and_then(|manifest| manifest.config_schema.as_ref())
+                .and_then(|schema| schema.settings.first())
+                .and_then(|setting| setting.presentation.as_ref())
+                .and_then(|presentation| presentation.unit.as_deref()),
+            Some("days")
+        );
         assert_eq!(loaded.last_protocol_version, Some(2));
 
         let listed = store.list().unwrap();
@@ -265,5 +562,53 @@ mod tests {
         let listed = store.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "blackboard");
+    }
+
+    #[test]
+    fn load_legacy_metadata_without_control_behavior() {
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path());
+        let plugin_dir = temp.path().join("blackboard");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join(METADATA_FILE),
+            r#"{
+  "name": "blackboard",
+  "source_repository": "https://github.com/mesh-llm/blackboard",
+  "installed_version": "v1.0.0",
+  "target_triple": "aarch64-apple-darwin",
+  "downloaded_asset_name": "blackboard-v1.0.0-aarch64-apple-darwin.tar.gz",
+  "install_path": "/tmp/plugins/blackboard",
+  "enabled": true,
+  "manifest": {
+    "config_schema": {
+      "plugin_name": "blackboard",
+      "schema_version": 1,
+      "allow_unvalidated_config": false,
+      "settings": [
+        {
+          "key": "retention_days",
+          "value_schema": { "kind": "integer" },
+          "required": true,
+          "apply_mode": "dynamic_validation_only",
+          "restart_scope": "plugin_process",
+          "visibility": "user"
+        }
+      ]
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let loaded = store.load("blackboard").unwrap();
+        let setting = loaded
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.config_schema.as_ref())
+            .and_then(|schema| schema.settings.first())
+            .expect("legacy setting should load");
+
+        assert!(setting.control_behavior.is_none());
     }
 }

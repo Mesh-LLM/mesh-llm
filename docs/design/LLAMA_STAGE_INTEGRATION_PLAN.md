@@ -1,6 +1,34 @@
 # llama-stage-runtime Integration Plan
 
-## Purpose
+## Status: completed — historical plan
+
+This migration has shipped. mesh-llm now embeds the staged (Skippy) runtime
+behind the C ABI, built from the upstream llama.cpp pin plus the patch queue in
+`third_party/llama.cpp/patches` (pinned by `third_party/llama.cpp/upstream.txt`).
+The external `llama-server` / `rpc-server` runtime lane described below as
+"Current State" no longer exists and must not be reintroduced. Keep this
+document as background for why the patch queue and embedded ABI are shaped the
+way they are; do not treat its "current state" sections as current.
+
+The current native Skippy source is organized by capability. `include/skippy.h`
+is the umbrella API; independently compilable public C headers live under
+`include/skippy/`, while implementations and private C++ headers live under
+`src/skippy/`. New work extends the owning capability module instead of growing
+or recreating the retired `src/skippy.cpp`. The patch queue mirrors those
+functional boundaries directly; it must not defer source organization to a
+terminal refactor patch. Source include paths are allowed to break, but exported
+binary ABI changes still require a version bump and synchronized Rust FFI
+constants.
+
+## Archived migration record
+
+Everything below this heading records the superseded migration proposal. It is
+not current implementation guidance: references to `ExternalLlamaBackend`,
+`llama-server`, and `rpc-server` describe the pre-Skippy architecture only.
+For current work, follow the completed-state summary above, `AGENTS.md`, and the
+llama patch-queue skills under `.agents/skills/`.
+
+### Historical purpose
 
 Track the planned integration of `/Users/jdumay/code/llama-stage-runtime` into
 mesh-llm here.
@@ -16,7 +44,7 @@ The goals are:
   external `llama-server` path for local serving
 - make it easy to move the llama-stage-runtime source tree into this repo later
 
-## Current State
+## Historical baseline
 
 mesh-llm's historical baseline depended on a pinned Mesh-LLM llama.cpp fork.
 The first migration step converts those fork commits into a local patch queue.
@@ -42,7 +70,7 @@ model:
 - `just llama-build` builds static llama.cpp archives
 - Rust crates link the patched static libraries through `llama-stage-ffi`
 
-## Feasibility Summary
+## Historical feasibility summary
 
 The patch-queue build migration is the first step and intentionally excludes
 the llama-stage ABI patches.
@@ -128,7 +156,7 @@ If staged activation transport later replaces llama.cpp RPC for dense split
 mode, that should be designed as an additive capability advertised through
 gossip, with fallback to the current external RPC split path.
 
-## Proposed Architecture
+## Historical proposed architecture
 
 Introduce an inference backend abstraction owned by `crates/mesh-llm-host-runtime/src/inference/`.
 
@@ -155,7 +183,7 @@ For early integration, keep mesh-llm's routing and tunneling model stable:
   running an experimental staged-runtime split
   orchestration until the embedded backend can serve those shards equivalently
 
-## Build System Plan
+## Historical build system plan
 
 ### Phase 1: Adopt Upstream Pin Plus Patch Queue
 
@@ -220,7 +248,7 @@ If the source has not yet moved into this repo, a temporary local path to
 `/Users/jdumay/code/llama-stage-runtime` can be used only for experimental
 branches. Mainline should not depend on an absolute local path.
 
-## Runtime Migration Plan
+## Historical runtime migration plan
 
 ### Milestone 1: External Behavior Preserved
 
@@ -337,7 +365,7 @@ Acceptance criteria:
 - virtual LLM behavior has either equivalent Rust-owned hook points or an
   explicit reason to stay on external llama-server
 
-## Dense Split Strategy
+## Historical dense split strategy
 
 Do not replace llama.cpp RPC split mode as part of the first embedded milestone.
 
@@ -388,7 +416,7 @@ but that requires careful behavior matching.
 Any replacement for RPC split mode touches distributed execution semantics.
 It must be advertised as a capability and rolled out with fallback behavior.
 
-## Recommended Near-Term PRs
+## Historical recommended PR sequence
 
 1. Add upstream pin and patch queue scaffolding without changing runtime
    behavior.
@@ -400,7 +428,7 @@ It must be advertised as a capability and rolled out with fallback behavior.
    flag.
 6. Add benchmark fixtures comparing external and embedded execution per backend.
 
-## Validation Checklist
+## Historical validation checklist
 
 Before embedded mode can become default for any backend:
 

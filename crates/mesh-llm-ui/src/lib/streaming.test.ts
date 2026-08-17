@@ -1,6 +1,37 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { hasBlobContent, parseApiErrorBody } from '@/lib/streaming'
+import { createRafBatcher, hasBlobContent, parseApiErrorBody } from '@/lib/streaming'
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('createRafBatcher', () => {
+  it('publishes updates without waiting for animation frames in a hidden tab', () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame')
+    const onUpdate = vi.fn()
+
+    createRafBatcher(onUpdate).push('background response')
+
+    expect(onUpdate).toHaveBeenCalledWith('background response')
+    expect(requestFrame).not.toHaveBeenCalled()
+  })
+
+  it('cancels a pending animation frame when the tab becomes hidden', () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame')
+    const cancelFrame = vi.spyOn(window, 'cancelAnimationFrame')
+    const onUpdate = vi.fn()
+    const batcher = createRafBatcher(onUpdate)
+
+    batcher.push('visible response')
+    const frame = requestFrame.mock.results[0].value
+    visibility.mockReturnValue('hidden')
+    batcher.push('background response')
+
+    expect(cancelFrame).toHaveBeenCalledWith(frame)
+    expect(onUpdate).toHaveBeenCalledWith('background response')
+  })
+})
 
 // ---------------------------------------------------------------------------
 // hasBlobContent

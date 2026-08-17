@@ -1,0 +1,184 @@
+name: Prepare backend-neutral Windows host input
+description: Build, optionally attest, import-check, and checksum one immutable Windows host.
+
+inputs:
+  profile:
+    description: Windows host build profile (debug or release).
+    required: false
+    default: release
+  skip_ui:
+    description: Use a minimal prepared UI tree instead of rebuilding the React console.
+    required: false
+    default: "false"
+  attestation_signing_key_file:
+    description: Optional release-attestation signing key path.
+    required: false
+    default: ""
+  attestation_public_key_file:
+    description: Optional release-attestation public key path used to inspect the stamp.
+    required: false
+    default: ""
+
+outputs:
+  binary_path:
+    description: Absolute path to the prepared Windows host executable.
+    value: ${{ steps.prepare.outputs.binary_path }}
+  imports_path:
+    description: Absolute path to the host import-policy report.
+    value: ${{ steps.prepare.outputs.imports_path }}
+  checksum_path:
+    description: Absolute path to the host checksum.
+    value: ${{ steps.prepare.outputs.checksum_path }}
+  attestation_verifier_path:
+    description: Optional prebuilt verifier copied beside an attested release host.
+    value: ${{ steps.prepare.outputs.attestation_verifier_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build and prepare immutable Windows host
+      id: prepare
+      shell: pwsh
+      env:
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_SKIP_UI: ${{ inputs.skip_ui }}
+        INPUT_ATTESTATION_SIGNING_KEY_FILE: ${{ inputs.attestation_signing_key_file }}
+        INPUT_ATTESTATION_PUBLIC_KEY_FILE: ${{ inputs.attestation_public_key_file }}
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $profile = "$env:INPUT_PROFILE".Trim().ToLowerInvariant()
+        if ($profile -notin @("debug", "release")) {
+          throw "unsupported Windows host profile: $profile"
+        }
+        if ($env:INPUT_SKIP_UI -notin @("true", "false")) {
+          throw "INPUT_SKIP_UI must be true or false"
+        }
+
+        $signingKey = "$env:INPUT_ATTESTATION_SIGNING_KEY_FILE".Trim()
+        $publicKey = "$env:INPUT_ATTESTATION_PUBLIC_KEY_FILE".Trim()
+        if ([string]::IsNullOrWhiteSpace($signingKey) -ne [string]::IsNullOrWhiteSpace($publicKey)) {
+          throw "both attestation key files are required when release attestation is enabled"
+        }
+
+        if ($profile -eq "debug") {
+          $pkgid = (& cargo pkgid -p mesh-llm).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $pkgid.Contains("#")) {
+            throw "failed to derive the debug host MeshLLM version"
+          }
+          $env:MESH_LLM_BUILD_VERSION = $pkgid.Substring($pkgid.LastIndexOf("#") + 1)
+        }
+
+        if ($env:INPUT_SKIP_UI -eq "true") {
+          $env:MESH_LLM_SKIP_UI = "1"
+          $uiDist = "crates/mesh-llm-ui/dist"
+          New-Item -ItemType Directory -Force -Path $uiDist | Out-Null
+          $uiEntryPoint = Join-Path $uiDist "index.html"
+          if (-not (Test-Path -LiteralPath $uiEntryPoint -PathType Leaf)) {
+            "<html></html>" | Set-Content -Path $uiEntryPoint -Encoding utf8
+          }
+        } else {
+          Remove-Item Env:MESH_LLM_SKIP_UI -ErrorAction SilentlyContinue
+        }
+
+        & .\scripts\build-windows.ps1 -BuildProfile $profile -HostOnly
+        if ($LASTEXITCODE -ne 0) {
+          throw "backend-neutral Windows host build failed"
+        }
+
+        $sourceProfile = if ($profile -eq "release") { "release" } else { "debug" }
+        $sourceBinary = Join-Path "target" "$sourceProfile\mesh-llm.exe"
+        if (-not (Test-Path -LiteralPath $sourceBinary -PathType Leaf)) {
+          throw "Windows host build did not produce $sourceBinary"
+        }
+
+        $outputDir = "host-input"
+        New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+        $binaryPath = Join-Path $outputDir "mesh-llm.exe"
+        $importsPath = Join-Path $outputDir "host-imports.json"
+        $checksumPath = Join-Path $outputDir "mesh-llm.exe.sha256"
+        Copy-Item -LiteralPath $sourceBinary -Destination $binaryPath -Force
+
+        $attestationVerifierPath = ""
+        if ($signingKey -and $publicKey) {
+          foreach ($keyFile in @($signingKey, $publicKey)) {
+            if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf) -or
+                (Get-Item -LiteralPath $keyFile).Length -eq 0) {
+              throw "release attestation key file is empty or missing: $keyFile"
+            }
+          }
+
+          & cargo build -q -p xtask --bin xtask
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to build the release attestation verifier"
+          }
+          $cargoMetadata = & cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to resolve the Cargo target directory"
+          }
+          $verifier = Join-Path $cargoMetadata.target_directory "debug\xtask.exe"
+          if (-not (Test-Path -LiteralPath $verifier -PathType Leaf)) {
+            throw "release attestation verifier was not built: $verifier"
+          }
+
+          & $verifier release-attestation stamp `
+            --binary $binaryPath `
+            --signing-key-file $signingKey
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to stamp the Windows release host"
+          }
+          & $verifier release-attestation inspect `
+            --binary $binaryPath `
+            --public-key-file $publicKey `
+            --json
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to verify the Windows release host attestation"
+          }
+
+          $attestationVerifierPath = Join-Path $outputDir "release-attestation-verifier.exe"
+          Copy-Item -LiteralPath $verifier -Destination $attestationVerifierPath -Force
+        }
+
+        & python scripts\verify-host-dependencies.py $binaryPath --report $importsPath
+        if ($LASTEXITCODE -ne 0) {
+          throw "backend-neutral host dependency verification failed"
+        }
+
+        function Get-Sha256Hex {
+          param([string]$Path)
+
+          $sha256 = [System.Security.Cryptography.SHA256]::Create()
+          try {
+            $stream = [System.IO.File]::OpenRead($Path)
+            try {
+              $bytes = $sha256.ComputeHash($stream)
+            } finally {
+              $stream.Dispose()
+            }
+          } finally {
+            $sha256.Dispose()
+          }
+          return [System.BitConverter]::ToString($bytes).Replace("-", "").ToLowerInvariant()
+        }
+
+        $hostHash = Get-Sha256Hex $binaryPath
+        Set-Content -Path $checksumPath -Value "$hostHash  mesh-llm.exe" -NoNewline
+        if ($attestationVerifierPath) {
+          $verifierHash = Get-Sha256Hex $attestationVerifierPath
+          Set-Content `
+            -Path "$attestationVerifierPath.sha256" `
+            -Value "$verifierHash  release-attestation-verifier.exe" `
+            -NoNewline
+        }
+
+        $absoluteOutputDir = [System.IO.Path]::GetFullPath($outputDir)
+        @(
+          "binary_path=$absoluteOutputDir\mesh-llm.exe"
+          "imports_path=$absoluteOutputDir\host-imports.json"
+          "checksum_path=$absoluteOutputDir\mesh-llm.exe.sha256"
+          if ($attestationVerifierPath) {
+            "attestation_verifier_path=$absoluteOutputDir\release-attestation-verifier.exe"
+          } else {
+            "attestation_verifier_path="
+          }
+        ) | Add-Content -Path $env:GITHUB_OUTPUT

@@ -11,7 +11,7 @@ readme = "README.md"
 [dependencies]
 anyhow.workspace = true
 hex = "0.4"
-iroh = "1.0.0-rc.0"
+iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
 prost = "0.14"
 serde_json.workspace = true
 sha2.workspace = true

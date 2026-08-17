@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage CI"
+  short_description: "Safely manage MeshLLM CI workflows"
+  default_prompt: "Use $manage-ci to inspect and update MeshLLM CI safely."

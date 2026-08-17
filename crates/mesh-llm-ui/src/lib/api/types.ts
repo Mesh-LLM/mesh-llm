@@ -7,11 +7,13 @@ import type { WakeableNode } from '@/features/app-shell/lib/status-types'
 export type { WakeableNode }
 
 export interface GpuInfo {
-  idx: number
+  idx?: number
   name: string
-  total_vram_gb: number
+  rated_vram_gb?: number
+  total_vram_gb?: number
   vram_bytes?: number
   reserved_bytes?: number
+  allocatable_vram_bytes?: number
   used_vram_gb?: number
   free_vram_gb?: number
   temperature?: number
@@ -38,16 +40,23 @@ export interface ModelCapabilities {
 
 export interface MeshModelRaw {
   name: string
+  display_name?: string
   status: 'warm' | 'cold'
   size_gb?: number
   node_count: number
   capabilities?: ModelCapabilities
-  quantization: string
+  quantization?: string
   context_length?: number
+  tokenizer?: string
+  layer_count?: number
+  head_count?: number
+  embedding_size?: number
   family?: string
   tags?: string[]
   params_b?: number
   disk_gb?: number
+  source_file?: string
+  source_ref?: string
   moe?: boolean
   vision?: boolean
   license?: string
@@ -88,6 +97,7 @@ export interface PeerInfo {
   role?: string
   serving_models?: string[]
   hosted_models?: string[]
+  hosted_models_known?: boolean
   models?: string[]
   my_vram_gb?: number
   vram_gb?: number
@@ -124,6 +134,14 @@ export interface RuntimeInfo {
   stages?: RuntimeStageInfo[]
 }
 
+export interface LoggingStatus {
+  metadata_available: boolean
+  capture_mode: 'metadata_only' | 'redacted_artifacts' | 'unavailable'
+  artifact_capture_available: boolean
+  artifact_capture_ready: boolean
+  artifact_capture_degradation?: string
+}
+
 export interface StatusPayload {
   node_id: string
   node_state: 'client' | 'standby' | 'loading' | 'serving'
@@ -133,6 +151,7 @@ export interface StatusPayload {
   peers: PeerInfo[]
   models: MeshModelRaw[]
   my_vram_gb: number
+  my_is_soc?: boolean
   api_port?: number
   gpus: GpuInfo[]
   serving_models: ServingModelEntry[]
@@ -152,6 +171,7 @@ export interface StatusPayload {
   publication_state?: MeshPublicationState
   first_joined_mesh_ts?: number
   wakeable_nodes?: WakeableNode[]
+  logging?: LoggingStatus
 }
 
 // ============================================================
@@ -246,10 +266,7 @@ export interface ResponsesInputFileBlock {
 }
 
 export type ResponsesInputContentBlock =
-  | ResponsesInputTextBlock
-  | ResponsesInputImageBlock
-  | ResponsesInputAudioBlock
-  | ResponsesInputFileBlock
+  ResponsesInputTextBlock | ResponsesInputImageBlock | ResponsesInputAudioBlock | ResponsesInputFileBlock
 
 export interface ResponsesInputMessage {
   role: 'system' | 'user' | 'assistant'

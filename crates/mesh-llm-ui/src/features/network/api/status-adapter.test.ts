@@ -166,6 +166,41 @@ describe('adaptStatusToDashboard', () => {
     )
   })
 
+  it('uses per-GPU rated VRAM for mesh aggregate display before legacy totals', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      my_vram_gb: 30.15,
+      gpus: [{ idx: 0, name: 'local-gpu', total_vram_gb: 30.15, rated_vram_gb: 32, vram_bytes: 32_000_000_000 }],
+      peers: [
+        {
+          id: 'remote-serving',
+          role: 'Host',
+          state: 'serving',
+          models: [],
+          vram_gb: 20,
+          gpus: [
+            {
+              idx: 0,
+              name: 'remote-gpu',
+              total_vram_gb: 22.35,
+              rated_vram_gb: 24,
+              vram_bytes: 24_000_000_000
+            }
+          ],
+          hostname: 'remote-serving'
+        }
+      ]
+    })
+
+    expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
+      expect.objectContaining({ value: '56.0', unit: 'GB' })
+    )
+    expect(dashboard.peers.find((peer) => peer.id === '16ce0bb4de')).toEqual(expect.objectContaining({ vramGB: 32 }))
+    expect(dashboard.peers.find((peer) => peer.id === 'remote-serving')).toEqual(
+      expect.objectContaining({ vramGB: 24 })
+    )
+  })
+
   it('keeps live client and standby nodes connected instead of offline', () => {
     const dashboard = adaptStatusToDashboard({
       ...PUBLIC_STATUS_PAYLOAD,

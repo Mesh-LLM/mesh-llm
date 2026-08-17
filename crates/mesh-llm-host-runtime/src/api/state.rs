@@ -43,8 +43,13 @@ impl Serialize for PublicationState {
 }
 
 pub enum RuntimeControlRequest {
+    Join {
+        invite_token: String,
+        resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
     Load {
         spec: String,
+        profile: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeLoadResponse>>,
     },
     Unload {
@@ -56,7 +61,9 @@ pub enum RuntimeControlRequest {
         mode: GuardrailMode,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<OpenAiGuardrailModeUpdateResponse>>,
     },
-    Shutdown,
+    Shutdown {
+        source: &'static str,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -64,6 +71,9 @@ pub struct RuntimeLoadResponse {
     pub model_ref: String,
     pub model: String,
     pub instance_id: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub profile: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,6 +100,8 @@ pub struct RuntimeModelPayload {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub profile: String,
     pub backend: String,
     pub status: String,
     pub port: Option<u16>,
@@ -102,6 +114,8 @@ pub struct RuntimeProcessPayload {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub profile: String,
     pub backend: String,
     pub status: String,
     pub port: u16,
@@ -191,6 +205,7 @@ pub(super) struct ApiInner {
     pub(super) is_host: bool,
     pub(super) is_client: bool,
     pub(super) llama_ready: bool,
+    pub(super) listeners_ready: bool,
     pub(super) llama_port: Option<u16>,
     pub(super) model_name: String,
     pub(super) primary_backend: Option<String>,
@@ -199,6 +214,8 @@ pub(super) struct ApiInner {
     pub(super) api_port: u16,
     pub(super) model_size_bytes: u64,
     pub(super) mesh_name: Option<String>,
+    pub(super) mesh_region: Option<String>,
+    pub(super) mesh_max_clients: Option<usize>,
     pub(super) latest_version: Option<String>,
     pub(super) nostr_relays: Vec<String>,
     pub(super) mesh_discovery_mode: MeshDiscoveryMode,

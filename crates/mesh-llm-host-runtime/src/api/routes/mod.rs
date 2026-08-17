@@ -1,6 +1,8 @@
 mod chat;
+mod control_apply_diagnostics;
 mod diagnostics;
 mod discover;
+pub(crate) mod logs;
 mod mcp;
 mod mesh_hook;
 mod model_interests;
@@ -8,6 +10,9 @@ mod model_targets;
 mod objects;
 mod plugins;
 pub(crate) mod runtime;
+mod runtime_activity;
+pub(crate) mod runtime_control_state;
+mod runtime_control_state_sources;
 mod search;
 
 use super::MeshApi;
@@ -31,11 +36,23 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
     |stream, state, method, path, path_only, body, req, raw_request| {
         Box::pin(async move {
             match (method, path_only) {
+                (method, route_path) if logs::is_route(route_path) => {
+                    logs::handle(stream, method, path, body, raw_request).await?;
+                    Ok(true)
+                }
                 ("GET", "/api/discover") => {
                     discover::handle(stream, state).await?;
                     Ok(true)
                 }
+                ("POST", p) if p == crate::network::discovery::LAN_DETAILS_PATH => {
+                    discover::handle_lan_details(stream, state, body).await?;
+                    Ok(true)
+                }
                 ("GET", "/api/diagnostics/split-readiness") => {
+                    diagnostics::handle(stream, state, path).await?;
+                    Ok(true)
+                }
+                ("GET", "/api/diagnostics") => {
                     diagnostics::handle(stream, state, path).await?;
                     Ok(true)
                 }
@@ -51,12 +68,24 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("GET", "/api/runtime/endpoints")
                 | ("GET", "/api/runtime/processes")
                 | ("GET", "/api/runtime/stages")
+                | ("GET", "/api/runtime/config-schema")
+                | ("GET", "/api/runtime/config-control-state")
                 | ("GET", "/api/runtime/control-bootstrap")
+                | ("GET", "/api/runtime/intents")
+                | ("GET", "/api/runtime/activity")
                 | ("POST", "/api/runtime/control/get-config")
+                | ("POST", "/api/runtime/control/scan-refresh")
                 | ("POST", "/api/runtime/control/refresh-inventory")
                 | ("POST", "/api/runtime/control/apply-config")
+                | ("POST", "/api/runtime/control/load-model")
+                | ("POST", "/api/runtime/control/unload-model")
+                | ("POST", "/api/runtime/control/ensure-model")
+                | ("POST", "/api/runtime/control/drain-model")
+                | ("POST", "/api/runtime/config/validate")
                 | ("POST", "/api/runtime/mesh-guardrails")
                 | ("POST", "/api/runtime/models")
+                | ("PUT", "/api/runtime/activity/override")
+                | ("DELETE", "/api/runtime/activity/override")
                 | ("GET", "/api/events") => {
                     runtime::handle(stream, state, method, path_only, body).await?;
                     Ok(true)

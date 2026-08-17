@@ -38,7 +38,7 @@ In plain terms: MeshLLM exists because powerful open models should not require e
 
 ## Who made it
 
-The public origin statement on docs.meshllm.cloud is signed by **Mic N**. Public GitHub contributor data for `Mesh-LLM/mesh-llm` identifies these top three human contributors:
+The public origin statement on meshllm.cloud is signed by **Mic N**. Public GitHub contributor data for `Mesh-LLM/mesh-llm` identifies these top three human contributors:
 
 1. **Michael Neale** (`michaelneale`)
 2. **James Dumay** (`i386`)
@@ -95,7 +95,7 @@ Promising directions include:
 - Mobile clients that join a mesh by QR code and chat with models served by the GPU pool.
 - Stronger relay infrastructure and connection resilience.
 - One-command agent launchers for tools such as Goose, pi, OpenCode, and Claude Code.
-- Single-binary distribution that makes installation simpler.
+- Composed host and native-runtime distribution that keeps installation simple while supporting heterogeneous backends.
 - MoE expert sharding and SSD expert streaming for models far larger than ordinary memory budgets.
 - More robust demand-based rebalancing and failure recovery.
 - Richer blackboard and plugin workflows for teams of agents.

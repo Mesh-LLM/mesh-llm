@@ -45,6 +45,7 @@ import { cn } from '@/lib/utils'
 import { useDataMode } from '@/lib/data-mode'
 import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import { CHAT_HARNESS } from '@/features/app-tabs/data'
+import { statusBackedChatModels } from '@/features/chat/lib/live-chat-models'
 import type {
   ChatActionMetric,
   ChatHarnessData,
@@ -115,7 +116,7 @@ function hasLastUserTurn(messages: Array<{ role: string }>): boolean {
   return false
 }
 
-function getMessageTextContent(message: { parts?: Array<{ type: string; content?: string }> }): string {
+function getMessageTextContent(message: { parts?: Array<{ type: string; content?: unknown }> }): string {
   const textPart = message.parts?.find((part) => part.type === 'text' && typeof part.content === 'string')
   return typeof textPart?.content === 'string' ? textPart.content.trim() : ''
 }
@@ -424,7 +425,7 @@ function AttachmentPreviewDialog({
                 <DialogPrimitive.Close asChild>
                   <button
                     type="button"
-                    className="ui-control inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius)] border text-fg-muted outline-none transition-[background,color,box-shadow,transform] hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                    className="ui-control inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius)] border text-fg-muted outline-none transition-[background,color,box-shadow,transform] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     aria-label="Close attachment preview"
                   >
                     <X className="size-4" aria-hidden={true} />
@@ -469,18 +470,20 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const modelsQuery = useModelsQuery({ enabled: mode === 'live' })
   const statusQuery = useStatusQuery({ enabled: liveMode })
   const liveStatus = statusQuery.data
-  const liveModels = modelsQuery.data ? adaptModelsToSummary(modelsQuery.data.mesh_models) : undefined
-  const resolvedModels = liveMode ? liveModels : data.models
-  const displayModels = resolvedModels ?? data.models
+  const catalogModels = useMemo(
+    () => (modelsQuery.data ? adaptModelsToSummary(modelsQuery.data.mesh_models) : undefined),
+    [modelsQuery.data]
+  )
+  const statusModels = useMemo(() => statusBackedChatModels(liveStatus), [liveStatus])
+  const liveModels = catalogModels && catalogModels.length > 0 ? catalogModels : statusModels
+  const displayModels = liveMode ? liveModels : data.models
   const selectableModels = useMemo(() => displayModels.filter(isChatSelectableModel), [displayModels])
-  const showLiveError = liveMode && !liveModels && !modelsQuery.isFetching && modelsQuery.isError
-  const showLiveLoading = liveMode && !liveModels && !showLiveError
-  const warmModelCount = liveModels?.filter(isChatSelectableModel).length ?? 0
-  const canChat =
-    !liveMode ||
-    (liveStatus?.llama_ready ?? false) ||
-    warmModelCount > 0 ||
-    (liveStatus?.serving_models?.length ?? 0) > 0
+  const warmModelCount = catalogModels?.filter(isChatSelectableModel).length ?? 0
+  const hasLiveReadiness = liveStatus != null || warmModelCount > 0
+  const liveReadinessFetching = statusQuery.isFetching || modelsQuery.isFetching
+  const showLiveError = liveMode && !hasLiveReadiness && !liveReadinessFetching && statusQuery.isError
+  const showLiveLoading = liveMode && !hasLiveReadiness && liveReadinessFetching
+  const canChat = !liveMode || (liveStatus?.llama_ready ?? false) || warmModelCount > 0 || statusModels.length > 0
   const transparencyTabEnabled = useBooleanFeatureFlag('chat/transparencyTab')
   const systemPromptButtonEnabled = useBooleanFeatureFlag('chat/systemPromptButton')
   const [sidebarTab, setSidebarTab] = useState<'conversations' | 'transparency'>('conversations')
@@ -503,6 +506,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   >({})
   const [selectedAttachmentPreview, setSelectedAttachmentPreview] = useState<SubmittedAttachmentPreview | null>(null)
   const [failedSubmission, setFailedSubmission] = useState<FailedSubmission | null>(null)
+  const [latestTurnToken, setLatestTurnToken] = useState(0)
   const queuedSubmissionsRef = useRef<QueuedSubmission[]>([])
   const queueDrainInFlightRef = useRef(false)
   const submittedAttachmentUrlsRef = useRef<Set<string>>(new Set())
@@ -544,8 +548,15 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     submittedModel: string
     submittedAttachmentMessageId?: string
   } | null>(null)
-  const pendingRetryRef = useRef<{ conversationId: string; model: string } | null>(null)
+  const pendingRetryRef = useRef<{
+    conversationId: string
+    model: string
+    previousAssistantMessageIds: Set<string>
+  } | null>(null)
   const handledChatErrorRef = useRef<{ conversationId: string; message: string } | null>(null)
+  const requestJumpToLatest = useCallback(() => {
+    setLatestTurnToken((current) => current + 1)
+  }, [])
   const revokeSubmittedAttachmentPreviews = useCallback((previews: SubmittedAttachmentPreview[]) => {
     for (const preview of previews) {
       revokeObjectUrl(preview.objectUrl)
@@ -773,8 +784,8 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     removeSubmittedAttachmentPreviewsForConversation
   ])
   const retryLiveData = useCallback(() => {
-    void modelsQuery.refetch()
-  }, [modelsQuery])
+    void statusQuery.refetch()
+  }, [statusQuery])
   const switchToTestData = useCallback(() => setMode('harness'), [setMode])
 
   useEffect(() => {
@@ -871,6 +882,23 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     submittedAttachmentsByMessageId,
     updateThread
   ])
+
+  useEffect(() => {
+    const pendingRetry = pendingRetryRef.current
+    if (!pendingRetry || pendingRetry.conversationId !== chatConversationId) return
+
+    const retryAssistant = chat.messages.find(
+      (message) => message.role === 'assistant' && !pendingRetry.previousAssistantMessageIds.has(message.id)
+    )
+    if (!retryAssistant) return
+
+    setMessageModels((current) =>
+      current[retryAssistant.id] === pendingRetry.model
+        ? current
+        : { ...current, [retryAssistant.id]: pendingRetry.model }
+    )
+    if (chat.status === 'ready' && !chat.error) pendingRetryRef.current = null
+  }, [chat.error, chat.messages, chat.status, chatConversationId, setMessageModels])
 
   useEffect(() => {
     const pendingRetry = pendingRetryRef.current
@@ -996,6 +1024,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     const nextPrompt = composerDraft.prompt.trim()
     if (!nextPrompt && composerDraft.attachments.length === 0) return
 
+    requestJumpToLatest()
     const submission: ComposerSubmission = { prompt: composerDraft.prompt, attachments: [...composerDraft.attachments] }
 
     if (composerShouldQueue) {
@@ -1018,7 +1047,14 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     }
 
     await submitPromptNow(submission, composerConversationId)
-  }, [clearComposerDraft, composerConversationId, composerDraft, composerShouldQueue, submitPromptNow])
+  }, [
+    clearComposerDraft,
+    composerConversationId,
+    composerDraft,
+    composerShouldQueue,
+    requestJumpToLatest,
+    submitPromptNow
+  ])
 
   useEffect(() => {
     queuedSubmissionsRef.current = queuedSubmissions
@@ -1062,13 +1098,20 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
 
   const retryLastResponse = useCallback(async () => {
     if (!canRetry) return
+    requestJumpToLatest()
     const ensuredConversationId = ensureConversation()
     clearStoppedConversation(ensuredConversationId)
     setFailedSubmission(null)
     handledChatErrorRef.current = null
-    pendingRetryRef.current = { conversationId: ensuredConversationId, model: activeModelName }
+    pendingRetryRef.current = {
+      conversationId: ensuredConversationId,
+      model: activeModelName,
+      previousAssistantMessageIds: new Set(
+        chat.messages.filter((message) => message.role === 'assistant').map((message) => message.id)
+      )
+    }
     await chat.reload()
-  }, [activeModelName, canRetry, chat, clearStoppedConversation, ensureConversation])
+  }, [activeModelName, canRetry, chat, clearStoppedConversation, ensureConversation, requestJumpToLatest])
 
   const stopStreamingResponse = useCallback(() => {
     const latestLiveMessage = liveMessagesWithModels.at(-1)
@@ -1168,10 +1211,10 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   if (showLiveError) {
     return (
       <LiveDataUnavailableOverlay
-        debugTitle="Could not reach the local model catalog"
-        title="Live chat models are unavailable"
-        debugDescription="Chat could not fetch the initial model catalog from the configured API target. Start the backend, verify the endpoint, or switch Data source back to Harness in Tweaks while debugging."
-        productionDescription="Chat is waiting for the live model catalog before starting a conversation. Keep the page open while the service recovers, or switch Data source back to Harness in Tweaks to inspect sample conversations."
+        debugTitle="Could not reach local runtime status"
+        title="Live chat is unavailable"
+        debugDescription="Chat could not fetch runtime status from the configured API target. Start the backend, verify the endpoint, or switch Data source back to Harness in Tweaks while debugging."
+        productionDescription="Chat is waiting for the local runtime to become reachable. Keep the page open while the service recovers, or switch Data source back to Harness in Tweaks to inspect sample conversations."
         onRetry={retryLiveData}
         onSwitchToTestData={switchToTestData}
       >
@@ -1219,6 +1262,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
       <ChatLayout
         sidebar={sidebar}
         hideSidebar={conversations.conversations.length === 0}
+        stickToBottomKey={`${displayedConversationId}:${latestTurnToken}`}
         title={data.title}
         subtitle={activeConversation?.title}
         actions={actions}

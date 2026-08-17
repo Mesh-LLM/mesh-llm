@@ -14,8 +14,10 @@ import {
   peerLatencyHint as formatPeerLatencyHint,
   formatPeerLatencySummary as formatPeerLatencySummaryFn
 } from '@/lib/format-latency'
+import { formatRatedVramBytes, formatRatedVramGB, gpuRatedVramGB } from '@/lib/vram'
 
-type GpuInventory = Array<{ vram_bytes: number }>
+type GpuInventoryItem = { total_vram_gb?: number; rated_vram_gb?: number; vram_bytes?: number }
+type GpuInventory = GpuInventoryItem[]
 
 export function modelDisplayName(model?: MeshModel | null) {
   if (!model) return ''
@@ -61,12 +63,8 @@ export function overviewVramGb(isClient: boolean, vramGb?: number | null) {
 }
 
 export function gpuInventoryVramGb(gpus?: GpuInventory | null) {
-  const bytes =
-    gpus?.reduce((sum, gpu) => {
-      const vramBytes = Number(gpu.vram_bytes)
-      return sum + (Number.isFinite(vramBytes) && vramBytes > 0 ? vramBytes : 0)
-    }, 0) ?? 0
-  return bytes > 0 ? bytes / 1024 ** 3 : null
+  const total = gpus?.reduce((sum, gpu) => sum + (gpuRatedVramGB(gpu) ?? 0), 0) ?? 0
+  return total > 0 ? total : null
 }
 
 export function displayVramGb(isClient: boolean, capacityVramGb?: number | null, gpus?: GpuInventory | null) {
@@ -187,9 +185,11 @@ export function uniqueModels(...groups: Array<string[] | undefined>): string[] {
   return [...new Set(groups.flatMap((group) => group ?? []).filter((model) => !!model && model !== '(idle)'))]
 }
 
-export function formatGpuMemory(bytes?: number | null) {
-  if (!bytes || !Number.isFinite(bytes)) return 'Unknown'
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(0)} GB`
+export function formatGpuMemory(gpuOrBytes?: GpuInventoryItem | number | null) {
+  if (typeof gpuOrBytes === 'object' && gpuOrBytes !== null) {
+    return formatRatedVramGB(gpuRatedVramGB(gpuOrBytes))
+  }
+  return formatRatedVramBytes(gpuOrBytes)
 }
 
 export function trimGpuVendor(name: string) {

@@ -11,11 +11,42 @@ peer, or uses Skippy stage splits for models that are too large for one box.
 
 ## Quick start
 
-Install the latest release:
+Install the latest release executable:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
 ```
+
+On Windows, use PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
+```
+
+Install the Apple Silicon Homebrew formula with
+`brew install Mesh-LLM/tap/mesh-llm`. Versioned formulas, Ubuntu and Arch
+packages, checksums, SBOMs, and OCI images are produced by the public
+[`Mesh-LLM/mesh-packaging`](https://github.com/Mesh-LLM/mesh-packaging)
+repository. See the [platform install guides](https://meshllm.cloud/docs/pages/installing-mesh/)
+for the supported package matrix and install commands.
+
+Finish setup:
+
+```bash
+mesh-llm setup
+```
+
+On Windows PowerShell, use `mesh-llm.exe setup`. *(If you plan to run MeshLLM inside WSL2 for CUDA 13+ support or multi-node LAN clustering, see the [Windows & WSL2 Troubleshooting Guide](#-windows--wsl2-troubleshooting).)*
+
+To remove an executable install later, preview the cleanup first:
+
+```bash
+mesh-llm uninstall --dry-run
+mesh-llm uninstall --yes
+```
+
+Uninstall preserves `~/.mesh-llm` configuration and identity data unless you
+explicitly pass `--purge-config`.
 
 Join the public mesh and start serving:
 
@@ -54,6 +85,7 @@ mesh-llm serve --auto --headless
 |---|---|---|
 | Try the public mesh | `mesh-llm serve --auto` | [docs/MESHES.md](docs/MESHES.md) |
 | Start a private mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M` | [docs/MESHES.md](docs/MESHES.md) |
+| Serve one model without mesh networking | `mesh-llm serve --local-model-only --model /models/model.gguf` | OpenAI API defaults to `127.0.0.1:9337` (`--port` and `--listen-all` change it) |
 | Publish your own mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M --publish` | [docs/MESHES.md](docs/MESHES.md) |
 | Join by invite token | `mesh-llm serve --join <token>` | [docs/MESHES.md](docs/MESHES.md) |
 | Run an API-only client | `mesh-llm client --auto` | [docs/MESHES.md](docs/MESHES.md) |
@@ -83,6 +115,28 @@ mesh-llm serve --auto --headless
 
 For a deeper operator guide, see [docs/USAGE.md](docs/USAGE.md). For every CLI
 command and switch, see [docs/CLI.md](docs/CLI.md).
+
+### Local model-only serving
+
+Use the direct topology when a process should expose one complete local model
+through the OpenAI API without becoming a mesh node:
+
+```bash
+mesh-llm serve \
+  --local-model-only \
+  --model /models/model.gguf \
+  --port 9337
+```
+
+This mode starts the OpenAI frontend and one local Skippy model runtime. It does
+not start QUIC, discovery, peer maintenance, split planning, plugins, release
+lookup, the web console, or the management API. Add `--listen-all` only when the
+OpenAI endpoint must bind beyond loopback. Startup fails if the complete model
+does not fit within detected local capacity (or `--max-vram`); it never falls
+back to distributed serving.
+
+For `--local-model-only`, `--model`, `--gguf`, and `--mmproj` values must be
+absolute paths and must not be symlinks.
 
 ## Mixture-of-Agents (`model: "mesh"`) — experimental
 
@@ -133,10 +187,13 @@ llama.cpp parity queue.
 Tagged releases publish macOS bundles plus Linux CPU, Linux ARM64 CPU, Linux
 ARM64 CUDA, Linux CUDA, Linux CUDA Blackwell, Linux ROCm, Linux Vulkan, Windows
 CPU, Windows CUDA, Windows ROCm, and Windows Vulkan bundles. Metal is
-macOS-only. The Linux ARM64 CPU artifact is
+macOS-only. Every flavor is composed from the same backend-neutral host for its
+OS/architecture plus one versioned native runtime. The Linux ARM64 CPU artifact is
 `mesh-llm-aarch64-unknown-linux-gnu.tar.gz`; the Linux ARM64 CUDA artifact is
 `mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz`. In install and release
-contexts, `arm64` and `aarch64` mean the same 64-bit ARM target.
+contexts, `arm64` and `aarch64` mean the same 64-bit ARM target. Portable
+archives work offline: the host discovers the adjacent
+`native-runtimes/<runtime-id>` tree before consulting the user cache.
 
 Build from source with `just`:
 
@@ -146,9 +203,21 @@ cd mesh-llm
 just build
 ```
 
-Source builds require `just`, `cmake`, Rust, and Node.js 24 + npm. CUDA builds
-need `nvcc`, ROCm builds need ROCm/HIP, and Vulkan builds need Vulkan dev files
-plus `glslc`.
+Source builds require `just`, `cmake`, Rust, and Node.js 24 + npm. To exercise
+the release boundary locally, build the neutral host and one runtime:
+
+```bash
+just release-host-build
+just release-runtime-build metal # or cpu, cuda, rocm, vulkan
+MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes" \
+MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$(mktemp -d)" \
+  ./target/release/mesh-llm runtime list
+```
+
+CUDA runtimes need `nvcc`, ROCm runtimes need ROCm/HIP, and Vulkan runtimes need
+Vulkan development files plus `glslc`. See
+[docs/design/NATIVE_RUNTIMES.md](docs/design/NATIVE_RUNTIMES.md) for the
+manifest, discovery, and compatibility contract.
 
 The shipped `mesh-llm` executable uses embedded release attestation for
 provenance and admission hardening only. It does not apply to SDK, XCFramework,
@@ -160,6 +229,83 @@ Bare `inspect --binary ...` is only enough to classify an unstamped binary as
 `missing`; stamped binaries require `--public-key-file` and otherwise report
 `invalid` with an explicit error. Post-download mutation can flip a stamped
 binary to `invalid`, but default startup still allows it.
+
+## 🪟 Windows & WSL2 Troubleshooting
+
+### Running on Windows with CUDA 13+ Drivers
+
+If you are running Windows with an NVIDIA CUDA 13.x driver (e.g., Driver version 595+) and `mesh-llm` reports `0 GPUs` or falls back to Vulkan, use **WSL2 (Windows Subsystem for Linux)** with `--llama-flavor cuda` to access Linux CUDA 13 runtimes.
+
+#### 1. Install CUDA 13.0 Toolkit inside WSL2
+Inside your Ubuntu WSL2 terminal, install `cuda-toolkit-13-0` to supply `libcudart.so.13`:
+
+```bash
+wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-wsl-ubuntu.pin
+sudo mv cuda-wsl-ubuntu.pin /etc/apt/preferences.d/cuda-repository-pin-600
+wget https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda-repo-wsl-ubuntu-13-0-local_13.0.0-1_amd64.deb
+sudo dpkg -i cuda-repo-wsl-ubuntu-13-0-local_13.0.0-1_amd64.deb
+sudo cp /var/cuda-repo-wsl-ubuntu-13-0-local/cuda-*-keyring.gpg /usr/share/keyrings/
+sudo apt-get update && sudo apt-get -y install cuda-toolkit-13-0
+
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### 2. Enable Hyper-V & Windows Firewall for WSL2 Mirrored Mode
+If you use WSL2 `networkingMode=mirrored` in `%UserProfile%\.wslconfig`, Windows 11 manages a separate **Hyper-V VM Firewall** that defaults to `Block` for inbound network traffic when third-party security software (e.g. Norton, McAfee) is present. 
+
+##### 2.1 Configure Mirrored Networking (`.wslconfig`) Part 1
+Create or edit `C:\Users\<username>\.wslconfig` on the Windows host:
+
+```powershell
+notepad $env:USERPROFILE\.wslconfig
+```
+
+##### 2.2 Configure Mirrored Networking (`.wslconfig`) Part 2
+
+```ini
+[wsl2]
+networkingMode=mirrored
+autoProxy=true
+```
+
+##### 2.3 Restart WSL in Powershell
+
+Restart WSL in PowerShell:
+```powershell
+wsl --shutdown
+```
+
+##### 2.4 Enable Windows Firewall Needs
+
+To allow incoming LAN connections to the Web UI (`3131`) and P2P QUIC mesh transport (`9337`), run **PowerShell as Administrator** on the Windows host:
+
+```powershell
+# 1. Allow Inbound Traffic through the WSL Hyper-V VM Firewall Container
+$vmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+Set-NetFirewallHyperVVMSetting -Name $vmCreatorId -DefaultInboundAction Allow
+
+# 2. Allow MeshLLM Ports in Windows Defender Firewall
+New-NetFirewallRule -DisplayName "MeshLLM TCP In" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3131,9337 -Profile Any
+New-NetFirewallRule -DisplayName "MeshLLM UDP In" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9337,5353 -Profile Any
+```
+
+#### 3. Match Model Paths for Direct LAN Reading
+To ensure worker nodes load GGUF model shards directly off local NVMe/SSD storage without streaming tens of gigabytes over the network, ensure the `--gguf` file path string is identical across all nodes (or use symlinks/bind mounts):
+
+```bash
+# Example: Mount or symlink model path on worker nodes
+sudo mkdir -p /mnt/d/models/
+sudo mount --bind /path/to/local/fast/nvme/ /mnt/d/models/
+
+# Launch Master and Worker with matching path strings
+mesh-llm --llama-flavor cuda serve \
+  --console 3131 \
+  --gguf "/mnt/d/models/model.gguf" \
+  --mesh-name "MainMesh" \
+  --listen-all \
+  --auto
+```
 
 ## Documentation hub
 
@@ -176,6 +322,23 @@ binary to `invalid`, but default startup still allows it.
 | [docs/plugins/flash-moe.md](docs/plugins/flash-moe.md) | Optional Flash-MoE SSD expert streaming backend setup |
 | [docs/skippy/FAMILY_STATUS.md](docs/skippy/FAMILY_STATUS.md) | Certified Skippy model-family status |
 | [docs/specs/layer-package-repos.md](docs/specs/layer-package-repos.md) | Manifest and artifact format spec |
+| [docs/specs/mesh-setup-installer.md](docs/specs/mesh-setup-installer.md) | Installer/bootstrap and setup command behavior spec |
+
+## CI infrastructure
+
+<a href="https://depot.dev">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-light.svg">
+    <img alt="Depot" src="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-light.svg" width="128">
+  </picture>
+</a>
+
+Trusted `main` Linux jobs may use [Depot's managed GitHub Actions
+runners](https://depot.dev/docs/github-actions/overview) through the checked-in
+runner policy. Pull requests remain on GitHub-hosted runners until the cache
+isolation and protected-workflow gates in [`ci/DEPOT_MIGRATION.md`](ci/DEPOT_MIGRATION.md)
+are proven. Hardware-qualified GPU tests remain on dedicated runners.
 
 ## Community
 

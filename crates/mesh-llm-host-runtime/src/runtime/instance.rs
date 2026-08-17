@@ -328,7 +328,7 @@ struct OwnerMetadata {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RuntimeProcessTarget {
+pub struct RuntimeProcessTarget {
     pub label: String,
     pub pid: u32,
     pub expected_comm: String,
@@ -351,9 +351,7 @@ fn binary_process_name(binary: &str) -> Option<String> {
     }
 }
 
-pub(crate) fn collect_runtime_stop_targets(
-    root: &Path,
-) -> anyhow::Result<Vec<RuntimeProcessTarget>> {
+pub fn collect_runtime_stop_targets(root: &Path) -> anyhow::Result<Vec<RuntimeProcessTarget>> {
     if !root.exists() {
         return Ok(Vec::new());
     }

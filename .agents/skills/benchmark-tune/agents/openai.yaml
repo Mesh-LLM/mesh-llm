@@ -1,0 +1,4 @@
+interface:
+  display_name: "Benchmark Tune"
+  short_description: "Run mesh-llm benchmark tune safely."
+  default_prompt: "Use benchmark tune to evaluate local model-serving settings, choose candidate sweeps, and interpret results."

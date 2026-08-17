@@ -17,6 +17,44 @@ fn load_gemma_live_fixture() -> HfRepoFixture {
     .expect("parse live Hugging Face fixture")
 }
 
+/// Isolates a parser test from the live remote catalog by installing an empty
+/// catalog override. `parse_exact_model_ref` consults the catalog before the
+/// Hugging Face parser branches, so without this a live catalog entry (e.g. a
+/// real `unsloth/gemma-4-31B-it-GGUF` package) would be returned as
+/// `ExactModelRef::Catalog` instead of the `HuggingFace` ref these tests
+/// assert. Tests using this must be `#[serial]` because the override is global.
+fn empty_catalog_guard() -> crate::models::remote_catalog::CatalogEntriesOverrideGuard {
+    crate::models::remote_catalog::set_catalog_entries_for_test(Vec::new())
+}
+
+struct EnvGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvGuard {
+    fn set_path(key: &'static str, value: &Path) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe { std::env::remove_var(key) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
 fn remote_catalog_entry(
     variant_name: &str,
     curated_name: &str,
@@ -80,6 +118,48 @@ async fn existing_model_path_resolves_to_canonical_path() {
         .expect("resolve existing model path");
 
     assert_eq!(resolved, model_path.canonicalize().unwrap());
+}
+
+#[tokio::test]
+#[serial]
+async fn synthetic_local_gguf_ref_resolves_from_hf_cache() {
+    let temp = tempfile::tempdir().expect("create temp HF cache");
+    let model_path = temp.path().join("local-model.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write local GGUF");
+    let model_ref = synthetic_local_gguf_ref_for_test(&model_path);
+
+    let _hub_cache_guard = EnvGuard::set_path("HF_HUB_CACHE", temp.path());
+    let _hf_home_guard = EnvGuard::remove("HF_HOME");
+
+    let resolved = resolve_model_spec_with_progress(Path::new(&model_ref), false)
+        .await
+        .expect("resolve synthetic local GGUF ref");
+
+    assert_eq!(resolved, model_path);
+}
+
+fn synthetic_local_gguf_ref_for_test(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    use std::time::UNIX_EPOCH;
+
+    let filename = path.file_name().and_then(|value| value.to_str()).unwrap();
+    let metadata = std::fs::metadata(path).expect("read model metadata");
+    let len = metadata.len();
+    let modified = metadata
+        .modified()
+        .expect("read model modified time")
+        .duration_since(UNIX_EPOCH)
+        .expect("model modified after epoch")
+        .as_nanos();
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(filename.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(len.to_le_bytes());
+    hasher.update(modified.to_le_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    format!("local-gguf/sha256-{}", &digest[..16])
 }
 
 #[tokio::test]
@@ -512,7 +592,9 @@ fn repo_name_can_signal_gguf_intent() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_unsloth_gemma_repo_ref() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed = parse_exact_model_ref("unsloth/gemma-4-31B-it-GGUF").unwrap();
     match parsed {
         ExactModelRef::HuggingFace {
@@ -529,7 +611,9 @@ fn parse_exact_model_ref_accepts_unsloth_gemma_repo_ref() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_unsloth_gemma_repo_url() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed =
         parse_exact_model_ref("https://huggingface.co/unsloth/gemma-4-31B-it-GGUF").unwrap();
     match parsed {
@@ -547,7 +631,9 @@ fn parse_exact_model_ref_accepts_unsloth_gemma_repo_url() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_unsloth_gemma_quant_selector() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed = parse_exact_model_ref("unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL").unwrap();
     match parsed {
         ExactModelRef::HuggingFace {
@@ -564,7 +650,9 @@ fn parse_exact_model_ref_accepts_unsloth_gemma_quant_selector() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_revisioned_quant_selector() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed = parse_exact_model_ref("unsloth/gemma-4-31B-it-GGUF@main:UD-Q4_K_XL").unwrap();
     match parsed {
         ExactModelRef::HuggingFace {
@@ -605,7 +693,9 @@ fn simulated_name_and_repo_quant_inputs_converge_to_same_ref() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_unsloth_gemma_repo_url_with_quant_selector() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed =
         parse_exact_model_ref("https://huggingface.co/unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL")
             .unwrap();
@@ -835,7 +925,9 @@ fn format_huggingface_display_ref_prefers_repo_form_for_mlx() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_legacy_mlx_model_path_shape() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed = parse_exact_model_ref("mlx-community/SmolLM-135M-8bit/model").unwrap();
     match parsed {
         ExactModelRef::HuggingFace {

@@ -1,9 +1,19 @@
-use super::*;
+use std::{
+    io,
+    net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
+
+use anyhow::{Context, Result};
+use skippy_protocol::StageConfig;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 #[cfg(target_os = "macos")]
 use std::{net::Ipv4Addr, os::fd::AsRawFd, ptr};
 
-pub(super) fn downstream_source_ip(config: &StageConfig) -> Result<Option<IpAddr>> {
+pub(crate) fn downstream_source_ip(config: &StageConfig) -> Result<Option<IpAddr>> {
     let bind_addr = config
         .bind_addr
         .parse::<SocketAddr>()
@@ -16,7 +26,7 @@ pub(super) fn downstream_source_ip(config: &StageConfig) -> Result<Option<IpAddr
     }
 }
 
-pub(super) fn resolve_downstream_endpoint(endpoint: &str) -> Result<SocketAddr> {
+pub(crate) fn resolve_downstream_endpoint(endpoint: &str) -> Result<SocketAddr> {
     endpoint
         .to_socket_addrs()
         .with_context(|| format!("resolve downstream binary stage endpoint {endpoint}"))?
@@ -27,7 +37,7 @@ pub(super) fn resolve_downstream_endpoint(endpoint: &str) -> Result<SocketAddr> 
         })
 }
 
-pub(super) fn connect_downstream_socket(
+pub(crate) fn connect_downstream_socket(
     downstream_addr: SocketAddr,
     source_ip: Option<IpAddr>,
     timeout: Duration,

@@ -98,21 +98,41 @@ callable in the mesh.
 
 | Callable models | Workers fanned out | Roles assigned |
 |---:|:---:|:---|
-| 0 or 1 | — | MoA bails (503 to client; needs ≥2) |
+| 0 or 1 | — | degrades to serving that model directly (no 503) |
 | 2 | 2 | fast + strong |
 | 3 | 3 | fast + specialist + strong |
 | 4 | 4 | fast + specialist + specialist + strong |
 | N | N | fast + (N-2) specialists + strong |
 
-Models are tier-sorted before role assignment:
-single-digit-B names ("Qwen3-8B", "llama-3-7b") form the small tier and
-get `Fast`; everything else (multi-digit B, or names without an explicit
-size) forms the big tier. Within the big tier, role assignment is
-*first-encountered*, not deterministically by parameter count — we don't
-parse parameter sizes from the alias string, only the broad small-vs-big
-bucket. `Strong` and the reducer head both come from the big tier; if
-deterministic largest-first ordering becomes important, a size-aware
-sort within the big tier would go here.
+On an **answer** turn every worker is packed at the full budget rather
+than its role budget: the role tiers exist so the cheap worker can answer
+the grace fast-path quickly, but a truncated draft is an *input* to
+synthesis, so brevity there drags the aggregated answer down.
+
+Tiering comes from **verified parameter counts**, not the alias string.
+The serving node sums its GGUF tensor element counts and gossips the
+result via `ServedModelMetadata.parameter_count_b`; the gateway reads
+that and splits at `SMALL_TIER_MAX_B` (10B). A model with no verified
+size ranks small, so an unparseable alias can never pose as a big-tier
+worker and displace a real one. Name parsing is no longer used — it
+mis-tiered real models (e.g. `gemma-4-E4B` stores 7.5B, not 4B).
+
+Pool shaping, in order (all measured; see
+`evals/moa-openrouter/RESULTS.md`):
+
+- **Admission**: verified-small workers are dropped only when ≥2
+  verified-big remain. A lone big + smalls keeps the mix, because
+  dropping the smalls there would collapse the committee to a solo model.
+- **All-small pools do not convene a committee.** Measured through the
+  shipped path, an 8B-class pool with an 8B reducer never beat its best
+  member and lost about a third of decided trials (2×8B 0W/37L; 6×8B
+  5W/23L, p=0.0009). Such a pool collapses to its strongest member and
+  the request degrades to serving that model directly. This is a
+  statement about a weak reducer synthesizing weak drafts — a capable
+  pool is the opposite (71W/8T/1L, p<0.0001) — so as soon as a mesh gains
+  a big-tier model the pool is no longer all-small and MoA engages.
+- **Committee cap**: 6 for all-small, 4 once a verified big is present.
+  Fan-out costs ~2N+1 calls per turn and quality is flat past ~4.
 
 **The reducer is not a separate fan-out slot.** It's the same strong
 model (or next-strongest if the primary is slow/broken), invoked
@@ -275,8 +295,10 @@ The MoA intercept lives in `ingress.rs` (~line 234). When `model == "mesh"`:
 2. `handle_turn()` runs the stateless MoA pipeline
 3. Response is sent as SSE (streaming clients) or plain JSON
 
-Activation: requires ≥2 distinct models available in the mesh. Returns 503
-with explanation if fewer.
+Activation: requires ≥2 committee-eligible models in the mesh. If fewer (a
+single model, or an all-small pool collapsed to its best member), the request
+degrades: the virtual `mesh` name is rewritten to a real served model and routed
+normally. Only a node serving nothing at all returns 503.
 
 ---
 
@@ -388,10 +410,10 @@ client, no recursive hook loops.
 |----------|-------------------|
 | 2+ workers agree quickly | Early-exit, faster than single-model |
 | 1 worker much faster than others | Returns fast worker if confident |
-| Remote peer timeout (15s worker / 15s reducer) | Degrades to local-only, adds latency |
+| Remote peer timeout (60s worker / 60s reducer) | Grace ships what arrived at the 10s window; a dead peer costs 10s, not 60s |
 | First reducer candidate slow / cold KV | Hedges to second candidate after 5s, races for first OK |
 | First reducer candidate broken (502s) | Fast-fails to next candidate immediately, no hedge wait |
-| Only 1 model available | Returns 503, does not activate MoA |
+| Only 1 model available | Degrades to serving that model directly |
 | All workers fail | Returns error response |
 
 ### What to watch for

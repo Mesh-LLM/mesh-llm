@@ -1,166 +1,154 @@
-import CryptoKit
 import Foundation
 
-public struct NativeRuntimeConfig: Sendable {
+#if canImport(MeshLLMFFI)
+import MeshLLMFFI
+
+public typealias NativeRuntimeInstallOptions = NativeRuntimeInstallOptionsNative
+public typealias NativeRuntimeInstallOutcome = NativeRuntimeInstallOutcomeNative
+public typealias NativeRuntimeDownloadProgress = NativeRuntimeDownloadProgressNative
+public typealias InstalledNativeRuntime = InstalledNativeRuntimeNative
+public typealias NativeRuntimePruneResult = NativeRuntimePruneResultNative
+public typealias NativeRuntimeVerificationPolicy = NativeRuntimeVerificationPolicyNative
+public typealias NativeRuntimePruneMode = NativeRuntimePruneModeNative
+
+public struct NativeRuntimeResolveOptions: Sendable {
     public let artifactDirectory: URL?
     public let searchDirectories: [URL]
+    public let cacheDirectory: URL?
+    public let allowDownload: Bool
+    public let selection: String
 
-    public init(artifactDirectory: URL? = nil, searchDirectories: [URL] = []) {
+    public init(
+        artifactDirectory: URL? = nil,
+        searchDirectories: [URL] = [],
+        cacheDirectory: URL? = nil,
+        allowDownload: Bool = false,
+        selection: String = "recommended"
+    ) {
         self.artifactDirectory = artifactDirectory
         self.searchDirectories = searchDirectories
-    }
-}
-
-public struct NativeRuntimeArtifact: Sendable, Equatable {
-    public let artifactId: String
-    public let artifactDirectory: URL
-    public let manifest: URL
-    public let library: URL
-}
-
-public enum NativeRuntimeError: Error, LocalizedError, Equatable {
-    case notFound(String)
-    case invalidArtifact(String)
-    case checksumMismatch(URL)
-
-    public var errorDescription: String? {
-        switch self {
-        case .notFound(let detail):
-            return "MeshLLM native runtime artifact not found: \(detail)"
-        case .invalidArtifact(let detail):
-            return "Invalid MeshLLM native runtime artifact: \(detail)"
-        case .checksumMismatch(let url):
-            return "MeshLLM native runtime checksum mismatch: \(url.path)"
-        }
+        self.cacheDirectory = cacheDirectory
+        self.allowDownload = allowDownload
+        self.selection = selection
     }
 }
 
 public enum NativeRuntime {
-    public static func resolve(_ config: NativeRuntimeConfig = NativeRuntimeConfig()) throws -> NativeRuntimeArtifact {
-        var candidates: [URL] = []
-        if let artifactDirectory = config.artifactDirectory {
-            candidates.append(artifactDirectory)
-        }
-        candidates.append(contentsOf: environmentDirectories())
-        candidates.append(contentsOf: config.searchDirectories)
-        if let resourceURL = Bundle.main.resourceURL {
-            candidates.append(resourceURL.appendingPathComponent("meshllm-native"))
-            candidates.append(resourceURL.appendingPathComponent("native"))
-        }
-        candidates.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("meshllm-native"))
-        candidates.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("native"))
+    public static var meshVersion: String {
+        currentMeshVersion()
+    }
 
-        var errors: [String] = []
-        var seen = Set<String>()
-        for candidate in candidates {
-            for artifactDirectory in artifactCandidates(candidate) {
-                let normalized = artifactDirectory.standardizedFileURL
-                guard seen.insert(normalized.path).inserted else {
-                    continue
-                }
-                do {
-                    return try validate(artifactDirectory: normalized)
-                } catch {
-                    errors.append("\(normalized.path): \(error.localizedDescription)")
-                }
-            }
-        }
+    public static var skippyAbiVersion: String {
+        currentSkippyAbiVersion()
+    }
 
-        let detail = errors.isEmpty
-            ? "no candidate runtime artifact directories were configured"
-            : errors.joined(separator: "; ")
-        throw NativeRuntimeError.notFound(detail)
+    public static func install(
+        _ options: NativeRuntimeInstallOptions,
+        onProgress: (@Sendable (NativeRuntimeDownloadProgress) -> Void)? = nil
+    ) async throws -> NativeRuntimeInstallOutcome {
+        let progress = onProgress.map(ProgressListener.init)
+        return try await runBlocking {
+            try installNativeRuntime(options: options, progress: progress)
+        }
+    }
+
+    public static func resolve(
+        _ options: NativeRuntimeResolveOptions = NativeRuntimeResolveOptions(),
+        onProgress: (@Sendable (NativeRuntimeDownloadProgress) -> Void)? = nil
+    ) async throws -> InstalledNativeRuntime {
+        var bundleDirs: [String] = options.searchDirectories.map(\.path)
+        if let artifactDirectory = options.artifactDirectory {
+            bundleDirs.insert(artifactDirectory.path, at: 0)
+        }
+        let outcome = try await install(
+            NativeRuntimeInstallOptions(
+                meshVersion: nil,
+                skippyAbiVersion: nil,
+                selection: options.selection,
+                manifestPath: nil,
+                manifestUrl: nil,
+                bundleDirs: bundleDirs,
+                cacheDir: options.cacheDirectory?.path,
+                verificationPolicy: .requireChecksum,
+                allowDownload: options.allowDownload
+            ),
+            onProgress: onProgress
+        )
+        return outcome.runtime
+    }
+
+    public static func validate(
+        artifactDirectory: URL,
+        cacheDirectory: URL? = nil
+    ) async throws -> InstalledNativeRuntime {
+        try await resolve(
+            NativeRuntimeResolveOptions(
+                artifactDirectory: artifactDirectory,
+                cacheDirectory: cacheDirectory,
+                allowDownload: false
+            )
+        )
+    }
+
+    public static func installed(cacheDirectory: URL? = nil) async throws -> [InstalledNativeRuntime] {
+        try await runBlocking {
+            try installedNativeRuntimes(cacheDir: cacheDirectory?.path)
+        }
     }
 
     @discardableResult
-    public static func prepare(_ config: NativeRuntimeConfig = NativeRuntimeConfig()) throws -> NativeRuntimeArtifact {
-        try resolve(config)
+    public static func remove(
+        meshVersion: String,
+        nativeRuntimeId: String,
+        cacheDirectory: URL? = nil
+    ) async throws -> Bool {
+        try await runBlocking {
+            try removeNativeRuntime(
+                cacheDir: cacheDirectory?.path,
+                meshVersion: meshVersion,
+                nativeRuntimeId: nativeRuntimeId
+            )
+        }
     }
 
-    public static func validate(artifactDirectory: URL) throws -> NativeRuntimeArtifact {
-        let artifactDirectory = artifactDirectory.standardizedFileURL
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: artifactDirectory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw NativeRuntimeError.invalidArtifact("artifact directory does not exist: \(artifactDirectory.path)")
+    public static func prune(
+        cacheDirectory: URL? = nil,
+        activeMeshVersion: String? = nil,
+        mode: NativeRuntimePruneMode = .keepActiveAndPrevious
+    ) async throws -> NativeRuntimePruneResult {
+        try await runBlocking {
+            try pruneNativeRuntimes(
+                cacheDir: cacheDirectory?.path,
+                activeMeshVersion: activeMeshVersion,
+                mode: mode
+            )
         }
-
-        let manifestURL = artifactDirectory.appendingPathComponent("manifest.json")
-        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
-            throw NativeRuntimeError.invalidArtifact("manifest.json does not exist: \(manifestURL.path)")
-        }
-
-        let manifest = try JSONDecoder().decode(
-            NativeRuntimeManifest.self,
-            from: Data(contentsOf: manifestURL)
-        )
-        let library = artifactDirectory.appendingPathComponent(manifest.library)
-        guard FileManager.default.fileExists(atPath: library.path) else {
-            throw NativeRuntimeError.invalidArtifact("native library does not exist: \(library.path)")
-        }
-
-        let expected = manifest.librarySha256.lowercased()
-        guard try sha256Hex(library) == expected else {
-            throw NativeRuntimeError.checksumMismatch(library)
-        }
-
-        return NativeRuntimeArtifact(
-            artifactId: manifest.artifactId,
-            artifactDirectory: artifactDirectory,
-            manifest: manifestURL,
-            library: library
-        )
-    }
-
-    private static func environmentDirectories() -> [URL] {
-        let env = ProcessInfo.processInfo.environment
-        var urls: [URL] = []
-        for name in [
-            "MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR",
-            "MESHLLM_NATIVE_RUNTIME_DIR",
-            "MESH_SDK_NATIVE_RUNTIME_DIR",
-        ] {
-            if let value = env[name], !value.isEmpty {
-                urls.append(URL(fileURLWithPath: value))
-            }
-        }
-        if let library = env["MESHLLM_NATIVE_RUNTIME_LIBRARY"], !library.isEmpty {
-            urls.append(URL(fileURLWithPath: library).deletingLastPathComponent().deletingLastPathComponent())
-        }
-        return urls
-    }
-
-    private static func artifactCandidates(_ candidate: URL) -> [URL] {
-        let normalized = candidate.standardizedFileURL
-        if FileManager.default.fileExists(atPath: normalized.appendingPathComponent("manifest.json").path) {
-            return [normalized]
-        }
-        let children = (try? FileManager.default.contentsOfDirectory(
-            at: normalized,
-            includingPropertiesForKeys: [.isDirectoryKey]
-        )) ?? []
-        let artifacts = children
-            .filter { url in
-                let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
-                return values?.isDirectory == true && url.lastPathComponent.hasPrefix("meshllm-native-")
-            }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        return [normalized] + artifacts
-    }
-
-    private static func sha256Hex(_ url: URL) throws -> String {
-        let digest = SHA256.hash(data: try Data(contentsOf: url))
-        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
 
-private struct NativeRuntimeManifest: Decodable {
-    let artifactId: String
-    let library: String
-    let librarySha256: String
+private final class ProgressListener: NativeRuntimeProgressListener, @unchecked Sendable {
+    private let onProgress: @Sendable (NativeRuntimeDownloadProgress) -> Void
 
-    enum CodingKeys: String, CodingKey {
-        case artifactId = "artifact_id"
-        case library
-        case librarySha256 = "library_sha256"
+    init(_ onProgress: @escaping @Sendable (NativeRuntimeDownloadProgress) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func onProgress(event: NativeRuntimeDownloadProgressNative) {
+        onProgress(event)
     }
 }
+
+private func runBlocking<T>(_ work: @escaping () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue.global().async(flags: .inheritQoS) {
+            do {
+                continuation.resume(returning: try work())
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+}
+#else
+#error("MeshLLM Swift SDK requires MeshLLMFFI.xcframework. Build it with sdk/swift/scripts/build-xcframework.sh before building, testing, or integrating the SDK.")
+#endif

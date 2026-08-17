@@ -16,7 +16,7 @@ Issue #630, Cohere Command A+, is the first model tracked with this flow.
 | Artifact inspected | GGUF metadata or package manifest gives architecture, layer count, activation width, quant, shard layout, and tokenizer sidecars. | May plan a package job. |
 | Package validated | `skippy-model-package` writes, validates, and preflights a package with no unresolved manifest, artifact, sidecar, materialization, missing, duplicate, or checksum diagnostics. | May test staged serving. |
 | Runtime smoke passed | A package-backed model starts and answers through the OpenAI-compatible surface. | May collect serving evidence. |
-| Family certified | Split correctness, dtype matrix, state handoff/cache policy, and required multimodal sidebands pass. | May promote to reviewed support. |
+| Family certified | Split correctness, dtype matrix, state handoff/cache policy, required context capacity, and required multimodal sidebands pass. | May promote to reviewed support. |
 | Reviewed support | `docs/skippy/FAMILY_STATUS.md` and reviewed topology records are updated from evidence. | User-visible support claim. |
 
 Do not skip from candidate to reviewed support. A big or popular model is still
@@ -36,7 +36,11 @@ only a candidate until the evidence exists.
    load and inspect it.
 5. Run package validation before runtime certification for models too large for
    a local full-model parity pass.
-6. Promote only after the evidence maps cleanly to both
+6. Run the context-capacity lane at `min(native_context, 131072)`. For models
+   whose native context is at least 131,072 tokens, a tiny-context runtime smoke
+   is not promotion evidence: the live split must allocate 131,072 and complete
+   a request with at least 120,000 prompt tokens plus a continuation.
+7. Promote only after the evidence maps cleanly to both
    `docs/skippy/FAMILY_STATUS.md` and
    `crates/skippy-topology/capabilities/reviewed-family-capabilities.json`.
 

@@ -4,7 +4,8 @@
 //! shared snapshots through this boundary.
 
 use super::inventory::{
-    InventoryScanCoordinator, replace_local_instances_snapshot, replace_local_inventory_snapshot,
+    InventoryScanCoordinator, InventoryScanDisposition, InventoryScanError, InventoryScanOutcome,
+    InventoryScanResult, replace_local_instances_snapshot, replace_local_inventory_snapshot,
 };
 use super::plugins::{
     PluginDataValue, PluginsSnapshotView, clear_plugin_data, clear_plugin_endpoints,
@@ -69,6 +70,15 @@ impl RuntimeDataCollector {
     #[cfg(test)]
     pub(crate) fn subscription_state(&self) -> RuntimeDataSubscriptionState {
         self.shared.subscriptions.state()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inventory_scan_waiter_count(&self) -> usize {
+        self.shared
+            .inventory_scan
+            .lock()
+            .expect("runtime data inventory scan lock poisoned")
+            .waiters_len()
     }
 
     pub(crate) fn mark_dirty(&self, dirty: RuntimeDataDirty) -> RuntimeDataSubscriptionState {
@@ -218,12 +228,21 @@ impl RuntimeDataCollector {
         })
     }
 
-    pub(crate) async fn coalesce_local_inventory_scan<F>(
-        &self,
-        load: F,
-    ) -> LocalModelInventorySnapshot
+    pub(crate) async fn coalesce_local_inventory_scan<F>(&self, load: F) -> InventoryScanResult
     where
         F: FnOnce() -> LocalModelInventorySnapshot + Send + 'static,
+    {
+        self.coalesce_local_inventory_scan_outcome(move || Ok(load()))
+            .await
+            .map(|outcome| outcome.snapshot)
+    }
+
+    pub(crate) async fn coalesce_local_inventory_scan_outcome<F>(
+        &self,
+        load: F,
+    ) -> Result<InventoryScanOutcome, InventoryScanError>
+    where
+        F: FnOnce() -> InventoryScanResult + Send + 'static,
     {
         let (rx, start_scan) = {
             let mut inventory_scan = self
@@ -237,15 +256,17 @@ impl RuntimeDataCollector {
         if start_scan {
             let collector = self.clone();
             tokio::spawn(async move {
-                let snapshot = match tokio::task::spawn_blocking(load).await {
-                    Ok(snapshot) => snapshot,
+                let scan_result = match tokio::task::spawn_blocking(load).await {
+                    Ok(result) => result,
                     Err(err) => {
                         tracing::warn!("Local inventory scan failed: {err}");
-                        LocalModelInventorySnapshot::default()
+                        Err(InventoryScanError::TaskPanicked(err.to_string()))
                     }
                 };
 
-                collector.replace_local_inventory_snapshot(snapshot.clone());
+                if let Ok(snapshot) = &scan_result {
+                    collector.replace_local_inventory_snapshot(snapshot.clone());
+                }
                 let waiters = {
                     let mut inventory_scan = collector
                         .shared
@@ -255,12 +276,20 @@ impl RuntimeDataCollector {
                     inventory_scan.finish()
                 };
                 for waiter in waiters {
-                    let _ = waiter.send(snapshot.clone());
+                    let _ = waiter.send(scan_result.clone());
                 }
             });
         }
 
-        rx.await.unwrap_or_else(|_| self.local_inventory_snapshot())
+        let snapshot = rx.await.map_err(|_| InventoryScanError::TaskCancelled)??;
+        Ok(InventoryScanOutcome {
+            snapshot,
+            disposition: if start_scan {
+                InventoryScanDisposition::Executed
+            } else {
+                InventoryScanDisposition::Coalesced
+            },
+        })
     }
 
     pub(crate) fn plugin_data_snapshot(&self) -> PluginDataSnapshot {
@@ -403,6 +432,7 @@ impl RuntimeDataCollector {
         let local_model_names = std::mem::take(&mut input.local_inventory.model_names);
         let mut metadata_by_name = std::mem::take(&mut input.local_inventory.metadata_by_name);
         let mut size_by_name = std::mem::take(&mut input.local_inventory.size_by_name);
+        let display_name_by_name = std::mem::take(&mut input.local_inventory.display_name_by_name);
         for peer in &input.peers {
             for meta in &peer.available_model_metadata {
                 metadata_by_name
@@ -439,6 +469,7 @@ impl RuntimeDataCollector {
             local_model_names: &local_model_names,
             metadata_by_name: &metadata_by_name,
             size_by_name: &size_by_name,
+            display_name_by_name: &display_name_by_name,
         };
         let models = catalog
             .iter()
@@ -493,6 +524,7 @@ struct ModelViewBuildContext<'a> {
     local_model_names: &'a HashSet<String>,
     metadata_by_name: &'a HashMap<String, crate::proto::node::CompactModelMetadata>,
     size_by_name: &'a HashMap<String, u64>,
+    display_name_by_name: &'a HashMap<String, String>,
 }
 
 fn build_model_payload_from_catalog_entry(
@@ -509,7 +541,9 @@ fn build_model_payload_from_catalog_entry(
         || input.my_hosted_models.iter().any(|served| served == name)
         || input.my_serving_models.iter().any(|served| served == name)
         || name == &input.model_name;
-    let display_name = crate::models::installed_model_display_name(name);
+    let display_name = crate::models::loaded_remote_catalog_display_name(name)
+        .or_else(|| ctx.display_name_by_name.get(name).cloned())
+        .unwrap_or_else(|| name.to_string());
     let route_stats = is_warm.then(|| {
         http_route_stats(
             name,
@@ -554,6 +588,13 @@ fn build_model_payload_from_catalog_entry(
         .map(|m| m.context_length)
         .filter(|value| *value > 0);
     let quantization = model_quantization_for_view(metadata, catalog_entry.as_ref());
+    let tokenizer = metadata
+        .map(|m| m.tokenizer_model_name.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let layer_count = compact_metadata_nonzero(metadata, |m| m.layer_count);
+    let head_count = compact_metadata_nonzero(metadata, |m| m.head_count);
+    let embedding_size = compact_metadata_nonzero(metadata, |m| m.embedding_size);
     let draft_model = catalog_entry
         .as_ref()
         .and_then(crate::models::remote_catalog_model_draft_ref);
@@ -600,6 +641,10 @@ fn build_model_payload_from_catalog_entry(
         architecture,
         context_length,
         quantization,
+        tokenizer,
+        layer_count,
+        head_count,
+        embedding_size,
         description,
         multimodal: capability_view.multimodal,
         multimodal_status: capability_view.multimodal_status,
@@ -629,6 +674,13 @@ fn build_model_payload_from_catalog_entry(
         run_command: format!("mesh-llm serve --model {}", command_ref),
         auto_command: format!("mesh-llm serve --auto --model {}", command_ref),
     }
+}
+
+fn compact_metadata_nonzero(
+    metadata: Option<&crate::proto::node::CompactModelMetadata>,
+    field: impl FnOnce(&crate::proto::node::CompactModelMetadata) -> u32,
+) -> Option<u32> {
+    metadata.map(field).filter(|value| *value > 0)
 }
 
 fn model_size_gb_for_view(
@@ -946,7 +998,7 @@ fn derive_runtime_status(input: RuntimeStatusDerivationInput<'_>) -> RuntimeStat
         Some(format!(
             "mesh-llm pi --host 127.0.0.1:{} --model {}",
             input.api_port,
-            crate::cli::shell::single_quote(&display_model_name)
+            single_quote_shell_arg(&display_model_name)
         ))
     } else {
         None
@@ -969,6 +1021,10 @@ fn derive_runtime_status(input: RuntimeStatusDerivationInput<'_>) -> RuntimeStat
         launch_pi,
         launch_goose,
     }
+}
+
+fn single_quote_shell_arg(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn derive_local_node_state(
@@ -1050,6 +1106,7 @@ fn build_peer_payload(peer: &mesh::PeerInfo) -> PeerPayload {
         serving_models: peer.serving_models.clone(),
         hosted_models: peer.hosted_models.clone(),
         hosted_models_known: peer.hosted_models_known,
+        advertised_model_throughput: peer.advertised_model_throughput.clone(),
         version: peer.version.clone(),
         rtt_ms: peer.rtt_ms,
         latency_ms: display_latency.latency_ms,

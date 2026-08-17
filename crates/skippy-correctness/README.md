@@ -83,6 +83,47 @@ skippy-correctness state-handoff \
   --cache-hit-repeats 3 \
   --n-gpu-layers=-1 \
   --report-out reports/state-handoff.json
+
+skippy-correctness native-mtp-open-ai-ab \
+  --model model.gguf \
+  --model-id org/repo:Q4_K_M \
+  --prompt 'Write a Python function named add_one that returns x + 1.' \
+  --layer-end 48 \
+  --split-layer 24 \
+  --ctx-size 128 \
+  --n-batch 128 \
+  --n-ubatch 128 \
+  --n-gpu-layers 999 \
+  --activation-width 2048 \
+  --activation-wire-dtype f16 \
+  --max-tokens 12 \
+  --report-out reports/native-mtp-openai-ab.json
+
+skippy-correctness native-mtp-open-ai-ab \
+  --model /Volumes/External/models/huggingface/.../model.gguf \
+  --model-id org/repo:Q4_K_M \
+  --stage1-model /Volumes/models/huggingface/.../model.gguf \
+  --stage1-ssh-host micstudio \
+  --stage1-remote-workdir /Users/micn/src/mesh-llm-codex \
+  --stage1-remote-stage-server-bin target/debug/skippy-server \
+  --openai-bind-addr 192.168.0.5:19170 \
+  --stage0-bind-addr 192.168.0.5:19171 \
+  --stage0-endpoint-addr 192.168.0.5:19171 \
+  --stage1-bind-addr 192.168.0.10:19172 \
+  --stage1-endpoint-addr 192.168.0.10:19172 \
+  --layer-end 48 \
+  --split-layer 24
+
+skippy-correctness glm-dsa-stage0-trace \
+  --model /Volumes/External/models/huggingface/.../GLM-5.2-Q2_K-MTP-Q8-layers/snapshots/main \
+  --stage-model /Volumes/External/models/huggingface/.../GLM-5.2-Q2_K-MTP-Q8-layers/snapshots/main \
+  --model-id meshllm/GLM-5.2-Q2_K-MTP-Q8-layers \
+  --stage-load-mode layer-package \
+  --ctx-size 1024 \
+  --n-gpu-layers 999 \
+  --stage-server-bin target/release/skippy-server \
+  --prompt-bin target/release/skippy-prompt \
+  --report-out reports/glm-dsa-stage0-trace.json
 ```
 
 All commands emit JSON, optionally write the same JSON with `--report-out`, and
@@ -178,6 +219,33 @@ same activation/cache contracts without requiring a monolithic full GGUF.
   `--cache-hit-repeats` to repeatedly attach the exported state and decode the
   same continuation, producing a recompute-vs-cache-hit speedup estimate. Use
   `--allow-mismatch` only for diagnostic payloads such as recurrent-only.
+- `native-mtp-open-ai-ab` launches a real two-stage `skippy-server
+  serve-binary` split three times through the embedded OpenAI frontend. The
+  baseline run sets `SKIPPY_NATIVE_MTP_ENABLED=0`, the n=1 run sets
+  `SKIPPY_NATIVE_MTP_BATCHED_VERIFY=0`, and the batched run uses the default
+  transactional verification path. The command fails unless all responses are
+  HTTP 200, baseline/n=1/batched output content is byte-identical, native MTP
+  metrics are observed for n=1 and batched runs, and the batched run emits
+  `stage.openai_native_mtp_verify` events.
+- `glm-dsa-stage0-trace` runs a package-backed GLM-DSA stage-0 slice twice:
+  fused sparse-mask mode and direct sparse-attention mode. It starts a local
+  fake downstream binary stage, drives `skippy-prompt binary`, captures
+  `glm_dsa_tensor_trace` / `glm_dsa_op_timing` logs, and emits a JSON report
+  with fake-downstream top-k sideband counts plus fused-vs-direct speed ratios.
+  This is a diagnostic loop for GLM-DSA fast-path work, not a full-model
+  correctness proof.
+- For lab split config generation, use `--stage0-endpoint-addr` and
+  `--stage1-endpoint-addr` when the address a peer should dial differs from the
+  local bind. Use `--stage0-model` and `--stage1-model` when the same model is
+  mounted at different paths on each host.
+- For harness-owned lab splits, pass `--stage1-ssh-host`,
+  `--stage1-remote-workdir`, and `--stage1-remote-stage-server-bin`. The harness
+  copies the generated stage-1 config/topology to the remote host, launches
+  `serve-binary` there for each baseline/n=1/batched case, waits for the binary
+  endpoint, and collects the remote log back into the report directory.
+- For manually managed lab splits, pass `--external-stage1`. The harness writes
+  the stage configs and waits for the configured stage-1 endpoint, but it does
+  not start or stop the remote process.
 - Requires a built `skippy-server` binary for binary transport checks.
 - Uses the same llama-backed runtime ABI as the server.
 - The default build statically links llama from

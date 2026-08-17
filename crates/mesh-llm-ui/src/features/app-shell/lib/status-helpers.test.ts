@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   displayVramGb,
+  formatGpuMemory,
   formatLiveNodeState,
   gpuInventoryVramGb,
   localRoutableModels,
@@ -110,11 +111,21 @@ describe('live node state helpers', () => {
     expect(localRoutableModels({ ...baseStatus, node_state: 'client', is_client: false })).toEqual([])
   })
 
-  it('prefers physical GPU inventory over effective capacity for VRAM display', () => {
+  it('prefers rated GPU inventory over effective capacity for VRAM display', () => {
     const physicalVramBytes = 17_094_934_528
 
-    expect(gpuInventoryVramGb([{ vram_bytes: physicalVramBytes }])).toBeCloseTo(15.92, 2)
-    expect(displayVramGb(false, 29.4, [{ vram_bytes: physicalVramBytes }])).toBeCloseTo(15.92, 2)
+    expect(gpuInventoryVramGb([{ vram_bytes: physicalVramBytes }])).toBe(16)
+    expect(displayVramGb(false, 29.4, [{ vram_bytes: physicalVramBytes }])).toBe(16)
+  })
+
+  it('prefers explicit rated VRAM when formatting GPU inventory', () => {
+    expect(
+      formatGpuMemory({
+        total_vram_gb: 30.15,
+        rated_vram_gb: 32,
+        vram_bytes: 32_000_000_000
+      })
+    ).toBe('32 GB')
   })
 
   it('falls back to capacity VRAM when GPU inventory is absent', () => {

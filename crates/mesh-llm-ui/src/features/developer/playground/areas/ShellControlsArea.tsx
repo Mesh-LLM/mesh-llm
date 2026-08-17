@@ -12,6 +12,7 @@ import { DASHBOARD_HARNESS } from '@/features/app-tabs/data'
 import type { Accent, Density, PanelStyle, Theme, AppTab } from '@/features/app-tabs/types'
 import { env, hrefWithBasePath } from '@/lib/env'
 import { PlaygroundPanel, SidebarTabs, TextAreaField, TextField } from '@/features/developer/playground/primitives'
+import { Stepper } from '@/components/ui/Stepper'
 import type { DeveloperPlaygroundState } from '@/features/developer/playground/useDeveloperPlaygroundState'
 
 type PreviewCommand = { id: string; label: string; summary: string }
@@ -246,6 +247,60 @@ export function ShellControlsArea({ state }: { state: DeveloperPlaygroundState }
                     Keep shell actions short, direct, and easy to scan. Selection state should be obvious from border
                     and tint, not from decoration.
                   </p>
+                </div>
+              </div>
+            </PlaygroundPanel>
+          )
+        },
+        {
+          value: 'inputs',
+          label: 'Inputs',
+          content: (
+            <PlaygroundPanel
+              title="Stepper"
+              description="Numeric stepper with increment/decrement buttons, min/max bounds, custom step size, and keyboard support."
+            >
+              <div className="space-y-6">
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <PlaygroundPanel title="Default" description="Basic stepper with step=1, no bounds.">
+                    <Stepper
+                      value={state.stepperValue1}
+                      onChange={state.setStepperValue1}
+                      aria-label="Default stepper"
+                    />
+                  </PlaygroundPanel>
+                  <PlaygroundPanel title="With bounds" description="Stepper with min=0, max=100, step=5.">
+                    <Stepper
+                      value={state.stepperValue2}
+                      min={0}
+                      max={100}
+                      step={5}
+                      onChange={state.setStepperValue2}
+                      aria-label="Bounded stepper"
+                    />
+                  </PlaygroundPanel>
+                  <PlaygroundPanel
+                    title="Negative step handled"
+                    description="Stepper normalizes negative step to positive (step=-1 becomes step=1)."
+                  >
+                    <Stepper
+                      value={state.stepperValue3}
+                      step={-1}
+                      onChange={state.setStepperValue3}
+                      aria-label="Normalized stepper"
+                    />
+                  </PlaygroundPanel>
+                  <PlaygroundPanel
+                    title="Zero step handled"
+                    description="Stepper clamps zero step to 1 (step=0 becomes step=1)."
+                  >
+                    <Stepper
+                      value={state.stepperValue4}
+                      step={0}
+                      onChange={state.setStepperValue4}
+                      aria-label="Clamped stepper"
+                    />
+                  </PlaygroundPanel>
                 </div>
               </div>
             </PlaygroundPanel>

@@ -1,0 +1,7 @@
+attn_kv_a_mqa\.weight$=Q8_0
+attn_q_a\.weight$=Q8_0
+attn_q_b\.weight$=Q8_0
+ffn_down_shexp\.weight$=Q4_K
+ffn_gate_shexp\.weight$=Q4_K
+ffn_up_shexp\.weight$=Q4_K
+(^|\.)nextn\.=Q8_0

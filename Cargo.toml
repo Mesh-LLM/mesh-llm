@@ -1,20 +1,34 @@
 [workspace]
 members = [
     "crates/mesh-llm",
+    "crates/mesh-llm-cli",
+    "crates/mesh-llm-commands",
     "crates/mesh-llm-config",
+    "crates/mesh-llm-events",
+    "crates/mesh-llm-build-info",
     "crates/mesh-llm-gpu-bench",
     "crates/mesh-llm-host-runtime",
+    "crates/mesh-llm-log-store",
+    "crates/mesh-llm-hardware-profile",
     "crates/mesh-llm-identity",
+    "crates/mesh-llm-native-runtime",
     "crates/mesh-llm-protocol",
+    "crates/mesh-llm-release-footer",
     "crates/mesh-llm-routing",
+    "crates/mesh-llm-runtime-install",
+    "crates/mesh-llm-sdk",
     "crates/mesh-llm-guardrails",
     "crates/mesh-llm-system",
+    "crates/mesh-llm-tui",
     "crates/mesh-llm-types",
     "crates/mesh-llm-console-server",
+    "crates/mesh-llm-embedded-runtime",
     "crates/mesh-llm-ui",
     "crates/mesh-llm-plugin",
     "crates/mesh-llm-skills",
     "crates/mesh-llm-plugin-manager",
+    "crates/mesh-native-serving-plugin-api",
+    "crates/mesh-native-serving-plugin-host",
     "crates/mesh-client",
     "crates/mesh-llm-api-client",
     "crates/mesh-llm-api-server",
@@ -27,6 +41,7 @@ members = [
     "crates/model-fit",
     "crates/model-hf",
     "crates/model-resolver",
+    "crates/skippy-tokenizer",
     "crates/skippy-protocol",
     "crates/skippy-coordinator",
     "crates/skippy-topology",
@@ -38,12 +53,14 @@ members = [
     "crates/skippy-server",
     "crates/metrics-server",
     "crates/skippy-model-package",
+    "crates/skippy-quantize",
     "crates/model-package",
     "crates/skippy-correctness",
     "crates/llama-spec-bench",
     "crates/skippy-bench",
     "crates/skippy-prompt",
     "crates/mesh-mixture-of-agents",
+    "crates/llama-quant-ffi",
     "tools/xtask",
 ]
 default-members = [
@@ -55,19 +72,21 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-version = "0.68.0"
+version = "0.76.0-rc2"
 
 [workspace.dependencies]
+ahash = "0.8.12"
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
-mesh-llm-skills = { path = "crates/mesh-llm-skills" }
+memmap2 = "0.9"
+mesh-llm-build-info = { path = "crates/mesh-llm-build-info", version = "0.76.0-rc2" }
+mesh-llm-release-footer = { path = "crates/mesh-llm-release-footer", version = "0.76.0-rc2" }
+mesh-llm-skills = { path = "crates/mesh-llm-skills", version = "0.76.0-rc2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-
-[patch.crates-io]
-hf-hub = { git = "https://github.com/Mesh-LLM/hf-hub", branch = "mesh-llm" }
+strum = { version = "0.28", features = ["derive"] }
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"
@@ -76,6 +95,13 @@ too_many_lines = "warn"
 # Do not remove this section: direct GGUF debug startup spends most of its time
 # hashing the source model via sha2/sha2-asm before native skippy model open,
 # so keep those crates near release speed in dev builds.
+# blake3 verifies every KV page read back from the disk tier, so an
+# unoptimized build hashes multi-gigabyte pages at a few hundred MB/s and
+# makes a cache restore look far more expensive than it is. Same reasoning
+# as sha2 below: cryptographic primitives are hot even in dev builds.
+[profile.dev.package.blake3]
+opt-level = 3
+
 [profile.dev.package.sha2]
 opt-level = 3
 

@@ -23,6 +23,7 @@ API_PORT="${MESH_SDK_API_PORT:-9347}"
 CONSOLE_PORT="${MESH_SDK_CONSOLE_PORT:-3141}"
 MAX_WAIT="${MESH_SDK_MAX_WAIT:-180}"
 LOG="${MESH_SDK_LOG:-/tmp/mesh-llm-sdk-ci.log}"
+RUNTIME_CACHE="${MESH_SDK_NATIVE_RUNTIME_CACHE_DIR:-${RUNNER_TEMP:-/tmp}/mesh-llm-sdk-native-runtimes}"
 
 echo "=== SDK Fixture ==="
 echo "  mesh-llm:  $MESH_LLM"
@@ -30,6 +31,7 @@ echo "  bin-dir:   $BIN_DIR (compatibility placeholder)"
 echo "  model:     $MODEL"
 echo "  api port:  $API_PORT"
 echo "  console:   $CONSOLE_PORT"
+echo "  runtimes:  $RUNTIME_CACHE"
 
 if [[ ! -x "$MESH_LLM" ]]; then
     echo "Missing executable mesh-llm binary: $MESH_LLM" >&2
@@ -38,6 +40,19 @@ fi
 if [[ ! -f "$MODEL" ]]; then
     echo "Missing model: $MODEL" >&2
     exit 1
+fi
+
+export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$RUNTIME_CACHE"
+if [[ -n "${MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR:-}" ]]; then
+    if [[ ! -d "$MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR" ]]; then
+        echo "Missing native runtime artifact directory: $MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR" >&2
+        exit 1
+    fi
+    echo "Installing native runtime artifact:"
+    echo "  artifact: $MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR"
+    "$MESH_LLM" runtime install \
+        --bundle-dir "$MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR" \
+        --cache-dir "$RUNTIME_CACHE"
 fi
 
 "$MESH_LLM" \
@@ -83,6 +98,8 @@ trap cleanup EXIT
 
 STATUS_JSON=""
 TOKEN=""
+MODELS_JSON=""
+MODEL_ID=""
 for i in $(seq 1 "$MAX_WAIT"); do
     if ! kill -0 "$MESH_PID" 2>/dev/null; then
         echo "mesh-llm exited unexpectedly" >&2
@@ -91,13 +108,6 @@ for i in $(seq 1 "$MAX_WAIT"); do
     fi
 
     STATUS_JSON="$(curl -sf "http://127.0.0.1:${CONSOLE_PORT}/api/status" 2>/dev/null || true)"
-    READY="$(
-        printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
-try:
-    print(json.load(sys.stdin).get("llama_ready", False))
-except Exception:
-    print(False)' 2>/dev/null || echo "False"
-    )"
     TOKEN="$(
         printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
 try:
@@ -105,8 +115,17 @@ try:
 except Exception:
     print("")' 2>/dev/null || echo ""
     )"
+    MODELS_JSON="$(curl -sf "http://127.0.0.1:${API_PORT}/v1/models" 2>/dev/null || true)"
+    MODEL_ID="$(
+        printf '%s' "$MODELS_JSON" | python3 -c 'import json,sys
+try:
+    data = json.load(sys.stdin).get("data", [])
+    print(data[0]["id"] if data else "")
+except Exception:
+    print("")' 2>/dev/null || echo ""
+    )"
 
-    if [[ "$READY" == "True" && -n "$TOKEN" ]]; then
+    if [[ -n "$MODEL_ID" && -n "$TOKEN" ]]; then
         break
     fi
 
@@ -117,13 +136,6 @@ except Exception:
     fi
     sleep 1
 done
-
-MODELS_JSON="$(curl -sf "http://127.0.0.1:${API_PORT}/v1/models")"
-MODEL_ID="$(
-    printf '%s' "$MODELS_JSON" | python3 -c 'import json,sys
-data = json.load(sys.stdin).get("data", [])
-print(data[0]["id"] if data else "")'
-)"
 
 if [[ -z "$MODEL_ID" ]]; then
     echo "No models returned from /v1/models" >&2

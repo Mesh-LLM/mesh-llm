@@ -1,0 +1,132 @@
+{% set fullTopPlugPath = "M10 0H180Q190 0 190 10V78Q190 88 180 88H119Q113 88 113 94V104Q113 110 107 110H81Q75 110 75 104V94Q75 88 69 88H10Q0 88 0 78V10Q0 0 10 0Z" %}
+{% set fullBottomPlugPath = "M10 0H69Q75 0 75 -6V-16Q75 -22 81 -22H107Q113 -22 113 -16V-6Q113 0 119 0H180Q190 0 190 10V78Q190 88 180 88H10Q0 88 0 78V10Q0 0 10 0Z" %}
+
+<figure class="arch-diag arch-diag--socket" data-plugin-architecture role="img" aria-label="Mesh plugin architecture socket diagram: plugin modules plug into the Mesh runtime, and the runtime exposes configuration, inference backends, HTTP routes, and mesh events.">
+  <svg class="arch-svg arch-svg--full" viewBox="0 0 1000 520" aria-hidden="true">
+    <path class="arch-svg-bus-fill" d="M824 206H840Q847 206 847 199V190Q847 184 853 184H966Q976 184 976 194V326Q976 336 966 336H853Q847 336 847 330V321Q847 314 840 314H808Q801 314 801 321V330Q801 336 795 336H637Q631 336 631 330V321Q631 314 624 314H592Q585 314 585 321V330Q585 336 579 336H421Q415 336 415 330V321Q415 314 408 314H376Q369 314 369 321V330Q369 336 363 336H205Q199 336 199 330V321Q199 314 192 314H160Q153 314 153 321V330Q153 336 147 336H34Q24 336 24 326V194Q24 184 34 184H147Q153 184 153 190V199Q153 206 160 206H192Q199 206 199 199V190Q199 184 205 184H363Q369 184 369 190V199Q369 206 376 206H408Q415 206 415 199V190Q415 184 421 184H579Q585 184 585 190V199Q585 206 592 206H624Q631 206 631 199V190Q631 184 637 184H795Q801 184 801 190V199Q801 206 808 206H824Z"></path>
+    <path class="arch-svg-runtime-glow" d="M976 260V194Q976 184 966 184H34Q24 184 24 194V326Q24 336 34 336H966Q976 336 976 326V260" data-arch-runtime-glow></path>
+
+    <path class="arch-svg-socket-glow" d="M147 184Q153 184 153 190V199Q153 206 160 206H192Q199 206 199 199V190Q199 184 205 184" data-arch-socket-glow="full-top-0"></path>
+    <path class="arch-svg-socket-glow" d="M363 184Q369 184 369 190V199Q369 206 376 206H408Q415 206 415 199V190Q415 184 421 184" data-arch-socket-glow="full-top-1"></path>
+    <path class="arch-svg-socket-glow" d="M579 184Q585 184 585 190V199Q585 206 592 206H624Q631 206 631 199V190Q631 184 637 184" data-arch-socket-glow="full-top-2"></path>
+    <path class="arch-svg-socket-glow" d="M795 184Q801 184 801 190V199Q801 206 808 206H840Q847 206 847 199V190Q847 184 853 184" data-arch-socket-glow="full-top-3"></path>
+    <path class="arch-svg-socket-glow" d="M147 336Q153 336 153 330V321Q153 314 160 314H192Q199 314 199 321V330Q199 336 205 336" data-arch-socket-glow="full-bottom-0"></path>
+    <path class="arch-svg-socket-glow" d="M363 336Q369 336 369 330V321Q369 314 376 314H408Q415 314 415 321V330Q415 336 421 336" data-arch-socket-glow="full-bottom-1"></path>
+    <path class="arch-svg-socket-glow" d="M579 336Q585 336 585 330V321Q585 314 592 314H624Q631 314 631 321V330Q631 336 637 336" data-arch-socket-glow="full-bottom-2"></path>
+    <path class="arch-svg-socket-glow" d="M795 336Q801 336 801 330V321Q801 314 808 314H840Q847 314 847 321V330Q847 336 853 336" data-arch-socket-glow="full-bottom-3"></path>
+
+    <g class="arch-svg-runtime-copy arch-svg-runtime-copy--full" transform="translate(500 260)">
+      <text class="arch-svg-runtime-title arch-svg-runtime-title--center" x="0" y="-5.5">Mesh Runtime</text>
+      <text class="arch-svg-runtime-body arch-svg-runtime-body--center" x="0" y="25.5">loads manifests, starts plugin processes, routes declared capabilities</text>
+    </g>
+
+    <path class="arch-svg-draw-path arch-svg-draw-path--ingress" d="M976 260V194Q976 184 966 184H853Q847 184 847 190V199Q847 206 840 206H808Q801 206 801 199V190Q801 184 795 184H637Q631 184 631 190V199Q631 206 624 206H592Q585 206 585 199V190Q585 184 579 184H421Q415 184 415 190V199Q415 206 408 206H376Q369 206 369 199V190Q369 184 363 184H205Q199 184 199 190V199Q199 206 192 206H160Q153 206 153 199V190Q153 184 147 184H34Q24 184 24 194V260"></path>
+    <path class="arch-svg-draw-path arch-svg-draw-path--egress" d="M976 260V326Q976 336 966 336H853Q847 336 847 330V321Q847 314 840 314H808Q801 314 801 321V330Q801 336 795 336H637Q631 336 631 330V321Q631 314 624 314H592Q585 314 585 321V330Q585 336 579 336H421Q415 336 415 330V321Q415 314 408 314H376Q369 314 369 321V330Q369 336 363 336H205Q199 336 199 330V321Q199 314 192 314H160Q153 314 153 321V330Q153 336 147 336H34Q24 336 24 326V260"></path>
+
+    <g class="arch-svg-plug-position" transform="translate(82 50)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="0" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="full-top-0">
+        <path class="arch-svg-plug-shape" d="{{ fullTopPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Blobstore</text>
+        <text class="arch-svg-plug-body" x="95" y="61">state persistence</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(298 50)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="1" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="full-top-1">
+        <path class="arch-svg-plug-shape" d="{{ fullTopPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Blackboard</text>
+        <text class="arch-svg-plug-body" x="95" y="61">agent coordination</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(514 50)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="2" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="full-top-2">
+        <path class="arch-svg-plug-shape" d="{{ fullTopPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">OpenAI Endpoint</text>
+        <text class="arch-svg-plug-body" x="95" y="61">OpenAI-compatible API</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(730 50)">
+      <g class="arch-svg-plug arch-svg-plug--muted" data-arch-plug data-arch-pair="3" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="full-top-3">
+        <path class="arch-svg-plug-shape" d="{{ fullTopPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">More plugins</text>
+        <text class="arch-svg-plug-body" x="95" y="61">metrics, data, tools</text>
+      </g>
+    </g>
+
+    
+    <g class="arch-svg-plug-position" transform="translate(82 382)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="0" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="full-bottom-0">
+        <path class="arch-svg-plug-shape" d="{{ fullBottomPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Configuration</text>
+        <text class="arch-svg-plug-body" x="95" y="61">settings, tweaks</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(298 382)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="1" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="full-bottom-1">
+        <path class="arch-svg-plug-shape" d="{{ fullBottomPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Inference backends</text>
+        <text class="arch-svg-plug-body" x="95" y="61">model serving</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(514 382)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="2" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="full-bottom-2">
+        <path class="arch-svg-plug-shape" d="{{ fullBottomPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">HTTP routes</text>
+        <text class="arch-svg-plug-body" x="95" y="61">REST endpoints</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(730 382)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="3" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="full-bottom-3">
+        <path class="arch-svg-plug-shape" d="{{ fullBottomPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Mesh events</text>
+        <text class="arch-svg-plug-body" x="95" y="61">channels, gossip</text>
+      </g>
+    </g>
+  </svg>
+
+  <svg class="arch-svg arch-svg--small" viewBox="0 0 420 390" aria-hidden="true">
+    <path class="arch-svg-bus-fill" d="M408 211V156Q408 144 396 144H343Q337 144 337 150V159Q337 166 330 166H298Q291 166 291 159V150Q291 144 285 144H133Q127 144 127 150V159Q127 166 120 166H88Q81 166 81 159V150Q81 144 75 144H24Q12 144 12 156V266Q12 278 24 278H75Q81 278 81 272V263Q81 256 88 256H120Q127 256 127 263V272Q127 278 133 278H285Q291 278 291 272V263Q291 256 298 256H330Q337 256 337 263V272Q337 278 343 278H396Q408 278 408 266V211Z"></path>
+    <path class="arch-svg-runtime-glow" d="M408 211V156Q408 144 396 144H24Q12 144 12 156V266Q12 278 24 278H396Q408 278 408 266V211" data-arch-runtime-glow></path>
+
+    <path class="arch-svg-socket-glow" d="M75 144Q81 144 81 150V159Q81 166 88 166H120Q127 166 127 159V150Q127 144 133 144" data-arch-socket-glow="small-top-0"></path>
+    <path class="arch-svg-socket-glow" d="M285 144Q291 144 291 150V159Q291 166 298 166H330Q337 166 337 159V150Q337 144 343 144" data-arch-socket-glow="small-top-1"></path>
+    <path class="arch-svg-socket-glow" d="M75 278Q81 278 81 272V263Q81 256 88 256H120Q127 256 127 263V272Q127 278 133 278" data-arch-socket-glow="small-bottom-0"></path>
+    <path class="arch-svg-socket-glow" d="M285 278Q291 278 291 272V263Q291 256 298 256H330Q337 256 337 263V272Q337 278 343 278" data-arch-socket-glow="small-bottom-1"></path>
+
+    <g class="arch-svg-runtime-copy arch-svg-runtime-copy--small" transform="translate(210 211)">
+      <text class="arch-svg-runtime-title arch-svg-runtime-title--small" x="0" y="-3">Mesh Runtime</text>
+      <text class="arch-svg-runtime-body arch-svg-runtime-body--small" x="0" y="24">manifests, processes, capabilities</text>
+    </g>
+
+    <path class="arch-svg-draw-path arch-svg-draw-path--ingress" d="M408 211V156Q408 144 396 144H343Q337 144 337 150V159Q337 166 330 166H298Q291 166 291 159V150Q291 144 285 144H133Q127 144 127 150V159Q127 166 120 166H88Q81 166 81 159V150Q81 144 75 144H24Q12 144 12 156V211"></path>
+    <path class="arch-svg-draw-path arch-svg-draw-path--egress" d="M408 211V266Q408 278 396 278H343Q337 278 337 272V263Q337 256 330 256H298Q291 256 291 263V272Q291 278 285 278H133Q127 278 127 272V263Q127 256 120 256H88Q81 256 81 263V272Q81 278 75 278H24Q12 278 12 266V211"></path>
+
+    <g class="arch-svg-plug-position" transform="translate(10 10)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="0" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="small-top-0">
+        <path class="arch-svg-plug-shape" d="{{ fullTopPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="34.75">Blackboard</text>
+        <text class="arch-svg-plug-body" x="95" y="56.75">coordination</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(220 10)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="1" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="small-top-1">
+        <path class="arch-svg-plug-shape" d="{{ fullTopPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="34.75">OpenAI Endpoint</text>
+        <text class="arch-svg-plug-body" x="95" y="56.75">compatible API</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(10 324)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="0" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="small-bottom-0">
+        <path class="arch-svg-plug-shape" d="{{ fullBottomPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="34.75">Inference backends</text>
+        <text class="arch-svg-plug-body" x="95" y="56.75">model serving</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(220 324)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="1" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="small-bottom-1">
+        <path class="arch-svg-plug-shape" d="{{ fullBottomPlugPath }}"></path>
+        <text class="arch-svg-plug-title" x="95" y="34.75">HTTP routes</text>
+        <text class="arch-svg-plug-body" x="95" y="56.75">REST endpoints</text>
+      </g>
+    </g>
+  </svg>
+</figure>

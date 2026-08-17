@@ -9,13 +9,13 @@ use super::{
     request_contract::{
         GuardrailRequestContract, MeshGuardrailsOverride, ParallelToolCalls, RawToolChoice,
     },
-    rescue::ClassifiedGuardrailResponse,
     state::{GuardrailRequestOutcome, GuardrailRequestState, PreparedGuardrailRequest},
     telemetry::GuardrailTelemetryBypassReason,
     tools::{
         append_mesh_emit_structured_tool, append_mesh_respond_tool, model_param_size_b,
         request_uses_reserved_tool_name,
     },
+    validation::ClassifiedGuardrailResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -117,7 +117,7 @@ impl GuardrailEngine {
         prepared: &PreparedGuardrailRequest,
         response: &crate::chat::ChatCompletionResponse,
     ) -> ClassifiedGuardrailResponse {
-        super::rescue::classify_response(prepared, response)
+        super::validation::classify_response(prepared, response)
     }
 
     fn guardrails_apply_to_request(

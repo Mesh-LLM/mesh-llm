@@ -1,12 +1,14 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::{BufRead, BufReader},
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -14,7 +16,10 @@ use reqwest::blocking::Client;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-use crate::cli::ChatCorpusArgs;
+use crate::{
+    cli::ChatCorpusArgs,
+    telemetry_report::{self, BenchTelemetry},
+};
 
 #[derive(Debug, Clone)]
 struct PromptCase {
@@ -29,6 +34,9 @@ struct PromptCase {
 
 #[derive(Serialize)]
 struct ChatCorpusReport {
+    run_id: String,
+    metrics_http: String,
+    metrics_run_id: String,
     base_url: String,
     model: String,
     endpoint: &'static str,
@@ -43,6 +51,7 @@ struct ChatCorpusReport {
     sampling: SamplingReport,
     results: Vec<ChatCorpusResult>,
     summary: ChatCorpusSummary,
+    telemetry: BenchTelemetry,
 }
 
 #[derive(Default, Serialize)]
@@ -70,6 +79,7 @@ struct ChatCorpusResult {
     total_tokens: Option<u64>,
     finish_reason: Option<String>,
     output_chars: usize,
+    timings: Option<BTreeMap<String, Value>>,
     error: Option<String>,
     api_error_code: Option<String>,
 }
@@ -91,6 +101,9 @@ struct ChatCorpusSummary {
     total_wall_ms: f64,
     completion_tok_s: Option<f64>,
     total_tok_s: Option<f64>,
+    drafted_tokens: u64,
+    accepted_draft_tokens: u64,
+    draft_acceptance: Option<f64>,
 }
 
 pub fn chat_corpus(args: ChatCorpusArgs) -> Result<()> {
@@ -102,6 +115,29 @@ pub fn chat_corpus(args: ChatCorpusArgs) -> Result<()> {
     }
 
     let prompts = Arc::new(prompt_cases(&args)?);
+    let run_id = args
+        .run_id
+        .clone()
+        .unwrap_or_else(generate_chat_corpus_run_id);
+    let metrics_run_id = args
+        .metrics_run_id
+        .clone()
+        .unwrap_or_else(|| run_id.clone());
+    let metrics_http = args.metrics_http.trim_end_matches('/').to_string();
+    let metrics_report_output = metrics_report_output_path(&args, &metrics_run_id);
+    let run_config = json!({
+        "mode": "skippy-bench-chat-corpus",
+        "run_id": &run_id,
+        "model": &args.model,
+        "base_url": &args.base_url,
+        "stream": args.stream,
+        "request_count": prompts.len(),
+        "prompt_corpus": args.prompt_corpus.as_ref().map(|path| path.display().to_string()),
+        "prompt_limit": args.prompt_limit,
+        "max_tokens": args.max_tokens,
+        "concurrency_depth": args.concurrency_depth,
+    });
+    telemetry_report::create_run(&metrics_http, &metrics_run_id, &run_config)?;
     let client = Client::builder()
         .timeout(Duration::from_secs(args.request_timeout_secs))
         .build()
@@ -139,8 +175,21 @@ pub fn chat_corpus(args: ChatCorpusArgs) -> Result<()> {
         .into_inner()
         .expect("results mutex poisoned");
     results.sort_by_key(|result| result.sequence);
+    let telemetry_result = telemetry_report::finalize_and_collect(
+        &metrics_http,
+        &metrics_run_id,
+        &metrics_report_output,
+    );
+    let telemetry_error = telemetry_result.as_ref().err().map(ToString::to_string);
+    let telemetry = match telemetry_result {
+        Ok(telemetry) => telemetry,
+        Err(error) => telemetry_report::unavailable(&metrics_http, &metrics_run_id, &error),
+    };
 
     let report = ChatCorpusReport {
+        run_id,
+        metrics_http,
+        metrics_run_id,
         base_url: args.base_url.trim_end_matches('/').to_string(),
         model: args.model.clone(),
         endpoint: "/v1/chat/completions",
@@ -165,6 +214,7 @@ pub fn chat_corpus(args: ChatCorpusArgs) -> Result<()> {
         },
         summary: summarize(&results, total_wall_ms),
         results,
+        telemetry,
     };
 
     let json = serde_json::to_vec_pretty(&report)?;
@@ -173,6 +223,9 @@ pub fn chat_corpus(args: ChatCorpusArgs) -> Result<()> {
             .with_context(|| format!("failed to write {}", output.display()))?;
     }
     println!("{}", String::from_utf8(json)?);
+    if let Some(error) = telemetry_error {
+        anyhow::bail!("metrics-server report unavailable: {error}");
+    }
     Ok(())
 }
 
@@ -181,6 +234,7 @@ fn run_case(client: &Client, args: &ChatCorpusArgs, prompt_case: &PromptCase) ->
         .session_group
         .clone()
         .unwrap_or_else(|| format!("{}-{}", args.session_prefix, prompt_case.index));
+    let request_id = format!("{}-request-{}", args.session_prefix, prompt_case.index);
     let started = Instant::now();
     let request = request_body(args, prompt_case, &session_id);
     let response = client
@@ -188,6 +242,7 @@ fn run_case(client: &Client, args: &ChatCorpusArgs, prompt_case: &PromptCase) ->
             "{}/chat/completions",
             args.base_url.trim_end_matches('/')
         ))
+        .header("x-request-id", request_id)
         .json(&request)
         .send();
     match response {
@@ -280,6 +335,7 @@ fn parse_json_response(
                     .map(str::chars)
                     .map(Iterator::count)
                     .unwrap_or_default(),
+                timings: response_timings(&value),
                 error: None,
                 api_error_code: None,
             }
@@ -320,6 +376,7 @@ fn parse_stream_response(
     let mut prompt_tokens = None;
     let mut total_tokens = None;
     let mut finish_reason = None;
+    let mut timings = None;
     let mut error = None;
     let mut api_error_code_value = None;
 
@@ -369,6 +426,9 @@ fn parse_stream_response(
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
         }
+        if let Some(response_timings) = response_timings(&value) {
+            timings = Some(response_timings);
+        }
         if let Some(usage) = value.get("usage").filter(|usage| !usage.is_null()) {
             completion_tokens = usage_u64(usage, "completion_tokens");
             prompt_tokens = usage_u64(usage, "prompt_tokens");
@@ -390,6 +450,7 @@ fn parse_stream_response(
         total_tokens,
         finish_reason,
         output_chars,
+        timings,
         error,
         api_error_code: api_error_code_value,
     }
@@ -416,6 +477,7 @@ fn error_result(
         total_tokens: None,
         finish_reason: None,
         output_chars: 0,
+        timings: None,
         error: Some(error),
         api_error_code,
     }
@@ -572,6 +634,14 @@ fn summarize(results: &[ChatCorpusResult], total_wall_ms: f64) -> ChatCorpusSumm
         .iter()
         .filter_map(|result| result.total_tokens)
         .sum::<u64>();
+    let drafted_tokens = results
+        .iter()
+        .filter_map(|result| timing_u64(result, "draft_n"))
+        .sum::<u64>();
+    let accepted_draft_tokens = results
+        .iter()
+        .filter_map(|result| timing_u64(result, "draft_n_accepted"))
+        .sum::<u64>();
     elapsed.sort_by(f64::total_cmp);
     ttft.sort_by(f64::total_cmp);
     ChatCorpusSummary {
@@ -590,7 +660,19 @@ fn summarize(results: &[ChatCorpusResult], total_wall_ms: f64) -> ChatCorpusSumm
         total_wall_ms,
         completion_tok_s: rate(completion_tokens, total_wall_ms),
         total_tok_s: rate(total_tokens, total_wall_ms),
+        drafted_tokens,
+        accepted_draft_tokens,
+        draft_acceptance: (drafted_tokens > 0)
+            .then(|| accepted_draft_tokens as f64 / drafted_tokens as f64),
     }
+}
+
+fn response_timings(value: &Value) -> Option<BTreeMap<String, Value>> {
+    serde_json::from_value(value.get("timings")?.clone()).ok()
+}
+
+fn timing_u64(result: &ChatCorpusResult, key: &str) -> Option<u64> {
+    result.timings.as_ref()?.get(key)?.as_u64()
 }
 
 fn mean(values: &[f64]) -> Option<f64> {
@@ -609,10 +691,34 @@ fn rate(tokens: u64, wall_ms: f64) -> Option<f64> {
     (tokens > 0 && wall_ms > 0.0).then(|| tokens as f64 / (wall_ms / 1000.0))
 }
 
+fn metrics_report_output_path(args: &ChatCorpusArgs, metrics_run_id: &str) -> PathBuf {
+    if let Some(output) = args.metrics_report_output.as_ref() {
+        return output.clone();
+    }
+    if let Some(output) = args.output.as_ref() {
+        return sibling_path(output, "metrics-report.json");
+    }
+    std::env::temp_dir().join(format!("{metrics_run_id}-metrics-report.json"))
+}
+
+fn generate_chat_corpus_run_id() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_millis();
+    format!("run-chat-corpus-{millis}")
+}
+
+fn sibling_path(path: &Path, suffix: &str) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("chat-corpus");
+    path.with_file_name(format!("{stem}-{suffix}"))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
 
     fn default_args() -> ChatCorpusArgs {
@@ -628,6 +734,10 @@ mod tests {
             include_usage: true,
             request_timeout_secs: 600,
             output: None,
+            metrics_report_output: None,
+            run_id: None,
+            metrics_http: "http://127.0.0.1:18080".to_string(),
+            metrics_run_id: None,
             session_prefix: "chat-corpus-test".to_string(),
             temperature: None,
             top_p: None,
@@ -733,5 +843,44 @@ mod tests {
         );
 
         assert_eq!(body["user"], "repo:turns");
+    }
+
+    #[test]
+    fn summary_aggregates_canonical_draft_counters() {
+        let results = vec![
+            result_with_timings(20, 12),
+            result_with_timings(5, 4),
+            result_with_timings(0, 0),
+        ];
+
+        let summary = summarize(&results, 1_000.0);
+
+        assert_eq!(summary.drafted_tokens, 25);
+        assert_eq!(summary.accepted_draft_tokens, 16);
+        assert_eq!(summary.draft_acceptance, Some(0.64));
+    }
+
+    fn result_with_timings(drafted: u64, accepted: u64) -> ChatCorpusResult {
+        ChatCorpusResult {
+            sequence: 0,
+            prompt_id: None,
+            category: None,
+            length_bucket: None,
+            session_id: "session".to_string(),
+            prompt_chars: 1,
+            elapsed_ms: 1.0,
+            ttft_ms: None,
+            completion_tokens: Some(1),
+            prompt_tokens: Some(1),
+            total_tokens: Some(2),
+            finish_reason: Some("stop".to_string()),
+            output_chars: 1,
+            timings: Some(BTreeMap::from([
+                ("draft_n".to_string(), json!(drafted)),
+                ("draft_n_accepted".to_string(), json!(accepted)),
+            ])),
+            error: None,
+            api_error_code: None,
+        }
     }
 }

@@ -1,75 +1,55 @@
-# GitHub workflow agent rules
+# GitHub CI agent entry point
 
-These rules apply when editing files under `.github/`, especially workflows,
-actions, and CI instructions. Keep pull request CI fast, explicit, and easy to
-reason about.
+Before inspecting, running, defining, editing, reviewing, or documenting any
+workflow, local action, runner, cache, artifact, variable, secret, permission,
+release, deployment, or CI script:
 
-## Workflow ownership
+1. Read `.agents/skills/manage-ci/SKILL.md` completely.
+2. Read its `references/current-inventory.md` completely.
+3. Read `ci/ci.md` and every workflow/action/script reached by the change.
+4. For PR/main composition, routing, fan-out, or provider changes, follow
+   `.omo/specs/pr-ci-optimization.md`.
 
-- Keep pull request workflows in files named `pr_*.yml`.
-- Keep the early quality workflow named `PR Quality Checks` in
-  `pr_quality.yml`.
-- Keep the PR build workflow named `PR Builds` in `pr_builds.yml`.
-- Keep `ci.yml`, `docker.yml`, and `release.yml` free of pull request triggers;
-  they own main, dispatch, tag, and release behavior.
-- Keep `pr_cleanup.yml` safe for `pull_request_target`: never check out or run
-  pull request code there.
+Strict extension pattern:
 
-## Routing and build shape
+- keep event entrypoints thin;
+- implement new PR/main behavior once as a typed reusable slice;
+- route it from the central checked plan using direct ownership or affected
+  Rust dependencies as appropriate;
+- make a selected PR slice identical to its main slice;
+- derive runner and cache authority centrally—never accept raw labels;
+- preserve immutable producer/consumer artifacts and a stable unique summary;
+- validate GitHub fallback before any provider rollout.
 
-- Route PR work from `.github/actions/compute-changes` outputs; do not add heavy
-  jobs that ignore `docs_only`, `rust_changed`, `backend_changed`, or
-  `sdk_smoke_required`.
-- Keep Linux, macOS, and Windows as top-level target matrices in `pr_builds.yml`.
-  Linux/macOS CPU rows are the producer rows for downstream smoke artifacts.
-- Keep macOS CUDA, ROCm, and Vulkan rows as explicit unsupported-backend skips.
-- Gate backend lanes on backend inputs, not every Rust change.
-- Keep clippy sharding driven by `scripts/plan-clippy-batches.sh`; do not
-  replace it with hand-maintained static batches.
-- When adding a Rust workspace crate, make sure its package name appears in the
-  `WORKSPACE_MEMBERS` arrays in `scripts/affected-crates.sh` and
-  `scripts/plan-clippy-batches.sh`. Normal affected-crate routing discovers new
-  crates through `cargo metadata`, but the all-rust/fail-open paths and clippy
-  `--all` planning still use those arrays. `cargo run -p xtask --
-  repo-consistency ci-crate-lists` fails fast when they drift from the Cargo
-  workspace.
-- If workflow changes affect crate/test routing, update
-  `tools/xtask/src/main.rs` invariants in the same change.
+The five `pr_{quality,website,linux,macos,windows}.yml` and five
+`main_{quality,website,linux,macos,windows}.yml` entry workflows, the
+manual-only `ci-control.yml` dispatcher, and separate Quality, Website, Linux,
+macOS and Windows lane workflows are authoritative for assembly. Each PR/main
+entry calls one nested reusable lane so its jobs and logs remain visible in a
+focused native run; only an explicit manual-full run uses detached dispatch.
+Platform lanes must call platform-pure host/runtime/product/smoke/SDK reusables
+without empty platform placeholders. Ordinary PR code is GitHub-hosted. The
+approved uncredentialed CUDA smoke may use the ephemeral `gpu-nvidia` scale
+set through the protected default-branch workflow; this narrow exception does
+not allow Depot, secrets, shared cache authority, or broader runner-group
+access. Depot PR execution is prohibited until the cache and runner-group
+isolation gates in `ci/DEPOT_MIGRATION.md` pass. Do not change Depot settings
+or runner groups as part of an ordinary CI refactor.
 
-## Artifact and cache policy
+Preserve the five-entry PR shape exactly. Do not create an all-platform PR
+workflow, an all-lanes reusable composer, or a PR controller whose visible job
+only dispatches detached runs. Quality, Website, Linux, macOS, and Windows must
+remain separate PR-associated workflows with directly drillable nested jobs
+and one stable `PR / <lane>` result each. Do not add path filters; planning owns
+skips so every stable result exists.
 
-- PR and smoke-only CI artifacts must use short retention. The current policy is
-  `retention-days: 1`.
-- PR cleanup must delete PR merge-ref caches and artifacts from positively
-  matched PR workflow runs without deleting workflow runs or logs.
-- Do not save large shared Rust caches from PR merge refs; shared caches are
-  written from trusted main/release paths.
-- Do not reintroduce unreachable artifact consumers. If a smoke consumes an
-  artifact, the producer must upload it in the same workflow graph.
+Preserve the five-entry main shape as well. Routine pushes to `main` must use
+five focused native workflows with one stable `Main / <lane>` result each.
+They must not use path filters, cancel older main revisions, call detached
+dispatch, or compose all lanes into one graph. `ci-control.yml` must remain
+`workflow_dispatch`-only.
 
-## Smoke test policy
-
-- Smoke jobs should restore producer artifacts through
-  `.github/actions/restore-smoke-inputs` instead of rebuilding `mesh-llm` or
-  patched llama.cpp.
-- Use `smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`, and
-  `hf-download-smoke.yml` instead of copying artifact/model restore blocks into
-  individual jobs.
-- Producer-local smoke steps may stay in CPU rows when they validate the binary
-  before upload.
-- Every workflow or script invocation of `mesh-llm` must include
-  `--log-format json` so CI never starts the TUI by default.
-
-## Documentation and validation
-
-- Keep `ci/ci.md` synchronized with workflow topology changes.
-- CI workflow editing rules live here, not in `docs/CI_GUIDANCE.md`.
-- Before committing workflow changes, run local validation equivalent to:
-  - parse all workflow/action YAML files,
-  - check duplicate step IDs,
-  - confirm only `pr_*.yml` workflows contain pull request triggers,
-  - run `GIT_MASTER=1 git diff --check`, and
-  - run `cargo run -p xtask -- repo-consistency release-targets`.
-- Validate significant workflow changes with GitHub Actions. If an existing PR
-  cannot be reopened and a new PR is not desired, use `workflow_dispatch` on the
-  branch and record that caveat.
+The manage-ci skill is normative. The inventory and `ci/ci.md` describe current
+implementation; the optimization specification records design, status and
+acceptance criteria. Update the appropriate source in the same change and
+remove superseded text instead of adding an investigation log here.

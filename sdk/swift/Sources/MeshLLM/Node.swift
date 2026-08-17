@@ -32,6 +32,32 @@ public struct ConsoleOptions: Sendable {
         self.port = port
         self.listenAll = listenAll
     }
+
+    public static func packaged(port: UInt16? = nil, listenAll: Bool = false) throws -> ConsoleOptions {
+        guard let index = Bundle.module.url(
+            forResource: "index",
+            withExtension: "html",
+            subdirectory: "Console"
+        ) else {
+            throw ConsoleAssetError.packagedConsoleMissing
+        }
+        return ConsoleOptions(
+            assetDirectory: index.deletingLastPathComponent(),
+            port: port,
+            listenAll: listenAll
+        )
+    }
+}
+
+public enum ConsoleAssetError: Error, CustomStringConvertible {
+    case packagedConsoleMissing
+
+    public var description: String {
+        switch self {
+        case .packagedConsoleMissing:
+            return "Packaged MeshLLM console assets are missing. Run scripts/package-sdk-console-assets.sh --sdk swift before publishing the Swift package."
+        }
+    }
 }
 
 public enum Event: Sendable {

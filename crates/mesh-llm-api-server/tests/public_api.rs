@@ -372,6 +372,7 @@ impl ServingController for FakeServingController {
             let model_ref = request.model_ref;
             let model = mesh_llm_node::serving::ServedModel {
                 model_ref: model_ref.clone(),
+                profile: String::new(),
                 model_id: model_ref,
                 instance_id: Some("instance-1".to_string()),
                 state: mesh_llm_node::serving::ServingModelState::Ready,

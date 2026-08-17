@@ -9,6 +9,7 @@ import { generateRequestId } from '@/lib/api/request-id'
 import type { ChatSSEEvent } from '@/lib/api/types'
 import { buildResponsesInput } from '@/features/chat/api/build-input'
 import type { ChatResponseMetadata } from '@/features/chat/api/response-metadata'
+import { isMeshVirtualModel, syntheticMoaProgressKey } from '@/features/chat/lib/moa-progress'
 
 function nowMs() {
   return performance.now()
@@ -78,6 +79,31 @@ function statusFromStreamError(data: string): number {
 
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === 'AbortError'
+}
+
+const MODEL_ROUTE_RETRY_DELAY_MS = 500
+
+function isModelRouteNotFound(status: number, body: string): boolean {
+  if (status !== 404) return false
+  const normalized = body.toLowerCase()
+  return normalized.includes('model') && (normalized.includes('not found') || normalized.includes('missing'))
+}
+
+async function waitForModelRouteRetry(abortSignal?: AbortSignal): Promise<boolean> {
+  if (abortSignal?.aborted) return false
+
+  return new Promise((resolve) => {
+    const abortHandler = () => finish(false)
+    const timerId = setTimeout(() => finish(true), MODEL_ROUTE_RETRY_DELAY_MS)
+
+    function finish(shouldRetry: boolean) {
+      clearTimeout(timerId)
+      abortSignal?.removeEventListener('abort', abortHandler)
+      resolve(shouldRetry)
+    }
+
+    abortSignal?.addEventListener('abort', abortHandler, { once: true })
+  })
 }
 
 async function* parseSSEStream(
@@ -175,26 +201,38 @@ async function* runConnect(
   const requestId = generateRequestId()
   const messageId = generateRequestId()
   const requestStartedAt = nowMs()
+  const meshVirtualModel = isMeshVirtualModel(model)
 
   yield { type: EventType.RUN_STARTED, threadId: requestId, runId: requestId }
 
   let response: Response
   try {
     const requestBody = await buildResponsesInput(messages, model, clientId, requestId, systemPrompt)
-    response = await fetch(`${env.managementApiUrl}/api/responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      signal: abortSignal
-    })
+    for (let attempt = 0; ; attempt += 1) {
+      response = await fetch(`${env.managementApiUrl}/api/responses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: abortSignal
+      })
+
+      if (response.ok) break
+
+      const errorBody = await parseApiErrorBody(response)
+      const shouldRetry = attempt === 0 && isModelRouteNotFound(response.status, errorBody)
+      if (!shouldRetry) {
+        throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+      }
+
+      const retryAllowed = await waitForModelRouteRetry(abortSignal)
+      if (abortSignal?.aborted) return
+      if (!retryAllowed) {
+        throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+      }
+    }
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return
     throw err
-  }
-
-  if (!response.ok) {
-    const errorBody = await parseApiErrorBody(response)
-    throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
   }
 
   if (!response.body) {
@@ -203,12 +241,17 @@ async function* runConnect(
 
   let messageStarted = false
   let reasoningOpen = false
+  const seenMeshProgress = new Set<string>()
   let firstDeltaAt: number | undefined
 
   for await (const event of parseSSEStream(response.body, abortSignal)) {
     if (abortSignal?.aborted) break
 
     if (event.type === 'response.reasoning_text.delta') {
+      const progressKey = meshVirtualModel ? syntheticMoaProgressKey(event.delta) : undefined
+      if (progressKey && seenMeshProgress.has(progressKey)) continue
+
+      if (progressKey) seenMeshProgress.add(progressKey)
       firstDeltaAt ??= nowMs()
       if (!messageStarted) {
         messageStarted = true

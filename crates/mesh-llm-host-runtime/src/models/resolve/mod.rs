@@ -1,12 +1,12 @@
-use super::ModelCapabilities;
 use super::local::HuggingFaceModelIdentity;
+use super::{DownloadTransferStats, ModelCapabilities};
 use super::{
     capabilities, catalog, find_model_path, format_size_bytes, huggingface_identity_for_path,
     remote_catalog, track_model_usage,
 };
-use crate::cli::terminal_progress::start_spinner;
 use crate::models::usage::ModelUsageRecord;
 use anyhow::{Context, Result, bail};
+use mesh_llm_events::terminal_progress::start_spinner;
 use model_artifact::{ModelArtifactFile, select_primary_artifact_file};
 use serde::Deserialize;
 use std::cmp::Ordering;
@@ -49,16 +49,6 @@ pub enum ShowVariantsProgress {
 #[derive(Clone, Debug)]
 enum ExactModelRef {
     Catalog(Box<remote_catalog::RemoteCatalogModel>),
-    HuggingFace {
-        repo: String,
-        revision: Option<String>,
-        file: String,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum DeleteModelRef {
-    LocalStem(String),
     HuggingFace {
         repo: String,
         revision: Option<String>,
@@ -148,7 +138,22 @@ pub fn remote_catalog_model_draft_ref(
 pub async fn download_model_ref_with_progress_details(
     input: &str,
     progress: bool,
-) -> Result<(PathBuf, Option<ModelDetails>)> {
+) -> Result<ModelDownload> {
+    download_model_ref_with_progress_details_direct(input, progress, false).await
+}
+
+pub struct ModelDownload {
+    pub path: PathBuf,
+    pub paths: Vec<PathBuf>,
+    pub details: Option<ModelDetails>,
+    pub transfer_stats: Option<DownloadTransferStats>,
+}
+
+pub async fn download_model_ref_with_progress_details_direct(
+    input: &str,
+    progress: bool,
+    direct: bool,
+) -> Result<ModelDownload> {
     let details = if progress {
         let mut spinner = start_spinner(&format!("Resolving {input}"));
         let details = show_exact_model(input).await.ok();
@@ -161,11 +166,26 @@ pub async fn download_model_ref_with_progress_details(
         .as_ref()
         .map(|detail| detail.download_url.as_str())
         .unwrap_or(input);
-    let path = download_exact_ref_with_progress(download_ref, progress).await?;
-    Ok((path, details))
+    let download = download_exact_ref_with_progress_direct(download_ref, progress, direct).await?;
+    Ok(ModelDownload {
+        path: download.path,
+        paths: download.paths,
+        details,
+        transfer_stats: download.transfer_stats,
+    })
 }
 
 pub async fn download_exact_ref_with_progress(input: &str, progress: bool) -> Result<PathBuf> {
+    download_exact_ref_with_progress_direct(input, progress, false)
+        .await
+        .map(|download| download.path)
+}
+
+async fn download_exact_ref_with_progress_direct(
+    input: &str,
+    progress: bool,
+    direct: bool,
+) -> Result<catalog::HfDownload> {
     let input = canonicalize_model_ref_input(input).await?;
     match parse_exact_model_ref(&input)? {
         ExactModelRef::Catalog(model) => download_remote_catalog_model(&model, progress).await,
@@ -175,9 +195,16 @@ pub async fn download_exact_ref_with_progress(input: &str, progress: bool) -> Re
             file,
         } => {
             let file = resolve_huggingface_file(&repo, revision.as_deref(), &file).await?;
-            if let Some(model) =
-                matching_remote_catalog_primary_for_huggingface(&repo, revision.as_deref(), &file)
+            if !direct
+                && let Some(model) = matching_remote_catalog_primary_for_huggingface(
+                    &repo,
+                    revision.as_deref(),
+                    &file,
+                )
             {
+                if progress {
+                    eprintln!("ℹ Using repackaged model from catalog: {}", model.name);
+                }
                 return download_remote_catalog_model(&model, progress).await;
             }
             catalog::download_hf_repo_file_with_progress_label(
@@ -231,7 +258,8 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
                 &hf_ref.name,
                 progress,
             )
-            .await;
+            .await
+            .map(|download| download.path);
         }
         let installed_path = find_model_path(installed_name);
         if installed_path.exists() {
@@ -254,10 +282,16 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
         );
     }
 
-    let (path, _) = download_model_ref_with_progress_details(&raw, progress)
+    let installed_path = find_model_path(&raw);
+    if installed_path.exists() {
+        record_resolved_model_usage(&installed_path, Some(raw.as_ref()));
+        return Ok(installed_path);
+    }
+
+    let download = download_model_ref_with_progress_details(&raw, progress)
         .await
         .with_context(|| format!("Resolve model spec {raw}"))?;
-    Ok(path)
+    Ok(download.path)
 }
 
 fn record_resolved_model_usage(path: &Path, model_ref: Option<&str>) {
@@ -442,58 +476,16 @@ pub fn installed_model_capabilities(model_name: &str) -> ModelCapabilities {
     capabilities::infer_local_model_capabilities(model_name, &path)
 }
 
+pub fn loaded_remote_catalog_display_name(model_name: &str) -> Option<String> {
+    find_loaded_remote_catalog_model_exact(model_name).map(|model| model.name.clone())
+}
+
 pub fn installed_model_display_name(model_name: &str) -> String {
-    find_loaded_remote_catalog_model_exact(model_name)
-        .map(|model| model.name.clone())
-        .unwrap_or_else(|| model_name.to_string())
+    loaded_remote_catalog_display_name(model_name).unwrap_or_else(|| model_name.to_string())
 }
 
 pub fn installed_model_huggingface_ref(identity: &HuggingFaceModelIdentity) -> String {
     format_huggingface_display_ref(&identity.repo_id, None, &identity.file)
-}
-
-pub(crate) async fn parse_delete_model_ref(input: &str) -> Result<DeleteModelRef> {
-    if input.starts_with("http://") || input.starts_with("https://") {
-        bail!("Delete does not support direct URLs. Use a model stem or Hugging Face ref.");
-    }
-    if Path::new(input).is_absolute()
-        || input.contains('\\')
-        || input.starts_with("./")
-        || input.starts_with("../")
-        || input.starts_with("~/")
-    {
-        bail!("Delete does not support filesystem paths. Use a model stem or Hugging Face ref.");
-    }
-
-    if let Some(model) = find_remote_catalog_model_exact(input) {
-        let stem = model.file.trim_end_matches(".gguf");
-        if find_model_path(stem).exists() {
-            return Ok(DeleteModelRef::LocalStem(stem.to_string()));
-        }
-    }
-
-    if !input.contains('/') {
-        let installed_name = input.strip_suffix(".gguf").unwrap_or(input);
-        if find_model_path(installed_name).exists() {
-            return Ok(DeleteModelRef::LocalStem(installed_name.to_string()));
-        }
-    }
-
-    let canonical = canonicalize_model_ref_input(input).await?;
-    match parse_exact_model_ref(&canonical)? {
-        ExactModelRef::Catalog(model) => Ok(DeleteModelRef::LocalStem(
-            model.file.trim_end_matches(".gguf").to_string(),
-        )),
-        ExactModelRef::HuggingFace {
-            repo,
-            revision,
-            file,
-        } => Ok(DeleteModelRef::HuggingFace {
-            repo,
-            revision,
-            file,
-        }),
-    }
 }
 
 pub(super) fn matching_remote_catalog_model_for_huggingface(
@@ -537,9 +529,6 @@ fn parse_huggingface_repo_url(input: &str) -> Option<(String, Option<String>, Op
 }
 
 fn parse_exact_model_ref(input: &str) -> Result<ExactModelRef> {
-    if let Some(model) = find_remote_catalog_model_exact(input) {
-        return Ok(ExactModelRef::Catalog(Box::new(model)));
-    }
     if let Some((repo, revision, file)) = parse_huggingface_ref(input) {
         return Ok(ExactModelRef::HuggingFace {
             repo,
@@ -560,6 +549,9 @@ fn parse_exact_model_ref(input: &str) -> Result<ExactModelRef> {
             revision,
             file: selector.unwrap_or_default(),
         });
+    }
+    if let Some(model) = find_remote_catalog_model_exact(input) {
+        return Ok(ExactModelRef::Catalog(Box::new(model)));
     }
     bail!(
         "Expected an exact model ref. Use a catalog id or a Hugging Face ref like org/repo, org/repo@rev:QUANT, org/repo/file.gguf, org/repo/file-stem for split GGUFs, org/repo/model.safetensors, or org/repo/model-00001-of-00048.safetensors."
@@ -1104,7 +1096,7 @@ async fn remote_size_label(url: &str) -> Option<String> {
 async fn download_remote_catalog_model(
     model: &remote_catalog::RemoteCatalogModel,
     progress: bool,
-) -> Result<PathBuf> {
+) -> Result<catalog::HfDownload> {
     catalog::download_hf_repo_file_with_progress_label(
         &model.repo,
         model.revision.as_deref(),

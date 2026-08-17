@@ -3,6 +3,7 @@
 mod certification;
 mod deployment;
 mod family_policy;
+mod hash_cache;
 mod hooks;
 mod kv_cache;
 mod materialization;
@@ -11,8 +12,11 @@ mod resolver;
 mod stage;
 mod topology;
 
-use crate::runtime::survey;
+use crate::runtime::{
+    NativeSkippyOperationalEvent, record_native_skippy_operational_event, survey,
+};
 use std::{
+    env,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -29,26 +33,32 @@ use openai_frontend::{
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, StageKvCacheConfig};
 use skippy_runtime::ModelInfo;
+use skippy_server::serving_hooks::{ModelServingHooks, SharedModelServingHooksFactory};
 use skippy_server::{
     DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs, EmbeddedRuntimeOptions, EmbeddedRuntimeStatus,
     EmbeddedServerHandle, EmbeddedState, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
-    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::WireCondition,
-    embedded_openai_backend, telemetry::Telemetry, telemetry::TelemetryLevel,
+    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::PredictionReturnHub,
+    binary_transport::PredictionReturnListener, binary_transport::WireCondition,
+    embedded_openai_backend, runtime_state::RuntimeState, telemetry::Telemetry,
+    telemetry::TelemetryLevel,
 };
 
-pub(crate) use certification::{
+pub use certification::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
 };
-pub(crate) use family_policy::{family_policy_for_model_path, family_policy_for_stage_config};
+pub(crate) use family_policy::{
+    family_policy_for_compact_meta, family_policy_for_model_path, family_policy_for_stage_config,
+};
 pub(crate) use hooks::MeshAutoHookPolicy;
 pub(crate) use kv_cache::KvCachePolicy;
-pub(crate) use materialization::{
+pub use materialization::{
     configure_materialized_stage_cache, is_layer_package_ref, materialize_stage_config,
     materialized_stage_cache_dir, materialized_stages_for_sources,
     prune_unpinned_materialized_stages, remove_materialized_stages_for_sources,
     resolve_hf_package_to_local,
 };
-pub(crate) use package::{
+pub(crate) use package::direct_gguf_source_paths;
+pub use package::{
     SkippyPackageIdentity, identity_from_layer_package, synthetic_direct_gguf_package,
 };
 #[allow(unused_imports)]
@@ -70,6 +80,29 @@ pub(crate) use stage::{
 };
 #[cfg(test)]
 pub(crate) use topology::{StageTopologyParticipant, plan_package_identity_topology};
+
+const BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS";
+
+fn benchmark_downstream_wire_condition() -> Result<WireCondition> {
+    let delay_ms = match env::var(BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV) {
+        Ok(value) => parse_benchmark_downstream_wire_delay_ms(&value)?,
+        Err(env::VarError::NotPresent) => 0.0,
+        Err(env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("{BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV} must be valid UTF-8")
+        }
+    };
+    WireCondition::new(delay_ms, None)
+}
+
+fn parse_benchmark_downstream_wire_delay_ms(value: &str) -> Result<f64> {
+    let delay_ms = value.parse::<f64>().with_context(|| {
+        format!("{BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV} must be a finite non-negative number")
+    })?;
+    if !delay_ms.is_finite() || delay_ms < 0.0 {
+        anyhow::bail!("{BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV} must be a finite non-negative number");
+    }
+    Ok(delay_ms)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SkippyModelState {
@@ -96,8 +129,12 @@ pub(crate) struct SkippyModelStatus {
     pub(crate) projector_path: Option<String>,
     pub(crate) ctx_size: u32,
     pub(crate) lane_count: u32,
+    /// Per-lane session state, possibly a frozen snapshot. Display only.
     pub(crate) lanes: Vec<SkippySessionLaneStatus>,
     pub(crate) max_session_tokens: u64,
+    /// When [`Self::lanes`] and [`Self::max_session_tokens`] were read, which
+    /// may be arbitrarily earlier than this status.
+    pub(crate) sessions_captured_at_unix_nanos: i64,
     pub(crate) n_batch: Option<u32>,
     pub(crate) n_ubatch: Option<u32>,
     pub(crate) n_gpu_layers: i32,
@@ -136,6 +173,8 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) model_path: PathBuf,
     pub(crate) ctx_size: u32,
     pub(crate) n_gpu_layers: i32,
+    pub(crate) mmap: Option<bool>,
+    pub(crate) mlock: bool,
     pub(crate) cache_type_k: String,
     pub(crate) cache_type_v: String,
     pub(crate) n_batch: Option<u32>,
@@ -154,6 +193,8 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) projector_path: Option<PathBuf>,
     pub(crate) telemetry: SkippyTelemetryOptions,
     pub(crate) openai_guardrails: Option<OpenAiGuardrailsConfig>,
+    pub(crate) native_mtp_enabled: bool,
+    pub(crate) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +202,12 @@ pub(crate) struct SkippyTelemetryOptions {
     pub(crate) metrics_otlp_grpc: Option<String>,
     pub(crate) queue_capacity: usize,
     pub(crate) level: TelemetryLevel,
+}
+
+impl Default for SkippyTelemetryOptions {
+    fn default() -> Self {
+        Self::off()
+    }
 }
 
 impl SkippyTelemetryOptions {
@@ -177,6 +224,14 @@ impl SkippyTelemetryOptions {
             metrics_otlp_grpc,
             queue_capacity: 1024,
             level: TelemetryLevel::Debug,
+        }
+    }
+
+    pub(crate) fn summary(metrics_otlp_grpc: String) -> Self {
+        Self {
+            metrics_otlp_grpc: Some(metrics_otlp_grpc),
+            queue_capacity: 1024,
+            level: TelemetryLevel::Summary,
         }
     }
 }
@@ -219,6 +274,8 @@ impl SkippyModelLoadOptions {
             model_path: model_path.into(),
             ctx_size: 4096,
             n_gpu_layers: -1,
+            mmap: None,
+            mlock: false,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             n_batch: None,
@@ -237,6 +294,8 @@ impl SkippyModelLoadOptions {
             projector_path: None,
             telemetry: SkippyTelemetryOptions::off(),
             openai_guardrails: Some(OpenAiGuardrailsConfig::disabled_for_skippy()),
+            native_mtp_enabled: true,
+            serving_hooks_factory: None,
         }
     }
 
@@ -324,6 +383,14 @@ impl SkippyModelLoadOptions {
         self
     }
 
+    pub(crate) fn with_serving_hooks_factory(
+        mut self,
+        factory: Option<SharedModelServingHooksFactory>,
+    ) -> Self {
+        self.serving_hooks_factory = factory;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn with_package_identity(mut self, package_identity: SkippyPackageIdentity) -> Self {
         self.package_identity = Some(package_identity);
@@ -346,6 +413,7 @@ pub(crate) struct SkippyModelHandle {
     started_at_unix_nanos: i64,
     status: Arc<Mutex<HandleState>>,
     _materialized_pin: Option<materialization::MaterializedStagePin>,
+    _prediction_return_listener: Option<PredictionReturnListener>,
 }
 
 pub(crate) struct SkippyHttpHandle {
@@ -357,6 +425,8 @@ pub(crate) struct SkippyOpenAiGuardrailOptions {
     config: Option<OpenAiGuardrailsConfig>,
     telemetry: survey::SurveyTelemetry,
 }
+
+pub(crate) type NativeModelOpenEventReporter = Box<dyn FnMut(skippy_runtime::RuntimeEvent) + Send>;
 
 impl SkippyOpenAiGuardrailOptions {
     pub(crate) fn new(
@@ -372,8 +442,103 @@ impl SkippyHttpHandle {
         self.port
     }
 
+    pub(crate) fn status(&self) -> skippy_server::EmbeddedServerStatus {
+        self.server.status()
+    }
+
     pub(crate) async fn shutdown(self) -> Result<()> {
         self.server.shutdown().await
+    }
+}
+
+/// Builds `EmbeddedOpenAiArgs`, filling most fields from `embedded_args` and
+/// taking only the handful that differ per load path as parameters.
+fn embedded_openai_args_from(
+    embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
+    config: StageConfig,
+    runtime: Arc<Mutex<RuntimeState>>,
+    prediction_returns: Option<Arc<PredictionReturnHub>>,
+    telemetry: Telemetry,
+    hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    serving_hooks: &ModelServingHooks,
+) -> Result<EmbeddedOpenAiArgs> {
+    Ok(EmbeddedOpenAiArgs {
+        bind_addr: "127.0.0.1:0"
+            .parse()
+            .expect("static bind address should parse"),
+        config,
+        runtime,
+        model_id: embedded_args.model_id,
+        default_max_tokens: embedded_args.default_max_tokens,
+        request_defaults: embedded_args.request_defaults,
+        generation_concurrency: embedded_args.generation_concurrency,
+        prefill_chunk_size: embedded_args.prefill_chunk_size,
+        prefill_chunk_policy: embedded_args.prefill_chunk_policy,
+        prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
+        prefill_adaptive_start: embedded_args.prefill_adaptive_start,
+        prefill_adaptive_step: embedded_args.prefill_adaptive_step,
+        prefill_adaptive_max: embedded_args.prefill_adaptive_max,
+        draft_model_path: embedded_args.draft_model_path,
+        speculative_window: embedded_args.speculative_window,
+        adaptive_speculative_window: embedded_args.adaptive_speculative_window,
+        draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
+        speculative: embedded_args.speculative,
+        native_mtp_enabled: embedded_args.native_mtp_enabled,
+        native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
+        native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
+        native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
+        activation_width: embedded_args.activation_width,
+        wire_dtype: embedded_args.wire_dtype,
+        reply_credit_limit: embedded_args.reply_credit_limit,
+        downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
+        downstream_wire_condition: benchmark_downstream_wire_condition()?,
+        prediction_returns,
+        telemetry,
+        hook_policy,
+        generation_receipt: serving_hooks.generation_receipt(),
+        linear_proposal_ingress: serving_hooks.linear_proposal_ingress(),
+        openai_guardrails: None,
+    })
+}
+
+fn resolve_serving_hooks(
+    factory: Option<&SharedModelServingHooksFactory>,
+    runtime: &SkippyRuntimeHandle,
+) -> Result<ModelServingHooks> {
+    let Some(factory) = factory else {
+        return Ok(ModelServingHooks::default());
+    };
+    let tokenizer = runtime
+        .tokenizer_capability()
+        .context("loaded Skippy runtime cannot provide its tokenizer capability")?;
+    factory
+        .create(tokenizer)
+        .context("product-neutral serving hook factory rejected the loaded model")
+}
+
+struct NativeSkippyStartupAudit {
+    ready: bool,
+}
+
+impl NativeSkippyStartupAudit {
+    fn new() -> Self {
+        record_native_skippy_operational_event(NativeSkippyOperationalEvent::RuntimeStartupStarted);
+        Self { ready: false }
+    }
+
+    fn mark_ready(&mut self) {
+        self.ready = true;
+        record_native_skippy_operational_event(NativeSkippyOperationalEvent::RuntimeReady);
+    }
+}
+
+impl Drop for NativeSkippyStartupAudit {
+    fn drop(&mut self) {
+        if !self.ready {
+            record_native_skippy_operational_event(
+                NativeSkippyOperationalEvent::RuntimeStartupFailed,
+            );
+        }
     }
 }
 
@@ -387,6 +552,7 @@ impl SkippyModelHandle {
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
+        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         let stage_config = single_stage_config(&options)?;
         let runtime = SkippyRuntimeHandle::load(EmbeddedRuntimeOptions {
             config: stage_config.clone(),
@@ -410,6 +576,8 @@ impl SkippyModelHandle {
             stage_config.clone(),
             options.telemetry.level,
         );
+        let serving_hooks =
+            resolve_serving_hooks(options.serving_hooks_factory.as_ref(), &runtime)?;
         let family_policy = family_policy_for_stage_config(&stage_config);
         let embedded_args = options.embedded_openai.clone().unwrap_or_else(|| {
             resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
@@ -417,38 +585,19 @@ impl SkippyModelHandle {
                 options.default_max_tokens,
                 options.generation_concurrency,
                 family_policy.activation_wire_dtype.into(),
+                options.native_mtp_enabled,
             )
         });
         let openai_guardrails = options.openai_guardrails.clone();
-        let binding = embedded_openai_backend(EmbeddedOpenAiArgs {
-            bind_addr: "127.0.0.1:0"
-                .parse()
-                .expect("static bind address should parse"),
-            config: stage_config.clone(),
-            runtime: runtime.runtime(),
-            model_id: embedded_args.model_id,
-            default_max_tokens: embedded_args.default_max_tokens,
-            request_defaults: embedded_args.request_defaults,
-            generation_concurrency: embedded_args.generation_concurrency,
-            prefill_chunk_size: embedded_args.prefill_chunk_size,
-            prefill_chunk_policy: embedded_args.prefill_chunk_policy,
-            prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
-            prefill_adaptive_start: embedded_args.prefill_adaptive_start,
-            prefill_adaptive_step: embedded_args.prefill_adaptive_step,
-            prefill_adaptive_max: embedded_args.prefill_adaptive_max,
-            draft_model_path: embedded_args.draft_model_path,
-            speculative_window: embedded_args.speculative_window,
-            adaptive_speculative_window: embedded_args.adaptive_speculative_window,
-            draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
-            activation_width: embedded_args.activation_width,
-            wire_dtype: embedded_args.wire_dtype,
-            reply_credit_limit: embedded_args.reply_credit_limit,
-            downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
-            downstream_wire_condition: WireCondition::new(0.0, None)?,
+        let binding = embedded_openai_backend(embedded_openai_args_from(
+            embedded_args,
+            stage_config.clone(),
+            runtime.runtime(),
+            None,
             telemetry,
             hook_policy,
-            openai_guardrails: None,
-        })
+            &serving_hooks,
+        )?)
         .context("construct skippy OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(
             binding.backend,
@@ -456,6 +605,7 @@ impl SkippyModelHandle {
             Some(usize::try_from(stage_config.ctx_size).unwrap_or(usize::MAX)),
             guardrail_telemetry.guardrail_sink(),
         );
+        lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
             backend,
@@ -468,6 +618,86 @@ impl SkippyModelHandle {
                 last_error: None,
             })),
             _materialized_pin: None,
+            _prediction_return_listener: None,
+        })
+    }
+
+    pub(crate) fn load_with_hooks_and_open_events(
+        options: SkippyModelLoadOptions,
+        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        model_open_event_reporter: Option<NativeModelOpenEventReporter>,
+        guardrail_telemetry: survey::SurveyTelemetry,
+    ) -> Result<Self> {
+        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
+        let stage_config = single_stage_config(&options)?;
+        let runtime = SkippyRuntimeHandle::load_with_open_events(
+            EmbeddedRuntimeOptions {
+                config: stage_config.clone(),
+                topology: None,
+                n_threads: options.n_threads,
+                n_threads_batch: options.n_threads_batch,
+                metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
+                telemetry_queue_capacity: options.telemetry.queue_capacity,
+                telemetry_level: options.telemetry.level,
+            },
+            model_open_event_reporter,
+        )
+        .with_context(|| {
+            format!(
+                "load skippy runtime for model {} from {}",
+                options.model_id,
+                options.model_path.display()
+            )
+        })?;
+        let telemetry = Telemetry::new(
+            options.telemetry.metrics_otlp_grpc.clone(),
+            options.telemetry.queue_capacity,
+            stage_config.clone(),
+            options.telemetry.level,
+        );
+        let serving_hooks =
+            resolve_serving_hooks(options.serving_hooks_factory.as_ref(), &runtime)?;
+        let family_policy = family_policy_for_stage_config(&stage_config);
+        let embedded_args = options.embedded_openai.clone().unwrap_or_else(|| {
+            resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
+                options.model_id.clone(),
+                options.default_max_tokens,
+                options.generation_concurrency,
+                family_policy.activation_wire_dtype.into(),
+                options.native_mtp_enabled,
+            )
+        });
+        let openai_guardrails = options.openai_guardrails.clone();
+        let binding = embedded_openai_backend(embedded_openai_args_from(
+            embedded_args,
+            stage_config.clone(),
+            runtime.runtime(),
+            None,
+            telemetry,
+            hook_policy,
+            &serving_hooks,
+        )?)
+        .context("construct skippy OpenAI backend")?;
+        let backend = wrap_host_guardrail_backend(
+            binding.backend,
+            openai_guardrails.as_ref(),
+            Some(usize::try_from(stage_config.ctx_size).unwrap_or(usize::MAX)),
+            guardrail_telemetry.guardrail_sink(),
+        );
+        lifecycle_audit.mark_ready();
+        Ok(Self {
+            runtime,
+            backend,
+            openai_guardrails,
+            config: stage_config,
+            started_at_unix_nanos: now_unix_nanos(),
+            status: Arc::new(Mutex::new(HandleState {
+                state: SkippyModelState::Ready,
+                stopped_at_unix_nanos: None,
+                last_error: None,
+            })),
+            _materialized_pin: None,
+            _prediction_return_listener: None,
         })
     }
 
@@ -484,6 +714,7 @@ impl SkippyModelHandle {
         let wire_dtype = family_policy_for_stage_config(&config)
             .activation_wire_dtype
             .into();
+        let native_mtp_enabled = config.native_mtp_enabled;
         Self::load_stage0_config_with_openai_args(
             config,
             resolver::ResolvedEmbeddedOpenAiArgs::embedded_stage_defaults(
@@ -492,6 +723,7 @@ impl SkippyModelHandle {
                 generation_concurrency,
                 activation_width,
                 wire_dtype,
+                native_mtp_enabled,
             ),
             hook_policy,
             telemetry,
@@ -520,6 +752,7 @@ impl SkippyModelHandle {
             hook_policy,
             telemetry,
             guardrails,
+            None,
         )
     }
 
@@ -529,7 +762,9 @@ impl SkippyModelHandle {
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
+        serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
+        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
         let materialized_pin = if config.load_mode == LoadMode::LayerPackage {
@@ -579,35 +814,26 @@ impl SkippyModelHandle {
             runtime_config.clone(),
             telemetry.level,
         );
-        let binding = embedded_openai_backend(EmbeddedOpenAiArgs {
-            bind_addr: "127.0.0.1:0"
-                .parse()
-                .expect("static bind address should parse"),
-            config: runtime_config.clone(),
-            runtime: runtime.runtime(),
-            model_id: embedded_args.model_id,
-            default_max_tokens: embedded_args.default_max_tokens,
-            request_defaults: embedded_args.request_defaults,
-            generation_concurrency: embedded_args.generation_concurrency,
-            prefill_chunk_size: embedded_args.prefill_chunk_size,
-            prefill_chunk_policy: embedded_args.prefill_chunk_policy,
-            prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
-            prefill_adaptive_start: embedded_args.prefill_adaptive_start,
-            prefill_adaptive_step: embedded_args.prefill_adaptive_step,
-            prefill_adaptive_max: embedded_args.prefill_adaptive_max,
-            draft_model_path: embedded_args.draft_model_path,
-            speculative_window: embedded_args.speculative_window,
-            adaptive_speculative_window: embedded_args.adaptive_speculative_window,
-            draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
-            activation_width: embedded_args.activation_width,
-            wire_dtype: embedded_args.wire_dtype,
-            reply_credit_limit: embedded_args.reply_credit_limit,
-            downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
-            downstream_wire_condition: WireCondition::new(0.0, None)?,
+        let serving_hooks = resolve_serving_hooks(serving_hooks_factory.as_ref(), &runtime)?;
+        let prediction_return_listener = if runtime_config.downstream.is_some() {
+            Some(PredictionReturnListener::start(
+                runtime_config.bind_addr.parse()?,
+            )?)
+        } else {
+            None
+        };
+        let prediction_returns = prediction_return_listener
+            .as_ref()
+            .map(PredictionReturnListener::hub);
+        let binding = embedded_openai_backend(embedded_openai_args_from(
+            embedded_args,
+            runtime_config.clone(),
+            runtime.runtime(),
+            prediction_returns,
             telemetry,
             hook_policy,
-            openai_guardrails: None,
-        })
+            &serving_hooks,
+        )?)
         .context("construct skippy stage 0 OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(
             binding.backend,
@@ -615,6 +841,7 @@ impl SkippyModelHandle {
             Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
             guardrails.telemetry.guardrail_sink(),
         );
+        lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
             backend,
@@ -627,6 +854,112 @@ impl SkippyModelHandle {
                 last_error: None,
             })),
             _materialized_pin: materialized_pin,
+            _prediction_return_listener: prediction_return_listener,
+        })
+    }
+
+    pub(crate) fn load_stage0_runtime_options_with_openai_args_and_open_events(
+        mut runtime_options: EmbeddedRuntimeOptions,
+        embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
+        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        telemetry: SkippyTelemetryOptions,
+        model_open_event_reporter: Option<NativeModelOpenEventReporter>,
+        guardrails: SkippyOpenAiGuardrailOptions,
+        serving_hooks_factory: Option<SharedModelServingHooksFactory>,
+    ) -> Result<Self> {
+        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
+        configure_materialized_stage_cache();
+        let config = &mut runtime_options.config;
+        let materialized_pin = if config.load_mode == LoadMode::LayerPackage {
+            if let Some(model_path) = config.model_path.as_deref() {
+                let local_ref = materialization::resolve_hf_package_to_local(
+                    model_path,
+                    config.layer_start,
+                    config.layer_end,
+                    config.layer_start == 0,
+                    config.downstream.is_none(),
+                )?;
+                if let Some(expected_manifest_sha) = config.manifest_sha256.as_deref() {
+                    materialization::ensure_package_manifest_sha(
+                        &local_ref,
+                        expected_manifest_sha,
+                    )?;
+                }
+                config.model_path = Some(local_ref);
+            }
+            None
+        } else {
+            let materialized = materialize_stage_config(config)?;
+            materialized.map(|(artifact, pin)| {
+                config.manifest_sha256 = Some(artifact.manifest_sha256);
+                config.source_model_path = Some(artifact.source_model_path);
+                config.source_model_sha256 = Some(artifact.source_model_sha256);
+                config.source_model_bytes = artifact.source_model_bytes;
+                config.materialized_path = Some(artifact.path.to_string_lossy().to_string());
+                config.materialized_pinned = true;
+                pin
+            })
+        };
+        if config.kv_cache.is_none() {
+            let family_policy = family_policy_for_stage_config(config);
+            config.kv_cache = family_policy.stage_kv_cache_config_for_stage(config);
+        }
+        let runtime_config = config.clone();
+        let runtime =
+            SkippyRuntimeHandle::load_with_open_events(runtime_options, model_open_event_reporter)
+                .with_context(|| {
+                    format!(
+                        "load skippy stage 0 runtime for model {} from {:?}",
+                        runtime_config.model_id, runtime_config.model_path
+                    )
+                })?;
+        let telemetry = Telemetry::new(
+            telemetry.metrics_otlp_grpc.clone(),
+            telemetry.queue_capacity,
+            runtime_config.clone(),
+            telemetry.level,
+        );
+        let serving_hooks = resolve_serving_hooks(serving_hooks_factory.as_ref(), &runtime)?;
+        let prediction_return_listener = if runtime_config.downstream.is_some() {
+            Some(PredictionReturnListener::start(
+                runtime_config.bind_addr.parse()?,
+            )?)
+        } else {
+            None
+        };
+        let prediction_returns = prediction_return_listener
+            .as_ref()
+            .map(PredictionReturnListener::hub);
+        let binding = embedded_openai_backend(embedded_openai_args_from(
+            embedded_args,
+            runtime_config.clone(),
+            runtime.runtime(),
+            prediction_returns,
+            telemetry,
+            hook_policy,
+            &serving_hooks,
+        )?)
+        .context("construct skippy stage 0 OpenAI backend")?;
+        let backend = wrap_host_guardrail_backend(
+            binding.backend,
+            guardrails.config.as_ref(),
+            Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
+            guardrails.telemetry.guardrail_sink(),
+        );
+        lifecycle_audit.mark_ready();
+        Ok(Self {
+            runtime,
+            backend,
+            openai_guardrails: guardrails.config,
+            config: runtime_config,
+            started_at_unix_nanos: now_unix_nanos(),
+            status: Arc::new(Mutex::new(HandleState {
+                state: SkippyModelState::Ready,
+                stopped_at_unix_nanos: None,
+                last_error: None,
+            })),
+            _materialized_pin: materialized_pin,
+            _prediction_return_listener: prediction_return_listener,
         })
     }
 
@@ -649,10 +982,28 @@ impl SkippyModelHandle {
         Some(guardrails.status())
     }
 
-    pub(crate) fn start_http(&self, port: u16) -> SkippyHttpHandle {
-        let bind_addr = ([127, 0, 0, 1], port).into();
-        let server = skippy_server::start_openai_backend(bind_addr, self.backend());
-        SkippyHttpHandle { port, server }
+    pub(crate) fn start_http(&self, port: u16) -> Result<SkippyHttpHandle> {
+        self.start_http_on(([127, 0, 0, 1], port).into())
+    }
+
+    pub(crate) fn start_http_on(
+        &self,
+        bind_addr: std::net::SocketAddr,
+    ) -> Result<SkippyHttpHandle> {
+        let port = bind_addr.port();
+        let tokenizer = self
+            .runtime
+            .tokenizer_capability()
+            .context("loaded Skippy runtime cannot provide its stage-0 tokenizer capability")?;
+        let lifecycle_observer =
+            crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer());
+        let server = skippy_server::start_openai_backend_with_tokenizer_and_lifecycle_observer(
+            bind_addr,
+            self.backend(),
+            tokenizer,
+            lifecycle_observer,
+        );
+        Ok(SkippyHttpHandle { port, server })
     }
 
     pub(crate) fn status(&self) -> SkippyModelStatus {
@@ -675,6 +1026,9 @@ impl SkippyModelHandle {
             }
             state.state = SkippyModelState::Stopping;
         }
+        record_native_skippy_operational_event(
+            NativeSkippyOperationalEvent::RuntimeShutdownStarted,
+        );
         self.runtime.shutdown();
         let mut state = self.status.lock().expect("skippy status lock poisoned");
         state.state = SkippyModelState::Stopped;
@@ -813,12 +1167,15 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         n_batch: options.n_batch,
         n_ubatch: options.n_ubatch,
         n_gpu_layers: options.n_gpu_layers,
+        mmap: options.mmap,
+        mlock: options.mlock,
         cache_type_k: options.cache_type_k.clone(),
         cache_type_v: options.cache_type_v.clone(),
         flash_attn_type: options.flash_attn_type,
         filter_tensors_on_load: false,
         selected_device: options.selected_device.clone().map(Into::into),
         kv_cache: None,
+        native_mtp_enabled: options.native_mtp_enabled,
         load_mode: LoadMode::RuntimeSlice,
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
@@ -907,6 +1264,7 @@ fn status_from_parts(
             })
             .collect(),
         max_session_tokens: embedded.sessions.max_session_tokens,
+        sessions_captured_at_unix_nanos: embedded.sessions_captured_at_unix_nanos,
         n_batch: config.n_batch,
         n_ubatch: config.n_ubatch,
         n_gpu_layers: config.n_gpu_layers,
@@ -954,6 +1312,22 @@ mod tests {
     use skippy_server::runtime_state::RuntimeSessionStats;
     use skippy_server::telemetry::TelemetryStats;
 
+    #[test]
+    fn benchmark_wire_delay_accepts_finite_non_negative_values() {
+        assert_eq!(parse_benchmark_downstream_wire_delay_ms("0").unwrap(), 0.0);
+        assert_eq!(
+            parse_benchmark_downstream_wire_delay_ms("25.5").unwrap(),
+            25.5
+        );
+    }
+
+    #[test]
+    fn benchmark_wire_delay_rejects_invalid_values() {
+        for value in ["-1", "NaN", "inf", "not-a-number"] {
+            assert!(parse_benchmark_downstream_wire_delay_ms(value).is_err());
+        }
+    }
+
     #[derive(Default)]
     struct RecordingHostBackend {
         seen_chat: Mutex<Option<ChatCompletionRequest>>,
@@ -998,9 +1372,11 @@ mod tests {
                 .to_string(),
             source_model_bytes: 1234,
             source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
             layer_count,
             activation_width: 4096,
             tensor_count: 100,
+            generation: None,
         }
     }
 
@@ -1037,9 +1413,9 @@ mod tests {
                 tracked_token_counts: 0,
                 max_session_tokens: 2048,
                 total_session_tokens: 0,
-                checkpoints: 0,
                 lanes: vec![],
             },
+            sessions_captured_at_unix_nanos: 111,
             telemetry: TelemetryStats {
                 queued: 0,
                 sent: 0,

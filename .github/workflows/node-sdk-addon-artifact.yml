@@ -1,0 +1,373 @@
+name: Reusable Node SDK Addon Artifact
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: Node platform and architecture target.
+        required: true
+        type: string
+      artifact_name:
+        description: Immutable GitHub artifact name.
+        required: true
+        type: string
+      release_tag:
+        description: Release tag whose version the addon must report.
+        required: true
+        type: string
+      prepare_release_version:
+        description: Prepare checked-out sources for release_tag before building.
+        required: false
+        default: false
+        type: boolean
+      retention_days:
+        description: Artifact retention in days.
+        required: false
+        default: 90
+        type: number
+      timeout_minutes:
+        description: Producer timeout in minutes.
+        required: false
+        default: 90
+        type: number
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  validate_inputs:
+    name: Validate Node SDK addon producer inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: none
+    steps:
+      - name: Validate typed producer contract
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          NODE_SDK_TARGET: ${{ inputs.target }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          case "$NODE_SDK_TARGET" in
+            darwin-arm64|darwin-x64|linux-arm64|linux-x64|win32-x64) ;;
+            *) echo "unsupported Node SDK target: $NODE_SDK_TARGET" >&2; exit 1 ;;
+          esac
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || {
+            echo "invalid artifact name: $ARTIFACT_NAME" >&2
+            exit 1
+          }
+
+  linux_addon:
+    name: Node SDK addon (${{ inputs.target }})
+    needs: validate_inputs
+    if: ${{ startsWith(inputs.target, 'linux-') }}
+    runs-on: ${{ inputs.target == 'linux-arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BACKEND: cpu
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Verify prebuilt addon environment
+        run: verify-runner-image public cpu
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "true"
+      - name: Build, smoke, and stage immutable addon
+        env:
+          NODE_SDK_TARGET: ${{ inputs.target }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
+        run: |
+          set -euo pipefail
+          case "$NODE_SDK_TARGET" in
+            linux-arm64|linux-x64) ;;
+            *) echo "unsupported Linux Node SDK target: $NODE_SDK_TARGET" >&2; exit 1 ;;
+          esac
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          }
+          if [[ "$PREPARE_RELEASE_VERSION" == "true" ]]; then
+            scripts/release-version.sh "$RELEASE_TAG"
+          fi
+          expected_version="${RELEASE_TAG#v}"
+          actual_version="$(node -p "require('./sdk/node/package.json').version")"
+          [[ "$actual_version" == "$expected_version" ]] || {
+            echo "Node SDK version mismatch: expected $expected_version, got $actual_version" >&2
+            exit 1
+          }
+          npm test --prefix sdk/node
+          npm run build:native --prefix sdk/node
+          source="sdk/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          test -s "$source"
+          smoke_root="$(mktemp -d)"
+          trap 'rm -rf "$smoke_root"' EXIT
+          mkdir -p "$smoke_root/tarball" "$smoke_root/consumer"
+          (cd sdk/node && npm pack --pack-destination "$smoke_root/tarball")
+          tarball="$(find "$smoke_root/tarball" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          test -n "$tarball"
+          (cd "$smoke_root/consumer" && npm init --yes >/dev/null && npm install "$tarball")
+          node - "$smoke_root/consumer" "$expected_version" <<'NODE'
+          const [root, expected] = process.argv.slice(2)
+          const sdk = require(require.resolve("@mesh-llm/sdk", { paths: [root] }))
+          const actual = sdk.currentMeshVersion()
+          if (actual !== expected) {
+            throw new Error(`native addon version mismatch: expected ${expected}, got ${actual}`)
+          }
+          NODE
+          stage_root="dist/node-sdk-addon-stage"
+          output_root="dist/node-sdk-addon-release"
+          mkdir -p "$stage_root/$NODE_SDK_TARGET" "$output_root"
+          cp "$source" "$stage_root/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          addon_digest="$(node -e "const fs=require('fs'),c=require('crypto'); console.log(c.createHash('sha256').update(fs.readFileSync(process.argv[1])).digest('hex'))" "$source")"
+          printf '{\n  "schema": "mesh-llm-node-sdk-addon-v1",\n  "version": "%s",\n  "target": "%s",\n  "file": "mesh_llm_nodejs.node",\n  "sha256": "%s"\n}\n' \
+            "$expected_version" "$NODE_SDK_TARGET" "$addon_digest" \
+            > "$stage_root/$NODE_SDK_TARGET/manifest.json"
+          archive="mesh-llm-node-sdk-addon-$expected_version-$NODE_SDK_TARGET.tar.gz"
+          tar -C "$stage_root" -czf "$output_root/$archive" "$NODE_SDK_TARGET"
+          archive_digest="$(node -e "const fs=require('fs'),c=require('crypto'); console.log(c.createHash('sha256').update(fs.readFileSync(process.argv[1])).digest('hex'))" "$output_root/$archive")"
+          printf '%s  %s\n' "$archive_digest" "$archive" > "$output_root/$archive.sha256"
+      - name: Capture Node SDK addon sccache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-node-sdk-addon-${{ inputs.target }}-${{ github.run_attempt }}
+      - name: Upload immutable Node SDK addon
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: dist/node-sdk-addon-release/*
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+  macos_addon:
+    name: Node SDK addon (${{ inputs.target }})
+    needs: validate_inputs
+    if: ${{ startsWith(inputs.target, 'darwin-') }}
+    runs-on: ${{ inputs.target == 'darwin-x64' && 'macos-15-intel' || 'macos-15' }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BACKEND: metal
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "true"
+      - name: Install macOS native dependencies
+        run: brew install cmake ninja lld
+      - name: Configure and validate macOS x64 linker
+        if: ${{ inputs.target == 'darwin-x64' }}
+        run: |
+          set -euo pipefail
+          lld_bin="$(brew --prefix lld)/bin"
+          test -x "$lld_bin/ld64.lld"
+          echo "$lld_bin" >> "$GITHUB_PATH"
+          echo 'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld' >> "$GITHUB_ENV"
+          probe="$RUNNER_TEMP/mesh-cargo-linker-check"
+          mkdir -p "$probe/src"
+          printf '[package]\nname = "mesh-cargo-linker-check"\nversion = "0.0.0"\nedition = "2024"\n' > "$probe/Cargo.toml"
+          printf 'fn main() {}\n' > "$probe/src/main.rs"
+          PATH="$lld_bin:$PATH" CARGO_ENCODED_RUSTFLAGS='-Clink-arg=-fuse-ld=lld' \
+            cargo rustc --quiet --manifest-path "$probe/Cargo.toml" --target x86_64-apple-darwin
+      - name: Build, smoke, and stage immutable addon
+        env:
+          NODE_SDK_TARGET: ${{ inputs.target }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
+        run: |
+          set -euo pipefail
+          case "$NODE_SDK_TARGET" in
+            darwin-arm64|darwin-x64) ;;
+            *) echo "unsupported macOS Node SDK target: $NODE_SDK_TARGET" >&2; exit 1 ;;
+          esac
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          }
+          if [[ "$PREPARE_RELEASE_VERSION" == "true" ]]; then
+            scripts/release-version.sh "$RELEASE_TAG"
+          fi
+          expected_version="${RELEASE_TAG#v}"
+          actual_version="$(node -p "require('./sdk/node/package.json').version")"
+          [[ "$actual_version" == "$expected_version" ]] || {
+            echo "Node SDK version mismatch: expected $expected_version, got $actual_version" >&2
+            exit 1
+          }
+          npm test --prefix sdk/node
+          npm run build:native --prefix sdk/node
+          source="sdk/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          test -s "$source"
+          smoke_root="$(mktemp -d)"
+          trap 'rm -rf "$smoke_root"' EXIT
+          mkdir -p "$smoke_root/tarball" "$smoke_root/consumer"
+          (cd sdk/node && npm pack --pack-destination "$smoke_root/tarball")
+          tarball="$(find "$smoke_root/tarball" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          test -n "$tarball"
+          (cd "$smoke_root/consumer" && npm init --yes >/dev/null && npm install "$tarball")
+          node - "$smoke_root/consumer" "$expected_version" <<'NODE'
+          const [root, expected] = process.argv.slice(2)
+          const sdk = require(require.resolve("@mesh-llm/sdk", { paths: [root] }))
+          const actual = sdk.currentMeshVersion()
+          if (actual !== expected) {
+            throw new Error(`native addon version mismatch: expected ${expected}, got ${actual}`)
+          }
+          NODE
+          stage_root="dist/node-sdk-addon-stage"
+          output_root="dist/node-sdk-addon-release"
+          mkdir -p "$stage_root/$NODE_SDK_TARGET" "$output_root"
+          cp "$source" "$stage_root/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          addon_digest="$(node -e "const fs=require('fs'),c=require('crypto'); console.log(c.createHash('sha256').update(fs.readFileSync(process.argv[1])).digest('hex'))" "$source")"
+          printf '{\n  "schema": "mesh-llm-node-sdk-addon-v1",\n  "version": "%s",\n  "target": "%s",\n  "file": "mesh_llm_nodejs.node",\n  "sha256": "%s"\n}\n' \
+            "$expected_version" "$NODE_SDK_TARGET" "$addon_digest" \
+            > "$stage_root/$NODE_SDK_TARGET/manifest.json"
+          archive="mesh-llm-node-sdk-addon-$expected_version-$NODE_SDK_TARGET.tar.gz"
+          tar -C "$stage_root" -czf "$output_root/$archive" "$NODE_SDK_TARGET"
+          archive_digest="$(node -e "const fs=require('fs'),c=require('crypto'); console.log(c.createHash('sha256').update(fs.readFileSync(process.argv[1])).digest('hex'))" "$output_root/$archive")"
+          printf '%s  %s\n' "$archive_digest" "$archive" > "$output_root/$archive.sha256"
+      - name: Capture Node SDK addon sccache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-node-sdk-addon-${{ inputs.target }}-${{ github.run_attempt }}
+      - name: Upload immutable Node SDK addon
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: dist/node-sdk-addon-release/*
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+  windows_addon:
+    name: Node SDK addon (${{ inputs.target }})
+    needs: validate_inputs
+    if: ${{ inputs.target == 'win32-x64' }}
+    runs-on: windows-2022
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BACKEND: cpu
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "true"
+      - name: Build, smoke, and stage immutable addon
+        env:
+          NODE_SDK_TARGET: ${{ inputs.target }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
+        run: |
+          set -euo pipefail
+          [[ "$NODE_SDK_TARGET" == "win32-x64" ]] || {
+            echo "unsupported Windows Node SDK target: $NODE_SDK_TARGET" >&2
+            exit 1
+          }
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          }
+          if [[ "$PREPARE_RELEASE_VERSION" == "true" ]]; then
+            scripts/release-version.sh "$RELEASE_TAG"
+          fi
+          expected_version="${RELEASE_TAG#v}"
+          actual_version="$(node -p "require('./sdk/node/package.json').version")"
+          [[ "$actual_version" == "$expected_version" ]] || {
+            echo "Node SDK version mismatch: expected $expected_version, got $actual_version" >&2
+            exit 1
+          }
+          npm test --prefix sdk/node
+          npm run build:native --prefix sdk/node
+          source="sdk/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          test -s "$source"
+          smoke_root="$(mktemp -d)"
+          trap 'rm -rf "$smoke_root"' EXIT
+          mkdir -p "$smoke_root/tarball" "$smoke_root/consumer"
+          (cd sdk/node && npm pack --pack-destination "$smoke_root/tarball")
+          tarball="$(find "$smoke_root/tarball" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          test -n "$tarball"
+          (cd "$smoke_root/consumer" && npm init --yes >/dev/null && npm install "$tarball")
+          node - "$smoke_root/consumer" "$expected_version" <<'NODE'
+          const [root, expected] = process.argv.slice(2)
+          const sdk = require(require.resolve("@mesh-llm/sdk", { paths: [root] }))
+          const actual = sdk.currentMeshVersion()
+          if (actual !== expected) {
+            throw new Error(`native addon version mismatch: expected ${expected}, got ${actual}`)
+          }
+          NODE
+          stage_root="dist/node-sdk-addon-stage"
+          output_root="dist/node-sdk-addon-release"
+          mkdir -p "$stage_root/$NODE_SDK_TARGET" "$output_root"
+          cp "$source" "$stage_root/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          addon_digest="$(node -e "const fs=require('fs'),c=require('crypto'); console.log(c.createHash('sha256').update(fs.readFileSync(process.argv[1])).digest('hex'))" "$source")"
+          printf '{\n  "schema": "mesh-llm-node-sdk-addon-v1",\n  "version": "%s",\n  "target": "%s",\n  "file": "mesh_llm_nodejs.node",\n  "sha256": "%s"\n}\n' \
+            "$expected_version" "$NODE_SDK_TARGET" "$addon_digest" \
+            > "$stage_root/$NODE_SDK_TARGET/manifest.json"
+          archive="mesh-llm-node-sdk-addon-$expected_version-$NODE_SDK_TARGET.tar.gz"
+          tar -C "$stage_root" -czf "$output_root/$archive" "$NODE_SDK_TARGET"
+          archive_digest="$(node -e "const fs=require('fs'),c=require('crypto'); console.log(c.createHash('sha256').update(fs.readFileSync(process.argv[1])).digest('hex'))" "$output_root/$archive")"
+          printf '%s  %s\n' "$archive_digest" "$archive" > "$output_root/$archive.sha256"
+      - name: Capture Node SDK addon sccache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-node-sdk-addon-${{ inputs.target }}-${{ github.run_attempt }}
+      - name: Upload immutable Node SDK addon
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: dist/node-sdk-addon-release/*
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}

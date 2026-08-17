@@ -24,7 +24,7 @@ pub async fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        api::otlp_http_traces,
+        api::{health, otlp_http_traces},
         otlp_value::{kv_i64, kv_string},
         server::AppState,
         store::Store,
@@ -136,6 +136,12 @@ mod tests {
                 schema_url: String::new(),
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_reports_ok() {
+        let response = health().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]

@@ -9,18 +9,21 @@ pub use activation::{
 };
 pub use codec::{
     read_stage_message, recv_ready, recv_reply, send_ready, send_reply_ack,
-    send_reply_ack_with_stats, send_reply_predicted, send_reply_predicted_tokens_with_stats,
-    send_reply_predicted_with_stats, write_stage_message,
+    send_reply_ack_with_stats, send_reply_message, send_reply_predicted,
+    send_reply_predicted_tokens_with_stats, send_reply_predicted_tokens_with_window_and_stats,
+    send_reply_predicted_with_stats, send_reply_predicted_with_tokens_and_stats,
+    send_reply_predicted_with_tokens_window_and_stats, write_stage_message,
 };
 pub use types::{
-    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_RWKV7_V_FIRST, LLAMA_TOKEN_NULL,
-    MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
+    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_INKLING_MTP_EMBD, ACTIVATION_FLAG_RWKV7_V_FIRST,
+    LLAMA_TOKEN_NULL, MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
     MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
     STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
-    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageReply,
-    StageReplyStats, StageSamplingConfig, StageStateHeader, StageWireMessage, WireActivationDType,
-    WireMessageKind, WireReplyKind, WireStagePhase, activation_frame_flags_from_state_flags,
+    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageNativeMtpDraft,
+    StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch, StageSamplingConfig,
+    StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind,
+    WireStagePhase, activation_frame_flags_from_state_flags,
     activation_state_flags_from_frame_flags, state_flags,
 };
 
@@ -102,6 +105,60 @@ mod tests {
         assert_eq!(reply.kind, WireReplyKind::PredictedToken);
         assert_eq!(reply.predicted, 42);
         assert_eq!(reply.predicted_tokens, vec![42]);
+        assert_eq!(reply.native_mtp_draft, None);
+    }
+
+    #[test]
+    fn reply_round_trips_typed_native_mtp_draft() {
+        let reply = StageReply {
+            kind: WireReplyKind::PredictedToken,
+            predicted: 42,
+            predicted_tokens: vec![42],
+            native_mtp_draft: Some(StageNativeMtpDraft {
+                token_ids: vec![43, 44],
+                proposal_compute_us: 12_345,
+            }),
+            window: StageReplyWindow::default(),
+            stats: StageReplyStats::default(),
+        };
+        let mut bytes = Vec::new();
+        send_reply_message(&mut bytes, &reply).unwrap();
+
+        assert_eq!(recv_reply(Cursor::new(bytes)).unwrap(), reply);
+    }
+
+    #[test]
+    fn predicted_token_reply_preserves_sideband_tokens() {
+        let mut bytes = Vec::new();
+        send_reply_predicted_with_tokens_and_stats(
+            &mut bytes,
+            42,
+            &[42, 43, 123],
+            StageReplyStats::default(),
+        )
+        .unwrap();
+        let reply = recv_reply(Cursor::new(bytes)).unwrap();
+        assert_eq!(reply.kind, WireReplyKind::PredictedToken);
+        assert_eq!(reply.predicted, 42);
+        assert_eq!(reply.predicted_tokens, vec![42, 43, 123]);
+    }
+
+    #[test]
+    fn reply_stats_preserve_prefill_edge_transport() {
+        let mut stats = StageReplyStats::default();
+        stats.observe_prefill_edge_transport(2, 12_000, 3_000, 1_048_576);
+        stats.observe_prefill_edge_transport(1, 4_000, 40_000, 524_288);
+
+        let mut bytes = Vec::new();
+        send_reply_predicted_with_stats(&mut bytes, 42, stats).unwrap();
+        let reply = recv_reply(Cursor::new(bytes)).unwrap();
+
+        assert_eq!(reply.stats.prefill_edge_write_us_max, 12_000);
+        assert_eq!(reply.stats.prefill_edge_wait_us_max, 40_000);
+        assert_eq!(reply.stats.prefill_edge_total_us_max, 44_000);
+        assert_eq!(reply.stats.prefill_edge_stage_index, 1);
+        assert_eq!(reply.stats.prefill_edge_activation_bytes_max, 524_288);
+        assert_eq!(reply.stats.prefill_edge_observation_count, 2);
     }
 
     #[test]
@@ -113,6 +170,23 @@ mod tests {
         assert_eq!(reply.kind, WireReplyKind::PredictedTokens);
         assert_eq!(reply.predicted, 1);
         assert_eq!(reply.predicted_tokens, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn reply_window_metadata_round_trips() {
+        let mut bytes = Vec::new();
+        send_reply_predicted_tokens_with_window_and_stats(
+            &mut bytes,
+            &[1, 2, 3],
+            StageReplyWindow { window_id: 42 },
+            StageReplyStats::default(),
+        )
+        .unwrap();
+        let reply = recv_reply(Cursor::new(bytes)).unwrap();
+
+        assert_eq!(reply.kind, WireReplyKind::PredictedTokens);
+        assert_eq!(reply.predicted_tokens, vec![1, 2, 3]);
+        assert_eq!(reply.window.window_id, 42);
     }
 
     #[test]
@@ -135,6 +209,7 @@ mod tests {
     fn stage_message_round_trips_f32() {
         let mut state =
             StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F32);
+        state.checkpoint_generation = 3;
         state.prompt_token_count = 1;
         state.decode_step = 0;
         state.current_token = 11;
@@ -174,6 +249,16 @@ mod tests {
         assert_eq!(decoded.state.source_stage_index, 0);
         assert_eq!(decoded.request_id, 7);
         assert_eq!(decoded.session_id, 11);
+        assert_eq!(
+            decoded.request_epoch(),
+            StageRequestEpoch {
+                request_id: 7,
+                session_id: 11,
+                checkpoint_generation: 3,
+                prompt_token_count: 1,
+                decode_step: 0,
+            }
+        );
         assert_ne!(decoded.state.flags & state_flags::SAMPLING, 0);
         assert_eq!(decoded.state.flags & state_flags::CHAT_SAMPLING_METADATA, 0);
         assert_eq!(decoded.chat_sampling_metadata, None);
@@ -183,6 +268,199 @@ mod tests {
         assert_eq!(sampling.logit_bias.len(), 1);
         assert_eq!(sampling.logit_bias[0].token_id, 123);
         assert_eq!(sampling.logit_bias[0].bias, -50.0);
+    }
+
+    #[test]
+    fn verify_window_message_round_trips_window_metadata() {
+        let mut state =
+            StageStateHeader::new(WireMessageKind::VerifyWindow, WireActivationDType::F32);
+        state.seq_id = 42;
+        state.prompt_token_count = 128;
+        state.decode_step = 7;
+        state.current_token = 1001;
+        let message = StageWireMessage {
+            kind: WireMessageKind::VerifyWindow,
+            pos_start: 135,
+            token_count: 4,
+            state,
+            request_id: 7,
+            session_id: 11,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: vec![1001, 1002, 1003, 1004],
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message, WireActivationDType::F32).unwrap();
+        let decoded = read_stage_message(Cursor::new(bytes), 2).unwrap();
+
+        assert_eq!(decoded.kind, WireMessageKind::VerifyWindow);
+        assert_eq!(decoded.verify_window_id(), Some(42));
+        assert_eq!(decoded.verify_window_base_position(), Some(135));
+        assert_eq!(decoded.verify_window_token_count(), Some(4));
+        assert_eq!(decoded.authoritative_session_position(), Some(135));
+        assert_eq!(decoded.tokens, vec![1001, 1002, 1003, 1004]);
+        assert_eq!(decoded.state.decode_step, 7);
+    }
+
+    #[test]
+    fn only_decode_messages_carry_authoritative_session_positions() {
+        let mut decode = StageWireMessage {
+            kind: WireMessageKind::DecodeEmbd,
+            pos_start: 17,
+            token_count: 1,
+            state: StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F32),
+            request_id: 1,
+            session_id: 2,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: vec![3],
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+        assert_eq!(decode.authoritative_session_position(), Some(17));
+
+        decode.pos_start = -1;
+        assert_eq!(decode.authoritative_session_position(), None);
+
+        decode.kind = WireMessageKind::PrefillEmbd;
+        assert_eq!(decode.authoritative_session_position(), None);
+    }
+
+    #[test]
+    fn stage_message_rejects_old_state_version() {
+        let mut state =
+            StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F32);
+        state.version = STAGE_STATE_VERSION - 1;
+        let bytes = stage_frame_prefix(WireMessageKind::DecodeEmbd, 1, 0, 0, state);
+
+        assert_invalid_data(
+            read_stage_message(Cursor::new(bytes), 2),
+            "unsupported stage state version",
+        );
+    }
+
+    #[test]
+    fn stage_message_rejects_legacy_kind_10() {
+        let mut bytes = Vec::new();
+        push_i32(&mut bytes, 10);
+        push_i32(&mut bytes, 0);
+        push_i32(&mut bytes, 1);
+        push_i32(&mut bytes, 0);
+        push_i32(&mut bytes, 0);
+
+        assert_invalid_data(
+            read_stage_message(Cursor::new(bytes), 2),
+            "unknown stage message kind",
+        );
+    }
+
+    #[test]
+    fn stage_message_estimates_full_wire_transfer_bytes() {
+        let message = StageWireMessage {
+            kind: WireMessageKind::PrefillEmbd,
+            pos_start: 0,
+            token_count: 2,
+            state: StageStateHeader::new(WireMessageKind::PrefillEmbd, WireActivationDType::F32),
+            request_id: 7,
+            session_id: 11,
+            sampling: Some(StageSamplingConfig {
+                flags: 1,
+                logit_bias: vec![
+                    StageLogitBias {
+                        token_id: 1,
+                        bias: -1.0,
+                    },
+                    StageLogitBias {
+                        token_id: 2,
+                        bias: 1.0,
+                    },
+                ],
+                ..StageSamplingConfig::default()
+            }),
+            chat_sampling_metadata: Some("{}".to_string()),
+            tokens: vec![1, 2],
+            positions: vec![0],
+            activation: vec![0; 16],
+            raw_bytes: Vec::new(),
+        };
+
+        assert_eq!(
+            message.estimated_wire_bytes(),
+            STAGE_WIRE_FIXED_HEADER_BYTES
+                + STAGE_SAMPLING_CONFIG_BASE_BYTES
+                + 2 * STAGE_LOGIT_BIAS_WIRE_BYTES
+                + std::mem::size_of::<u32>()
+                + 2
+                + 3 * std::mem::size_of::<i32>()
+                + 16
+        );
+    }
+
+    #[test]
+    fn request_epoch_orders_only_matching_flows() {
+        let older = StageRequestEpoch {
+            request_id: 7,
+            session_id: 11,
+            checkpoint_generation: 1,
+            prompt_token_count: 8,
+            decode_step: 2,
+        };
+        let newer = StageRequestEpoch {
+            request_id: 7,
+            session_id: 11,
+            checkpoint_generation: 1,
+            prompt_token_count: 8,
+            decode_step: 3,
+        };
+        let different_session = StageRequestEpoch {
+            session_id: 12,
+            ..newer
+        };
+
+        assert!(older.same_flow(newer));
+        assert!(older.is_stale_for(newer));
+        assert!(!newer.is_stale_for(older));
+        assert!(!older.same_flow(different_session));
+        assert!(!older.is_stale_for(different_session));
+    }
+
+    #[test]
+    fn request_epoch_staleness_orders_generation_before_prompt_before_decode() {
+        let base = StageRequestEpoch {
+            request_id: 7,
+            session_id: 11,
+            checkpoint_generation: 1,
+            prompt_token_count: 8,
+            decode_step: 3,
+        };
+        let newer_checkpoint = StageRequestEpoch {
+            checkpoint_generation: 2,
+            prompt_token_count: 0,
+            decode_step: 0,
+            ..base
+        };
+        let newer_prompt = StageRequestEpoch {
+            prompt_token_count: 9,
+            decode_step: 0,
+            ..base
+        };
+        let newer_decode = StageRequestEpoch {
+            decode_step: 4,
+            ..base
+        };
+
+        assert!(base.same_flow(newer_checkpoint));
+        assert!(base.is_stale_for(newer_checkpoint));
+        assert!(!newer_checkpoint.is_stale_for(base));
+        assert!(base.is_stale_for(newer_prompt));
+        assert!(!newer_prompt.is_stale_for(base));
+        assert!(base.is_stale_for(newer_decode));
+        assert!(!newer_decode.is_stale_for(base));
     }
 
     #[test]
@@ -349,36 +627,58 @@ mod tests {
     }
 
     #[test]
+    fn verify_retirement_round_trips_exact_identity() {
+        let kind = WireMessageKind::RetireVerifyWindow;
+        let message = StageWireMessage {
+            kind,
+            pos_start: 128,
+            token_count: 8,
+            state: StageStateHeader::new(kind, WireActivationDType::F32),
+            request_id: 23,
+            session_id: 29,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message, WireActivationDType::F32).unwrap();
+        let decoded = read_stage_message(Cursor::new(bytes), 2048).unwrap();
+
+        assert_eq!(decoded.kind, kind);
+        assert_eq!(decoded.pos_start, 128);
+        assert_eq!(decoded.token_count, 8);
+        assert!(decoded.state.matches_kind(kind));
+    }
+
+    #[test]
     fn session_control_messages_are_fixed_header_only() {
-        for kind in [
-            WireMessageKind::CheckpointSession,
-            WireMessageKind::RestoreSession,
-            WireMessageKind::TrimSession,
-        ] {
-            let message = StageWireMessage {
-                kind,
-                pos_start: 0,
-                token_count: 0,
-                state: StageStateHeader::new(kind, WireActivationDType::F32),
-                request_id: 23,
-                session_id: 29,
-                sampling: None,
-                chat_sampling_metadata: None,
-                tokens: Vec::new(),
-                positions: Vec::new(),
-                activation: Vec::new(),
-                raw_bytes: Vec::new(),
-            };
-            let mut bytes = Vec::new();
-            write_stage_message(&mut bytes, &message, WireActivationDType::F32).unwrap();
-            assert_eq!(bytes.len(), STAGE_WIRE_FIXED_HEADER_BYTES);
-            let decoded = read_stage_message(Cursor::new(bytes), 2048).unwrap();
-            assert_eq!(decoded.kind, kind);
-            assert_eq!(decoded.request_id, 23);
-            assert_eq!(decoded.session_id, 29);
-            assert!(decoded.tokens.is_empty());
-            assert!(decoded.activation.is_empty());
-        }
+        let kind = WireMessageKind::TrimSession;
+        let message = StageWireMessage {
+            kind,
+            pos_start: 0,
+            token_count: 0,
+            state: StageStateHeader::new(kind, WireActivationDType::F32),
+            request_id: 23,
+            session_id: 29,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message, WireActivationDType::F32).unwrap();
+        assert_eq!(bytes.len(), STAGE_WIRE_FIXED_HEADER_BYTES);
+        let decoded = read_stage_message(Cursor::new(bytes), 2048).unwrap();
+        assert_eq!(decoded.kind, kind);
+        assert_eq!(decoded.request_id, 23);
+        assert_eq!(decoded.session_id, 29);
+        assert!(decoded.tokens.is_empty());
+        assert!(decoded.activation.is_empty());
     }
 
     #[test]
@@ -630,6 +930,98 @@ mod tests {
             decoded.activation_f32_payload(2).unwrap(),
             message.activation
         );
+    }
+
+    #[test]
+    fn inkling_mtp_embedding_sideband_activation_round_trips() {
+        let mut state =
+            StageStateHeader::new(WireMessageKind::PrefillEmbd, WireActivationDType::F32);
+        state.source_stage_index = 0;
+        state.flags |= state_flags::INKLING_MTP_EMBD_SIDEBAND;
+        let mut activation = Vec::new();
+        for value in [1.0_f32, 2.0, 3.0, 4.0] {
+            activation.extend_from_slice(&value.to_le_bytes());
+        }
+        let message = StageWireMessage {
+            kind: WireMessageKind::PrefillEmbd,
+            pos_start: 0,
+            token_count: 1,
+            state,
+            request_id: 7,
+            session_id: 9,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation,
+            raw_bytes: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message, WireActivationDType::F32).unwrap();
+        let decoded = read_stage_message(Cursor::new(bytes), 2).unwrap();
+        assert_eq!(decoded.activation.len(), 16);
+        assert_eq!(
+            activation_frame_flags_from_state_flags(decoded.state.flags),
+            ACTIVATION_FLAG_INKLING_MTP_EMBD
+        );
+        assert_eq!(
+            activation_state_flags_from_frame_flags(ACTIVATION_FLAG_INKLING_MTP_EMBD),
+            state_flags::INKLING_MTP_EMBD_SIDEBAND
+        );
+        assert_eq!(
+            decoded.activation_f32_payload(2).unwrap(),
+            message.activation
+        );
+    }
+
+    #[test]
+    fn f32_activation_payload_can_be_moved_without_clone() {
+        let state = StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F32);
+        let activation = vec![1_u8, 2, 3, 4, 5, 6, 7, 8];
+        let mut message = StageWireMessage {
+            kind: WireMessageKind::DecodeEmbd,
+            pos_start: 0,
+            token_count: 1,
+            state,
+            request_id: 7,
+            session_id: 9,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: vec![42],
+            positions: Vec::new(),
+            activation: activation.clone(),
+            raw_bytes: Vec::new(),
+        };
+
+        let payload = message.take_activation_f32_payload(2).unwrap();
+
+        assert_eq!(payload, activation);
+        assert!(message.activation.is_empty());
+    }
+
+    #[test]
+    fn f32_activation_payload_clone_helper_preserves_wire_payload() {
+        let state = StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F32);
+        let activation = vec![1_u8, 2, 3, 4, 5, 6, 7, 8];
+        let message = StageWireMessage {
+            kind: WireMessageKind::DecodeEmbd,
+            pos_start: 0,
+            token_count: 1,
+            state,
+            request_id: 7,
+            session_id: 9,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: vec![42],
+            positions: Vec::new(),
+            activation: activation.clone(),
+            raw_bytes: Vec::new(),
+        };
+
+        let payload = message.activation_f32_payload(2).unwrap();
+
+        assert_eq!(payload, activation);
+        assert_eq!(message.activation, activation);
     }
 
     #[test]

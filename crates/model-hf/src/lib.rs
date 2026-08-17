@@ -1,6 +1,16 @@
+mod cache_paths;
+pub mod store;
+
+pub use cache_paths::{
+    DownloadDirectoryFallback, DownloadDirectoryKind, PreparedDownloadDirectories,
+    download_cache_diagnostic, download_cache_diagnostic_for, huggingface_hub_cache_dir,
+    huggingface_xet_cache_dir, mesh_llm_cache_dir, prepare_download_directories,
+};
+
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -18,6 +28,9 @@ use model_ref::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+
+const HF_RETRY_MAX_ATTEMPTS_ENV: &str = "MESH_HF_RETRY_MAX_ATTEMPTS";
+const HF_RETRY_BASE_DELAY_MS_ENV: &str = "MESH_HF_RETRY_BASE_DELAY_MS";
 
 #[derive(Clone)]
 pub struct HfModelRepository {
@@ -61,7 +74,12 @@ impl HfModelRepository {
             .maybe_progress(progress_handler)
             .send()
             .await
-            .with_context(|| format!("download Hugging Face model file {repo}@{revision}/{file}"))
+            .with_context(|| {
+                format!(
+                    "download Hugging Face model file {repo}@{revision}/{file}. {}",
+                    download_cache_diagnostic_for(&self.cache_dir)
+                )
+            })
     }
 
     pub async fn download_artifact_files(
@@ -289,6 +307,8 @@ pub struct HfModelRepositoryBuilder {
     cache_dir: Option<PathBuf>,
     endpoint: Option<String>,
     token: Option<String>,
+    retry_max_attempts: Option<usize>,
+    retry_base_delay: Option<Duration>,
 }
 
 impl HfModelRepositoryBuilder {
@@ -307,9 +327,22 @@ impl HfModelRepositoryBuilder {
         self
     }
 
+    pub fn retry_max_attempts(mut self, max_attempts: usize) -> Self {
+        self.retry_max_attempts = Some(max_attempts);
+        self
+    }
+
+    pub fn retry_base_delay(mut self, delay: Duration) -> Self {
+        self.retry_base_delay = Some(delay);
+        self
+    }
+
     pub fn build(self) -> Result<HfModelRepository> {
         let cache_dir = self.cache_dir.unwrap_or_else(huggingface_hub_cache_dir);
-        let mut builder = HFClientBuilder::new().cache_dir(cache_dir.clone());
+        let mut builder = HFClientBuilder::new()
+            .cache_dir(cache_dir.clone())
+            .retry_max_attempts(6)
+            .retry_base_delay(Duration::from_millis(500));
 
         let endpoint = self
             .endpoint
@@ -323,6 +356,20 @@ impl HfModelRepositoryBuilder {
         let token = self.token.or_else(hf_token_override);
         if let Some(token) = token {
             builder = builder.token(token);
+        }
+
+        let retry_max_attempts = self
+            .retry_max_attempts
+            .or_else(|| env_usize(HF_RETRY_MAX_ATTEMPTS_ENV));
+        if let Some(max_attempts) = retry_max_attempts {
+            builder = builder.retry_max_attempts(max_attempts);
+        }
+
+        let retry_base_delay = self
+            .retry_base_delay
+            .or_else(|| env_duration_millis(HF_RETRY_BASE_DELAY_MS_ENV));
+        if let Some(delay) = retry_base_delay {
+            builder = builder.retry_base_delay(delay);
         }
 
         let api = builder.build().context("build Hugging Face API client")?;
@@ -397,27 +444,6 @@ impl HfModelIdentity {
             format!("{}@{}/{}", self.repo_id, self.revision, distribution_id)
         })
     }
-}
-
-pub fn huggingface_hub_cache_dir() -> PathBuf {
-    if let Some(path) = env_path("HF_HUB_CACHE") {
-        return path;
-    }
-    if let Some(path) = env_path("HUGGINGFACE_HUB_CACHE") {
-        return path;
-    }
-    if let Some(path) = env_path("HF_HOME") {
-        return path.join("hub");
-    }
-    if let Some(path) = env_path("XDG_CACHE_HOME") {
-        return path.join("huggingface").join("hub");
-    }
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".cache")
-        .join("huggingface")
-        .join("hub")
 }
 
 pub fn hf_token_override() -> Option<String> {
@@ -630,17 +656,24 @@ fn repo_parts(repo: &str) -> (&str, &str) {
     repo.split_once('/').unwrap_or(("", repo))
 }
 
-fn env_path(key: &str) -> Option<PathBuf> {
+fn env_usize(key: &str) -> Option<usize> {
     let value = std::env::var(key).ok()?;
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+    value.trim().parse().ok()
+}
+
+fn env_duration_millis(key: &str) -> Option<Duration> {
+    env_usize(key).map(|millis| Duration::from_millis(millis as u64))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::Duration;
 
     #[test]
     fn cache_path_identity_matches_mesh_snapshot_layout() {
@@ -790,6 +823,53 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn retry_config_recovers_rate_limited_repo_info() {
+        let endpoint = start_rate_limited_repo_info_server(1);
+        let cache_dir = tempfile::tempdir().unwrap();
+        let repo = HfModelRepository::builder()
+            .endpoint(endpoint)
+            .cache_dir(cache_dir.path())
+            .retry_max_attempts(1)
+            .retry_base_delay(Duration::from_millis(1))
+            .build()
+            .unwrap();
+
+        let revision = repo
+            .resolve_revision("owner/repo", Some("main"))
+            .await
+            .unwrap();
+
+        assert_eq!(revision, TEST_COMMIT);
+    }
+
+    #[tokio::test]
+    async fn retry_config_can_disable_rate_limited_retry() {
+        let endpoint = start_rate_limited_repo_info_server(1);
+        let cache_dir = tempfile::tempdir().unwrap();
+        let repo = HfModelRepository::builder()
+            .endpoint(endpoint)
+            .cache_dir(cache_dir.path())
+            .retry_max_attempts(0)
+            .retry_base_delay(Duration::from_millis(1))
+            .build()
+            .unwrap();
+
+        let error = repo
+            .resolve_revision("owner/repo", Some("main"))
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("fetch Hugging Face model repo"),
+            "unexpected error: {error:?}"
+        );
+        assert!(
+            format!("{error:?}").contains("Rate limited"),
+            "unexpected error chain: {error:?}"
+        );
+    }
+
     const TEST_COMMIT: &str = "0123456789012345678901234567890123456789";
     const TEST_ETAG: &str = "etag-http";
 
@@ -804,6 +884,28 @@ mod tests {
                 let body = Arc::clone(&body);
                 let ranges = Arc::clone(&ranges);
                 std::thread::spawn(move || handle_resume_request(&mut stream, &body, &ranges));
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn start_rate_limited_repo_info_server(rate_limited_attempts: usize) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                let Ok(mut stream) = connection else {
+                    return;
+                };
+                let attempts = Arc::clone(&attempts);
+                std::thread::spawn(move || {
+                    handle_rate_limited_repo_info_request(
+                        &mut stream,
+                        &attempts,
+                        rate_limited_attempts,
+                    )
+                });
             }
         });
         format!("http://{addr}")
@@ -827,6 +929,43 @@ mod tests {
             ranges.lock().unwrap().push(range.to_string());
         }
         let response = http_resume_response(body, is_head, range);
+        let _ = stream.write_all(&response);
+    }
+
+    fn handle_rate_limited_repo_info_request(
+        stream: &mut std::net::TcpStream,
+        attempts: &AtomicUsize,
+        rate_limited_attempts: usize,
+    ) {
+        use std::io::{Read, Write};
+
+        let mut request = vec![0; 4096];
+        let Ok(read) = stream.read(&mut request) else {
+            return;
+        };
+        let request = String::from_utf8_lossy(&request[..read]);
+        let path = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("/");
+        let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+        let response =
+            if path == "/api/models/owner/repo/revision/main" && attempt < rate_limited_attempts {
+                response_bytes_with_headers(
+                    "429 Too Many Requests",
+                    &[("Retry-After", "0")],
+                    br#"{"error":"rate limited"}"#,
+                )
+            } else if path == "/api/models/owner/repo/revision/main" {
+                response_bytes_with_headers(
+                    "200 OK",
+                    &[("Content-Type", "application/json")],
+                    format!(r#"{{"id":"owner/repo","sha":"{TEST_COMMIT}"}}"#).as_bytes(),
+                )
+            } else {
+                response_bytes_with_headers("404 Not Found", &[], br#"{"error":"not found"}"#)
+            };
         let _ = stream.write_all(&response);
     }
 
@@ -867,6 +1006,25 @@ mod tests {
              {content_range}\
              Connection: close\r\n\
              \r\n"
+        )
+        .into_bytes()
+        .into_iter()
+        .chain(body.iter().copied())
+        .collect()
+    }
+
+    fn response_bytes_with_headers(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
+        let extra_headers = headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect::<String>();
+        format!(
+            "HTTP/1.1 {status}\r\n\
+             Content-Length: {}\r\n\
+             {extra_headers}\
+             Connection: close\r\n\
+             \r\n",
+            body.len()
         )
         .into_bytes()
         .into_iter()

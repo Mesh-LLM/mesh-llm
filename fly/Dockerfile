@@ -7,26 +7,36 @@
 # syntax=docker/dockerfile:1.7
 
 FROM node:24-alpine AS ui-builder
-ARG VITE_API_URL=https://meshllm.cloud
+ARG TARGETARCH
+ARG VITE_API_URL=https://public.meshllm.cloud
 ARG VITE_APP_VERSION=
 ARG VITE_STORAGE_NAMESPACE=mesh-llm-ui-production
 ARG NODE_ENV=production
 ENV NODE_ENV=$NODE_ENV
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_STORAGE_NAMESPACE=$VITE_STORAGE_NAMESPACE
-RUN npm install -g pnpm
+RUN --mount=type=cache,id=mesh-llm-npm-alpine-node24-${TARGETARCH},target=/root/.npm,sharing=locked \
+    npm install -g pnpm
 WORKDIR /app
 COPY crates/mesh-llm-ui/package.json crates/mesh-llm-ui/pnpm-lock.yaml crates/mesh-llm-ui/pnpm-workspace.yaml ./
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN --mount=type=cache,id=mesh-llm-pnpm-store-alpine-node24-${TARGETARCH},target=/root/.local/share/pnpm/store,sharing=locked \
     pnpm install --frozen-lockfile
 COPY crates/mesh-llm-ui/ ./
 RUN VITE_APP_VERSION="${VITE_APP_VERSION:-$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')}" pnpm run build
 
 FROM debian:bookworm-slim AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential \
-    && rm -rf /var/lib/apt/lists/*
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+ARG TARGETARCH
+ARG SCCACHE_VERSION=0.16.0
+RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,id=mesh-llm-apt-archives-debian-bookworm-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential
+COPY scripts/install-sccache.sh /usr/local/bin/install-sccache
+RUN --mount=type=cache,id=mesh-llm-downloads-debian-bookworm-sccache-${TARGETARCH},target=/var/cache/mesh-downloads,sharing=locked \
+    TARGETARCH="$TARGETARCH" SCCACHE_VERSION="$SCCACHE_VERSION" install-sccache
+RUN --mount=type=cache,id=mesh-llm-rustup-stable-debian-bookworm-${TARGETARCH},target=/root/.rustup/downloads,sharing=locked \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
 ENV PATH="/root/.cargo/bin:$PATH"
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -34,6 +44,7 @@ COPY crates/mesh-llm-ui/ crates/mesh-llm-ui/
 COPY crates/mesh-llm-gpu-bench/ crates/mesh-llm-gpu-bench/
 COPY crates/mesh-llm-identity/ crates/mesh-llm-identity/
 COPY crates/mesh-llm-protocol/ crates/mesh-llm-protocol/
+COPY crates/mesh-llm-release-footer/ crates/mesh-llm-release-footer/
 COPY crates/mesh-llm-routing/ crates/mesh-llm-routing/
 COPY crates/mesh-llm-guardrails/ crates/mesh-llm-guardrails/
 COPY crates/mesh-llm-system/ crates/mesh-llm-system/
@@ -70,6 +81,8 @@ COPY crates/skippy-cache/ crates/skippy-cache/
 COPY crates/skippy-metrics/ crates/skippy-metrics/
 COPY crates/openai-frontend/ crates/openai-frontend/
 COPY crates/skippy-ffi/ crates/skippy-ffi/
+COPY crates/skippy-quantize/ crates/skippy-quantize/
+COPY crates/llama-quant-ffi/ crates/llama-quant-ffi/
 COPY crates/skippy-runtime/ crates/skippy-runtime/
 COPY crates/skippy-server/ crates/skippy-server/
 COPY crates/metrics-server/ crates/metrics-server/
@@ -80,23 +93,44 @@ COPY crates/llama-spec-bench/ crates/llama-spec-bench/
 COPY crates/skippy-bench/ crates/skippy-bench/
 COPY crates/skippy-prompt/ crates/skippy-prompt/
 COPY crates/mesh-mixture-of-agents/ crates/mesh-mixture-of-agents/
+COPY crates/mesh-llm-cli/ crates/mesh-llm-cli/
+COPY crates/mesh-llm-commands/ crates/mesh-llm-commands/
+COPY crates/mesh-llm-embedded-runtime/ crates/mesh-llm-embedded-runtime/
+COPY crates/mesh-llm-events/ crates/mesh-llm-events/
+COPY crates/mesh-llm-build-info/ crates/mesh-llm-build-info/
+COPY crates/mesh-llm-hardware-profile/ crates/mesh-llm-hardware-profile/
+COPY crates/mesh-llm-native-runtime/ crates/mesh-llm-native-runtime/
+COPY crates/mesh-llm-runtime-install/ crates/mesh-llm-runtime-install/
+COPY crates/mesh-llm-sdk/ crates/mesh-llm-sdk/
+COPY crates/mesh-llm-tui/ crates/mesh-llm-tui/
+COPY crates/skippy-tokenizer/ crates/skippy-tokenizer/
+COPY crates/mesh-native-serving-plugin-api/ crates/mesh-native-serving-plugin-api/
+COPY crates/mesh-native-serving-plugin-host/ crates/mesh-native-serving-plugin-host/
 COPY tools/xtask/ tools/xtask/
 COPY scripts/prepare-llama.sh scripts/build-llama.sh scripts/
+COPY scripts/lib/ scripts/lib/
 COPY third_party/llama.cpp/upstream.txt third_party/llama.cpp/upstream.txt
 COPY third_party/llama.cpp/patches/ third_party/llama.cpp/patches/
-RUN LLAMA_STAGE_USE_SCCACHE=0 scripts/prepare-llama.sh pinned && \
-    LLAMA_STAGE_USE_SCCACHE=0 scripts/build-llama.sh
+RUN --mount=type=cache,id=mesh-llm-sccache-debian-bookworm-gcc12-cpu-${TARGETARCH},target=/root/.cache/sccache,sharing=locked \
+    scripts/prepare-llama.sh pinned && \
+    SCCACHE_DIR=/root/.cache/sccache \
+    MESH_LLM_REQUIRE_SCCACHE=1 \
+    LLAMA_STAGE_USE_SCCACHE=1 \
+    scripts/build-llama.sh
 COPY --from=ui-builder /app/dist crates/mesh-llm-ui/dist
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-git-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-target-debian-bookworm-rust-stable-cpu-${TARGETARCH},target=/src/target,sharing=locked \
     cargo build --release --locked -p mesh-llm && \
     cp target/release/mesh-llm /usr/local/bin/mesh-llm
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libgomp1 libdbus-1-3 \
-    && rm -rf /var/lib/apt/lists/*
+ARG TARGETARCH
+RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,id=mesh-llm-apt-archives-debian-bookworm-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libgomp1 libdbus-1-3
 COPY --from=builder /usr/local/bin/mesh-llm /usr/local/bin/mesh-llm
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

@@ -1,0 +1,25 @@
+---
+layout: docs-base.njk
+title: Crate API reference
+description: Rust API documentation for the crates published by Mesh LLM.
+permalink: /crates/index.html
+---
+<main class="shell min-w-0 py-12 sm:py-16" data-pagefind-ignore="all">
+  <header class="docs-page-hero">
+    <p class="eyebrow">Rust API</p>
+    <h1 class="text-balance font-display text-[clamp(2.5rem,12vw,5rem)] leading-[0.95] text-fg">Crate API reference</h1>
+    <p class="lead mt-4 max-w-[42rem] text-pretty text-base leading-7 text-muted sm:text-lg">Browse the current API surface for the crates Mesh LLM publishes to crates.io. For versioned documentation, use the docs.rs link on each crate.</p>
+  </header>
+
+  <section class="mt-10 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Published crates">
+    {% for crate in crates %}
+      <article class="card grid min-w-0 gap-2 rounded-mesh border border-line-soft bg-surface/55 p-[18px] shadow-none">
+        <a class="font-mono text-sm font-semibold text-fg hover:text-blue-3" href="/crates/{{ crate.rustdocName }}/index.html">{{ crate.name }}</a>
+        <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+          <a class="hover:text-blue-3" href="/crates/{{ crate.rustdocName }}/index.html">Current API →</a>
+          <a class="external-link hover:text-blue-3" href="https://docs.rs/{{ crate.name }}/latest/" target="_blank" rel="noreferrer">docs.rs ↗</a>
+        </div>
+      </article>
+    {% endfor %}
+  </section>
+</main>

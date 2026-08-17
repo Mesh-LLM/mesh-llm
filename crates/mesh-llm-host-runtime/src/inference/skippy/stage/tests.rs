@@ -1,10 +1,11 @@
 use super::*;
 use std::{
+    fs,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use super::inventory::inventory_source_candidates;
+use super::inventory::{inventory_source_candidates, resolve_inventory_source};
 use anyhow::{Result, anyhow};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
 use tokio::sync::{Mutex as TokioMutex, oneshot};
@@ -38,9 +39,12 @@ fn load_request() -> StageLoadRequest {
         n_batch: Some(2048),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
+        mmap: Some(false),
+        mlock: true,
         cache_type_k: "f16".to_string(),
         cache_type_v: "q8_0".to_string(),
         flash_attn_type: FlashAttentionType::Enabled,
+        native_mtp_enabled: true,
         shutdown_generation: 7,
         coordinator_term: 0,
         coordinator_id: None,
@@ -76,6 +80,26 @@ fn coordinator_claim_from_load(
         topology_hash: "topology".to_string(),
         lease_until_unix_ms: u64::MAX,
     }
+}
+
+fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(value.as_bytes());
+}
+
+fn write_metadata_only_gguf(path: &std::path::Path, layer_count: u32) {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"GGUF");
+    bytes.extend_from_slice(&3u32.to_le_bytes());
+    bytes.extend_from_slice(&0i64.to_le_bytes());
+    bytes.extend_from_slice(&2i64.to_le_bytes());
+    push_gguf_string(&mut bytes, "general.architecture");
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    push_gguf_string(&mut bytes, "deepseek4");
+    push_gguf_string(&mut bytes, "deepseek4.block_count");
+    bytes.extend_from_slice(&4u32.to_le_bytes());
+    bytes.extend_from_slice(&layer_count.to_le_bytes());
+    fs::write(path, bytes).unwrap();
 }
 
 struct BlockingPackagePrefetcher {
@@ -721,6 +745,40 @@ fn inventory_source_candidates_prefer_explicit_gguf_ref() {
     assert_eq!(
         candidates[0],
         std::path::PathBuf::from("/tmp/source-model.gguf")
+    );
+}
+
+#[test]
+fn inventory_source_resolves_metadata_only_first_shard() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("DeepSeek-V4-Flash-00001-of-00003.gguf");
+    write_metadata_only_gguf(&first, 61);
+    fs::write(
+        dir.path().join("DeepSeek-V4-Flash-00002-of-00003.gguf"),
+        vec![0u8; 7],
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("DeepSeek-V4-Flash-00003-of-00003.gguf"),
+        vec![0u8; 11],
+    )
+    .unwrap();
+    let expected_bytes = fs::metadata(&first).unwrap().len() + 7 + 11;
+
+    let inventory = resolve_inventory_source(&StageInventoryRequest {
+        model_id: "local-gguf/deepseek-v4-flash".to_string(),
+        package_ref: format!("gguf://{}", first.display()),
+        manifest_sha256: "manifest".to_string(),
+    })
+    .expect("metadata-only first shard should still advertise inventory");
+
+    assert_eq!(inventory.layer_count, 61);
+    assert_eq!(inventory.bytes, Some(expected_bytes));
+    assert_eq!(inventory.kind, SourceModelKind::SplitGguf);
+    assert!(
+        inventory
+            .path
+            .ends_with("DeepSeek-V4-Flash-00001-of-00003.gguf")
     );
 }
 

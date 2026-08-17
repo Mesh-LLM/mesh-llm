@@ -15,6 +15,7 @@ export type SettingsCategoryItem = {
 
 type SettingsSummaryBannerProps = {
   eyebrow?: string
+  titleId?: string
   title: string
   description: ReactNode
   status: string
@@ -40,10 +41,15 @@ type SettingsRowProps = {
   className?: string
   disabled?: boolean
   disabledReason?: string
+  dirty?: boolean
+  errorMessage?: string
+  errorMessageId?: string
   label: ReactNode
   labelAccessory?: ReactNode
   hint: string
+  hintId?: string
   children: ReactNode
+  showDisabledReason?: boolean
 }
 
 type SettingsPreviewRailProps = {
@@ -52,7 +58,14 @@ type SettingsPreviewRailProps = {
   tip: ReactNode
 }
 
-export function SettingsSummaryBanner({ eyebrow, title, description, status, action }: SettingsSummaryBannerProps) {
+export function SettingsSummaryBanner({
+  eyebrow,
+  titleId = 'defaults-summary-heading',
+  title,
+  description,
+  status,
+  action
+}: SettingsSummaryBannerProps) {
   return (
     <InfoBanner
       action={action}
@@ -69,7 +82,7 @@ export function SettingsSummaryBanner({ eyebrow, title, description, status, act
         </span>
       }
       title={title}
-      titleId="defaults-summary-heading"
+      titleId={titleId}
     />
   )
 }
@@ -104,13 +117,10 @@ export function SettingsSection({ id, icon, title, subtitle, children }: Setting
       <header className="mb-2 flex items-start gap-3">
         <AccentIconFrame className="size-9">{icon}</AccentIconFrame>
         <div>
-          <h3
-            id={`${id}-heading`}
-            className="text-[length:var(--density-type-title)] font-semibold leading-tight text-foreground"
-          >
+          <h3 id={`${id}-heading`} className="type-panel-title text-foreground">
             {title}
           </h3>
-          <p className="mt-1 text-[length:var(--density-type-caption-lg)] leading-snug text-fg-faint">{subtitle}</p>
+          <p className="mt-1 type-caption text-fg-dim">{subtitle}</p>
         </div>
       </header>
       <div>{children}</div>
@@ -122,35 +132,53 @@ export function SettingsRow({
   className,
   disabled = false,
   disabledReason,
+  dirty = false,
+  errorMessage,
+  errorMessageId,
   label,
   labelAccessory,
   hint,
-  children
+  hintId,
+  children,
+  showDisabledReason = true
 }: SettingsRowProps) {
   return (
     <div
       className={cn(
-        'grid gap-3 border-t border-border-soft py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center',
+        'grid min-h-[68px] gap-3 border-t border-border-soft py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start',
         disabled && 'opacity-55',
         className
       )}
       data-settings-row="true"
       data-settings-row-disabled={disabled ? 'true' : undefined}
+      data-settings-row-dirty={dirty ? 'true' : undefined}
       aria-disabled={disabled ? 'true' : undefined}
     >
       <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-[length:var(--density-type-control)] font-medium leading-tight text-foreground">{label}</p>
-          {labelAccessory ? <div className="shrink-0">{labelAccessory}</div> : null}
+        <div className="flex min-h-6 flex-wrap items-start gap-2">
+          <p
+            className={cn(
+              'text-[length:var(--density-type-control)] font-medium leading-tight text-foreground',
+              dirty && 'text-warn'
+            )}
+          >
+            {label}
+          </p>
+          {labelAccessory ? <div className="-mt-0.5 shrink-0">{labelAccessory}</div> : null}
         </div>
-        <p className="mt-1 text-[length:var(--density-type-caption)] leading-relaxed text-fg-faint">{hint}</p>
-        {disabledReason ? (
-          <p className="mt-1 text-[length:var(--density-type-caption)] leading-relaxed text-fg-faint">
-            {disabledReason}
+        <p className="mt-1 type-caption text-fg-dim" id={hintId}>
+          {hint}
+        </p>
+        {errorMessage ? (
+          <p className="mt-1 type-caption font-medium text-bad" id={errorMessageId}>
+            {errorMessage}
           </p>
         ) : null}
+        {disabledReason && showDisabledReason ? (
+          <p className="mt-1 type-caption text-fg-dim">{disabledReason}</p>
+        ) : null}
       </div>
-      <div className="min-w-0 md:justify-self-end">{children}</div>
+      <div className="flex min-w-0 justify-end md:justify-self-stretch md:pt-0.5">{children}</div>
     </div>
   )
 }
@@ -188,8 +216,8 @@ export function SettingsPreviewRail({ title, code, tip }: SettingsPreviewRailPro
           />
         </div>
       </section>
-      <section className="panel-shell rounded-[var(--radius-lg)] border border-dashed border-border bg-panel p-3 text-[length:var(--density-type-caption)] leading-relaxed text-fg-dim">
-        <div className="mb-1.5 text-[9.5px] font-semibold uppercase tracking-[0.06em] text-fg-faint">TIP</div>
+      <section className="panel-shell rounded-[var(--radius-lg)] border border-dashed border-border bg-panel p-3 type-caption text-fg-dim">
+        <div className="mb-1.5 type-label text-fg-faint">TIP</div>
         {tip}
       </section>
     </aside>

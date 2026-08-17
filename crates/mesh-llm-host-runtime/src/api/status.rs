@@ -8,6 +8,9 @@ use crate::mesh::requirements::{MeshRequirementPolicySummary, MeshRequirementRej
 use crate::network::{affinity, metrics};
 use crate::runtime_data;
 use crate::system::hardware::expand_gpu_names;
+mod runtime;
+
+pub(crate) use runtime::*;
 use serde::Serialize;
 use skippy_server::OpenAiGuardrailsStatus;
 use std::collections::BTreeMap;
@@ -49,6 +52,20 @@ pub(crate) struct RuntimeStatusPayload {
     pub(crate) models: Vec<RuntimeModelPayload>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) stages: Vec<RuntimeStagePayload>,
+
+    // ── Runtime daemon state (backward-compatible optional fields) ────────────
+    /// Derived runtime daemon state. Optional for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) daemon_state: Option<DaemonState>,
+    /// Coexistence capability booleans. Optional for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) capabilities: Option<RuntimeCapabilityFlags>,
+    /// Bounded lifecycle instance payloads. Optional for backward compatibility.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) lifecycle_instances: Vec<LifecycleInstancePayload>,
+    /// Intent summary counts and errors. Optional for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) intent_summary: Option<IntentSummary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -249,7 +266,11 @@ pub(crate) struct GpuEntry {
     pub(crate) name: String,
     pub(crate) vram_bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rated_vram_gb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) reserved_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) allocatable_vram_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) mem_bandwidth_gbps: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -327,7 +348,14 @@ pub(crate) fn build_gpus(
         .map(|(i, name)| GpuEntry {
             name,
             vram_bytes: vrams.get(i).copied().flatten().unwrap_or(0),
+            rated_vram_gb: mesh_llm_system::vram::rated_capacity_gb(
+                vrams.get(i).copied().flatten().unwrap_or(0),
+            ),
             reserved_bytes: reserved.get(i).copied().flatten(),
+            allocatable_vram_bytes: Some(mesh_llm_system::vram::allocatable_bytes(
+                vrams.get(i).copied().flatten().unwrap_or(0),
+                reserved.get(i).copied().flatten(),
+            )),
             mem_bandwidth_gbps: bandwidths.get(i).copied().flatten(),
             compute_tflops_fp32: compute_fp32.get(i).copied().flatten(),
             compute_tflops_fp16: compute_fp16.get(i).copied().flatten(),
@@ -390,6 +418,70 @@ pub(crate) struct StatusPayload {
     pub(crate) mesh_requirements: Option<MeshRequirementPolicySummary>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) recent_mesh_rejections: Vec<MeshRequirementRejectionEvent>,
+    /// Local-only logging capability and worker health. Omitted until logging
+    /// state has been initialized so older consumers retain their prior shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) logging: Option<LoggingStatusPayload>,
+}
+
+/// Path-free local logging health. This is deliberately absent from mesh
+/// payloads and contains no storage paths, raw identifiers, or backend errors.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct LoggingStatusPayload {
+    pub(crate) metadata_available: bool,
+    pub(crate) capture_mode: &'static str,
+    /// Artifact storage availability only; see `artifact_capture_ready` for
+    /// whether production request paths are actually wired to capture.
+    pub(crate) artifact_capture_available: bool,
+    pub(crate) artifact_capture_ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) artifact_capture_degradation: Option<&'static str>,
+    pub(crate) persistence: LoggingPersistenceStatusPayload,
+    pub(crate) cleanup: LoggingCleanupStatusPayload,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct LoggingPersistenceStatusPayload {
+    pub(crate) state: &'static str,
+    pub(crate) queue_drops: u64,
+    pub(crate) failures: u64,
+    pub(crate) shutdown_losses: u64,
+    pub(crate) outstanding: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct LoggingCleanupStatusPayload {
+    pub(crate) state: &'static str,
+    pub(crate) shutdown_timeouts: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_outcome: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_deleted_count: Option<u64>,
+}
+
+impl From<crate::logging::LoggingRuntimeStatus> for LoggingStatusPayload {
+    fn from(status: crate::logging::LoggingRuntimeStatus) -> Self {
+        Self {
+            metadata_available: status.metadata_available,
+            capture_mode: status.capture_mode,
+            artifact_capture_available: status.artifact_capture_available,
+            artifact_capture_ready: status.artifact_capture_ready,
+            artifact_capture_degradation: status.artifact_capture_degradation,
+            persistence: LoggingPersistenceStatusPayload {
+                state: status.persistence_worker_state,
+                queue_drops: status.persistence_queue_drops,
+                failures: status.persistence_failures,
+                shutdown_losses: status.persistence_shutdown_losses,
+                outstanding: status.persistence_outstanding,
+            },
+            cleanup: LoggingCleanupStatusPayload {
+                state: status.cleanup_worker_state,
+                shutdown_timeouts: status.cleanup_shutdown_timeouts,
+                last_outcome: status.cleanup_last_outcome,
+                last_deleted_count: status.cleanup_last_deleted_count,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -418,6 +510,8 @@ pub(crate) struct PeerPayload {
     pub(crate) serving_models: Vec<String>,
     pub(crate) hosted_models: Vec<String>,
     pub(crate) hosted_models_known: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) advertised_model_throughput: Vec<metrics::ModelThroughputHint>,
     pub(crate) version: Option<String>,
     pub(crate) rtt_ms: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -509,6 +603,14 @@ pub(crate) struct MeshModelPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) quantization: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tokenizer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) layer_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) head_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) embedding_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
     pub(crate) multimodal: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -563,6 +665,8 @@ pub(crate) struct ModelTargetPayload {
     pub(crate) rank: usize,
     pub(crate) model_ref: String,
     pub(crate) display_name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub(crate) profile: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) model_name: Option<String>,
     pub(crate) explicit_interest_count: usize,
@@ -634,6 +738,7 @@ pub(crate) fn build_runtime_status_payload(
         .map(|process| RuntimeModelPayload {
             name: process.name,
             instance_id: process.instance_id,
+            profile: process.profile,
             backend: process.backend,
             status: process.status,
             port: Some(process.port),
@@ -648,6 +753,7 @@ pub(crate) fn build_runtime_status_payload(
             RuntimeModelPayload {
                 name: model_name.to_string(),
                 instance_id: None,
+                profile: String::new(),
                 backend: primary_backend.unwrap_or_else(|| "unknown".into()),
                 status: "starting".into(),
                 port: llama_port,
@@ -661,6 +767,10 @@ pub(crate) fn build_runtime_status_payload(
         openai_guardrails,
         models,
         stages: vec![],
+        daemon_state: None,
+        capabilities: None,
+        lifecycle_instances: vec![],
+        intent_summary: None,
     }
 }
 
@@ -987,6 +1097,7 @@ mod tests {
             serving_models: vec![],
             hosted_models: vec![],
             hosted_models_known: false,
+            advertised_model_throughput: vec![],
             version: Some("0.56.0".to_string()),
             rtt_ms: None,
             latency_ms: None,
@@ -1001,6 +1112,7 @@ mod tests {
 
         let json = serde_json::to_string(&peer).expect("serialization failed");
         assert!(json.contains("\"version\":\"0.56.0\""));
+        assert!(!json.contains("advertised_model_throughput"));
     }
 
     #[test]
@@ -1018,6 +1130,7 @@ mod tests {
             serving_models: vec![],
             hosted_models: vec![],
             hosted_models_known: false,
+            advertised_model_throughput: vec![],
             version: None,
             rtt_ms: None,
             latency_ms: None,
@@ -1060,6 +1173,10 @@ mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: "Qwen".to_string(),
             models: vec![],
@@ -1093,6 +1210,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1101,6 +1219,10 @@ mod tests {
         assert!(json.contains("\"mesh_discovery_mode\":\"nostr\""));
         assert!(json.contains("\"discovery_scope\":\"public\""));
         assert!(json.contains("\"discovery_source\":\"nostr-relay\""));
+        assert!(
+            !json.contains("\"logging\""),
+            "uninitialized logging must preserve the older status shape"
+        );
     }
 
     #[test]
@@ -1122,6 +1244,10 @@ mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: "Qwen".to_string(),
             models: vec!["Qwen".to_string()],
@@ -1155,6 +1281,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1181,6 +1308,10 @@ mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: String::new(),
             models: vec![],
@@ -1221,6 +1352,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -1249,6 +1381,10 @@ mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: String::new(),
             models: vec![],
@@ -1282,6 +1418,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -1304,6 +1441,7 @@ mod tests {
             serving_models: vec!["Qwen".to_string()],
             hosted_models: vec!["Qwen".to_string()],
             hosted_models_known: true,
+            advertised_model_throughput: vec![],
             version: Some("0.60.2".to_string()),
             rtt_ms: Some(12),
             latency_ms: None,
@@ -1430,5 +1568,161 @@ mod tests {
 
         let json = serde_json::to_string(&instance).expect("serialization failed");
         assert!(json.contains("\"is_self\":true"));
+    }
+
+    #[test]
+    fn logging_status_serializes_only_fixed_local_health_values() {
+        let cases = [
+            (
+                "healthy",
+                LoggingStatusPayload {
+                    metadata_available: true,
+                    capture_mode: "redacted_artifacts",
+                    artifact_capture_available: true,
+                    artifact_capture_ready: true,
+                    artifact_capture_degradation: None,
+                    persistence: LoggingPersistenceStatusPayload {
+                        state: "running",
+                        queue_drops: 0,
+                        failures: 0,
+                        shutdown_losses: 0,
+                        outstanding: 1,
+                    },
+                    cleanup: LoggingCleanupStatusPayload {
+                        state: "running",
+                        shutdown_timeouts: 0,
+                        last_outcome: Some("completed"),
+                        last_deleted_count: Some(3),
+                    },
+                },
+            ),
+            (
+                "disabled",
+                LoggingStatusPayload {
+                    metadata_available: false,
+                    capture_mode: "unavailable",
+                    artifact_capture_available: false,
+                    artifact_capture_ready: false,
+                    artifact_capture_degradation: None,
+                    persistence: LoggingPersistenceStatusPayload {
+                        state: "unavailable",
+                        queue_drops: 0,
+                        failures: 0,
+                        shutdown_losses: 0,
+                        outstanding: 0,
+                    },
+                    cleanup: LoggingCleanupStatusPayload {
+                        state: "not_started",
+                        shutdown_timeouts: 0,
+                        last_outcome: None,
+                        last_deleted_count: None,
+                    },
+                },
+            ),
+            (
+                "artifact_degraded",
+                LoggingStatusPayload {
+                    metadata_available: true,
+                    capture_mode: "redacted_artifacts",
+                    artifact_capture_available: false,
+                    artifact_capture_ready: false,
+                    artifact_capture_degradation: Some(
+                        "artifact_capture_disabled_privacy_unavailable",
+                    ),
+                    persistence: LoggingPersistenceStatusPayload {
+                        state: "running",
+                        queue_drops: 4,
+                        failures: 2,
+                        shutdown_losses: 0,
+                        outstanding: 0,
+                    },
+                    cleanup: LoggingCleanupStatusPayload {
+                        state: "running",
+                        shutdown_timeouts: 0,
+                        last_outcome: Some("failed"),
+                        last_deleted_count: None,
+                    },
+                },
+            ),
+            (
+                "shutdown",
+                LoggingStatusPayload {
+                    metadata_available: true,
+                    capture_mode: "redacted_artifacts",
+                    artifact_capture_available: true,
+                    artifact_capture_ready: true,
+                    artifact_capture_degradation: None,
+                    persistence: LoggingPersistenceStatusPayload {
+                        state: "stopped",
+                        queue_drops: 0,
+                        failures: 0,
+                        shutdown_losses: 2,
+                        outstanding: 0,
+                    },
+                    cleanup: LoggingCleanupStatusPayload {
+                        state: "stopped",
+                        shutdown_timeouts: 0,
+                        last_outcome: Some("completed"),
+                        last_deleted_count: Some(0),
+                    },
+                },
+            ),
+        ];
+
+        for (name, payload) in cases {
+            let json = serde_json::to_string(&payload).expect("serialize logging status");
+            assert!(json.contains("\"metadata_available\""), "{name}");
+            assert!(json.contains("\"persistence\""), "{name}");
+            assert!(json.contains("\"cleanup\""), "{name}");
+            for forbidden in [
+                "sqlite",
+                "database",
+                "error_message",
+                "path",
+                "request_id",
+                "token",
+                "secret",
+                "/private/",
+            ] {
+                assert!(
+                    !json.contains(forbidden),
+                    "{name} status leaked forbidden {forbidden}: {json}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn logging_status_maps_runtime_snapshot_without_backend_details() {
+        let payload = LoggingStatusPayload::from(crate::logging::LoggingRuntimeStatus {
+            metadata_available: true,
+            capture_mode: "redacted_artifacts",
+            artifact_capture_available: false,
+            artifact_capture_ready: false,
+            artifact_capture_degradation: Some("artifact_capture_disabled_privacy_unavailable"),
+            persistence_worker_state: "stopped",
+            persistence_queue_drops: 5,
+            persistence_failures: 3,
+            persistence_shutdown_losses: 2,
+            persistence_outstanding: 0,
+            cleanup_worker_state: "stopped",
+            cleanup_shutdown_timeouts: 0,
+            cleanup_last_outcome: Some("failed"),
+            cleanup_last_deleted_count: None,
+        });
+
+        let json = serde_json::to_value(payload).expect("serialize runtime status mapping");
+        assert_eq!(
+            json["artifact_capture_degradation"],
+            "artifact_capture_disabled_privacy_unavailable"
+        );
+        assert_eq!(json["persistence"]["state"], "stopped");
+        assert_eq!(json["persistence"]["queue_drops"], 5);
+        assert_eq!(json["persistence"]["failures"], 3);
+        assert_eq!(json["persistence"]["shutdown_losses"], 2);
+        assert_eq!(json["cleanup"]["state"], "stopped");
+        assert_eq!(json["cleanup"]["shutdown_timeouts"], 0);
+        assert_eq!(json["cleanup"]["last_outcome"], "failed");
+        assert!(json["cleanup"].get("last_deleted_count").is_none());
     }
 }

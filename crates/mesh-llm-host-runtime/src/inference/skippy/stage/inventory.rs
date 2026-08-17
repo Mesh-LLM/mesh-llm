@@ -41,24 +41,44 @@ pub(super) fn resolve_inventory_source(request: &StageInventoryRequest) -> Optio
     }
 
     for candidate in inventory_source_candidates(request) {
-        if !candidate.exists() {
-            continue;
+        if let Some(source) = resolve_direct_gguf_inventory_source(&candidate) {
+            return Some(source);
         }
-        let layer_count = crate::inference::skippy::infer_layer_count(&candidate).ok()?;
-        let kind = if is_split_gguf_path(&candidate) {
-            SourceModelKind::SplitGguf
-        } else {
-            SourceModelKind::PlainGguf
-        };
-        let bytes = crate::inference::election::total_model_bytes(&candidate);
-        return Some(InventorySource {
-            path: candidate,
-            bytes: Some(bytes),
-            layer_count,
-            kind,
-        });
     }
     None
+}
+
+fn resolve_direct_gguf_inventory_source(candidate: &Path) -> Option<InventorySource> {
+    let source_paths = match crate::inference::skippy::direct_gguf_source_paths(candidate) {
+        Ok(paths) => paths,
+        Err(error) => {
+            tracing::debug!(
+                path = %candidate.display(),
+                "direct GGUF inventory source is unavailable: {error:#}"
+            );
+            return None;
+        }
+    };
+    let source_path = source_paths.first()?.clone();
+    let layer_count = crate::models::gguf::scan_gguf_compact_meta(&source_path)
+        .map(|meta| meta.layer_count)
+        .filter(|layer_count| *layer_count > 0)
+        .or_else(|| crate::inference::skippy::infer_layer_count(&source_path).ok())?;
+    let bytes = source_paths
+        .iter()
+        .filter_map(|path| path.metadata().ok().map(|metadata| metadata.len()))
+        .sum();
+    let kind = if is_split_gguf_path(&source_path) {
+        SourceModelKind::SplitGguf
+    } else {
+        SourceModelKind::PlainGguf
+    };
+    Some(InventorySource {
+        path: source_path,
+        bytes: Some(bytes),
+        layer_count,
+        kind,
+    })
 }
 
 pub(super) fn inventory_source_candidates(request: &StageInventoryRequest) -> Vec<PathBuf> {

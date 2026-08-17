@@ -1,4 +1,20 @@
-use super::*;
+use crate::runtime_state::RuntimeState;
+use openai_frontend::FinishReason;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use sha2::Digest;
+use sha2::Sha256;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+
+#[cfg(test)]
+use anyhow::{Result, anyhow};
+#[cfg(test)]
+use skippy_protocol::binary::recv_ready;
+#[cfg(test)]
+use std::{net::TcpStream, time::Duration};
 
 pub(super) fn trim_at_stop<'a>(text: &'a str, stop_values: &[&str]) -> &'a str {
     let first_stop = stop_values
@@ -10,6 +26,33 @@ pub(super) fn trim_at_stop<'a>(text: &'a str, stop_values: &[&str]) -> &'a str {
         Some(index) => &text[..index],
         None => text,
     }
+}
+
+pub(super) fn generation_stop_values(
+    stop: Option<&openai_frontend::StopSequence>,
+    chat_metadata: Option<&str>,
+) -> Vec<String> {
+    let mut values: Vec<String> = stop
+        .map(|stop| stop.values().into_iter().map(str::to_string).collect())
+        .unwrap_or_default();
+    let additional_stops = chat_metadata
+        .and_then(|metadata| serde_json::from_str::<serde_json::Value>(metadata).ok())
+        .and_then(|value| {
+            value
+                .get("additional_stops")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        });
+    if let Some(stops) = additional_stops {
+        values.extend(
+            stops
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        );
+    }
+    values
 }
 
 pub(super) fn valid_utf8_prefix_len(bytes: &[u8]) -> usize {
@@ -87,64 +130,7 @@ pub(super) fn openai_io_error(error: std::io::Error) -> OpenAiError {
     OpenAiError::backend(error.to_string())
 }
 
-pub(super) fn proactive_eviction_error_kind(error: &anyhow::Error) -> &'static str {
-    let message = error.to_string();
-    if message.contains("is not active") {
-        "inactive_session"
-    } else if message.contains("batch size") {
-        "invalid_batch_size"
-    } else {
-        "native_drop_failed"
-    }
-}
-
-pub(super) fn proactive_eviction_attrs(
-    status: &str,
-    error_kind: Option<&str>,
-    target_tokens: u64,
-    evicted_entries: usize,
-    evicted_tokens: u64,
-) -> BTreeMap<String, Value> {
-    let mut attrs = BTreeMap::from([
-        (
-            "skippy.kv.decision".to_string(),
-            json!("proactive_eviction"),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTION_STATUS.to_string(),
-            json!(status),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTION_TARGET_TOKENS.to_string(),
-            json!(target_tokens),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTED_ENTRIES.to_string(),
-            json!(evicted_entries),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTED_TOKENS.to_string(),
-            json!(evicted_tokens),
-        ),
-    ]);
-    if let Some(error_kind) = error_kind {
-        attrs.insert(
-            attr_key::KV_PROACTIVE_EVICTION_ERROR_KIND.to_string(),
-            json!(error_kind),
-        );
-    }
-    attrs
-}
-
-pub(super) fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
-    match value {
-        "fp32" | "f32" => Ok(WireActivationDType::F32),
-        "fp16" | "f16" => Ok(WireActivationDType::F16),
-        "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
-        _ => bail!("unsupported activation wire dtype {value}"),
-    }
-}
-
+#[cfg(test)]
 pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Result<TcpStream> {
     let endpoint = endpoint.strip_prefix("tcp://").unwrap_or(endpoint);
     let attempts = timeout_secs.saturating_mul(2).max(1);
@@ -162,7 +148,7 @@ pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Resul
             }
             Err(error) => last_error = Some(anyhow!(error).context("connect failed")),
         }
-        thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(500));
     }
     Err(last_error.unwrap_or_else(|| anyhow!("timed out")))
 }
@@ -173,20 +159,6 @@ pub(super) fn finish_reason_for_generation(exhausted_max_tokens: bool) -> Finish
     } else {
         FinishReason::Stop
     }
-}
-
-pub(super) fn ensure_context_capacity(
-    prompt_token_count: usize,
-    max_tokens: u32,
-    ctx_size: usize,
-) -> OpenAiResult<()> {
-    let requested_tokens = prompt_token_count.saturating_add(max_tokens as usize);
-    if requested_tokens > ctx_size {
-        return Err(OpenAiError::context_length_exceeded(format!(
-            "requested prompt plus completion tokens ({requested_tokens}) exceed context window ({ctx_size})"
-        )));
-    }
-    Ok(())
 }
 
 pub(super) fn context_budget_completion_tokens(

@@ -35,7 +35,17 @@ mesh-llm plugins install metrics
 ```toml
 [[plugin]]
 name = "metrics"
+
+[plugin.startup]
+connect_timeout_secs = 75
+init_timeout_secs = 90
+optional = true
+lazy_start = true
 ```
+
+The startup block is optional. It is useful on slow legacy machines where the
+plugin process may take longer than the default startup budget, or where metrics
+should be advertised only after the plugin is actually used.
 
 Endpoint precedence is:
 
@@ -66,6 +76,17 @@ Counters:
 - `mesh_llm_route_attempt_total`
 - `mesh_llm_guardrail_decision_total`
 - `mesh_llm_guardrail_outcome_total`
+- `mesh_llm_logging_lifecycle_terminal_total`
+- `mesh_llm_logging_persistence_queue_dropped_total`
+- `mesh_llm_logging_persistence_failure_total`
+- `mesh_llm_logging_persistence_shutdown_loss_total`
+- `mesh_llm_logging_replay_evicted_total`
+- `mesh_llm_logging_replay_gap_total`
+- `mesh_llm_logging_replay_dropped_total`
+- `mesh_llm_logging_cleanup_total`
+- `mesh_llm_logging_webhook_delivery_total`
+- `mesh_llm_logging_webhook_attempt_total`
+- `mesh_llm_logging_artifact_capture_total`
 
 Gauges:
 
@@ -73,6 +94,7 @@ Gauges:
 - `mesh_llm_model_loaded`
 - `mesh_llm_model_context_length`
 - `mesh_llm_requests_inflight`
+- `mesh_llm_logging_persistence_outstanding`
 
 Histograms:
 
@@ -87,12 +109,23 @@ hostnames, mesh gossip, relay messages, raw node IDs, raw GPU stable IDs,
 endpoint URLs, or prompt hashes.
 
 Guardrail telemetry follows the same boundary. It exports only bounded labels for
-guardrail mode, contract kind, decision, bypass reason, parser stage, and retry
+guardrail mode, contract kind, decision, bypass reason, outcome, and retry
 bucket. It does not export prompt text, completion text, schemas, tool
 arguments, raw tool names, reserved sentinel names, request paths, endpoints, or
 hostnames.
 
-Guardrail v1 is validated emulation, not hard constrained decoding. Streaming is
+Logging telemetry is process-local until the host runtime's explicit telemetry
+configuration installs its adapter. It exports only counters, one outstanding
+queue gauge, and the closed lifecycle/cleanup/webhook/artifact outcome labels
+listed below. Logging metrics never include event payloads, prompts,
+completions, request or delivery IDs, URLs, local paths, raw identifiers,
+tokens, or hashes. Replay eviction, gap, and drop metrics have no attributes.
+It is not a log transport: request history, lifecycle details, artifact
+metadata, and maintenance receipts remain on the trusted-local logging service
+and are never mirrored into OTLP. See [the operator logging guide](../LOGGING.md)
+for that local workflow.
+
+Guardrail v1 validates native runtime output, not hard constrained decoding. Streaming is
 pass-through, no tool execution happens inside the guardrail layer, and real
 tools plus strict structured output stays unsupported in v1. See
 `docs/design/OPENAI_GUARDRAILS.md` for the rollout contract and evidence path.
@@ -135,9 +168,18 @@ to an OTLP record.
 | `mesh_llm.guardrail.contract` | guardrail decision, guardrail outcome | Bounded enum: `tools` or `structured`. |
 | `mesh_llm.guardrail.decision` | guardrail decision | Bounded enum: `eligible`, `bypassed`, `unsupported`, or `rejected`. |
 | `mesh_llm.guardrail.bypass_reason` | guardrail decision | Bounded enum: `disabled`, `streaming`, `no_contract`, `unsupported_surface`, `reserved_collision`, or `mixed_tools_structured`. Omitted when no bypass reason applies. |
-| `mesh_llm.guardrail.outcome` | guardrail outcome | Bounded enum: `pass_through`, `valid`, `rescued`, `retried`, `failed`, or `metrics_only_failure`. |
-| `mesh_llm.guardrail.parser_stage` | guardrail outcome | Bounded enum: `none`, `json_exact`, `json_fenced`, or `json_substring`. |
+| `mesh_llm.guardrail.outcome` | guardrail outcome | Bounded enum: `pass_through`, `valid`, `retried`, `failed`, or `metrics_only_failure`. |
 | `mesh_llm.guardrail.attempt_bucket` | guardrail outcome | Bounded retry bucket: `1`, `2`, or `3_plus`. |
+| `mesh_llm.logging_terminal_outcome` | logging lifecycle terminal | Bounded enum: `completed`, `failed`, `rejected`, `cancelled`, or `dropped`. |
+| `mesh_llm.logging_cleanup_outcome` | logging cleanup | Bounded enum: `completed`, `failed`, or `skipped_unavailable`. |
+| `mesh_llm.logging_webhook_delivery_outcome` | logging webhook delivery | Bounded enum: `delivered`, `retry_scheduled`, `dead_lettered`, or `fenced_out`; no delivery ID, endpoint, or HTTP status code. |
+| `mesh_llm.logging_webhook_attempt_state` | logging webhook attempt | Bounded enum: `claimed`; no delivery ID or endpoint. |
+| `mesh_llm.logging_artifact_capture_status` | logging artifact capture | Bounded enum: `written`, `disabled`, or `failed`; no artifact ID, request ID, kind, path, or content metadata. |
+| `llama_stage.verify_window.direct_return_upstream_opened` | Skippy decode summary | Boolean indicating that the preferred upstream-opened v10 prediction-return sink completed its handshake. |
+| `llama_stage.verify_window.direct_return_reverse_fallback` | Skippy decode summary | Boolean indicating that the final stage used the bounded reverse-open v10 prediction-return fallback after the preferred sink was unavailable. |
+| `llama_stage.linear_proposal.source_queue_wait_us` | Skippy linear proposal source | Queue wait in microseconds; contains no request, session, token, or plugin identity. |
+| `llama_stage.linear_proposal.source_callback_us` | Skippy linear proposal source | Plugin callback duration in microseconds; contains no request, session, token, or plugin identity. |
+| `llama_stage.linear_proposal.source_outcome` | Skippy linear proposal source | Bounded outcome enum: `ready`, `abstained`, `host_deadline_exceeded`, `queue_full`, `deadline_exceeded_before_dispatch`, `deadline_exceeded_in_plugin`, `candidate_returned_too_late`, or `source_error`. Ready/abstained events use token-debug sampling; deadline, pressure, late-candidate, and source-error outcomes are emitted unconditionally. |
 
 ## Review Checklist
 

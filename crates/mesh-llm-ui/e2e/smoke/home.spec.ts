@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/base'
 
-const meshHeroHeading = /^(Your private mesh|Welcome to the public mesh)$/
+const meshHeroHeading = 'Your private mesh'
 
 test('app smoke navigation shows Network and Chat tabs', async ({ page }) => {
   await page.goto('/')

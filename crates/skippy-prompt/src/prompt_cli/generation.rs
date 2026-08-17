@@ -3,7 +3,6 @@ struct PromptRun<'a> {
     tokenizer: &'a StageModel,
     chat_template_model: Option<&'a StageModel>,
     draft: Option<&'a mut DraftRunner>,
-    ngram: Option<&'a mut NgramSource>,
     interrupt: &'a Arc<PromptInterruptState>,
     wire_dtype: skippy_protocol::binary::WireActivationDType,
     session_id: &'a str,
@@ -19,7 +18,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         tokenizer,
         chat_template_model,
         mut draft,
-        mut ngram,
         interrupt,
         wire_dtype,
         session_id,
@@ -177,6 +175,15 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
     stream.set_read_timeout(Some(io_timeout)).ok();
     stream.set_write_timeout(Some(io_timeout)).ok();
     let mut reply_stats = StageReplyStats::default();
+    let generation_config = send_generation_config(
+        stream,
+        wire_dtype,
+        request_id,
+        wire_session_id,
+        token_ids.len(),
+    )
+    .with_context(|| stage_chain_error_context(args))?;
+    reply_stats.merge(generation_config.stats);
     if should_try_exact_prefix_restore(live_enabled, prefill_start, prefill_token_count) {
         let restore_tokens = &token_ids[..prefill_token_count];
         eprintln!(
@@ -271,16 +278,13 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
     if let Some(draft) = draft.as_deref_mut() {
         draft.reset_to_context(&context_tokens)?;
     }
-    if let Some(ngram) = ngram.as_deref_mut() {
-        ngram.observe_sequence(session_id, &context_tokens)?;
-    }
     let max_speculative_window = args.speculative_window.max(1);
     let mut adaptive_window = if args.adaptive_speculative_window {
         max_speculative_window.min(4)
     } else {
         max_speculative_window
     };
-    if draft.is_some() || ngram.is_some() {
+    if draft.is_some() {
         speculative_stats.adaptive_window_max = max_speculative_window;
         speculative_stats.adaptive_window_start = adaptive_window;
         speculative_stats.adaptive_window_enabled = args.adaptive_speculative_window;
@@ -296,19 +300,11 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
 
         let remaining = max_new_tokens - generated.len();
         let proposal_limit = remaining.min(adaptive_window);
-        let draft_tokens = match ngram.as_deref_mut() {
-            Some(ngram) => ngram.propose(session_id, &context_tokens, proposal_limit)?,
-            None => Vec::new(),
-        };
-        let draft_tokens = if draft_tokens.is_empty() {
-            match draft.as_deref_mut() {
-                Some(draft) if draft.window > 0 => {
-                    draft.propose(current, proposal_limit.min(draft.window))?
-                }
-                _ => Vec::new(),
+        let draft_tokens = match draft.as_deref_mut() {
+            Some(draft) if draft.window > 0 => {
+                draft.propose(current, proposal_limit.min(draft.window))?
             }
-        } else {
-            draft_tokens
+            _ => Vec::new(),
         };
 
         if draft_tokens.is_empty() {
@@ -331,9 +327,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             current = reply.predicted;
             generated.push(current);
             context_tokens.push(current);
-            if let Some(ngram) = ngram.as_deref_mut() {
-                ngram.observe_accepted(session_id, &context_tokens)?;
-            }
             first_time_to_token_ms.get_or_insert_with(|| elapsed_ms(wall_started));
             if tokenizer.token_is_eog(current)? {
                 generation_reached_eog = true;
@@ -359,17 +352,15 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             .max(adaptive_window);
         let decode_index = generated.len();
         let verify_inputs = verify_inputs_for_proposals(current, &draft_tokens);
-        let reply = send_verify_span(
+        let reply = send_verify_window(
             stream,
             wire_dtype,
-            prompt_index,
             request_id,
             wire_session_id,
             token_ids.len(),
             prefill_token_count + decode_index,
             decode_index,
             &verify_inputs,
-            true,
         )
         .with_context(|| stage_chain_error_context(args))?;
         decode_ms += reply.elapsed_ms;
@@ -377,7 +368,7 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         speculative_stats.observe_primary_verify(&reply, verify_inputs.len());
         reply_stats.merge(reply.stats);
         first_time_to_token_ms.get_or_insert_with(|| elapsed_ms(wall_started));
-        let decision = classify_verify_span(
+        let decision = classify_verify_window(
             &draft_tokens,
             &reply.predicted_tokens,
             generated.len(),
@@ -391,92 +382,12 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             max_speculative_window,
         );
 
-        let mut commit_tokens = reply.predicted_tokens[..decision.commit_count].to_vec();
-
-        if decision.requires_repair() {
-            let repair_input_count = decision
-                .repair_input_count
-                .context("missing rejected span index")?;
-            speculative_stats.recovery_restores += 1;
-            let restore = send_session_control(
-                stream,
-                wire_dtype,
-                prompt_index,
-                request_id,
-                wire_session_id,
-                WireMessageKind::RestoreSession,
-            )
-            .with_context(|| stage_chain_error_context(args))?;
-            decode_ms += restore.elapsed_ms;
-            speculative_stats.recovery_ms += restore.elapsed_ms;
-            speculative_stats.recovery_restore_ms += restore.elapsed_ms;
-            reply_stats.merge(restore.stats);
-
-            if repair_input_count == 1 {
-                let repair = send_decode_step(
-                    stream,
-                    wire_dtype,
-                    prompt_index,
-                    request_id,
-                    wire_session_id,
-                    token_ids.len(),
-                    prefill_token_count,
-                    decode_index,
-                    current,
-                )
-                .with_context(|| stage_chain_error_context(args))?;
-                commit_tokens = vec![repair.predicted];
-                reply_stats.merge(repair.stats);
-                decode_ms += repair.elapsed_ms;
-                speculative_stats.recovery_decode_repairs += 1;
-                speculative_stats.recovery_ms += repair.elapsed_ms;
-                speculative_stats.recovery_decode_elapsed_ms += repair.elapsed_ms;
-            } else {
-                let repair_inputs = &verify_inputs[..repair_input_count];
-                let repair = send_verify_span(
-                    stream,
-                    wire_dtype,
-                    prompt_index,
-                    request_id,
-                    wire_session_id,
-                    token_ids.len(),
-                    prefill_token_count + decode_index,
-                    decode_index,
-                    repair_inputs,
-                    false,
-                )
-                .with_context(|| stage_chain_error_context(args))?;
-                commit_tokens = repaired_commit_tokens(
-                    &draft_tokens,
-                    decision.accepted_before_reject,
-                    repair_input_count,
-                    &repair.predicted_tokens,
-                )?;
-                reply_stats.merge(repair.stats);
-                decode_ms += repair.elapsed_ms;
-                speculative_stats.recovery_reverify_tokens += repair_inputs.len();
-                speculative_stats.recovery_ms += repair.elapsed_ms;
-                speculative_stats.recovery_reverify_elapsed_ms += repair.elapsed_ms;
-                speculative_stats.recovery_reverify_write_ms += repair.write_ms;
-                speculative_stats.recovery_reverify_wait_ms += repair.wait_ms;
-                speculative_stats.recovery_reverify_compute_us +=
-                    repair.stats.verify_span_compute_us;
-                speculative_stats.recovery_reverify_forward_write_us +=
-                    repair.stats.verify_span_forward_write_us;
-                speculative_stats.recovery_reverify_downstream_wait_us +=
-                    repair.stats.verify_span_downstream_wait_us;
-                speculative_stats.recovery_reverify_stage_count +=
-                    repair.stats.verify_span_stage_count;
-            }
-        }
+        let commit_tokens = reply.predicted_tokens[..decision.commit_count].to_vec();
         let mut reached_eog = false;
         for predicted in commit_tokens {
             current = predicted;
             generated.push(current);
             context_tokens.push(current);
-            if let Some(ngram) = ngram.as_deref_mut() {
-                ngram.observe_accepted(session_id, &context_tokens)?;
-            }
             if tokenizer.token_is_eog(current)? {
                 reached_eog = true;
                 generation_reached_eog = true;
@@ -494,9 +405,10 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         }
         speculative_stats.adaptive_window_final = adaptive_window;
         if (decision.rejected() || reached_eog)
-            && let Some(draft) = draft.as_deref_mut() {
-                draft.reset_to_context(&context_tokens)?;
-            }
+            && let Some(draft) = draft.as_deref_mut()
+        {
+            draft.reset_to_context(&context_tokens)?;
+        }
         if reached_eog {
             break;
         }
@@ -525,13 +437,14 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             &generated,
             &assistant_raw_text,
             generation_reached_eog,
-        ) {
-            live_rematerialize_failed = true;
-            eprintln!(
-                "warning: live transcript rematerialization failed after generation; \
+        )
+    {
+        live_rematerialize_failed = true;
+        eprintln!(
+            "warning: live transcript rematerialization failed after generation; \
                  the next prompt will reset the live session: {error:#}"
-            );
-        }
+        );
+    }
 
     if !live_enabled {
         stop_prompt_stream(stream, wire_dtype, request_id, wire_session_id, args)?;
@@ -556,10 +469,11 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         }
         live.messages = live_messages;
         if let Some(last) = live.messages.last_mut()
-            && last.role == "user" {
-                live.messages
-                    .push(ChatTemplateMessage::new("assistant", &assistant_raw_text));
-            }
+            && last.role == "user"
+        {
+            live.messages
+                .push(ChatTemplateMessage::new("assistant", &assistant_raw_text));
+        }
         live.resident_tokens =
             live_transcript_tokens(tokenizer, chat_template_model, args, &live.messages)?;
         live.dirty = !generation_reached_eog || live_rematerialize_failed;

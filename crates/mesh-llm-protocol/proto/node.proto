@@ -56,6 +56,17 @@ message PeerAnnouncement {
   optional SignedMeshGenesisPolicy genesis_policy = 46;
   optional ReleaseBuildAttestation release_attestation = 47;
   optional DirectNodeAdmissionProof direct_admission_proof = 48;
+  // Inference admission state advertised by this peer (additive; older nodes ignore).
+  // Missing/unset means unspecified/legacy behavior.
+  optional InferenceAdmissionState inference_admission_state = 49;
+}
+
+enum InferenceAdmissionState {
+  INFERENCE_ADMISSION_STATE_UNSPECIFIED = 0;
+  INFERENCE_ADMISSION_STATE_ACCEPTING = 1;
+  INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED = 2;
+  INFERENCE_ADMISSION_STATE_REMOTE_PAUSED = 3;
+  INFERENCE_ADMISSION_STATE_ALL_PAUSED = 4;
 }
 
 enum LatencySource {
@@ -352,6 +363,13 @@ message PeerLeaving {
   uint32 gen = 2;      // must equal NODE_PROTOCOL_GENERATION; rejected otherwise
 }
 
+// Stream 0x0e — Direct Path Request
+message DirectPathRequest {
+  bytes requester_id = 1;      // exactly 32 bytes; must match the QUIC sender identity
+  uint32 gen = 2;              // must equal NODE_PROTOCOL_GENERATION; rejected otherwise
+  bytes serialized_addr = 3;   // JSON-serialized EndpointAddr the receiver should try to dial
+}
+
 // Shared enum
 enum NodeRole {
   NODE_ROLE_UNSPECIFIED = 0;
@@ -411,6 +429,53 @@ enum ConfigApplyMode {
   CONFIG_APPLY_MODE_NOOP = 3;
 }
 
+enum ConfigDiagnosticSeverity {
+  CONFIG_DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  CONFIG_DIAGNOSTIC_SEVERITY_ERROR = 1;
+  CONFIG_DIAGNOSTIC_SEVERITY_WARNING = 2;
+  CONFIG_DIAGNOSTIC_SEVERITY_INFO = 3;
+}
+
+enum ConfigDiagnosticSource {
+  CONFIG_DIAGNOSTIC_SOURCE_UNSPECIFIED = 0;
+  CONFIG_DIAGNOSTIC_SOURCE_VALIDATION = 1;
+  CONFIG_DIAGNOSTIC_SOURCE_SCHEMA = 2;
+  CONFIG_DIAGNOSTIC_SOURCE_PLUGIN = 3;
+  CONFIG_DIAGNOSTIC_SOURCE_COMPATIBILITY = 4;
+}
+
+enum ConfigDiagnosticSchemaSource {
+  CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_UNSPECIFIED = 0;
+  CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_BUILT_IN = 1;
+  CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_ENGINE = 2;
+  CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_PLUGIN = 3;
+}
+
+enum ConfigDiagnosticCode {
+  CONFIG_DIAGNOSTIC_CODE_UNSPECIFIED = 0;
+  CONFIG_DIAGNOSTIC_CODE_INVALID_VALUE = 1;
+  CONFIG_DIAGNOSTIC_CODE_MISSING_REQUIRED_VALUE = 2;
+  CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_FIELD = 3;
+  CONFIG_DIAGNOSTIC_CODE_REJECTED_FIELD = 4;
+  CONFIG_DIAGNOSTIC_CODE_ALIAS_APPLIED = 5;
+  CONFIG_DIAGNOSTIC_CODE_MISPLACED_FIELD = 6;
+  CONFIG_DIAGNOSTIC_CODE_UNKNOWN_FIELD = 7;
+  CONFIG_DIAGNOSTIC_CODE_SCHEMA_UNAVAILABLE = 8;
+  CONFIG_DIAGNOSTIC_CODE_LEGACY_UNVALIDATED_CONFIG = 9;
+  CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA_VERSION = 10;
+}
+
+message ConfigDiagnostic {
+  ConfigDiagnosticCode code = 1;
+  ConfigDiagnosticSeverity severity = 2;
+  ConfigDiagnosticSource source = 3;
+  optional ConfigDiagnosticSchemaSource schema_source = 4;
+  optional string path = 5;
+  optional string canonical_path = 6;
+  string message = 7;
+  optional string help = 8;
+}
+
 message OwnerControlEnvelope {
   uint32 gen = 1;                         // must equal NODE_PROTOCOL_GENERATION
   OwnerControlHandshake handshake = 2;
@@ -429,6 +494,10 @@ message OwnerControlRequest {
   OwnerControlWatchConfigRequest watch_config = 3;
   OwnerControlApplyConfigRequest apply_config = 4;
   OwnerControlRefreshInventoryRequest refresh_inventory = 5;
+  OwnerControlLoadModelRequest load_model = 6;
+  OwnerControlUnloadModelRequest unload_model = 7;
+  OwnerControlEnsureModelRequest ensure_model = 8;
+  OwnerControlDrainModelRequest drain_model = 9;
 }
 
 message OwnerControlResponse {
@@ -437,6 +506,10 @@ message OwnerControlResponse {
   OwnerControlWatchConfigResponse watch_config = 3;
   OwnerControlApplyConfigResponse apply_config = 4;
   OwnerControlRefreshInventoryResponse refresh_inventory = 5;
+  OwnerControlLoadModelResponse load_model = 6;
+  OwnerControlUnloadModelResponse unload_model = 7;
+  OwnerControlEnsureModelResponse ensure_model = 8;
+  OwnerControlDrainModelResponse drain_model = 9;
 }
 
 message OwnerControlError {
@@ -498,6 +571,7 @@ message OwnerControlApplyConfigResponse {
   bytes config_hash = 3;
   optional string error = 4;
   ConfigApplyMode apply_mode = 5;
+  repeated ConfigDiagnostic diagnostics = 6;
 }
 
 message OwnerControlRefreshInventoryRequest {
@@ -505,8 +579,83 @@ message OwnerControlRefreshInventoryRequest {
   bytes target_node_id = 2;               // exactly 32 bytes
 }
 
+message OwnerControlModelRef {
+  string canonical_model_ref = 1;
+  optional string instance_id = 2;
+}
+
+message OwnerControlLoadModelRequest {
+  bytes requester_node_id = 1;
+  bytes target_node_id = 2;
+  OwnerControlModelRef model = 3;
+  optional string profile = 4;
+}
+
+message OwnerControlUnloadModelRequest {
+  bytes requester_node_id = 1;
+  bytes target_node_id = 2;
+  OwnerControlModelRef model = 3;
+}
+
+message OwnerControlEnsureModelRequest {
+  bytes requester_node_id = 1;
+  bytes target_node_id = 2;
+  OwnerControlModelRef model = 3;
+  optional string profile = 4;
+}
+
+message OwnerControlDrainModelRequest {
+  bytes requester_node_id = 1;
+  bytes target_node_id = 2;
+  OwnerControlModelRef model = 3;
+  optional uint64 drain_timeout_secs = 4;
+}
+
+message OwnerControlLoadModelResponse {
+  string intent_id = 1;
+  string accepted_state = 2;
+  OwnerControlModelRef target = 3;
+}
+
+message OwnerControlUnloadModelResponse {
+  string intent_id = 1;
+  string accepted_state = 2;
+  OwnerControlModelRef target = 3;
+}
+
+message OwnerControlEnsureModelResponse {
+  string intent_id = 1;
+  string accepted_state = 2;
+  OwnerControlModelRef target = 3;
+}
+
+message OwnerControlDrainModelResponse {
+  string intent_id = 1;
+  string accepted_state = 2;
+  OwnerControlModelRef target = 3;
+}
+
 message OwnerControlRefreshInventoryResponse {
   OwnerControlConfigSnapshot snapshot = 1;
+  OwnerControlRefreshInventory inventory = 2;
+}
+
+message OwnerControlRefreshInventory {
+  repeated OwnerControlInventoryEntry entries = 1;
+  OwnerControlRefreshInventoryDisposition disposition = 2;
+}
+
+message OwnerControlInventoryEntry {
+  string canonical_model_ref = 1;
+  optional string display_name = 2;
+  uint64 total_size_bytes = 3;
+  CompactModelMetadata metadata = 4;
+}
+
+enum OwnerControlRefreshInventoryDisposition {
+  OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_UNSPECIFIED = 0;
+  OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_EXECUTED = 1;
+  OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_COALESCED = 2;
 }
 
 message OwnerControlConfigSnapshot {

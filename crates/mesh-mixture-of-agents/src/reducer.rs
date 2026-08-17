@@ -23,21 +23,41 @@ use std::time::Duration;
 /// running a stale binary that 502s on tool calls) doesn't take down
 /// the whole reducer step.
 pub(crate) fn reducer_candidates(config: &GatewayConfig) -> Vec<(String, usize)> {
-    let mut big = Vec::new();
-    let mut small = Vec::new();
-    for m in &config.models {
-        let entry = (m.name.clone(), m.backend_index);
-        if worker::is_single_digit_b_name(&m.name) {
-            small.push(entry);
-        } else {
-            big.push(entry);
+    // Host-provided actor priority wins. In the asymmetric tool path the actor
+    // is the model that actually emits the tool call, so it must be the best
+    // available tool-caller — a judgement the host makes from gossiped
+    // `tool_use` capability, model size, and peer health, none of which this
+    // crate can see. `actor_candidates` are indices into `config.models`,
+    // best-first; we translate them to `(name, backend_index)` and skip any
+    // stale/out-of-range index defensively.
+    if !config.actor_candidates.is_empty() {
+        let ordered: Vec<(String, usize)> = config
+            .actor_candidates
+            .iter()
+            .filter_map(|&i| config.models.get(i))
+            .map(|m| (m.name.clone(), m.backend_index))
+            .collect();
+        if !ordered.is_empty() {
+            return ordered;
         }
+        // Every provided index was stale — fall through to the size heuristic
+        // rather than return empty and fail the turn.
     }
-    big.extend(small);
+
+    // No host guidance (or all indices stale): fall back to capacity order,
+    // strongest first. Uses the same ordering as role assignment — big tier
+    // before small, and by verified size within each tier — so the reducer
+    // ladder starts at the largest model the host has verified rather than
+    // whichever big-tier model happened to arrive first.
+    let mut sorted = config.models.clone();
+    worker::sort_by_capacity_desc(&mut sorted);
     // Intentionally allow returning empty: hedged_reducer_call's empty-input
     // path surfaces the right error. A fake ("unknown", 0) entry would call
     // backend_index=0 with a bogus model name and mask real bugs.
-    big
+    sorted
+        .iter()
+        .map(|m| (m.name.clone(), m.backend_index))
+        .collect()
 }
 
 /// Successful hedged-reducer outcome.
@@ -127,7 +147,11 @@ pub(crate) async fn hedged_reducer_call(
                 SamplingParams::reducer().with_thinking(enable_thinking),
             )
             .await;
-            (name, result)
+            // The reducer's output *is* the final response, so there is no
+            // later arbitration step that could act on truncation. Keep the
+            // text; the 2048-token reducer budget is well clear of the
+            // worker budget where truncation actually bites.
+            (name, result.map(|reply| reply.text))
         });
     };
 
@@ -310,6 +334,94 @@ mod tests {
                 None => Err(format!("unconfigured model: {model}")),
             }
         }
+    }
+
+    /// A config carrying only what `reducer_candidates` reads.
+    fn config_with_models(models: Vec<crate::backend::ModelEntry>) -> GatewayConfig {
+        GatewayConfig {
+            backends: Vec::new(),
+            models,
+            worker_timeout: Duration::from_secs(30),
+            hedge_delay: Duration::from_millis(200),
+            reducer_timeout: Duration::from_secs(2),
+            first_answer_grace: Duration::ZERO,
+            strong_patience: Duration::ZERO,
+            enable_thinking: None,
+            actor_candidates: Vec::new(),
+            reference_policy: Default::default(),
+            refinement_policy: Default::default(),
+        }
+    }
+
+    fn sized(name: &str, index: usize, size: Option<f64>) -> crate::backend::ModelEntry {
+        crate::backend::ModelEntry::new(name.to_string(), index).with_parameter_count_b(size)
+    }
+
+    #[test]
+    fn reducer_ladder_starts_at_the_largest_verified_model() {
+        // Partitioning by tier alone left big-tier models in input order, so a
+        // pool arriving as [70B, 8B, 32B] could hedge to the 32B before the
+        // verified 70B. The ladder must be strongest-first.
+        let config = config_with_models(vec![
+            sized("big-70b", 0, Some(70.6)),
+            sized("small-8b", 1, Some(8.2)),
+            sized("mid-32b", 2, Some(32.8)),
+        ]);
+
+        let candidates = reducer_candidates(&config);
+        let order: Vec<&str> = candidates.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(order, vec!["big-70b", "mid-32b", "small-8b"]);
+    }
+
+    #[test]
+    fn reducer_ladder_prefers_a_verified_size_over_an_unknown_one() {
+        // Unknown size counts as big-tier, but must not lead the ladder ahead
+        // of a model the host verified to be large.
+        let config = config_with_models(vec![
+            sized("unknown-size", 0, None),
+            sized("verified-70b", 1, Some(70.0)),
+        ]);
+
+        let candidates = reducer_candidates(&config);
+        assert_eq!(
+            candidates.first().map(|(name, _)| name.as_str()),
+            Some("verified-70b")
+        );
+        // The unsized model stays on the ladder as a fallback rather than being
+        // dropped — a broken primary must still have somewhere to hedge.
+        assert_eq!(candidates.len(), 2);
+    }
+
+    #[test]
+    fn reducer_ladder_keeps_input_order_for_equally_ranked_models() {
+        // A pool of same-tier, unsized models has no capacity signal to sort on,
+        // so it must come back in the order the host supplied. Producing the
+        // strongest-first order by reversing an ascending sort flipped these
+        // instead, which changed the primary reducer pick and broke tool-call
+        // survival in fan-out (`sim_real_traces`).
+        let config = config_with_models(vec![
+            sized("first", 0, None),
+            sized("second", 1, None),
+            sized("third", 2, None),
+        ]);
+
+        let candidates = reducer_candidates(&config);
+        let order: Vec<&str> = candidates.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(order, vec!["first", "second", "third"]);
+    }
+
+    #[test]
+    fn reducer_ladder_keeps_host_actor_priority() {
+        // Host guidance wins over local size ordering: the host sees tool_use
+        // capability and peer health, which this crate cannot.
+        let mut config = config_with_models(vec![
+            sized("big-70b", 0, Some(70.6)),
+            sized("small-8b", 1, Some(8.2)),
+        ]);
+        config.actor_candidates = vec![1];
+
+        let candidates = reducer_candidates(&config);
+        assert_eq!(candidates, vec![("small-8b".to_string(), 1)]);
     }
 
     #[tokio::test]

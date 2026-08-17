@@ -5,8 +5,9 @@ use serde_json::Value;
 
 use crate::{
     common::{
-        FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort, StopSequence,
-        StreamOptions, Usage, completion_id, now_unix_secs,
+        AgentSessionIdentity, FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort,
+        StopSequence, StreamOptions, Usage, agent_session_metadata, agent_session_source_metadata,
+        completion_id, now_unix_secs, set_agent_session_metadata,
     },
     errors::OpenAiError,
 };
@@ -41,6 +42,20 @@ pub struct CompletionRequest {
 }
 
 impl CompletionRequest {
+    pub(crate) fn set_agent_session(&mut self, identity: Option<AgentSessionIdentity>) {
+        set_agent_session_metadata(&mut self.extra, identity);
+    }
+
+    #[must_use]
+    pub fn agent_session(&self) -> Option<&str> {
+        agent_session_metadata(&self.extra)
+    }
+
+    #[must_use]
+    pub fn agent_session_source(&self) -> Option<&str> {
+        agent_session_source_metadata(&self.extra)
+    }
+
     pub fn include_usage(&self) -> bool {
         self.stream_options
             .as_ref()
@@ -140,6 +155,8 @@ pub struct CompletionResponse {
     pub model: String,
     pub choices: Vec<CompletionChoice>,
     pub usage: Usage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timings: Option<BTreeMap<String, Value>>,
 }
 
 impl CompletionResponse {
@@ -165,7 +182,28 @@ impl CompletionResponse {
                 finish_reason: Some(finish_reason),
             }],
             usage,
+            timings: None,
         }
+    }
+
+    pub fn with_timings(mut self, timings: Option<BTreeMap<String, Value>>) -> Self {
+        self.timings = timings;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn completion_response_serializes_optional_timings() {
+        let response = CompletionResponse::new("model", "text", Usage::new(1, 1))
+            .with_timings(Some(BTreeMap::from([("draft_n".to_string(), json!(2))])));
+
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["timings"]["draft_n"], json!(2));
     }
 }
 

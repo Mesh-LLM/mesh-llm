@@ -1,0 +1,138 @@
+export default [
+  {
+    title: "Get Started",
+    description: "Install Mesh, run the quickstart, and serve your first model.",
+    links: [
+      ["Quickstart", "/docs/pages/quickstart/"],
+      ["Installing on macOS", "/docs/pages/installing-macos/"],
+      ["Installing on Linux", "/docs/pages/installing-linux/"],
+      ["Installing on Windows", "/docs/pages/installing-windows/"],
+      ["Updating Mesh", "/docs/pages/updating-mesh/"]
+    ]
+  },
+  {
+    title: "Configuration",
+    description: "Configure mesh-llm behavior, models, and defaults.",
+    links: [
+      ["Config File", "/docs/pages/config-toml/"],
+      ["Runtime modes", "/docs/pages/runtime-lifecycle/#runtime-modes"],
+      ["Activity policy", "/docs/pages/runtime-lifecycle/#activity-aware-admission"],
+      ["Config Defaults", "/docs/pages/config-defaults/"],
+      ["Config Models & Plugins", "/docs/pages/config-models/"],
+      ["Config Reference", "/docs/pages/config-reference/"]
+    ]
+  },
+  {
+    title: "Running Models",
+    description: "Serve local models, use Hugging Face GGUFs, and scale across machines.",
+    links: [
+      ["Run your first model", "/docs/pages/quickstart/#3-start-one-private-node"],
+      ["Runtime lifecycle", "/docs/pages/runtime-lifecycle/"],
+      ["Choose a model", "/docs/pages/choose-a-model/"],
+      ["Running large models", "/docs/pages/running-large-models/"],
+      ["KV disk cache", "/docs/pages/kv-disk-cache/"],
+      ["Console chat", "/docs/pages/console-chat/"],
+      ["Hardware support", "/docs/pages/hardware-support/"]
+    ]
+  },
+  {
+    title: "Capabilities",
+    description: "Use Mesh through OpenAI-compatible clients and model-serving features.",
+    links: [
+      ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
+      ["Automatic routing", "/docs/pages/automatic-routing/"],
+      ["Streaming", "/docs/pages/openai-compatible-api/#streaming"],
+      ["Tool calling", "/docs/pages/openai-compatible-api/#tool-calling"],
+      ["Structured outputs", "/docs/pages/openai-compatible-api/#structured-outputs"]
+    ]
+  },
+  {
+    title: "SDKs",
+    description: "Embed mesh clients and local serving into Rust, Node.js, JVM/Android, and Swift apps.",
+    links: [
+      ["SDK overview", "/docs/pages/sdk/"],
+      ["Rust", "/docs/pages/sdk-rust/"],
+      ["Node.js & Electron", "/docs/pages/sdk-node/"],
+      ["Java / Kotlin / Android", "/docs/pages/sdk-kotlin/"],
+      ["Swift & Apple platforms", "/docs/pages/sdk-swift/"]
+    ]
+  },
+  {
+    title: "Plugins",
+    description: "Extend mesh-llm with managed plugin processes, MCP tools, and HTTP bindings.",
+    links: [
+      ["Plugins overview", "/docs/pages/plugins/"],
+      ["Plugin architecture", "/docs/pages/plugin-architecture/"],
+      ["Developing plugins", "/docs/pages/developing-plugins/"],
+      ["Plugin reference", "/docs/pages/plugin-reference/"]
+    ]
+  },
+  {
+    title: "Catalog",
+    description: "Browse mesh-ready models and contribute catalog entries.",
+    links: [
+      ["Browse Catalog", "/catalog/"],
+      ["Contributing layer packages", "/docs/pages/contributing-layer-packages/"],
+      ["Certifying model families", "/docs/pages/certifying-model-families/"]
+    ]
+  },
+  {
+    title: "Meshes",
+    description: "Join the public mesh, create private meshes, and publish your own mesh.",
+    links: [
+      ["Join the public mesh", "/docs/pages/public-mesh/"],
+      ["Private meshes", "/docs/pages/private-meshes/"],
+      ["Publish mesh", "/docs/pages/publish-mesh/"]
+    ]
+  },
+  {
+    title: "Architecture",
+    description: "Understand node roles, mesh routing, Skippy stages, model artifacts, and subsystem ownership.",
+    links: [
+      ["Architecture hub", "/docs/pages/architecture/"],
+      ["Mesh workflows", "/docs/pages/private-meshes/"],
+      ["Large-model splits", "/docs/pages/running-large-models/"],
+      ["Model package spec", "/docs/pages/model-package-spec/"],
+      ["Plugin architecture", "/docs/pages/plugin-architecture/"],
+      ["SDK embedding", "/docs/pages/sdk/"]
+    ]
+  },
+  {
+    title: "Integrations",
+    description: "Connect agent tools and OpenAI-compatible applications.",
+    links: [
+      ["Coding agents", "/docs/pages/agents/"],
+      ["exo comparison", "/docs/pages/exo-comparison/"]
+    ]
+  },
+  {
+    title: "Developers",
+    description: "API reference, CLI commands, testing, and technical reference documentation.",
+    links: [
+      ["API reference", "/docs/pages/api-reference/"],
+      ["Local logging API", "/docs/pages/logging-api/"],
+      ["Crate API reference", "/crates/"],
+      ["Skippy native API", "/docs/pages/skippy-api/"],
+      ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
+      ["CLI reference", "/docs/pages/CLI/"],
+      ["Testing playbook", "/docs/pages/testing/"]
+    ]
+  },
+  {
+    title: "Help",
+    description: "Common questions, troubleshooting, and operational checks.",
+    links: [
+      ["FAQ", "/docs/pages/faq/"],
+      ["Troubleshooting", "/docs/pages/troubleshooting/"]
+    ]
+  },
+  {
+    title: "Contributing",
+    description: "Understand the roadmap, testing requirements, and project contribution workflow.",
+    links: [
+      ["Contributing guide", "https://github.com/Mesh-LLM/mesh-llm/blob/main/CONTRIBUTING.md"],
+      ["Testing playbook", "/docs/pages/testing/"],
+      ["Roadmap", "https://github.com/Mesh-LLM/mesh-llm/blob/main/ROADMAP.md"]
+    ]
+  }
+];

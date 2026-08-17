@@ -93,18 +93,9 @@ fn config_with_three_recording_workers() -> (
 
     let backends: Vec<Arc<dyn moa::ModelBackend>> = vec![fast.clone(), mid.clone(), strong.clone()];
     let models = vec![
-        moa::ModelEntry {
-            name: "fast-3b".into(),
-            backend_index: 0,
-        },
-        moa::ModelEntry {
-            name: "mid-13b".into(),
-            backend_index: 1,
-        },
-        moa::ModelEntry {
-            name: "strong-32b".into(),
-            backend_index: 2,
-        },
+        moa::ModelEntry::new("fast-3b", 0),
+        moa::ModelEntry::new("mid-13b", 1),
+        moa::ModelEntry::new("strong-32b", 2),
     ];
 
     let config = moa::GatewayConfig {
@@ -114,7 +105,11 @@ fn config_with_three_recording_workers() -> (
         hedge_delay: Duration::from_millis(50),
         reducer_timeout: Duration::from_secs(2),
         first_answer_grace: Duration::ZERO,
+        strong_patience: Duration::ZERO,
         enable_thinking: None,
+        actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     };
     (config, fast, mid, strong)
 }

@@ -20,7 +20,7 @@ env:
 
 jobs:
   close_stale_prs:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Calculate stale warning window
         id: stale_window
@@ -45,7 +45,7 @@ jobs:
           echo "days_before_close=$PR_WARNING_DAYS" >> "$GITHUB_OUTPUT"
 
       - name: Close stale pull requests
-        uses: actions/stale@v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10.4.0
         with:
           repo-token: ${{ github.token }}
           days-before-issue-stale: -1

@@ -6,6 +6,7 @@ import { RESERVE_PROVIDER_FIXTURES, reserveProvidersFromWakeableNodes } from '@/
 import type { StatusPayload } from '@/lib/api/types'
 import { useDataMode } from '@/lib/data-mode'
 import { useBooleanFeatureFlag } from '@/lib/feature-flags'
+import { gpuRatedVramGB } from '@/lib/vram'
 
 type ReservesPageProps = { data?: DashboardHarnessData }
 type VramNode = { my_vram_gb?: number; vram_gb?: number; gpus?: StatusPayload['gpus'] }
@@ -15,17 +16,11 @@ function finiteVramGB(value: number | undefined): number {
 }
 
 function gpuInventoryVramGB(gpus: VramNode['gpus'] | undefined): number {
-  return (gpus ?? []).reduce((sum, gpu) => {
-    const fromTotal = finiteVramGB(gpu.total_vram_gb)
-    if (fromTotal > 0) return sum + fromTotal
-
-    const fromBytes = finiteVramGB(gpu.vram_bytes) / 1024 ** 3
-    return sum + fromBytes
-  }, 0)
+  return (gpus ?? []).reduce((sum, gpu) => sum + (gpuRatedVramGB(gpu) ?? 0), 0)
 }
 
 function nodeVramGB(node: VramNode): number {
-  return finiteVramGB(node.my_vram_gb) || finiteVramGB(node.vram_gb) || gpuInventoryVramGB(node.gpus)
+  return gpuInventoryVramGB(node.gpus) || finiteVramGB(node.my_vram_gb) || finiteVramGB(node.vram_gb)
 }
 
 function statusMeshVramGB(status: StatusPayload | undefined): number | undefined {

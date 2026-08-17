@@ -1,0 +1,77 @@
+{% macro sectionHead(title, copy) %}
+<div class="sec-head grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,34rem)] xl:items-end xl:gap-8">
+  <div>
+    <h2 class="title max-w-4xl text-balance font-display text-[clamp(2rem,7vw,4rem)] leading-[0.98] tracking-normal text-fg xl:text-[clamp(2.75rem,5vw,4.25rem)] xl:leading-[0.96]">{{ title | safe }}</h2>
+  </div>
+  <p class="sec-copy max-w-[42rem] text-pretty text-base leading-7 text-muted sm:text-lg">{{ copy | safe }}</p>
+</div>
+{% endmacro %}
+
+{% macro badge(text, tone="") %}
+<span class="badge inline-flex max-w-full items-center rounded-full border border-line-soft px-2.5 py-1 text-xs font-semibold leading-none text-muted{% if tone %} {{ tone }}{% endif %}">{{ text | safe }}</span>
+{% endmacro %}
+
+{% macro badgeRow(items) %}
+<div class="badge-row flex max-w-full flex-wrap gap-1.5">
+  {% for item in items %}
+    {{ badge(item.text, item.tone) }}
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{% macro docsNavGroup(group, currentUrl, sectionClass="docs-nav-group grid grid-cols-1 gap-1", headingClass="text-sm font-semibold text-fg", linkClass="min-h-[30px] border-l pl-4 text-sm text-muted hover:text-blue-3") %}
+<section class="{{ sectionClass }}">
+  <h2 class="{{ headingClass }}">{{ group.title }}</h2>
+  {% for link in group.links %}
+    <a class="{{ linkClass }}" href="{{ link[1] }}"{% if currentUrl == (link[1] | urlPath) %} aria-current="page"{% endif %}>{{ link[0] }}</a>
+  {% endfor %}
+</section>
+{% endmacro %}
+
+{% macro meter(label, value, width, tone="") %}
+<div class="meter min-w-0">
+  <div class="lbl flex items-center justify-between gap-3 text-xs text-muted"><span class="truncate">{{ label | safe }}</span><span class="shrink-0"><b{% if tone %} class="{{ tone }}"{% endif %}>{{ value | safe }}</b></span></div>
+  <div class="bar mt-2 h-1.5 overflow-hidden rounded-full bg-line-soft"><div style="width: {{ width }}"></div></div>
+</div>
+{% endmacro %}
+
+{% macro topoCard(top, side, roleClass, role, peerName, modelName, detail, barWidth, vramLabel, vramValue, options={}) %}
+<div class="topo-card" style="top: {{ top }}; {{ side }}: 0;{% if options.minWidth %} min-width: {{ options.minWidth }};{% endif %}">
+  <div class="row1">
+    <span class="role {{ roleClass }}">{{ role | safe }}</span>
+    <span>{{ peerName }}</span>
+  </div>
+  <div class="name">{{ modelName | safe }}</div>
+  <div class="detail">{{ detail | safe }}</div>
+  <div class="bar"><div style="width: {{ barWidth }}{% if options.barStyle %}; {{ options.barStyle }}{% endif %}"></div></div>
+  <div class="vram"><span>{{ vramLabel }}</span><span>{{ vramValue }}</span></div>
+</div>
+{% endmacro %}
+
+{% macro archNode(left, top, width, height, accent, dot, name, sub, extraClass="") %}
+<div class="arch-node{% if extraClass %} {{ extraClass }}{% endif %}" style="left:{{ left }};top:{{ top }};width:{{ width }};height:{{ height }};"{% if accent %} data-accent="{{ accent }}"{% endif %}>
+  <div class="an-accent"></div>
+  <div class="an-body">
+    <div class="an-row"><span class="an-dot" style="--dot:{{ dot }};"></span><span class="an-name">{{ name }}</span></div>
+    <div class="an-sub">{{ sub }}</div>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro footerRow(label, href, icon="arrow-right", className="") %}
+<a class="footer-row{% if className %} {{ className }}{% endif %}" href="{{ href }}">
+  {% if className == "sponsor-row" %}
+    <span class="footer-sponsor-logo" aria-hidden="true">
+      <svg viewBox="0 0 50 50" fill="none">
+        <rect x="0.75" y="0.75" width="48.5" height="48.5" rx="7.25" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M25 4.5V45.5M4.5 25H45.5M9 9H41V41H9V9Z" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
+        <path d="M25 4.5L45.5 25L25 45.5L4.5 25L25 4.5Z" stroke="var(--sponsor-line)" stroke-width="1"/>
+        <circle cx="25" cy="25" r="18.5" stroke="var(--sponsor-line)" stroke-width="1"/>
+        <circle cx="25" cy="25" r="12" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
+      </svg>
+    </span>
+  {% endif %}
+  <span>{{ label }}</span>
+  <i data-lucide="{{ icon }}" aria-hidden="true"></i>
+</a>
+{% endmacro %}

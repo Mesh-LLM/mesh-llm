@@ -1,5 +1,5 @@
 import type { LiveNodeState } from '@/features/app-shell/lib/status-types'
-import type { LatencySource } from '@/lib/api/types'
+import type { GpuInfo, LatencySource } from '@/lib/api/types'
 
 export type TopologyNode = {
   id: string
@@ -19,5 +19,5 @@ export type TopologyNode = {
   latencyObserverId?: string | null
   hostname?: string
   isSoc?: boolean
-  gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[]
+  gpus?: GpuInfo[]
 }

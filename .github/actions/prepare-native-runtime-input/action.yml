@@ -1,0 +1,77 @@
+name: Prepare native runtime input
+description: Build, package, and verify one immutable MeshLLM native runtime input.
+
+inputs:
+  backend:
+    description: Native runtime backend.
+    required: true
+  target:
+    description: Optional Rust target triple.
+    required: false
+    default: ""
+  output_dir:
+    description: Directory that receives the runtime directory and archive.
+    required: false
+    default: dist/native-runtimes
+  build:
+    description: Build the native libraries before packaging.
+    required: false
+    default: "true"
+
+outputs:
+  runtime_dir:
+    description: Absolute path to the verified runtime directory.
+    value: ${{ steps.prepare.outputs.runtime_dir }}
+  archive_path:
+    description: Absolute path to the verified runtime archive.
+    value: ${{ steps.prepare.outputs.archive_path }}
+  checksum_path:
+    description: Absolute path to the runtime archive checksum.
+    value: ${{ steps.prepare.outputs.checksum_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Package and verify native runtime
+      id: prepare
+      shell: bash
+      env:
+        INPUT_BACKEND: ${{ inputs.backend }}
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
+        INPUT_BUILD: ${{ inputs.build }}
+      run: |
+        set -euo pipefail
+
+        args=(--backend "$INPUT_BACKEND" --out "$INPUT_OUTPUT_DIR")
+        if [[ "$INPUT_BUILD" == "true" ]]; then
+          args=(--build "${args[@]}")
+        fi
+        if [[ -n "$INPUT_TARGET" ]]; then
+          args+=(--target "$INPUT_TARGET")
+        fi
+        scripts/package-native-runtime.sh "${args[@]}"
+
+        runtime_dirs=()
+        while IFS= read -r manifest; do
+          runtime_dirs+=("$(dirname "$manifest")")
+        done < <(find "$INPUT_OUTPUT_DIR" -mindepth 2 -maxdepth 2 -type f -name manifest.json -print)
+        if [[ "${#runtime_dirs[@]}" -ne 1 ]]; then
+          echo "expected exactly one native runtime in $INPUT_OUTPUT_DIR; found ${#runtime_dirs[@]}" >&2
+          exit 1
+        fi
+
+        runtime_dir="${runtime_dirs[0]}"
+        archive_path="$runtime_dir.tar.gz"
+        checksum_path="$archive_path.sha256"
+        test -s "$archive_path"
+        test -s "$checksum_path"
+        scripts/verify-native-runtime-package.sh "$runtime_dir" "$archive_path"
+
+        runtime_parent="$(cd "$(dirname "$runtime_dir")" && pwd)"
+        runtime_dir="$runtime_parent/$(basename "$runtime_dir")"
+        {
+          echo "runtime_dir=$runtime_dir"
+          echo "archive_path=$runtime_dir.tar.gz"
+          echo "checksum_path=$runtime_dir.tar.gz.sha256"
+        } >> "$GITHUB_OUTPUT"

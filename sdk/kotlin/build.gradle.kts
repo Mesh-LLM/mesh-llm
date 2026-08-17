@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "ai.meshllm"
-version = "0.68.0"
+version = "0.76.0-rc2"
 
 val androidArtifactId = "meshllm-android"
 
@@ -202,6 +202,11 @@ val assembleAar by tasks.registering(Zip::class) {
 
     // Consumer ProGuard rules consumed by downstream Android projects
     from("consumer-proguard-rules.pro")
+
+    // Console web assets exposed to Android apps as package assets.
+    from("src/main/resources/mesh-llm/console") {
+        into("assets/mesh-llm/console")
+    }
 
     // Minimal AndroidManifest required by the AAR format
     from("src/main/AndroidManifest.xml")

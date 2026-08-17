@@ -85,25 +85,13 @@ fn four_workers_two_fast_consensus() -> moa::GatewayConfig {
 
     let backends: Vec<Arc<dyn moa::ModelBackend>> = vec![fast_a, fast_b, slow_a, slow_b];
     let models = vec![
-        moa::ModelEntry {
-            name: "fast-a-3b".into(),
-            backend_index: 0,
-        },
-        moa::ModelEntry {
-            name: "fast-b-3b".into(),
-            backend_index: 1,
-        },
+        moa::ModelEntry::new("fast-a-3b", 0),
+        moa::ModelEntry::new("fast-b-3b", 1),
         // The two big-tier models — one of them will be picked as
         // `Strong`. They are deliberately slow so the early-exit path
         // is hit before they finish.
-        moa::ModelEntry {
-            name: "slow-a-32b".into(),
-            backend_index: 2,
-        },
-        moa::ModelEntry {
-            name: "slow-b-32b".into(),
-            backend_index: 3,
-        },
+        moa::ModelEntry::new("slow-a-32b", 2),
+        moa::ModelEntry::new("slow-b-32b", 3),
     ];
 
     moa::GatewayConfig {
@@ -113,7 +101,11 @@ fn four_workers_two_fast_consensus() -> moa::GatewayConfig {
         hedge_delay: Duration::from_millis(200),
         reducer_timeout: Duration::from_secs(2),
         first_answer_grace: Duration::ZERO,
+        strong_patience: Duration::ZERO,
         enable_thinking: None,
+        actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     }
 }
 
@@ -135,11 +127,13 @@ async fn early_exit_summaries_account_for_aborted_workers() {
 
     let result = moa::handle_turn(&config, &body).await;
 
-    // Sanity: this should be the early-exit path.
+    // Answer turns always synthesize now, so consensus among the fast workers
+    // still aborts the slow tail but the turn is Fanout, not EarlyExit. The
+    // contract under test is worker *accounting*, which is unchanged.
     assert_eq!(
         result.turn_kind,
-        moa::TurnKind::EarlyExit,
-        "two fast agreeing workers should produce TurnKind::EarlyExit; got {:?}",
+        moa::TurnKind::Fanout,
+        "answer turns synthesize after aborting the slow tail; got {:?}",
         result.turn_kind
     );
 

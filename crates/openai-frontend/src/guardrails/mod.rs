@@ -16,19 +16,22 @@ mod engine;
 mod errors;
 mod policy;
 mod request_contract;
-mod rescue;
 mod retry;
 mod state;
 mod structured;
 mod telemetry;
 mod tools;
+mod validation;
 
 pub use compact::CompactingOpenAiBackend;
 pub use mesh_llm_guardrails::{
     CompactionConfig, CompactionDecision, CompactionOverride, CompactionReport, MESH_COMPACT_FIELD,
     MESH_RESPOND_TOOL_NAME,
 };
-pub use policy::{GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, StreamingGuardrailMode};
+pub use policy::{
+    GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, RetryExhaustionMode,
+    StreamingGuardrailMode,
+};
 pub use telemetry::GuardrailTelemetrySink;
 
 use self::{
@@ -38,7 +41,6 @@ use self::{
     telemetry::{
         GuardrailTelemetryAttemptBucket, GuardrailTelemetryBypassReason,
         GuardrailTelemetryContract, GuardrailTelemetryDecision, GuardrailTelemetryOutcome,
-        GuardrailTelemetryParserStage,
     },
 };
 
@@ -73,6 +75,7 @@ impl GuardedOpenAiBackend {
     async fn guarded_chat_completion(
         &self,
         request: ChatCompletionRequest,
+        context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
         let _guardrail_error_catalog = guardrail_error_catalog();
         let policy = self.policy.snapshot();
@@ -86,16 +89,17 @@ impl GuardedOpenAiBackend {
                     prepared.state.mode,
                     telemetry_contract(&prepared.state.request_contract),
                     GuardrailTelemetryOutcome::PassThrough,
-                    Some(GuardrailTelemetryParserStage::None),
                     None,
                 );
-                self.backend.chat_completion(request).await
+                self.backend
+                    .chat_completion_with_context(request, context)
+                    .await
             }
             GuardrailRequestOutcome::Reject { kind } => Err(errors::guardrail_error(*kind)),
             GuardrailRequestOutcome::Guarded { backend_request } => {
                 if matches!(policy.mode, GuardrailMode::MetricsOnly) {
                     return self
-                        .metrics_only_chat_completion(request, &engine, &prepared)
+                        .metrics_only_chat_completion(request, &engine, &prepared, context)
                         .await;
                 }
 
@@ -106,27 +110,19 @@ impl GuardedOpenAiBackend {
                 loop {
                     let response = self
                         .backend
-                        .chat_completion(attempt_request.clone())
+                        .chat_completion_with_context(attempt_request.clone(), context.clone())
                         .await?;
                     let classified = engine.classify_response(&prepared, &response);
-                    let parser_stage = telemetry_parser_stage(classified.parser_stage);
                     let contract = telemetry_contract(&prepared.state.request_contract);
                     let attempt_bucket = telemetry_attempt_bucket(attempt_index.saturating_add(1));
 
                     if let Some(sanitized) =
                         retry::sanitize_success_response(&policy, &response, &classified)
                     {
-                        let outcome = if matches!(parser_stage, GuardrailTelemetryParserStage::None)
-                        {
-                            GuardrailTelemetryOutcome::Valid
-                        } else {
-                            GuardrailTelemetryOutcome::Rescued
-                        };
                         self.record_outcome(
                             prepared.state.mode,
                             contract,
-                            outcome,
-                            Some(parser_stage),
+                            GuardrailTelemetryOutcome::Valid,
                             Some(attempt_bucket),
                         );
                         return Ok(sanitized);
@@ -137,7 +133,6 @@ impl GuardedOpenAiBackend {
                             prepared.state.mode,
                             contract,
                             GuardrailTelemetryOutcome::MetricsOnlyFailure,
-                            Some(parser_stage),
                             Some(attempt_bucket),
                         );
                         return Ok(response);
@@ -149,7 +144,6 @@ impl GuardedOpenAiBackend {
                             prepared.state.mode,
                             contract,
                             GuardrailTelemetryOutcome::Failed,
-                            Some(parser_stage),
                             Some(telemetry_attempt_bucket(attempt_index)),
                         );
                         return retry::exhaustion_result(&policy, response, &classified);
@@ -159,7 +153,6 @@ impl GuardedOpenAiBackend {
                         prepared.state.mode,
                         contract,
                         GuardrailTelemetryOutcome::Retried,
-                        Some(parser_stage),
                         Some(telemetry_attempt_bucket(attempt_index)),
                     );
 
@@ -175,15 +168,17 @@ impl GuardedOpenAiBackend {
         request: ChatCompletionRequest,
         engine: &GuardrailEngine,
         prepared: &state::PreparedGuardrailRequest,
+        context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
-        let response = self.backend.chat_completion(request).await?;
+        let response = self
+            .backend
+            .chat_completion_with_context(request, context)
+            .await?;
         let classified = engine.classify_response(prepared, &response);
-        let parser_stage = telemetry_parser_stage(classified.parser_stage);
         self.record_outcome(
             prepared.state.mode,
             telemetry_contract(&prepared.state.request_contract),
-            metrics_only_outcome(&classified, parser_stage),
-            Some(parser_stage),
+            metrics_only_outcome(&classified),
             Some(GuardrailTelemetryAttemptBucket::One),
         );
         Ok(response)
@@ -206,7 +201,6 @@ impl GuardedOpenAiBackend {
         mode: GuardrailMode,
         contract: Option<&'static str>,
         outcome: GuardrailTelemetryOutcome,
-        parser_stage: Option<GuardrailTelemetryParserStage>,
         attempt_bucket: Option<GuardrailTelemetryAttemptBucket>,
     ) {
         if let Some(telemetry) = &self.telemetry {
@@ -214,47 +208,30 @@ impl GuardedOpenAiBackend {
                 mode,
                 contract,
                 outcome.as_str(),
-                parser_stage.map(GuardrailTelemetryParserStage::as_str),
                 attempt_bucket.map(GuardrailTelemetryAttemptBucket::as_str),
             );
         }
     }
 }
 
-fn telemetry_parser_stage(
-    parser_stage: rescue::GuardrailParserStage,
-) -> GuardrailTelemetryParserStage {
-    match parser_stage {
-        rescue::GuardrailParserStage::None => GuardrailTelemetryParserStage::None,
-        rescue::GuardrailParserStage::JsonExact => GuardrailTelemetryParserStage::JsonExact,
-        rescue::GuardrailParserStage::JsonFenced => GuardrailTelemetryParserStage::JsonFenced,
-        rescue::GuardrailParserStage::JsonSubstring => GuardrailTelemetryParserStage::JsonSubstring,
-    }
-}
-
 fn metrics_only_outcome(
-    classified: &rescue::ClassifiedGuardrailResponse,
-    parser_stage: GuardrailTelemetryParserStage,
+    classified: &validation::ClassifiedGuardrailResponse,
 ) -> GuardrailTelemetryOutcome {
     match classified.category {
-        rescue::GuardrailResponseCategory::ValidText
-        | rescue::GuardrailResponseCategory::ValidToolCalls
-        | rescue::GuardrailResponseCategory::ValidSyntheticRespond
-        | rescue::GuardrailResponseCategory::ValidSyntheticStructured => {
-            if matches!(parser_stage, GuardrailTelemetryParserStage::None) {
-                GuardrailTelemetryOutcome::Valid
-            } else {
-                GuardrailTelemetryOutcome::Rescued
-            }
+        validation::GuardrailResponseCategory::ValidText
+        | validation::GuardrailResponseCategory::ValidToolCalls
+        | validation::GuardrailResponseCategory::ValidSyntheticRespond
+        | validation::GuardrailResponseCategory::ValidSyntheticStructured => {
+            GuardrailTelemetryOutcome::Valid
         }
-        rescue::GuardrailResponseCategory::MalformedToolText
-        | rescue::GuardrailResponseCategory::UnknownTool
-        | rescue::GuardrailResponseCategory::InvalidToolArguments
-        | rescue::GuardrailResponseCategory::InvalidStructuredPayload
-        | rescue::GuardrailResponseCategory::MixedTerminalAndTool
-        | rescue::GuardrailResponseCategory::ToolCallsNotAllowed
-        | rescue::GuardrailResponseCategory::TooManyToolCalls
-        | rescue::GuardrailResponseCategory::EmptyOutput => {
+        validation::GuardrailResponseCategory::MalformedToolText
+        | validation::GuardrailResponseCategory::UnknownTool
+        | validation::GuardrailResponseCategory::InvalidToolArguments
+        | validation::GuardrailResponseCategory::InvalidStructuredPayload
+        | validation::GuardrailResponseCategory::MixedTerminalAndTool
+        | validation::GuardrailResponseCategory::ToolCallsNotAllowed
+        | validation::GuardrailResponseCategory::TooManyToolCalls
+        | validation::GuardrailResponseCategory::EmptyOutput => {
             GuardrailTelemetryOutcome::MetricsOnlyFailure
         }
     }
@@ -333,7 +310,16 @@ impl OpenAiBackend for GuardedOpenAiBackend {
         &self,
         request: ChatCompletionRequest,
     ) -> OpenAiResult<ChatCompletionResponse> {
-        self.guarded_chat_completion(request).await
+        self.guarded_chat_completion(request, OpenAiRequestContext::new())
+            .await
+    }
+
+    async fn chat_completion_with_context(
+        &self,
+        request: ChatCompletionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<ChatCompletionResponse> {
+        self.guarded_chat_completion(request, context).await
     }
 
     async fn chat_completion_stream(
@@ -345,7 +331,16 @@ impl OpenAiBackend for GuardedOpenAiBackend {
     }
 
     async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
-        self.backend.completion(request).await
+        self.completion_with_context(request, OpenAiRequestContext::new())
+            .await
+    }
+
+    async fn completion_with_context(
+        &self,
+        request: CompletionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<CompletionResponse> {
+        self.backend.completion_with_context(request, context).await
     }
 
     async fn completion_stream(

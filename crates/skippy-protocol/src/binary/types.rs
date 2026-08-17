@@ -5,7 +5,10 @@ use super::{
     invalid_data,
 };
 
-pub const STAGE_STATE_VERSION: i32 = 6;
+// v11 adds the Inkling MTP embedding sideband and makes the coordinator the sole owner of
+// verify-window acceptance, removing redundant tail-stage acceptance/correction fields. Stage
+// peers must be upgraded together so older readers reject the changed payload contract.
+pub const STAGE_STATE_VERSION: i32 = 11;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_PREDICTED_TOKENS: usize = 262_144;
 pub const MAX_STAGE_SIDEBAND_VALUES: usize = 1_048_576;
@@ -53,9 +56,8 @@ pub enum WireMessageKind {
     StateImport = 7,
     DecodeReadout = 8,
     DecodeLightCtx = 9,
-    VerifySpan = 10,
-    CheckpointSession = 11,
-    RestoreSession = 12,
+    VerifyWindow = 21,
+    RetireVerifyWindow = 22,
     StateExport = 13,
     ConfigureGeneration = 14,
     ProbePrefill = 15,
@@ -63,6 +65,7 @@ pub enum WireMessageKind {
     TryRestorePrefill = 17,
     TryRestorePrefillDecode = 18,
     TrimSession = 19,
+    PredictionReturnOpen = 20,
 }
 
 impl WireMessageKind {
@@ -84,17 +87,18 @@ impl WireMessageKind {
             Self::DecodeEmbd
                 | Self::DecodeReadout
                 | Self::DecodeLightCtx
-                | Self::VerifySpan
+                | Self::VerifyWindow
                 | Self::PrefillFinalEmbd
                 | Self::DecodeReplayFinalEmbd
         )
     }
 
     pub fn is_session_control(self) -> bool {
-        matches!(
-            self,
-            Self::CheckpointSession | Self::RestoreSession | Self::TrimSession
-        )
+        matches!(self, Self::TrimSession)
+    }
+
+    pub fn is_verify_retirement(self) -> bool {
+        matches!(self, Self::RetireVerifyWindow)
     }
 
     pub fn is_generation_control(self) -> bool {
@@ -133,9 +137,6 @@ impl TryFrom<i32> for WireMessageKind {
             7 => Ok(Self::StateImport),
             8 => Ok(Self::DecodeReadout),
             9 => Ok(Self::DecodeLightCtx),
-            10 => Ok(Self::VerifySpan),
-            11 => Ok(Self::CheckpointSession),
-            12 => Ok(Self::RestoreSession),
             13 => Ok(Self::StateExport),
             14 => Ok(Self::ConfigureGeneration),
             15 => Ok(Self::ProbePrefill),
@@ -143,6 +144,9 @@ impl TryFrom<i32> for WireMessageKind {
             17 => Ok(Self::TryRestorePrefill),
             18 => Ok(Self::TryRestorePrefillDecode),
             19 => Ok(Self::TrimSession),
+            20 => Ok(Self::PredictionReturnOpen),
+            21 => Ok(Self::VerifyWindow),
+            22 => Ok(Self::RetireVerifyWindow),
             _ => Err(invalid_data("unknown stage message kind")),
         }
     }
@@ -181,16 +185,17 @@ pub enum WireStagePhase {
 pub mod state_flags {
     pub const FINAL_CHUNK: i32 = 1 << 0;
     pub const LIGHT_CONTEXT: i32 = 1 << 1;
-    pub const SKIP_VERIFY_CHECKPOINT: i32 = 1 << 2;
     pub const SAMPLING: i32 = 1 << 3;
     pub const FULL_STATE: i32 = 1 << 4;
     pub const CHAT_SAMPLING_METADATA: i32 = 1 << 5;
     pub const RWKV7_V_FIRST_SIDEBAND: i32 = 1 << 6;
     pub const GEMMA3N_ALTUP_SIDEBAND: i32 = 1 << 7;
+    pub const INKLING_MTP_EMBD_SIDEBAND: i32 = 1 << 8;
 }
 
 pub const ACTIVATION_FLAG_RWKV7_V_FIRST: u64 = 1 << 0;
 pub const ACTIVATION_FLAG_GEMMA3N_ALTUP: u64 = 1 << 1;
+pub const ACTIVATION_FLAG_INKLING_MTP_EMBD: u64 = 1 << 2;
 
 pub fn activation_frame_flags_from_state_flags(flags: i32) -> u64 {
     let mut frame_flags = 0;
@@ -199,6 +204,9 @@ pub fn activation_frame_flags_from_state_flags(flags: i32) -> u64 {
     }
     if (flags & state_flags::GEMMA3N_ALTUP_SIDEBAND) != 0 {
         frame_flags |= ACTIVATION_FLAG_GEMMA3N_ALTUP;
+    }
+    if (flags & state_flags::INKLING_MTP_EMBD_SIDEBAND) != 0 {
+        frame_flags |= ACTIVATION_FLAG_INKLING_MTP_EMBD;
     }
     frame_flags
 }
@@ -210,6 +218,9 @@ pub fn activation_state_flags_from_frame_flags(flags: u64) -> i32 {
     }
     if (flags & ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0 {
         state |= state_flags::GEMMA3N_ALTUP_SIDEBAND;
+    }
+    if (flags & ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0 {
+        state |= state_flags::INKLING_MTP_EMBD_SIDEBAND;
     }
     state
 }
@@ -317,6 +328,7 @@ impl StageStateHeader {
             kind,
             WireMessageKind::StateImport | WireMessageKind::StateExport
         ) || kind.is_session_control()
+            || kind.is_verify_retirement()
             || kind.is_generation_control()
         {
             return true;
@@ -341,6 +353,41 @@ impl Default for StageStateHeader {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StageRequestEpoch {
+    pub request_id: u64,
+    pub session_id: u64,
+    pub checkpoint_generation: i32,
+    pub prompt_token_count: i32,
+    pub decode_step: i32,
+}
+
+impl StageRequestEpoch {
+    pub fn same_flow(self, other: Self) -> bool {
+        self.request_id == other.request_id && self.session_id == other.session_id
+    }
+
+    /// Returns true when this epoch is strictly older than `current` within the
+    /// same request/session flow.
+    ///
+    /// Epochs from different flows are never comparable. For matching flows,
+    /// staleness uses lexicographic ordering of checkpoint generation, prompt
+    /// token count, and decode step, so a newer checkpoint dominates prompt and
+    /// decode progress, and prompt progress dominates decode progress.
+    pub fn is_stale_for(self, current: Self) -> bool {
+        self.same_flow(current)
+            && (
+                self.checkpoint_generation,
+                self.prompt_token_count,
+                self.decode_step,
+            ) < (
+                current.checkpoint_generation,
+                current.prompt_token_count,
+                current.decode_step,
+            )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StageWireMessage {
     pub kind: WireMessageKind,
@@ -358,6 +405,75 @@ pub struct StageWireMessage {
 }
 
 impl StageWireMessage {
+    /// The committed session position that must exist before this message runs.
+    ///
+    /// Stage-state v11 makes this absolute position authoritative: a worker whose
+    /// speculative KV is ahead must rewind locally before executing the message.
+    pub fn authoritative_session_position(&self) -> Option<u64> {
+        if !matches!(
+            self.kind,
+            WireMessageKind::DecodeEmbd
+                | WireMessageKind::DecodeReadout
+                | WireMessageKind::DecodeLightCtx
+                | WireMessageKind::VerifyWindow
+        ) {
+            return None;
+        }
+        u64::try_from(self.pos_start).ok()
+    }
+
+    pub fn verify_window_id(&self) -> Option<i32> {
+        (self.kind == WireMessageKind::VerifyWindow).then_some(self.state.seq_id)
+    }
+
+    pub fn verify_window_base_position(&self) -> Option<i32> {
+        (self.kind == WireMessageKind::VerifyWindow).then_some(self.pos_start)
+    }
+
+    pub fn verify_window_token_count(&self) -> Option<i32> {
+        (self.kind == WireMessageKind::VerifyWindow).then_some(self.token_count)
+    }
+
+    pub fn estimated_wire_bytes(&self) -> usize {
+        let sampling_bytes = self.sampling.as_ref().map_or(0, |sampling| {
+            STAGE_SAMPLING_CONFIG_BASE_BYTES
+                + sampling.logit_bias.len().min(MAX_STAGE_LOGIT_BIAS) * STAGE_LOGIT_BIAS_WIRE_BYTES
+        });
+        let chat_metadata_bytes = self
+            .chat_sampling_metadata
+            .as_ref()
+            .map_or(0, |metadata| std::mem::size_of::<u32>() + metadata.len());
+        STAGE_WIRE_FIXED_HEADER_BYTES
+            .saturating_add(sampling_bytes)
+            .saturating_add(chat_metadata_bytes)
+            .saturating_add(self.payload_wire_bytes())
+    }
+
+    fn payload_wire_bytes(&self) -> usize {
+        if self.kind == WireMessageKind::StateImport {
+            return self.raw_bytes.len();
+        }
+        self.tokens
+            .len()
+            .saturating_mul(std::mem::size_of::<i32>())
+            .saturating_add(
+                self.positions
+                    .len()
+                    .saturating_mul(std::mem::size_of::<i32>()),
+            )
+            .saturating_add(self.activation.len())
+    }
+
+    pub fn request_epoch(&self) -> StageRequestEpoch {
+        StageRequestEpoch {
+            request_id: self.request_id,
+            session_id: self.session_id,
+            checkpoint_generation: self.state.checkpoint_generation,
+            prompt_token_count: self.state.prompt_token_count,
+            decode_step: self.state.decode_step,
+        }
+    }
+
     pub fn stop(dtype: WireActivationDType) -> Self {
         Self::stop_with_identity(dtype, 0, 0)
     }
@@ -431,14 +547,56 @@ impl StageWireMessage {
             ),
         }
     }
+
+    pub fn take_activation_f32_payload(&mut self, n_embd: i32) -> io::Result<Vec<u8>> {
+        if self.activation.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self.state.dtype()? {
+            WireActivationDType::F32 => {
+                if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
+                    return Err(invalid_data(
+                        "decoded activation payload byte count exceeds maximum",
+                    ));
+                }
+                Ok(std::mem::take(&mut self.activation))
+            }
+            WireActivationDType::F16 => decode_f16_to_f32_bytes(&self.activation),
+            WireActivationDType::Q8 => decode_q8_to_f32_bytes_with_state_flags(
+                &self.activation,
+                self.token_count,
+                n_embd,
+                self.state.flags,
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageReply {
     pub kind: WireReplyKind,
     pub predicted: i32,
+    /// Target-model predictions only. Native MTP proposals are carried separately.
     pub predicted_tokens: Vec<i32>,
+    pub native_mtp_draft: Option<StageNativeMtpDraft>,
+    pub window: StageReplyWindow,
     pub stats: StageReplyStats,
+}
+
+/// A native MTP proposal associated with a stage reply.
+///
+/// This deliberately has its own reply field rather than sharing the target
+/// prediction vector. Consumers must never mistake proposal metadata for a
+/// target prediction while verifying a composite speculative window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageNativeMtpDraft {
+    pub token_ids: Vec<i32>,
+    pub proposal_compute_us: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StageReplyWindow {
+    pub window_id: i32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -452,30 +610,20 @@ pub struct StageReplyStats {
     pub kv_recorded_bytes: i64,
     pub kv_hit_stage_mask: i64,
     pub kv_record_stage_mask: i64,
-    pub checkpoint_flush_us: i64,
-    pub checkpoint_prefill_drain_us: i64,
-    pub checkpoint_local_us: i64,
-    pub checkpoint_downstream_write_us: i64,
-    pub checkpoint_downstream_wait_us: i64,
-    pub checkpoint_total_us: i64,
-    pub checkpoint_prefill_drained_replies: i64,
-    pub restore_flush_us: i64,
-    pub restore_prefill_drain_us: i64,
-    pub restore_local_us: i64,
-    pub restore_downstream_write_us: i64,
-    pub restore_downstream_wait_us: i64,
-    pub restore_total_us: i64,
-    pub restore_prefill_drained_replies: i64,
-    pub verify_span_compute_us: i64,
-    pub verify_span_forward_write_us: i64,
-    pub verify_span_downstream_wait_us: i64,
-    pub verify_span_total_us: i64,
-    pub verify_span_stage_count: i64,
-    pub verify_span_request_count: i64,
-    pub verify_span_token_count: i64,
-    pub verify_span_max_tokens: i64,
-    pub verify_span_checkpointed_requests: i64,
-    pub verify_span_skip_checkpoint_requests: i64,
+    pub verify_window_compute_us: i64,
+    pub verify_window_forward_write_us: i64,
+    pub verify_window_downstream_wait_us: i64,
+    pub verify_window_total_us: i64,
+    pub verify_window_stage_count: i64,
+    pub verify_window_request_count: i64,
+    pub verify_window_token_count: i64,
+    pub verify_window_max_tokens: i64,
+    pub prefill_edge_write_us_max: i64,
+    pub prefill_edge_wait_us_max: i64,
+    pub prefill_edge_total_us_max: i64,
+    pub prefill_edge_stage_index: i64,
+    pub prefill_edge_activation_bytes_max: i64,
+    pub prefill_edge_observation_count: i64,
 }
 
 impl StageReplyStats {
@@ -489,32 +637,49 @@ impl StageReplyStats {
         self.kv_recorded_bytes += other.kv_recorded_bytes;
         self.kv_hit_stage_mask |= other.kv_hit_stage_mask;
         self.kv_record_stage_mask |= other.kv_record_stage_mask;
-        self.checkpoint_flush_us += other.checkpoint_flush_us;
-        self.checkpoint_prefill_drain_us += other.checkpoint_prefill_drain_us;
-        self.checkpoint_local_us += other.checkpoint_local_us;
-        self.checkpoint_downstream_write_us += other.checkpoint_downstream_write_us;
-        self.checkpoint_downstream_wait_us += other.checkpoint_downstream_wait_us;
-        self.checkpoint_total_us += other.checkpoint_total_us;
-        self.checkpoint_prefill_drained_replies += other.checkpoint_prefill_drained_replies;
-        self.restore_flush_us += other.restore_flush_us;
-        self.restore_prefill_drain_us += other.restore_prefill_drain_us;
-        self.restore_local_us += other.restore_local_us;
-        self.restore_downstream_write_us += other.restore_downstream_write_us;
-        self.restore_downstream_wait_us += other.restore_downstream_wait_us;
-        self.restore_total_us += other.restore_total_us;
-        self.restore_prefill_drained_replies += other.restore_prefill_drained_replies;
-        self.verify_span_compute_us += other.verify_span_compute_us;
-        self.verify_span_forward_write_us += other.verify_span_forward_write_us;
-        self.verify_span_downstream_wait_us += other.verify_span_downstream_wait_us;
-        self.verify_span_total_us += other.verify_span_total_us;
-        self.verify_span_stage_count += other.verify_span_stage_count;
-        self.verify_span_request_count += other.verify_span_request_count;
-        self.verify_span_token_count += other.verify_span_token_count;
-        self.verify_span_max_tokens = self
-            .verify_span_max_tokens
-            .max(other.verify_span_max_tokens);
-        self.verify_span_checkpointed_requests += other.verify_span_checkpointed_requests;
-        self.verify_span_skip_checkpoint_requests += other.verify_span_skip_checkpoint_requests;
+        self.verify_window_compute_us += other.verify_window_compute_us;
+        self.verify_window_forward_write_us += other.verify_window_forward_write_us;
+        self.verify_window_downstream_wait_us += other.verify_window_downstream_wait_us;
+        self.verify_window_total_us += other.verify_window_total_us;
+        self.verify_window_stage_count += other.verify_window_stage_count;
+        self.verify_window_request_count += other.verify_window_request_count;
+        self.verify_window_token_count += other.verify_window_token_count;
+        self.verify_window_max_tokens = self
+            .verify_window_max_tokens
+            .max(other.verify_window_max_tokens);
+        self.prefill_edge_write_us_max = self
+            .prefill_edge_write_us_max
+            .max(other.prefill_edge_write_us_max);
+        self.prefill_edge_wait_us_max = self
+            .prefill_edge_wait_us_max
+            .max(other.prefill_edge_wait_us_max);
+        if other.prefill_edge_total_us_max > self.prefill_edge_total_us_max {
+            self.prefill_edge_total_us_max = other.prefill_edge_total_us_max;
+            self.prefill_edge_stage_index = other.prefill_edge_stage_index;
+            self.prefill_edge_activation_bytes_max = other.prefill_edge_activation_bytes_max;
+        }
+        self.prefill_edge_observation_count += other.prefill_edge_observation_count;
+    }
+
+    pub fn observe_prefill_edge_transport(
+        &mut self,
+        stage_index: u32,
+        write_us: i64,
+        wait_us: i64,
+        activation_bytes: usize,
+    ) {
+        let write_us = write_us.max(0);
+        let wait_us = wait_us.max(0);
+        let total_us = write_us.saturating_add(wait_us);
+        self.prefill_edge_write_us_max = self.prefill_edge_write_us_max.max(write_us);
+        self.prefill_edge_wait_us_max = self.prefill_edge_wait_us_max.max(wait_us);
+        if total_us > self.prefill_edge_total_us_max {
+            self.prefill_edge_total_us_max = total_us;
+            self.prefill_edge_stage_index = i64::from(stage_index);
+            self.prefill_edge_activation_bytes_max =
+                i64::try_from(activation_bytes).unwrap_or(i64::MAX);
+        }
+        self.prefill_edge_observation_count = self.prefill_edge_observation_count.saturating_add(1);
     }
 
     pub fn is_empty(self) -> bool {
@@ -527,30 +692,15 @@ impl StageReplyStats {
             && self.kv_recorded_bytes == 0
             && self.kv_hit_stage_mask == 0
             && self.kv_record_stage_mask == 0
-            && self.checkpoint_flush_us == 0
-            && self.checkpoint_prefill_drain_us == 0
-            && self.checkpoint_local_us == 0
-            && self.checkpoint_downstream_write_us == 0
-            && self.checkpoint_downstream_wait_us == 0
-            && self.checkpoint_total_us == 0
-            && self.checkpoint_prefill_drained_replies == 0
-            && self.restore_flush_us == 0
-            && self.restore_prefill_drain_us == 0
-            && self.restore_local_us == 0
-            && self.restore_downstream_write_us == 0
-            && self.restore_downstream_wait_us == 0
-            && self.restore_total_us == 0
-            && self.restore_prefill_drained_replies == 0
-            && self.verify_span_compute_us == 0
-            && self.verify_span_forward_write_us == 0
-            && self.verify_span_downstream_wait_us == 0
-            && self.verify_span_total_us == 0
-            && self.verify_span_stage_count == 0
-            && self.verify_span_request_count == 0
-            && self.verify_span_token_count == 0
-            && self.verify_span_max_tokens == 0
-            && self.verify_span_checkpointed_requests == 0
-            && self.verify_span_skip_checkpoint_requests == 0
+            && self.verify_window_compute_us == 0
+            && self.verify_window_forward_write_us == 0
+            && self.verify_window_downstream_wait_us == 0
+            && self.verify_window_total_us == 0
+            && self.verify_window_stage_count == 0
+            && self.verify_window_request_count == 0
+            && self.verify_window_token_count == 0
+            && self.verify_window_max_tokens == 0
+            && self.prefill_edge_observation_count == 0
     }
 }
 
@@ -561,6 +711,7 @@ fn expected_phase(kind: WireMessageKind) -> WireStagePhase {
             WireMessageKind::StateImport | WireMessageKind::StateExport
         )
         || kind.is_session_control()
+        || kind.is_verify_retirement()
         || kind.is_generation_control()
         || kind.is_prefix_cache_control()
     {

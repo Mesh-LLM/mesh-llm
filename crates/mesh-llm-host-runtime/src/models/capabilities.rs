@@ -6,11 +6,45 @@ pub use mesh_llm_types::models::capabilities::{
 use super::build_hf_tokio_api;
 use super::remote_catalog;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RuntimeMediaCapabilityEvidence {
     pub vision_projector_loaded: bool,
+    pub audio_projector_loaded: bool,
+}
+
+pub async fn runtime_media_capability_evidence(
+    projector_path: Option<PathBuf>,
+) -> RuntimeMediaCapabilityEvidence {
+    match tokio::task::spawn_blocking(move || {
+        scan_runtime_media_capability_evidence(projector_path)
+    })
+    .await
+    {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            tracing::warn!(%error, "projector metadata scan task failed");
+            RuntimeMediaCapabilityEvidence::default()
+        }
+    }
+}
+
+fn scan_runtime_media_capability_evidence(
+    projector_path: Option<PathBuf>,
+) -> RuntimeMediaCapabilityEvidence {
+    let Some(projector_path) = projector_path else {
+        return RuntimeMediaCapabilityEvidence::default();
+    };
+    let projector_meta = model_artifact::gguf::scan_gguf_projector_meta(Path::new(&projector_path));
+    RuntimeMediaCapabilityEvidence {
+        vision_projector_loaded: projector_meta
+            .and_then(|meta| meta.has_vision_encoder)
+            .unwrap_or(true),
+        audio_projector_loaded: projector_meta
+            .and_then(|meta| meta.has_audio_encoder)
+            .unwrap_or(false),
+    }
 }
 
 pub fn infer_remote_catalog_capabilities(
@@ -72,6 +106,10 @@ pub fn runtime_verified_capabilities_from_static(
         if caps.audio == CapabilityLevel::None {
             caps.multimodal = false;
         }
+    }
+    if evidence.audio_projector_loaded {
+        caps.audio = CapabilityLevel::Supported;
+        caps.multimodal = true;
     }
     caps.normalize()
 }
@@ -184,6 +222,7 @@ mod tests {
             Path::new("/models/Qwen3VL-2B-Instruct-Q4_K_M.gguf"),
             RuntimeMediaCapabilityEvidence {
                 vision_projector_loaded: false,
+                audio_projector_loaded: false,
             },
         );
 
@@ -201,6 +240,7 @@ mod tests {
             Path::new("/models/Qwen3VL-2B-Instruct-Q4_K_M.gguf"),
             RuntimeMediaCapabilityEvidence {
                 vision_projector_loaded: true,
+                audio_projector_loaded: false,
             },
         );
 
@@ -209,6 +249,23 @@ mod tests {
         assert!(caps.multimodal);
         assert!(caps.supports_vision_runtime());
         assert!(caps.supports_multimodal_runtime());
+    }
+
+    #[test]
+    fn runtime_media_verification_promotes_loaded_audio_encoder() {
+        let caps = runtime_verified_model_capabilities(
+            "inkling-UD-Q2_K_XL",
+            Path::new("/models/inkling-UD-Q2_K_XL.gguf"),
+            RuntimeMediaCapabilityEvidence {
+                vision_projector_loaded: true,
+                audio_projector_loaded: true,
+            },
+        );
+
+        assert_eq!(caps.vision, CapabilityLevel::Supported);
+        assert_eq!(caps.audio, CapabilityLevel::Supported);
+        assert!(caps.supports_multimodal_runtime());
+        assert!(caps.supports_audio_runtime());
     }
 
     #[test]
@@ -226,6 +283,7 @@ mod tests {
             caps,
             RuntimeMediaCapabilityEvidence {
                 vision_projector_loaded: false,
+                audio_projector_loaded: false,
             },
         );
 

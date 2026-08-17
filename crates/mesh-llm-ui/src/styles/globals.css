@@ -74,6 +74,10 @@
   --shell-pad-bottom: 40px;
   --shell-max-width: 1536px;
   --shell-zoom: 1;
+  --shell-normal: 14px;
+  --shell-compact: 12px;
+  --panel-x: 16px;
+  --panel-y: 12px;
   --chat-layout-height: calc(100dvh - 180px);
   --topnav-pad-x: 24px;
   --topnav-pad-y: 10px;
@@ -153,21 +157,25 @@
     0 0 0 4px color-mix(in oklch, var(--color-bad), transparent 88%);
   --shadow-config-reserved-selected:
     inset 0 0 0 1.5px var(--color-background), 0 0 0 1px color-mix(in oklch, var(--color-accent), transparent 38%);
-  --shadow-config-chip-selected:
-    inset 0 0 0 1.5px var(--color-background), 0 0 0 1px color-mix(in oklch, var(--color-accent), transparent 40%);
+  --shadow-config-chip-selected: inset 0 0 0 1.5px color-mix(in oklch, var(--color-accent), transparent 34%);
   --shadow-config-chip-resting: inset 0 0 0 1px color-mix(in oklch, var(--color-background), transparent 65%);
   --shadow-slider-thumb: 0 4px 12px color-mix(in oklch, var(--color-accent) 42%, transparent);
   --shadow-slider-alert: 0 0 0 3px color-mix(in oklch, var(--color-bad) 18%, transparent);
   --color-accent: oklch(0.8 0.14 200);
+  --color-accent-text: var(--color-accent);
   --color-accent-contrast: oklch(0.78 0.14 322);
   --color-accent-ink: oklch(0.2 0.04 220);
   --color-accent-soft: oklch(0.3 0.06 200);
   --chat-user-message-background: color-mix(in oklab, var(--color-panel-strong) 36%, transparent);
   --color-good: oklch(0.78 0.14 150);
+  --color-good-text: var(--color-good);
   --color-warn: oklch(0.8 0.12 80);
+  --color-warn-text: var(--color-warn);
   --color-bad: oklch(0.7 0.18 25);
+  --color-bad-text: var(--color-bad);
   --color-destructive: var(--color-bad);
-  --color-destructive-foreground: oklch(0.985 0.003 80);
+  --color-destructive-text: var(--color-destructive);
+  --color-destructive-foreground: var(--color-background);
   --color-fg-dim: oklch(0.75 0.01 250);
   --color-fg-faint: oklch(0.69 0.012 250);
   --model-family-text: oklch(0.985 0.003 80);
@@ -194,15 +202,20 @@
   --color-panel: oklch(0.975 0.004 80);
   --color-panel-strong: oklch(0.955 0.005 80);
   --color-accent: oklch(0.62 0.14 220);
+  --color-accent-text: color-mix(in oklab, var(--color-accent) 36%, var(--color-foreground));
   --color-accent-contrast: oklch(0.62 0.14 322);
-  --color-accent-ink: oklch(0.98 0.01 220);
+  --color-accent-ink: var(--color-foreground);
   --color-accent-soft: oklch(0.92 0.05 198);
   --chat-user-message-background: color-mix(in oklab, var(--color-panel-strong) 88%, transparent);
   --color-good: oklch(0.58 0.13 150);
+  --color-good-text: color-mix(in oklab, var(--color-good) 36%, var(--color-foreground));
   --color-warn: oklch(0.62 0.14 55);
+  --color-warn-text: color-mix(in oklab, var(--color-warn) 36%, var(--color-foreground));
   --color-bad: oklch(0.62 0.16 28);
+  --color-bad-text: color-mix(in oklab, var(--color-bad) 36%, var(--color-foreground));
   --color-destructive: var(--color-bad);
-  --color-destructive-foreground: oklch(0.985 0.003 80);
+  --color-destructive-text: color-mix(in oklab, var(--color-destructive) 36%, var(--color-foreground));
+  --color-destructive-foreground: var(--color-foreground);
   --color-fg-dim: oklch(0.45 0.015 250);
   --color-fg-faint: oklch(0.5 0.012 250);
   --model-family-text: oklch(0.2 0.02 250);
@@ -229,15 +242,20 @@
   --color-panel: oklch(0.2 0.018 250);
   --color-panel-strong: oklch(0.23 0.02 250);
   --color-accent: oklch(0.8 0.14 200);
+  --color-accent-text: var(--color-accent);
   --color-accent-contrast: oklch(0.78 0.14 322);
   --color-accent-ink: oklch(0.2 0.04 220);
   --color-accent-soft: oklch(0.3 0.06 200);
   --chat-user-message-background: color-mix(in oklab, var(--color-panel-strong) 36%, transparent);
   --color-good: oklch(0.78 0.14 150);
+  --color-good-text: var(--color-good);
   --color-warn: oklch(0.8 0.12 80);
+  --color-warn-text: var(--color-warn);
   --color-bad: oklch(0.7 0.18 25);
+  --color-bad-text: var(--color-bad);
   --color-destructive: var(--color-bad);
-  --color-destructive-foreground: oklch(0.985 0.003 80);
+  --color-destructive-text: var(--color-destructive);
+  --color-destructive-foreground: var(--color-background);
   --color-fg-dim: oklch(0.75 0.01 250);
   --color-fg-faint: oklch(0.69 0.012 250);
   --model-family-text: oklch(0.985 0.003 80);
@@ -426,6 +444,10 @@
   --shell-pad-bottom: 48px;
   --shell-max-width: 1536px;
   --shell-zoom: 1.18;
+  --shell-normal: 18px;
+  --shell-compact: 14px;
+  --panel-x: 20px;
+  --panel-y: 14px;
   --topnav-pad-x: 24px;
   --topnav-pad-y: 10px;
   --topnav-gap: 10px;
@@ -575,19 +597,29 @@ a[href],
     opacity 140ms cubic-bezier(0.16, 1, 0.3, 1),
     transform 90ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-button,
-a,
-input,
-textarea,
-[role='slider'] {
-  outline-offset: 3px;
+@layer base {
+  button,
+  a,
+  input,
+  textarea,
+  [role='slider'] {
+    outline-offset: 3px;
+  }
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  [role='slider']:focus-visible {
+    outline: 2px solid var(--color-accent);
+  }
 }
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-[role='slider']:focus-visible {
-  outline: 2px solid var(--color-accent);
+
+.text-accent {
+  color: var(--color-accent-text);
+}
+
+.text-warn {
+  color: var(--color-warn-text);
 }
 
 .surface-chrome {
@@ -735,11 +767,14 @@ textarea:focus-visible,
 .ui-control[data-active='true'] {
   border-color: color-mix(in oklab, var(--color-accent) 70%, var(--color-border));
   background: color-mix(in oklab, var(--color-accent) 12%, var(--color-panel));
-  color: var(--color-accent);
+  color: var(--color-foreground);
 }
 .ui-control:disabled {
   opacity: 0.45;
   box-shadow: none;
+}
+.ui-control[aria-invalid='true'] {
+  border-color: var(--color-bad);
 }
 
 .ui-field {
@@ -785,7 +820,7 @@ textarea:focus-visible,
 .ui-control-destructive-hover:focus-visible:not(:disabled) {
   border-color: color-mix(in oklab, var(--color-destructive) 76%, var(--color-border));
   background: color-mix(in oklab, var(--color-destructive) 14%, var(--color-panel));
-  color: var(--color-destructive);
+  color: var(--color-destructive-text);
   box-shadow: 0 0 12px color-mix(in oklab, var(--color-destructive) 12%, transparent);
 }
 
@@ -992,24 +1027,68 @@ textarea:focus-visible,
   line-height: var(--toml-source-line-height);
 }
 
+.toml-diff-body {
+  min-height: min(42vh, 34rem);
+  flex: 1;
+}
+
+.toml-diff-viewer {
+  min-height: 100%;
+  height: 100%;
+  padding: 0;
+}
+
 .toml-source-input:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: calc(var(--density-type-micro) * -0.18);
 }
 
 .toml-warning-list {
-  padding-block: calc(var(--density-type-caption) * 0.64);
+  display: grid;
+  gap: calc(var(--density-type-caption) * 0.78);
+  padding: calc(var(--density-type-control-lg) * 0.94) var(--toml-panel-pad-x);
 }
 
 .toml-warning-item {
-  gap: calc(var(--density-type-caption) * 0.68);
-  padding: calc(var(--density-type-caption) * 0.68) var(--toml-panel-pad-x);
+  gap: calc(var(--density-type-caption) * 0.84);
+  padding: calc(var(--density-type-control) * 0.9);
+  border: 1px solid color-mix(in oklab, var(--color-accent) 26%, var(--color-border-soft));
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--color-accent) 8%, var(--color-panel));
+}
+
+.toml-warning-item[data-kind='warn'] {
+  border-color: color-mix(in oklab, var(--color-accent) 42%, var(--color-border-soft));
+  background: color-mix(in oklab, var(--color-accent) 11%, var(--color-panel));
+}
+
+.toml-warning-item[data-kind='ok'] {
+  border-color: color-mix(in oklab, var(--color-accent) 34%, var(--color-border-soft));
+  background: color-mix(in oklab, var(--color-accent) 9%, var(--color-panel));
 }
 
 .toml-status-dot {
-  width: calc(var(--density-type-caption) * 0.56);
-  height: calc(var(--density-type-caption) * 0.56);
-  margin-top: calc(var(--density-type-caption) * 0.36);
+  width: calc(var(--density-type-caption) * 0.68);
+  height: calc(var(--density-type-caption) * 0.68);
+  margin-top: calc(var(--density-type-control-lg) * 0.35);
+}
+
+.toml-warning-content {
+  display: grid;
+  gap: calc(var(--density-type-micro) * 0.42);
+  line-height: 1.55;
+}
+
+.toml-warning-path {
+  color: var(--color-foreground);
+  font-size: var(--density-type-control);
+  overflow-wrap: anywhere;
+}
+
+.toml-warning-message {
+  color: var(--color-fg-dim);
+  font-size: var(--density-type-control-lg);
+  overflow-wrap: anywhere;
 }
 
 .toml-status-dot-ok {
@@ -1155,7 +1234,7 @@ textarea:focus-visible,
 .ui-control-destructive {
   border-color: color-mix(in oklab, var(--color-destructive) 48%, var(--color-border));
   background: color-mix(in oklab, var(--color-destructive) 12%, var(--color-panel));
-  color: var(--color-destructive);
+  color: var(--color-destructive-text);
   box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-destructive) 0%, transparent);
 }
 .ui-control-destructive:hover:not(:disabled) {
@@ -1373,6 +1452,10 @@ textarea:focus-visible,
     --shell-pad-top: 12px;
     --shell-pad-bottom: 28px;
     --shell-zoom: 1;
+    --shell-normal: 12px;
+    --shell-compact: 10px;
+    --panel-x: 12px;
+    --panel-y: 10px;
     --topnav-pad-x: 12px;
     --topnav-pad-y: 9px;
     --topnav-gap: 8px;

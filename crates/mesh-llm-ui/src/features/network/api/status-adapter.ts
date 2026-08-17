@@ -1,6 +1,7 @@
 import { DASHBOARD_HARNESS } from '@/features/app-tabs/data'
 import type { StatusPayload, PeerInfo, GpuInfo, ServingModelEntry } from '@/lib/api/types'
 import { isPublicMesh } from '@/lib/api/mesh-visibility'
+import { gpuRatedVramGB } from '@/lib/vram'
 import type {
   DashboardHarnessData,
   DashboardConnectData,
@@ -118,26 +119,18 @@ function gpuTotalVramGb(gpus?: GpuInfo[]): number | null {
   if (!gpus?.length) return null
 
   const total = gpus.reduce((sum, gpu) => {
-    if (typeof gpu.total_vram_gb === 'number' && Number.isFinite(gpu.total_vram_gb) && gpu.total_vram_gb > 0) {
-      return sum + gpu.total_vram_gb
-    }
-
-    if (typeof gpu.vram_bytes === 'number' && Number.isFinite(gpu.vram_bytes) && gpu.vram_bytes > 0) {
-      return sum + gpu.vram_bytes / 1024 ** 3
-    }
-
-    return sum
+    return sum + (gpuRatedVramGB(gpu) ?? 0)
   }, 0)
 
   return total > 0 ? total : null
 }
 
 function peerVramGb(peer: PeerInfo): number {
-  return finiteMetric(peer.my_vram_gb ?? peer.vram_gb ?? gpuTotalVramGb(peer.gpus) ?? undefined)
+  return finiteMetric(gpuTotalVramGb(peer.gpus) ?? peer.my_vram_gb ?? peer.vram_gb ?? undefined)
 }
 
 function meshTotalVramGb(payload: StatusPayload): number {
-  const localVram = finiteMetric(payload.my_vram_gb || gpuTotalVramGb(payload.gpus) || undefined)
+  const localVram = finiteMetric(gpuTotalVramGb(payload.gpus) ?? payload.my_vram_gb ?? undefined)
   return payload.peers.reduce((sum, peer) => sum + peerVramGb(peer), localVram)
 }
 
@@ -204,7 +197,7 @@ function adaptSelfPeer(payload: StatusPayload): Peer {
     role: 'you' as const,
     nodeState: effectiveState,
     version: payload.version,
-    vramGB: payload.my_vram_gb,
+    vramGB: gpuTotalVramGb(payload.gpus) ?? payload.my_vram_gb,
     toksPerSec: payload.tok_per_sec,
     firstJoinedMeshTs: payload.first_joined_mesh_ts
   }

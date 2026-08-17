@@ -9,9 +9,25 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
-$releaseBinDir = Join-Path $repoRoot "target\release"
+$releaseBinDir = if ($env:MESH_LLM_RELEASE_BIN_DIR) {
+    $env:MESH_LLM_RELEASE_BIN_DIR
+} else {
+    Join-Path $repoRoot "target\release"
+}
+$nativeRuntimeRoot = if ($env:MESH_LLM_NATIVE_RUNTIME_ROOT) {
+    $env:MESH_LLM_NATIVE_RUNTIME_ROOT
+} else {
+    Join-Path $repoRoot "dist\native-runtimes"
+}
 $attestationSigningKeyFile = $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE
 $attestationPublicKeyFile = $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE
+$attestationVerifier = $env:MESH_RELEASE_ATTESTATION_VERIFIER
+$precomposedProductDir = $env:MESH_LLM_PRECOMPOSED_PRODUCT_DIR
+$attestationPreverified = if ([string]::IsNullOrWhiteSpace($env:MESH_RELEASE_ATTESTATION_PREVERIFIED)) {
+    "0"
+} else {
+    $env:MESH_RELEASE_ATTESTATION_PREVERIFIED.Trim()
+}
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -147,6 +163,36 @@ function New-ZipArchive {
     )
 }
 
+function Get-Sha256Hex {
+    param([string]$Path)
+
+    # Use the .NET SHA-256 API directly instead of Get-FileHash. Under
+    # `powershell -NoProfile` on the CI runners, Microsoft.PowerShell.Utility
+    # module autoloading does not always resolve Get-FileHash, which caused
+    # release bundling to fail with CommandNotFoundException. The .NET API is
+    # always available regardless of module autoloading.
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $bytes = $sha256.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+    return [System.BitConverter]::ToString($bytes).Replace("-", "").ToLowerInvariant()
+}
+
+function New-ChecksumSidecar {
+    param([string]$Path)
+
+    $hash = Get-Sha256Hex $Path
+    $name = Split-Path -Leaf $Path
+    Set-Content -Path "$Path.sha256" -Value "$hash  $name" -NoNewline
+}
+
 function Require-File {
     param([string]$Path)
 
@@ -155,142 +201,45 @@ function Require-File {
     }
 }
 
-function Resolve-VulkanRuntimeDll {
-    $candidates = @()
-
-    if ($env:VULKAN_SDK) {
-        $candidates += (Join-Path $env:VULKAN_SDK "Bin\vulkan-1.dll")
-    }
-
-    $vulkanSdkRoot = "C:\VulkanSDK"
-    if (Test-Path $vulkanSdkRoot) {
-        $candidates += Get-ChildItem -Path $vulkanSdkRoot -Directory -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending |
-            ForEach-Object { Join-Path $_.FullName "Bin\vulkan-1.dll" }
-    }
-
-    $candidates += (Join-Path $env:WINDIR "System32\vulkan-1.dll")
-
-    foreach ($candidate in ($candidates | Select-Object -Unique)) {
-        if ($candidate -and (Test-Path $candidate)) {
-            return $candidate
-        }
-    }
-
-    throw "Vulkan runtime DLL not found. Install the Vulkan SDK/runtime so vulkan-1.dll is available before packaging."
-}
-
-function Resolve-CudaBinDir {
-    $candidates = @()
-
-    if ($env:CUDA_PATH) {
-        $candidates += (Join-Path $env:CUDA_PATH "bin")
-    }
-
-    $cudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
-    if (Test-Path $cudaRoot) {
-        $candidates += Get-ChildItem -Path $cudaRoot -Directory -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending |
-            ForEach-Object { Join-Path $_.FullName "bin" }
-    }
-
-    foreach ($candidate in ($candidates | Select-Object -Unique)) {
-        if ($candidate -and (Test-Path $candidate)) {
-            return $candidate
-        }
-    }
-
-    throw "CUDA toolkit bin directory not found. Install the CUDA toolkit before packaging a CUDA release."
-}
-
-function Copy-CudaRuntimeDependencies {
-    param([string]$BundleDir)
-
-    $cudaBin = Resolve-CudaBinDir
-    $requiredPatterns = @(
-        "cudart64_*.dll",
-        "cublas64_*.dll",
-        "cublasLt64_*.dll"
-    )
-    $optionalPatterns = @(
-        "nvJitLink_*.dll",
-        "nvrtc64_*.dll",
-        "nvrtc-builtins64_*.dll"
-    )
-    $copied = @()
-
-    foreach ($pattern in $requiredPatterns) {
-        $matches = @(Get-ChildItem -Path $cudaBin -Filter $pattern -File -ErrorAction SilentlyContinue | Sort-Object Name)
-        if ($matches.Count -eq 0) {
-            throw "CUDA runtime DLL not found: $pattern under $cudaBin"
-        }
-
-        foreach ($dll in $matches) {
-            Copy-Item $dll.FullName -Destination (Join-Path $BundleDir $dll.Name) -Force
-            $copied += $dll.FullName
-        }
-    }
-
-    foreach ($pattern in $optionalPatterns) {
-        $matches = @(Get-ChildItem -Path $cudaBin -Filter $pattern -File -ErrorAction SilentlyContinue | Sort-Object Name)
-        foreach ($dll in $matches) {
-            Copy-Item $dll.FullName -Destination (Join-Path $BundleDir $dll.Name) -Force
-            $copied += $dll.FullName
-        }
-    }
-
-    foreach ($source in ($copied | Select-Object -Unique)) {
-        Write-Host "Bundled CUDA runtime dependency: $source"
-    }
-}
-
-function Copy-RuntimeDependencies {
-    param(
-        [string]$BundleDir,
-        [string]$BinaryFlavor
-    )
-
-    switch ($BinaryFlavor) {
-        "vulkan" {
-            $vulkanDll = Resolve-VulkanRuntimeDll
-            Copy-Item $vulkanDll -Destination (Join-Path $BundleDir "vulkan-1.dll") -Force
-            Write-Host "Bundled Vulkan runtime dependency: $vulkanDll"
-            return
-        }
-        { $_ -in @("cuda", "cuda-blackwell") } {
-            Copy-CudaRuntimeDependencies -BundleDir $BundleDir
-            return
-        }
-    }
-}
-
-function Test-BinaryContainsAsciiText {
+function Assert-FileChecksum {
     param(
         [string]$Path,
-        [string]$Text
+        [string]$ChecksumPath
     )
 
-    $binaryText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($Path))
-    return $binaryText.Contains($Text)
+    Require-File $Path
+    Require-File $ChecksumPath
+    $checksumText = (Get-Content -Path $ChecksumPath -Raw).Trim()
+    $expectedHash = ($checksumText -split '\s+')[0].ToLowerInvariant()
+    if ($expectedHash -notmatch '^[0-9a-f]{64}$') {
+        throw "Invalid SHA-256 checksum in ${ChecksumPath}"
+    }
+
+    $actualHash = Get-Sha256Hex $Path
+    if ($actualHash -ne $expectedHash) {
+        throw "SHA-256 checksum mismatch for ${Path}"
+    }
+}
+
+function Get-PythonCommand {
+    foreach ($name in @("python3", "python")) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        if ($command) {
+            return $command.Source
+        }
+    }
+    throw "python3 or python is required for release packaging"
 }
 
 function Assert-MeshBinaryVersion {
     param(
         [string]$Path,
-        [string]$ExpectedVersion,
-        [string]$BinaryFlavor
+        [string]$ExpectedVersion
     )
 
     $expected = $ExpectedVersion.TrimStart("v")
     $output = & $Path --version
     if ($LASTEXITCODE -ne 0) {
-        if ($BinaryFlavor -in @("cuda", "cuda-blackwell") -and $LASTEXITCODE -eq -1073741515) {
-            if (Test-BinaryContainsAsciiText -Path $Path -Text $expected) {
-                Write-Warning "CUDA release binary could not start on this driverless Windows runner; verified embedded version string $expected instead."
-                return
-            }
-        }
-
         throw "Release binary failed --version with exit code ${LASTEXITCODE}: $Path"
     }
 
@@ -307,7 +256,38 @@ function Test-HasValue {
     return -not [string]::IsNullOrWhiteSpace($Value)
 }
 
+function Resolve-RepositoryPath {
+    param([string]$Path)
+
+    # Bash composite actions expose Git-for-Windows paths such as
+    # /d/a/mesh-llm/mesh-llm/product-input through GITHUB_OUTPUT. Convert that
+    # form before handing it to the Windows .NET path APIs.
+    if ($Path -match '^/(?<drive>[A-Za-z])(?:/(?<tail>.*))?$') {
+        $drive = $Matches.drive.ToUpperInvariant()
+        $tail = "$($Matches.tail)".Replace("/", "\")
+        return [System.IO.Path]::GetFullPath("${drive}:\${tail}")
+    }
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $repoRoot $Path))
+}
+
 function Assert-AttestationConfig {
+    if ($attestationPreverified -eq "1") {
+        if ($env:MESH_RELEASE_HOST_PRESTAMPED -ne "1" -or -not (Test-HasValue $precomposedProductDir)) {
+            throw "MESH_RELEASE_ATTESTATION_PREVERIFIED=1 requires a pre-stamped precomposed product"
+        }
+    } elseif ($attestationPreverified -ne "0") {
+        throw "MESH_RELEASE_ATTESTATION_PREVERIFIED must be 0 or 1"
+    }
+
+    if ($env:MESH_RELEASE_HOST_PRESTAMPED -eq "1") {
+        if (-not (Test-HasValue $attestationPublicKeyFile)) {
+            throw "MESH_RELEASE_HOST_PRESTAMPED=1 requires MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
+        }
+        return
+    }
     if ((Test-HasValue $attestationSigningKeyFile) -and -not (Test-HasValue $attestationPublicKeyFile)) {
         throw "MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE is required when MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE is set"
     }
@@ -321,6 +301,45 @@ function Invoke-ReleaseAttestationStamp {
     param([string]$BinaryPath)
 
     $inspectJson = $null
+
+    if ($env:MESH_RELEASE_HOST_PRESTAMPED -eq "1") {
+        if (-not (Test-Path $attestationPublicKeyFile) -or (Get-Item $attestationPublicKeyFile).Length -eq 0) {
+            throw "MESH_RELEASE_HOST_PRESTAMPED=1 requires a non-empty MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
+        }
+        if ($attestationPreverified -eq "1") {
+            Write-Host "Release attestation: verified by immutable product composer"
+            return
+        }
+        if (Test-HasValue $attestationVerifier) {
+            Assert-FileChecksum -Path $attestationVerifier -ChecksumPath "${attestationVerifier}.sha256"
+            $inspectJson = & $attestationVerifier release-attestation inspect `
+                --binary $BinaryPath `
+                --public-key-file $attestationPublicKeyFile `
+                --json
+            if ($LASTEXITCODE -ne 0) {
+                throw "prebuilt release-attestation verifier failed for pre-stamped $BinaryPath"
+            }
+        } else {
+            Push-Location $repoRoot
+            try {
+                $inspectJson = & cargo run -q -p xtask -- release-attestation inspect `
+                    --binary $BinaryPath `
+                    --public-key-file $attestationPublicKeyFile `
+                    --json
+                if ($LASTEXITCODE -ne 0) {
+                    throw "release-attestation inspect failed for pre-stamped $BinaryPath"
+                }
+            } finally {
+                Pop-Location
+            }
+        }
+        $inspectStatus = ($inspectJson | ConvertFrom-Json).status
+        if ($inspectStatus -ne "valid") {
+            throw "pre-stamped release host attestation reported status '$inspectStatus' for $BinaryPath"
+        }
+        Write-Host "Release attestation: verified pre-stamped host"
+        return
+    }
 
     if (-not (Test-HasValue $attestationSigningKeyFile)) {
         Write-Host "Release attestation: missing (packaged binary left unstamped)"
@@ -363,6 +382,67 @@ function Invoke-ReleaseAttestationStamp {
     }
 }
 
+function Copy-AndVerifyPrecomposedProduct {
+    param(
+        [string]$SourceDir,
+        [string]$BundleDir,
+        [string]$ExpectedVersion,
+        [string]$ExpectedBackend,
+        [string]$VerificationReport
+    )
+
+    $resolvedSourceDir = Resolve-RepositoryPath $SourceDir
+    if (-not (Test-Path -LiteralPath $resolvedSourceDir -PathType Container)) {
+        throw "Precomposed product directory does not exist: $resolvedSourceDir"
+    }
+
+    Require-File (Join-Path $resolvedSourceDir "product-manifest.json")
+    Require-File (Join-Path $resolvedSourceDir "host-imports.json")
+    foreach ($entry in [System.IO.Directory]::GetFileSystemEntries($resolvedSourceDir)) {
+        Copy-Item -LiteralPath $entry -Destination $BundleDir -Recurse -Force
+    }
+
+    $bundleBinary = Join-Path $BundleDir "mesh-llm.exe"
+    Require-File $bundleBinary
+    Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $ExpectedVersion
+    Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
+
+    $python = Get-PythonCommand
+    & $python (Join-Path $scriptDir "verify-host-dependencies.py") `
+        $bundleBinary `
+        --report $VerificationReport
+    if ($LASTEXITCODE -ne 0) {
+        throw "backend-neutral host dependency verification failed"
+    }
+
+    $runtimeRoot = Join-Path $BundleDir "native-runtimes"
+    if (-not (Test-Path -LiteralPath $runtimeRoot -PathType Container)) {
+        throw "Precomposed product is missing native-runtimes: $runtimeRoot"
+    }
+    $runtimeDirs = @(Get-ChildItem -LiteralPath $runtimeRoot -Directory)
+    if ($runtimeDirs.Count -ne 1) {
+        throw "Precomposed product must contain exactly one native runtime; found $($runtimeDirs.Count)"
+    }
+    $runtimeDir = $runtimeDirs[0].FullName
+    Require-File (Join-Path $runtimeDir "manifest.json")
+
+    & bash (Join-Path $scriptDir "verify-native-runtime-package.sh") $runtimeDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "native runtime verification failed"
+    }
+
+    & $python (Join-Path $scriptDir "compose-product-bundle.py") `
+        --bundle $BundleDir `
+        --host $bundleBinary `
+        --runtime $runtimeDir `
+        --version $ExpectedVersion `
+        --backend $ExpectedBackend `
+        --check
+    if ($LASTEXITCODE -ne 0) {
+        throw "precomposed product manifest does not match the packaged bytes"
+    }
+}
+
 $Version = Normalize-RecipeArgument $Version @("version")
 $OutputDir = Normalize-RecipeArgument $OutputDir @("output", "output_dir", "outputdir")
 $Flavor = Normalize-RecipeArgument $Flavor @("flavor", "backend")
@@ -380,7 +460,9 @@ $versionedAsset = New-ReleaseAssetName -Prefix "mesh-llm-$Version" -TargetTriple
 
 $meshBinary = Join-Path $releaseBinDir "mesh-llm.exe"
 
-Require-File $meshBinary
+if (-not (Test-HasValue $precomposedProductDir)) {
+    Require-File $meshBinary
+}
 
 $resolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) {
     [System.IO.Path]::GetFullPath($OutputDir)
@@ -394,17 +476,79 @@ $bundleDir = Join-Path $stagingRoot "mesh-bundle"
 New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
 
 try {
-    $bundleBinary = Join-Path $bundleDir (Get-BundleBinaryName "mesh-llm" $binaryFlavor)
-    Copy-Item $meshBinary -Destination $bundleBinary -Force
-    Copy-RuntimeDependencies -BundleDir $bundleDir -BinaryFlavor $binaryFlavor
-    Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $Version -BinaryFlavor $binaryFlavor
+    if (Test-HasValue $precomposedProductDir) {
+        Copy-AndVerifyPrecomposedProduct `
+            -SourceDir $precomposedProductDir `
+            -BundleDir $bundleDir `
+            -ExpectedVersion $Version `
+            -ExpectedBackend $releaseFlavor `
+            -VerificationReport (Join-Path $stagingRoot "host-imports.verify.json")
+    } else {
+        $bundleBinary = Join-Path $bundleDir (Get-BundleBinaryName "mesh-llm" $binaryFlavor)
+        Copy-Item $meshBinary -Destination $bundleBinary -Force
+        Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $Version
 
-    Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
+        Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
+        $python = Get-PythonCommand
+        $hostReport = Join-Path $bundleDir "host-imports.json"
+        & $python (Join-Path $scriptDir "verify-host-dependencies.py") $bundleBinary --report $hostReport
+        if ($LASTEXITCODE -ne 0) {
+            throw "backend-neutral host dependency verification failed"
+        }
+
+        $cudaMajor = if ($env:MESH_LLM_CUDA_TOOLKIT_MAJOR) {
+            $env:MESH_LLM_CUDA_TOOLKIT_MAJOR
+        } elseif ($env:MESH_CUDA_VERSION) {
+            ($env:MESH_CUDA_VERSION -split '\.')[0]
+        } else {
+            ""
+        }
+        $selectorArgs = @(
+            (Join-Path $scriptDir "select-native-runtime.py")
+            "--root"
+            $nativeRuntimeRoot
+            "--os"
+            "windows"
+            "--arch"
+            "x86_64"
+            "--backend"
+            $releaseFlavor
+        )
+        if (Test-HasValue $cudaMajor) {
+            $selectorArgs += @("--cuda-major", $cudaMajor)
+        }
+        $selectorOutput = & $python @selectorArgs
+        $selectorExitCode = $LASTEXITCODE
+        if ($selectorExitCode -ne 0) {
+            throw "failed to select the packaged Windows native runtime"
+        }
+        $runtimeDir = $selectorOutput | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Last 1
+        if (-not $runtimeDir) {
+            throw "failed to select the packaged Windows native runtime"
+        }
+        $runtimeDestinationRoot = Join-Path $bundleDir "native-runtimes"
+        $runtimeDestination = Join-Path $runtimeDestinationRoot (Split-Path -Leaf $runtimeDir)
+        New-Item -ItemType Directory -Path $runtimeDestinationRoot -Force | Out-Null
+        Copy-Item $runtimeDir -Destination $runtimeDestination -Recurse -Force
+
+        & $python (Join-Path $scriptDir "compose-product-bundle.py") `
+            --bundle $bundleDir `
+            --host $bundleBinary `
+            --runtime $runtimeDestination `
+            --version $Version `
+            --backend $releaseFlavor
+        if ($LASTEXITCODE -ne 0) {
+            throw "failed to write the product-v2 bundle manifest"
+        }
+    }
+
     $versionedPath = Join-Path $resolvedOutputDir $versionedAsset
     $stablePath = Join-Path $resolvedOutputDir $stableAsset
 
     New-ZipArchive -SourceDir $bundleDir -ArchivePath $versionedPath
+    New-ChecksumSidecar -Path $versionedPath
     New-ZipArchive -SourceDir $bundleDir -ArchivePath $stablePath
+    New-ChecksumSidecar -Path $stablePath
 
     Write-Host "Created release archives:"
     Get-ChildItem -Path $resolvedOutputDir -File | Sort-Object Name | ForEach-Object {

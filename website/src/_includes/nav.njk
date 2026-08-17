@@ -1,0 +1,19 @@
+<nav class="top sticky top-0 z-50 border-b border-line-soft bg-void/90 backdrop-blur-xl supports-[backdrop-filter]:bg-void/75" data-pagefind-ignore="all">
+  <div class="shell nav-inner flex min-h-16 items-center gap-3 sm:gap-5">
+    <a class="brand min-w-0 shrink-0" href="/" aria-label="Mesh LLM home">{% include "brand.njk" %}</a>
+    <div class="nav-links ml-auto flex min-w-0 items-center gap-2 text-sm text-muted sm:gap-4">
+      <a class="hidden whitespace-nowrap transition-colors hover:text-fg md:inline-flex" href="{{ site.publicMeshUrl }}">Public Mesh</a>
+      <a class="hidden whitespace-nowrap transition-colors hover:text-fg sm:inline-flex" href="/catalog/">Catalog</a>
+      <a class="hidden whitespace-nowrap transition-colors hover:text-fg sm:inline-flex" href="/docs/">Docs</a>
+      <div class="nav-cta flex min-w-0 items-center gap-2">
+        <a class="nav-github btn ghost btn-sm inline-flex min-h-11 items-center gap-2 whitespace-nowrap rounded-mesh border border-line px-3 text-sm" href="{{ site.githubUrl }}" data-github-stars-link data-github-repo="{{ site.githubRepo }}" aria-label="View {{ site.githubRepo }} on GitHub, {{ site.githubStarsFallback }} stars, {{ site.githubReleaseFallback }} release">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.7.5.5 5.6.5 12c0 5 3.3 9.3 7.8 10.8.6.1.8-.2.8-.6V20c-3.2.7-3.8-1.4-3.8-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2.9-.3 1.9-.4 2.9-.4s2 .1 2.9.4c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.7.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.3-5.3 5.6.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.8C23.5 5.6 18.3.5 12 .5Z"/></svg>
+          <span data-github-stars>{{ site.githubStarsFallback }}</span>
+          <span class="github-separator" aria-hidden="true">·</span>
+          <span data-github-release>{{ site.githubReleaseFallback }}</span>
+        </a>
+        <a class="btn primary btn-sm inline-flex h-11 min-h-0 items-center justify-center whitespace-nowrap rounded-mesh px-3 text-sm font-semibold sm:px-4" href="/docs/pages/installing-mesh/">Install</a>
+      </div>
+    </div>
+  </div>
+</nav>

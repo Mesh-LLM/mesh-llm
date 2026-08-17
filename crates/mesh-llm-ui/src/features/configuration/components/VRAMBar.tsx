@@ -6,14 +6,17 @@ import {
   contextGB,
   findModel,
   kvGB,
-  modelFamilyColorKey
+  modelFamilyColorKey,
+  modelWeightsGB
 } from '@/features/configuration/lib/config-math'
 import { formatGB } from '@/features/configuration/lib/config-display'
 import { createAssignmentId } from '@/features/configuration/lib/assignment-ids'
 import { reservedVramSelectionId } from '@/features/configuration/lib/selection'
 import {
   ASSIGN_MIME_PREFIX,
+  MODEL_MIME_PREFIX,
   SOURCE_CONTAINER_MIME_PREFIX,
+  getTypedDataId,
   getVramDropIntent,
   isReservedLaneEvent,
   isWithinVramBar
@@ -89,8 +92,9 @@ export function VRAMBar({
     if (readOnly) return
     if (isReservedLaneEvent(event)) return
 
-    const modelId = event.dataTransfer.getData('text/model')
-    const assignId = event.dataTransfer.getData('text/assign-id')
+    const types = Array.from(event.dataTransfer.types)
+    const modelId = event.dataTransfer.getData('text/model') || getTypedDataId(types, MODEL_MIME_PREFIX)
+    const assignId = event.dataTransfer.getData('text/assign-id') || getTypedDataId(types, ASSIGN_MIME_PREFIX)
     if (modelId) {
       const model = findModel(modelId, models)
       if (!model || !canFitModelInContainer(model, node, assigns, containerIdx, 4096, undefined, models)) return
@@ -223,7 +227,7 @@ export function VRAMBar({
           <button
             aria-label={`System reserved space, ${formatGB(reservedGB)} GB reserved on ${label.main}`}
             aria-pressed={reservedSelected}
-            className="grid shrink-0 cursor-pointer place-items-center rounded-[5px] border border-border-soft bg-background px-1.5 font-mono text-[length:var(--density-type-annotation)] uppercase tracking-[0.16em] text-fg-faint outline-none transition-[border-color,box-shadow,color] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+            className="grid shrink-0 cursor-pointer place-items-center rounded-[5px] border border-border-soft bg-background px-1.5 font-mono text-[length:var(--density-type-annotation)] uppercase tracking-[0.16em] text-fg-faint outline-none transition-[border-color,box-shadow,color] focus-visible:shadow-[var(--shadow-focus-accent)]"
             data-config-selection-area="true"
             data-vram-reserved-lane="true"
             disabled={readOnly}
@@ -247,7 +251,7 @@ export function VRAMBar({
         <div className="flex min-w-0 overflow-hidden rounded-[5px]" style={{ gap: 3 }}>
           {current.map((assign) => {
             const model = findModel(assign.modelId, models)
-            const weightsGB = model?.sizeGB ?? 1
+            const weightsGB = model ? modelWeightsGB(model) : 1
             const exactCacheGB = model ? contextGB(model, assign.ctx) : 0
             const displayCacheGB = model ? kvGB(model, assign.ctx) : 0
             const minWeightsPct = dense ? 10 : 8
@@ -264,7 +268,7 @@ export function VRAMBar({
                 key={assign.id}
                 aria-label={`${modelName}, ${formatGB(weightsGB)} GB weights, ${formatGB(displayCacheGB)} GB context cache${readOnly ? ', read-only' : ', drag to move'}`}
                 aria-pressed={selected}
-                className={`relative h-full min-w-0 shrink-0 overflow-hidden rounded-[5px] px-2 text-left outline-none transition-[box-shadow] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent ${readOnly ? 'cursor-not-allowed opacity-85' : ''}`}
+                className={`relative h-full min-w-0 shrink-0 overflow-hidden rounded-[5px] px-2 text-left outline-none transition-[box-shadow] focus-visible:shadow-[inset_0_0_0_2px_var(--color-accent)] ${readOnly ? 'cursor-not-allowed opacity-85' : ''}`}
                 data-config-model-chip="true"
                 data-model-family-color={modelFamilyColorKey(model)}
                 data-model-selection-area="true"

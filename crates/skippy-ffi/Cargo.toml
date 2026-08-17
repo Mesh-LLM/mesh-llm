@@ -7,5 +7,13 @@ description = "FFI bindings for mesh-llm's patched Skippy llama.cpp runtime"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 build = "build.rs"
+description = "Rust FFI bindings for the Skippy native runtime ABI"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+
+[features]
+default = ["dynamic-runtime"]
+dynamic-runtime = ["dep:libloading"]
 
 [dependencies]
+libloading = { version = "0.8", optional = true }

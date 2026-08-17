@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   reset:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Require explicit confirmation
         env:
@@ -27,7 +27,7 @@ jobs:
 
       - name: Delete all repository caches
         id: delete-caches
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           result-encoding: string
           script: |

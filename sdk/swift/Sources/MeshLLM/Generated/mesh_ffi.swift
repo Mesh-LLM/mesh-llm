@@ -1790,6 +1790,72 @@ public func FfiConverterTypeInstalledModel_lower(_ value: InstalledModel) -> Rus
 }
 
 
+public struct InstalledNativeRuntimeNative: Equatable, Hashable {
+    public var meshVersion: String
+    public var nativeRuntimeId: String
+    public var flavor: String
+    public var path: String
+    public var skippyAbiVersion: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(meshVersion: String, nativeRuntimeId: String, flavor: String, path: String, skippyAbiVersion: String?) {
+        self.meshVersion = meshVersion
+        self.nativeRuntimeId = nativeRuntimeId
+        self.flavor = flavor
+        self.path = path
+        self.skippyAbiVersion = skippyAbiVersion
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension InstalledNativeRuntimeNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeInstalledNativeRuntimeNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> InstalledNativeRuntimeNative {
+        return
+            try InstalledNativeRuntimeNative(
+                meshVersion: FfiConverterString.read(from: &buf),
+                nativeRuntimeId: FfiConverterString.read(from: &buf),
+                flavor: FfiConverterString.read(from: &buf),
+                path: FfiConverterString.read(from: &buf),
+                skippyAbiVersion: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: InstalledNativeRuntimeNative, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.meshVersion, into: &buf)
+        FfiConverterString.write(value.nativeRuntimeId, into: &buf)
+        FfiConverterString.write(value.flavor, into: &buf)
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterOptionString.write(value.skippyAbiVersion, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeInstalledNativeRuntimeNative_lift(_ buf: RustBuffer) throws -> InstalledNativeRuntimeNative {
+    return try FfiConverterTypeInstalledNativeRuntimeNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeInstalledNativeRuntimeNative_lower(_ value: InstalledNativeRuntimeNative) -> RustBuffer {
+    return FfiConverterTypeInstalledNativeRuntimeNative.lower(value)
+}
+
+
 public struct LoadModelOptions: Equatable, Hashable {
     public var devicePolicy: DevicePolicy
 
@@ -2229,6 +2295,266 @@ public func FfiConverterTypeModelSummary_lift(_ buf: RustBuffer) throws -> Model
 #endif
 public func FfiConverterTypeModelSummary_lower(_ value: ModelSummary) -> RustBuffer {
     return FfiConverterTypeModelSummary.lower(value)
+}
+
+
+public struct NativeRuntimeDownloadProgressNative: Equatable, Hashable {
+    public var nativeRuntimeId: String
+    public var url: String
+    public var downloadedBytes: UInt64
+    public var totalBytes: UInt64?
+    public var finished: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(nativeRuntimeId: String, url: String, downloadedBytes: UInt64, totalBytes: UInt64?, finished: Bool) {
+        self.nativeRuntimeId = nativeRuntimeId
+        self.url = url
+        self.downloadedBytes = downloadedBytes
+        self.totalBytes = totalBytes
+        self.finished = finished
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NativeRuntimeDownloadProgressNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeRuntimeDownloadProgressNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeRuntimeDownloadProgressNative {
+        return
+            try NativeRuntimeDownloadProgressNative(
+                nativeRuntimeId: FfiConverterString.read(from: &buf),
+                url: FfiConverterString.read(from: &buf),
+                downloadedBytes: FfiConverterUInt64.read(from: &buf),
+                totalBytes: FfiConverterOptionUInt64.read(from: &buf),
+                finished: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeRuntimeDownloadProgressNative, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.nativeRuntimeId, into: &buf)
+        FfiConverterString.write(value.url, into: &buf)
+        FfiConverterUInt64.write(value.downloadedBytes, into: &buf)
+        FfiConverterOptionUInt64.write(value.totalBytes, into: &buf)
+        FfiConverterBool.write(value.finished, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimeDownloadProgressNative_lift(_ buf: RustBuffer) throws -> NativeRuntimeDownloadProgressNative {
+    return try FfiConverterTypeNativeRuntimeDownloadProgressNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimeDownloadProgressNative_lower(_ value: NativeRuntimeDownloadProgressNative) -> RustBuffer {
+    return FfiConverterTypeNativeRuntimeDownloadProgressNative.lower(value)
+}
+
+
+public struct NativeRuntimeInstallOptionsNative: Equatable, Hashable {
+    public var meshVersion: String?
+    public var skippyAbiVersion: String?
+    public var selection: String
+    public var manifestPath: String?
+    public var manifestUrl: String?
+    public var bundleDirs: [String]
+    public var cacheDir: String?
+    public var verificationPolicy: NativeRuntimeVerificationPolicyNative
+    public var allowDownload: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(meshVersion: String?, skippyAbiVersion: String?, selection: String, manifestPath: String?, manifestUrl: String?, bundleDirs: [String], cacheDir: String?, verificationPolicy: NativeRuntimeVerificationPolicyNative, allowDownload: Bool) {
+        self.meshVersion = meshVersion
+        self.skippyAbiVersion = skippyAbiVersion
+        self.selection = selection
+        self.manifestPath = manifestPath
+        self.manifestUrl = manifestUrl
+        self.bundleDirs = bundleDirs
+        self.cacheDir = cacheDir
+        self.verificationPolicy = verificationPolicy
+        self.allowDownload = allowDownload
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NativeRuntimeInstallOptionsNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeRuntimeInstallOptionsNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeRuntimeInstallOptionsNative {
+        return
+            try NativeRuntimeInstallOptionsNative(
+                meshVersion: FfiConverterOptionString.read(from: &buf),
+                skippyAbiVersion: FfiConverterOptionString.read(from: &buf),
+                selection: FfiConverterString.read(from: &buf),
+                manifestPath: FfiConverterOptionString.read(from: &buf),
+                manifestUrl: FfiConverterOptionString.read(from: &buf),
+                bundleDirs: FfiConverterSequenceString.read(from: &buf),
+                cacheDir: FfiConverterOptionString.read(from: &buf),
+                verificationPolicy: FfiConverterTypeNativeRuntimeVerificationPolicyNative.read(from: &buf),
+                allowDownload: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeRuntimeInstallOptionsNative, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.meshVersion, into: &buf)
+        FfiConverterOptionString.write(value.skippyAbiVersion, into: &buf)
+        FfiConverterString.write(value.selection, into: &buf)
+        FfiConverterOptionString.write(value.manifestPath, into: &buf)
+        FfiConverterOptionString.write(value.manifestUrl, into: &buf)
+        FfiConverterSequenceString.write(value.bundleDirs, into: &buf)
+        FfiConverterOptionString.write(value.cacheDir, into: &buf)
+        FfiConverterTypeNativeRuntimeVerificationPolicyNative.write(value.verificationPolicy, into: &buf)
+        FfiConverterBool.write(value.allowDownload, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimeInstallOptionsNative_lift(_ buf: RustBuffer) throws -> NativeRuntimeInstallOptionsNative {
+    return try FfiConverterTypeNativeRuntimeInstallOptionsNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimeInstallOptionsNative_lower(_ value: NativeRuntimeInstallOptionsNative) -> RustBuffer {
+    return FfiConverterTypeNativeRuntimeInstallOptionsNative.lower(value)
+}
+
+
+public struct NativeRuntimeInstallOutcomeNative: Equatable, Hashable {
+    public var status: String
+    public var runtime: InstalledNativeRuntimeNative
+    public var selectedNativeRuntimeId: String
+    public var selectedSource: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(status: String, runtime: InstalledNativeRuntimeNative, selectedNativeRuntimeId: String, selectedSource: String) {
+        self.status = status
+        self.runtime = runtime
+        self.selectedNativeRuntimeId = selectedNativeRuntimeId
+        self.selectedSource = selectedSource
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NativeRuntimeInstallOutcomeNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeRuntimeInstallOutcomeNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeRuntimeInstallOutcomeNative {
+        return
+            try NativeRuntimeInstallOutcomeNative(
+                status: FfiConverterString.read(from: &buf),
+                runtime: FfiConverterTypeInstalledNativeRuntimeNative.read(from: &buf),
+                selectedNativeRuntimeId: FfiConverterString.read(from: &buf),
+                selectedSource: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeRuntimeInstallOutcomeNative, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.status, into: &buf)
+        FfiConverterTypeInstalledNativeRuntimeNative.write(value.runtime, into: &buf)
+        FfiConverterString.write(value.selectedNativeRuntimeId, into: &buf)
+        FfiConverterString.write(value.selectedSource, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimeInstallOutcomeNative_lift(_ buf: RustBuffer) throws -> NativeRuntimeInstallOutcomeNative {
+    return try FfiConverterTypeNativeRuntimeInstallOutcomeNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimeInstallOutcomeNative_lower(_ value: NativeRuntimeInstallOutcomeNative) -> RustBuffer {
+    return FfiConverterTypeNativeRuntimeInstallOutcomeNative.lower(value)
+}
+
+
+public struct NativeRuntimePruneResultNative: Equatable, Hashable {
+    public var removedDirs: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(removedDirs: [String]) {
+        self.removedDirs = removedDirs
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NativeRuntimePruneResultNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeRuntimePruneResultNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeRuntimePruneResultNative {
+        return
+            try NativeRuntimePruneResultNative(
+                removedDirs: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeRuntimePruneResultNative, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.removedDirs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimePruneResultNative_lift(_ buf: RustBuffer) throws -> NativeRuntimePruneResultNative {
+    return try FfiConverterTypeNativeRuntimePruneResultNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimePruneResultNative_lower(_ value: NativeRuntimePruneResultNative) -> RustBuffer {
+    return FfiConverterTypeNativeRuntimePruneResultNative.lower(value)
 }
 
 
@@ -3047,6 +3373,8 @@ public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErro
 
     case ConsoleFailed(message: String)
 
+    case NativeRuntimeFailed(message: String)
+
 
 
 
@@ -3128,6 +3456,10 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
 
+        case 14: return .NativeRuntimeFailed(
+            message: try FfiConverterString.read(from: &buf)
+        )
+
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -3165,6 +3497,8 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(12))
         case .ConsoleFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(13))
+        case .NativeRuntimeFailed(_ /* message is ignored*/):
+            writeInt(&buf, Int32(14))
 
 
         }
@@ -3338,6 +3672,140 @@ public func FfiConverterTypeModelSource_lift(_ buf: RustBuffer) throws -> ModelS
 #endif
 public func FfiConverterTypeModelSource_lower(_ value: ModelSource) -> RustBuffer {
     return FfiConverterTypeModelSource.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum NativeRuntimePruneModeNative: Equatable, Hashable {
+
+    case keepActiveAndPrevious
+    case activeOnly
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NativeRuntimePruneModeNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeRuntimePruneModeNative: FfiConverterRustBuffer {
+    typealias SwiftType = NativeRuntimePruneModeNative
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeRuntimePruneModeNative {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .keepActiveAndPrevious
+
+        case 2: return .activeOnly
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: NativeRuntimePruneModeNative, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .keepActiveAndPrevious:
+            writeInt(&buf, Int32(1))
+
+
+        case .activeOnly:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimePruneModeNative_lift(_ buf: RustBuffer) throws -> NativeRuntimePruneModeNative {
+    return try FfiConverterTypeNativeRuntimePruneModeNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimePruneModeNative_lower(_ value: NativeRuntimePruneModeNative) -> RustBuffer {
+    return FfiConverterTypeNativeRuntimePruneModeNative.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum NativeRuntimeVerificationPolicyNative: Equatable, Hashable {
+
+    case requireChecksum
+    case requireChecksumAndSignature
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NativeRuntimeVerificationPolicyNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeRuntimeVerificationPolicyNative: FfiConverterRustBuffer {
+    typealias SwiftType = NativeRuntimeVerificationPolicyNative
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeRuntimeVerificationPolicyNative {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .requireChecksum
+
+        case 2: return .requireChecksumAndSignature
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: NativeRuntimeVerificationPolicyNative, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .requireChecksum:
+            writeInt(&buf, Int32(1))
+
+
+        case .requireChecksumAndSignature:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimeVerificationPolicyNative_lift(_ buf: RustBuffer) throws -> NativeRuntimeVerificationPolicyNative {
+    return try FfiConverterTypeNativeRuntimeVerificationPolicyNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeRuntimeVerificationPolicyNative_lower(_ value: NativeRuntimeVerificationPolicyNative) -> RustBuffer {
+    return FfiConverterTypeNativeRuntimeVerificationPolicyNative.lower(value)
 }
 
 
@@ -3636,6 +4104,130 @@ public func FfiConverterCallbackInterfaceEventListener_lower(_ v: EventListener)
     return FfiConverterCallbackInterfaceEventListener.lower(v)
 }
 
+
+
+
+public protocol NativeRuntimeProgressListener: AnyObject, Sendable {
+
+    func onProgress(event: NativeRuntimeDownloadProgressNative)
+
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceNativeRuntimeProgressListener {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceNativeRuntimeProgressListener] = [UniffiVTableCallbackInterfaceNativeRuntimeProgressListener(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceNativeRuntimeProgressListener.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface NativeRuntimeProgressListener: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceNativeRuntimeProgressListener.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface NativeRuntimeProgressListener: handle missing in uniffiClone")
+            }
+        },
+        onProgress: { (
+            uniffiHandle: UInt64,
+            event: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceNativeRuntimeProgressListener.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onProgress(
+                     event: try FfiConverterTypeNativeRuntimeDownloadProgressNative_lift(event)
+                )
+            }
+
+
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )]
+}
+
+private func uniffiCallbackInitNativeRuntimeProgressListener() {
+    uniffi_meshllm_ffi_fn_init_callback_vtable_nativeruntimeprogresslistener(UniffiCallbackInterfaceNativeRuntimeProgressListener.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceNativeRuntimeProgressListener {
+    fileprivate static let handleMap = UniffiHandleMap<NativeRuntimeProgressListener>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceNativeRuntimeProgressListener : FfiConverter {
+    typealias SwiftType = NativeRuntimeProgressListener
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceNativeRuntimeProgressListener_lift(_ handle: UInt64) throws -> NativeRuntimeProgressListener {
+    return try FfiConverterCallbackInterfaceNativeRuntimeProgressListener.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceNativeRuntimeProgressListener_lower(_ v: NativeRuntimeProgressListener) -> UInt64 {
+    return FfiConverterCallbackInterfaceNativeRuntimeProgressListener.lower(v)
+}
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -3783,6 +4375,30 @@ fileprivate struct FfiConverterOptionTypeModelDetails: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionCallbackInterfaceNativeRuntimeProgressListener: FfiConverterRustBuffer {
+    typealias SwiftType = NativeRuntimeProgressListener?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterCallbackInterfaceNativeRuntimeProgressListener.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterCallbackInterfaceNativeRuntimeProgressListener.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -3850,6 +4466,31 @@ fileprivate struct FfiConverterSequenceTypeInstalledModel: FfiConverterRustBuffe
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeInstalledModel.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeInstalledNativeRuntimeNative: FfiConverterRustBuffer {
+    typealias SwiftType = [InstalledNativeRuntimeNative]
+
+    public static func write(_ value: [InstalledNativeRuntimeNative], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeInstalledNativeRuntimeNative.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [InstalledNativeRuntimeNative] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [InstalledNativeRuntimeNative]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeInstalledNativeRuntimeNative.read(from: &buf))
         }
         return seq
     }
@@ -3989,6 +4630,18 @@ public func createNode(ownerKeypairBytesHex: String, inviteToken: String, cacheD
     )
 })
 }
+public func currentMeshVersion() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_meshllm_ffi_fn_func_current_mesh_version($0
+    )
+})
+}
+public func currentSkippyAbiVersion() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_meshllm_ffi_fn_func_current_skippy_abi_version($0
+    )
+})
+}
 public func discoverPublicMeshes(query: PublicMeshQuery)throws  -> [PublicMesh]  {
     return try  FfiConverterSequenceTypePublicMesh.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_meshllm_ffi_fn_func_discover_public_meshes(
@@ -3999,6 +4652,39 @@ public func discoverPublicMeshes(query: PublicMeshQuery)throws  -> [PublicMesh] 
 public func generateOwnerKeypairHex() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_meshllm_ffi_fn_func_generate_owner_keypair_hex($0
+    )
+})
+}
+public func installNativeRuntime(options: NativeRuntimeInstallOptionsNative, progress: NativeRuntimeProgressListener?)throws  -> NativeRuntimeInstallOutcomeNative  {
+    return try  FfiConverterTypeNativeRuntimeInstallOutcomeNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_meshllm_ffi_fn_func_install_native_runtime(
+        FfiConverterTypeNativeRuntimeInstallOptionsNative_lower(options),
+        FfiConverterOptionCallbackInterfaceNativeRuntimeProgressListener.lower(progress),$0
+    )
+})
+}
+public func installedNativeRuntimes(cacheDir: String?)throws  -> [InstalledNativeRuntimeNative]  {
+    return try  FfiConverterSequenceTypeInstalledNativeRuntimeNative.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_meshllm_ffi_fn_func_installed_native_runtimes(
+        FfiConverterOptionString.lower(cacheDir),$0
+    )
+})
+}
+public func pruneNativeRuntimes(cacheDir: String?, activeMeshVersion: String?, mode: NativeRuntimePruneModeNative)throws  -> NativeRuntimePruneResultNative  {
+    return try  FfiConverterTypeNativeRuntimePruneResultNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_meshllm_ffi_fn_func_prune_native_runtimes(
+        FfiConverterOptionString.lower(cacheDir),
+        FfiConverterOptionString.lower(activeMeshVersion),
+        FfiConverterTypeNativeRuntimePruneModeNative_lower(mode),$0
+    )
+})
+}
+public func removeNativeRuntime(cacheDir: String?, meshVersion: String, nativeRuntimeId: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_meshllm_ffi_fn_func_remove_native_runtime(
+        FfiConverterOptionString.lower(cacheDir),
+        FfiConverterString.lower(meshVersion),
+        FfiConverterString.lower(nativeRuntimeId),$0
     )
 })
 }
@@ -4030,10 +4716,28 @@ private let initializationResult: InitializationResult = {
     if (uniffi_meshllm_ffi_checksum_func_create_node() != 11855) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 42923) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 11242) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_meshllm_ffi_checksum_func_discover_public_meshes() != 52961) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 63994) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 25162) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 21851) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 18336) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 48639) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 13931) {
@@ -4144,8 +4848,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_meshllm_ffi_checksum_method_eventlistener_on_event() != 56769) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 1578) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
     uniffiCallbackInitEventListener()
+    uniffiCallbackInitNativeRuntimeProgressListener()
     return InitializationResult.ok
 }()
 

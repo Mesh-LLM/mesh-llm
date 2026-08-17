@@ -1,0 +1,33 @@
+---
+layout: docs-base.njk
+title: Docs
+description: Mesh LLM documentation for installing Mesh, running models, joining meshes, using the Catalog, and connecting agents.
+permalink: /docs/index.html
+---
+<header class="docs-page-hero" id="documentation" data-pagefind-body>
+  <h1 class="text-balance font-display text-[clamp(2.5rem,12vw,5rem)] leading-[0.95] text-fg">Documentation</h1>
+  <p class="lead mt-4 max-w-[42rem] text-pretty text-base leading-7 text-muted sm:text-lg">Start one node, open the console, choose a model, connect agents, and add machines when you need more capacity.</p>
+</header>
+
+<main class="docs-shell grid min-w-0">
+  {% include "docs-sidebar.njk" %}
+  <section class="docs-index min-w-0" data-pagefind-body>
+    <div class="docs-grid grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2">
+      {% for group in docs %}
+        <article class="card grid min-w-0 grid-cols-1 content-start gap-3 rounded-mesh border border-line-soft bg-surface/55 p-[22px] shadow-none">
+          <h2 class="text-xl font-semibold text-fg">{{ group.title }}</h2>
+          <p class="mt-2 text-sm leading-6 text-muted">{{ group.description }}</p>
+          <div class="links mt-1 grid grid-cols-1 gap-1 border-t border-line pt-3.5">
+            {% for link in group.links %}
+              <a class="flex min-h-[30px] min-w-0 items-center justify-between gap-3 rounded-mesh px-2 py-1 font-mono text-xs leading-[1.4] text-muted hover:bg-void hover:text-blue-3" href="{{ link[1] }}">{{ link[0] }}</a>
+            {% endfor %}
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+  <aside class="docs-toc" aria-label="On this page" data-pagefind-ignore="all">
+    <h2>☰ On this page</h2>
+    <a href="#documentation">Documentation</a>
+  </aside>
+</main>

@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     env,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -25,6 +25,27 @@ use tokio::{
 };
 
 static EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
+static STDERR_SINK: OnceLock<bool> = OnceLock::new();
+
+/// Whether the stderr debug sink is enabled via `SKIPPY_TELEMETRY_STDERR`.
+///
+/// Read once: this is consulted on the record and lookup paths, which run per
+/// request.
+fn stderr_sink_enabled() -> bool {
+    *STDERR_SINK.get_or_init(|| env::var_os("SKIPPY_TELEMETRY_STDERR").is_some())
+}
+
+/// The stderr sink acts as a floor on the configured level.
+///
+/// It never lowers an explicitly configured level, so a collector-backed
+/// `Summary` deployment is unaffected by the variable being set.
+fn effective_level(configured: TelemetryLevel, stderr_sink: bool) -> TelemetryLevel {
+    if stderr_sink && configured == TelemetryLevel::Off {
+        TelemetryLevel::Debug
+    } else {
+        configured
+    }
+}
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
 const EXPORT_BATCH_MAX: usize = 128;
 const RETRY_BUFFER_CAPACITY: usize = 8192;
@@ -77,6 +98,13 @@ impl Telemetry {
         config: StageConfig,
         level: TelemetryLevel,
     ) -> Self {
+        // `SKIPPY_TELEMETRY_STDERR` promises a local debug sink that needs no
+        // collector. It was checked in `enqueue`, which `emit` never reached
+        // when the level was `Off` -- and the embedded runtime defaults to
+        // `Off`. So the variable silently did nothing in exactly the
+        // single-process case it exists for. Honour it as a level floor, and
+        // the existing level checks then work unchanged.
+        let level = effective_level(level, stderr_sink_enabled());
         let stats = Arc::new(TelemetryCounters::default());
         let config = Arc::new(config);
         let tx = (level != TelemetryLevel::Off)
@@ -154,7 +182,7 @@ impl Telemetry {
         start_time_unix_nanos: u64,
         end_time_unix_nanos: u64,
     ) {
-        if env::var_os("SKIPPY_TELEMETRY_STDERR").is_some() {
+        if stderr_sink_enabled() {
             let line = json!({
                 "event": name,
                 "attributes": attributes,
@@ -464,4 +492,45 @@ fn trace_id(start_time_unix_nanos: u64, event_id: u64) -> Vec<u8> {
 
 fn span_id(counter: u64) -> Vec<u8> {
     counter.to_be_bytes().to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TelemetryLevel, effective_level};
+
+    /// `SKIPPY_TELEMETRY_STDERR` is the only way to see record/lookup
+    /// decisions in a single-process embedded run, and the embedded runtime
+    /// defaults to `Off`. If the variable does not raise the level, the sink
+    /// is unreachable and the variable is a no-op -- which is what it was.
+    #[test]
+    fn stderr_sink_raises_an_off_level_so_events_are_emitted() {
+        assert_eq!(
+            effective_level(TelemetryLevel::Off, true),
+            TelemetryLevel::Debug
+        );
+    }
+
+    #[test]
+    fn stderr_sink_never_lowers_a_configured_level() {
+        assert_eq!(
+            effective_level(TelemetryLevel::Summary, true),
+            TelemetryLevel::Summary
+        );
+        assert_eq!(
+            effective_level(TelemetryLevel::Debug, true),
+            TelemetryLevel::Debug
+        );
+    }
+
+    #[test]
+    fn level_is_untouched_without_the_stderr_sink() {
+        assert_eq!(
+            effective_level(TelemetryLevel::Off, false),
+            TelemetryLevel::Off
+        );
+        assert_eq!(
+            effective_level(TelemetryLevel::Summary, false),
+            TelemetryLevel::Summary
+        );
+    }
 }

@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::crypto::{ReleaseBuildAttestation, parse_release_signer_public_key};
 
-fn current_time_unix_ms() -> u64 {
+pub(crate) fn current_time_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -918,7 +918,7 @@ impl SignedBootstrapToken {
         Ok(())
     }
 
-    fn validate_unsigned_shape(&self) -> Result<(), MeshRequirementRejectReason> {
+    pub(crate) fn validate_unsigned_shape(&self) -> Result<(), MeshRequirementRejectReason> {
         if self.version != SIGNED_BOOTSTRAP_TOKEN_VERSION
             || self.mesh_id.trim().is_empty()
             || self.policy_hash.trim().is_empty()
@@ -1058,7 +1058,7 @@ impl DirectNodeAdmissionProof {
         Ok(())
     }
 
-    fn validate_unsigned_shape(&self) -> Result<(), MeshRequirementRejectReason> {
+    pub(crate) fn validate_unsigned_shape(&self) -> Result<(), MeshRequirementRejectReason> {
         if self.version != DIRECT_NODE_ADMISSION_PROOF_VERSION
             || self.sender_id.len() != 32
             || self.mesh_id.trim().is_empty()
@@ -1110,7 +1110,7 @@ pub struct NormalizedNodeVersionBounds {
 }
 
 impl NormalizedNodeVersionBounds {
-    fn is_constrained(&self) -> bool {
+    pub(crate) fn is_constrained(&self) -> bool {
         self.min.is_some() || self.max.is_some()
     }
 }
@@ -1122,7 +1122,7 @@ pub struct NormalizedProtocolGenerationBounds {
 }
 
 impl NormalizedProtocolGenerationBounds {
-    fn is_constrained(&self) -> bool {
+    pub(crate) fn is_constrained(&self) -> bool {
         self.min.is_some() || self.max.is_some()
     }
 }
@@ -1133,7 +1133,7 @@ pub struct NormalizedReleaseAttestationRequirement {
     pub allowed_signer_keys: Vec<String>,
 }
 
-fn parse_node_version(raw: &str) -> Result<Version, MeshRequirementRejectReason> {
+pub(crate) fn parse_node_version(raw: &str) -> Result<Version, MeshRequirementRejectReason> {
     let normalized = raw.trim();
     if normalized.is_empty() {
         return Err(MeshRequirementRejectReason::NodeVersionMalformed);
@@ -1142,7 +1142,7 @@ fn parse_node_version(raw: &str) -> Result<Version, MeshRequirementRejectReason>
     Version::parse(normalized).map_err(|_| MeshRequirementRejectReason::NodeVersionMalformed)
 }
 
-fn version_precedence_cmp(left: &Version, right: &Version) -> std::cmp::Ordering {
+pub(crate) fn version_precedence_cmp(left: &Version, right: &Version) -> std::cmp::Ordering {
     let mut left = left.clone();
     let mut right = right.clone();
     left.build = BuildMetadata::EMPTY;
@@ -1150,12 +1150,12 @@ fn version_precedence_cmp(left: &Version, right: &Version) -> std::cmp::Ordering
     left.cmp(&right)
 }
 
-fn write_string(buf: &mut Vec<u8>, value: &str) {
+pub(crate) fn write_string(buf: &mut Vec<u8>, value: &str) {
     buf.extend_from_slice(&(value.len() as u64).to_le_bytes());
     buf.extend_from_slice(value.as_bytes());
 }
 
-fn write_optional_string(buf: &mut Vec<u8>, value: Option<&str>) {
+pub(crate) fn write_optional_string(buf: &mut Vec<u8>, value: Option<&str>) {
     match value {
         Some(value) => {
             buf.push(1);
@@ -1165,7 +1165,7 @@ fn write_optional_string(buf: &mut Vec<u8>, value: Option<&str>) {
     }
 }
 
-fn write_optional_u32(buf: &mut Vec<u8>, value: Option<u32>) {
+pub(crate) fn write_optional_u32(buf: &mut Vec<u8>, value: Option<u32>) {
     match value {
         Some(value) => {
             buf.push(1);
@@ -1175,7 +1175,7 @@ fn write_optional_u32(buf: &mut Vec<u8>, value: Option<u32>) {
     }
 }
 
-fn write_optional_u64(buf: &mut Vec<u8>, value: Option<u64>) {
+pub(crate) fn write_optional_u64(buf: &mut Vec<u8>, value: Option<u64>) {
     match value {
         Some(value) => {
             buf.push(1);
@@ -1185,19 +1185,19 @@ fn write_optional_u64(buf: &mut Vec<u8>, value: Option<u64>) {
     }
 }
 
-fn write_bytes(buf: &mut Vec<u8>, value: &[u8]) {
+pub(crate) fn write_bytes(buf: &mut Vec<u8>, value: &[u8]) {
     buf.extend_from_slice(&(value.len() as u64).to_le_bytes());
     buf.extend_from_slice(value);
 }
 
-fn write_bytes_list(buf: &mut Vec<u8>, values: &[Vec<u8>]) {
+pub(crate) fn write_bytes_list(buf: &mut Vec<u8>, values: &[Vec<u8>]) {
     buf.extend_from_slice(&(values.len() as u64).to_le_bytes());
     for value in values {
         write_bytes(buf, value);
     }
 }
 
-fn write_string_list(buf: &mut Vec<u8>, values: &[String]) {
+pub(crate) fn write_string_list(buf: &mut Vec<u8>, values: &[String]) {
     buf.extend_from_slice(&(values.len() as u64).to_le_bytes());
     for value in values {
         write_string(buf, value);
@@ -1208,7 +1208,7 @@ fn write_string_list(buf: &mut Vec<u8>, values: &[String]) {
 pub(crate) mod tests {
     use super::*;
 
-    fn restricted_requirements() -> MeshRequirements {
+    pub(crate) fn restricted_requirements() -> MeshRequirements {
         MeshRequirements {
             node_version: NodeVersionBounds {
                 min: Some("0.65.0".into()),

@@ -1,0 +1,142 @@
+name: Prepare backend-neutral host input
+description: Build, optionally attest, and verify one immutable MeshLLM host input.
+
+inputs:
+  profile:
+    description: Host build profile (debug, dev, or release).
+    required: false
+    default: release
+  output_dir:
+    description: Directory that receives the immutable host input.
+    required: false
+    default: host-input
+  binary_name:
+    description: Filename used inside the host input.
+    required: false
+    default: mesh-llm
+  skip_ui:
+    description: Skip rebuilding the React UI when a prepared dist tree is available.
+    required: false
+    default: "false"
+  build_version:
+    description: Optional build version override.
+    required: false
+    default: ""
+  attestation_signing_key_file:
+    description: Optional release-attestation signing key path.
+    required: false
+    default: ""
+  attestation_public_key_file:
+    description: Optional release-attestation public key path used to inspect the stamp.
+    required: false
+    default: ""
+
+outputs:
+  binary_path:
+    description: Absolute path to the prepared host executable.
+    value: ${{ steps.prepare.outputs.binary_path }}
+  imports_path:
+    description: Absolute path to the host import-policy report.
+    value: ${{ steps.prepare.outputs.imports_path }}
+  checksum_path:
+    description: Absolute path to the host checksum.
+    value: ${{ steps.prepare.outputs.checksum_path }}
+  attestation_verifier_path:
+    description: Optional prebuilt verifier copied beside an attested release host.
+    value: ${{ steps.prepare.outputs.attestation_verifier_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build and prepare immutable host
+      id: prepare
+      shell: bash
+      env:
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
+        INPUT_BINARY_NAME: ${{ inputs.binary_name }}
+        INPUT_SKIP_UI: ${{ inputs.skip_ui }}
+        INPUT_BUILD_VERSION: ${{ inputs.build_version }}
+        INPUT_ATTESTATION_SIGNING_KEY_FILE: ${{ inputs.attestation_signing_key_file }}
+        INPUT_ATTESTATION_PUBLIC_KEY_FILE: ${{ inputs.attestation_public_key_file }}
+      run: |
+        set -euo pipefail
+
+        case "$INPUT_PROFILE" in
+          debug|dev) source_binary="target/debug/mesh-llm" ;;
+          release) source_binary="target/release/mesh-llm" ;;
+          *)
+            echo "unsupported host profile: $INPUT_PROFILE" >&2
+            exit 1
+            ;;
+        esac
+
+        if [[ "$INPUT_SKIP_UI" == "true" ]]; then
+          export MESH_LLM_SKIP_UI=1
+        fi
+        if [[ -n "$INPUT_BUILD_VERSION" ]]; then
+          export MESH_LLM_BUILD_VERSION="$INPUT_BUILD_VERSION"
+        fi
+        scripts/build-host.sh --profile "$INPUT_PROFILE"
+
+        mkdir -p "$INPUT_OUTPUT_DIR"
+        binary_path="$INPUT_OUTPUT_DIR/$INPUT_BINARY_NAME"
+        imports_path="$INPUT_OUTPUT_DIR/host-imports.json"
+        checksum_path="$INPUT_OUTPUT_DIR/$INPUT_BINARY_NAME.sha256"
+        cp "$source_binary" "$binary_path"
+        chmod +x "$binary_path"
+
+        if [[ -n "$INPUT_ATTESTATION_SIGNING_KEY_FILE" || -n "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
+          if [[ -z "$INPUT_ATTESTATION_SIGNING_KEY_FILE" || -z "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
+            echo "both attestation key files are required when release attestation is enabled" >&2
+            exit 1
+          fi
+          cargo build -q -p xtask --bin xtask
+          cargo_target_dir="$(
+            cargo metadata --no-deps --format-version 1 |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'
+          )"
+          attestation_verifier="$cargo_target_dir/debug/xtask"
+          "$attestation_verifier" release-attestation stamp \
+            --binary "$binary_path" \
+            --signing-key-file "$INPUT_ATTESTATION_SIGNING_KEY_FILE"
+          "$attestation_verifier" release-attestation inspect \
+            --binary "$binary_path" \
+            --public-key-file "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" \
+            --json
+          cp "$attestation_verifier" "$INPUT_OUTPUT_DIR/release-attestation-verifier"
+          chmod +x "$INPUT_OUTPUT_DIR/release-attestation-verifier"
+        fi
+
+        python3 scripts/verify-host-dependencies.py \
+          "$binary_path" \
+          --report "$imports_path"
+        if command -v sha256sum >/dev/null 2>&1; then
+          checksum="$(sha256sum "$binary_path" | awk '{print $1}')"
+        else
+          checksum="$(shasum -a 256 "$binary_path" | awk '{print $1}')"
+        fi
+        printf '%s  %s\n' "$checksum" "$INPUT_BINARY_NAME" > "$checksum_path"
+        attestation_verifier_path=""
+        if [[ -f "$INPUT_OUTPUT_DIR/release-attestation-verifier" ]]; then
+          attestation_verifier_path="$INPUT_OUTPUT_DIR/release-attestation-verifier"
+          if command -v sha256sum >/dev/null 2>&1; then
+            verifier_checksum="$(sha256sum "$attestation_verifier_path" | awk '{print $1}')"
+          else
+            verifier_checksum="$(shasum -a 256 "$attestation_verifier_path" | awk '{print $1}')"
+          fi
+          printf '%s  release-attestation-verifier\n' "$verifier_checksum" \
+            > "$INPUT_OUTPUT_DIR/release-attestation-verifier.sha256"
+        fi
+
+        output_dir="$(cd "$INPUT_OUTPUT_DIR" && pwd)"
+        {
+          echo "binary_path=$output_dir/$INPUT_BINARY_NAME"
+          echo "imports_path=$output_dir/host-imports.json"
+          echo "checksum_path=$output_dir/$INPUT_BINARY_NAME.sha256"
+          if [[ -n "$attestation_verifier_path" ]]; then
+            echo "attestation_verifier_path=$output_dir/release-attestation-verifier"
+          else
+            echo "attestation_verifier_path="
+          fi
+        } >> "$GITHUB_OUTPUT"

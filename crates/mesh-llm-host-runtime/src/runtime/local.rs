@@ -1,18 +1,12 @@
-use super::capacity::{model_fits_runtime_capacity, runtime_model_required_bytes};
+use super::capacity::runtime_model_required_bytes;
 use super::context_planning::{
-    RuntimeResourcePlan, RuntimeResourcePlanInput, plan_runtime_resources,
+    RuntimeResourcePlan, RuntimeResourcePlanInput, RuntimeResourcePlanningProfile,
+    plan_runtime_resources,
 };
-use super::split_planning::{
-    PlannedRuntimeSliceTopology, RuntimeSliceStagePlan, SplitTopologyResourceInputs, format_gb,
-    plan_runtime_slice_topology_with_resources, split_participant_exclusion_labels,
-    split_participant_labels, split_participants_for_stages, split_stage_plan_labels,
-};
-#[cfg(test)]
-use super::split_planning::{format_aggregate_split_capacity_error, validate_split_capacity};
+use super::split_planning::format_gb;
 use crate::api;
-use crate::cli::output::{OutputEvent, emit_event};
 use crate::inference::{election, skippy};
-use crate::mesh::{self, NodeRole};
+use crate::mesh;
 use crate::models;
 use crate::network::router;
 use crate::plugin;
@@ -21,17 +15,36 @@ use crate::runtime_data::{
     RuntimeLlamaEndpointStatus, RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot,
 };
 use anyhow::{Context, Result};
-use sha2::{Digest, Sha256};
-use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
-use std::collections::HashMap;
+use mesh_llm_events::{OutputEvent, emit_event};
+use openai_frontend::OpenAiHookPolicy;
+use skippy_protocol::{FlashAttentionType, LoadMode};
+use skippy_server::serving_hooks::SharedModelServingHooksFactory;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-const SPLIT_PARTICIPANT_POLL_INTERVAL: Duration = Duration::from_millis(500);
-const SPLIT_PARTICIPANT_STABLE_FOR: Duration = Duration::from_secs(2);
-pub(super) const SPLIT_DEFAULT_MIN_PARTICIPANTS: usize = 2;
-const SPLIT_INITIAL_SHUTDOWN_GENERATION: u64 = 1;
-const SPLIT_COORDINATOR_LEASE_SECS: u64 = 4 * 60 * 60;
+use super::operational_logging::{
+    LocalServingOperationalEvent, record_local_serving_operational_event,
+};
+
+mod native_runtime_events;
+
+pub(super) use super::local_package::{
+    SPLIT_DEFAULT_MIN_PARTICIPANTS, SplitParticipant, SplitParticipantExclusion,
+    runtime_model_planning_bytes, scan_layer_package_metadata,
+};
+pub(super) use super::local_split::{
+    SplitCoordinatorAck, SplitCoordinatorEvent, SplitCoordinatorLocalFallbackEvent,
+    SplitCoordinatorReplaceEvent, SplitGenerationCleanup, SplitRuntimeReason, SplitRuntimeStart,
+    StartupRuntimePlan, now_unix_nanos, start_runtime_split_model, startup_runtime_plan,
+    stop_split_generation_cleanup,
+};
+pub(super) fn skippy_native_model_open_event_reporter(
+    model_name: String,
+) -> skippy::NativeModelOpenEventReporter {
+    native_runtime_events::skippy_native_model_open_event_reporter(model_name)
+}
 
 pub(super) type OpenAiGuardrailPolicyHandle = openai_frontend::GuardrailPolicyHandle;
 
@@ -59,6 +72,12 @@ pub(super) enum RuntimeEvent {
     },
     ModelTargetReconciliationLoadFinished {
         model_ref: String,
+        profile: String,
+        result: std::result::Result<api::RuntimeLoadResponse, String>,
+    },
+    StartupModelLoadFinished {
+        model_ref: String,
+        profile: String,
         result: std::result::Result<api::RuntimeLoadResponse, String>,
     },
 }
@@ -77,7 +96,7 @@ pub(super) struct LocalRuntimeModelHandle {
     pub(super) context_length: u32,
     pub(super) slots: usize,
     pub(super) capabilities: models::ModelCapabilities,
-    inner: LocalRuntimeBackendHandle,
+    pub(super) inner: LocalRuntimeBackendHandle,
 }
 
 impl LocalRuntimeModelHandle {
@@ -98,6 +117,12 @@ impl LocalRuntimeModelHandle {
     pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
+        }
+    }
+
+    pub(super) fn openai_server_status(&self) -> skippy_server::EmbeddedServerStatus {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { http, .. } => http.status(),
         }
     }
 
@@ -122,12 +147,17 @@ impl LocalRuntimeModelHandle {
                 let status = model.status();
                 let ctx_size = status.ctx_size as u64;
                 let now = current_time_unix_ms();
+                // Lane data may be a cached snapshot, so report when it was
+                // captured: a wedged runtime then shows a success time that
+                // stops advancing instead of looking fresh every tick.
+                let captured_unix_ms =
+                    unix_nanos_to_unix_ms(status.sessions_captured_at_unix_nanos).unwrap_or(now);
                 Some(RuntimeLlamaSlotsSnapshot {
                     status: RuntimeLlamaEndpointStatus::Ready,
                     model: Some(model_name.to_string()),
                     instance_id: instance_id.map(str::to_string),
                     last_attempt_unix_ms: Some(now),
-                    last_success_unix_ms: Some(now),
+                    last_success_unix_ms: Some(captured_unix_ms),
                     error: None,
                     slots: status
                         .lanes
@@ -164,21 +194,29 @@ impl LocalRuntimeModelHandle {
     }
 }
 
-fn current_time_unix_ms() -> u64 {
+pub(super) fn current_time_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }
 
-fn split_coordinator_lease_until_unix_ms() -> u64 {
-    current_time_unix_ms().saturating_add(SPLIT_COORDINATOR_LEASE_SECS.saturating_mul(1000))
+/// Convert a unix-nanosecond capture time to unix milliseconds. `None` for a
+/// non-positive input, meaning "never captured" rather than the epoch.
+fn unix_nanos_to_unix_ms(unix_nanos: i64) -> Option<u64> {
+    u64::try_from(unix_nanos)
+        .ok()
+        .filter(|nanos| *nanos > 0)
+        .map(|nanos| nanos / 1_000_000)
 }
 
 pub(super) struct ManagedModelController {
     pub(super) model_name: String,
+    pub(super) profile: String,
     pub(super) stop_tx: tokio::sync::watch::Sender<bool>,
     pub(super) task: tokio::task::JoinHandle<()>,
+    pub(super) lifecycle: std::sync::Arc<tokio::sync::Mutex<super::InstanceLifecycleRecord>>,
+    pub(super) port: std::sync::Arc<std::sync::atomic::AtomicU16>,
 }
 
 pub(super) struct LocalRuntimeModelStartSpec<'a> {
@@ -197,81 +235,35 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) n_ubatch_override: Option<u32>,
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
+    pub(super) split_topology_lock: Option<&'a Path>,
+    pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
 }
 
-pub(super) enum SplitRuntimeStart {
-    Started(Box<SplitRuntimeGenerationHandle>),
-    Standby { coordinator: iroh::EndpointId },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum StartupRuntimePlan {
-    Local,
-    Split { reason: SplitRuntimeReason },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SplitRuntimeReason {
-    Forced,
-    LocalCapacity,
-}
-
-pub(super) struct SplitRuntimeGenerationHandle {
-    pub(super) loaded_name: String,
-    pub(super) handle: LocalRuntimeModelHandle,
-    pub(super) death_rx: tokio::sync::oneshot::Receiver<()>,
-    pub(super) cleanup: Option<SplitGenerationCleanup>,
-    pub(super) coordinator_rx: Option<tokio::sync::mpsc::Receiver<SplitCoordinatorEvent>>,
-    pub(super) coordinator_task: Option<tokio::task::JoinHandle<()>>,
-}
-
-pub(super) enum SplitCoordinatorEvent {
-    Replace(Box<SplitCoordinatorReplaceEvent>),
-    LocalFallback(SplitCoordinatorLocalFallbackEvent),
-    Withdraw(SplitCoordinatorWithdrawEvent),
-}
-
-pub(super) struct SplitCoordinatorReplaceEvent {
-    pub(super) reason: &'static str,
-    pub(super) generation: u64,
-    pub(super) loaded: SplitRuntimeGenerationHandle,
-    pub(super) ack: tokio::sync::oneshot::Sender<SplitCoordinatorAck>,
-}
-
-pub(super) struct SplitCoordinatorLocalFallbackEvent {
-    pub(super) reason: &'static str,
-    pub(super) generation: u64,
-    pub(super) topology_id: String,
-    pub(super) unavailable_stage_nodes: Vec<iroh::EndpointId>,
-    pub(super) ack: tokio::sync::oneshot::Sender<SplitCoordinatorAck>,
-}
-
-pub(super) struct SplitCoordinatorWithdrawEvent {
-    pub(super) reason: &'static str,
-    pub(super) generation: u64,
-    pub(super) topology_id: String,
-    pub(super) unavailable_stage_nodes: Vec<iroh::EndpointId>,
-    pub(super) ack: tokio::sync::oneshot::Sender<SplitCoordinatorAck>,
-}
-
-pub(super) enum SplitCoordinatorAck {
-    Accepted,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct SplitGenerationCleanup {
-    generation: SplitTopologyGeneration,
-}
-
-pub(super) async fn stop_split_generation_cleanup(
-    node: &mesh::Node,
-    cleanup: SplitGenerationCleanup,
-    shutdown_generation: u64,
-) {
-    stop_split_generation(node, &cleanup.generation, shutdown_generation).await;
+pub(super) struct LocalOpenAiModelStartSpec<'a> {
+    pub(super) mesh_config: &'a plugin::MeshConfig,
+    pub(super) config_model_id: Option<&'a str>,
+    pub(super) model_path: &'a Path,
+    pub(super) model_bytes: u64,
+    pub(super) mmproj_override: Option<&'a Path>,
+    pub(super) ctx_size_override: Option<u32>,
+    pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    pub(super) capacity_budget_bytes: u64,
+    pub(super) cache_type_k_override: Option<&'a str>,
+    pub(super) cache_type_v_override: Option<&'a str>,
+    pub(super) n_batch_override: Option<u32>,
+    pub(super) n_ubatch_override: Option<u32>,
+    pub(super) flash_attention_override: FlashAttentionType,
+    pub(super) parallel_override: Option<usize>,
+    pub(super) planning_profile: RuntimeResourcePlanningProfile,
+    pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
+    pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
+    pub(super) survey_telemetry: survey::SurveyTelemetry,
+    pub(super) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
+    pub(super) http_bind_addr: SocketAddr,
 }
 
 pub(super) fn resolved_model_name(path: &Path) -> String {
@@ -283,7 +275,7 @@ pub(super) fn resolved_model_name(path: &Path) -> String {
     router::strip_split_suffix_owned(&stem)
 }
 
-fn mmproj_path_for_model(model_name: &str) -> Option<PathBuf> {
+pub(super) fn mmproj_path_for_model(model_name: &str) -> Option<PathBuf> {
     let model_path = models::find_model_path(model_name);
     models::find_mmproj_path(model_name, &model_path)
 }
@@ -299,7 +291,7 @@ fn pinned_skippy_device(
     }
 }
 
-fn pinned_stage_device(
+pub(super) fn pinned_stage_device(
     gpu: &crate::runtime::StartupPinnedGpuTarget,
 ) -> skippy_protocol::StageDevice {
     skippy_protocol::StageDevice {
@@ -310,43 +302,24 @@ fn pinned_stage_device(
     }
 }
 
-fn resolve_runtime_skippy_config(
-    spec: &LocalRuntimeModelStartSpec<'_>,
+pub(super) fn resolve_local_openai_skippy_config(
+    spec: &LocalOpenAiModelStartSpec<'_>,
     model_name: &str,
     model_bytes: u64,
     context_length: u32,
     slots: usize,
     fallback_projector_path: Option<PathBuf>,
 ) -> Result<skippy::ResolvedSkippyConfig> {
-    let allocatable_memory_bytes = spec
-        .capacity_budget_bytes
-        .or_else(|| spec.pinned_gpu.map(|gpu| gpu.vram_bytes));
     let mut resolved = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
         mesh_config: spec.mesh_config,
         model_id: spec.config_model_id.unwrap_or(model_name),
         model_path: spec.model_path,
         model_bytes,
-        allocatable_memory_bytes,
+        allocatable_memory_bytes: Some(spec.capacity_budget_bytes),
         request_defaults: None,
+        package_generation: None,
     })?;
     resolved.model_id = model_name.to_string();
-    apply_runtime_skippy_launch_overrides(
-        &mut resolved,
-        spec,
-        context_length,
-        slots,
-        fallback_projector_path,
-    );
-    Ok(resolved)
-}
-
-fn apply_runtime_skippy_launch_overrides(
-    resolved: &mut skippy::ResolvedSkippyConfig,
-    spec: &LocalRuntimeModelStartSpec<'_>,
-    context_length: u32,
-    slots: usize,
-    fallback_projector_path: Option<PathBuf>,
-) {
     resolved.model_fit.ctx_size = context_length;
     resolved.throughput.parallel = slots;
     if let Some(cache_type_k) = spec.cache_type_k_override {
@@ -372,9 +345,10 @@ fn apply_runtime_skippy_launch_overrides(
     if let Some(gpu) = spec.pinned_gpu {
         resolved.hardware.device = Some(gpu.backend_device.clone());
     }
+    Ok(resolved)
 }
 
-async fn alloc_local_port() -> Result<u16> {
+pub(super) async fn alloc_local_port() -> Result<u16> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     drop(listener);
@@ -388,11 +362,17 @@ pub(super) fn add_runtime_local_target(
 ) {
     let mut targets = target_tx.borrow().clone();
     let entry = targets.targets.entry(model_name.to_string()).or_default();
+    let target_was_present = entry
+        .iter()
+        .any(|target| matches!(target, election::InferenceTarget::Local(local_port) if *local_port == port));
     entry.retain(
         |target| !matches!(target, election::InferenceTarget::Local(local_port) if *local_port == port),
     );
     entry.insert(0, election::InferenceTarget::Local(port));
     target_tx.send_replace(targets);
+    if !target_was_present {
+        record_local_serving_operational_event(LocalServingOperationalEvent::TargetAdded);
+    }
 }
 
 pub(super) fn remove_runtime_local_target(
@@ -402,28 +382,40 @@ pub(super) fn remove_runtime_local_target(
 ) {
     let mut targets = target_tx.borrow().clone();
     let mut should_remove_model = false;
+    let mut target_was_removed = false;
     if let Some(entry) = targets.targets.get_mut(model_name) {
+        let entry_len = entry.len();
         entry.retain(|target| {
             !matches!(target, election::InferenceTarget::Local(local_port) if *local_port == port)
         });
+        target_was_removed = entry.len() != entry_len;
         should_remove_model = entry.is_empty();
     }
     if should_remove_model {
         targets.targets.remove(model_name);
     }
     target_tx.send_replace(targets);
+    if target_was_removed {
+        record_local_serving_operational_event(LocalServingOperationalEvent::TargetRemoved);
+    }
 }
 
 pub(super) async fn advertise_model_ready(
     node: &mesh::Node,
     primary_model_name: &str,
     model_name: &str,
+    profile: &str,
 ) {
     let mut hosted_models = node.hosted_models().await;
-    if hosted_models.iter().any(|m| m == model_name) {
+    let public_id = if profile.is_empty() {
+        model_name.to_string()
+    } else {
+        format!("{}#{}", model_name, profile)
+    };
+    if hosted_models.iter().any(|m| m == &public_id) {
         return;
     }
-    hosted_models.push(model_name.to_string());
+    hosted_models.push(public_id);
     hosted_models.sort();
     if let Some(pos) = hosted_models.iter().position(|m| m == primary_model_name) {
         let primary = hosted_models.remove(pos);
@@ -431,6 +423,7 @@ pub(super) async fn advertise_model_ready(
     }
     node.set_hosted_models(hosted_models).await;
     node.regossip().await;
+    record_local_serving_operational_event(LocalServingOperationalEvent::Ready);
 }
 
 pub(super) async fn set_advertised_model_context(
@@ -443,15 +436,21 @@ pub(super) async fn set_advertised_model_context(
     node.regossip().await;
 }
 
-pub(super) async fn withdraw_advertised_model(node: &mesh::Node, model_name: &str) {
+pub(super) async fn withdraw_advertised_model(node: &mesh::Node, model_name: &str, profile: &str) {
     let mut hosted_models = node.hosted_models().await;
+    let public_id = if profile.is_empty() {
+        model_name.to_string()
+    } else {
+        format!("{}#{}", model_name, profile)
+    };
     let old_len = hosted_models.len();
-    hosted_models.retain(|m| m != model_name);
+    hosted_models.retain(|m| m != &public_id);
     if hosted_models.len() == old_len {
         return;
     }
     node.set_hosted_models(hosted_models).await;
     node.regossip().await;
+    record_local_serving_operational_event(LocalServingOperationalEvent::Unavailable);
 }
 
 pub(super) async fn add_serving_assignment(
@@ -498,7 +497,7 @@ pub(super) async fn set_runtime_verified_served_model_capabilities(
     node.upsert_served_model_descriptor(descriptor).await;
 }
 
-fn runtime_verified_served_model_descriptor(
+pub(super) fn runtime_verified_served_model_descriptor(
     existing: Option<mesh::ServedModelDescriptor>,
     primary_model_name: &str,
     model_name: &str,
@@ -544,6 +543,50 @@ pub(super) async fn start_runtime_local_model(
     LocalRuntimeModelHandle,
     tokio::sync::oneshot::Receiver<()>,
 )> {
+    let local_capacity_bytes = spec
+        .capacity_budget_bytes
+        .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
+        .unwrap_or_else(|| spec.node.vram_bytes());
+    let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
+    let hook_policy =
+        Some(skippy::MeshAutoHookPolicy::new(spec.node.clone()) as Arc<dyn OpenAiHookPolicy>);
+    start_local_openai_model(
+        LocalOpenAiModelStartSpec {
+            mesh_config: spec.mesh_config,
+            config_model_id: spec.config_model_id,
+            model_path: spec.model_path,
+            model_bytes: spec.model_bytes,
+            mmproj_override: spec.mmproj_override,
+            ctx_size_override: spec.ctx_size_override,
+            pinned_gpu: spec.pinned_gpu,
+            capacity_budget_bytes: local_capacity_bytes,
+            cache_type_k_override: spec.cache_type_k_override,
+            cache_type_v_override: spec.cache_type_v_override,
+            n_batch_override: spec.n_batch_override,
+            n_ubatch_override: spec.n_ubatch_override,
+            flash_attention_override: spec.flash_attention_override,
+            parallel_override: spec.parallel_override,
+            planning_profile: spec.planning_profile,
+            openai_guardrail_policy: spec.openai_guardrail_policy,
+            skippy_telemetry: spec.skippy_telemetry,
+            survey_telemetry: spec.survey_telemetry,
+            hook_policy,
+            serving_hooks_factory: None,
+            http_bind_addr,
+        },
+        runtime_model_name,
+    )
+    .await
+}
+
+pub(super) async fn start_local_openai_model(
+    spec: LocalOpenAiModelStartSpec<'_>,
+    runtime_model_name: &str,
+) -> Result<(
+    String,
+    LocalRuntimeModelHandle,
+    tokio::sync::oneshot::Receiver<()>,
+)> {
     let model_name = runtime_model_name.to_string();
     let package_ref = spec.model_path.to_string_lossy().to_string();
     let layer_package = if skippy::is_layer_package_ref(&package_ref) {
@@ -562,10 +605,7 @@ pub(super) async fn start_runtime_local_model(
         .as_ref()
         .map(|package| package.source_model_bytes)
         .unwrap_or_else(|| election::total_model_bytes(spec.model_path));
-    let my_vram = spec
-        .capacity_budget_bytes
-        .or_else(|| spec.pinned_gpu.map(|gpu| gpu.vram_bytes))
-        .unwrap_or_else(|| spec.node.vram_bytes());
+    let my_vram = spec.capacity_budget_bytes;
 
     // For split/layer-package models, compute the local share of model weights
     // and the layer fraction so the context planner budgets correctly.
@@ -626,2648 +666,18 @@ pub(super) async fn start_runtime_local_model(
         metadata: compact_meta.as_ref(),
         kv_cache_quant,
         local_layer_fraction,
+        planning_profile: spec.planning_profile,
     });
 
     if let Some(package) = layer_package {
-        start_runtime_layer_package_model(spec, model_name, package, plan).await
+        start_local_layer_package_model(spec, model_name, package, plan).await
     } else {
-        start_runtime_skippy_model(spec, model_name, plan).await
+        start_local_skippy_model(spec, model_name, plan).await
     }
 }
 
-/// Try to extract GGUF architecture metadata from a layer package's shared
-/// metadata file.  Layer packages store a `shared/metadata.gguf` that carries
-/// the model's KV pairs (context_length, head counts, etc.) without any tensor
-/// data.  This gives the context planner the information it needs for accurate
-/// KV cache budget calculations on split models.
-fn scan_layer_package_metadata(
-    package: &skippy::SkippyPackageIdentity,
-) -> Option<models::gguf::GgufCompactMeta> {
-    // The source_model_path in a layer package identity points to the original
-    // GGUF.  But for HF layer packages the source model is not downloaded
-    // locally.  Instead, look for the shared metadata file in the package dir.
-    //
-    // The package_ref looks like "hf://meshllm/Qwen3-layers@rev" which resolves
-    // to a local cache directory.  Try to find shared/metadata.gguf there.
-    let package_ref = &package.package_ref;
-    let local_ref = skippy::resolve_hf_package_to_local(package_ref, 0, 0, false, false).ok()?;
-    let metadata_path = std::path::Path::new(&local_ref).join("shared/metadata.gguf");
-    if metadata_path.is_file() {
-        return models::gguf::scan_gguf_compact_meta(&metadata_path);
-    }
-    // Fallback: try scanning the source model directly (works for local packages).
-    if package.source_model_path.is_file() {
-        return models::gguf::scan_gguf_compact_meta(&package.source_model_path);
-    }
-    None
-}
-
-pub(super) fn runtime_model_planning_bytes(model_path: &Path) -> Result<u64> {
-    let package_ref = model_path.to_string_lossy().to_string();
-    if skippy::is_layer_package_ref(&package_ref) {
-        return Ok(skippy::identity_from_layer_package(&package_ref)?.source_model_bytes);
-    }
-    Ok(election::total_model_bytes(model_path))
-}
-
-pub(super) fn startup_runtime_plan(
-    explicit_split: bool,
-    local_vram_bytes: u64,
-    model_bytes: u64,
-) -> StartupRuntimePlan {
-    if explicit_split {
-        return StartupRuntimePlan::Split {
-            reason: SplitRuntimeReason::Forced,
-        };
-    }
-    if model_fits_runtime_capacity(model_bytes, local_vram_bytes) {
-        StartupRuntimePlan::Local
-    } else {
-        StartupRuntimePlan::Split {
-            reason: SplitRuntimeReason::LocalCapacity,
-        }
-    }
-}
-
-pub(super) async fn start_runtime_split_model(
-    spec: LocalRuntimeModelStartSpec<'_>,
-    model_ref: &str,
-) -> Result<SplitRuntimeStart> {
-    let run_id = format!("mesh-split-{}", now_unix_nanos());
-    let topology_id = format!("topology-{run_id}");
-    let split_setup =
-        prepare_split_runtime_start(&spec, model_ref, &topology_id, Duration::from_secs(30))
-            .await?;
-    let SplitRuntimeStartPreparation {
-        package,
-        participant_snapshot,
-        compact_meta,
-        kv_bytes_per_token,
-        planned_topology,
-    } = split_setup;
-    let stages = planned_topology.stages;
-    let planned_participants =
-        split_participants_for_stages(&participant_snapshot.participants, &stages);
-    anyhow::ensure!(
-        split_stages_meet_minimum(&stages),
-        "split runtime needs at least two stage participants"
-    );
-    let stage0 = stages
-        .first()
-        .context("split topology did not produce stage 0")?;
-    tracing::info!(
-        model_ref,
-        topology_id,
-        run_id,
-        context_length = planned_topology.context_length,
-        parallel_lanes = planned_topology.slots,
-        local_node = %spec.node.id().fmt_short(),
-        elected_coordinator = %stage0.node_id.fmt_short(),
-        stages = ?split_stage_plan_labels(&stages),
-        participants = ?split_participant_labels(&planned_participants),
-        excluded = ?split_participant_exclusion_labels(&participant_snapshot.excluded),
-        "split topology planned; elected coordinator from stage 0"
-    );
-    if let Some(standby) =
-        split_runtime_standby_start(spec.node, model_ref, &topology_id, &run_id, stage0)
-    {
-        return Ok(standby);
-    }
-    tracing::info!(
-        model_ref,
-        topology_id,
-        run_id,
-        local_node = %spec.node.id().fmt_short(),
-        context_length = planned_topology.context_length,
-        parallel_lanes = planned_topology.slots,
-        "split topology election selected local node as coordinator"
-    );
-
-    let ctx_size = planned_topology.context_length;
-    let slots = planned_topology.slots;
-    let projector_path = spec
-        .mmproj_override
-        .map(Path::to_path_buf)
-        .or_else(|| mmproj_path_for_model(&resolved_model_name(spec.model_path)))
-        .filter(|path| path.exists())
-        .map(|path| path.to_string_lossy().to_string());
-    let active = SplitTopologyGeneration::new(
-        topology_id.clone(),
-        run_id.clone(),
-        SPLIT_INITIAL_SHUTDOWN_GENERATION,
-        planned_participants,
-        stages,
-    );
-    let mut loaded = load_split_runtime_generation(SplitGenerationLoadSpec {
-        node: spec.node,
-        mesh_config: spec.mesh_config,
-        model_ref,
-        model_path: spec.model_path,
-        package: &package,
-        generation: &active,
-        projector_path: projector_path.clone(),
-        ctx_size,
-        cache_type_k_override: spec.cache_type_k_override,
-        cache_type_v_override: spec.cache_type_v_override,
-        n_batch_override: spec.n_batch_override,
-        n_ubatch_override: spec.n_ubatch_override,
-        flash_attention_override: spec.flash_attention_override,
-        openai_guardrail_policy: spec.openai_guardrail_policy.clone(),
-        pinned_gpu: spec.pinned_gpu,
-        slots,
-        skippy_telemetry: spec.skippy_telemetry.clone(),
-        survey_telemetry: spec.survey_telemetry.clone(),
-    })
-    .await?;
-    let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(1);
-    loaded.coordinator_rx = Some(coordinator_rx);
-    loaded.coordinator_task = Some(spawn_split_topology_coordinator(SplitTopologyCoordinator {
-        node: spec.node.clone(),
-        mesh_config: spec.mesh_config.clone(),
-        model_name: model_ref.to_string(),
-        model_path: spec.model_path.to_path_buf(),
-        model_ref: model_ref.to_string(),
-        package: package.clone(),
-        active,
-        projector_path,
-        ctx_size,
-        topology_resources: SplitTopologyResourceInputs {
-            native_context_length: compact_meta.context_length,
-            kv_bytes_per_token,
-            ctx_size_override: spec.ctx_size_override,
-            parallel_override: spec.parallel_override,
-        },
-        cache_type_k_override: spec.cache_type_k_override.map(str::to_string),
-        cache_type_v_override: spec.cache_type_v_override.map(str::to_string),
-        n_batch_override: spec.n_batch_override,
-        n_ubatch_override: spec.n_ubatch_override,
-        flash_attention_override: spec.flash_attention_override,
-        openai_guardrail_policy: spec.openai_guardrail_policy.clone(),
-        pinned_gpu: spec.pinned_gpu.cloned(),
-        slots,
-        skippy_telemetry: spec.skippy_telemetry.clone(),
-        survey_telemetry: spec.survey_telemetry.clone(),
-        event_tx: coordinator_tx,
-    }));
-
-    Ok(SplitRuntimeStart::Started(Box::new(loaded)))
-}
-
-struct SplitRuntimeStartPreparation {
-    package: skippy::SkippyPackageIdentity,
-    participant_snapshot: SplitParticipantSnapshot,
-    compact_meta: models::gguf::GgufCompactMeta,
-    kv_bytes_per_token: u64,
-    planned_topology: PlannedRuntimeSliceTopology,
-}
-
-async fn prepare_split_runtime_start(
-    spec: &LocalRuntimeModelStartSpec<'_>,
-    model_ref: &str,
-    topology_id: &str,
-    timeout: Duration,
-) -> Result<SplitRuntimeStartPreparation> {
-    let package = resolve_split_runtime_package(spec.model_path, model_ref).await?;
-    let participant_snapshot = wait_for_split_participants(
-        spec.node,
-        model_ref,
-        model_ref,
-        &package,
-        spec.pinned_gpu.map(|gpu| gpu.vram_bytes),
-        timeout,
-    )
-    .await?;
-    let compact_meta = split_runtime_compact_meta(&package).await?;
-    let kv_bytes_per_token = split_runtime_kv_bytes_per_token(
-        &package,
-        &compact_meta,
-        spec.cache_type_k_override,
-        spec.cache_type_v_override,
-    )?;
-    let planned_topology = plan_runtime_slice_topology_with_resources(
-        topology_id,
-        model_ref,
-        &package,
-        &participant_snapshot.participants,
-        &participant_snapshot.excluded,
-        SplitTopologyResourceInputs {
-            native_context_length: compact_meta.context_length,
-            kv_bytes_per_token,
-            ctx_size_override: spec.ctx_size_override,
-            parallel_override: spec.parallel_override,
-        },
-    )?;
-    Ok(SplitRuntimeStartPreparation {
-        package,
-        participant_snapshot,
-        compact_meta,
-        kv_bytes_per_token,
-        planned_topology,
-    })
-}
-
-async fn split_runtime_compact_meta(
-    package: &skippy::SkippyPackageIdentity,
-) -> Result<models::gguf::GgufCompactMeta> {
-    let package = package.clone();
-    tokio::task::spawn_blocking(move || scan_layer_package_metadata(&package))
-        .await
-        .ok()
-        .flatten()
-        .context("split topology planning requires GGUF metadata")
-}
-
-fn split_runtime_kv_bytes_per_token(
-    package: &skippy::SkippyPackageIdentity,
-    compact_meta: &models::gguf::GgufCompactMeta,
-    cache_type_k_override: Option<&str>,
-    cache_type_v_override: Option<&str>,
-) -> Result<u64> {
-    let split_kv_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes);
-    let kv_cache_quant = split_kv_cache_quant(
-        &split_kv_policy,
-        cache_type_k_override,
-        cache_type_v_override,
-    );
-    kv_cache_quant
-        .kv_cache_bytes_per_token(compact_meta)
-        .context("split topology planning requires KV cache byte metadata")
-}
-
-fn split_runtime_standby_start(
-    node: &mesh::Node,
-    model_ref: &str,
-    topology_id: &str,
-    run_id: &str,
-    stage0: &RuntimeSliceStagePlan,
-) -> Option<SplitRuntimeStart> {
-    if stage0.node_id == node.id() {
-        return None;
-    }
-    tracing::info!(
-        model_ref,
-        topology_id,
-        run_id,
-        local_node = %node.id().fmt_short(),
-        elected_coordinator = %stage0.node_id.fmt_short(),
-        "split topology election selected a remote coordinator; local node entering standby"
-    );
-    Some(SplitRuntimeStart::Standby {
-        coordinator: stage0.node_id,
-    })
-}
-
-async fn resolve_split_runtime_package(
-    model_path: &Path,
-    model_ref: &str,
-) -> Result<skippy::SkippyPackageIdentity> {
-    let model_path_str = model_path.to_string_lossy().to_string();
-    if skippy::is_layer_package_ref(&model_path_str) {
-        Ok(tokio::task::spawn_blocking(move || {
-            skippy::identity_from_layer_package(&model_path_str)
-        })
-        .await
-        .context("join identify skippy layer package task")??)
-    } else {
-        Ok(skippy::synthetic_direct_gguf_package(
-            model_ref, model_path,
-        )?)
-    }
-}
-
-fn split_kv_cache_quant(
-    split_kv_policy: &skippy::KvCachePolicy,
-    cache_type_k_override: Option<&str>,
-    cache_type_v_override: Option<&str>,
-) -> models::gguf::GgufKvCacheQuant {
-    let policy_quant = models::gguf::GgufKvCacheQuant::from_llama_args(
-        split_kv_policy.cache_type_k(),
-        split_kv_policy.cache_type_v(),
-    )
-    .unwrap_or(models::gguf::GgufKvCacheQuant::Q8_0);
-
-    match (cache_type_k_override, cache_type_v_override) {
-        (None, None) => policy_quant,
-        (k_override, v_override) => models::gguf::GgufKvCacheQuant::from_llama_args(
-            k_override.unwrap_or(split_kv_policy.cache_type_k()),
-            v_override.unwrap_or(split_kv_policy.cache_type_v()),
-        )
-        .unwrap_or(policy_quant),
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct SplitParticipant {
-    pub(super) node_id: iroh::EndpointId,
-    pub(super) vram_bytes: u64,
-    first_joined_mesh_ts: Option<u64>,
-    pub(super) cached_slice_bytes: u64,
-    pub(super) missing_artifact_bytes: u64,
-    pub(super) rtt_ms: Option<u32>,
-    pub(super) artifact_transfer_supported: bool,
-    availability_score: u32,
-}
-
-impl SplitParticipant {
-    pub(super) fn new(
-        node_id: iroh::EndpointId,
-        vram_bytes: u64,
-        first_joined_mesh_ts: Option<u64>,
-    ) -> Self {
-        Self {
-            node_id,
-            vram_bytes,
-            first_joined_mesh_ts,
-            cached_slice_bytes: 0,
-            missing_artifact_bytes: 0,
-            rtt_ms: None,
-            artifact_transfer_supported: false,
-            availability_score: 0,
-        }
-    }
-
-    fn local_package(
-        node_id: iroh::EndpointId,
-        vram_bytes: u64,
-        first_joined_mesh_ts: Option<u64>,
-        package: &skippy::SkippyPackageIdentity,
-    ) -> Self {
-        let mut participant = Self::new(node_id, vram_bytes, first_joined_mesh_ts);
-        participant.cached_slice_bytes = package.source_model_bytes;
-        participant.artifact_transfer_supported = true;
-        participant.availability_score = package.layer_count;
-        participant
-    }
-
-    fn with_package_signals(
-        mut self,
-        signal: SplitParticipantPackageSignal,
-        rtt_ms: Option<u32>,
-        artifact_transfer_supported: bool,
-    ) -> Self {
-        self.cached_slice_bytes = signal.cached_slice_bytes;
-        self.missing_artifact_bytes = signal.missing_artifact_bytes;
-        self.availability_score = signal.availability_score;
-        self.rtt_ms = rtt_ms;
-        self.artifact_transfer_supported = artifact_transfer_supported;
-        self
-    }
-
-    #[cfg(test)]
-    fn to_topology_participant(self) -> skippy::StageTopologyParticipant {
-        skippy::StageTopologyParticipant {
-            node_id: self.node_id,
-            vram_bytes: self.vram_bytes,
-            cached_slice_bytes: self.cached_slice_bytes,
-            missing_artifact_bytes: self.missing_artifact_bytes,
-            rtt_ms: self.rtt_ms,
-            artifact_transfer_supported: self.artifact_transfer_supported,
-            availability_score: self.availability_score,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct SplitParticipantPackageSignal {
-    cached_slice_bytes: u64,
-    missing_artifact_bytes: u64,
-    availability_score: u32,
-}
-
-impl SplitParticipantPackageSignal {
-    fn can_stage_with(
-        self,
-        package: &skippy::SkippyPackageIdentity,
-        artifact_transfer_supported: bool,
-    ) -> bool {
-        self.missing_artifact_bytes == 0
-            || artifact_transfer_supported
-            || package_ref_has_independent_prepare_source(&package.package_ref)
-    }
-}
-
-fn package_ref_has_independent_prepare_source(package_ref: &str) -> bool {
-    // HF layer packages can be resolved by the selected worker during prepare;
-    // peer artifact transfer is only an optional cache warm path.
-    skippy_runtime::package::is_hf_package_ref(package_ref)
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SplitParticipantSnapshot {
-    participants: Vec<SplitParticipant>,
-    excluded: Vec<SplitParticipantExclusion>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct SplitParticipantExclusion {
-    pub(super) node_id: iroh::EndpointId,
-    pub(super) reason: SplitParticipantExclusionReason,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SplitParticipantExclusionReason {
-    Client,
-    MissingVram,
-    MissingModelInterest,
-    StageProtocolGeneration,
-    MissingStagePath,
-    StagePathRelayOnly,
-    StagePathTooSlow,
-    MissingModelSource,
-}
-
-impl SplitParticipantExclusionReason {
-    pub(super) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Client => "client",
-            Self::MissingVram => "missing_vram",
-            Self::MissingModelInterest => "missing_model_interest",
-            Self::StageProtocolGeneration => "stage_protocol_generation",
-            Self::MissingStagePath => "missing_stage_path",
-            Self::StagePathRelayOnly => "stage_path_relay_only",
-            Self::StagePathTooSlow => "stage_path_too_slow",
-            Self::MissingModelSource => "missing_model_source",
-        }
-    }
-}
-
-struct SplitGenerationLoadSpec<'a> {
-    node: &'a mesh::Node,
-    mesh_config: &'a plugin::MeshConfig,
-    model_ref: &'a str,
-    model_path: &'a Path,
-    package: &'a skippy::SkippyPackageIdentity,
-    generation: &'a SplitTopologyGeneration,
-    projector_path: Option<String>,
-    ctx_size: u32,
-    pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
-    slots: usize,
-    cache_type_k_override: Option<&'a str>,
-    cache_type_v_override: Option<&'a str>,
-    n_batch_override: Option<u32>,
-    n_ubatch_override: Option<u32>,
-    flash_attention_override: FlashAttentionType,
-    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
-    skippy_telemetry: skippy::SkippyTelemetryOptions,
-    survey_telemetry: survey::SurveyTelemetry,
-}
-
-struct SplitGenerationLoadSettings<'a> {
-    stage0: &'a RuntimeSliceStagePlan,
-    runtime_options: skippy_server::EmbeddedRuntimeOptions,
-    embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
-    load_mode: LoadMode,
-    activation_width: i32,
-    activation_wire_dtype: skippy::StageWireDType,
-}
-
-async fn load_split_runtime_generation(
-    spec: SplitGenerationLoadSpec<'_>,
-) -> Result<SplitRuntimeGenerationHandle> {
-    let mut cleanup_on_error = false;
-    let result = Box::pin(load_split_runtime_generation_inner(
-        &spec,
-        &mut cleanup_on_error,
-    ))
-    .await;
-    if let Err(error) = &result
-        && cleanup_on_error
-    {
-        tracing::warn!(
-            model_ref = spec.model_ref,
-            topology_id = %spec.generation.topology_id,
-            run_id = %spec.generation.run_id,
-            generation = spec.generation.generation,
-            error = %error,
-            "cleaning up split runtime generation after failed load"
-        );
-        stop_split_generation(spec.node, spec.generation, spec.generation.generation).await;
-    }
-    result
-}
-
-async fn load_split_runtime_generation_inner(
-    spec: &SplitGenerationLoadSpec<'_>,
-    cleanup_on_error: &mut bool,
-) -> Result<SplitRuntimeGenerationHandle> {
-    let settings = split_generation_load_settings(spec)?;
-    anyhow::ensure!(
-        settings.stage0.node_id == spec.node.id(),
-        "split topology stage 0 moved to {}; local coordinator is {}",
-        settings.stage0.node_id.fmt_short(),
-        spec.node.id().fmt_short()
-    );
-
-    claim_split_coordinator_lease(spec.node, spec.model_ref, spec.package, spec.generation).await?;
-
-    let mut ready_by_stage: HashMap<String, skippy::StageStatusSnapshot> = HashMap::new();
-    let mut downstream: Option<skippy::StagePeerDescriptor> = None;
-
-    if settings.load_mode == LoadMode::LayerPackage {
-        spec.node
-            .record_stage_topology(split_stage_topology_instance(
-                &spec.generation.topology_id,
-                &spec.generation.run_id,
-                spec.model_ref,
-                spec.package,
-                &spec.generation.stages,
-                &ready_by_stage,
-            ))
-            .await;
-    }
-
-    let downstream = Box::pin(load_downstream_split_runtime_stages(
-        spec,
-        &settings,
-        cleanup_on_error,
-        &mut ready_by_stage,
-        &mut downstream,
-    ))
-    .await?;
-    let downstream_endpoint = if downstream.node_id == Some(spec.node.id()) {
-        downstream.endpoint
-    } else {
-        spec.node
-            .ensure_stage_transport_bridge(
-                downstream
-                    .node_id
-                    .context("downstream split stage is missing node id")?,
-                spec.generation.topology_id.clone(),
-                spec.generation.run_id.clone(),
-                downstream.stage_id.clone(),
-            )
-            .await?
-    };
-    let mut runtime_options = settings.runtime_options.clone();
-    runtime_options.config.run_id = spec.generation.run_id.clone();
-    runtime_options.config.topology_id = spec.generation.topology_id.clone();
-    runtime_options.config.model_id = spec.model_ref.to_string();
-    runtime_options.config.package_ref = Some(spec.package.package_ref.clone());
-    runtime_options.config.manifest_sha256 = Some(spec.package.manifest_sha256.clone());
-    let effective_model_path = stage_load_model_path(
-        settings.load_mode.clone(),
-        &spec.package.package_ref,
-        spec.model_path,
-    );
-    runtime_options.config.source_model_path = Some(effective_model_path.clone());
-    runtime_options.config.source_model_sha256 = Some(spec.package.source_model_sha256.clone());
-    runtime_options.config.source_model_bytes = Some(spec.package.source_model_bytes);
-    runtime_options.config.materialized_path = None;
-    runtime_options.config.materialized_pinned = false;
-    runtime_options.config.model_path = Some(effective_model_path);
-    if runtime_options.config.projector_path.is_none() {
-        runtime_options.config.projector_path = spec.projector_path.clone();
-    }
-    runtime_options.config.stage_id = settings.stage0.stage_id.clone();
-    runtime_options.config.stage_index = settings.stage0.stage_index;
-    runtime_options.config.layer_start = settings.stage0.layer_start;
-    runtime_options.config.layer_end = settings.stage0.layer_end;
-    runtime_options.config.ctx_size = spec.ctx_size;
-    runtime_options.config.lane_count = spec.slots as u32;
-    runtime_options.config.filter_tensors_on_load = true;
-    if let Some(gpu) = spec.pinned_gpu {
-        runtime_options.config.selected_device = Some(pinned_stage_device(gpu));
-    }
-    runtime_options.config.load_mode = settings.load_mode.clone();
-    runtime_options.config.bind_addr = "127.0.0.1:0".to_string();
-    runtime_options.config.upstream = None;
-    runtime_options.config.downstream = Some(PeerConfig {
-        stage_id: downstream.stage_id,
-        stage_index: downstream.stage_index,
-        endpoint: downstream_endpoint,
-    });
-    let vision_projector_loaded = runtime_options.config.projector_path.is_some();
-    let node_for_hook = spec.node.clone();
-    let model_ref = spec.model_ref.to_string();
-    let skippy_telemetry = spec.skippy_telemetry.clone();
-    let guardrail_telemetry = spec.survey_telemetry.clone();
-    let openai_guardrails =
-        skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
-    let _ = emit_event(OutputEvent::ModelLoading {
-        model: model_ref.clone(),
-        source: None,
-    });
-    let handle = tokio::task::spawn_blocking(move || {
-        skippy::SkippyModelHandle::load_stage0_runtime_options_with_openai_args(
-            runtime_options,
-            settings.embedded_openai.clone(),
-            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
-            skippy_telemetry,
-            skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
-        )
-    })
-    .await
-    .context("join load skippy stage0 config task")??;
-    let _ = emit_event(OutputEvent::ModelLoaded {
-        model: model_ref,
-        bytes: None,
-    });
-    let http = handle.start_http(alloc_local_port().await?);
-    let (death_tx, death_rx) = tokio::sync::oneshot::channel();
-    let capabilities = models::runtime_verified_model_capabilities(
-        spec.model_ref,
-        spec.model_path,
-        models::RuntimeMediaCapabilityEvidence {
-            vision_projector_loaded,
-        },
-    );
-
-    spec.node
-        .activate_stage_topology(split_stage_topology_instance(
-            &spec.generation.topology_id,
-            &spec.generation.run_id,
-            spec.model_ref,
-            spec.package,
-            &spec.generation.stages,
-            &ready_by_stage,
-        ))
-        .await;
-
-    Ok(SplitRuntimeGenerationHandle {
-        loaded_name: spec.model_ref.to_string(),
-        handle: LocalRuntimeModelHandle {
-            port: http.port(),
-            backend: "skippy".into(),
-            context_length: spec.ctx_size,
-            slots: spec.slots,
-            capabilities,
-            inner: LocalRuntimeBackendHandle::Skippy {
-                model: handle,
-                http,
-                _death_tx: death_tx,
-            },
-        },
-        death_rx,
-        cleanup: Some(SplitGenerationCleanup {
-            generation: spec.generation.clone(),
-        }),
-        coordinator_rx: None,
-        coordinator_task: None,
-    })
-}
-
-async fn load_downstream_split_runtime_stages(
-    spec: &SplitGenerationLoadSpec<'_>,
-    settings: &SplitGenerationLoadSettings<'_>,
-    cleanup_on_error: &mut bool,
-    ready_by_stage: &mut HashMap<String, skippy::StageStatusSnapshot>,
-    downstream: &mut Option<skippy::StagePeerDescriptor>,
-) -> Result<skippy::StagePeerDescriptor> {
-    for stage in spec.generation.stages.iter().skip(1).rev() {
-        *cleanup_on_error = true;
-        let load = split_runtime_stage_load_request(spec, settings, stage, downstream.clone());
-        prepare_split_stage(spec.node, stage.node_id, load.clone()).await?;
-        wait_for_split_stage_source(
-            spec.node,
-            stage.node_id,
-            &load,
-            Duration::from_secs(30 * 60),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "prepare split stage {} on {}",
-                stage.stage_id,
-                stage.node_id.fmt_short()
-            )
-        })?;
-        let response = if stage.node_id == spec.node.id() {
-            spec.node
-                .send_local_stage_control(skippy::StageControlRequest::Load(load))
-                .await
-        } else {
-            spec.node
-                .send_stage_control(stage.node_id, skippy::StageControlRequest::Load(load))
-                .await
-        }
-        .with_context(|| {
-            format!(
-                "load split stage {} on {}",
-                stage.stage_id,
-                stage.node_id.fmt_short()
-            )
-        })?;
-        let skippy::StageControlResponse::Ready(ready) = response else {
-            anyhow::bail!(
-                "unexpected status response while loading {}",
-                stage.stage_id
-            );
-        };
-        anyhow::ensure!(
-            ready.accepted,
-            "stage {} rejected load: {}",
-            stage.stage_id,
-            ready.error.unwrap_or_else(|| "unknown error".to_string())
-        );
-        *downstream = Some(skippy::StagePeerDescriptor {
-            stage_id: stage.stage_id.clone(),
-            stage_index: stage.stage_index,
-            endpoint: ready.status.bind_addr.clone(),
-            node_id: Some(stage.node_id),
-        });
-        ready_by_stage.insert(stage.stage_id.clone(), ready.status);
-    }
-
-    downstream
-        .clone()
-        .context("split topology missing downstream stage")
-}
-
-fn split_runtime_stage_load_request(
-    spec: &SplitGenerationLoadSpec<'_>,
-    settings: &SplitGenerationLoadSettings<'_>,
-    stage: &RuntimeSliceStagePlan,
-    downstream: Option<skippy::StagePeerDescriptor>,
-) -> skippy::StageLoadRequest {
-    let resolved_config = &settings.runtime_options.config;
-    skippy::StageLoadRequest {
-        topology_id: spec.generation.topology_id.clone(),
-        run_id: spec.generation.run_id.clone(),
-        model_id: spec.model_ref.to_string(),
-        backend: "skippy".to_string(),
-        package_ref: spec.package.package_ref.clone(),
-        manifest_sha256: spec.package.manifest_sha256.clone(),
-        stage_id: stage.stage_id.clone(),
-        stage_index: stage.stage_index,
-        layer_start: stage.layer_start,
-        layer_end: stage.layer_end,
-        model_path: Some(stage_load_model_path(
-            settings.load_mode.clone(),
-            &spec.package.package_ref,
-            spec.model_path,
-        )),
-        source_model_bytes: Some(spec.package.source_model_bytes),
-        projector_path: spec.projector_path.clone(),
-        selected_device: None,
-        bind_addr: "127.0.0.1:0".to_string(),
-        activation_width: settings.activation_width,
-        wire_dtype: settings.activation_wire_dtype,
-        ctx_size: spec.ctx_size,
-        lane_count: spec.slots as u32,
-        n_batch: resolved_config.n_batch,
-        n_ubatch: resolved_config.n_ubatch,
-        n_gpu_layers: resolved_config.n_gpu_layers,
-        cache_type_k: resolved_config.cache_type_k.clone(),
-        cache_type_v: resolved_config.cache_type_v.clone(),
-        flash_attn_type: resolved_config.flash_attn_type,
-        shutdown_generation: spec.generation.generation,
-        coordinator_term: spec.generation.coordinator_term,
-        coordinator_id: Some(spec.node.id()),
-        lease_until_unix_ms: spec.generation.lease_until_unix_ms,
-        load_mode: settings.load_mode.clone(),
-        upstream: None,
-        downstream,
-    }
-}
-
-fn split_generation_load_settings<'a>(
-    spec: &'a SplitGenerationLoadSpec<'_>,
-) -> Result<SplitGenerationLoadSettings<'a>> {
-    let stage0 = spec
-        .generation
-        .stages
-        .first()
-        .context("split topology did not produce stage 0")?;
-    let load_mode = split_generation_load_mode(spec.package);
-    let activation_width =
-        skippy_stage_activation_width(spec.package.activation_width, spec.model_ref)?;
-    let mut resolved = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
-        mesh_config: spec.mesh_config,
-        model_id: spec.model_ref,
-        model_path: spec.model_path,
-        model_bytes: spec.package.source_model_bytes,
-        allocatable_memory_bytes: spec.pinned_gpu.map(|gpu| gpu.vram_bytes),
-        request_defaults: None,
-    })?;
-    resolved.model_fit.ctx_size = spec.ctx_size;
-    resolved.throughput.parallel = spec.slots;
-    if let Some(cache_type_k) = spec.cache_type_k_override {
-        resolved.model_fit.cache_type_k = cache_type_k.to_string();
-    }
-    if let Some(cache_type_v) = spec.cache_type_v_override {
-        resolved.model_fit.cache_type_v = cache_type_v.to_string();
-    }
-    if let Some(n_batch) = spec.n_batch_override {
-        resolved.model_fit.batch = n_batch;
-    }
-    if let Some(n_ubatch) = spec.n_ubatch_override {
-        resolved.model_fit.ubatch = n_ubatch;
-    }
-    if spec.flash_attention_override != FlashAttentionType::Auto {
-        resolved.model_fit.flash_attention = spec.flash_attention_override;
-    }
-    if resolved.hardware.projector_path.is_none() {
-        resolved.hardware.projector_path = spec.projector_path.as_ref().map(PathBuf::from);
-    }
-    if let Some(gpu) = spec.pinned_gpu {
-        resolved.hardware.device = Some(gpu.backend_device.clone());
-    }
-    let embedded_openai = resolved.to_embedded_openai_args(activation_width, true)?;
-    let runtime_options = resolved.to_embedded_runtime_options(
-        &spec.skippy_telemetry,
-        Some(spec.package.clone()),
-        load_mode.clone(),
-    )?;
-    tracing::info!(
-        model = spec.model_ref,
-        "KV cache: {} K + {} V",
-        runtime_options.config.cache_type_k.to_ascii_uppercase(),
-        runtime_options.config.cache_type_v.to_ascii_uppercase(),
-    );
-    Ok(SplitGenerationLoadSettings {
-        stage0,
-        runtime_options,
-        embedded_openai,
-        load_mode,
-        activation_width,
-        activation_wire_dtype: resolved.skippy.activation_wire_dtype,
-    })
-}
-
-fn split_generation_load_mode(package: &skippy::SkippyPackageIdentity) -> LoadMode {
-    if skippy::is_layer_package_ref(&package.package_ref) {
-        LoadMode::LayerPackage
-    } else {
-        LoadMode::RuntimeSlice
-    }
-}
-
-async fn claim_split_coordinator_lease(
-    node: &mesh::Node,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    generation: &SplitTopologyGeneration,
-) -> Result<()> {
-    let claim = split_coordinator_claim(node.id(), model_ref, package, generation);
-    let required_accepts = skippy_coordinator::quorum_requirement(generation.stages.len());
-    let mut accepted = 0usize;
-    let mut accepted_nodes = Vec::new();
-    let mut errors = Vec::new();
-    tracing::info!(
-        model_ref,
-        topology_id = generation.topology_id,
-        run_id = generation.run_id,
-        generation = generation.generation,
-        coordinator_term = generation.coordinator_term,
-        coordinator = %node.id().fmt_short(),
-        planned_stages = generation.stages.len(),
-        required_accepts,
-        stages = ?split_stage_plan_labels(&generation.stages),
-        participants = ?split_participant_labels(&generation.participants),
-        "claiming split topology coordinator lease"
-    );
-
-    for stage in &generation.stages {
-        record_split_coordinator_claim_result(
-            model_ref,
-            generation,
-            stage,
-            claim_split_coordinator_stage(node, stage, claim.clone()).await,
-            &mut accepted,
-            &mut accepted_nodes,
-            &mut errors,
-        );
-    }
-
-    anyhow::ensure!(
-        accepted >= required_accepts,
-        "coordinator claim for {model_ref} accepted by {accepted}/{} planned stage(s), need {required_accepts}: {}",
-        generation.stages.len(),
-        errors.join("; ")
-    );
-    tracing::info!(
-        model_ref,
-        topology_id = generation.topology_id,
-        run_id = generation.run_id,
-        generation = generation.generation,
-        coordinator_term = generation.coordinator_term,
-        accepted,
-        required_accepts,
-        accepted_nodes = ?split_node_labels(&accepted_nodes),
-        "split topology coordinator lease quorum reached"
-    );
-    Ok(())
-}
-
-enum SplitCoordinatorClaimResult {
-    Accepted,
-    Rejected(String),
-    Unexpected(Box<skippy::StageControlResponse>),
-    Failed(anyhow::Error),
-}
-
-fn record_split_coordinator_claim_result(
-    model_ref: &str,
-    generation: &SplitTopologyGeneration,
-    stage: &RuntimeSliceStagePlan,
-    result: SplitCoordinatorClaimResult,
-    accepted: &mut usize,
-    accepted_nodes: &mut Vec<iroh::EndpointId>,
-    errors: &mut Vec<String>,
-) {
-    match result {
-        SplitCoordinatorClaimResult::Accepted => {
-            record_claim_accepted(model_ref, generation, stage, accepted, accepted_nodes)
-        }
-        SplitCoordinatorClaimResult::Rejected(error) => {
-            record_claim_rejected(model_ref, generation, stage, error, errors)
-        }
-        SplitCoordinatorClaimResult::Unexpected(response) => {
-            record_claim_unexpected(model_ref, generation, stage, response, errors)
-        }
-        SplitCoordinatorClaimResult::Failed(err) => {
-            record_claim_failed(model_ref, generation, stage, err, errors)
-        }
-    }
-}
-
-fn record_claim_accepted(
-    model_ref: &str,
-    generation: &SplitTopologyGeneration,
-    stage: &RuntimeSliceStagePlan,
-    accepted: &mut usize,
-    accepted_nodes: &mut Vec<iroh::EndpointId>,
-) {
-    *accepted += 1;
-    accepted_nodes.push(stage.node_id);
-    tracing::debug!(
-        model_ref,
-        topology_id = generation.topology_id,
-        generation = generation.generation,
-        stage_id = stage.stage_id,
-        stage_node = %stage.node_id.fmt_short(),
-        "split topology coordinator claim accepted by stage"
-    );
-}
-
-fn record_claim_rejected(
-    model_ref: &str,
-    generation: &SplitTopologyGeneration,
-    stage: &RuntimeSliceStagePlan,
-    error: String,
-    errors: &mut Vec<String>,
-) {
-    tracing::warn!(
-        model_ref,
-        topology_id = generation.topology_id,
-        generation = generation.generation,
-        stage_id = stage.stage_id,
-        stage_node = %stage.node_id.fmt_short(),
-        error = %error,
-        "split topology coordinator claim rejected by stage"
-    );
-    errors.push(format!(
-        "{} rejected claim: {}",
-        stage.node_id.fmt_short(),
-        error
-    ));
-}
-
-fn record_claim_unexpected(
-    model_ref: &str,
-    generation: &SplitTopologyGeneration,
-    stage: &RuntimeSliceStagePlan,
-    response: Box<skippy::StageControlResponse>,
-    errors: &mut Vec<String>,
-) {
-    tracing::warn!(
-        model_ref,
-        topology_id = generation.topology_id,
-        generation = generation.generation,
-        stage_id = stage.stage_id,
-        stage_node = %stage.node_id.fmt_short(),
-        response = ?response,
-        "split topology coordinator claim returned unexpected response"
-    );
-    errors.push(format!(
-        "{} returned unexpected claim response: {response:?}",
-        stage.node_id.fmt_short()
-    ));
-}
-
-fn record_claim_failed(
-    model_ref: &str,
-    generation: &SplitTopologyGeneration,
-    stage: &RuntimeSliceStagePlan,
-    err: anyhow::Error,
-    errors: &mut Vec<String>,
-) {
-    tracing::warn!(
-        model_ref,
-        topology_id = generation.topology_id,
-        generation = generation.generation,
-        stage_id = stage.stage_id,
-        stage_node = %stage.node_id.fmt_short(),
-        error = %err,
-        "split topology coordinator claim failed for stage"
-    );
-    errors.push(format!(
-        "{} claim failed: {err:#}",
-        stage.node_id.fmt_short()
-    ));
-}
-
-async fn claim_split_coordinator_stage(
-    node: &mesh::Node,
-    stage: &RuntimeSliceStagePlan,
-    claim: skippy::StageCoordinatorClaim,
-) -> SplitCoordinatorClaimResult {
-    let request = skippy::StageControlRequest::Claim(claim);
-    let response = if stage.node_id == node.id() {
-        node.send_local_stage_control(request).await
-    } else {
-        node.send_stage_control(stage.node_id, request).await
-    };
-    match response {
-        Ok(skippy::StageControlResponse::ClaimAccepted(ack)) if ack.accepted => {
-            SplitCoordinatorClaimResult::Accepted
-        }
-        Ok(skippy::StageControlResponse::ClaimAccepted(ack)) => {
-            SplitCoordinatorClaimResult::Rejected(
-                ack.error.unwrap_or_else(|| "unknown rejection".to_string()),
-            )
-        }
-        Ok(other) => SplitCoordinatorClaimResult::Unexpected(Box::new(other)),
-        Err(err) => SplitCoordinatorClaimResult::Failed(err),
-    }
-}
-
-fn split_coordinator_claim(
-    coordinator_id: iroh::EndpointId,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    generation: &SplitTopologyGeneration,
-) -> skippy::StageCoordinatorClaim {
-    skippy::StageCoordinatorClaim {
-        model_id: model_ref.to_string(),
-        package_ref: package.package_ref.clone(),
-        manifest_sha256: package.manifest_sha256.clone(),
-        topology_id: generation.topology_id.clone(),
-        run_id: generation.run_id.clone(),
-        coordinator_id: coordinator_id.to_string(),
-        coordinator_term: generation.coordinator_term,
-        participant_set_hash: split_participant_set_hash(&generation.participants),
-        topology_hash: split_topology_hash(&generation.stages),
-        lease_until_unix_ms: generation.lease_until_unix_ms,
-    }
-}
-
-fn stage_load_model_path(load_mode: LoadMode, package_ref: &str, model_path: &Path) -> String {
-    match load_mode {
-        LoadMode::LayerPackage => package_ref.to_string(),
-        LoadMode::RuntimeSlice | LoadMode::ArtifactSlice => {
-            model_path.to_string_lossy().to_string()
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SplitTopologyGeneration {
-    topology_id: String,
-    run_id: String,
-    generation: u64,
-    coordinator_term: u64,
-    lease_until_unix_ms: u64,
-    participants: Vec<SplitParticipant>,
-    stages: Vec<RuntimeSliceStagePlan>,
-}
-
-impl SplitTopologyGeneration {
-    fn new(
-        topology_id: String,
-        run_id: String,
-        generation: u64,
-        participants: Vec<SplitParticipant>,
-        stages: Vec<RuntimeSliceStagePlan>,
-    ) -> Self {
-        Self {
-            topology_id,
-            run_id,
-            generation,
-            coordinator_term: now_unix_nanos().max(1) as u64,
-            lease_until_unix_ms: split_coordinator_lease_until_unix_ms(),
-            participants,
-            stages,
-        }
-    }
-}
-
-struct SplitTopologyCoordinator {
-    node: mesh::Node,
-    mesh_config: plugin::MeshConfig,
-    model_name: String,
-    model_path: PathBuf,
-    model_ref: String,
-    package: skippy::SkippyPackageIdentity,
-    active: SplitTopologyGeneration,
-    projector_path: Option<String>,
-    ctx_size: u32,
-    topology_resources: SplitTopologyResourceInputs,
-    cache_type_k_override: Option<String>,
-    cache_type_v_override: Option<String>,
-    n_batch_override: Option<u32>,
-    n_ubatch_override: Option<u32>,
-    flash_attention_override: FlashAttentionType,
-    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
-    pinned_gpu: Option<crate::runtime::StartupPinnedGpuTarget>,
-    slots: usize,
-    skippy_telemetry: skippy::SkippyTelemetryOptions,
-    survey_telemetry: survey::SurveyTelemetry,
-    event_tx: tokio::sync::mpsc::Sender<SplitCoordinatorEvent>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SplitReplanDecision {
-    Keep,
-    Candidate,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SplitLossRecoveryDecision {
-    NoActiveStageLoss,
-    ReplacementSplit,
-    LocalFallback,
-    Withdraw,
-}
-
-fn spawn_split_topology_coordinator(
-    coordinator: SplitTopologyCoordinator,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(Box::pin(coordinator.run()))
-}
-
-impl SplitTopologyCoordinator {
-    async fn run(mut self) {
-        let mut peer_rx = self.node.peer_change_rx.clone();
-        let mut health_tick = tokio::time::interval(Duration::from_secs(30));
-        health_tick.tick().await;
-        tracing::info!(
-            model_ref = self.model_ref,
-            topology_id = self.active.topology_id,
-            generation = self.active.generation,
-            stages = ?split_stage_plan_labels(&self.active.stages),
-            participants = ?split_participant_labels(&self.active.participants),
-            "split topology coordinator active"
-        );
-
-        loop {
-            tokio::select! {
-                changed = peer_rx.changed() => {
-                    if !self.handle_peer_change(&mut peer_rx, changed).await {
-                        break;
-                    }
-                }
-                _ = health_tick.tick() => {
-                    if !self.evaluate_replan("periodic_check").await {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    async fn handle_peer_change<T>(
-        &mut self,
-        peer_rx: &mut tokio::sync::watch::Receiver<T>,
-        changed: Result<(), tokio::sync::watch::error::RecvError>,
-    ) -> bool {
-        if changed.is_err() {
-            tracing::debug!(
-                model_ref = self.model_ref,
-                "split topology coordinator peer watch closed"
-            );
-            return false;
-        }
-        tokio::time::sleep(SPLIT_PARTICIPANT_STABLE_FOR).await;
-        drain_split_peer_changes(peer_rx);
-        self.evaluate_replan("membership_changed").await
-    }
-
-    async fn evaluate_replan(&mut self, reason: &'static str) -> bool {
-        let snapshot = collect_split_participants(
-            &self.node,
-            &self.model_name,
-            &self.model_ref,
-            &self.package,
-            self.pinned_gpu.as_ref().map(|gpu| gpu.vram_bytes),
-        )
-        .await;
-        self.node
-            .refresh_stage_runtime_statuses(Duration::from_secs(2))
-            .await;
-        let runtime_statuses = self.node.stage_runtime_statuses().await;
-        let missing_stage_nodes =
-            split_missing_active_stage_nodes(&self.active, &snapshot.participants);
-        let unavailable_stage_nodes = split_unavailable_active_stage_nodes(
-            &self.active,
-            &snapshot.participants,
-            &runtime_statuses,
-        );
-        let candidate = self.replan_candidate(reason, &snapshot, &unavailable_stage_nodes);
-
-        if let Some(should_continue) = self
-            .handle_loss_recovery(
-                reason,
-                &snapshot.participants,
-                &missing_stage_nodes,
-                &unavailable_stage_nodes,
-                candidate.as_ref(),
-            )
-            .await
-        {
-            return should_continue;
-        }
-
-        self.apply_replan_candidate(reason, snapshot.participants.len(), candidate)
-            .await
-    }
-
-    fn replan_candidate(
-        &self,
-        reason: &'static str,
-        snapshot: &SplitParticipantSnapshot,
-        unavailable_stage_nodes: &[iroh::EndpointId],
-    ) -> Option<SplitTopologyGeneration> {
-        let planned_participants =
-            split_recovery_candidate_participants(&snapshot.participants, unavailable_stage_nodes);
-        if !split_participants_meet_minimum(&planned_participants) {
-            log_split_replan_quorum_not_met(
-                &self.model_ref,
-                reason,
-                &snapshot.participants,
-                &snapshot.excluded,
-            );
-            return None;
-        }
-        self.try_build_local_replan_candidate(reason, &planned_participants, &snapshot.excluded)
-    }
-
-    fn try_build_local_replan_candidate(
-        &self,
-        reason: &'static str,
-        planned_participants: &[SplitParticipant],
-        excluded: &[SplitParticipantExclusion],
-    ) -> Option<SplitTopologyGeneration> {
-        match self.plan_replan_candidate(planned_participants) {
-            Ok(candidate) if split_candidate_stage0_is_local(self.node.id(), &candidate) => {
-                Some(candidate)
-            }
-            Ok(candidate) => {
-                tracing::debug!(
-                    model_ref = self.model_ref,
-                    reason,
-                    candidate_stages = ?split_stage_plan_labels(&candidate.stages),
-                    "split topology replan skipped; stage 0 would move to another node"
-                );
-                None
-            }
-            Err(err) => {
-                tracing::warn!(
-                    model_ref = self.model_ref,
-                    reason,
-                    error = %err,
-                    participants = ?split_participant_labels(planned_participants),
-                    excluded = ?split_participant_exclusion_labels(excluded),
-                    "split topology replan candidate failed"
-                );
-                None
-            }
-        }
-    }
-
-    async fn handle_loss_recovery(
-        &mut self,
-        reason: &'static str,
-        current_participants: &[SplitParticipant],
-        missing_stage_nodes: &[iroh::EndpointId],
-        unavailable_stage_nodes: &[iroh::EndpointId],
-        candidate: Option<&SplitTopologyGeneration>,
-    ) -> Option<bool> {
-        let decision = split_loss_recovery_decision(
-            &self.active,
-            current_participants,
-            unavailable_stage_nodes,
-            candidate,
-            self.local_model_fits(),
-        );
-        match decision {
-            SplitLossRecoveryDecision::NoActiveStageLoss => None,
-            SplitLossRecoveryDecision::ReplacementSplit => {
-                let candidate = candidate.expect("replacement split decision requires a candidate");
-                Some(
-                    self.handle_replacement_split_loss(
-                        reason,
-                        candidate,
-                        missing_stage_nodes,
-                        unavailable_stage_nodes,
-                    )
-                    .await,
-                )
-            }
-            SplitLossRecoveryDecision::LocalFallback => Some(
-                self.handle_local_fallback_loss(
-                    reason,
-                    missing_stage_nodes,
-                    unavailable_stage_nodes,
-                )
-                .await,
-            ),
-            SplitLossRecoveryDecision::Withdraw => Some(
-                self.handle_withdraw_loss(reason, missing_stage_nodes, unavailable_stage_nodes)
-                    .await,
-            ),
-        }
-    }
-
-    async fn handle_replacement_split_loss(
-        &mut self,
-        reason: &'static str,
-        candidate: &SplitTopologyGeneration,
-        missing_stage_nodes: &[iroh::EndpointId],
-        unavailable_stage_nodes: &[iroh::EndpointId],
-    ) -> bool {
-        tracing::info!(
-            model_ref = self.model_ref,
-            reason,
-            active_topology_id = self.active.topology_id,
-            active_generation = self.active.generation,
-            candidate_topology_id = candidate.topology_id,
-            candidate_generation = candidate.generation,
-            missing_stage_nodes = ?split_node_labels(missing_stage_nodes),
-            unavailable_stage_nodes = ?split_node_labels(unavailable_stage_nodes),
-            active_stages = ?split_stage_plan_labels(&self.active.stages),
-            candidate_stages = ?split_stage_plan_labels(&candidate.stages),
-            participants = ?split_participant_labels(&candidate.participants),
-            "split topology lost an active stage peer; loading replacement split generation"
-        );
-        match self
-            .load_and_publish_candidate(reason, candidate.clone())
-            .await
-        {
-            Ok(()) => true,
-            Err(err) => {
-                tracing::warn!(
-                    model_ref = self.model_ref,
-                    reason,
-                    error = %err,
-                    "split topology replacement failed during load-and-cutover"
-                );
-                self.publish_loss_fallback(reason, unavailable_stage_nodes.to_vec())
-                    .await
-            }
-        }
-    }
-
-    async fn handle_local_fallback_loss(
-        &mut self,
-        reason: &'static str,
-        missing_stage_nodes: &[iroh::EndpointId],
-        unavailable_stage_nodes: &[iroh::EndpointId],
-    ) -> bool {
-        tracing::warn!(
-            model_ref = self.model_ref,
-            reason,
-            topology_id = self.active.topology_id,
-            generation = self.active.generation,
-            missing_stage_nodes = ?split_node_labels(missing_stage_nodes),
-            unavailable_stage_nodes = ?split_node_labels(unavailable_stage_nodes),
-            "split topology lost an active stage peer; requesting local runtime fallback"
-        );
-        self.publish_local_fallback(reason, unavailable_stage_nodes.to_vec())
-            .await
-    }
-
-    async fn handle_withdraw_loss(
-        &mut self,
-        reason: &'static str,
-        missing_stage_nodes: &[iroh::EndpointId],
-        unavailable_stage_nodes: &[iroh::EndpointId],
-    ) -> bool {
-        tracing::warn!(
-            model_ref = self.model_ref,
-            reason,
-            topology_id = self.active.topology_id,
-            generation = self.active.generation,
-            missing_stage_nodes = ?split_node_labels(missing_stage_nodes),
-            unavailable_stage_nodes = ?split_node_labels(unavailable_stage_nodes),
-            "split topology lost an active stage peer and no replacement path is available; withdrawing active generation"
-        );
-        self.publish_withdrawal(reason, unavailable_stage_nodes.to_vec())
-            .await
-    }
-
-    async fn apply_replan_candidate(
-        &mut self,
-        reason: &'static str,
-        participant_count: usize,
-        candidate: Option<SplitTopologyGeneration>,
-    ) -> bool {
-        let Some(candidate) = split_candidate_for_replan(participant_count, candidate) else {
-            return true;
-        };
-
-        let (replan_decision, replan_decision_reason) =
-            split_replan_decision_with_reason(&self.active, &candidate);
-        match replan_decision {
-            SplitReplanDecision::Keep => {
-                self.log_replan_keep(reason, &candidate, replan_decision_reason);
-            }
-            SplitReplanDecision::Candidate => {
-                self.apply_selected_replan_candidate(reason, candidate, replan_decision_reason)
-                    .await;
-            }
-        }
-        true
-    }
-
-    fn log_replan_keep(
-        &self,
-        reason: &'static str,
-        candidate: &SplitTopologyGeneration,
-        decision_reason: &'static str,
-    ) {
-        tracing::debug!(
-            model_ref = self.model_ref,
-            reason,
-            decision_reason,
-            active_generation = self.active.generation,
-            active_stages = self.active.stages.len(),
-            candidate_stages = candidate.stages.len(),
-            active_participants = self.active.participants.len(),
-            candidate_participants = candidate.participants.len(),
-            "split topology replan skipped; candidate is not materially better"
-        );
-    }
-
-    async fn apply_selected_replan_candidate(
-        &mut self,
-        reason: &'static str,
-        candidate: SplitTopologyGeneration,
-        decision_reason: &'static str,
-    ) {
-        tracing::info!(
-            model_ref = self.model_ref,
-            reason,
-            decision_reason,
-            active_topology_id = self.active.topology_id,
-            active_generation = self.active.generation,
-            candidate_topology_id = candidate.topology_id,
-            candidate_generation = candidate.generation,
-            active_stages = ?split_stage_plan_labels(&self.active.stages),
-            candidate_stages = ?split_stage_plan_labels(&candidate.stages),
-            participants = ?split_participant_labels(&candidate.participants),
-            "split topology replan candidate accepted; loading candidate generation"
-        );
-        if let Err(err) = self.load_and_publish_candidate(reason, candidate).await {
-            tracing::warn!(
-                model_ref = self.model_ref,
-                reason,
-                error = %err,
-                "split topology replan candidate failed during load-and-cutover"
-            );
-        }
-    }
-
-    async fn publish_loss_fallback(
-        &mut self,
-        reason: &'static str,
-        unavailable_stage_nodes: Vec<iroh::EndpointId>,
-    ) -> bool {
-        if self.local_model_fits() {
-            return self
-                .publish_local_fallback(reason, unavailable_stage_nodes.clone())
-                .await;
-        }
-        self.publish_withdrawal(reason, unavailable_stage_nodes)
-            .await
-    }
-
-    async fn publish_local_fallback(
-        &mut self,
-        reason: &'static str,
-        unavailable_stage_nodes: Vec<iroh::EndpointId>,
-    ) -> bool {
-        match self
-            .request_local_fallback(reason, unavailable_stage_nodes)
-            .await
-        {
-            Err(err) => {
-                tracing::warn!(
-                    model_ref = self.model_ref,
-                    reason,
-                    error = %err,
-                    "failed to publish split topology local fallback request"
-                );
-                true
-            }
-            _ => false,
-        }
-    }
-
-    async fn publish_withdrawal(
-        &mut self,
-        reason: &'static str,
-        unavailable_stage_nodes: Vec<iroh::EndpointId>,
-    ) -> bool {
-        match self
-            .withdraw_active_generation(reason, unavailable_stage_nodes)
-            .await
-        {
-            Err(err) => {
-                tracing::warn!(
-                    model_ref = self.model_ref,
-                    reason,
-                    error = %err,
-                    "failed to publish split topology withdrawal"
-                );
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn plan_replan_candidate(
-        &self,
-        planned_participants: &[SplitParticipant],
-    ) -> Result<SplitTopologyGeneration> {
-        let generation = self.active.generation.saturating_add(1);
-        let run_id = format!("mesh-split-{}-g{}", now_unix_nanos(), generation);
-        let topology_id = format!("topology-{run_id}");
-        let resources = SplitTopologyResourceInputs {
-            ctx_size_override: Some(self.ctx_size),
-            parallel_override: Some(self.slots),
-            ..self.topology_resources
-        };
-        let planned = plan_runtime_slice_topology_with_resources(
-            &topology_id,
-            &self.model_ref,
-            &self.package,
-            planned_participants,
-            &[],
-            resources,
-        )?;
-        let stages = planned.stages;
-        let participants = split_participants_for_stages(planned_participants, &stages);
-        anyhow::ensure!(
-            split_stages_meet_minimum(&stages),
-            "split runtime needs at least two stage participants"
-        );
-        Ok(SplitTopologyGeneration::new(
-            topology_id,
-            run_id,
-            generation,
-            participants,
-            stages,
-        ))
-    }
-
-    fn local_model_fits(&self) -> bool {
-        let local_capacity = self
-            .pinned_gpu
-            .as_ref()
-            .map(|gpu| gpu.vram_bytes)
-            .unwrap_or_else(|| self.node.vram_bytes());
-        // Use the package's source model bytes when available — layer-package
-        // refs use `hf://` pseudo-paths that `total_model_bytes` cannot stat.
-        let model_bytes = if self.package.source_model_bytes > 0 {
-            self.package.source_model_bytes
-        } else {
-            election::total_model_bytes(&self.model_path)
-        };
-        model_fits_runtime_capacity(model_bytes, local_capacity)
-    }
-
-    async fn load_and_publish_candidate(
-        &mut self,
-        reason: &'static str,
-        candidate: SplitTopologyGeneration,
-    ) -> Result<()> {
-        let previous = self.active.clone();
-        let loaded = load_split_runtime_generation(SplitGenerationLoadSpec {
-            node: &self.node,
-            mesh_config: &self.mesh_config,
-            model_ref: &self.model_ref,
-            model_path: &self.model_path,
-            package: &self.package,
-            generation: &candidate,
-            projector_path: self.projector_path.clone(),
-            ctx_size: self.ctx_size,
-            cache_type_k_override: self.cache_type_k_override.as_deref(),
-            cache_type_v_override: self.cache_type_v_override.as_deref(),
-            n_batch_override: self.n_batch_override,
-            n_ubatch_override: self.n_ubatch_override,
-            flash_attention_override: self.flash_attention_override,
-            openai_guardrail_policy: self.openai_guardrail_policy.clone(),
-            pinned_gpu: self.pinned_gpu.as_ref(),
-            slots: self.slots,
-            skippy_telemetry: self.skippy_telemetry.clone(),
-            survey_telemetry: self.survey_telemetry.clone(),
-        })
-        .await?;
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        let event = SplitCoordinatorEvent::Replace(Box::new(SplitCoordinatorReplaceEvent {
-            reason,
-            generation: candidate.generation,
-            loaded,
-            ack: ack_tx,
-        }));
-        if let Err(err) = self.event_tx.send(event).await {
-            let SplitCoordinatorEvent::Replace(event) = err.0 else {
-                unreachable!("replace event send returned a non-replace event")
-            };
-            let event = *event;
-            event.loaded.handle.shutdown().await;
-            stop_split_generation(&self.node, &candidate, candidate.generation).await;
-            anyhow::bail!("publish split topology candidate to runtime loop: receiver closed");
-        }
-        match ack_rx.await {
-            Ok(SplitCoordinatorAck::Accepted) => {
-                self.active = candidate;
-                stop_split_generation(&self.node, &previous, self.active.generation).await;
-                tracing::info!(
-                    model_ref = self.model_ref,
-                    topology_id = self.active.topology_id,
-                    generation = self.active.generation,
-                    stages = ?split_stage_plan_labels(&self.active.stages),
-                    "split topology replan cutover complete"
-                );
-                Ok(())
-            }
-            Err(_) => {
-                stop_split_generation(&self.node, &candidate, candidate.generation).await;
-                anyhow::bail!("runtime loop dropped split topology candidate ack");
-            }
-        }
-    }
-
-    async fn request_local_fallback(
-        &mut self,
-        reason: &'static str,
-        unavailable_stage_nodes: Vec<iroh::EndpointId>,
-    ) -> Result<()> {
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        let event = SplitCoordinatorEvent::LocalFallback(SplitCoordinatorLocalFallbackEvent {
-            reason,
-            generation: self.active.generation,
-            topology_id: self.active.topology_id.clone(),
-            unavailable_stage_nodes,
-            ack: ack_tx,
-        });
-        if self.event_tx.send(event).await.is_err() {
-            anyhow::bail!("publish split topology local fallback to runtime loop: receiver closed");
-        }
-        match ack_rx.await {
-            Ok(SplitCoordinatorAck::Accepted) => Ok(()),
-            Err(_) => anyhow::bail!("runtime loop dropped split topology local fallback ack"),
-        }
-    }
-
-    async fn withdraw_active_generation(
-        &mut self,
-        reason: &'static str,
-        unavailable_stage_nodes: Vec<iroh::EndpointId>,
-    ) -> Result<()> {
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        let event = SplitCoordinatorEvent::Withdraw(SplitCoordinatorWithdrawEvent {
-            reason,
-            generation: self.active.generation,
-            topology_id: self.active.topology_id.clone(),
-            unavailable_stage_nodes,
-            ack: ack_tx,
-        });
-        if self.event_tx.send(event).await.is_err() {
-            anyhow::bail!("publish split topology withdrawal to runtime loop: receiver closed");
-        }
-        match ack_rx.await {
-            Ok(SplitCoordinatorAck::Accepted) => Ok(()),
-            Err(_) => anyhow::bail!("runtime loop dropped split topology withdrawal ack"),
-        }
-    }
-}
-
-#[cfg(test)]
-fn split_replan_decision(
-    active: &SplitTopologyGeneration,
-    candidate: &SplitTopologyGeneration,
-) -> SplitReplanDecision {
-    split_replan_decision_with_reason(active, candidate).0
-}
-
-fn split_replan_decision_with_reason(
-    active: &SplitTopologyGeneration,
-    candidate: &SplitTopologyGeneration,
-) -> (SplitReplanDecision, &'static str) {
-    if split_active_stage_participant_missing(active, &candidate.participants) {
-        return (
-            SplitReplanDecision::Candidate,
-            "active_stage_participant_missing",
-        );
-    }
-    if candidate.stages.len() > active.stages.len() {
-        return (SplitReplanDecision::Candidate, "candidate_has_more_stages");
-    }
-    if candidate.participants.len() > active.participants.len()
-        && candidate.stages.len() == active.stages.len()
-    {
-        return (
-            SplitReplanDecision::Candidate,
-            "candidate_has_more_participants",
-        );
-    }
-    if split_stage_node_signature(&candidate.stages) != split_stage_node_signature(&active.stages)
-        && split_stage_balance_score(&candidate.stages) < split_stage_balance_score(&active.stages)
-    {
-        return (SplitReplanDecision::Candidate, "candidate_improves_balance");
-    }
-    (SplitReplanDecision::Keep, "candidate_not_materially_better")
-}
-
-fn split_loss_recovery_decision(
-    active: &SplitTopologyGeneration,
-    current_participants: &[SplitParticipant],
-    unavailable_stage_nodes: &[iroh::EndpointId],
-    candidate: Option<&SplitTopologyGeneration>,
-    local_model_fits: bool,
-) -> SplitLossRecoveryDecision {
-    if !split_active_stage_participant_missing(active, current_participants)
-        && unavailable_stage_nodes.is_empty()
-    {
-        return SplitLossRecoveryDecision::NoActiveStageLoss;
-    }
-    if candidate.is_some_and(|candidate| {
-        split_candidate_is_valid_replacement_split_after_loss(candidate, unavailable_stage_nodes)
-    }) {
-        return SplitLossRecoveryDecision::ReplacementSplit;
-    }
-    if local_model_fits {
-        return SplitLossRecoveryDecision::LocalFallback;
-    }
-    SplitLossRecoveryDecision::Withdraw
-}
-
-fn split_candidate_is_valid_replacement_split(candidate: &SplitTopologyGeneration) -> bool {
-    split_participants_meet_minimum(&candidate.participants)
-        && split_stages_meet_minimum(&candidate.stages)
-}
-
-fn split_candidate_is_valid_replacement_split_after_loss(
-    candidate: &SplitTopologyGeneration,
-    unavailable_stage_nodes: &[iroh::EndpointId],
-) -> bool {
-    split_candidate_is_valid_replacement_split(candidate)
-        && !split_candidate_uses_unavailable_stage_node(candidate, unavailable_stage_nodes)
-}
-
-fn split_candidate_uses_unavailable_stage_node(
-    candidate: &SplitTopologyGeneration,
-    unavailable_stage_nodes: &[iroh::EndpointId],
-) -> bool {
-    candidate
-        .stages
-        .iter()
-        .any(|stage| unavailable_stage_nodes.contains(&stage.node_id))
-}
-
-fn split_recovery_candidate_participants(
-    participants: &[SplitParticipant],
-    unavailable_stage_nodes: &[iroh::EndpointId],
-) -> Vec<SplitParticipant> {
-    if unavailable_stage_nodes.is_empty() {
-        return participants.to_vec();
-    }
-    participants
-        .iter()
-        .copied()
-        .filter(|participant| !unavailable_stage_nodes.contains(&participant.node_id))
-        .collect()
-}
-
-fn split_candidate_for_replan(
-    participant_count: usize,
-    candidate: Option<SplitTopologyGeneration>,
-) -> Option<SplitTopologyGeneration> {
-    if participant_count < SPLIT_DEFAULT_MIN_PARTICIPANTS {
-        return None;
-    }
-    candidate
-}
-
-fn log_split_replan_quorum_not_met(
-    model_ref: &str,
-    reason: &'static str,
-    participants: &[SplitParticipant],
-    excluded: &[SplitParticipantExclusion],
-) {
-    tracing::debug!(
-        model_ref,
-        reason,
-        participants = ?split_participant_labels(participants),
-        excluded = ?split_participant_exclusion_labels(excluded),
-        "split topology replan skipped; quorum not met"
-    );
-}
-
-fn split_participants_meet_minimum(participants: &[SplitParticipant]) -> bool {
-    participants.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS
-}
-
-fn split_stages_meet_minimum(stages: &[RuntimeSliceStagePlan]) -> bool {
-    stages.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS
-}
-
-fn split_active_stage_participant_missing(
-    active: &SplitTopologyGeneration,
-    current_participants: &[SplitParticipant],
-) -> bool {
-    !split_missing_active_stage_nodes(active, current_participants).is_empty()
-}
-
-fn split_missing_active_stage_nodes(
-    active: &SplitTopologyGeneration,
-    current_participants: &[SplitParticipant],
-) -> Vec<iroh::EndpointId> {
-    let mut missing = Vec::new();
-    for stage in &active.stages {
-        if current_participants
-            .iter()
-            .any(|participant| participant.node_id == stage.node_id)
-            || missing.contains(&stage.node_id)
-        {
-            continue;
-        }
-        missing.push(stage.node_id);
-    }
-    missing
-}
-
-fn split_unavailable_active_stage_nodes(
-    active: &SplitTopologyGeneration,
-    current_participants: &[SplitParticipant],
-    runtime_statuses: &[mesh::StageRuntimeStatus],
-) -> Vec<iroh::EndpointId> {
-    let mut unavailable = split_missing_active_stage_nodes(active, current_participants);
-    for status in runtime_statuses {
-        if !matches!(
-            status.state,
-            skippy::StageRuntimeState::Failed
-                | skippy::StageRuntimeState::Stopping
-                | skippy::StageRuntimeState::Stopped
-        ) || status.topology_id != active.topology_id
-            || status.run_id != active.run_id
-            || active
-                .stages
-                .iter()
-                .all(|stage| stage.stage_id != status.stage_id)
-        {
-            continue;
-        }
-        let Some(node_id) = status.node_id else {
-            continue;
-        };
-        if !unavailable.contains(&node_id) {
-            unavailable.push(node_id);
-        }
-    }
-    unavailable
-}
-
-async fn stop_split_generation(
-    node: &mesh::Node,
-    generation: &SplitTopologyGeneration,
-    shutdown_generation: u64,
-) {
-    for stage in generation.stages.iter().skip(1) {
-        let stop = skippy::StageStopRequest {
-            topology_id: generation.topology_id.clone(),
-            run_id: generation.run_id.clone(),
-            stage_id: stage.stage_id.clone(),
-            shutdown_generation,
-            coordinator_term: generation.coordinator_term,
-        };
-        let result = if stage.node_id == node.id() {
-            node.send_local_stage_control(skippy::StageControlRequest::Stop(stop))
-                .await
-        } else {
-            node.send_stage_control(stage.node_id, skippy::StageControlRequest::Stop(stop))
-                .await
-        };
-        if let Err(err) = result {
-            tracing::warn!(
-                topology_id = %generation.topology_id,
-                run_id = %generation.run_id,
-                stage_id = %stage.stage_id,
-                node = %stage.node_id.fmt_short(),
-                error = %err,
-                "failed to stop split stage generation"
-            );
-        }
-        if stage.node_id != node.id() {
-            node.stop_stage_transport_bridge(
-                &generation.topology_id,
-                &generation.run_id,
-                &stage.stage_id,
-            )
-            .await;
-        }
-    }
-}
-
-fn split_stage_node_signature(stages: &[RuntimeSliceStagePlan]) -> Vec<iroh::EndpointId> {
-    stages.iter().map(|stage| stage.node_id).collect()
-}
-
-fn split_stage_balance_score(stages: &[RuntimeSliceStagePlan]) -> u32 {
-    let Some(min) = stages
-        .iter()
-        .map(|stage| stage.layer_end.saturating_sub(stage.layer_start))
-        .min()
-    else {
-        return 0;
-    };
-    let max = stages
-        .iter()
-        .map(|stage| stage.layer_end.saturating_sub(stage.layer_start))
-        .max()
-        .unwrap_or(min);
-    max.saturating_sub(min)
-}
-
-type SplitParticipantSignature = Vec<(String, u64, u64, u64, Option<u32>, bool, u32)>;
-
-fn drain_split_peer_changes<T>(peer_rx: &mut tokio::sync::watch::Receiver<T>) {
-    while peer_rx.has_changed().unwrap_or(false) {
-        let _ = peer_rx.borrow_and_update();
-    }
-}
-
-async fn wait_for_split_participants(
-    node: &mesh::Node,
-    model_name: &str,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    local_vram_override: Option<u64>,
-    timeout: Duration,
-) -> Result<SplitParticipantSnapshot> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut best: Vec<SplitParticipant> = Vec::new();
-    let mut best_excluded: Vec<SplitParticipantExclusion> = Vec::new();
-    let mut last_signature: SplitParticipantSignature = Vec::new();
-    let mut stable_since = tokio::time::Instant::now();
-    loop {
-        let snapshot =
-            collect_split_participants(node, model_name, model_ref, package, local_vram_override)
-                .await;
-        let signature = split_participant_signature(&snapshot.participants);
-        let now = tokio::time::Instant::now();
-        split_participant_signature_changed(
-            model_ref,
-            &snapshot,
-            &signature,
-            &mut last_signature,
-            &mut stable_since,
-            now,
-        );
-        record_best_split_participants(&snapshot, &mut best, &mut best_excluded);
-
-        let stable_for = now.saturating_duration_since(stable_since);
-        if split_participants_ready(&snapshot, stable_for) {
-            tracing::info!(
-                model_ref,
-                stable_for_ms = stable_for.as_millis(),
-                participants = ?split_participant_labels(&snapshot.participants),
-                "split topology participant set accepted"
-            );
-            return Ok(snapshot);
-        }
-
-        if now >= deadline {
-            ensure_split_participant_timeout_has_quorum(model_ref, &best, &best_excluded)?;
-            tracing::warn!(
-                model_ref,
-                participants = ?split_participant_labels(&best),
-                excluded = ?split_participant_exclusion_labels(&best_excluded),
-                "split topology participant wait timed out; using best observed set"
-            );
-            return Ok(best_split_participant_snapshot(best, best_excluded));
-        }
-
-        tokio::time::sleep(SPLIT_PARTICIPANT_POLL_INTERVAL).await;
-    }
-}
-
-fn split_participant_signature_changed(
-    model_ref: &str,
-    snapshot: &SplitParticipantSnapshot,
-    signature: &SplitParticipantSignature,
-    last_signature: &mut SplitParticipantSignature,
-    stable_since: &mut tokio::time::Instant,
-    now: tokio::time::Instant,
-) {
-    if signature == last_signature {
-        return;
-    }
-    *stable_since = now;
-    *last_signature = signature.clone();
-    tracing::info!(
-        model_ref,
-        included = ?split_participant_labels(&snapshot.participants),
-        excluded = ?split_participant_exclusion_labels(&snapshot.excluded),
-        "split topology participant set changed"
-    );
-}
-
-fn record_best_split_participants(
-    snapshot: &SplitParticipantSnapshot,
-    best: &mut Vec<SplitParticipant>,
-    best_excluded: &mut Vec<SplitParticipantExclusion>,
-) {
-    if snapshot.participants.len() >= best.len() {
-        *best = snapshot.participants.clone();
-        *best_excluded = snapshot.excluded.clone();
-    }
-}
-
-fn split_participants_ready(snapshot: &SplitParticipantSnapshot, stable_for: Duration) -> bool {
-    snapshot.participants.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS
-        && stable_for >= SPLIT_PARTICIPANT_STABLE_FOR
-}
-
-fn ensure_split_participant_timeout_has_quorum(
-    model_ref: &str,
-    best: &[SplitParticipant],
-    best_excluded: &[SplitParticipantExclusion],
-) -> Result<()> {
-    anyhow::ensure!(
-        best.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS,
-        "split runtime needs at least two participating nodes for {model_ref}; found {} eligible [{}]; excluded [{}]",
-        best.len(),
-        split_participant_labels(best).join(", "),
-        split_participant_exclusion_labels(best_excluded).join(", ")
-    );
-    Ok(())
-}
-
-fn best_split_participant_snapshot(
-    participants: Vec<SplitParticipant>,
-    excluded: Vec<SplitParticipantExclusion>,
-) -> SplitParticipantSnapshot {
-    SplitParticipantSnapshot {
-        participants,
-        excluded,
-    }
-}
-
-fn split_candidate_stage0_is_local(
-    local_node_id: iroh::EndpointId,
-    candidate: &SplitTopologyGeneration,
-) -> bool {
-    candidate
-        .stages
-        .first()
-        .is_some_and(|stage0| stage0.node_id == local_node_id)
-}
-
-async fn collect_split_participants(
-    node: &mesh::Node,
-    model_name: &str,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    local_vram_override: Option<u64>,
-) -> SplitParticipantSnapshot {
-    let mut participants = vec![SplitParticipant::local_package(
-        node.id(),
-        local_vram_override.unwrap_or_else(|| node.vram_bytes()),
-        Some(node.first_joined_mesh_ts().await.unwrap_or(0)),
-        package,
-    )];
-    let mut excluded = Vec::new();
-    for peer in node.peers().await {
-        if let Some(reason) = split_peer_preflight_exclusion_reason(&peer, model_name, model_ref) {
-            excluded.push(SplitParticipantExclusion {
-                node_id: peer.id,
-                reason,
-            });
-            continue;
-        }
-        if let Some(reason) =
-            split_peer_stage_path_exclusion_reason(node.split_stage_path_snapshot(peer.id).await)
-        {
-            excluded.push(SplitParticipantExclusion {
-                node_id: peer.id,
-                reason,
-            });
-            continue;
-        }
-
-        if let Some(package_signal) =
-            split_peer_package_signal(node, peer.id, model_ref, package).await
-        {
-            let artifact_transfer_allowed = node.artifact_transfer_allowed_for_peer(&peer).await;
-            if package_signal.can_stage_with(package, artifact_transfer_allowed) {
-                participants.push(
-                    SplitParticipant::new(peer.id, peer.vram_bytes, peer.first_joined_mesh_ts)
-                        .with_package_signals(
-                            package_signal,
-                            peer.rtt_ms,
-                            artifact_transfer_allowed,
-                        ),
-                );
-            } else {
-                excluded.push(SplitParticipantExclusion {
-                    node_id: peer.id,
-                    reason: SplitParticipantExclusionReason::MissingModelSource,
-                });
-            }
-        } else {
-            excluded.push(SplitParticipantExclusion {
-                node_id: peer.id,
-                reason: SplitParticipantExclusionReason::MissingModelSource,
-            });
-        }
-    }
-    participants.sort_by_key(|participant| participant.node_id.to_string());
-    participants.dedup_by_key(|participant| participant.node_id);
-    excluded.sort_by_key(|exclusion| exclusion.node_id.to_string());
-    excluded.dedup_by_key(|exclusion| exclusion.node_id);
-    SplitParticipantSnapshot {
-        participants,
-        excluded,
-    }
-}
-
-fn split_peer_preflight_exclusion_reason(
-    peer: &mesh::PeerInfo,
-    model_name: &str,
-    model_ref: &str,
-) -> Option<SplitParticipantExclusionReason> {
-    if let Some(reason) = split_peer_stage_host_exclusion_reason(peer) {
-        return Some(reason);
-    }
-    if !split_peer_wants_model(peer, model_name, model_ref) {
-        return Some(SplitParticipantExclusionReason::MissingModelInterest);
-    }
-    if !peer.stage_protocol_generation_supported {
-        return Some(SplitParticipantExclusionReason::StageProtocolGeneration);
-    }
-    None
-}
-
-fn split_peer_stage_path_exclusion_reason(
-    snapshot: mesh::SplitStagePathSnapshot,
-) -> Option<SplitParticipantExclusionReason> {
-    match snapshot.stage_path_rejection()? {
-        mesh::SplitStagePathRejection::MissingStagePath => {
-            Some(SplitParticipantExclusionReason::MissingStagePath)
-        }
-        mesh::SplitStagePathRejection::StagePathRelayOnly => {
-            Some(SplitParticipantExclusionReason::StagePathRelayOnly)
-        }
-        mesh::SplitStagePathRejection::StagePathTooSlow => {
-            Some(SplitParticipantExclusionReason::StagePathTooSlow)
-        }
-    }
-}
-
-fn split_peer_stage_host_exclusion_reason(
-    peer: &mesh::PeerInfo,
-) -> Option<SplitParticipantExclusionReason> {
-    if !split_peer_can_run_stage_runtime(peer) {
-        return Some(SplitParticipantExclusionReason::Client);
-    }
-    if peer.vram_bytes == 0 {
-        return Some(SplitParticipantExclusionReason::MissingVram);
-    }
-    None
-}
-
-fn split_peer_can_run_stage_runtime(peer: &mesh::PeerInfo) -> bool {
-    matches!(peer.role, NodeRole::Worker | NodeRole::Host { .. })
-}
-
-fn split_peer_wants_model(peer: &mesh::PeerInfo, model_name: &str, model_ref: &str) -> bool {
-    peer.requested_models
-        .iter()
-        .any(|model| model == model_name)
-        || peer.routes_model(model_ref)
-        || peer.serving_models.iter().any(|model| model == model_name)
-        || peer
-            .available_models
-            .iter()
-            .any(|model| model == model_name)
-        || peer
-            .explicit_model_interests
-            .iter()
-            .any(|model| model == model_ref)
-}
-
-async fn split_peer_package_signal(
-    node: &mesh::Node,
-    peer_id: iroh::EndpointId,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-) -> Option<SplitParticipantPackageSignal> {
-    let request = skippy::StageInventoryRequest {
-        model_id: model_ref.to_string(),
-        package_ref: package.package_ref.clone(),
-        manifest_sha256: package.manifest_sha256.clone(),
-    };
-    let result = node
-        .send_stage_control(peer_id, skippy::StageControlRequest::Inventory(request))
-        .await;
-    let Ok(skippy::StageControlResponse::Inventory(inventory)) = result else {
-        return None;
-    };
-    Some(split_inventory_package_signal(&inventory, package))
-}
-
-fn split_inventory_package_signal(
-    inventory: &skippy::StageLayerInventory,
-    package: &skippy::SkippyPackageIdentity,
-) -> SplitParticipantPackageSignal {
-    let cached_slice_bytes = split_inventory_range_bytes(
-        inventory
-            .available_ranges
-            .iter()
-            .chain(inventory.ready_ranges.iter()),
-        package,
-    );
-    let explicit_missing_bytes =
-        split_inventory_range_bytes(inventory.missing_ranges.iter(), package);
-    let missing_artifact_bytes = if explicit_missing_bytes > 0 {
-        explicit_missing_bytes
-    } else if cached_slice_bytes >= package.source_model_bytes {
-        0
-    } else if inventory.layer_count == 0 && cached_slice_bytes == 0 {
-        package.source_model_bytes
-    } else {
-        package
-            .source_model_bytes
-            .saturating_sub(cached_slice_bytes)
-    };
-    SplitParticipantPackageSignal {
-        cached_slice_bytes,
-        missing_artifact_bytes,
-        availability_score: split_inventory_covered_layers(
-            inventory
-                .available_ranges
-                .iter()
-                .chain(inventory.ready_ranges.iter()),
-            package.layer_count,
-        ),
-    }
-}
-
-fn split_inventory_range_bytes<'a>(
-    ranges: impl Iterator<Item = &'a skippy::LayerRange>,
-    package: &skippy::SkippyPackageIdentity,
-) -> u64 {
-    if package.layer_count == 0 || package.source_model_bytes == 0 {
-        return 0;
-    }
-    let covered_layers = u128::from(split_inventory_covered_layers(ranges, package.layer_count));
-    let layer_count = u128::from(package.layer_count);
-    let bytes = u128::from(package.source_model_bytes).saturating_mul(covered_layers) / layer_count;
-    bytes.min(u128::from(package.source_model_bytes)) as u64
-}
-
-fn split_inventory_covered_layers<'a>(
-    ranges: impl Iterator<Item = &'a skippy::LayerRange>,
-    layer_count: u32,
-) -> u32 {
-    let mut ranges = ranges
-        .filter_map(|range| {
-            let start = range.layer_start.min(layer_count);
-            let end = range.layer_end.min(layer_count);
-            (start < end).then_some((start, end))
-        })
-        .collect::<Vec<_>>();
-    ranges.sort_unstable();
-    let mut covered = 0u32;
-    let mut current: Option<(u32, u32)> = None;
-    for (start, end) in ranges {
-        match current {
-            Some((current_start, current_end)) if start <= current_end => {
-                current = Some((current_start, current_end.max(end)));
-            }
-            Some((current_start, current_end)) => {
-                covered = covered.saturating_add(current_end.saturating_sub(current_start));
-                current = Some((start, end));
-            }
-            None => current = Some((start, end)),
-        }
-    }
-    if let Some((start, end)) = current {
-        covered = covered.saturating_add(end.saturating_sub(start));
-    }
-    covered
-}
-
-fn split_participant_signature(participants: &[SplitParticipant]) -> SplitParticipantSignature {
-    participants
-        .iter()
-        .map(|participant| {
-            (
-                participant.node_id.to_string(),
-                participant.vram_bytes,
-                participant.cached_slice_bytes,
-                participant.missing_artifact_bytes,
-                participant.rtt_ms,
-                participant.artifact_transfer_supported,
-                participant.availability_score,
-            )
-        })
-        .collect()
-}
-
-fn split_participant_set_hash(participants: &[SplitParticipant]) -> String {
-    let mut hasher = Sha256::new();
-    for participant in split_participant_signature(participants) {
-        hasher.update(participant.0.as_bytes());
-        hasher.update(participant.1.to_le_bytes());
-        hasher.update(participant.2.to_le_bytes());
-        hasher.update(participant.3.to_le_bytes());
-        hasher.update(participant.4.unwrap_or_default().to_le_bytes());
-        hasher.update([u8::from(participant.5)]);
-        hasher.update(participant.6.to_le_bytes());
-    }
-    format!("{:x}", hasher.finalize())
-}
-
-fn split_topology_hash(stages: &[RuntimeSliceStagePlan]) -> String {
-    let mut hasher = Sha256::new();
-    for stage in stages {
-        hasher.update(stage.stage_id.as_bytes());
-        hasher.update(stage.stage_index.to_le_bytes());
-        hasher.update(stage.node_id.to_string().as_bytes());
-        hasher.update(stage.layer_start.to_le_bytes());
-        hasher.update(stage.layer_end.to_le_bytes());
-        hasher.update(stage.parameter_bytes.to_le_bytes());
-    }
-    format!("{:x}", hasher.finalize())
-}
-
-fn split_node_labels(nodes: &[iroh::EndpointId]) -> Vec<String> {
-    nodes
-        .iter()
-        .map(|node| node.fmt_short().to_string())
-        .collect()
-}
-
-#[cfg(test)]
-fn plan_runtime_slice_topology(
-    topology_id: &str,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    participants: &[SplitParticipant],
-) -> Result<Vec<RuntimeSliceStagePlan>> {
-    plan_runtime_slice_topology_with_exclusions(topology_id, model_ref, package, participants, &[])
-}
-
-#[cfg(test)]
-fn plan_runtime_slice_topology_with_exclusions(
-    topology_id: &str,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    participants: &[SplitParticipant],
-    excluded: &[SplitParticipantExclusion],
-) -> Result<Vec<RuntimeSliceStagePlan>> {
-    tracing::info!(
-        topology_id,
-        model_ref,
-        participants = ?split_participant_labels(participants),
-        layer_count = package.layer_count,
-        "planning split runtime topology"
-    );
-    let topology_participants = collect_topology_participants(participants);
-    let plan = skippy::plan_package_identity_topology(
-        topology_id,
-        model_ref,
-        package,
-        &topology_participants,
-    )?;
-    log_topology_plan_diagnostics(topology_id, model_ref, &plan.diagnostics);
-    let mut stages = plan
-        .stages
-        .into_iter()
-        .map(|stage| RuntimeSliceStagePlan {
-            stage_id: stage.stage_id,
-            stage_index: stage.stage_index,
-            node_id: stage.node_id,
-            layer_start: stage.layer_start,
-            layer_end: stage.layer_end,
-            parameter_bytes: stage.parameter_bytes,
-        })
-        .collect::<Vec<_>>();
-    stages.sort_by_key(|stage| stage.stage_index);
-    validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
-    tracing::info!(
-        topology_id,
-        model_ref,
-        stages = ?split_stage_plan_labels(&stages),
-        "planned split runtime topology"
-    );
-    Ok(stages)
-}
-
-#[cfg(test)]
-fn collect_topology_participants(
-    participants: &[SplitParticipant],
-) -> Vec<skippy::StageTopologyParticipant> {
-    participants
-        .iter()
-        .copied()
-        .map(SplitParticipant::to_topology_participant)
-        .collect()
-}
-
-#[cfg(test)]
-fn log_topology_plan_diagnostics(topology_id: &str, model_ref: &str, diagnostics: &[String]) {
-    if !diagnostics.is_empty() {
-        tracing::debug!(
-            topology_id,
-            model_ref,
-            diagnostics = ?diagnostics,
-            "package-aware split topology planner emitted diagnostics"
-        );
-    }
-}
-
-async fn prepare_split_stage(
-    node: &mesh::Node,
-    stage_node_id: iroh::EndpointId,
-    load: skippy::StageLoadRequest,
-) -> Result<()> {
-    let prepare = skippy::StagePrepareRequest {
-        load,
-        coordinator_id: Some(node.id()),
-    };
-    let response = if stage_node_id == node.id() {
-        node.send_local_stage_control(skippy::StageControlRequest::Prepare(prepare))
-            .await
-    } else {
-        node.send_stage_control(stage_node_id, skippy::StageControlRequest::Prepare(prepare))
-            .await
-    }?;
-    let skippy::StageControlResponse::PrepareAccepted(accepted) = response else {
-        anyhow::bail!("unexpected response while preparing split stage");
-    };
-    anyhow::ensure!(
-        accepted.accepted,
-        "stage {} rejected prepare: {}",
-        accepted.status.stage_id,
-        accepted
-            .error
-            .unwrap_or_else(|| "unknown error".to_string())
-    );
-    Ok(())
-}
-
-async fn wait_for_split_stage_source(
-    node: &mesh::Node,
-    stage_node_id: iroh::EndpointId,
-    load: &skippy::StageLoadRequest,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let inventory = query_stage_inventory(node, stage_node_id, load).await?;
-        if split_stage_source_is_ready(&inventory, load) {
-            tracing::info!(
-                topology_id = %load.topology_id,
-                run_id = %load.run_id,
-                stage_id = %load.stage_id,
-                node = %stage_node_id.fmt_short(),
-                "split stage source is available; loading runtime"
-            );
-            return Ok(());
-        }
-        if let Some(failed) = inventory.preparing_ranges.iter().find(|status| {
-            status.stage_id == load.stage_id
-                && matches!(status.state, skippy::StagePreparationState::Failed)
-        }) {
-            anyhow::bail!(
-                "stage {} source prepare failed: {}",
-                load.stage_id,
-                failed.error.as_deref().unwrap_or("unknown error")
-            );
-        }
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!(
-                "timed out waiting for stage {} source availability after {:?}",
-                load.stage_id,
-                timeout
-            );
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-}
-
-fn split_stage_source_is_ready(
-    inventory: &skippy::StageLayerInventory,
-    load: &skippy::StageLoadRequest,
-) -> bool {
-    let ready_running_stage = inventory
-        .ready_ranges
-        .iter()
-        .any(|range| split_layer_range_covers(range, load));
-    if ready_running_stage {
-        return true;
-    }
-    if load.load_mode != LoadMode::LayerPackage && !skippy::is_layer_package_ref(&load.package_ref)
-    {
-        return inventory
-            .available_ranges
-            .iter()
-            .any(|range| split_layer_range_covers(range, load));
-    }
-    inventory.preparing_ranges.iter().any(|status| {
-        status.topology_id == load.topology_id
-            && status.run_id == load.run_id
-            && status.stage_id == load.stage_id
-            && status.model_id == load.model_id
-            && status.package_ref == load.package_ref
-            && status.manifest_sha256 == load.manifest_sha256
-            && status.layer_start <= load.layer_start
-            && status.layer_end >= load.layer_end
-            && matches!(
-                status.state,
-                skippy::StagePreparationState::Available | skippy::StagePreparationState::Ready
-            )
-    })
-}
-
-fn split_layer_range_covers(range: &skippy::LayerRange, load: &skippy::StageLoadRequest) -> bool {
-    range.layer_start <= load.layer_start && range.layer_end >= load.layer_end
-}
-
-async fn query_stage_inventory(
-    node: &mesh::Node,
-    stage_node_id: iroh::EndpointId,
-    load: &skippy::StageLoadRequest,
-) -> Result<skippy::StageLayerInventory> {
-    let request = skippy::StageInventoryRequest {
-        model_id: load.model_id.clone(),
-        package_ref: load.package_ref.clone(),
-        manifest_sha256: load.manifest_sha256.clone(),
-    };
-    let response = if stage_node_id == node.id() {
-        node.send_local_stage_control(skippy::StageControlRequest::Inventory(request))
-            .await
-    } else {
-        node.send_stage_control(
-            stage_node_id,
-            skippy::StageControlRequest::Inventory(request),
-        )
-        .await
-    }?;
-    let skippy::StageControlResponse::Inventory(inventory) = response else {
-        anyhow::bail!("unexpected response while querying stage inventory");
-    };
-    Ok(inventory)
-}
-
-fn split_stage_topology_instance(
-    topology_id: &str,
-    run_id: &str,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    stages: &[RuntimeSliceStagePlan],
-    ready_by_stage: &HashMap<String, skippy::StageStatusSnapshot>,
-) -> mesh::StageTopologyInstance {
-    mesh::StageTopologyInstance {
-        topology_id: topology_id.to_string(),
-        run_id: run_id.to_string(),
-        model_id: model_ref.to_string(),
-        package_ref: package.package_ref.clone(),
-        manifest_sha256: package.manifest_sha256.clone(),
-        stages: stages
-            .iter()
-            .map(|stage| mesh::StageAssignment {
-                stage_id: stage.stage_id.clone(),
-                stage_index: stage.stage_index,
-                node_id: stage.node_id,
-                layer_start: stage.layer_start,
-                layer_end: stage.layer_end,
-                endpoint: mesh::StageEndpoint {
-                    bind_addr: ready_by_stage
-                        .get(&stage.stage_id)
-                        .map(|status| status.bind_addr.clone())
-                        .unwrap_or_default(),
-                },
-            })
-            .collect(),
-    }
-}
-
-fn now_unix_nanos() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
-        .unwrap_or(0)
-}
-
-async fn start_runtime_skippy_model(
-    spec: LocalRuntimeModelStartSpec<'_>,
+async fn start_local_skippy_model(
+    spec: LocalOpenAiModelStartSpec<'_>,
     model_name: String,
     plan: RuntimeResourcePlan,
 ) -> Result<(
@@ -3275,10 +685,9 @@ async fn start_runtime_skippy_model(
     LocalRuntimeModelHandle,
     tokio::sync::oneshot::Receiver<()>,
 )> {
-    let port = alloc_local_port().await?;
     let context_length = plan.context_length;
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
-    let resolved = resolve_runtime_skippy_config(
+    let resolved = resolve_local_openai_skippy_config(
         &spec,
         &model_name,
         spec.model_bytes,
@@ -3296,14 +705,20 @@ async fn start_runtime_skippy_model(
     let capabilities = models::runtime_verified_model_capabilities(
         &model_name,
         spec.model_path,
-        models::RuntimeMediaCapabilityEvidence {
-            vision_projector_loaded: resolved.hardware.projector_path.is_some(),
-        },
+        models::runtime_media_capability_evidence(
+            resolved
+                .hardware
+                .projector_path
+                .as_deref()
+                .map(PathBuf::from),
+        )
+        .await,
     );
     let embedded_openai = resolved.to_embedded_openai_args(0, false)?;
     let mut options = resolved
         .to_model_load_options(spec.skippy_telemetry.clone())?
         .with_embedded_openai(embedded_openai)
+        .with_serving_hooks_factory(spec.serving_hooks_factory.clone())
         .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
             spec.openai_guardrail_policy.clone(),
         ));
@@ -3314,12 +729,14 @@ async fn start_runtime_skippy_model(
         model: model_name.clone(),
         source: None,
     });
-    let node_for_hook = spec.node.clone();
+    let hook_policy = spec.hook_policy.clone();
+    let reporter_model_name = model_name.clone();
     let guardrail_telemetry = spec.survey_telemetry.clone();
     let skippy_model = tokio::task::spawn_blocking(move || {
-        skippy::SkippyModelHandle::load_with_hooks(
+        skippy::SkippyModelHandle::load_with_hooks_and_open_events(
             options,
-            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            hook_policy,
+            Some(skippy_native_model_open_event_reporter(reporter_model_name)),
             guardrail_telemetry,
         )
     })
@@ -3329,7 +746,7 @@ async fn start_runtime_skippy_model(
         model: model_name.clone(),
         bytes: None,
     });
-    let http = skippy_model.start_http(port);
+    let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
     Ok((
@@ -3350,8 +767,8 @@ async fn start_runtime_skippy_model(
     ))
 }
 
-async fn start_runtime_layer_package_model(
-    spec: LocalRuntimeModelStartSpec<'_>,
+async fn start_local_layer_package_model(
+    spec: LocalOpenAiModelStartSpec<'_>,
     model_name: String,
     package: skippy::SkippyPackageIdentity,
     plan: RuntimeResourcePlan,
@@ -3362,7 +779,7 @@ async fn start_runtime_layer_package_model(
 )> {
     let context_length = plan.context_length;
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
-    let resolved = resolve_runtime_skippy_config(
+    let resolved = resolve_local_openai_skippy_config(
         &spec,
         &model_name,
         package.source_model_bytes,
@@ -3380,9 +797,14 @@ async fn start_runtime_layer_package_model(
     let capabilities = models::runtime_verified_model_capabilities(
         &model_name,
         spec.model_path,
-        models::RuntimeMediaCapabilityEvidence {
-            vision_projector_loaded: resolved.hardware.projector_path.is_some(),
-        },
+        models::runtime_media_capability_evidence(
+            resolved
+                .hardware
+                .projector_path
+                .as_deref()
+                .map(PathBuf::from),
+        )
+        .await,
     );
     let activation_width = skippy_stage_activation_width(package.activation_width, &model_name)?;
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
@@ -3418,8 +840,9 @@ async fn start_runtime_layer_package_model(
     runtime_options.config.bind_addr = "127.0.0.1:0".to_string();
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = None;
-    let node_for_hook = spec.node.clone();
+    let hook_policy = spec.hook_policy.clone();
     let model_ref = model_name.clone();
+    let reporter_model_ref = model_ref.clone();
     let skippy_telemetry = spec.skippy_telemetry.clone();
     let guardrail_telemetry = spec.survey_telemetry.clone();
     let openai_guardrails =
@@ -3429,12 +852,14 @@ async fn start_runtime_layer_package_model(
         source: None,
     });
     let handle = tokio::task::spawn_blocking(move || {
-        skippy::SkippyModelHandle::load_stage0_runtime_options_with_openai_args(
+        skippy::SkippyModelHandle::load_stage0_runtime_options_with_openai_args_and_open_events(
             runtime_options,
             embedded_openai,
-            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            hook_policy,
             skippy_telemetry,
+            Some(skippy_native_model_open_event_reporter(reporter_model_ref)),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
+            spec.serving_hooks_factory,
         )
     })
     .await
@@ -3443,7 +868,7 @@ async fn start_runtime_layer_package_model(
         model: model_ref,
         bytes: None,
     });
-    let http = handle.start_http(alloc_local_port().await?);
+    let http = handle.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
     Ok((
@@ -3464,9 +889,11 @@ async fn start_runtime_layer_package_model(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn local_process_payload(
     model_name: &str,
     instance_id: Option<&str>,
+    profile: &str,
     backend: &str,
     port: u16,
     pid: u32,
@@ -3476,6 +903,7 @@ pub(super) fn local_process_payload(
     local_process_snapshot(
         model_name,
         instance_id,
+        profile,
         backend,
         port,
         pid,
@@ -3485,9 +913,11 @@ pub(super) fn local_process_payload(
     .to_payload()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn local_process_snapshot(
     model_name: &str,
     instance_id: Option<&str>,
+    profile: &str,
     backend: &str,
     port: u16,
     pid: u32,
@@ -3497,6 +927,7 @@ pub(super) fn local_process_snapshot(
     crate::runtime_data::RuntimeProcessSnapshot {
         model: model_name.to_string(),
         instance_id: instance_id.map(str::to_string),
+        profile: profile.to_string(),
         backend: backend.into(),
         pid,
         slots,
@@ -3509,7 +940,7 @@ pub(super) fn local_process_snapshot(
     }
 }
 
-fn skippy_stage_activation_width(activation_width: u32, model_ref: &str) -> Result<i32> {
+pub(super) fn skippy_stage_activation_width(activation_width: u32, model_ref: &str) -> Result<i32> {
     i32::try_from(activation_width).with_context(|| {
         format!(
             "activation width {activation_width} for {model_ref} exceeds skippy stage ABI limit"
@@ -3519,1887 +950,21 @@ fn skippy_stage_activation_width(activation_width: u32, model_ref: &str) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroh::SecretKey;
-    use sha2::{Digest, Sha256};
-    use std::fs;
-    use std::sync::{Arc, Mutex as StdMutex};
+    use super::unix_nanos_to_unix_ms;
 
-    fn make_id(seed: u8) -> iroh::EndpointId {
-        let mut bytes = [0u8; 32];
-        bytes[0] = seed;
-        SecretKey::from_bytes(&bytes).public()
-    }
-
-    fn package(layer_count: u32) -> skippy::SkippyPackageIdentity {
-        skippy::SkippyPackageIdentity {
-            package_ref: "gguf:///models/qwen.gguf".to_string(),
-            manifest_sha256: "manifest".to_string(),
-            source_model_path: PathBuf::from("/models/qwen.gguf"),
-            source_model_sha256: "source".to_string(),
-            source_model_bytes: u64::from(layer_count) * 1_000_000,
-            source_files: Vec::new(),
-            layer_count,
-            activation_width: 2048,
-            tensor_count: 100,
-        }
-    }
-
-    fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadRequest {
-        skippy::StageLoadRequest {
-            topology_id: "topology-a".to_string(),
-            run_id: "run-a".to_string(),
-            model_id: "model-a".to_string(),
-            backend: "skippy".to_string(),
-            package_ref: match load_mode {
-                LoadMode::LayerPackage => "hf://meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
-                LoadMode::RuntimeSlice | LoadMode::ArtifactSlice => {
-                    "gguf:///models/qwen.gguf".to_string()
-                }
-            },
-            manifest_sha256: "a".repeat(64),
-            stage_id: "stage-1".to_string(),
-            stage_index: 1,
-            layer_start: 18,
-            layer_end: 36,
-            model_path: Some("/models/qwen.gguf".to_string()),
-            source_model_bytes: Some(4_900_000_000),
-            projector_path: None,
-            selected_device: None,
-            bind_addr: "127.0.0.1:0".to_string(),
-            activation_width: 4096,
-            wire_dtype: skippy::StageWireDType::F16,
-            ctx_size: 8192,
-            lane_count: 4,
-            n_batch: Some(2048),
-            n_ubatch: Some(512),
-            n_gpu_layers: -1,
-            cache_type_k: "f16".to_string(),
-            cache_type_v: "f16".to_string(),
-            flash_attn_type: FlashAttentionType::Auto,
-            shutdown_generation: 1,
-            coordinator_term: 1,
-            coordinator_id: None,
-            lease_until_unix_ms: u64::MAX,
-            load_mode,
-            upstream: None,
-            downstream: None,
-        }
-    }
-
-    fn split_test_peer(
-        seed: u8,
-        model_name: &str,
-        stage_protocol_generation_supported: bool,
-    ) -> mesh::PeerInfo {
-        let id = make_id(seed);
-        mesh::PeerInfo {
-            id,
-            addr: iroh::EndpointAddr {
-                id,
-                addrs: Default::default(),
-            },
-            mesh_id: None,
-            mesh_policy_hash: None,
-            genesis_policy: None,
-            role: NodeRole::Worker,
-            first_joined_mesh_ts: None,
-            models: Vec::new(),
-            vram_bytes: 24_000_000_000,
-            rtt_ms: None,
-            model_source: None,
-            admitted: true,
-            serving_models: Vec::new(),
-            hosted_models: Vec::new(),
-            hosted_models_known: false,
-            available_models: Vec::new(),
-            requested_models: vec![model_name.to_string()],
-            explicit_model_interests: Vec::new(),
-            last_seen: std::time::Instant::now(),
-            last_mentioned: std::time::Instant::now(),
-            version: None,
-            gpu_name: None,
-            hostname: None,
-            is_soc: None,
-            gpu_vram: None,
-            gpu_reserved_bytes: None,
-            gpu_mem_bandwidth_gbps: None,
-            gpu_compute_tflops_fp32: None,
-            gpu_compute_tflops_fp16: None,
-            available_model_metadata: Vec::new(),
-            experts_summary: None,
-            available_model_sizes: std::collections::HashMap::new(),
-            served_model_descriptors: Vec::new(),
-            served_model_runtime: Vec::new(),
-            owner_attestation: None,
-            release_attestation_summary: crate::ReleaseAttestationSummary::default(),
-            artifact_transfer_supported: false,
-            stage_protocol_generation_supported,
-            stage_status_list_supported: false,
-            advertised_model_throughput: vec![],
-
-            display_rtt: None,
-            selected_path: None,
-            propagated_latency: None,
-            owner_summary: crate::crypto::OwnershipSummary::default(),
-        }
-    }
-
-    fn sha256_hex(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
-    }
-
-    fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
-        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(value.as_bytes());
-    }
-
-    fn push_u32_kv(bytes: &mut Vec<u8>, key: &str, value: u32) {
-        push_gguf_string(bytes, key);
-        bytes.extend_from_slice(&4u32.to_le_bytes());
-        bytes.extend_from_slice(&value.to_le_bytes());
-    }
-
-    fn push_string_kv(bytes: &mut Vec<u8>, key: &str, value: &str) {
-        push_gguf_string(bytes, key);
-        bytes.extend_from_slice(&8u32.to_le_bytes());
-        push_gguf_string(bytes, value);
-    }
-
-    fn write_fake_gguf_model(path: &Path) {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"GGUF");
-        bytes.extend_from_slice(&2u32.to_le_bytes());
-        bytes.extend_from_slice(&0i64.to_le_bytes());
-        bytes.extend_from_slice(&8i64.to_le_bytes());
-        push_string_kv(&mut bytes, "general.architecture", "llama");
-        push_string_kv(&mut bytes, "tokenizer.ggml.model", "gpt2");
-        push_u32_kv(&mut bytes, "llama.context_length", 8192);
-        push_u32_kv(&mut bytes, "llama.embedding_length", 4096);
-        push_u32_kv(&mut bytes, "llama.block_count", 24);
-        push_u32_kv(&mut bytes, "llama.attention.head_count", 32);
-        push_u32_kv(&mut bytes, "llama.attention.head_count_kv", 8);
-        push_u32_kv(&mut bytes, "llama.attention.key_length", 128);
-        fs::write(path, bytes).unwrap();
-    }
-
-    fn write_test_layer_package(dir: &Path, source_model_bytes: u64) {
-        fs::create_dir_all(dir.join("layers")).unwrap();
-        fs::write(dir.join("metadata.gguf"), b"metadata").unwrap();
-        fs::write(dir.join("embeddings.gguf"), b"embeddings").unwrap();
-        fs::write(dir.join("output.gguf"), b"output").unwrap();
-        fs::write(dir.join("layers/00000.gguf"), b"layer0").unwrap();
-        let manifest = serde_json::json!({
-            "schema_version": 1,
-            "model_id": "meshllm/test-layer-package",
-            "source_model": {
-                "path": "/models/test-layer-package.gguf",
-                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "files": [{
-                    "path": "/models/test-layer-package.gguf",
-                    "size_bytes": source_model_bytes,
-                    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                }]
-            },
-            "format": "layer-package",
-            "layer_count": 1,
-            "activation_width": 4096,
-            "shared": {
-                "metadata": {
-                    "path": "metadata.gguf",
-                    "tensor_count": 1,
-                    "tensor_bytes": 1,
-                    "artifact_bytes": 8,
-                    "sha256": sha256_hex(b"metadata")
-                },
-                "embeddings": {
-                    "path": "embeddings.gguf",
-                    "tensor_count": 1,
-                    "tensor_bytes": 1,
-                    "artifact_bytes": 10,
-                    "sha256": sha256_hex(b"embeddings")
-                },
-                "output": {
-                    "path": "output.gguf",
-                    "tensor_count": 1,
-                    "tensor_bytes": 1,
-                    "artifact_bytes": 6,
-                    "sha256": sha256_hex(b"output")
-                }
-            },
-            "layers": [{
-                "layer_index": 0,
-                "path": "layers/00000.gguf",
-                "tensor_count": 1,
-                "tensor_bytes": 1,
-                "artifact_bytes": 6,
-                "sha256": sha256_hex(b"layer0")
-            }],
-            "skippy_abi_version": "0.1.0",
-        });
-        fs::write(
-            dir.join("model-package.json"),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-    }
-
-    fn participant(seed: u8) -> SplitParticipant {
-        SplitParticipant::new(make_id(seed), 24_000_000_000, None)
-    }
-
-    fn stage(
-        seed: u8,
-        stage_index: u32,
-        layer_start: u32,
-        layer_end: u32,
-    ) -> RuntimeSliceStagePlan {
-        RuntimeSliceStagePlan {
-            stage_id: format!("stage-{stage_index}"),
-            stage_index,
-            node_id: make_id(seed),
-            layer_start,
-            layer_end,
-            parameter_bytes: u64::from(layer_end.saturating_sub(layer_start)) * 1_000_000,
-        }
-    }
-
-    fn runtime_status_for_stage(
-        generation: &SplitTopologyGeneration,
-        stage: &RuntimeSliceStagePlan,
-        state: skippy::StageRuntimeState,
-    ) -> mesh::StageRuntimeStatus {
-        mesh::StageRuntimeStatus {
-            topology_id: generation.topology_id.clone(),
-            run_id: generation.run_id.clone(),
-            model_id: "model-a".to_string(),
-            backend: "skippy".to_string(),
-            package_ref: Some("gguf:///model.gguf".to_string()),
-            manifest_sha256: Some("direct-gguf:1:model.gguf".to_string()),
-            source_model_path: Some("/model.gguf".to_string()),
-            source_model_sha256: None,
-            source_model_bytes: Some(1),
-            materialized_path: None,
-            materialized_pinned: false,
-            projector_path: None,
-            stage_id: stage.stage_id.clone(),
-            stage_index: stage.stage_index,
-            node_id: Some(stage.node_id),
-            layer_start: stage.layer_start,
-            layer_end: stage.layer_end,
-            state,
-            bind_addr: "127.0.0.1:31000".to_string(),
-            activation_width: 896,
-            wire_dtype: skippy::StageWireDType::F16,
-            selected_device: None,
-            ctx_size: 512,
-            lane_count: 4,
-            n_batch: None,
-            n_ubatch: None,
-            flash_attn_type: FlashAttentionType::Auto,
-            error: None,
-            shutdown_generation: generation.generation,
-        }
-    }
-
-    fn local_stage(
-        node_id: iroh::EndpointId,
-        stage_index: u32,
-        layer_start: u32,
-        layer_end: u32,
-    ) -> RuntimeSliceStagePlan {
-        RuntimeSliceStagePlan {
-            stage_id: format!("stage-{stage_index}"),
-            stage_index,
-            node_id,
-            layer_start,
-            layer_end,
-            parameter_bytes: u64::from(layer_end.saturating_sub(layer_start)) * 1_000_000,
-        }
-    }
-
-    #[tokio::test]
-    async fn split_generation_load_settings_consumes_resolved_skippy_config() {
-        let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
-            .await
-            .unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let model_path = temp_dir.path().join("qwen.gguf");
-        let projector_path = temp_dir.path().join("config-mmproj.gguf");
-        write_fake_gguf_model(&model_path);
-        fs::write(&projector_path, b"mmproj").unwrap();
-        let mesh_config: plugin::MeshConfig = toml::from_str(&format!(
-            r#"
-[[models]]
-model = "Qwen"
-
-[models.model_fit]
-ctx_size = 2048
-batch = 768
-ubatch = 192
-cache_type_k = "q4_0"
-cache_type_v = "q5_0"
-
-[models.hardware]
-model_path = "{model_path}"
-device = "CUDA0"
-gpu_layers = 77
-mmproj = "{projector_path}"
-
-[models.throughput]
-parallel = 2
-threads = 6
-threads_batch = 3
-
-[models.skippy]
-activation_wire_dtype = "q8"
-prefill_chunking = "fixed"
-prefill_chunk_size = 96
-
-[models.speculative]
-mode = "draft"
-draft_model_path = "/models/draft.gguf"
-draft_max_tokens = 7
-draft_gpu_layers = 11
-
-[models.request_defaults]
-max_tokens = 321
-temperature = 0.35
-stop = ["END"]
-"#,
-            model_path = model_path.display(),
-            projector_path = projector_path.display()
-        ))
-        .expect("test mesh config should parse");
-        let mut package = package(40);
-        package.package_ref = "hf://Mesh-LLM/test-split-package".to_string();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let model_path = temp_dir.path().join("qwen.gguf");
-        write_fake_gguf_model(&model_path);
-        let local_id = node.id();
-        let generation = SplitTopologyGeneration::new(
-            "resolver-topology".into(),
-            "resolver-run".into(),
-            1,
-            vec![SplitParticipant::new(local_id, 24_000_000_000, None)],
-            vec![
-                local_stage(local_id, 0, 0, 12),
-                local_stage(local_id, 1, 12, 40),
-            ],
-        );
-
-        let spec = SplitGenerationLoadSpec {
-            node: &node,
-            mesh_config: &mesh_config,
-            model_ref: "Qwen",
-            model_path: &model_path,
-            package: &package,
-            generation: &generation,
-            projector_path: Some("/models/fallback-mmproj.gguf".to_string()),
-            ctx_size: 8192,
-            pinned_gpu: None,
-            slots: 4,
-            cache_type_k_override: None,
-            cache_type_v_override: None,
-            n_batch_override: None,
-            n_ubatch_override: None,
-            flash_attention_override: FlashAttentionType::Auto,
-            openai_guardrail_policy: openai_guardrail_policy_handle(
-                openai_frontend::GuardrailMode::Disabled,
-            ),
-            skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
-            survey_telemetry: survey::SurveyTelemetry::disabled(),
-        };
-        let settings =
-            split_generation_load_settings(&spec).expect("split settings should resolve");
-
-        assert_eq!(settings.load_mode, LoadMode::LayerPackage);
-        assert_eq!(settings.activation_width, 2048);
-        assert_eq!(settings.activation_wire_dtype, skippy::StageWireDType::Q8);
-        assert_eq!(settings.runtime_options.n_threads, Some(6));
-        assert_eq!(settings.runtime_options.n_threads_batch, Some(3));
-        assert_eq!(settings.runtime_options.config.ctx_size, 8192);
-        assert_eq!(settings.runtime_options.config.lane_count, 4);
-        assert_eq!(settings.runtime_options.config.n_batch, Some(768));
-        assert_eq!(settings.runtime_options.config.n_ubatch, Some(192));
-        assert_eq!(settings.runtime_options.config.n_gpu_layers, 77);
+    #[test]
+    fn unix_nanos_to_unix_ms_converts_a_real_capture_time() {
         assert_eq!(
-            settings
-                .runtime_options
-                .config
-                .selected_device
-                .as_ref()
-                .map(|device| device.backend_device.as_str()),
-            Some("CUDA0")
-        );
-        assert_eq!(settings.runtime_options.config.cache_type_k, "q4_0");
-        assert_eq!(settings.runtime_options.config.cache_type_v, "q5_0");
-        assert_eq!(
-            settings.runtime_options.config.projector_path.as_deref(),
-            Some(projector_path.to_string_lossy().as_ref())
-        );
-        assert_eq!(settings.embedded_openai.generation_concurrency, 4);
-        assert_eq!(settings.embedded_openai.default_max_tokens, 321);
-        assert_eq!(
-            settings.embedded_openai.request_defaults.temperature,
-            Some(0.35)
-        );
-        assert_eq!(
-            settings.embedded_openai.request_defaults.stop.as_deref(),
-            Some(["END".to_string()].as_slice())
-        );
-        assert_eq!(settings.embedded_openai.prefill_chunk_policy, "fixed");
-        assert_eq!(settings.embedded_openai.prefill_chunk_size, 96);
-        assert_eq!(
-            settings.embedded_openai.draft_model_path.as_deref(),
-            Some(Path::new("/models/draft.gguf"))
-        );
-        assert_eq!(settings.embedded_openai.speculative_window, 7);
-        assert_eq!(settings.embedded_openai.draft_n_gpu_layers, Some(11));
-    }
-
-    #[tokio::test]
-    async fn runtime_resolver_uses_config_model_id_but_preserves_served_model_id() {
-        let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
-            .await
-            .unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let model_path = temp_dir.path().join("alias-target.gguf");
-        write_fake_gguf_model(&model_path);
-        let mesh_config: plugin::MeshConfig = toml::from_str(&format!(
-            r#"
-[[models]]
-model = "configured/model-ref"
-
-[models.hardware]
-model_path = "{model_path}"
-
-[models.throughput]
-threads = 9
-threads_batch = 5
-
-[models.request_defaults]
-max_tokens = 222
-"#,
-            model_path = model_path.display()
-        ))
-        .expect("test mesh config should parse");
-        let model_bytes = fs::metadata(&model_path).unwrap().len();
-        let spec = LocalRuntimeModelStartSpec {
-            node: &node,
-            mesh_config: &mesh_config,
-            config_model_id: Some("configured/model-ref"),
-            model_path: &model_path,
-            model_bytes,
-            mmproj_override: None,
-            ctx_size_override: None,
-            pinned_gpu: None,
-            capacity_budget_bytes: None,
-            cache_type_k_override: None,
-            cache_type_v_override: None,
-            n_batch_override: None,
-            n_ubatch_override: None,
-            flash_attention_override: FlashAttentionType::Auto,
-            parallel_override: None,
-            openai_guardrail_policy: openai_guardrail_policy_handle(
-                openai_frontend::GuardrailMode::Disabled,
-            ),
-            skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
-            survey_telemetry: survey::SurveyTelemetry::disabled(),
-        };
-
-        let resolved =
-            resolve_runtime_skippy_config(&spec, "runtime/served-name", model_bytes, 4096, 3, None)
-                .expect("runtime config should resolve through configured model id");
-
-        assert_eq!(resolved.model_id, "runtime/served-name");
-        assert_eq!(resolved.throughput.threads, Some(9));
-        assert_eq!(resolved.throughput.threads_batch, Some(5));
-        assert_eq!(resolved.request_defaults.max_tokens, 222);
-        assert_eq!(resolved.model_fit.ctx_size, 4096);
-        assert_eq!(resolved.throughput.parallel, 3);
-    }
-
-    #[test]
-    fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capabilities() {
-        let existing = mesh::ServedModelDescriptor {
-            identity: mesh::ServedModelIdentity {
-                model_name: "Qwen3VL-2B-Instruct-Q4_K_M".into(),
-                is_primary: false,
-                source_kind: mesh::ModelSourceKind::HuggingFace,
-                repository: Some("Qwen/Qwen3-VL-2B-Instruct-GGUF".into()),
-                artifact: Some("Qwen3VL-2B-Instruct-Q4_K_M.gguf".into()),
-                ..Default::default()
-            },
-            capabilities_known: false,
-            capabilities: models::ModelCapabilities::default(),
-            topology: None,
-            metadata: None,
-        };
-        let capabilities = models::ModelCapabilities {
-            multimodal: true,
-            vision: models::CapabilityLevel::Supported,
-            ..Default::default()
-        };
-
-        let descriptor = runtime_verified_served_model_descriptor(
-            Some(existing),
-            "Qwen3VL-2B-Instruct-Q4_K_M",
-            "Qwen3VL-2B-Instruct-Q4_K_M",
-            capabilities,
-        );
-
-        assert_eq!(
-            descriptor.identity.source_kind,
-            mesh::ModelSourceKind::HuggingFace
-        );
-        assert_eq!(
-            descriptor.identity.repository.as_deref(),
-            Some("Qwen/Qwen3-VL-2B-Instruct-GGUF")
-        );
-        assert!(descriptor.identity.is_primary);
-        assert!(descriptor.capabilities_known);
-        assert_eq!(descriptor.capabilities, capabilities);
-    }
-
-    #[test]
-    fn runtime_verified_served_model_descriptor_builds_fallback_identity() {
-        let descriptor = runtime_verified_served_model_descriptor(
-            None,
-            "Primary",
-            "Runtime",
-            models::ModelCapabilities::default(),
-        );
-
-        assert_eq!(descriptor.identity.model_name, "Runtime");
-        assert!(!descriptor.identity.is_primary);
-        assert_eq!(
-            descriptor.identity.source_kind,
-            mesh::ModelSourceKind::Unknown
-        );
-        assert_eq!(
-            descriptor.identity.local_file_name.as_deref(),
-            Some("Runtime.gguf")
-        );
-        assert_eq!(
-            descriptor.capabilities,
-            models::ModelCapabilities::default()
-        );
-        assert!(descriptor.capabilities_known);
-    }
-
-    fn test_stage_status_from_load(
-        load: &skippy::StageLoadRequest,
-        state: skippy::StageRuntimeState,
-    ) -> skippy::StageStatusSnapshot {
-        skippy::StageStatusSnapshot {
-            topology_id: load.topology_id.clone(),
-            run_id: load.run_id.clone(),
-            model_id: load.model_id.clone(),
-            backend: load.backend.clone(),
-            package_ref: Some(load.package_ref.clone()),
-            manifest_sha256: Some(load.manifest_sha256.clone()),
-            source_model_path: load.model_path.clone(),
-            source_model_sha256: None,
-            source_model_bytes: load.source_model_bytes,
-            materialized_path: None,
-            materialized_pinned: false,
-            projector_path: load.projector_path.clone(),
-            stage_id: load.stage_id.clone(),
-            stage_index: load.stage_index,
-            layer_start: load.layer_start,
-            layer_end: load.layer_end,
-            state,
-            bind_addr: "127.0.0.1:31000".to_string(),
-            activation_width: load.activation_width as u32,
-            wire_dtype: load.wire_dtype,
-            selected_device: load.selected_device.clone(),
-            ctx_size: load.ctx_size,
-            lane_count: load.lane_count,
-            n_batch: load.n_batch,
-            n_ubatch: load.n_ubatch,
-            flash_attn_type: load.flash_attn_type,
-            error: None,
-            shutdown_generation: load.shutdown_generation,
-            coordinator_term: load.coordinator_term,
-            coordinator_id: load.coordinator_id,
-            lease_until_unix_ms: load.lease_until_unix_ms,
-        }
-    }
-
-    fn test_stage_status_from_stop(stop: &skippy::StageStopRequest) -> skippy::StageStatusSnapshot {
-        skippy::StageStatusSnapshot {
-            topology_id: stop.topology_id.clone(),
-            run_id: stop.run_id.clone(),
-            model_id: String::new(),
-            backend: "skippy".to_string(),
-            package_ref: None,
-            manifest_sha256: None,
-            source_model_path: None,
-            source_model_sha256: None,
-            source_model_bytes: None,
-            materialized_path: None,
-            materialized_pinned: false,
-            projector_path: None,
-            stage_id: stop.stage_id.clone(),
-            stage_index: 0,
-            layer_start: 0,
-            layer_end: 0,
-            state: skippy::StageRuntimeState::Stopped,
-            bind_addr: String::new(),
-            activation_width: 0,
-            wire_dtype: skippy::StageWireDType::F16,
-            selected_device: None,
-            ctx_size: 0,
-            lane_count: 0,
-            n_batch: None,
-            n_ubatch: None,
-            flash_attn_type: FlashAttentionType::Auto,
-            error: None,
-            shutdown_generation: stop.shutdown_generation,
-            coordinator_term: stop.coordinator_term,
-            coordinator_id: None,
-            lease_until_unix_ms: 0,
-        }
-    }
-
-    fn test_preparation_status_from_load(
-        load: &skippy::StageLoadRequest,
-    ) -> skippy::StagePreparationStatus {
-        skippy::StagePreparationStatus {
-            topology_id: load.topology_id.clone(),
-            run_id: load.run_id.clone(),
-            model_id: load.model_id.clone(),
-            backend: load.backend.clone(),
-            package_ref: load.package_ref.clone(),
-            manifest_sha256: load.manifest_sha256.clone(),
-            stage_id: load.stage_id.clone(),
-            stage_index: load.stage_index,
-            layer_start: load.layer_start,
-            layer_end: load.layer_end,
-            state: skippy::StagePreparationState::Available,
-            bytes_done: load.source_model_bytes,
-            bytes_total: load.source_model_bytes,
-            bind_addr: None,
-            error: None,
-            shutdown_generation: load.shutdown_generation,
-            coordinator_term: load.coordinator_term,
-            coordinator_id: load.coordinator_id,
-            lease_until_unix_ms: load.lease_until_unix_ms,
-        }
-    }
-
-    fn test_inventory_from_request(
-        request: &skippy::StageInventoryRequest,
-    ) -> skippy::StageLayerInventory {
-        skippy::StageLayerInventory {
-            model_id: request.model_id.clone(),
-            package_ref: request.package_ref.clone(),
-            manifest_sha256: request.manifest_sha256.clone(),
-            layer_count: 40,
-            ready_ranges: Vec::new(),
-            available_ranges: vec![skippy::LayerRange {
-                layer_start: 0,
-                layer_end: 40,
-            }],
-            missing_ranges: Vec::new(),
-            preparing_ranges: Vec::new(),
-            source_model_path: Some("/models/qwen.gguf".to_string()),
-            source_model_bytes: Some(40_000_000),
-            source_model_kind: skippy::SourceModelKind::LayerPackage,
-        }
-    }
-
-    #[test]
-    fn runtime_local_targets_keep_duplicate_same_model_ports() {
-        let (target_tx, _target_rx) =
-            tokio::sync::watch::channel(election::ModelTargets::default());
-        let target_tx = std::sync::Arc::new(target_tx);
-
-        add_runtime_local_target(&target_tx, "Qwen", 41001);
-        add_runtime_local_target(&target_tx, "Qwen", 41002);
-        add_runtime_local_target(&target_tx, "Qwen", 41002);
-
-        let targets = target_tx.borrow().candidates("Qwen");
-        assert_eq!(
-            targets,
-            vec![
-                election::InferenceTarget::Local(41002),
-                election::InferenceTarget::Local(41001),
-            ]
+            unix_nanos_to_unix_ms(1_700_000_000_123_000_000),
+            Some(1_700_000_000_123)
         );
     }
 
     #[test]
-    fn split_topology_planner_uses_all_eligible_participants() {
-        let participants = vec![
-            SplitParticipant::new(make_id(1), 16_000_000_000, None),
-            SplitParticipant::new(make_id(2), 24_000_000_000, None),
-            SplitParticipant::new(make_id(3), 32_000_000_000, None),
-            SplitParticipant::new(make_id(4), 48_000_000_000, None),
-        ];
-
-        let stages = plan_runtime_slice_topology(
-            "topology-test",
-            "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
-            &package(40),
-            &participants,
-        )
-        .expect("topology plan");
-
-        assert_eq!(stages.len(), 4);
-        assert_eq!(stages[0].stage_index, 0);
-        assert_eq!(stages[3].stage_index, 3);
-        assert_eq!(
-            stages
-                .iter()
-                .map(|stage| stage.stage_index)
-                .collect::<Vec<_>>(),
-            vec![0, 1, 2, 3]
-        );
-        assert_eq!(stages.first().unwrap().layer_start, 0);
-        assert_eq!(stages.last().unwrap().layer_end, 40);
-    }
-
-    #[test]
-    fn split_topology_planner_prefers_cached_participant_in_runtime_path() {
-        let cold = SplitParticipant::new(make_id(1), 24_000_000_000, None).with_package_signals(
-            SplitParticipantPackageSignal {
-                cached_slice_bytes: 0,
-                missing_artifact_bytes: 40_000_000,
-                availability_score: 0,
-            },
-            Some(80),
-            true,
-        );
-        let warm = SplitParticipant::new(make_id(2), 24_000_000_000, None).with_package_signals(
-            SplitParticipantPackageSignal {
-                cached_slice_bytes: 40_000_000,
-                missing_artifact_bytes: 0,
-                availability_score: 40,
-            },
-            Some(5),
-            true,
-        );
-
-        let stages = plan_runtime_slice_topology(
-            "topology-test",
-            "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
-            &package(40),
-            &[cold, warm],
-        )
-        .expect("package-aware topology plan");
-
-        assert_eq!(stages.len(), 2);
-        assert_eq!(stages[0].node_id, make_id(2));
-        assert_eq!((stages[0].layer_start, stages[0].layer_end), (0, 20));
-    }
-
-    #[test]
-    fn split_inventory_package_signal_counts_cached_and_missing_ranges() {
-        let package = skippy::SkippyPackageIdentity {
-            source_model_bytes: 1_000,
-            layer_count: 10,
-            ..package(10)
-        };
-        let inventory = skippy::StageLayerInventory {
-            model_id: "model-a".to_string(),
-            package_ref: package.package_ref.clone(),
-            manifest_sha256: package.manifest_sha256.clone(),
-            layer_count: 10,
-            ready_ranges: vec![skippy::LayerRange {
-                layer_start: 4,
-                layer_end: 6,
-            }],
-            available_ranges: vec![skippy::LayerRange {
-                layer_start: 0,
-                layer_end: 4,
-            }],
-            missing_ranges: vec![skippy::LayerRange {
-                layer_start: 6,
-                layer_end: 10,
-            }],
-            preparing_ranges: Vec::new(),
-            source_model_path: None,
-            source_model_bytes: None,
-            source_model_kind: skippy::SourceModelKind::LayerPackage,
-        };
-
-        let signal = split_inventory_package_signal(&inventory, &package);
-
-        assert_eq!(
-            signal,
-            SplitParticipantPackageSignal {
-                cached_slice_bytes: 600,
-                missing_artifact_bytes: 400,
-                availability_score: 6,
-            }
-        );
-        assert!(signal.can_stage_with(&package, true));
-        assert!(!signal.can_stage_with(&package, false));
-    }
-
-    #[test]
-    fn split_package_signal_allows_hf_fallback_when_peer_transfer_is_disabled() {
-        let mut package = skippy::SkippyPackageIdentity {
-            source_model_bytes: 1_000,
-            layer_count: 10,
-            ..package(10)
-        };
-        package.package_ref = "hf://meshllm/demo-layer-package@abc123".to_string();
-        let signal = SplitParticipantPackageSignal {
-            cached_slice_bytes: 200,
-            missing_artifact_bytes: 800,
-            availability_score: 2,
-        };
-
-        assert!(signal.can_stage_with(&package, false));
-    }
-
-    #[test]
-    fn split_peer_preflight_requires_current_stage_protocol_generation() {
-        let mut peer = split_test_peer(0x61, "Qwen3-Coder", false);
-        peer.rtt_ms = Some(crate::mesh::MAX_SPLIT_RTT_MS);
-
-        assert_eq!(
-            split_peer_preflight_exclusion_reason(
-                &peer,
-                "Qwen3-Coder",
-                "meshllm/Qwen3-Coder-layers"
-            ),
-            Some(SplitParticipantExclusionReason::StageProtocolGeneration)
-        );
-
-        peer.stage_protocol_generation_supported = true;
-        assert_eq!(
-            split_peer_preflight_exclusion_reason(
-                &peer,
-                "Qwen3-Coder",
-                "meshllm/Qwen3-Coder-layers"
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn split_peer_preflight_requires_measured_stage_path() {
-        assert_eq!(
-            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::unknown()),
-            Some(SplitParticipantExclusionReason::MissingStagePath)
-        );
-    }
-
-    #[test]
-    fn split_peer_preflight_rejects_slow_stage_path() {
-        assert_eq!(
-            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::direct(Some(
-                crate::mesh::MAX_SPLIT_RTT_MS + 1,
-            ))),
-            Some(SplitParticipantExclusionReason::StagePathTooSlow)
-        );
-    }
-
-    #[test]
-    fn split_peer_preflight_rejects_relay_only_stage_path() {
-        assert_eq!(
-            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::relay(Some(
-                crate::mesh::MAX_SPLIT_RTT_MS,
-            ))),
-            Some(SplitParticipantExclusionReason::StagePathRelayOnly)
-        );
-    }
-
-    #[test]
-    fn split_peer_preflight_rejects_direct_stage_path_without_rtt() {
-        assert_eq!(
-            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::direct(None)),
-            Some(SplitParticipantExclusionReason::MissingStagePath)
-        );
-    }
-
-    #[test]
-    fn split_peer_preflight_allows_fast_stage_path() {
-        assert_eq!(
-            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::direct(Some(
-                crate::mesh::MAX_SPLIT_RTT_MS,
-            ))),
-            None
-        );
-    }
-
-    #[test]
-    fn split_peer_preflight_keeps_host_eligibility_separate_from_stage_path() {
-        let mut peer = split_test_peer(0x66, "Qwen3-Coder", true);
-        peer.rtt_ms = Some(crate::mesh::MAX_SPLIT_RTT_MS + 1);
-
-        assert_eq!(
-            split_peer_preflight_exclusion_reason(
-                &peer,
-                "Qwen3-Coder",
-                "meshllm/Qwen3-Coder-layers"
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn split_peer_host_eligibility_classifies_client_by_role_before_capacity() {
-        let mut peer = split_test_peer(0x62, "Qwen3-Coder", true);
-        peer.role = NodeRole::Client;
-        peer.vram_bytes = 24_000_000_000;
-
-        assert_eq!(
-            split_peer_stage_host_exclusion_reason(&peer),
-            Some(SplitParticipantExclusionReason::Client)
-        );
-    }
-
-    #[test]
-    fn split_peer_host_eligibility_classifies_non_client_zero_vram_as_capacity() {
-        let mut peer = split_test_peer(0x63, "Qwen3-Coder", true);
-        peer.role = NodeRole::Worker;
-        peer.vram_bytes = 0;
-
-        assert_eq!(
-            split_peer_stage_host_exclusion_reason(&peer),
-            Some(SplitParticipantExclusionReason::MissingVram)
-        );
-    }
-
-    #[test]
-    fn split_package_signal_still_requires_transfer_for_missing_local_package() {
-        let package = skippy::SkippyPackageIdentity {
-            source_model_bytes: 1_000,
-            layer_count: 10,
-            ..package(10)
-        };
-        let signal = SplitParticipantPackageSignal {
-            cached_slice_bytes: 200,
-            missing_artifact_bytes: 800,
-            availability_score: 2,
-        };
-
-        assert!(!signal.can_stage_with(&package, false));
-        assert!(signal.can_stage_with(&package, true));
-    }
-
-    #[test]
-    fn layer_package_stage_source_waits_for_exact_prepare_availability() {
-        let load = stage_load_request(LoadMode::LayerPackage);
-        let mut inventory = skippy::StageLayerInventory {
-            model_id: load.model_id.clone(),
-            package_ref: load.package_ref.clone(),
-            manifest_sha256: load.manifest_sha256.clone(),
-            layer_count: 36,
-            ready_ranges: Vec::new(),
-            available_ranges: vec![skippy::LayerRange {
-                layer_start: 0,
-                layer_end: 36,
-            }],
-            missing_ranges: Vec::new(),
-            preparing_ranges: Vec::new(),
-            source_model_path: Some(
-                "/cache/models--meshllm--Qwen3-8B-Q4_K_M-layers/snapshots/main".to_string(),
-            ),
-            source_model_bytes: Some(4_900_000_000),
-            source_model_kind: skippy::SourceModelKind::LayerPackage,
-        };
-
-        assert!(!split_stage_source_is_ready(&inventory, &load));
-
-        inventory
-            .preparing_ranges
-            .push(test_preparation_status_from_load(&load));
-
-        assert!(split_stage_source_is_ready(&inventory, &load));
-    }
-
-    #[test]
-    fn runtime_slice_stage_source_accepts_inventory_availability() {
-        let load = stage_load_request(LoadMode::RuntimeSlice);
-        let inventory = skippy::StageLayerInventory {
-            model_id: load.model_id.clone(),
-            package_ref: load.package_ref.clone(),
-            manifest_sha256: load.manifest_sha256.clone(),
-            layer_count: 36,
-            ready_ranges: Vec::new(),
-            available_ranges: vec![skippy::LayerRange {
-                layer_start: 0,
-                layer_end: 36,
-            }],
-            missing_ranges: Vec::new(),
-            preparing_ranges: Vec::new(),
-            source_model_path: Some("/models/qwen.gguf".to_string()),
-            source_model_bytes: Some(4_900_000_000),
-            source_model_kind: skippy::SourceModelKind::PlainGguf,
-        };
-
-        assert!(split_stage_source_is_ready(&inventory, &load));
-    }
-
-    #[test]
-    fn split_inventory_package_signal_treats_unknown_inventory_as_missing_package() {
-        let package = skippy::SkippyPackageIdentity {
-            source_model_bytes: 1_000,
-            layer_count: 10,
-            ..package(10)
-        };
-        let inventory = skippy::StageLayerInventory {
-            model_id: "model-a".to_string(),
-            package_ref: package.package_ref.clone(),
-            manifest_sha256: package.manifest_sha256.clone(),
-            layer_count: 0,
-            ready_ranges: Vec::new(),
-            available_ranges: Vec::new(),
-            missing_ranges: Vec::new(),
-            preparing_ranges: Vec::new(),
-            source_model_path: None,
-            source_model_bytes: None,
-            source_model_kind: skippy::SourceModelKind::Unknown,
-        };
-
-        let signal = split_inventory_package_signal(&inventory, &package);
-
-        assert_eq!(
-            signal,
-            SplitParticipantPackageSignal {
-                cached_slice_bytes: 0,
-                missing_artifact_bytes: 1_000,
-                availability_score: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn startup_runtime_plan_auto_splits_when_model_exceeds_local_capacity() {
-        assert_eq!(
-            startup_runtime_plan(false, 3_000_000_000, 4_800_000_000),
-            StartupRuntimePlan::Split {
-                reason: SplitRuntimeReason::LocalCapacity
-            }
-        );
-    }
-
-    #[test]
-    fn runtime_model_planning_bytes_uses_layer_package_source_model_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        write_test_layer_package(dir.path(), 4_800_000_000);
-
-        let model_bytes = runtime_model_planning_bytes(dir.path()).unwrap();
-
-        assert_eq!(model_bytes, 4_800_000_000);
-        assert_eq!(
-            startup_runtime_plan(false, 3_000_000_000, model_bytes),
-            StartupRuntimePlan::Split {
-                reason: SplitRuntimeReason::LocalCapacity
-            }
-        );
-    }
-
-    #[test]
-    fn startup_runtime_plan_keeps_local_when_model_fits_without_split_flag() {
-        assert_eq!(
-            startup_runtime_plan(false, 6_000_000_000, 4_800_000_000),
-            StartupRuntimePlan::Local
-        );
-    }
-
-    #[test]
-    fn startup_runtime_plan_respects_explicit_split_for_fitting_model() {
-        assert_eq!(
-            startup_runtime_plan(true, 6_000_000_000, 4_800_000_000),
-            StartupRuntimePlan::Split {
-                reason: SplitRuntimeReason::Forced
-            }
-        );
-    }
-
-    #[test]
-    fn split_topology_planner_accepts_constrained_nodes_with_enough_aggregate_capacity() {
-        let participants = vec![
-            SplitParticipant::new(make_id(1), 3_000_000_000, None),
-            SplitParticipant::new(make_id(2), 3_000_000_000, None),
-        ];
-        let package = skippy::SkippyPackageIdentity {
-            source_model_bytes: 4_800_000_000,
-            layer_count: 48,
-            ..package(48)
-        };
-
-        let stages = plan_runtime_slice_topology(
-            "topology-test",
-            "Hermes-2-Pro-Mistral-7B-Q4_K_M",
-            &package,
-            &participants,
-        )
-        .expect("constrained nodes should form a split topology");
-
-        assert_eq!(stages.len(), 2);
-        assert_eq!(
-            stages
-                .iter()
-                .map(|stage| (stage.layer_start, stage.layer_end))
-                .collect::<Vec<_>>(),
-            vec![(0, 24), (24, 48)]
-        );
-    }
-
-    #[test]
-    fn split_topology_planner_rejects_insufficient_aggregate_capacity() {
-        let participants = vec![
-            SplitParticipant::new(make_id(1), 2_000_000_000, None),
-            SplitParticipant::new(make_id(2), 2_000_000_000, None),
-        ];
-        let package = skippy::SkippyPackageIdentity {
-            source_model_bytes: 4_800_000_000,
-            layer_count: 48,
-            ..package(48)
-        };
-
-        let error = plan_runtime_slice_topology(
-            "topology-test",
-            "Hermes-2-Pro-Mistral-7B-Q4_K_M",
-            &package,
-            &participants,
-        )
-        .expect_err("aggregate split capacity should be enforced")
-        .to_string();
-
-        assert!(error.contains("aggregate split capacity"));
-        // Validation uses raw model weight (4.8GB) without the old 10%
-        // headroom that was removed to avoid double-counting the topology
-        // planner's own VRAM budget.
-        assert!(error.contains("requires 4.8GB"));
-        assert!(error.contains("has 4.0GB"));
-        assert!(error.contains("short by 0.8GB"));
-        assert!(error.contains("participants ["));
-        assert!(error.contains(&format!("{}:2.0GB", make_id(1).fmt_short())));
-        assert!(error.contains(&format!("{}:2.0GB", make_id(2).fmt_short())));
-    }
-
-    #[test]
-    fn split_topology_planner_rejects_stage_that_exceeds_participant_capacity() {
-        // Node 2 has 150 bytes but the planner assigns it at least 2 layers
-        // (200 bytes), which exceeds its capacity.  The previous version of
-        // this test used 200 bytes for node 2 which passes now that the old
-        // 10% headroom is no longer applied on top of the planner budget.
-        let participants = vec![
-            SplitParticipant::new(make_id(1), 900, None),
-            SplitParticipant::new(make_id(2), 150, None),
-        ];
-        let package = skippy::SkippyPackageIdentity {
-            source_model_bytes: 1_000,
-            layer_count: 10,
-            ..package(10)
-        };
-
-        let error = plan_runtime_slice_topology(
-            "topology-test",
-            "tiny-capacity-test",
-            &package,
-            &participants,
-        )
-        .expect_err("per-stage split capacity should be enforced")
-        .to_string();
-
-        assert!(error.contains("stage-1"));
-        assert!(error.contains("exceeds node capacity"));
-    }
-
-    #[test]
-    fn aggregate_split_capacity_error_reports_excluded_peers() {
-        let participants = vec![SplitParticipant::new(make_id(1), 2_000_000_000, None)];
-        let excluded = vec![
-            SplitParticipantExclusion {
-                node_id: make_id(2),
-                reason: SplitParticipantExclusionReason::MissingModelInterest,
-            },
-            SplitParticipantExclusion {
-                node_id: make_id(3),
-                reason: SplitParticipantExclusionReason::MissingModelSource,
-            },
-        ];
-
-        let error = format_aggregate_split_capacity_error(
-            "Hermes-2-Pro-Mistral-7B-Q4_K_M",
-            5_280_000_000,
-            2_000_000_000,
-            &participants,
-            &excluded,
-        );
-
-        assert!(error.contains("short by 3.3GB"));
-        assert!(error.contains("excluded ["));
-        assert!(error.contains(&format!(
-            "{}:missing_model_interest",
-            make_id(2).fmt_short()
-        )));
-        assert!(error.contains(&format!("{}:missing_model_source", make_id(3).fmt_short())));
-    }
-
-    #[test]
-    fn split_topology_planner_reports_exclusions_on_capacity_failure() {
-        let participants = vec![
-            SplitParticipant::new(make_id(1), 2_000_000_000, None),
-            SplitParticipant::new(make_id(2), 2_000_000_000, None),
-        ];
-        let excluded = vec![SplitParticipantExclusion {
-            node_id: make_id(3),
-            reason: SplitParticipantExclusionReason::MissingModelInterest,
-        }];
-        let package = skippy::SkippyPackageIdentity {
-            source_model_bytes: 4_800_000_000,
-            layer_count: 48,
-            ..package(48)
-        };
-
-        let error = plan_runtime_slice_topology_with_exclusions(
-            "topology-test",
-            "Hermes-2-Pro-Mistral-7B-Q4_K_M",
-            &package,
-            &participants,
-            &excluded,
-        )
-        .expect_err("aggregate split capacity should be enforced")
-        .to_string();
-
-        // Raw model weight (4.8GB) minus aggregate VRAM (4.0GB) = 0.8GB
-        // shortfall, without the old 10% headroom.
-        assert!(error.contains("short by 0.8GB"));
-        assert!(error.contains("excluded ["));
-        assert!(error.contains(&format!(
-            "{}:missing_model_interest",
-            make_id(3).fmt_short()
-        )));
-    }
-
-    #[test]
-    fn stage_load_model_path_uses_local_path_outside_layer_packages() {
-        let model_path = PathBuf::from("/models/runtime-slice.gguf");
-
-        let layer_package = stage_load_model_path(
-            LoadMode::LayerPackage,
-            "hf://meshllm/demo-package",
-            &model_path,
-        );
-        assert_eq!(layer_package, "hf://meshllm/demo-package");
-
-        for mode in [LoadMode::RuntimeSlice, LoadMode::ArtifactSlice] {
-            let path = stage_load_model_path(mode, "hf://meshllm/demo-package", &model_path);
-            assert_eq!(path, "/models/runtime-slice.gguf");
-        }
-    }
-
-    #[test]
-    fn skippy_stage_activation_width_rejects_i32_overflow() {
-        let error = skippy_stage_activation_width(i32::MAX as u32 + 1, "overflow-model")
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("exceeds skippy stage ABI limit"));
-        assert!(error.contains("overflow-model"));
-    }
-
-    #[test]
-    fn split_participant_signature_includes_vram_for_stability() {
-        let node_id = make_id(9);
-        let first = vec![SplitParticipant::new(node_id, 16_000_000_000, None)];
-        let second = vec![SplitParticipant::new(node_id, 24_000_000_000, None)];
-
-        assert_ne!(
-            split_participant_signature(&first),
-            split_participant_signature(&second)
-        );
-    }
-
-    #[test]
-    fn split_participant_signature_includes_package_signals_for_stability() {
-        let node_id = make_id(9);
-        let first = vec![SplitParticipant::new(node_id, 24_000_000_000, None)];
-        let second = vec![
-            SplitParticipant::new(node_id, 24_000_000_000, None).with_package_signals(
-                SplitParticipantPackageSignal {
-                    cached_slice_bytes: 12_000_000,
-                    missing_artifact_bytes: 0,
-                    availability_score: 12,
-                },
-                Some(20),
-                true,
-            ),
-        ];
-
-        assert_ne!(
-            split_participant_signature(&first),
-            split_participant_signature(&second)
-        );
-    }
-
-    #[test]
-    fn split_missing_active_stage_nodes_ignores_unused_lost_participants() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2), participant(3)],
-            vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
-        );
-        let current_participants = vec![participant(1)];
-
-        assert_eq!(
-            split_missing_active_stage_nodes(&active, &current_participants),
-            vec![make_id(2)]
-        );
-    }
-
-    #[test]
-    fn split_unavailable_active_stage_nodes_includes_failed_stage_without_missing_peer() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2), participant(3)],
-            vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
-        );
-        let statuses = vec![runtime_status_for_stage(
-            &active,
-            &active.stages[1],
-            skippy::StageRuntimeState::Failed,
-        )];
-
-        assert_eq!(
-            split_unavailable_active_stage_nodes(
-                &active,
-                &[participant(1), participant(2), participant(3)],
-                &statuses,
-            ),
-            vec![make_id(2)]
-        );
-    }
-
-    #[test]
-    fn split_unavailable_active_stage_nodes_includes_stopping_stage_without_missing_peer() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2), participant(3)],
-            vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
-        );
-        let statuses = vec![runtime_status_for_stage(
-            &active,
-            &active.stages[1],
-            skippy::StageRuntimeState::Stopping,
-        )];
-
-        assert_eq!(
-            split_unavailable_active_stage_nodes(
-                &active,
-                &[participant(1), participant(2), participant(3)],
-                &statuses,
-            ),
-            vec![make_id(2)]
-        );
-    }
-
-    #[test]
-    fn split_recovery_candidate_participants_excludes_unavailable_stage_nodes() {
-        let participants = vec![participant(1), participant(2), participant(3)];
-
-        assert_eq!(
-            split_recovery_candidate_participants(&participants, &[make_id(2)]),
-            vec![participant(1), participant(3)]
-        );
-    }
-
-    #[tokio::test]
-    async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load_failure() {
-        let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
-            .await
-            .unwrap();
-        let (control_tx, mut control_rx) =
-            tokio::sync::mpsc::unbounded_channel::<skippy::StageControlCommand>();
-        node.set_stage_control_sender(control_tx).await;
-
-        let requests = Arc::new(StdMutex::new(Vec::new()));
-        let preparations = Arc::new(StdMutex::new(Vec::<skippy::StagePreparationStatus>::new()));
-        let captured_requests = Arc::clone(&requests);
-        let captured_preparations = Arc::clone(&preparations);
-        tokio::spawn(async move {
-            while let Some(command) = control_rx.recv().await {
-                captured_requests
-                    .lock()
-                    .unwrap()
-                    .push(command.request.clone());
-                let response = match &command.request {
-                    skippy::StageControlRequest::Prepare(prepare) => {
-                        let status = test_preparation_status_from_load(&prepare.load);
-                        captured_preparations.lock().unwrap().push(status.clone());
-                        Ok(skippy::StageControlResponse::PrepareAccepted(
-                            skippy::StagePrepareAcceptedResponse {
-                                accepted: true,
-                                status,
-                                error: None,
-                            },
-                        ))
-                    }
-                    skippy::StageControlRequest::Inventory(inventory) => {
-                        let mut response = test_inventory_from_request(inventory);
-                        response.preparing_ranges = captured_preparations
-                            .lock()
-                            .unwrap()
-                            .iter()
-                            .filter(|status| {
-                                status.model_id == inventory.model_id
-                                    && status.package_ref == inventory.package_ref
-                                    && status.manifest_sha256 == inventory.manifest_sha256
-                            })
-                            .cloned()
-                            .collect();
-                        Ok(skippy::StageControlResponse::Inventory(response))
-                    }
-                    skippy::StageControlRequest::Claim(claim) => {
-                        Ok(skippy::StageControlResponse::ClaimAccepted(
-                            skippy::StageCoordinatorClaimAck {
-                                accepted: true,
-                                claim: claim.clone(),
-                                error: None,
-                            },
-                        ))
-                    }
-                    skippy::StageControlRequest::Load(load) if load.stage_id == "stage-1" => {
-                        Err(anyhow::anyhow!("injected stage load failure"))
-                    }
-                    skippy::StageControlRequest::Load(load) => Ok(
-                        skippy::StageControlResponse::Ready(skippy::StageReadyResponse {
-                            accepted: true,
-                            status: test_stage_status_from_load(
-                                load,
-                                skippy::StageRuntimeState::Ready,
-                            ),
-                            error: None,
-                        }),
-                    ),
-                    skippy::StageControlRequest::Stop(stop) => Ok(
-                        skippy::StageControlResponse::Ready(skippy::StageReadyResponse {
-                            accepted: true,
-                            status: test_stage_status_from_stop(stop),
-                            error: None,
-                        }),
-                    ),
-                    other => panic!("unexpected stage control request: {other:?}"),
-                };
-                let _ = command.resp.send(response);
-            }
-        });
-
-        let mut package = package(40);
-        package.package_ref = "hf://Mesh-LLM/test-split-package".to_string();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let model_path = temp_dir.path().join("qwen.gguf");
-        write_fake_gguf_model(&model_path);
-        let local_id = node.id();
-        let generation = SplitTopologyGeneration::new(
-            "candidate-topology".into(),
-            "candidate-run".into(),
-            2,
-            vec![SplitParticipant::new(local_id, 24_000_000_000, None)],
-            vec![
-                local_stage(local_id, 0, 0, 12),
-                local_stage(local_id, 1, 12, 24),
-                local_stage(local_id, 2, 24, 40),
-            ],
-        );
-        let mesh_config = plugin::MeshConfig::default();
-
-        let error = match Box::pin(load_split_runtime_generation(SplitGenerationLoadSpec {
-            node: &node,
-            mesh_config: &mesh_config,
-            model_ref: "Qwen",
-            model_path: &model_path,
-            package: &package,
-            generation: &generation,
-            projector_path: None,
-            ctx_size: 4096,
-            pinned_gpu: None,
-            slots: 1,
-            cache_type_k_override: None,
-            cache_type_v_override: None,
-            n_batch_override: None,
-            n_ubatch_override: None,
-            flash_attention_override: FlashAttentionType::Auto,
-            openai_guardrail_policy: openai_guardrail_policy_handle(
-                openai_frontend::GuardrailMode::Disabled,
-            ),
-            skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
-            survey_telemetry: survey::SurveyTelemetry::disabled(),
-        }))
-        .await
-        {
-            Ok(_) => panic!("candidate split generation load unexpectedly succeeded"),
-            Err(error) => error,
-        };
-
-        let error_chain = format!("{error:#}");
-        assert!(
-            error_chain.contains("injected stage load failure"),
-            "unexpected error: {error_chain}"
-        );
-
-        let requests = requests.lock().unwrap();
-        let claim_count = requests
-            .iter()
-            .filter(|request| matches!(request, skippy::StageControlRequest::Claim(_)))
-            .count();
-        assert_eq!(claim_count, generation.stages.len());
-        let load_stage_ids = requests
-            .iter()
-            .filter_map(|request| match request {
-                skippy::StageControlRequest::Load(load) => Some(load.stage_id.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(load_stage_ids, vec!["stage-2", "stage-1"]);
-
-        let stop_requests = requests
-            .iter()
-            .filter_map(|request| match request {
-                skippy::StageControlRequest::Stop(stop) => Some(stop),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(stop_requests.len(), 2);
-        assert_eq!(stop_requests[0].stage_id, "stage-1");
-        assert_eq!(stop_requests[1].stage_id, "stage-2");
-        assert!(stop_requests.iter().all(|stop| {
-            stop.topology_id == generation.topology_id
-                && stop.run_id == generation.run_id
-                && stop.shutdown_generation == generation.generation
-        }));
-    }
-
-    #[test]
-    fn split_replan_decision_accepts_more_stage_capacity() {
-        let participants = vec![SplitParticipant::new(make_id(1), 16_000_000_000, None)];
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            participants.clone(),
-            vec![RuntimeSliceStagePlan {
-                stage_id: "stage-0".into(),
-                stage_index: 0,
-                node_id: make_id(1),
-                layer_start: 0,
-                layer_end: 40,
-                parameter_bytes: 40_000_000,
-            }],
-        );
-        let candidate = SplitTopologyGeneration::new(
-            "topology-b".into(),
-            "run-b".into(),
-            2,
-            participants,
-            vec![
-                RuntimeSliceStagePlan {
-                    stage_id: "stage-0".into(),
-                    stage_index: 0,
-                    node_id: make_id(1),
-                    layer_start: 0,
-                    layer_end: 16,
-                    parameter_bytes: 16_000_000,
-                },
-                RuntimeSliceStagePlan {
-                    stage_id: "stage-1".into(),
-                    stage_index: 1,
-                    node_id: make_id(2),
-                    layer_start: 16,
-                    layer_end: 40,
-                    parameter_bytes: 24_000_000,
-                },
-            ],
-        );
-
-        assert_eq!(
-            split_replan_decision(&active, &candidate),
-            SplitReplanDecision::Candidate
-        );
-        assert_eq!(
-            split_replan_decision_with_reason(&active, &candidate),
-            (SplitReplanDecision::Candidate, "candidate_has_more_stages")
-        );
-    }
-
-    #[test]
-    fn split_replan_decision_keeps_equivalent_topology() {
-        let stages = vec![RuntimeSliceStagePlan {
-            stage_id: "stage-0".into(),
-            stage_index: 0,
-            node_id: make_id(1),
-            layer_start: 0,
-            layer_end: 40,
-            parameter_bytes: 40_000_000,
-        }];
-        let participants = vec![SplitParticipant::new(make_id(1), 16_000_000_000, None)];
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            participants.clone(),
-            stages.clone(),
-        );
-        let candidate = SplitTopologyGeneration::new(
-            "topology-b".into(),
-            "run-b".into(),
-            2,
-            participants,
-            stages,
-        );
-
-        assert_eq!(
-            split_replan_decision(&active, &candidate),
-            SplitReplanDecision::Keep
-        );
-        assert_eq!(
-            split_replan_decision_with_reason(&active, &candidate),
-            (SplitReplanDecision::Keep, "candidate_not_materially_better")
-        );
-    }
-
-    #[test]
-    fn split_replan_decision_accepts_degraded_topology_when_active_stage_peer_is_lost() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2), participant(3)],
-            vec![stage(1, 0, 0, 10), stage(2, 1, 10, 20), stage(3, 2, 20, 30)],
-        );
-        let candidate = SplitTopologyGeneration::new(
-            "topology-b".into(),
-            "run-b".into(),
-            2,
-            vec![participant(1), participant(3)],
-            vec![stage(1, 0, 0, 15), stage(3, 1, 15, 30)],
-        );
-
-        assert_eq!(
-            split_replan_decision(&active, &candidate),
-            SplitReplanDecision::Candidate
-        );
-    }
-
-    #[test]
-    fn split_replan_decision_keeps_topology_when_only_unused_participant_is_lost() {
-        let active_stages = vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)];
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2), participant(3)],
-            active_stages.clone(),
-        );
-        let candidate = SplitTopologyGeneration::new(
-            "topology-b".into(),
-            "run-b".into(),
-            2,
-            vec![participant(1), participant(2)],
-            active_stages,
-        );
-
-        assert_eq!(
-            split_replan_decision(&active, &candidate),
-            SplitReplanDecision::Keep
-        );
-    }
-
-    #[test]
-    fn split_loss_recovery_uses_replacement_split_when_active_stage_peer_is_lost() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2), participant(3)],
-            vec![stage(1, 0, 0, 10), stage(2, 1, 10, 20), stage(3, 2, 20, 30)],
-        );
-        let candidate = SplitTopologyGeneration::new(
-            "topology-b".into(),
-            "run-b".into(),
-            2,
-            vec![participant(1), participant(3)],
-            vec![stage(1, 0, 0, 15), stage(3, 1, 15, 30)],
-        );
-
-        assert_eq!(
-            split_loss_recovery_decision(
-                &active,
-                &[participant(1), participant(3)],
-                &[],
-                Some(&candidate),
-                true,
-            ),
-            SplitLossRecoveryDecision::ReplacementSplit
-        );
-    }
-
-    #[test]
-    fn split_loss_recovery_uses_replacement_split_when_active_stage_has_failed() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2), participant(3)],
-            vec![stage(1, 0, 0, 10), stage(2, 1, 10, 20), stage(3, 2, 20, 30)],
-        );
-        let candidate = SplitTopologyGeneration::new(
-            "topology-b".into(),
-            "run-b".into(),
-            2,
-            vec![participant(1), participant(3)],
-            vec![stage(1, 0, 0, 15), stage(3, 1, 15, 30)],
-        );
-        assert_eq!(
-            split_loss_recovery_decision(
-                &active,
-                &[participant(1), participant(2), participant(3)],
-                &[make_id(2)],
-                Some(&candidate),
-                true,
-            ),
-            SplitLossRecoveryDecision::ReplacementSplit
-        );
-    }
-
-    #[test]
-    fn split_loss_recovery_rejects_replacement_that_reuses_failed_stage_peer() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2), participant(3)],
-            vec![stage(1, 0, 0, 10), stage(2, 1, 10, 20), stage(3, 2, 20, 30)],
-        );
-        let candidate = SplitTopologyGeneration::new(
-            "topology-b".into(),
-            "run-b".into(),
-            2,
-            vec![participant(1), participant(2), participant(3)],
-            vec![stage(1, 0, 0, 15), stage(2, 1, 15, 30)],
-        );
-
-        assert_eq!(
-            split_loss_recovery_decision(
-                &active,
-                &[participant(1), participant(2), participant(3)],
-                &[make_id(2)],
-                Some(&candidate),
-                true,
-            ),
-            SplitLossRecoveryDecision::LocalFallback
-        );
-        assert!(split_candidate_is_valid_replacement_split(&candidate));
-        assert!(!split_candidate_is_valid_replacement_split_after_loss(
-            &candidate,
-            &[make_id(2)]
-        ));
-    }
-
-    #[test]
-    fn split_loss_recovery_falls_back_to_local_when_replacement_split_is_unavailable() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2)],
-            vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
-        );
-
-        assert_eq!(
-            split_loss_recovery_decision(&active, &[participant(1)], &[], None, true),
-            SplitLossRecoveryDecision::LocalFallback
-        );
-    }
-
-    #[test]
-    fn split_loss_recovery_withdraws_when_split_and_local_paths_are_unavailable() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2)],
-            vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
-        );
-
-        assert_eq!(
-            split_loss_recovery_decision(&active, &[participant(1)], &[], None, false),
-            SplitLossRecoveryDecision::Withdraw
-        );
-    }
-
-    #[test]
-    fn split_loss_recovery_rejects_single_participant_candidate_as_split_topology() {
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2)],
-            vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
-        );
-        let candidate = SplitTopologyGeneration::new(
-            "topology-b".into(),
-            "run-b".into(),
-            2,
-            vec![participant(1)],
-            vec![stage(1, 0, 0, 40)],
-        );
-
-        assert_eq!(
-            split_loss_recovery_decision(&active, &[participant(1)], &[], Some(&candidate), true),
-            SplitLossRecoveryDecision::LocalFallback
-        );
-        assert!(!split_candidate_is_valid_replacement_split(&candidate));
-    }
-
-    #[test]
-    fn split_loss_recovery_ignores_unused_participant_loss() {
-        let active_stages = vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)];
-        let active = SplitTopologyGeneration::new(
-            "topology-a".into(),
-            "run-a".into(),
-            1,
-            vec![participant(1), participant(2), participant(3)],
-            active_stages.clone(),
-        );
-        let candidate = SplitTopologyGeneration::new(
-            "topology-b".into(),
-            "run-b".into(),
-            2,
-            vec![participant(1), participant(2)],
-            active_stages,
-        );
-
-        assert_eq!(
-            split_loss_recovery_decision(
-                &active,
-                &[participant(1), participant(2)],
-                &[],
-                Some(&candidate),
-                false,
-            ),
-            SplitLossRecoveryDecision::NoActiveStageLoss
-        );
-    }
-
-    #[test]
-    fn split_topology_minimum_rejects_single_stage_split_candidate() {
-        assert!(split_participants_meet_minimum(&[
-            participant(1),
-            participant(2)
-        ]));
-        assert!(!split_participants_meet_minimum(&[participant(1)]));
-        assert!(split_stages_meet_minimum(&[
-            stage(1, 0, 0, 20),
-            stage(2, 1, 20, 40)
-        ]));
-        assert!(!split_stages_meet_minimum(&[stage(1, 0, 0, 40)]));
+    fn unix_nanos_to_unix_ms_treats_non_positive_as_never_captured() {
+        // A zero or negative capture time means "never read", not "read at the
+        // epoch". Callers must not project 1970 as a success timestamp.
+        assert_eq!(unix_nanos_to_unix_ms(0), None);
+        assert_eq!(unix_nanos_to_unix_ms(-1), None);
     }
 }

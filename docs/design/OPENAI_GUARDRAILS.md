@@ -32,7 +32,8 @@ already wrapped hosted models and future runtime-loaded/replacement Skippy
 backends observe the new mode without a process restart. The current posture is
 visible at `/api/status.runtime.openai_guardrails`.
 
-The goal is validated emulation, not a general OpenAI tool runtime.
+The goal is validation of native runtime output, not a second tool-call parser
+or a general OpenAI tool runtime.
 
 ## Request Mode Contract
 
@@ -57,15 +58,17 @@ The v1 surface is intentionally narrow.
 - no hard constrained decoding is promised
 - real tools plus strict structured output is unsupported in v1
 
-That means the layer can validate and emulate shaped responses, but it does not
-become a full agent runtime.
+That means the layer can validate native `message.tool_calls` and structured
+output, but it does not become a full agent runtime.
 
 ## Retry and Exhaustion
 
-Guardrail flow is rescue before retry.
+Guardrail flow is native parsing, validation, then optional retry.
 
-- rescue tries to turn malformed output into a valid assistant response first
-- retry follows only after rescue fails or the policy requires another pass
+- llama/Skippy owns chat-template rendering and tool-call parsing
+- Mesh never converts assistant text, fenced JSON, XML, bracket syntax, or
+  model-specific text into `tool_calls`
+- retry follows only after native output fails validation
 - retry budget means `max_retries + 1` total attempts
 
 The supported exhaustion modes are:
@@ -81,11 +84,12 @@ Otherwise the run fails closed.
 The rollout preserves the reliability-layer behavior that informed this
 adaptation:
 
-- a synthetic `respond` tool can be injected and stripped by the proxy
-- rescue happens before retry
+- a synthetic `respond` tool can be injected and stripped only when the native
+  parser returns it as a structured tool call
+- native parsing happens before validation and retry
 - retry exhaustion is `max_retries + 1` total attempts
-- guardrail outcome recording can propagate optional arguments while remaining
-  backward compatible
+- guardrail outcomes record validation and retry only; parser-stage and rescue
+  telemetry do not exist
 
 ## Telemetry Privacy
 
@@ -130,7 +134,7 @@ The corpus should include a small set of prompts that cover:
 
 - streaming pass-through
 - real tool-call reliability
-- synthetic `_mesh_respond` rescue
+- native synthetic `_mesh_respond` validation
 - strict structured output
 - unsupported real tools plus strict structured output
 

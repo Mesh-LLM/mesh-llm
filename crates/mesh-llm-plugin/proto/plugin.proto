@@ -185,6 +185,255 @@ message PluginManifest {
   repeated string capabilities = 8;
   repeated MeshChannelManifest mesh_channels = 9;
   repeated MeshEventSubscriptionManifest mesh_event_subscriptions = 10;
+  optional PluginConfigSchemaManifest config_schema = 11;
+  optional PluginWebUiManifest web_ui = 12;
+}
+
+message PluginWebUiManifest {
+  repeated PluginWebUiPageManifest pages = 1;
+  repeated PluginWebUiConfigSectionManifest config_sections = 2;
+  repeated PluginWebUiBundleManifest bundles = 3;
+}
+
+message PluginWebUiPageManifest {
+  string id = 1;
+  string label = 2;
+  optional string icon = 3;
+  string route = 4;
+  string bundle_id = 5;
+  string entry_script = 6;
+}
+
+message PluginWebUiConfigSectionManifest {
+  string id = 1;
+  string title = 2;
+  string entry_script = 3;
+  optional string parent_tab = 4;
+  string bundle_id = 5;
+}
+
+message PluginWebUiBundleManifest {
+  string id = 1;
+  string root_path = 2;
+}
+
+message PluginConfigSchemaManifest {
+  string plugin_name = 1;
+  uint32 schema_version = 2;
+  bool allow_unvalidated_config = 3;
+  repeated PluginConfigSettingManifest settings = 4;
+}
+
+message PluginConfigSettingManifest {
+  string key = 1;
+  PluginConfigValueSchema value_schema = 2;
+  bool required = 3;
+  optional string default_json = 4;
+  repeated PluginConfigConstraintManifest constraints = 5;
+  PluginConfigApplyMode apply_mode = 6;
+  PluginConfigRestartScope restart_scope = 7;
+  PluginConfigVisibility visibility = 8;
+  optional string description = 9;
+  optional PluginConfigPresentationManifest presentation = 10;
+  optional PluginConfigControlBehavior control_behavior = 11;
+}
+
+message PluginConfigControlBehavior {
+  optional PluginConfigNumericControl numeric = 1;
+  optional PluginConfigTextFormat text_format = 2;
+  optional PluginConfigOptionsSource options_source = 3;
+  optional PluginConfigControlAvailability availability = 4;
+  repeated PluginConfigControlCondition enable_when = 5;
+  repeated PluginConfigConditionalDisable disable_when = 6;
+  repeated PluginConfigConflictRule conflicts = 7;
+  optional PluginConfigDisabledWritePolicy write_policy = 8;
+}
+
+message PluginConfigNumericControl {
+  optional double min = 1;
+  optional double max = 2;
+  optional double step = 3;
+  optional double soft_min = 4;
+  optional double soft_max = 5;
+  optional string unit = 6;
+}
+
+enum PluginConfigTextFormat {
+  PLUGIN_CONFIG_TEXT_FORMAT_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_TEXT_FORMAT_PLAIN = 1;
+  PLUGIN_CONFIG_TEXT_FORMAT_PATH = 2;
+  PLUGIN_CONFIG_TEXT_FORMAT_URL = 3;
+  PLUGIN_CONFIG_TEXT_FORMAT_SOCKET_ADDR = 4;
+  PLUGIN_CONFIG_TEXT_FORMAT_SEMVER = 5;
+  PLUGIN_CONFIG_TEXT_FORMAT_ED25519_KEY = 6;
+  PLUGIN_CONFIG_TEXT_FORMAT_CSV_POSITIVE_INTS = 7;
+}
+
+enum PluginConfigOptionsSource {
+  PLUGIN_CONFIG_OPTIONS_SOURCE_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_STATIC = 1;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_GPUS = 2;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_NATIVE_BACKENDS = 3;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_LOCAL_MODELS = 4;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_INSTALLED_PLUGINS = 5;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_MESH_PEERS = 6;
+}
+
+message PluginConfigControlAvailability {
+  bool enabled = 1;
+  optional string reason = 2;
+  optional string note = 3;
+  PluginConfigControlAvailabilitySource source = 4;
+}
+
+enum PluginConfigControlAvailabilitySource {
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_STATIC = 1;
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_RUNTIME = 2;
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_DEPENDENCY = 3;
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_CONFLICT = 4;
+}
+
+message PluginConfigControlCondition {
+  string key = 1;
+  PluginConfigConditionOperator operator = 2;
+  repeated PluginConfigConditionValue values = 3;
+}
+
+enum PluginConfigConditionOperator {
+  PLUGIN_CONFIG_CONDITION_OPERATOR_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_EQUALS = 1;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_NOT_EQUALS = 2;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_IN = 3;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_NOT_IN = 4;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_PRESENT = 5;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_ABSENT = 6;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_TRUTHY = 7;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_FALSY = 8;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_RANGE = 9;
+}
+
+message PluginConfigConditionValue {
+  oneof value {
+    bool bool_value = 1;
+    int64 integer_value = 2;
+    double float_value = 3;
+    string string_value = 4;
+  }
+}
+
+message PluginConfigConditionalDisable {
+  optional PluginConfigControlCondition condition = 1;
+  string reason = 2;
+  optional string note = 3;
+  PluginConfigDisabledWritePolicy write_policy = 4;
+}
+
+message PluginConfigConflictRule {
+  string group = 1;
+  optional PluginConfigControlCondition condition = 2;
+  string reason = 3;
+  optional string preferred_key = 4;
+}
+
+enum PluginConfigDisabledWritePolicy {
+  PLUGIN_CONFIG_DISABLED_WRITE_POLICY_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_DISABLED_WRITE_POLICY_PRESERVE_EXISTING = 1;
+  PLUGIN_CONFIG_DISABLED_WRITE_POLICY_OMIT_WHEN_DISABLED = 2;
+  PLUGIN_CONFIG_DISABLED_WRITE_POLICY_REJECT_WHEN_DISABLED = 3;
+}
+
+message PluginConfigPresentationManifest {
+  optional string label = 1;
+  optional string help = 2;
+  optional string category_id = 3;
+  optional string category_label = 4;
+  optional string category_summary = 5;
+  optional uint32 category_order = 6;
+  optional uint32 setting_order = 7;
+  optional string unit = 8;
+  optional string placeholder = 9;
+  optional string control_hint = 10;
+  optional string renderer_id = 11;
+}
+
+message PluginConfigValueSchema {
+  PluginConfigValueKind kind = 1;
+  repeated string enum_values = 2;
+  optional PluginConfigValueSchema items = 3;
+  repeated PluginConfigObjectProperty object_properties = 4;
+  bool allow_additional_properties = 5;
+}
+
+message PluginConfigObjectProperty {
+  string key = 1;
+  PluginConfigValueSchema value_schema = 2;
+  bool required = 3;
+  optional string description = 4;
+}
+
+enum PluginConfigValueKind {
+  PLUGIN_CONFIG_VALUE_KIND_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_VALUE_KIND_BOOLEAN = 1;
+  PLUGIN_CONFIG_VALUE_KIND_INTEGER = 2;
+  PLUGIN_CONFIG_VALUE_KIND_FLOAT = 3;
+  PLUGIN_CONFIG_VALUE_KIND_STRING = 4;
+  PLUGIN_CONFIG_VALUE_KIND_PATH = 5;
+  PLUGIN_CONFIG_VALUE_KIND_URL = 6;
+  PLUGIN_CONFIG_VALUE_KIND_ENUM = 7;
+  PLUGIN_CONFIG_VALUE_KIND_ARRAY = 8;
+  PLUGIN_CONFIG_VALUE_KIND_OBJECT = 9;
+}
+
+enum PluginConfigApplyMode {
+  PLUGIN_CONFIG_APPLY_MODE_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_APPLY_MODE_STATIC_ON_LOAD = 1;
+  PLUGIN_CONFIG_APPLY_MODE_DYNAMIC_VALIDATION_ONLY = 2;
+  PLUGIN_CONFIG_APPLY_MODE_DYNAMIC_APPLY = 3;
+}
+
+enum PluginConfigRestartScope {
+  PLUGIN_CONFIG_RESTART_SCOPE_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_RESTART_SCOPE_NONE = 1;
+  PLUGIN_CONFIG_RESTART_SCOPE_MODEL_RELOAD = 2;
+  PLUGIN_CONFIG_RESTART_SCOPE_PROCESS_RESTART = 3;
+  PLUGIN_CONFIG_RESTART_SCOPE_MESH_RESTART = 4;
+  PLUGIN_CONFIG_RESTART_SCOPE_PLUGIN_PROCESS = 5;
+}
+
+enum PluginConfigVisibility {
+  PLUGIN_CONFIG_VISIBILITY_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_VISIBILITY_USER = 1;
+  PLUGIN_CONFIG_VISIBILITY_ADVANCED = 2;
+  PLUGIN_CONFIG_VISIBILITY_HIDDEN = 3;
+  PLUGIN_CONFIG_VISIBILITY_INTERNAL = 4;
+}
+
+message PluginConfigConstraintManifest {
+  oneof constraint {
+    PluginConfigNonEmptyConstraint non_empty = 1;
+    PluginConfigPositiveConstraint positive = 2;
+    PluginConfigRangeConstraint range = 3;
+    PluginConfigAllowedValuesConstraint allowed_values = 4;
+    PluginConfigRequiresConstraint requires = 5;
+  }
+}
+
+message PluginConfigNonEmptyConstraint {}
+
+message PluginConfigPositiveConstraint {}
+
+message PluginConfigRangeConstraint {
+  optional string min = 1;
+  optional string max = 2;
+}
+
+message PluginConfigAllowedValuesConstraint {
+  repeated string values = 1;
+}
+
+message PluginConfigRequiresConstraint {
+  string key = 1;
 }
 
 message MeshChannelManifest {

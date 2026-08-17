@@ -11,6 +11,7 @@ import ai.meshllm.UnloadModelOptions
 import kotlinx.coroutines.runBlocking
 import uniffi.mesh_ffi.DevicePolicy
 import uniffi.mesh_ffi.UnloadTarget
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -23,8 +24,14 @@ fun main(args: Array<String>) = runBlocking {
         return@runBlocking
     }
 
-    val runtime = NativeRuntime.configure()
-    println("[runtime] artifact=${runtime.artifactId} library=${runtime.library}")
+    val runtime = NativeRuntime.resolve(
+        ai.meshllm.NativeRuntimeResolveOptions(
+            artifactDir = System.getenv("MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR")?.let(::File),
+            cacheDir = System.getenv("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR")?.let(::File),
+            allowDownload = System.getenv("MESH_SDK_RUNTIME_ALLOW_DOWNLOAD") == "1",
+        )
+    )
+    println("[runtime] artifact=${runtime.nativeRuntimeId} path=${runtime.path}")
     // Generate an ephemeral owner keypair for the example. In a real app this
     // must be persisted across launches.
     val ownerKeypairHex = uniffi.mesh_ffi.generateOwnerKeypairHex()

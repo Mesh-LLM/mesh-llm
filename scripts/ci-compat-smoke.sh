@@ -54,6 +54,13 @@ fi
 
 inspect_release_attestation
 
+RUNTIME_BUNDLE="${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR:-$(cd "$(dirname "$MESH_LLM")" && pwd)/native-runtimes}"
+if [[ ! -d "$RUNTIME_BUNDLE" ]]; then
+    echo "Missing packaged native runtime beside mesh-llm: $RUNTIME_BUNDLE" >&2
+    exit 1
+fi
+export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$RUNTIME_BUNDLE"
+
 env MESH_LLM_CONFIG="$SMOKE_CONFIG_PATH" MESH_LLM_RUNTIME_ROOT="$SMOKE_RUNTIME_ROOT" \
     "$MESH_LLM" \
     --log-format json \

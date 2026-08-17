@@ -1,0 +1,12 @@
+{% from "components/ui.njk" import sectionHead %}
+
+<section class="sec" id="plugins" style="padding-top: 56px;">
+  <div class="shell">
+    {{ sectionHead(
+      '<span class="title-line">Pluggable architecture</span><br/><span class="title-line">for distributed agents.</span>',
+      "Plugins declare what they provide in a manifest. The runtime starts them, routes calls, and exposes capabilities over MCP, HTTP, inference, and mesh events."
+    ) }}
+
+    {% include "components/plugin-architecture.njk" %}
+  </div>
+</section>

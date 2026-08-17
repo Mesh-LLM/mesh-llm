@@ -43,6 +43,13 @@ if [[ ! -f "$MODEL" ]]; then
     exit 1
 fi
 
+RUNTIME_BUNDLE="${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR:-$(cd "$(dirname "$MESH_LLM")" && pwd)/native-runtimes}"
+if [[ ! -d "$RUNTIME_BUNDLE" ]]; then
+    echo "Missing packaged native runtime beside mesh-llm: $RUNTIME_BUNDLE" >&2
+    exit 1
+fi
+export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$RUNTIME_BUNDLE"
+
 descendant_pids() {
     local pid="$1"
     local children

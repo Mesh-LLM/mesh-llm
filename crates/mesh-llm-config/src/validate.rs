@@ -1,1024 +1,1140 @@
-use crate::model::{merge_hardware, merge_model_fit, merge_multimodal, merge_throughput};
+pub(crate) use crate::diagnostic::DiagnosticResult;
+pub use crate::diagnostic::{
+    ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSchemaSource, ConfigDiagnosticSeverity,
+    ConfigDiagnosticSource, alias_diagnostic, invalid_value_diagnostic,
+    legacy_validation_error_text, rejected_field_diagnostic, unsupported_field_diagnostic,
+};
+use crate::model_validation::{
+    collect_legacy_draft_model_path_warnings, validate_duplicate_model_entries,
+    validate_model_defaults, validate_model_entry,
+};
+use crate::plugin_validation::{
+    PluginSchemaAvailability, validate_plugin_entries, validate_plugin_entries_strict,
+};
+pub(crate) use crate::validation_support::validation_diagnostic;
+pub use crate::validation_support::{
+    built_in_support_diagnostic, canonical_builtin_diagnostic_path,
+};
+use crate::validation_support::{
+    parse_node_version, validate_optional_http_url, validate_release_signer_key_shape,
+    version_precedence_cmp,
+};
 use crate::*;
-use anyhow::{Result, bail};
-use semver::{BuildMetadata, Version};
+use anyhow::Result;
 
-pub fn validate_config(config: &MeshConfig) -> Result<()> {
+pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
+
     if let Some(version) = config.version
         && version != 1
     {
-        bail!("unsupported config version {version}; expected version = 1");
+        diagnostics.push(validation_diagnostic(
+            "version",
+            format!("unsupported config version {version}; expected version = 1"),
+        ));
     }
     if let Some(bind) = config.owner_control.bind
         && bind.port() == 0
         && !bind.ip().is_loopback()
     {
-        bail!("owner_control.bind must use a concrete port when binding a non-loopback address");
+        diagnostics.push(validation_diagnostic(
+            "owner_control.bind",
+            "owner_control.bind must use a concrete port when binding a non-loopback address",
+        ));
     }
     if let Some(advertise_addr) = config.owner_control.advertise_addr {
+        match config.owner_control.bind {
+            Some(bind) if bind.port() == 0 => {
+                diagnostics.push(validation_diagnostic(
+                    "owner_control.bind",
+                    "owner_control.bind must use a concrete port when owner_control.advertise_addr is set",
+                ));
+            }
+            Some(bind) if bind.port() != advertise_addr.port() => {
+                diagnostics.push(validation_diagnostic(
+                    "owner_control.advertise_addr",
+                    "owner_control.advertise_addr must use the same port as owner_control.bind",
+                ));
+            }
+            Some(_) => {}
+            None => {
+                diagnostics.push(validation_diagnostic(
+                    "owner_control.advertise_addr",
+                    "owner_control.advertise_addr requires owner_control.bind so the advertised port is actually listening",
+                ));
+            }
+        }
         if advertise_addr.port() == 0 {
-            bail!("owner_control.advertise_addr must use a concrete port");
+            diagnostics.push(validation_diagnostic(
+                "owner_control.advertise_addr",
+                "owner_control.advertise_addr must use a concrete port",
+            ));
         }
         if advertise_addr.ip().is_unspecified() {
-            bail!("owner_control.advertise_addr must not use an unspecified IP address");
+            diagnostics.push(validation_diagnostic(
+                "owner_control.advertise_addr",
+                "owner_control.advertise_addr must not use an unspecified IP address",
+            ));
         }
     }
     if let Some(parallel) = config.gpu.parallel
         && parallel < 1
     {
-        bail!("gpu.parallel must be at least 1, got {parallel}");
+        diagnostics.push(validation_diagnostic(
+            "gpu.parallel",
+            format!("gpu.parallel must be at least 1, got {parallel}"),
+        ));
     }
-    validate_mesh_requirements_config(&config.mesh_requirements)?;
-    validate_telemetry_config(&config.telemetry)?;
+    if let Err(diagnostic) = validate_mesh_requirements_config(&config.mesh_requirements) {
+        diagnostics.push(diagnostic);
+    }
+    if let Err(diagnostic) = validate_telemetry_config(&config.telemetry) {
+        diagnostics.push(diagnostic);
+    }
+    diagnostics.extend(validate_logging_config(&config.logging));
+    diagnostics.extend(validate_audit_config(&config.logging.audit));
+
+    diagnostics.extend(validate_runtime_config(&config.runtime));
+    if let Err(diagnostic) = validate_plugin_entries(&config.plugins) {
+        diagnostics.push(diagnostic);
+    }
     let defaults_hardware = config
         .defaults
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref());
-    if let Some(defaults) = &config.defaults {
-        validate_model_defaults(defaults, "defaults", config.gpu.assignment)?;
+    if let Some(defaults) = &config.defaults
+        && let Err(diagnostic) =
+            validate_model_defaults(defaults, "defaults", config.gpu.assignment)
+    {
+        diagnostics.push(diagnostic);
     }
     for (index, model) in config.models.iter().enumerate() {
         if model.model.trim().is_empty() {
-            bail!("models[{index}].model must not be empty");
+            diagnostics.push(validation_diagnostic(
+                &format!("models[{index}].model"),
+                format!("models[{index}].model must not be empty"),
+            ));
         }
-        validate_model_entry(
+        if let Err(diagnostic) = validate_model_entry(
             model,
             &format!("models[{index}]"),
             config.gpu.assignment,
             defaults_hardware,
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_model_defaults(
-    defaults: &ModelConfigDefaults,
-    base_path: &str,
-    gpu_assignment: GpuAssignment,
-) -> Result<()> {
-    if let Some(model_fit) = &defaults.model_fit {
-        validate_model_fit(model_fit, &format!("{base_path}.model_fit"))?;
-    }
-    if let Some(hardware) = &defaults.hardware {
-        validate_hardware(hardware, &format!("{base_path}.hardware"), gpu_assignment)?;
-    }
-    if let Some(throughput) = &defaults.throughput {
-        validate_throughput(throughput, &format!("{base_path}.throughput"))?;
-    }
-    if let Some(skippy) = &defaults.skippy {
-        validate_skippy(skippy, &format!("{base_path}.skippy"))?;
-    }
-    if let Some(speculative) = &defaults.speculative {
-        validate_speculative(speculative, &format!("{base_path}.speculative"))?;
-    }
-    if let Some(request_defaults) = &defaults.request_defaults {
-        validate_request_defaults(request_defaults, &format!("{base_path}.request_defaults"))?;
-    }
-    validate_multimodal_pair(
-        defaults.hardware.as_ref(),
-        defaults.multimodal.as_ref(),
-        &format!("{base_path}.hardware"),
-        &format!("{base_path}.multimodal"),
-    )?;
-    if let Some(multimodal) = &defaults.multimodal {
-        validate_multimodal(multimodal, &format!("{base_path}.multimodal"))?;
-    }
-    if let Some(advanced) = &defaults.advanced {
-        validate_advanced(advanced, &format!("{base_path}.advanced"))?;
-    }
-    Ok(())
-}
-
-fn validate_model_entry(
-    model: &ModelConfigEntry,
-    base_path: &str,
-    gpu_assignment: GpuAssignment,
-    defaults_hardware: Option<&HardwareConfig>,
-) -> Result<()> {
-    let model_fit = merge_model_fit(
-        model.model_fit.clone(),
-        model.ctx_size,
-        model.cache_type_k.clone(),
-        model.cache_type_v.clone(),
-        model.batch,
-        model.ubatch,
-        model.flash_attention,
-    );
-    let multimodal = merge_multimodal(model.multimodal.clone(), model.mmproj.clone());
-    let hardware = merge_hardware(
-        model.hardware.clone(),
-        model.gpu_id.clone(),
-        multimodal.as_ref().and_then(|config| config.mmproj.clone()),
-        multimodal
-            .as_ref()
-            .and_then(|config| config.mmproj_offload.clone()),
-    );
-    let throughput = merge_throughput(model.throughput.clone(), model.parallel);
-
-    if let Some(mmproj) = &model.mmproj {
-        validate_non_empty(mmproj, &format!("{base_path}.multimodal.mmproj"))?;
-    }
-    if let Some(model_fit) = &model_fit {
-        validate_model_fit(model_fit, &format!("{base_path}.model_fit"))?;
-    }
-    if let Some(hardware) = hardware.as_ref() {
-        validate_hardware(hardware, &format!("{base_path}.hardware"), gpu_assignment)?;
-    }
-    if let Some(throughput) = &throughput {
-        validate_throughput(throughput, &format!("{base_path}.throughput"))?;
-    }
-    if let Some(skippy) = &model.skippy {
-        validate_skippy(skippy, &format!("{base_path}.skippy"))?;
-    }
-    if let Some(speculative) = &model.speculative {
-        validate_speculative(speculative, &format!("{base_path}.speculative"))?;
-    }
-    if let Some(request_defaults) = &model.request_defaults {
-        validate_request_defaults(request_defaults, &format!("{base_path}.request_defaults"))?;
-    }
-    validate_multimodal_pair(
-        hardware.as_ref(),
-        multimodal.as_ref(),
-        &format!("{base_path}.hardware"),
-        &format!("{base_path}.multimodal"),
-    )?;
-    if let Some(multimodal) = &multimodal {
-        validate_multimodal(multimodal, &format!("{base_path}.multimodal"))?;
-    }
-    if let Some(advanced) = &model.advanced {
-        validate_advanced(advanced, &format!("{base_path}.advanced"))?;
-    }
-    validate_gpu_assignment_constraints(
-        hardware.as_ref(),
-        defaults_hardware.and_then(|hardware| hardware.device.as_deref()),
-        model
-            .gpu_id_from_legacy_shim
-            .then_some(model.gpu_id.as_deref())
-            .flatten(),
-        &format!("{base_path}.hardware.device"),
-        gpu_assignment,
-    )?;
-    Ok(())
-}
-
-fn validate_gpu_assignment_constraints(
-    hardware: Option<&HardwareConfig>,
-    inherited_device: Option<&str>,
-    legacy_gpu_id: Option<&str>,
-    device_path: &str,
-    gpu_assignment: GpuAssignment,
-) -> Result<()> {
-    if matches!(gpu_assignment, GpuAssignment::Auto) && legacy_gpu_id.is_some() {
-        bail!("{device_path} must not be set when gpu.assignment = \"auto\"");
-    }
-    if matches!(gpu_assignment, GpuAssignment::Pinned) {
-        match hardware
-            .and_then(|config| config.device.as_deref())
-            .or(inherited_device)
-        {
-            Some(device) if !device.trim().is_empty() && !device.eq_ignore_ascii_case("auto") => {}
-            _ => {
-                bail!(
-                    "{device_path} must be set to a non-empty value when gpu.assignment = \"pinned\""
-                );
-            }
+        ) {
+            diagnostics.push(diagnostic);
         }
     }
-    Ok(())
+
+    collect_legacy_draft_model_path_warnings(config, &mut diagnostics);
+
+    validate_duplicate_model_entries(&config.models, &mut diagnostics);
+
+    diagnostics
 }
 
-fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> Result<()> {
-    validate_optional_positive_u32(config.ctx_size, &format!("{base_path}.ctx_size"))?;
-    validate_optional_positive_u32(config.batch, &format!("{base_path}.batch"))?;
-    validate_optional_positive_u32(config.ubatch, &format!("{base_path}.ubatch"))?;
-    if let (Some(batch), Some(ubatch)) = (config.batch, config.ubatch)
-        && ubatch > batch
+fn validate_audit_config(config: &AuditConfig) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
+    if config.enabled == Some(true)
+        && config.log_path.as_ref().is_none_or(|path| {
+            path.as_os_str().is_empty() || path.to_string_lossy().trim().is_empty()
+        })
     {
-        bail!("{base_path}.ubatch must be less than or equal to {base_path}.batch");
+        diagnostics.push(validation_diagnostic(
+            "logging.audit.log_path",
+            "logging.audit.log_path must be set when logging.audit.enabled is true",
+        ));
     }
-    validate_optional_non_empty(
-        config.cache_type_k.as_deref(),
-        &format!("{base_path}.cache_type_k"),
-    )?;
-    validate_optional_non_empty(
-        config.cache_type_v.as_deref(),
-        &format!("{base_path}.cache_type_v"),
-    )?;
-    validate_optional_enum(
-        config.kv_cache_policy.as_deref(),
-        &["auto", "quality", "balanced", "saver"],
-        &format!("{base_path}.kv_cache_policy"),
-    )?;
-    validate_bool_or_auto(
-        config.kv_offload.as_ref(),
-        &format!("{base_path}.kv_offload"),
-    )?;
-    validate_bool_or_auto(
-        config.kv_unified.as_ref(),
-        &format!("{base_path}.kv_unified"),
-    )?;
-    validate_bool_or_auto(
-        config.prompt_cache.as_ref(),
-        &format!("{base_path}.prompt_cache"),
-    )?;
-    validate_bool_or_auto(
-        config.context_shift.as_ref(),
-        &format!("{base_path}.context_shift"),
-    )?;
-    if let Some(cache_idle_slots) = config.cache_idle_slots
-        && cache_idle_slots > 0
-        && matches!(config.prompt_cache, Some(BoolOrAuto::Bool(false)))
+    if config
+        .log_format
+        .as_deref()
+        .is_some_and(|format| format != "json_lines")
     {
-        bail!("{base_path}.cache_idle_slots requires {base_path}.prompt_cache = true");
+        diagnostics.push(validation_diagnostic(
+            "logging.audit.log_format",
+            "logging.audit.log_format must be json_lines",
+        ));
     }
-    if let Some(prefix_cache) = &config.prefix_cache {
-        validate_prefix_cache(prefix_cache, &format!("{base_path}.prefix_cache"))?;
+    if config.max_file_size_mb.is_some_and(|value| value == 0) {
+        diagnostics.push(validation_diagnostic(
+            "logging.audit.max_file_size_mb",
+            "logging.audit.max_file_size_mb must be at least 1",
+        ));
     }
-    if let (Some(keep_tokens), Some(ctx_size)) = (config.keep_tokens, config.ctx_size)
-        && keep_tokens > ctx_size
-    {
-        bail!("{base_path}.keep_tokens must be less than or equal to {base_path}.ctx_size");
+    if config.max_files.is_some_and(|value| value == 0) {
+        diagnostics.push(validation_diagnostic(
+            "logging.audit.max_files",
+            "logging.audit.max_files must be at least 1",
+        ));
     }
-    validate_optional_positive_u32(
-        config.checkpoint_interval,
-        &format!("{base_path}.checkpoint_interval"),
-    )?;
-    validate_optional_positive_u32(
-        config.checkpoint_count,
-        &format!("{base_path}.checkpoint_count"),
-    )?;
-    validate_optional_non_empty(
-        config.lookup_cache_static.as_deref(),
-        &format!("{base_path}.lookup_cache_static"),
-    )?;
-    validate_optional_non_empty(
-        config.lookup_cache_dynamic.as_deref(),
-        &format!("{base_path}.lookup_cache_dynamic"),
-    )?;
-    Ok(())
+    diagnostics
 }
 
-fn validate_prefix_cache(config: &PrefixCacheConfig, base_path: &str) -> Result<()> {
-    if config.enabled == Some(false) {
-        return Ok(());
+fn validate_runtime_config(config: &RuntimeConfig) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let mesh_version = config.native_runtime.mesh_version.as_deref();
+    let skippy_abi = config.native_runtime.skippy_abi.as_deref();
+    let selection = config.native_runtime.selection.as_deref();
+    if mesh_version.is_none() && (skippy_abi.is_some() || selection.is_some()) {
+        diagnostics.push(validation_diagnostic(
+            "runtime.native_runtime",
+            "runtime.native_runtime override must set mesh_version when skippy_abi or selection is set",
+        ));
     }
-    if config.enabled == Some(true) {
-        validate_optional_positive_u32(config.max_entries, &format!("{base_path}.max_entries"))?;
-        validate_optional_positive_u32(config.min_tokens, &format!("{base_path}.min_tokens"))?;
-        validate_optional_positive_u32(
-            config.shared_stride_tokens,
-            &format!("{base_path}.shared_stride_tokens"),
-        )?;
-        validate_optional_positive_u32(
-            config.shared_record_limit,
-            &format!("{base_path}.shared_record_limit"),
-        )?;
+    if matches!(mesh_version, Some(value) if value.trim().is_empty()) {
+        diagnostics.push(validation_diagnostic(
+            "runtime.native_runtime.mesh_version",
+            "runtime.native_runtime.mesh_version must not be empty",
+        ));
     }
-    validate_optional_enum(
-        config.payload_mode.as_deref(),
-        &["resident-kv", "kv-recurrent", "full-state", "auto"],
-        &format!("{base_path}.payload_mode"),
-    )?;
-    Ok(())
-}
-
-fn validate_hardware(
-    config: &HardwareConfig,
-    base_path: &str,
-    gpu_assignment: GpuAssignment,
-) -> Result<()> {
-    if let Some(device) = &config.device {
-        validate_non_empty(device, &format!("{base_path}.device"))?;
-        if matches!(gpu_assignment, GpuAssignment::Pinned) && device.eq_ignore_ascii_case("auto") {
-            bail!("{base_path}.device must not be \"auto\" when gpu.assignment = \"pinned\"");
-        }
+    if matches!(skippy_abi, Some(value) if value.trim().is_empty()) {
+        diagnostics.push(validation_diagnostic(
+            "runtime.native_runtime.skippy_abi",
+            "runtime.native_runtime.skippy_abi must not be empty",
+        ));
     }
-    if let Some(gpu_layers) = &config.gpu_layers {
-        match gpu_layers {
-            IntegerOrString::Integer(value) if *value >= -1 && *value <= i64::from(i32::MAX) => {}
-            IntegerOrString::Integer(value) if *value > i64::from(i32::MAX) => {
-                bail!("{base_path}.gpu_layers must be at most {}", i32::MAX)
-            }
-            IntegerOrString::Integer(_) => bail!("{base_path}.gpu_layers must be at least -1"),
-            IntegerOrString::String(value) => {
-                validate_allowed(value, &["auto"], &format!("{base_path}.gpu_layers"))?
-            }
-        }
+    if matches!(selection, Some(value) if value.trim().is_empty()) {
+        diagnostics.push(validation_diagnostic(
+            "runtime.native_runtime.selection",
+            "runtime.native_runtime.selection must not be empty",
+        ));
     }
-    match (config.stage_layer_start, config.stage_layer_end) {
-        (Some(start), Some(end)) if end <= start => {
-            bail!("{base_path}.stage_layer_end must be greater than {base_path}.stage_layer_start");
-        }
-        (Some(_), None) => bail!(
-            "{base_path}.stage_layer_end must be set when {base_path}.stage_layer_start is set"
+    for (path, value, min, max) in [
+        (
+            "runtime.activity.idle_after_secs",
+            config.activity.idle_after_secs,
+            30,
+            86_400,
         ),
-        (None, Some(_)) => bail!(
-            "{base_path}.stage_layer_start must be set when {base_path}.stage_layer_end is set"
+        (
+            "runtime.activity.poll_interval_secs",
+            config.activity.poll_interval_secs,
+            1,
+            60,
         ),
-        _ => {}
-    }
-    validate_optional_enum(
-        config.placement.as_deref(),
-        &["auto", "pooled", "separated"],
-        &format!("{base_path}.placement"),
-    )?;
-    if let Some(tensor_split) = &config.tensor_split {
-        match tensor_split {
-            TensorSplitConfig::Ratios(ratios) => {
-                for ratio in ratios {
-                    if *ratio < 0.0 {
-                        bail!("{base_path}.tensor_split must contain only non-negative ratios");
-                    }
-                }
-            }
-            TensorSplitConfig::String(value) => {
-                validate_non_empty(value, &format!("{base_path}.tensor_split"))?
-            }
+        (
+            "runtime.activity.resume_debounce_secs",
+            config.activity.resume_debounce_secs,
+            0,
+            300,
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {min} and {max}, got {value}"),
+            ));
         }
     }
-    validate_optional_enum(
-        config.split_mode.as_deref(),
-        &["auto", "none", "layer", "row"],
-        &format!("{base_path}.split_mode"),
-    )?;
-    if let Some(value) = &config.cpu_moe {
-        validate_bool_or_auto(Some(value), &format!("{base_path}.cpu_moe"))?;
+    if config.drain_timeout_secs == 0 {
+        diagnostics.push(validation_diagnostic(
+            "runtime.drain_timeout_secs",
+            "runtime.drain_timeout_secs must be at least 1",
+        ));
     }
-    if config.rpc_backend.is_some() {
-        bail!("{base_path}.rpc_backend is documented-rejected and must not be set");
+    if config.drain_timeout_max_secs == 0 {
+        diagnostics.push(validation_diagnostic(
+            "runtime.drain_timeout_max_secs",
+            "runtime.drain_timeout_max_secs must be at least 1",
+        ));
+    } else if config.drain_timeout_secs > config.drain_timeout_max_secs {
+        diagnostics.push(validation_diagnostic(
+            "runtime.drain_timeout_secs",
+            "runtime.drain_timeout_secs must not exceed runtime.drain_timeout_max_secs",
+        ));
     }
-    if let Some(fit_context) = &config.fit_context {
-        validate_bool_or_auto(Some(fit_context), &format!("{base_path}.fit_context"))?;
-    }
-    validate_non_negative_f64(
-        config.safety_margin_gb,
-        &format!("{base_path}.safety_margin_gb"),
-    )?;
-    validate_hf_pair(
-        config.hf_repo.as_deref(),
-        config.hf_file.as_deref(),
-        &format!("{base_path}.hf_repo"),
-        &format!("{base_path}.hf_file"),
-    )?;
-    validate_optional_non_empty(
-        config.model_path.as_deref(),
-        &format!("{base_path}.model_path"),
-    )?;
-    validate_optional_non_empty(config.mmproj.as_deref(), &format!("{base_path}.mmproj"))?;
-    validate_bool_or_auto(
-        config.mmproj_offload.as_ref(),
-        &format!("{base_path}.mmproj_offload"),
-    )?;
-    validate_bool_or_auto(config.mmap.as_ref(), &format!("{base_path}.mmap"))?;
-    validate_bool_or_auto(config.warmup.as_ref(), &format!("{base_path}.warmup"))?;
-    validate_string_list(&config.lora_adapters, &format!("{base_path}.lora_adapters"))?;
-    validate_string_list(
-        &config.control_vectors,
-        &format!("{base_path}.control_vectors"),
-    )?;
-    Ok(())
+    diagnostics
 }
 
-fn validate_throughput(config: &ThroughputConfig, base_path: &str) -> Result<()> {
-    if let Some(parallel) = config.parallel
-        && parallel < 1
-    {
-        bail!("{base_path}.parallel must be at least 1, got {parallel}");
-    }
-    validate_bool_or_auto(
-        config.continuous_batching.as_ref(),
-        &format!("{base_path}.continuous_batching"),
-    )?;
-    // `0` is a canonical auto/default sentinel for threads and threads_batch.
-    if config.threads_http.is_some() {
-        bail!("{base_path}.threads_http is documented-rejected and must not be set");
-    }
-    if let Some(BoolOrString::String(value)) = &config.poll {
-        validate_allowed(
-            value,
-            &["auto", "busy", "sleep"],
-            &format!("{base_path}.poll"),
-        )?;
-    }
-    if let Some(cpu_affinity) = &config.cpu_affinity {
-        match cpu_affinity {
-            StringOrStringList::String(value) => {
-                validate_non_empty(value, &format!("{base_path}.cpu_affinity"))?
-            }
-            StringOrStringList::List(values) => {
-                validate_string_list(values, &format!("{base_path}.cpu_affinity"))?
-            }
-        }
-    }
-    validate_optional_non_empty(config.numa.as_deref(), &format!("{base_path}.numa"))?;
-    if let Some(slot_prompt_similarity) = config.slot_prompt_similarity
-        && slot_prompt_similarity < 0.0
-    {
-        bail!("{base_path}.slot_prompt_similarity must be non-negative");
-    }
-    if config.sleep_idle_seconds.is_some() {
-        bail!("{base_path}.sleep_idle_seconds is documented-rejected and must not be set");
-    }
-    validate_optional_enum(
-        config.tuning_profile.as_deref(),
-        &["throughput", "balanced", "saver"],
-        &format!("{base_path}.tuning_profile"),
-    )?;
-    Ok(())
+pub fn validate_config_diagnostics_with_plugin_schemas<F>(
+    config: &MeshConfig,
+    raw_toml: Option<&str>,
+    schema_for_plugin: F,
+) -> Vec<ConfigDiagnostic>
+where
+    F: FnMut(&str) -> PluginSchemaAvailability,
+{
+    let mut diagnostics = validate_config_diagnostics(config);
+    diagnostics.extend(validate_plugin_entries_strict(
+        &config.plugins,
+        raw_toml,
+        schema_for_plugin,
+    ));
+    diagnostics
 }
 
-fn validate_skippy(config: &SkippyConfig, base_path: &str) -> Result<()> {
-    validate_optional_non_empty(
-        config.stage_model_path.as_deref(),
-        &format!("{base_path}.stage_model_path"),
-    )?;
-    validate_optional_non_empty(
-        config.stage_role.as_deref(),
-        &format!("{base_path}.stage_role"),
-    )?;
-    validate_optional_non_empty(
-        config.stage_topology.as_deref(),
-        &format!("{base_path}.stage_topology"),
-    )?;
-    validate_optional_enum(
-        config.activation_wire_dtype.as_deref(),
-        &["auto", "f16", "f32", "q8"],
-        &format!("{base_path}.activation_wire_dtype"),
-    )?;
-    validate_optional_non_empty(
-        config.binary_stage_transport.as_deref(),
-        &format!("{base_path}.binary_stage_transport"),
-    )?;
-    if config.openai_frontend_mode.is_some() {
-        bail!("{base_path}.openai_frontend_mode is documented-rejected and must not be set");
-    }
-    validate_optional_positive_u64(
-        config.lifecycle_startup_timeout_ms,
-        &format!("{base_path}.lifecycle_startup_timeout_ms"),
-    )?;
-    validate_optional_positive_u64(
-        config.lifecycle_readiness_interval_ms,
-        &format!("{base_path}.lifecycle_readiness_interval_ms"),
-    )?;
-    validate_optional_positive_u64(
-        config.lifecycle_health_interval_ms,
-        &format!("{base_path}.lifecycle_health_interval_ms"),
-    )?;
-    validate_optional_enum(
-        config.prefill_chunking.as_deref(),
-        &["auto", "fixed", "schedule", "adaptive-ramp"],
-        &format!("{base_path}.prefill_chunking"),
-    )?;
-    if let Some(schedule) = &config.prefill_chunk_schedule {
-        validate_non_empty(schedule, &format!("{base_path}.prefill_chunk_schedule"))?;
-        for item in schedule.split(',') {
-            let trimmed = item.trim();
-            if trimmed.is_empty()
-                || trimmed
-                    .parse::<u32>()
-                    .ok()
-                    .filter(|value| *value > 0)
-                    .is_none()
-            {
-                bail!(
-                    "{base_path}.prefill_chunk_schedule must contain only comma-separated positive integers"
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<()> {
-    validate_optional_enum(
-        config.mode.as_deref(),
-        &["auto", "disabled", "draft", "ngram"],
-        &format!("{base_path}.mode"),
-    )?;
-    validate_hf_pair(
-        config.draft_hf_repo.as_deref(),
-        config.draft_hf_file.as_deref(),
-        &format!("{base_path}.draft_hf_repo"),
-        &format!("{base_path}.draft_hf_file"),
-    )?;
-    validate_optional_enum(
-        config.draft_selection_policy.as_deref(),
-        &["manual", "auto"],
-        &format!("{base_path}.draft_selection_policy"),
-    )?;
-    validate_optional_enum(
-        config.pairing_fault.as_deref(),
-        &[
-            "warn_disable",
-            "fail-open",
-            "fail-closed",
-            "fail_open",
-            "fail_closed",
-        ],
-        &format!("{base_path}.pairing_fault"),
-    )?;
-    validate_optional_positive_u32(
-        config.draft_max_tokens,
-        &format!("{base_path}.draft_max_tokens"),
-    )?;
-    if let (Some(min), Some(max)) = (config.draft_min_tokens, config.draft_max_tokens)
-        && min > max
-    {
-        bail!(
-            "{base_path}.draft_min_tokens must be less than or equal to {base_path}.draft_max_tokens"
-        );
-    }
-    validate_probability(
-        config.draft_acceptance_threshold,
-        &format!("{base_path}.draft_acceptance_threshold"),
-    )?;
-    validate_probability(
-        config.draft_split_probability,
-        &format!("{base_path}.draft_split_probability"),
-    )?;
-    if let Some(gpu_layers) = config.draft_gpu_layers
-        && gpu_layers < -1
-    {
-        bail!("{base_path}.draft_gpu_layers must be at least -1");
-    }
-    validate_optional_non_empty(
-        config.draft_device.as_deref(),
-        &format!("{base_path}.draft_device"),
-    )?;
-    validate_optional_positive_usize(config.draft_threads, &format!("{base_path}.draft_threads"))?;
-    validate_optional_non_empty(
-        config.draft_cache_type_k.as_deref(),
-        &format!("{base_path}.draft_cache_type_k"),
-    )?;
-    validate_optional_non_empty(
-        config.draft_cache_type_v.as_deref(),
-        &format!("{base_path}.draft_cache_type_v"),
-    )?;
-    validate_optional_positive_u32(config.ngram_min, &format!("{base_path}.ngram_min"))?;
-    validate_optional_positive_u32(config.ngram_max, &format!("{base_path}.ngram_max"))?;
-    if let (Some(min), Some(max)) = (config.ngram_min, config.ngram_max)
-        && max < min
-    {
-        bail!("{base_path}.ngram_max must be greater than or equal to {base_path}.ngram_min");
-    }
-    validate_bool_or_auto(
-        config.spec_default.as_ref(),
-        &format!("{base_path}.spec_default"),
-    )?;
-    if config.mode.as_deref() == Some("draft")
-        && config.draft_model_path.is_none()
-        && config.draft_hf_repo.is_none()
-        && config.draft_selection_policy.is_none()
-    {
-        bail!(
-            "{base_path}.draft_selection_policy must be set when {base_path}.mode = \"draft\" and no explicit draft model source is configured"
-        );
-    }
-    Ok(())
-}
-
-fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) -> Result<()> {
-    validate_optional_positive_u32(config.max_tokens, &format!("{base_path}.max_tokens"))?;
-    if let Some(stop) = &config.stop {
-        match stop {
-            StringOrStringList::String(value) => {
-                validate_non_empty(value, &format!("{base_path}.stop"))?
-            }
-            StringOrStringList::List(values) => {
-                validate_string_list(values, &format!("{base_path}.stop"))?
-            }
-        }
-    }
-    validate_non_negative_f64(config.temperature, &format!("{base_path}.temperature"))?;
-    validate_probability(config.top_p, &format!("{base_path}.top_p"))?;
-    if let Some(top_k) = config.top_k
-        && top_k < 0
-    {
-        bail!("{base_path}.top_k must be greater than or equal to 0");
-    }
-    validate_probability(config.min_p, &format!("{base_path}.min_p"))?;
-    validate_probability(config.typical_p, &format!("{base_path}.typical_p"))?;
-    validate_non_negative_f64(config.top_nsigma, &format!("{base_path}.top_nsigma"))?;
-    validate_non_negative_f64(
-        config.dynatemp_range,
-        &format!("{base_path}.dynatemp_range"),
-    )?;
-    validate_non_negative_f64(
-        config.dynatemp_exponent,
-        &format!("{base_path}.dynatemp_exponent"),
-    )?;
-    validate_non_negative_f64(
-        config.repeat_penalty,
-        &format!("{base_path}.repeat_penalty"),
-    )?;
-    if let Some(repeat_last_n) = config.repeat_last_n
-        && repeat_last_n < -1
-    {
-        bail!("{base_path}.repeat_last_n must be greater than or equal to -1");
-    }
-    validate_non_negative_f64(
-        config.presence_penalty,
-        &format!("{base_path}.presence_penalty"),
-    )?;
-    validate_non_negative_f64(
-        config.frequency_penalty,
-        &format!("{base_path}.frequency_penalty"),
-    )?;
-    if let Some(mode) = &config.mirostat_mode {
-        match mode {
-            IntegerOrString::Integer(value) if *value == 1 || *value == 2 => {}
-            IntegerOrString::String(value) => validate_allowed(
-                value,
-                &["disabled", "1", "2"],
-                &format!("{base_path}.mirostat_mode"),
-            )?,
-            _ => bail!("{base_path}.mirostat_mode must be one of: disabled, 1, 2"),
-        }
-    }
-    validate_positive_f64(
-        config.mirostat_entropy,
-        &format!("{base_path}.mirostat_entropy"),
-    )?;
-    validate_positive_f64(
-        config.mirostat_learning_rate,
-        &format!("{base_path}.mirostat_learning_rate"),
-    )?;
-    if let Some(samplers) = &config.samplers {
-        validate_string_list(samplers, &format!("{base_path}.samplers"))?;
-    }
-    validate_optional_non_empty(
-        config.sampler_sequence.as_deref(),
-        &format!("{base_path}.sampler_sequence"),
-    )?;
-    if config.backend_sampling.is_some() {
-        bail!("{base_path}.backend_sampling is documented-rejected and must not be set");
-    }
-    validate_optional_enum(
-        config.reasoning_format.as_deref(),
-        &["auto", "none", "deepseek", "deepseek-legacy", "hidden"],
-        &format!("{base_path}.reasoning_format"),
-    )?;
-    if let Some(reasoning_enabled) = &config.reasoning_enabled {
-        match reasoning_enabled {
-            ReasoningEnabled::Bool(_) => {}
-            ReasoningEnabled::String(value) => validate_allowed(
-                value,
-                &["auto", "off", "on"],
-                &format!("{base_path}.reasoning_enabled"),
-            )?,
-        }
-    }
-    if let Some(reasoning_budget) = &config.reasoning_budget {
-        match reasoning_budget {
-            ReasoningBudget::Integer(_) => {}
-            ReasoningBudget::String(value) => validate_allowed(
-                value,
-                &["auto", "low", "medium", "high"],
-                &format!("{base_path}.reasoning_budget"),
-            )?,
-        }
-    }
-    validate_optional_non_empty(
-        config.chat_template.as_deref(),
-        &format!("{base_path}.chat_template"),
-    )?;
-    validate_optional_non_empty(
-        config.chat_template_file.as_deref(),
-        &format!("{base_path}.chat_template_file"),
-    )?;
-    validate_optional_non_empty(
-        config.system_prompt.as_deref(),
-        &format!("{base_path}.system_prompt"),
-    )?;
-    if config.grammar.is_some() {
-        bail!("{base_path}.grammar is documented-rejected and must not be set");
-    }
-    if config.json_schema.is_some() {
-        bail!("{base_path}.json_schema is documented-rejected and must not be set");
-    }
-    if config.logprobs.is_some() {
-        bail!("{base_path}.logprobs is documented-rejected and must not be set");
-    }
-    Ok(())
-}
-
-fn validate_multimodal_pair(
-    hardware: Option<&HardwareConfig>,
-    multimodal: Option<&MultimodalConfig>,
-    hardware_path: &str,
-    multimodal_path: &str,
-) -> Result<()> {
-    if let (Some(hardware), Some(multimodal)) = (hardware, multimodal) {
-        if let (Some(hardware_mmproj), Some(multimodal_mmproj)) =
-            (hardware.mmproj.as_deref(), multimodal.mmproj.as_deref())
-            && hardware_mmproj != multimodal_mmproj
-        {
-            bail!("{multimodal_path}.mmproj must match {hardware_path}.mmproj when both are set");
-        }
-        if let (Some(hardware_offload), Some(multimodal_offload)) = (
-            hardware.mmproj_offload.as_ref(),
-            multimodal.mmproj_offload.as_ref(),
-        ) && hardware_offload != multimodal_offload
-        {
-            bail!(
-                "{multimodal_path}.mmproj_offload must match {hardware_path}.mmproj_offload when both are set"
-            );
-        }
-    }
-    Ok(())
-}
-
-fn validate_multimodal(config: &MultimodalConfig, base_path: &str) -> Result<()> {
-    validate_optional_non_empty(config.mmproj.as_deref(), &format!("{base_path}.mmproj"))?;
-    validate_optional_non_empty(
-        config.mmproj_url.as_deref(),
-        &format!("{base_path}.mmproj_url"),
-    )?;
-    validate_bool_or_auto(
-        config.mmproj_offload.as_ref(),
-        &format!("{base_path}.mmproj_offload"),
-    )?;
-    if let (Some(min), Some(max)) = (config.image_min_tokens, config.image_max_tokens)
-        && min > max
-    {
-        bail!(
-            "{base_path}.image_min_tokens must be less than or equal to {base_path}.image_max_tokens"
-        );
-    }
-    if config.embeddings.is_some() {
-        bail!("{base_path}.embeddings is documented-rejected and must not be set");
-    }
-    if config.reranking.is_some() {
-        bail!("{base_path}.reranking is documented-rejected and must not be set");
-    }
-    if config.pooling.is_some() {
-        bail!("{base_path}.pooling is documented-rejected and must not be set");
-    }
-    if config.vocoder.is_some() {
-        bail!("{base_path}.vocoder is documented-rejected and must not be set");
-    }
-    Ok(())
-}
-
-fn validate_advanced(config: &AdvancedConfig, base_path: &str) -> Result<()> {
-    if let Some(server) = &config.server {
-        if server.host.is_some() {
-            bail!("{base_path}.server.host is documented-rejected and must not be set");
-        }
-        if server.port.is_some() {
-            bail!("{base_path}.server.port is documented-rejected and must not be set");
-        }
-        if server.reuse_port.is_some() {
-            bail!("{base_path}.server.reuse_port is documented-rejected and must not be set");
-        }
-        if server.timeout.is_some() {
-            bail!("{base_path}.server.timeout is documented-rejected and must not be set");
-        }
-        if server.metrics.is_some() {
-            bail!("{base_path}.server.metrics is documented-rejected and must not be set");
-        }
-        if server.slots.is_some() {
-            bail!("{base_path}.server.slots is documented-rejected and must not be set");
-        }
-        if server.props.is_some() {
-            bail!("{base_path}.server.props is documented-rejected and must not be set");
-        }
-        if server.api_prefix.is_some() {
-            bail!("{base_path}.server.api_prefix is documented-rejected and must not be set");
-        }
-        validate_optional_non_empty(
-            server.alias.as_deref(),
-            &format!("{base_path}.server.alias"),
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_optional_positive_u32(value: Option<u32>, path: &str) -> Result<()> {
-    if value == Some(0) {
-        bail!("{path} must be at least 1 when set");
-    }
-    Ok(())
-}
-
-fn validate_optional_positive_u64(value: Option<u64>, path: &str) -> Result<()> {
-    if value == Some(0) {
-        bail!("{path} must be at least 1 when set");
-    }
-    Ok(())
-}
-
-fn validate_optional_positive_usize(value: Option<usize>, path: &str) -> Result<()> {
-    if value == Some(0) {
-        bail!("{path} must be at least 1 when set");
-    }
-    Ok(())
-}
-
-fn validate_optional_non_empty(value: Option<&str>, path: &str) -> Result<()> {
-    if let Some(value) = value {
-        validate_non_empty(value, path)?;
-    }
-    Ok(())
-}
-
-fn validate_non_empty(value: &str, path: &str) -> Result<()> {
-    if value.trim().is_empty() {
-        bail!("{path} must not be empty when set");
-    }
-    Ok(())
-}
-
-fn validate_optional_enum(value: Option<&str>, allowed: &[&str], path: &str) -> Result<()> {
-    if let Some(value) = value {
-        validate_allowed(value, allowed, path)?;
-    }
-    Ok(())
-}
-
-fn validate_allowed(value: &str, allowed: &[&str], path: &str) -> Result<()> {
-    validate_non_empty(value, path)?;
-    if !allowed
+pub fn validate_config(config: &MeshConfig) -> Result<()> {
+    let diagnostics = validate_config_diagnostics(config);
+    let has_errors = diagnostics
         .iter()
-        .any(|candidate| value.eq_ignore_ascii_case(candidate))
-    {
-        bail!("{path} must be one of: {}", allowed.join(", "));
-    }
-    Ok(())
-}
-
-fn validate_bool_or_auto(value: Option<&BoolOrAuto>, path: &str) -> Result<()> {
-    if let Some(BoolOrAuto::String(value)) = value {
-        validate_allowed(value, &["auto"], path)?;
-    }
-    Ok(())
-}
-
-fn validate_probability(value: Option<f64>, path: &str) -> Result<()> {
-    if let Some(value) = value
-        && !(0.0..=1.0).contains(&value)
-    {
-        bail!("{path} must be between 0.0 and 1.0");
-    }
-    Ok(())
-}
-
-fn validate_non_negative_f64(value: Option<f64>, path: &str) -> Result<()> {
-    if let Some(value) = value
-        && value < 0.0
-    {
-        bail!("{path} must be greater than or equal to 0.0");
-    }
-    Ok(())
-}
-
-fn validate_positive_f64(value: Option<f64>, path: &str) -> Result<()> {
-    if let Some(value) = value
-        && value <= 0.0
-    {
-        bail!("{path} must be greater than 0.0");
-    }
-    Ok(())
-}
-
-fn validate_hf_pair(
-    repo: Option<&str>,
-    file: Option<&str>,
-    repo_path: &str,
-    file_path: &str,
-) -> Result<()> {
-    validate_optional_non_empty(repo, repo_path)?;
-    validate_optional_non_empty(file, file_path)?;
-    match (repo, file) {
-        (Some(_), None) => bail!("{file_path} must be set when {repo_path} is set"),
-        (None, Some(_)) => bail!("{repo_path} must be set when {file_path} is set"),
-        _ => Ok(()),
+        .any(|diagnostic| diagnostic.severity == ConfigDiagnosticSeverity::Error);
+    if has_errors {
+        Err(anyhow::anyhow!(legacy_validation_error_text(&diagnostics)))
+    } else {
+        Ok(())
     }
 }
 
-fn validate_string_list(values: &[String], path: &str) -> Result<()> {
-    for value in values {
-        validate_non_empty(value, path)?;
+pub fn validate_config_with_plugin_schemas<F>(
+    config: &MeshConfig,
+    raw_toml: Option<&str>,
+    schema_for_plugin: F,
+) -> Result<()>
+where
+    F: FnMut(&str) -> PluginSchemaAvailability,
+{
+    let diagnostics =
+        validate_config_diagnostics_with_plugin_schemas(config, raw_toml, schema_for_plugin);
+    let has_errors = diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == ConfigDiagnosticSeverity::Error);
+    if has_errors {
+        Err(anyhow::anyhow!(legacy_validation_error_text(&diagnostics)))
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
-fn validate_mesh_requirements_config(config: &MeshRequirementsConfig) -> Result<()> {
+fn validate_mesh_requirements_config(config: &MeshRequirementsConfig) -> DiagnosticResult {
     let min_node_version = config
         .min_node_version
         .as_deref()
-        .map(parse_node_version)
+        .map(|value| parse_node_version(value, "mesh_requirements.min_node_version"))
         .transpose()?;
     let max_node_version = config
         .max_node_version
         .as_deref()
-        .map(parse_node_version)
+        .map(|value| parse_node_version(value, "mesh_requirements.max_node_version"))
         .transpose()?;
     if let (Some(min), Some(max)) = (&min_node_version, &max_node_version)
         && version_precedence_cmp(min, max).is_gt()
     {
-        bail!(
-            "mesh_requirements.min_node_version must be less than or equal to mesh_requirements.max_node_version"
-        );
+        return Err(validation_diagnostic(
+            "mesh_requirements.min_node_version",
+            "mesh_requirements.min_node_version must be less than or equal to mesh_requirements.max_node_version",
+        ));
     }
 
     if let (Some(min), Some(max)) = (config.min_protocol_version, config.max_protocol_version)
         && min > max
     {
-        bail!(
-            "mesh_requirements.min_protocol_version must be less than or equal to mesh_requirements.max_protocol_version"
-        );
+        return Err(validation_diagnostic(
+            "mesh_requirements.min_protocol_version",
+            "mesh_requirements.min_protocol_version must be less than or equal to mesh_requirements.max_protocol_version",
+        ));
     }
 
     for signer_key in &config.release_signer_keys {
-        validate_release_signer_key_shape(signer_key)?;
+        validate_release_signer_key_shape(signer_key, "mesh_requirements.release_signer_keys")?;
     }
     if config.require_release_attestation && config.release_signer_keys.is_empty() {
-        bail!(
-            "mesh_requirements.require_release_attestation is true but mesh_requirements.release_signer_keys is empty; certified-build admission is not remote runtime attestation, so trust must be anchored in at least one release signer key"
-        );
+        return Err(validation_diagnostic(
+            "mesh_requirements.require_release_attestation",
+            "mesh_requirements.require_release_attestation is true but mesh_requirements.release_signer_keys is empty; certified-build admission is not remote runtime attestation, so trust must be anchored in at least one release signer key",
+        ));
     }
 
     Ok(())
 }
 
-fn parse_node_version(raw: &str) -> Result<Version> {
-    let normalized = raw.trim();
-    if normalized.is_empty() {
-        bail!(
-            "mesh_requirements node version bounds must be valid semver strings (an optional leading 'v' is allowed)"
-        );
+fn validate_telemetry_config(config: &TelemetryConfig) -> DiagnosticResult {
+    if let Some(service_name) = &config.service_name {
+        let trimmed = service_name.trim();
+        if !trimmed.is_empty() {
+            // Validate service name: alphanumeric, dash, underscore only
+            if !trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(validation_diagnostic(
+                    "telemetry.service_name",
+                    "telemetry.service_name must contain only alphanumeric characters, dashes, and underscores",
+                ));
+            }
+        }
     }
-    let normalized = normalized
-        .strip_prefix('v')
-        .or_else(|| normalized.strip_prefix('V'))
-        .unwrap_or(normalized);
-    Version::parse(normalized).map_err(|_| {
-        anyhow::anyhow!(
-            "mesh_requirements node version bounds must be valid semver strings (an optional leading 'v' is allowed)"
-        )
-    })
-}
-
-fn validate_release_signer_key_shape(raw: &str) -> Result<()> {
-    let normalized = raw.trim();
-    if normalized.is_empty() {
-        bail!("mesh_requirements.release_signer_keys entries must not be empty");
-    }
-    let Some(encoded) = normalized.strip_prefix("ed25519:") else {
-        bail!(
-            "mesh_requirements.release_signer_keys entries must be of the form 'ed25519:<64-character-hex-public-key>'"
-        );
-    };
-    if encoded.len() != 64 || !encoded.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        bail!(
-            "mesh_requirements.release_signer_keys entries must be of the form 'ed25519:<64-character-hex-public-key>'"
-        );
-    }
-    Ok(())
-}
-
-fn version_precedence_cmp(left: &Version, right: &Version) -> std::cmp::Ordering {
-    let mut left = left.clone();
-    let mut right = right.clone();
-    left.build = BuildMetadata::EMPTY;
-    right.build = BuildMetadata::EMPTY;
-    left.cmp(&right)
-}
-
-fn validate_telemetry_config(config: &TelemetryConfig) -> Result<()> {
-    if let Some(service_name) = &config.service_name
-        && service_name.trim().is_empty()
-    {
-        bail!("telemetry.service_name must not be empty when set");
-    }
-    if let Some(endpoint) = &config.endpoint
-        && endpoint.trim().is_empty()
-    {
-        bail!("telemetry.endpoint must not be empty when set");
-    }
-    if let Some(endpoint) = &config.metrics.endpoint
-        && endpoint.trim().is_empty()
-    {
-        bail!("telemetry.metrics.endpoint must not be empty when set");
-    }
+    validate_optional_http_url(config.endpoint.as_deref(), "telemetry.endpoint")?;
+    validate_optional_http_url(
+        config.metrics.endpoint.as_deref(),
+        "telemetry.metrics.endpoint",
+    )?;
     for key in config.headers.keys() {
         if key.trim().is_empty() {
-            bail!("telemetry.headers keys must not be empty");
+            return Err(validation_diagnostic(
+                "telemetry.headers",
+                "telemetry.headers keys must not be empty",
+            ));
         }
     }
     if let Some(export_interval_secs) = config.export_interval_secs
         && export_interval_secs < 1
     {
-        bail!("telemetry.export_interval_secs must be at least 1");
+        return Err(validation_diagnostic(
+            "telemetry.export_interval_secs",
+            "telemetry.export_interval_secs must be at least 1",
+        ));
     }
     if let Some(queue_size) = config.queue_size
         && queue_size < 1
     {
-        bail!("telemetry.queue_size must be at least 1");
+        return Err(validation_diagnostic(
+            "telemetry.queue_size",
+            "telemetry.queue_size must be at least 1",
+        ));
     }
     if config.prompt_shape_metrics {
-        bail!("telemetry.prompt_shape_metrics is not supported yet and must remain false");
+        return Err(validation_diagnostic(
+            "telemetry.prompt_shape_metrics",
+            "telemetry.prompt_shape_metrics is not supported yet and must remain false",
+        ));
     }
     Ok(())
+}
+
+fn validate_logging_config(config: &crate::LoggingConfig) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
+
+    // Application state root validation.
+    if let Some(root) = &config.application_state_root {
+        validate_application_state_root(root, &mut diagnostics);
+    }
+
+    // Numeric bounds validation.
+    for (path, value, min, max) in [
+        (
+            "logging.summary_line_limit",
+            config.summary_line_limit,
+            1_u64,
+            65_536,
+        ),
+        (
+            "logging.event_buffer_size",
+            config.event_buffer_size,
+            50,
+            100_000,
+        ),
+        (
+            "logging.retention_ttl_secs",
+            config.retention_ttl_secs,
+            3600,      // minimum 1 hour
+            7_776_000, // maximum 90 days
+        ),
+        (
+            "logging.retention_max_rows",
+            config.retention_max_rows,
+            1,
+            1_000_000,
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {min} and {max}, got {value}"),
+            ));
+        }
+    }
+
+    for (path, value, min, max) in [
+        (
+            "logging.replay_capacity",
+            config.replay_capacity as u64,
+            1_u64,
+            10_000,
+        ),
+        (
+            "logging.queue_capacity",
+            config.queue_capacity as u64,
+            64,
+            131_072,
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {} and {}, got {}", min, max, value),
+            ));
+        }
+    }
+
+    if config.replay_capacity as u64 > config.event_buffer_size {
+        diagnostics.push(validation_diagnostic(
+            "logging.replay_capacity",
+            "logging.replay_capacity must not exceed logging.event_buffer_size",
+        ));
+    }
+
+    // Artifact byte limits.
+    for (path, value, min, max) in [
+        (
+            "logging.artifact.byte_limit_bytes",
+            config.artifact.byte_limit_bytes,
+            1024_u64,
+            16 * 1024 * 1024,
+        ),
+        (
+            "logging.artifact.aggregate_limit_bytes",
+            config.artifact.aggregate_limit_bytes,
+            512 * 1024,        // minimum 512 KiB
+            500 * 1024 * 1024, // maximum 500 MiB
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {} and {}, got {}", min, max, value),
+            ));
+        }
+    }
+
+    // Export limit.
+    let export_min = 64 * 1024_u64; // 64 KiB
+    let export_max = 100 * 1024 * 1024_u64; // 100 MiB
+    if !(export_min..=export_max).contains(&config.export_limit_bytes) {
+        diagnostics.push(validation_diagnostic(
+            "logging.export_limit_bytes",
+            format!(
+                "logging.export_limit_bytes must be between {} and {}, got {}",
+                export_min, export_max, config.export_limit_bytes
+            ),
+        ));
+    }
+
+    // Cleanup cadence.
+    if !(300..=86_400).contains(&config.cleanup_cadence_secs) {
+        diagnostics.push(validation_diagnostic(
+            "logging.cleanup_cadence_secs",
+            format!(
+                "logging.cleanup_cadence_secs must be between 300 and 86400, got {}",
+                config.cleanup_cadence_secs
+            ),
+        ));
+    }
+
+    // Webhook validation.
+    validate_webhook_config(&config.webhook, &mut diagnostics);
+
+    diagnostics
+}
+
+fn validate_application_state_root(
+    root: &std::path::PathBuf,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) {
+    if root.as_os_str().is_empty() {
+        diagnostics.push(validation_diagnostic(
+            "logging.application_state_root",
+            "logging.application_state_root must not be empty",
+        ));
+        return;
+    }
+
+    let contains_parent_dir = root
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+        // A configuration can be authored on another OS, so reject Windows
+        // separators even when validation runs on Unix (and vice versa).
+        || root
+            .to_string_lossy()
+            .split(['/', '\\'])
+            .any(|segment| segment == "..");
+    if contains_parent_dir {
+        diagnostics.push(validation_diagnostic(
+            "logging.application_state_root",
+            "logging.application_state_root must not contain directory traversal sequences",
+        ));
+    }
+
+    // Reject absolute system paths that should never contain application state.
+    let forbidden_roots = ["/etc", "/dev", "/proc", "/sys"];
+    if let Some(path_str) = root.to_str() {
+        if path_str == "/" {
+            diagnostics.push(validation_diagnostic(
+                "logging.application_state_root",
+                "logging.application_state_root must not be the filesystem root \"/\"",
+            ));
+        } else {
+            for forbidden_root in forbidden_roots {
+                let is_descendant = path_str
+                    .strip_prefix(forbidden_root)
+                    .is_some_and(|suffix| suffix.starts_with('/'));
+                if path_str == forbidden_root || is_descendant {
+                    diagnostics.push(validation_diagnostic(
+                    "logging.application_state_root",
+                    format!(
+                            "logging.application_state_root must not target system directories; rejecting path at or below \"{forbidden_root}\""
+                    ),
+                ));
+                    break;
+                }
+            }
+        }
+    }
+
+    // On Unix, check for world-writable if path exists.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(metadata) = std::fs::metadata(root) {
+            let mode = metadata.mode() & 0o777;
+            if mode & 0o002 != 0 {
+                diagnostics.push(validation_diagnostic(
+                    "logging.application_state_root",
+                    format!(
+                        "logging.application_state_root must not be world-writable; current mode is {:04o}",
+                        metadata.mode() & 0o7777
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_webhook_config(
+    config: &crate::LoggingWebhookConfig,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) {
+    let configured_url = config
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty());
+    if config.enabled && configured_url.is_none() {
+        diagnostics.push(validation_diagnostic(
+            "logging.webhook.url",
+            "logging.webhook.url is required when logging.webhook.enabled is true",
+        ));
+    }
+    if let Some(url) = configured_url {
+        if let Err(diag) = validate_optional_http_url(Some(url), "logging.webhook.url") {
+            diagnostics.push(diag);
+        } else if let Ok(parsed) = url::Url::parse(url)
+            && (!parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some())
+        {
+            diagnostics.push(validation_diagnostic(
+                "logging.webhook.url",
+                "logging.webhook.url must not include credentials, a query string, or a fragment",
+            ));
+        }
+    }
+
+    for (path, value, min, max) in [
+        (
+            "logging.webhook.max_attempts",
+            config.max_attempts as u64,
+            1_u64,
+            20,
+        ),
+        (
+            "logging.webhook.timeout_secs",
+            config.timeout_secs,
+            1_u64,
+            60,
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {} and {}, got {}", min, max, value),
+            ));
+        }
+    }
+
+    // Dead-letter retention.
+    let dlr = config.dead_letter_retention_secs;
+    if !(3600..=1_555_200).contains(&dlr) {
+        diagnostics.push(validation_diagnostic(
+            "logging.webhook.dead_letter_retention_secs",
+            format!(
+                "logging.webhook.dead_letter_retention_secs must be between 3600 and 1555200, got {}",
+                dlr
+            ),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn audit_rotation_limits_must_be_nonzero() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[logging.audit]
+max_file_size_mb = 0
+max_files = 0
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let paths = diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.path.as_ref().map(ConfigPath::render))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                "logging.audit.max_file_size_mb".to_string(),
+                "logging.audit.max_files".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn enabled_audit_requires_a_path_and_json_lines_format() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[logging.audit]
+enabled = true
+log_format = "json"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let paths = validate_config_diagnostics(&config)
+            .iter()
+            .filter_map(|diagnostic| diagnostic.path.as_ref().map(ConfigPath::render))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec!["logging.audit.log_path", "logging.audit.log_format"]
+        );
+    }
+
+    #[test]
+    fn audit_json_lines_format_is_the_only_valid_exported_format() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[logging.audit]
+enabled = true
+log_path = "audit.jsonl"
+log_format = "json_lines"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        assert!(
+            validate_config_diagnostics(&config)
+                .iter()
+                .all(
+                    |diagnostic| diagnostic.path.as_ref().map(ConfigPath::render)
+                        != Some("logging.audit.log_format".to_string())
+                )
+        );
+    }
+
+    #[test]
+    fn logging_summary_and_event_buffer_limits_accept_boundaries_and_reject_underflow() {
+        let mut config = MeshConfig::default();
+        config.logging.summary_line_limit = 1;
+        config.logging.event_buffer_size = 50;
+        config.logging.replay_capacity = 50;
+        assert!(validate_config_diagnostics(&config).is_empty());
+
+        config.logging.summary_line_limit = 0;
+        config.logging.event_buffer_size = 49;
+        let paths = validate_config_diagnostics(&config)
+            .iter()
+            .filter_map(|diagnostic| diagnostic.path.as_ref().map(ConfigPath::render))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                "logging.summary_line_limit".to_string(),
+                "logging.event_buffer_size".to_string(),
+                "logging.replay_capacity".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_state_root_rejects_parent_components_on_all_platforms() {
+        for root in ["../outside", "state/../outside", r"..\outside"] {
+            let mut config = MeshConfig::default();
+            config.logging.application_state_root = Some(root.into());
+            assert!(
+                validate_config_diagnostics(&config)
+                    .iter()
+                    .any(|diagnostic| {
+                        diagnostic.path.as_ref().map(ConfigPath::render)
+                            == Some("logging.application_state_root".to_string())
+                    })
+            );
+        }
+    }
+
+    #[test]
+    fn application_state_root_rejects_exact_system_directories() {
+        for root in ["/etc", "/dev", "/proc", "/sys"] {
+            let mut config = MeshConfig::default();
+            config.logging.application_state_root = Some(root.into());
+            assert!(
+                validate_config_diagnostics(&config)
+                    .iter()
+                    .any(|diagnostic| {
+                        diagnostic.path.as_ref().map(ConfigPath::render)
+                            == Some("logging.application_state_root".to_string())
+                    }),
+                "{root} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn enabled_audit_rejects_an_empty_log_path() {
+        let mut config = MeshConfig::default();
+        config.logging.audit.enabled = Some(true);
+        config.logging.audit.log_path = Some(std::path::PathBuf::new());
+
+        assert!(
+            validate_config_diagnostics(&config)
+                .iter()
+                .any(
+                    |diagnostic| diagnostic.path.as_ref().map(ConfigPath::render)
+                        == Some("logging.audit.log_path".to_string())
+                )
+        );
+    }
+
+    #[test]
+    fn drain_default_cannot_exceed_maximum() {
+        let mut config = MeshConfig::default();
+        config.runtime.drain_timeout_secs = 301;
+        config.runtime.drain_timeout_max_secs = 300;
+        let diagnostics = validate_config_diagnostics(&config);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].path.as_ref().map(ConfigPath::render),
+            Some("runtime.drain_timeout_secs".to_string())
+        );
+    }
+
+    #[test]
+    fn owner_control_advertise_addr_requires_matching_bind_port() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[owner_control]
+advertise_addr = "127.0.0.1:17001"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(
+            legacy_validation_error_text(&diagnostics).contains(
+                "owner_control.advertise_addr requires owner_control.bind so the advertised port is actually listening"
+            )
+        );
+
+        let config: MeshConfig = toml::from_str(
+            r#"
+[owner_control]
+bind = "127.0.0.1:17002"
+advertise_addr = "127.0.0.1:17001"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(
+            legacy_validation_error_text(&diagnostics).contains(
+                "owner_control.advertise_addr must use the same port as owner_control.bind"
+            )
+        );
+
+        let config: MeshConfig = toml::from_str(
+            r#"
+[owner_control]
+bind = "127.0.0.1:0"
+advertise_addr = "127.0.0.1:17001"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(legacy_validation_error_text(&diagnostics).contains(
+            "owner_control.bind must use a concrete port when owner_control.advertise_addr is set"
+        ));
+
+        let config: MeshConfig = toml::from_str(
+            r#"
+[owner_control]
+bind = "127.0.0.1:17001"
+advertise_addr = "127.0.0.1:17001"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        validate_config(&config).expect("matching bind and advertise ports should validate");
+    }
+
+    #[test]
+    fn structured_diagnostics_report_canonical_path_for_alias_backed_invalid_input() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[gpu]
+assignment = "auto"
+
+[[models]]
+model = "Qwen3-4B-Q4_K_M"
+gpu_id = "metal:0"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.canonical_path.as_ref().map(ConfigPath::render)
+                    == Some("models.<model-ref>.hardware.device".to_string())
+            })
+            .expect("legacy gpu_id path should yield a canonical device diagnostic");
+
+        assert_eq!(diagnostic.code, ConfigDiagnosticCode::InvalidValue);
+        assert_eq!(diagnostic.severity, ConfigDiagnosticSeverity::Error);
+        assert_eq!(
+            diagnostic.schema_source,
+            Some(ConfigDiagnosticSchemaSource::BuiltIn)
+        );
+        assert_eq!(
+            diagnostic.path.as_ref().map(ConfigPath::render),
+            Some("models[0].hardware.device".to_string())
+        );
+        assert_eq!(
+            diagnostic.canonical_path.as_ref().map(ConfigPath::render),
+            Some("models.<model-ref>.hardware.device".to_string())
+        );
+        assert_eq!(
+            diagnostic.message,
+            "models[0].hardware.device must not be set when gpu.assignment = \"auto\""
+        );
+    }
+
+    #[test]
+    fn legacy_validation_errors_derive_compatible_string_messages() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[[plugin]]
+name = "metrics"
+command = "mesh-llm-plugin-metrics"
+
+[plugin.startup]
+connect_timeout_secs = 0
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            legacy_validation_error_text(&diagnostics),
+            "plugin[0].startup.connect_timeout_secs must be at least 1 when set"
+        );
+
+        let err =
+            validate_config(&config).expect_err("legacy validation surface should still fail");
+        assert_eq!(
+            err.to_string(),
+            "plugin[0].startup.connect_timeout_secs must be at least 1 when set"
+        );
+    }
+
+    #[test]
+    fn runtime_activity_bounds_reject_out_of_range_values() {
+        for (toml, expected_path, expected_value) in [
+            (
+                r#"
+[runtime.activity]
+idle_after_secs = 29
+"#,
+                "runtime.activity.idle_after_secs",
+                29_u64,
+            ),
+            (
+                r#"
+[runtime.activity]
+idle_after_secs = 86401
+"#,
+                "runtime.activity.idle_after_secs",
+                86_401_u64,
+            ),
+            (
+                r#"
+[runtime.activity]
+poll_interval_secs = 0
+"#,
+                "runtime.activity.poll_interval_secs",
+                0_u64,
+            ),
+            (
+                r#"
+[runtime.activity]
+poll_interval_secs = 61
+"#,
+                "runtime.activity.poll_interval_secs",
+                61_u64,
+            ),
+            (
+                r#"
+[runtime.activity]
+resume_debounce_secs = 301
+"#,
+                "runtime.activity.resume_debounce_secs",
+                301_u64,
+            ),
+        ] {
+            let config: MeshConfig =
+                toml::from_str(toml).expect("config should parse before validation");
+
+            let diagnostics = validate_config_diagnostics(&config);
+            assert_eq!(diagnostics.len(), 1);
+
+            let diagnostic = &diagnostics[0];
+            assert_eq!(diagnostic.code, ConfigDiagnosticCode::InvalidValue);
+            assert_eq!(diagnostic.severity, ConfigDiagnosticSeverity::Error);
+            assert_eq!(
+                diagnostic.schema_source,
+                Some(ConfigDiagnosticSchemaSource::BuiltIn)
+            );
+            assert_eq!(
+                diagnostic.path.as_ref().map(ConfigPath::render),
+                Some(expected_path.to_string())
+            );
+            assert_eq!(
+                diagnostic.canonical_path.as_ref().map(ConfigPath::render),
+                Some(expected_path.to_string())
+            );
+            assert!(diagnostic.message.contains(expected_path));
+            assert!(diagnostic.message.contains(&expected_value.to_string()));
+        }
+    }
+
+    #[test]
+    fn runtime_activity_bounds_accept_in_range_edges() {
+        for toml in [
+            r#"
+[runtime.activity]
+idle_after_secs = 30
+poll_interval_secs = 60
+resume_debounce_secs = 0
+"#,
+            r#"
+[runtime.activity]
+idle_after_secs = 86400
+poll_interval_secs = 1
+resume_debounce_secs = 300
+"#,
+        ] {
+            let config: MeshConfig =
+                toml::from_str(toml).expect("config should parse before validation");
+
+            let diagnostics = validate_config_diagnostics(&config);
+            assert!(diagnostics.is_empty());
+        }
+    }
+
+    #[test]
+    fn config_v1_without_logging_section_applies_bounded_defaults() {
+        // Regression: existing v1 configs without [logging] must parse cleanly,
+        // produce zero diagnostics, and apply bounded metadata-only defaults.
+        let toml = r#"
+[runtime]
+listen_all = true
+
+[owner_control]
+bind = "0.0.0.0:9337"
+"#;
+
+        let config: MeshConfig =
+            toml::from_str(toml).expect("v1 config without [logging] should parse");
+
+        // Zero validation warnings for missing logging section.
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(
+            diagnostics.is_empty(),
+            "Expected zero diagnostics; got {:?}",
+            diagnostics
+        );
+
+        // Logging subsystem enabled by default with bounded defaults.
+        assert!(
+            config.logging.enabled,
+            "logging.enabled should default to true"
+        );
+        assert_eq!(config.logging.summary_line_limit, 2048);
+        assert_eq!(config.logging.event_buffer_size, 10_000);
+        assert_eq!(config.logging.retention_ttl_secs, 36 * 3600); // 36 hours
+        assert_eq!(config.logging.retention_max_rows, 100_000);
+        assert_eq!(config.logging.replay_capacity, 128);
+        assert_eq!(config.logging.queue_capacity, 4096);
+        assert_eq!(config.logging.export_limit_bytes, 5 * 1024 * 1024); // 5 MB
+        assert_eq!(config.logging.cleanup_cadence_secs, 3600);
+
+        // Artifact capture defaults to safe metadata-only (no raw content).
+        use crate::model::CaptureMode;
+        assert_eq!(
+            config.logging.artifact.capture_mode,
+            CaptureMode::MetadataOnly
+        );
+
+        // Webhook disabled by default.
+        assert!(!config.logging.webhook.enabled);
+    }
+
+    #[test]
+    fn logging_retention_max_rows_reports_a_stable_validation_path() {
+        let mut config = crate::MeshConfig::default();
+        config.logging.retention_max_rows = 0;
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .path
+                .as_ref()
+                .is_some_and(|path| path.render() == "logging.retention_max_rows")
+                && diagnostic.message.contains("must be between 1 and 1000000")
+        }));
+    }
+
+    #[test]
+    fn enabled_webhook_requires_a_plain_http_url_without_secret_components() {
+        let mut config = crate::MeshConfig::default();
+        config.logging.webhook.enabled = true;
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .path
+                .as_ref()
+                .is_some_and(|path| path.render() == "logging.webhook.url")
+                && diagnostic.message.contains("required")
+        }));
+
+        config.logging.webhook.url =
+            Some("https://operator:secret@example.invalid/hook?token=secret#fragment".into());
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .path
+                .as_ref()
+                .is_some_and(|path| path.render() == "logging.webhook.url")
+                && diagnostic.message.contains("must not include credentials")
+        }));
+        assert!(diagnostics.iter().all(|diagnostic| {
+            !diagnostic.message.contains("operator")
+                && !diagnostic.message.contains("secret")
+                && !diagnostic.message.contains("example.invalid")
+        }));
+
+        config.logging.webhook.url = Some("http://127.0.0.1:4567/hook".into());
+        assert!(validate_config_diagnostics(&config).is_empty());
+    }
 }

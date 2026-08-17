@@ -56,101 +56,91 @@ mod speculative_tests {
     }
 
     #[test]
-    fn classify_verify_span_full_accept() {
+    fn classify_verify_window_full_accept() {
         let decision =
-            classify_verify_span(&[10, 11, 12], &[10, 11, 12], 0, 16, |_| Ok(false)).unwrap();
+            classify_verify_window(&[10, 11, 12], &[10, 11, 12], 0, 16, |_| Ok(false)).unwrap();
         assert_eq!(
             decision,
-            VerifySpanDecision {
-                kind: VerifySpanDecisionKind::FullAccept,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::FullAccept,
                 accepted_before_reject: 3,
-                repair_input_count: None,
                 commit_count: 3,
             }
         );
         assert!(!decision.rejected());
-        assert!(!decision.requires_repair());
     }
 
     #[test]
-    fn classify_verify_span_tail_reject_keeps_state() {
+    fn classify_verify_window_tail_reject_keeps_state() {
         let decision =
-            classify_verify_span(&[10, 11, 12], &[10, 11, 42], 0, 16, |_| Ok(false)).unwrap();
+            classify_verify_window(&[10, 11, 12], &[10, 11, 42], 0, 16, |_| Ok(false)).unwrap();
         assert_eq!(
             decision,
-            VerifySpanDecision {
-                kind: VerifySpanDecisionKind::TailReject,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::TailReject,
                 accepted_before_reject: 2,
-                repair_input_count: Some(3),
                 commit_count: 3,
             }
         );
         assert!(decision.rejected());
         assert!(decision.tail_reject());
-        assert!(!decision.requires_repair());
     }
 
     #[test]
-    fn classify_verify_span_early_reject_requires_repair() {
+    fn classify_verify_window_early_reject_commits_correction() {
         let decision =
-            classify_verify_span(&[10, 11, 12, 13], &[10, 42, 77, 88], 0, 16, |_| Ok(false))
+            classify_verify_window(&[10, 11, 12, 13], &[10, 42, 77, 88], 0, 16, |_| Ok(false))
                 .unwrap();
         assert_eq!(
             decision,
-            VerifySpanDecision {
-                kind: VerifySpanDecisionKind::EarlyReject,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyReject,
                 accepted_before_reject: 1,
-                repair_input_count: Some(2),
                 commit_count: 2,
             }
         );
         assert!(decision.rejected());
         assert!(!decision.tail_reject());
-        assert!(decision.requires_repair());
     }
 
     #[test]
-    fn classify_verify_span_accepted_eog_stops_without_growing_window() {
+    fn classify_verify_window_accepted_eog_stops_without_growing_window() {
         let decision =
-            classify_verify_span(&[10, 99, 12], &[10, 99, 12], 0, 16, |token| Ok(token == 99))
+            classify_verify_window(&[10, 99, 12], &[10, 99, 12], 0, 16, |token| Ok(token == 99))
                 .unwrap();
         assert_eq!(
             decision,
-            VerifySpanDecision {
-                kind: VerifySpanDecisionKind::AcceptedStop,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::AcceptedStop,
                 accepted_before_reject: 2,
-                repair_input_count: None,
                 commit_count: 2,
             }
         );
         assert!(!decision.rejected());
-        assert!(!decision.requires_repair());
     }
 
     #[test]
-    fn classify_verify_span_early_reject_at_limit_does_not_repair() {
+    fn classify_verify_window_early_reject_at_limit_stops() {
         let decision =
-            classify_verify_span(&[10, 11, 12], &[10, 42, 77], 2, 4, |_| Ok(false)).unwrap();
+            classify_verify_window(&[10, 11, 12], &[10, 42, 77], 2, 4, |_| Ok(false)).unwrap();
         assert_eq!(
             decision,
-            VerifySpanDecision {
-                kind: VerifySpanDecisionKind::EarlyRejectStop,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyRejectStop,
                 accepted_before_reject: 1,
-                repair_input_count: Some(2),
                 commit_count: 2,
             }
         );
         assert!(decision.rejected());
         assert!(!decision.tail_reject());
-        assert!(!decision.requires_repair());
     }
 
     #[test]
-    fn classify_verify_span_requires_complete_predictions() {
-        let err = classify_verify_span(&[10, 11, 12], &[10, 11], 0, 16, |_| Ok(false)).unwrap_err();
+    fn classify_verify_window_requires_complete_predictions() {
+        let err = classify_verify_window(&[10, 11, 12], &[10, 11], 0, 16, |_| Ok(false)).unwrap_err();
         assert!(
             err.to_string()
-                .contains("verify span returned too few tokens"),
+                .contains("verify window returned too few tokens"),
             "{err:#}"
         );
     }
@@ -160,10 +150,9 @@ mod speculative_tests {
         let mut stats = SpeculativeStats::default();
         let mut adaptive_window = 4;
         stats.observe_verify_decision(
-            VerifySpanDecision {
-                kind: VerifySpanDecisionKind::FullAccept,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::FullAccept,
                 accepted_before_reject: 4,
-                repair_input_count: None,
                 commit_count: 4,
             },
             &mut adaptive_window,
@@ -182,10 +171,9 @@ mod speculative_tests {
         let mut stats = SpeculativeStats::default();
         let mut adaptive_window = 4;
         stats.observe_verify_decision(
-            VerifySpanDecision {
-                kind: VerifySpanDecisionKind::AcceptedStop,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::AcceptedStop,
                 accepted_before_reject: 2,
-                repair_input_count: None,
                 commit_count: 2,
             },
             &mut adaptive_window,
@@ -193,10 +181,9 @@ mod speculative_tests {
             8,
         );
         stats.observe_verify_decision(
-            VerifySpanDecision {
-                kind: VerifySpanDecisionKind::EarlyRejectStop,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyRejectStop,
                 accepted_before_reject: 1,
-                repair_input_count: Some(2),
                 commit_count: 2,
             },
             &mut adaptive_window,
@@ -207,20 +194,18 @@ mod speculative_tests {
         assert_eq!(adaptive_window, 4);
         assert_eq!(stats.accepted_stop_windows, 1);
         assert_eq!(stats.early_reject_stop_windows, 1);
-        assert_eq!(stats.repair_required_windows, 0);
         assert_eq!(stats.adaptive_window_grows, 0);
         assert_eq!(stats.adaptive_window_shrinks, 0);
     }
 
     #[test]
-    fn observe_verify_decision_early_reject_shrinks_and_marks_repair() {
+    fn observe_verify_decision_early_reject_shrinks() {
         let mut stats = SpeculativeStats::default();
         let mut adaptive_window = 6;
         stats.observe_verify_decision(
-            VerifySpanDecision {
-                kind: VerifySpanDecisionKind::EarlyReject,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyReject,
                 accepted_before_reject: 1,
-                repair_input_count: Some(2),
                 commit_count: 2,
             },
             &mut adaptive_window,
@@ -230,35 +215,9 @@ mod speculative_tests {
 
         assert_eq!(adaptive_window, 5);
         assert_eq!(stats.early_reject_windows, 1);
-        assert_eq!(stats.repair_required_windows, 1);
         assert_eq!(stats.adaptive_window_shrinks, 1);
         assert_eq!(stats.rejected_windows, 1);
         assert_eq!(stats.first_reject_position_sum, 2);
-    }
-
-    #[test]
-    fn early_reject_commits_repaired_target_tokens() {
-        let draft_tokens = [10, 11, 12, 13];
-        let repaired = repaired_commit_tokens(&draft_tokens, 2, 3, &[10, 11, 42]).unwrap();
-        assert_eq!(repaired, vec![10, 11, 42]);
-    }
-
-    #[test]
-    fn repair_commits_changed_accepted_prefix_from_restored_state() {
-        let draft_tokens = [10, 11, 12, 13];
-        let repaired = repaired_commit_tokens(&draft_tokens, 2, 3, &[10, 99, 42]).unwrap();
-        assert_eq!(repaired, vec![10, 99, 42]);
-    }
-
-    #[test]
-    fn repair_requires_the_full_repaired_prefix() {
-        let draft_tokens = [10, 11, 12, 13];
-        let err = repaired_commit_tokens(&draft_tokens, 2, 3, &[10, 11]).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("recovery verify returned too few tokens"),
-            "{err:#}"
-        );
     }
 
     #[test]

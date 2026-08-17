@@ -72,6 +72,19 @@ function createAbortError() {
   return error
 }
 
+function createModelNotFoundResponse() {
+  return new Response(JSON.stringify({ error: { message: "model 'apple/system' not found" } }), {
+    status: 404,
+    headers: { 'Content-Type': 'application/json' }
+  })
+}
+
+function spyAbortSignalListeners(signal: AbortSignal) {
+  const addEventListener = vi.spyOn(signal, 'addEventListener')
+  const removeEventListener = vi.spyOn(signal, 'removeEventListener')
+  return { addEventListener, removeEventListener }
+}
+
 function createPendingAbortReaderStream(abortSignal: AbortSignal) {
   const reader = {
     read: vi.fn<() => Promise<ReadableStreamReadResult<Uint8Array>>>(() => {
@@ -191,6 +204,52 @@ describe('createMeshConnectionAdapter', () => {
     expect(chunks.map((chunk) => chunk.type)).toContain(EventType.REASONING_MESSAGE_END)
     expect(chunks.map((chunk) => chunk.type)).toContain(EventType.REASONING_END)
     expect(contentDeltas).toEqual([' Final answer.'])
+  })
+
+  it('keeps each distinct mesh progress phase once for expandable details', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          createSSEStream([
+            'data: {"type":"response.reasoning_text.delta","delta":"Routing through mesh…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Routing through mesh…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Querying peer models…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Verifier found conflicting dates.\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Waiting on a slow peer…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Waiting on a slow peer…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Still gathering responses…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Hold on, this is taking a moment…\\n"}\n',
+            'data: {"type":"response.output_text.delta","delta":"Corroborated answer."}\n',
+            'data: [DONE]\n'
+          ]),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('mesh')
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    const progressDeltas = chunks
+      .filter((chunk) => chunk.type === EventType.REASONING_MESSAGE_CONTENT)
+      .map((chunk) => (chunk.type === EventType.REASONING_MESSAGE_CONTENT ? chunk.delta : ''))
+    const answerDeltas = chunks
+      .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+
+    expect(progressDeltas).toEqual([
+      'Routing through mesh…\n',
+      'Querying peer models…\n',
+      'Verifier found conflicting dates.\n',
+      'Waiting on a slow peer…\n',
+      'Still gathering responses…\n',
+      'Hold on, this is taking a moment…\n'
+    ])
+    expect(answerDeltas).toEqual(['Corroborated answer.'])
   })
 
   it('includes the latest system prompt in responses requests', async () => {
@@ -399,6 +458,139 @@ describe('createMeshConnectionAdapter', () => {
       body: 'Backend exploded',
       message: 'Chat request failed: 503'
     })
+  })
+
+  it('retries a transient model-not-found response while public routing converges', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "model 'apple/system' not found" } }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          createSSEStream(['data: {"type":"response.output_text.delta","delta":"Recovered"}\n', 'data: [DONE]\n']),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+    const chunks: StreamChunk[] = []
+    try {
+      const first = await iterator.next()
+      if (!first.done) chunks.push(first.value)
+
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(500)
+
+      while (true) {
+        const next = await pendingNext
+        if (!next.done) chunks.push(next.value)
+        break
+      }
+      while (true) {
+        const next = await iterator.next()
+        if (next.done) break
+        chunks.push(next.value)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+        .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+        .join('')
+    ).toContain('Recovered')
+  })
+
+  it('does not schedule a route retry for an already-aborted request', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    abortController.abort()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createModelNotFoundResponse()))
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+      expect(setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 500)).toHaveLength(0)
+      expect(listeners.addEventListener).not.toHaveBeenCalled()
+      expect(listeners.removeEventListener).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cleans up the route retry timer and abort listener when the request is aborted', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createModelNotFoundResponse()))
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+
+      abortController.abort()
+
+      await expect(pendingNext).resolves.toEqual({ done: true, value: undefined })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(listeners.addEventListener).toHaveBeenCalledTimes(1)
+      expect(listeners.removeEventListener).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cleans up the route retry timer and abort listener after a retry timeout', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(createModelNotFoundResponse())
+      .mockResolvedValueOnce(
+        new Response(createSSEStream(['data: [DONE]\n']), {
+          status: 200
+        })
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(500)
+
+      await expect(pendingNext).resolves.toMatchObject({ done: false, value: { type: EventType.RUN_FINISHED } })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(listeners.addEventListener).toHaveBeenCalledTimes(1)
+      expect(listeners.removeEventListener).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('stops before /api/responses when attachment upload fails', async () => {

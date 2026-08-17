@@ -360,9 +360,10 @@ implementation.
 
 ## Current Local Evidence
 
-These rows were collected on the local Mac Studio against the Metal stage ABI.
-They are cheap text-split and cache-smoke evidence, not full promotion by
-themselves until the reviewed topology records are updated.
+These rows were collected primarily on the local Mac Studio against the Metal
+stage ABI. They are cheap text-split and cache-smoke evidence, not full
+promotion by themselves until the reviewed topology records are updated.
+Rows with distributed evidence call out the second backend explicitly.
 
 | Family | Artifact | Text Split | q8 Wire | Exact State | Cache |
 | --- | --- | --- | --- | --- | --- |
@@ -370,6 +371,8 @@ themselves until the reviewed topology records are updated.
 | `deepseek` | `Morgen0052/deepseek-llm-7b-chat-Q4_K_M-GGUF` | `single-step`, `chain`, and f16 dtype matrix passed | rejected | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 1.58x cache-hit speedup |
 | `openai_moe` | `ggml-org/gpt-oss-20b-GGUF:gpt-oss-20b-mxfp4` | `single-step`, `chain`, and dtype matrix passed | rejected | accepted | `ResidentKv` state handoff passed; llama.cpp model file is `openai-moe`, GGUF architecture is `gpt-oss` |
 | `ernie4_5_moe` | `lmstudio-community/ERNIE-4.5-21B-A3B-PT-GGUF:Q4_K_M` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` state handoff passed |
+| `laguna` | `meshllm/laguna-s-2.1-Q4_K_M-layers@0c467ad441ee94cb5a76f626294d963c4048507d` | package-backed `single-step` and three-stage `chain` parity passed; ordinary three-stage CUDA Mesh serving completed two 128,080-token prompts | untested | accepted through bounded recurrent checkpoint/replay | Three-stage CUDA placement `0..25 / 25..39 / 39..48` used a 131,072-token allocation, Q4_0 K/V, F16 activation wire, and package-default suffix N-gram depth 2. The two 128K cold prompts ran at 956.12/958.05 prompt tok/s and 12.45/12.59 generation tok/s. A 44,460-token exact replay restored 44,416 tokens; structured OpenAI tool call and result turns passed; 12/12 subsequent stability requests passed. This evidence promotes only the pinned Q4_K_M package. The 128K repeats reported zero cached tokens; 256K, Q8 wire, other quants, and Metal at 128K remain unproven. |
+| `qwen3next` (Inkling) | `meshllm/inkling-UD-Q2_K_XL-layers@9b4b91a7ddd978dd7a01679bc977f6e53777f2c7` | experimental two-stage CUDA text serving passed at a 131,072-token allocation | rejected; F32 required | exact replay accepted; recurrent verification recovery exercised | Automatic placement `0..65 / 65..66` on a direct approximately 5 ms path generated at 14.98 tok/s and completed two sequential native OpenAI tool loops. Exact replay restored 3,531/3,531 prompt tokens and the native fatal-pattern scan passed. This lopsided research topology reserved about 589 GiB of head host workspace and is not a deployment recommendation. Overlapping admission and changed-tail same-prefix cache reuse still fail the formal harness; native MTP, multimodal serving, and clean Metal teardown remain unproven. |
 | `llama4` | `ggml-org/Llama-4-Scout-17B-16E-Instruct-GGUF:Q4_K_M` | package validated | untested | untested | package-only validation passed: 48 layers, 627 owned tensors, 51 artifacts, no missing/duplicate tensors |
 | `mistral4` | `bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF:IQ2_XXS` | package validated | untested | untested | package-only validation passed: 36 layers, 579 tensors, 39 artifacts, no missing/duplicate tensors |
 | `nemotron_h_moe` | `lmstudio-community/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF:Q4_K_M` | package validated | untested | rejected-too-large | package-only validation passed: 52 layers, 401 tensors, 55 artifacts; `KvRecurrent` target |

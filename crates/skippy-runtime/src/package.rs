@@ -53,8 +53,58 @@ pub struct LayerPackageInfo {
     pub source_model_bytes: Option<u64>,
     pub layer_count: u32,
     pub activation_width: Option<u32>,
+    pub generation: Option<PackageGenerationInfo>,
     pub projectors: Vec<PackageProjectorInfo>,
     pub layers: Vec<LayerPackageLayerInfo>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PackageGenerationInfo {
+    pub speculative_decoding: Option<PackageSpeculativeDecodingInfo>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PackageSpeculativeDecodingInfo {
+    pub default: String,
+    pub proposers: BTreeMap<String, PackageSpeculativeProposerInfo>,
+    pub strategies: BTreeMap<String, PackageSpeculativeStrategyInfo>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PackageSpeculativeProposerInfo {
+    pub proposer_type: String,
+    pub prediction_depth: Option<u32>,
+    pub layer_indices: Vec<u32>,
+    pub ngram_min: Option<u32>,
+    pub ngram_max: Option<u32>,
+    pub max_proposal_tokens: Option<u32>,
+    pub history_scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PackageSpeculativeStrategyInfo {
+    pub strategy_type: String,
+    pub prediction_depth: Option<u32>,
+    pub layer_indices: Vec<u32>,
+    pub window_policy: Option<PackageWindowPolicyInfo>,
+    pub proposer: Option<String>,
+    pub primary: Option<String>,
+    pub extender: Option<String>,
+    pub extension_policy: Option<PackageExtensionPolicyInfo>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PackageExtensionPolicyInfo {
+    pub max_tokens: u32,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PackageWindowPolicyInfo {
+    pub default: String,
+    pub initial_window: u32,
+    pub min_window: u32,
+    pub max_window: u32,
+    pub pipeline_depth: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +189,8 @@ struct PackageManifest {
     layer_count: u32,
     #[serde(default)]
     activation_width: Option<u32>,
+    #[serde(default)]
+    generation: Option<PackageGeneration>,
     shared: PackageShared,
     #[serde(default)]
     projectors: Vec<PackageProjector>,
@@ -171,6 +223,74 @@ struct PackageShared {
     metadata: PackageArtifact,
     embeddings: PackageArtifact,
     output: PackageArtifact,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageGeneration {
+    #[serde(default)]
+    speculative_decoding: Option<PackageSpeculativeDecoding>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageSpeculativeDecoding {
+    default: String,
+    #[serde(default)]
+    proposers: BTreeMap<String, PackageSpeculativeProposer>,
+    #[serde(default)]
+    strategies: BTreeMap<String, PackageSpeculativeStrategy>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageSpeculativeProposer {
+    #[serde(rename = "type")]
+    proposer_type: String,
+    #[serde(default)]
+    prediction_depth: Option<u32>,
+    #[serde(default)]
+    layer_indices: Vec<u32>,
+    #[serde(default)]
+    ngram_min: Option<u32>,
+    #[serde(default)]
+    ngram_max: Option<u32>,
+    #[serde(default)]
+    max_proposal_tokens: Option<u32>,
+    #[serde(default)]
+    history_scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageSpeculativeStrategy {
+    #[serde(rename = "type")]
+    strategy_type: String,
+    #[serde(default)]
+    prediction_depth: Option<u32>,
+    #[serde(default)]
+    layer_indices: Vec<u32>,
+    #[serde(default)]
+    window_policy: Option<PackageWindowPolicy>,
+    #[serde(default)]
+    proposer: Option<String>,
+    #[serde(default)]
+    primary: Option<String>,
+    #[serde(default)]
+    extender: Option<String>,
+    #[serde(default)]
+    extension_policy: Option<PackageExtensionPolicy>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageExtensionPolicy {
+    max_tokens: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageWindowPolicy {
+    default: String,
+    initial_window: u32,
+    min_window: u32,
+    max_window: u32,
+    #[serde(default)]
+    pipeline_depth: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -465,6 +585,7 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             .flatten(),
         layer_count: manifest.layer_count,
         activation_width,
+        generation: manifest.generation.map(package_generation_info),
         projectors,
         layers: manifest
             .layers
@@ -477,6 +598,73 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             })
             .collect(),
     })
+}
+
+fn package_generation_info(generation: PackageGeneration) -> PackageGenerationInfo {
+    PackageGenerationInfo {
+        speculative_decoding: generation
+            .speculative_decoding
+            .map(package_speculative_decoding_info),
+    }
+}
+
+fn package_speculative_decoding_info(
+    speculative: PackageSpeculativeDecoding,
+) -> PackageSpeculativeDecodingInfo {
+    PackageSpeculativeDecodingInfo {
+        default: speculative.default,
+        proposers: speculative
+            .proposers
+            .into_iter()
+            .map(|(name, proposer)| (name, package_speculative_proposer_info(proposer)))
+            .collect(),
+        strategies: speculative
+            .strategies
+            .into_iter()
+            .map(|(name, strategy)| (name, package_speculative_strategy_info(strategy)))
+            .collect(),
+    }
+}
+
+fn package_speculative_proposer_info(
+    proposer: PackageSpeculativeProposer,
+) -> PackageSpeculativeProposerInfo {
+    PackageSpeculativeProposerInfo {
+        proposer_type: proposer.proposer_type,
+        prediction_depth: proposer.prediction_depth,
+        layer_indices: proposer.layer_indices,
+        ngram_min: proposer.ngram_min,
+        ngram_max: proposer.ngram_max,
+        max_proposal_tokens: proposer.max_proposal_tokens,
+        history_scope: proposer.history_scope,
+    }
+}
+
+fn package_speculative_strategy_info(
+    strategy: PackageSpeculativeStrategy,
+) -> PackageSpeculativeStrategyInfo {
+    PackageSpeculativeStrategyInfo {
+        strategy_type: strategy.strategy_type,
+        prediction_depth: strategy.prediction_depth,
+        layer_indices: strategy.layer_indices,
+        window_policy: strategy
+            .window_policy
+            .map(|window| PackageWindowPolicyInfo {
+                default: window.default,
+                initial_window: window.initial_window,
+                min_window: window.min_window,
+                max_window: window.max_window,
+                pipeline_depth: window.pipeline_depth,
+            }),
+        proposer: strategy.proposer,
+        primary: strategy.primary,
+        extender: strategy.extender,
+        extension_policy: strategy
+            .extension_policy
+            .map(|policy| PackageExtensionPolicyInfo {
+                max_tokens: policy.max_tokens,
+            }),
+    }
 }
 
 fn infer_activation_width_from_layers(

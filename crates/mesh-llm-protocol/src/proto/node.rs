@@ -126,6 +126,9 @@ pub struct PeerAnnouncement {
     pub release_attestation: ::core::option::Option<ReleaseBuildAttestation>,
     #[prost(message, optional, tag = "48")]
     pub direct_admission_proof: ::core::option::Option<DirectNodeAdmissionProof>,
+    /// Inference admission state advertised by this peer (additive; older nodes ignore)
+    #[prost(enumeration = "InferenceAdmissionState", optional, tag = "49")]
+    pub inference_admission_state: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdvertisedModelThroughput {
@@ -462,6 +465,19 @@ pub struct PeerLeaving {
     #[prost(uint32, tag = "2")]
     pub r#gen: u32,
 }
+/// Stream 0x0e — Direct Path Request
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DirectPathRequest {
+    /// exactly 32 bytes; must match the QUIC sender identity
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_id: ::prost::alloc::vec::Vec<u8>,
+    /// must equal NODE_PROTOCOL_GENERATION; rejected otherwise
+    #[prost(uint32, tag = "2")]
+    pub r#gen: u32,
+    /// JSON-serialized EndpointAddr the receiver should try to dial
+    #[prost(bytes = "vec", tag = "3")]
+    pub serialized_addr: ::prost::alloc::vec::Vec<u8>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NodeConfigSnapshot {
     /// config schema version (currently 1)
@@ -553,6 +569,14 @@ pub struct OwnerControlRequest {
     pub apply_config: ::core::option::Option<OwnerControlApplyConfigRequest>,
     #[prost(message, optional, tag = "5")]
     pub refresh_inventory: ::core::option::Option<OwnerControlRefreshInventoryRequest>,
+    #[prost(message, optional, tag = "6")]
+    pub load_model: ::core::option::Option<OwnerControlLoadModelRequest>,
+    #[prost(message, optional, tag = "7")]
+    pub unload_model: ::core::option::Option<OwnerControlUnloadModelRequest>,
+    #[prost(message, optional, tag = "8")]
+    pub ensure_model: ::core::option::Option<OwnerControlEnsureModelRequest>,
+    #[prost(message, optional, tag = "9")]
+    pub drain_model: ::core::option::Option<OwnerControlDrainModelRequest>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlResponse {
@@ -566,6 +590,14 @@ pub struct OwnerControlResponse {
     pub apply_config: ::core::option::Option<OwnerControlApplyConfigResponse>,
     #[prost(message, optional, tag = "5")]
     pub refresh_inventory: ::core::option::Option<OwnerControlRefreshInventoryResponse>,
+    #[prost(message, optional, tag = "6")]
+    pub load_model: ::core::option::Option<OwnerControlLoadModelResponse>,
+    #[prost(message, optional, tag = "7")]
+    pub unload_model: ::core::option::Option<OwnerControlUnloadModelResponse>,
+    #[prost(message, optional, tag = "8")]
+    pub ensure_model: ::core::option::Option<OwnerControlEnsureModelResponse>,
+    #[prost(message, optional, tag = "9")]
+    pub drain_model: ::core::option::Option<OwnerControlDrainModelResponse>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlError {
@@ -643,6 +675,27 @@ pub struct OwnerControlApplyConfigResponse {
     pub error: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(enumeration = "ConfigApplyMode", tag = "5")]
     pub apply_mode: i32,
+    #[prost(message, repeated, tag = "6")]
+    pub diagnostics: ::prost::alloc::vec::Vec<ConfigDiagnostic>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConfigDiagnostic {
+    #[prost(enumeration = "ConfigDiagnosticCode", tag = "1")]
+    pub code: i32,
+    #[prost(enumeration = "ConfigDiagnosticSeverity", tag = "2")]
+    pub severity: i32,
+    #[prost(enumeration = "ConfigDiagnosticSource", tag = "3")]
+    pub source: i32,
+    #[prost(enumeration = "ConfigDiagnosticSchemaSource", optional, tag = "4")]
+    pub schema_source: ::core::option::Option<i32>,
+    #[prost(string, optional, tag = "5")]
+    pub path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub canonical_path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag = "7")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "8")]
+    pub help: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlRefreshInventoryRequest {
@@ -657,6 +710,111 @@ pub struct OwnerControlRefreshInventoryRequest {
 pub struct OwnerControlRefreshInventoryResponse {
     #[prost(message, optional, tag = "1")]
     pub snapshot: ::core::option::Option<OwnerControlConfigSnapshot>,
+    #[prost(message, optional, tag = "2")]
+    pub inventory: ::core::option::Option<OwnerControlRefreshInventory>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlModelRef {
+    #[prost(string, tag = "1")]
+    pub canonical_model_ref: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub instance_id: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlLoadModelRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub target_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub model: ::core::option::Option<OwnerControlModelRef>,
+    #[prost(string, optional, tag = "4")]
+    pub profile: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlUnloadModelRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub target_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub model: ::core::option::Option<OwnerControlModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlEnsureModelRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub target_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub model: ::core::option::Option<OwnerControlModelRef>,
+    #[prost(string, optional, tag = "4")]
+    pub profile: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlDrainModelRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub target_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub model: ::core::option::Option<OwnerControlModelRef>,
+    #[prost(uint64, optional, tag = "4")]
+    pub drain_timeout_secs: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlLoadModelResponse {
+    #[prost(string, tag = "1")]
+    pub intent_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub accepted_state: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub target: ::core::option::Option<OwnerControlModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlUnloadModelResponse {
+    #[prost(string, tag = "1")]
+    pub intent_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub accepted_state: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub target: ::core::option::Option<OwnerControlModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlEnsureModelResponse {
+    #[prost(string, tag = "1")]
+    pub intent_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub accepted_state: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub target: ::core::option::Option<OwnerControlModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlDrainModelResponse {
+    #[prost(string, tag = "1")]
+    pub intent_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub accepted_state: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub target: ::core::option::Option<OwnerControlModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlRefreshInventory {
+    #[prost(message, repeated, tag = "1")]
+    pub entries: ::prost::alloc::vec::Vec<OwnerControlInventoryEntry>,
+    #[prost(enumeration = "OwnerControlRefreshInventoryDisposition", tag = "2")]
+    pub disposition: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlInventoryEntry {
+    #[prost(string, tag = "1")]
+    pub canonical_model_ref: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub display_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, tag = "3")]
+    pub total_size_bytes: u64,
+    #[prost(message, optional, tag = "4")]
+    pub metadata: ::core::option::Option<CompactModelMetadata>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlConfigSnapshot {
@@ -999,6 +1157,142 @@ impl ConfigApplyMode {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
+pub enum ConfigDiagnosticSeverity {
+    Unspecified = 0,
+    Error = 1,
+    Warning = 2,
+    Info = 3,
+}
+impl ConfigDiagnosticSeverity {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CONFIG_DIAGNOSTIC_SEVERITY_UNSPECIFIED",
+            Self::Error => "CONFIG_DIAGNOSTIC_SEVERITY_ERROR",
+            Self::Warning => "CONFIG_DIAGNOSTIC_SEVERITY_WARNING",
+            Self::Info => "CONFIG_DIAGNOSTIC_SEVERITY_INFO",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONFIG_DIAGNOSTIC_SEVERITY_UNSPECIFIED" => Some(Self::Unspecified),
+            "CONFIG_DIAGNOSTIC_SEVERITY_ERROR" => Some(Self::Error),
+            "CONFIG_DIAGNOSTIC_SEVERITY_WARNING" => Some(Self::Warning),
+            "CONFIG_DIAGNOSTIC_SEVERITY_INFO" => Some(Self::Info),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ConfigDiagnosticSource {
+    Unspecified = 0,
+    Validation = 1,
+    Schema = 2,
+    Plugin = 3,
+    Compatibility = 4,
+}
+impl ConfigDiagnosticSource {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CONFIG_DIAGNOSTIC_SOURCE_UNSPECIFIED",
+            Self::Validation => "CONFIG_DIAGNOSTIC_SOURCE_VALIDATION",
+            Self::Schema => "CONFIG_DIAGNOSTIC_SOURCE_SCHEMA",
+            Self::Plugin => "CONFIG_DIAGNOSTIC_SOURCE_PLUGIN",
+            Self::Compatibility => "CONFIG_DIAGNOSTIC_SOURCE_COMPATIBILITY",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONFIG_DIAGNOSTIC_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "CONFIG_DIAGNOSTIC_SOURCE_VALIDATION" => Some(Self::Validation),
+            "CONFIG_DIAGNOSTIC_SOURCE_SCHEMA" => Some(Self::Schema),
+            "CONFIG_DIAGNOSTIC_SOURCE_PLUGIN" => Some(Self::Plugin),
+            "CONFIG_DIAGNOSTIC_SOURCE_COMPATIBILITY" => Some(Self::Compatibility),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ConfigDiagnosticSchemaSource {
+    Unspecified = 0,
+    BuiltIn = 1,
+    Engine = 2,
+    Plugin = 3,
+}
+impl ConfigDiagnosticSchemaSource {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_UNSPECIFIED",
+            Self::BuiltIn => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_BUILT_IN",
+            Self::Engine => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_ENGINE",
+            Self::Plugin => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_PLUGIN",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_BUILT_IN" => Some(Self::BuiltIn),
+            "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_ENGINE" => Some(Self::Engine),
+            "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_PLUGIN" => Some(Self::Plugin),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ConfigDiagnosticCode {
+    Unspecified = 0,
+    InvalidValue = 1,
+    MissingRequiredValue = 2,
+    UnsupportedField = 3,
+    RejectedField = 4,
+    AliasApplied = 5,
+    MisplacedField = 6,
+    UnknownField = 7,
+    SchemaUnavailable = 8,
+    LegacyUnvalidatedConfig = 9,
+    UnsupportedSchemaVersion = 10,
+}
+impl ConfigDiagnosticCode {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CONFIG_DIAGNOSTIC_CODE_UNSPECIFIED",
+            Self::InvalidValue => "CONFIG_DIAGNOSTIC_CODE_INVALID_VALUE",
+            Self::MissingRequiredValue => "CONFIG_DIAGNOSTIC_CODE_MISSING_REQUIRED_VALUE",
+            Self::UnsupportedField => "CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_FIELD",
+            Self::RejectedField => "CONFIG_DIAGNOSTIC_CODE_REJECTED_FIELD",
+            Self::AliasApplied => "CONFIG_DIAGNOSTIC_CODE_ALIAS_APPLIED",
+            Self::MisplacedField => "CONFIG_DIAGNOSTIC_CODE_MISPLACED_FIELD",
+            Self::UnknownField => "CONFIG_DIAGNOSTIC_CODE_UNKNOWN_FIELD",
+            Self::SchemaUnavailable => "CONFIG_DIAGNOSTIC_CODE_SCHEMA_UNAVAILABLE",
+            Self::LegacyUnvalidatedConfig => "CONFIG_DIAGNOSTIC_CODE_LEGACY_UNVALIDATED_CONFIG",
+            Self::UnsupportedSchemaVersion => "CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA_VERSION",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONFIG_DIAGNOSTIC_CODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "CONFIG_DIAGNOSTIC_CODE_INVALID_VALUE" => Some(Self::InvalidValue),
+            "CONFIG_DIAGNOSTIC_CODE_MISSING_REQUIRED_VALUE" => Some(Self::MissingRequiredValue),
+            "CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_FIELD" => Some(Self::UnsupportedField),
+            "CONFIG_DIAGNOSTIC_CODE_REJECTED_FIELD" => Some(Self::RejectedField),
+            "CONFIG_DIAGNOSTIC_CODE_ALIAS_APPLIED" => Some(Self::AliasApplied),
+            "CONFIG_DIAGNOSTIC_CODE_MISPLACED_FIELD" => Some(Self::MisplacedField),
+            "CONFIG_DIAGNOSTIC_CODE_UNKNOWN_FIELD" => Some(Self::UnknownField),
+            "CONFIG_DIAGNOSTIC_CODE_SCHEMA_UNAVAILABLE" => Some(Self::SchemaUnavailable),
+            "CONFIG_DIAGNOSTIC_CODE_LEGACY_UNVALIDATED_CONFIG" => {
+                Some(Self::LegacyUnvalidatedConfig)
+            }
+            "CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA_VERSION" => {
+                Some(Self::UnsupportedSchemaVersion)
+            }
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
 pub enum OwnerControlErrorCode {
     Unspecified = 0,
     BadRequest = 1,
@@ -1043,6 +1337,73 @@ impl OwnerControlErrorCode {
             "OWNER_CONTROL_ERROR_CODE_LEGACY_JSON_UNSUPPORTED" => Some(Self::LegacyJsonUnsupported),
             "OWNER_CONTROL_ERROR_CODE_INVALID_HANDSHAKE" => Some(Self::InvalidHandshake),
             "OWNER_CONTROL_ERROR_CODE_TARGET_NODE_MISMATCH" => Some(Self::TargetNodeMismatch),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum OwnerControlRefreshInventoryDisposition {
+    Unspecified = 0,
+    Executed = 1,
+    Coalesced = 2,
+}
+impl OwnerControlRefreshInventoryDisposition {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_UNSPECIFIED",
+            Self::Executed => "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_EXECUTED",
+            Self::Coalesced => "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_COALESCED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_UNSPECIFIED" => Some(Self::Unspecified),
+            "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_EXECUTED" => Some(Self::Executed),
+            "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_COALESCED" => Some(Self::Coalesced),
+            _ => None,
+        }
+    }
+}
+/// Inference admission state for a peer (additive; older nodes ignore).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum InferenceAdmissionState {
+    Unspecified = 0,
+    Accepting = 1,
+    AcceptingDeprioritized = 2,
+    RemotePaused = 3,
+    AllPaused = 4,
+}
+impl InferenceAdmissionState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "INFERENCE_ADMISSION_STATE_UNSPECIFIED",
+            Self::Accepting => "INFERENCE_ADMISSION_STATE_ACCEPTING",
+            Self::AcceptingDeprioritized => "INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED",
+            Self::RemotePaused => "INFERENCE_ADMISSION_STATE_REMOTE_PAUSED",
+            Self::AllPaused => "INFERENCE_ADMISSION_STATE_ALL_PAUSED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "INFERENCE_ADMISSION_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "INFERENCE_ADMISSION_STATE_ACCEPTING" => Some(Self::Accepting),
+            "INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED" => {
+                Some(Self::AcceptingDeprioritized)
+            }
+            "INFERENCE_ADMISSION_STATE_REMOTE_PAUSED" => Some(Self::RemotePaused),
+            "INFERENCE_ADMISSION_STATE_ALL_PAUSED" => Some(Self::AllPaused),
             _ => None,
         }
     }

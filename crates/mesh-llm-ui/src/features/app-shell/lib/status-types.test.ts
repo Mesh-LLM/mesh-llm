@@ -4,6 +4,7 @@ import {
   LIVE_NODE_STATE_LABELS,
   type LiveNodeState,
   type Peer,
+  type PluginWebUiState,
   type StatusPayload,
   type WakeableNodeState
 } from '@/features/app-shell/lib/status-types'
@@ -108,5 +109,54 @@ describe('status type contracts', () => {
     const standbyWakeable: WakeableNodeState = 'standby'
 
     expect([idle, splitServing, host, standbyWakeable]).toHaveLength(4)
+  })
+
+  it('allows app shell status payloads to preserve plugin web UI state when present', () => {
+    const webUi = {
+      state: 'ready',
+      declared: true,
+      enabled: true,
+      available: true,
+      pages: [
+        {
+          id: 'dashboard',
+          label: 'Dashboard',
+          route: 'dashboard',
+          bundle_id: 'main',
+          entry_script: 'dashboard.js'
+        }
+      ],
+      config_sections: [],
+      asset_base_url: '/api/plugins/blackboard/web-ui/assets/'
+    } satisfies PluginWebUiState
+    const statusPayload: StatusPayload = {
+      node_id: 'node-1',
+      token: 'token-1',
+      node_state: 'serving',
+      node_status: 'Serving',
+      is_host: true,
+      is_client: false,
+      llama_ready: true,
+      model_name: 'Qwen',
+      api_port: 3131,
+      my_vram_gb: 24,
+      model_size_gb: 8,
+      peers: [],
+      inflight_requests: 0,
+      plugins: [
+        {
+          name: 'blackboard',
+          kind: 'bridge',
+          enabled: true,
+          status: 'running',
+          capabilities: [],
+          args: [],
+          tools: [],
+          web_ui: webUi
+        }
+      ]
+    }
+
+    expect(statusPayload.plugins?.[0]?.web_ui).toEqual(webUi)
   })
 })

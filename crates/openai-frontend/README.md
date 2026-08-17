@@ -48,8 +48,9 @@ For the concrete benchy command and contract, see
 | OpenAI-style error envelope | Supported | Includes strict `type`, `param`, and `code` fields. |
 | OpenAI-style HTTP fallbacks | Supported | Unknown routes, unsupported methods, invalid JSON, and oversized JSON return the shared error envelope. |
 | Request body limit | Supported | Configurable via `OpenAiFrontendConfig`; defaults to 4 MiB. |
-| Request IDs | Supported | Propagates or generates `x-request-id`, returns it on every response, and emits a tracing event with method, URI, status, and request ID. |
-| Backend timeout | Supported | Configurable via `OpenAiFrontendConfig`; defaults to 300 seconds and maps timeouts to OpenAI-shaped 504 errors. |
+| Request IDs | Supported | Reuses only a valid UUID `x-request-id`; missing or invalid values are replaced with a generated UUID. Every response returns the canonical hyphenated UUID and the frontend emits a tracing event with method, URI, status, and request ID. |
+| Backend timeout | Supported | Configurable via `OpenAiFrontendConfig` or the `MESH_OPENAI_BACKEND_TIMEOUT_SECS` environment variable; defaults to 600 seconds (`0` disables it) and maps timeouts to OpenAI-shaped 504 errors. |
+| Agent session header | Supported | Set `MESH_AGENT_SESSION_HEADER` to accept a trusted upstream header as the stable agent-session identity. |
 | embeddings/rerank/infill/audio/vision | Out of scope | Not needed for staged text benchmark entrypoints. |
 
 ## Shape

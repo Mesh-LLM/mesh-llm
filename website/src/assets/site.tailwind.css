@@ -1,0 +1,93 @@
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "./site.css" layer(components);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@layer utilities {
+  .font-display {
+    font-family: "Rajdhani", "Geist", ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .font-mono {
+    font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  .text-fg { color: #f4f4f5; }
+  .text-muted { color: #a1a1aa; }
+  .text-subtle { color: #71717a; }
+  .text-void { color: #08090b; }
+  .bg-void { background-color: #08090b; }
+  .bg-surface { background-color: #0e1014; }
+  .bg-surface-2 { background-color: #141821; }
+  .border-line { border-color: #27272a; }
+  .border-line-soft { border-color: rgba(255, 255, 255, 0.08); }
+  .rounded-mesh { border-radius: 8px; }
+  .shadow-terminal { box-shadow: 0 24px 70px rgba(0, 0, 0, 0.52); }
+
+  .shell {
+    width: min(75rem, calc(100% - 1.5rem));
+  }
+
+  #plugins h2.title {
+    max-width: none;
+  }
+
+  @media (width >= 80rem) {
+    #plugins .sec-head {
+      grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.85fr);
+    }
+
+    .title .title-line {
+      white-space: nowrap;
+    }
+  }
+
+  @media (width >= 48rem) {
+    .shell {
+      width: min(75rem, calc(100% - 4rem));
+    }
+  }
+
+  .docs-body .shell.nav-inner {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0 28px;
+  }
+
+  @media (width <= 40rem) {
+    .nav-links,
+    .nav-cta {
+      gap: 0.5rem;
+    }
+
+    .nav-cta .btn.primary {
+      padding-inline: 0.625rem;
+    }
+  }
+
+  .doc :where(pre, code, table) {
+    max-width: 100%;
+  }
+
+  .doc pre,
+  .doc .code-copy-frame {
+    overflow-x: auto;
+  }
+
+  .docs-body .doc .code-copy-frame,
+  .docs-body .doc .code-copy-frame pre {
+    overflow-x: hidden;
+  }
+
+  .docs-body .doc .code-copy-frame-single-line {
+    overflow: hidden;
+  }
+
+.docs-body .doc .code-copy-frame-single-line pre {
+  overflow-x: auto;
+}
+}

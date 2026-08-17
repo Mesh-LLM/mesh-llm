@@ -1,7 +1,7 @@
 use super::{build_hf_api, huggingface_hub_cache_dir, run_hf_sync, short_revision};
-use crate::cli::terminal_progress::{DeterminateProgressLine, clear_stderr_line};
 use anyhow::{Context, Result};
 use hf_hub::{RepoTypeModel, repository::ModelInfo};
+use mesh_llm_events::terminal_progress::{DeterminateProgressLine, clear_stderr_line};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 

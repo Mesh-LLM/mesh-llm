@@ -1,28 +1,70 @@
+import * as RadioGroup from '@radix-ui/react-radio-group'
 import { animate, createScope } from 'animejs'
-import { Trash2 } from 'lucide-react'
-import { useLayoutEffect, useRef } from 'react'
+import { Logs, Trash2 } from 'lucide-react'
+import { cn } from '@/lib/cn'
+import { useLayoutEffect, useRef, useState } from 'react'
+import { NativeSelect } from '@/components/ui/NativeSelect'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { CtxSlider } from '@/features/configuration/components/CtxSlider'
 import { CTX_MAX, CTX_MIN, fmtCtx, snapCtx } from '@/features/configuration/components/ctx-slider-utils'
-import { DetailPill } from '@/features/configuration/components/DetailPill'
-import { MetaPill } from '@/features/configuration/components/MetaPill'
+import { MetaPill } from '@/components/ui/MetaPill'
 import {
   contextGB,
   contextGBPerK,
   findModel,
   kvGB,
-  modelFamilyColorKey
+  modelFamilyColorKey,
+  modelWeightsGB
 } from '@/features/configuration/lib/config-math'
 import { formatGB as formatConfigGB } from '@/features/configuration/lib/config-display'
-import type { ConfigAssign, ConfigModel, ConfigNode } from '@/features/app-tabs/types'
+import type {
+  ConfigAssign,
+  ConfigAssignModelConfig,
+  ConfigModel,
+  ConfigNode,
+  ConfigurationModelPlacementOptions
+} from '@/features/app-tabs/types'
 
 type ModelConfigCardProps = {
   assign: ConfigAssign
   node: ConfigNode
   models?: ConfigModel[]
+  modelPlacementOptions?: ConfigurationModelPlacementOptions
   containerFreeGB: number
+  selected?: boolean
   controlTabIndex?: number
+  onPick?: () => void
   onCtxChange: (ctx: number) => void
+  onConfigChange?: (config: ConfigAssignModelConfig) => void
   onRemove: () => void
+}
+
+type ChoiceOption<T extends string> = { value: T; label: string }
+
+const batchProfileOptions: ChoiceOption<NonNullable<ConfigAssignModelConfig['batchProfile']>>[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'throughput', label: 'Performance' },
+  { value: 'saver', label: 'Saver' }
+]
+
+const splitModeOptions: ChoiceOption<NonNullable<ConfigAssignModelConfig['splitMode']>>[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'layer', label: 'Layer' },
+  { value: 'row', label: 'Row' }
+]
+
+const flashAttentionOptions: ChoiceOption<NonNullable<ConfigAssignModelConfig['flashAttention']>>[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'enabled', label: 'On' },
+  { value: 'disabled', label: 'Off' }
+]
+
+const defaultKvCacheTypeOptions = ['f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'iq4_nl', 'q5_0', 'q5_1']
+
+function kvCacheTypeOptions(values: string[] | undefined): ChoiceOption<string>[] {
+  const concreteValues = (values?.length ? values : defaultKvCacheTypeOptions).filter((value) => value !== 'auto')
+  return [{ value: 'auto', label: 'Auto' }, ...concreteValues.map((value) => ({ value, label: value }))]
 }
 
 function formatGBLabel(value: number): string {
@@ -36,16 +78,224 @@ function formatOptional(value: number | string | undefined): string {
   return value === undefined ? 'auto' : `${value}`
 }
 
+const summarySectionClass = 'text-[length:var(--density-type-caption)] font-semibold uppercase text-foreground'
+const summaryListClass = 'mt-2 space-y-1.5 text-[length:var(--density-type-caption)]'
+const summaryRowClass = 'flex justify-between gap-3'
+const summaryLabelClass = 'text-fg-faint'
+const summaryValueClass = 'font-mono text-[length:var(--density-type-label)] font-medium tabular-nums text-foreground'
+const summaryMutedValueClass =
+  'font-mono text-[length:var(--density-type-label)] font-medium tabular-nums text-fg-faint'
+const summaryTotalLabelClass = 'font-medium text-foreground'
+
+function hasOverride(value: string | number | undefined): boolean {
+  if (value === undefined || value === 'auto' || value === '') return false
+  if (typeof value === 'number') return value !== 1
+  return true
+}
+
+function ConfigControl({
+  label,
+  children,
+  override
+}: {
+  label: string
+  children: React.ReactNode
+  override?: boolean
+}) {
+  return (
+    <div className="grid grid-cols-[120px_auto_96px] items-center gap-3">
+      <span className="text-[length:var(--density-type-caption)] text-fg-dim">{label}</span>
+      <div className="w-fit max-w-[720px]">{children}</div>
+      <div
+        className={`shrink-0 text-[length:var(--density-type-label)] font-semibold uppercase leading-none text-warn ${override ? '' : 'invisible'}`}
+      >
+        OVERRIDE
+      </div>
+    </div>
+  )
+}
+
+function ConfigSectionTitle({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      className={cn(
+        'text-balance border-t border-border-soft pt-3 text-[length:var(--density-type-caption)] font-semibold uppercase text-foreground',
+        className
+      )}
+    >
+      {children}
+    </div>
+  )
+}
+
+function updateModelConfig(
+  current: ConfigAssignModelConfig | undefined,
+  patch: Partial<ConfigAssignModelConfig>
+): ConfigAssignModelConfig {
+  const next = { ...(current ?? {}), ...patch }
+  for (const key of Object.keys(next) as Array<keyof ConfigAssignModelConfig>) {
+    const value = next[key]
+    if (value === undefined || value === '' || value === 'auto') delete next[key]
+  }
+  return next
+}
+
+function SegmentedChoice<T extends string>({
+  label,
+  value,
+  options,
+  tabIndex,
+  onChange
+}: {
+  label: string
+  value: T
+  options: ChoiceOption<T>[]
+  tabIndex?: number
+  onChange: (value: T) => void
+}) {
+  return (
+    <div className="w-fit">
+      <SegmentedControl
+        ariaLabel={label}
+        itemTabIndex={tabIndex}
+        name={`model-config-${label}`}
+        onValueChange={(v) => onChange(v as T)}
+        options={options.map((o) => ({ label: o.label, value: o.value }))}
+        value={value}
+        variant="pill"
+      />
+    </div>
+  )
+}
+
+function TextConfigInput({
+  label,
+  value,
+  placeholder,
+  tabIndex,
+  onChange
+}: {
+  label: string
+  value: string
+  placeholder: string
+  tabIndex?: number
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="w-fit">
+      <label htmlFor={label} className="sr-only">
+        {label}
+      </label>
+      <input
+        id={label}
+        className="h-8 w-[420px] max-w-[560px] min-w-0 rounded-[var(--radius)] border border-border-soft bg-background/70 px-3 font-mono text-[length:var(--density-type-caption)] text-foreground outline-none transition-[border-color,box-shadow] placeholder:text-fg-faint focus:border-accent focus:shadow-[var(--shadow-control-focus)]"
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        tabIndex={tabIndex}
+        value={value}
+      />
+    </div>
+  )
+}
+
+function SlotMeter({
+  value,
+  tabIndex,
+  onChange
+}: {
+  value: number
+  tabIndex?: number
+  onChange: (value: number) => void
+}) {
+  const min = 1
+  const max = 32
+  const slotRange = Math.max(1, Math.floor(max - min + 1))
+  const slotOptions = Array.from({ length: slotRange }, (_, index) => min + index)
+  const selectedSlots = Math.max(min, Math.min(max, value))
+
+  const selectSlotFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (bounds.width <= 0) return
+
+    const clampedX = Math.max(0, Math.min(bounds.width, event.clientX - bounds.left))
+    const slotCount = Math.max(min, Math.min(max, min + Math.floor((clampedX / bounds.width) * slotRange)))
+    onChange(slotCount)
+  }
+
+  return (
+    <RadioGroup.Root
+      aria-label="Slots"
+      className="w-[560px] max-w-[720px] min-w-0 rounded-[6px] border border-border-soft bg-panel-strong px-2.5 py-2 text-[length:var(--density-type-caption)] text-fg-dim"
+      name="model-config-slots"
+      onValueChange={(v) => onChange(Number(v))}
+      value={String(selectedSlots)}
+    >
+      <div className="mb-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <span className="text-fg-faint">Parallel slots</span>
+        <span className="font-mono text-fg-dim">
+          {selectedSlots} slot{selectedSlots === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div
+        className="grid w-full min-w-0 touch-none select-none gap-px"
+        onPointerDown={(event) => {
+          event.preventDefault()
+          if (event.currentTarget.setPointerCapture) event.currentTarget.setPointerCapture(event.pointerId)
+          selectSlotFromPointer(event)
+        }}
+        onPointerMove={(event) => {
+          if (
+            event.currentTarget.hasPointerCapture &&
+            !event.currentTarget.hasPointerCapture(event.pointerId) &&
+            event.buttons !== 1
+          )
+            return
+          selectSlotFromPointer(event)
+        }}
+        onPointerUp={(event) => {
+          if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId)
+          }
+        }}
+        style={{ gridTemplateColumns: `repeat(${slotRange}, minmax(0, 1fr))` }}
+      >
+        {slotOptions.map((slotCount) => (
+          <RadioGroup.Item
+            aria-label={`${slotCount} slot${slotCount === 1 ? '' : 's'}`}
+            className="group flex w-full min-w-0 appearance-none items-center rounded-[2px] border-0 bg-transparent py-1 outline-none transition-[opacity] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+            key={slotCount}
+            tabIndex={tabIndex}
+            value={String(slotCount)}
+          >
+            <span
+              className={cn(
+                'h-1.5 w-full rounded-[1px] transition-colors',
+                slotCount <= selectedSlots ? 'bg-accent opacity-100' : 'bg-border-soft opacity-50'
+              )}
+              data-slot-empty={slotCount > selectedSlots ? 'true' : undefined}
+            />
+          </RadioGroup.Item>
+        ))}
+      </div>
+    </RadioGroup.Root>
+  )
+}
+
 export function ModelConfigCard({
   assign,
   node,
   models,
+  modelPlacementOptions,
   containerFreeGB,
+  selected = false,
   controlTabIndex,
+  onPick,
   onCtxChange,
+  onConfigChange,
   onRemove
 }: ModelConfigCardProps) {
   const cardRef = useRef<HTMLElement>(null)
+  const [advanced, setAdvanced] = useState(false)
   const model = findModel(assign.modelId, models)
 
   useLayoutEffect(() => {
@@ -71,12 +321,11 @@ export function ModelConfigCard({
 
   const kv = contextGB(model, assign.ctx)
   const displayKV = kvGB(model, assign.ctx)
-  const total = model.sizeGB + kv
-  const modelCtxMax = Math.min(CTX_MAX, model.ctxMaxK * 1024)
-  const maxAllowedCtx = Math.max(
-    CTX_MIN,
-    containerFreeGB > 0 ? (containerFreeGB / contextGBPerK(model)) * 1024 : CTX_MIN
-  )
+  const weightsGB = modelWeightsGB(model)
+  const total = weightsGB + kv
+  const headroomGB = Math.max(0, containerFreeGB - kv)
+  const ctxGBPerK = contextGBPerK(model)
+  const maxAllowedCtx = Math.max(CTX_MIN, ctxGBPerK > 0 ? (Math.max(0, containerFreeGB) / ctxGBPerK) * 1024 : CTX_MIN)
   const safeCtx = Math.min(CTX_MAX, maxAllowedCtx)
   const selectedGpu = node.gpus.find((gpu) => gpu.idx === assign.containerIdx)
   const locationLabel =
@@ -91,24 +340,18 @@ export function ModelConfigCard({
     modelShortfallGB > 0
       ? `ERROR: model allocation exceeds this container by ${formatGBLabel(modelShortfallGB)}.`
       : `ERROR: context allocation needs ${formatShortfallGB(ctxShortfallGB)} more KV cache.`
-  const details = [
-    ['Ctx len', fmtCtx(modelCtxMax)],
-    ['Weights', formatGBLabel(model.sizeGB)],
-    ['KV cache', formatGBLabel(displayKV)],
-    ['Total', formatGBLabel(total)],
-    ['Embed', formatOptional(model.embed)],
-    ['Layers', formatOptional(model.layers)],
-    ['Heads', formatOptional(model.heads)],
-    ['Offload', model.layers === undefined ? 'auto' : Math.round(model.layers * 0.82).toString()],
-    ['Tokenizer', formatOptional(model.tokenizer)],
-    ['Dense', model.moe ? 'MoE' : 'Capable']
-  ]
+  const modelConfig = assign.config ?? {}
+  const patchConfig = (patch: Partial<ConfigAssignModelConfig>) =>
+    onConfigChange?.(updateModelConfig(modelConfig, patch))
+  const cacheTypeKOptions = kvCacheTypeOptions(modelPlacementOptions?.cacheTypeK)
+  const cacheTypeVOptions = kvCacheTypeOptions(modelPlacementOptions?.cacheTypeV)
 
   return (
     <article
       aria-invalid={hasError}
-      className={`mt-2 select-none rounded-[var(--radius-lg)] border bg-panel px-5 py-4 ${hasError ? 'border-bad shadow-[var(--shadow-surface-error-inset)]' : 'border-border-soft'}`}
+      className={`mt-2 select-none rounded-[var(--radius-lg)] border bg-panel px-5 py-4 transition-[border-color,box-shadow] ${hasError ? 'border-bad shadow-[var(--shadow-surface-error-inset)]' : selected ? 'border-[color:color-mix(in_oklab,var(--color-accent)_44%,var(--color-border))] shadow-[var(--shadow-surface-selected)]' : 'border-border-soft'}`}
       data-model-selection-area="true"
+      onPointerDown={onPick}
       ref={cardRef}
       style={{
         transformOrigin: 'top center'
@@ -123,6 +366,17 @@ export function ModelConfigCard({
           on <span className="font-mono text-fg">{locationLabel}</span>
         </span>
         <button
+          className="ui-control inline-flex size-[30px] shrink-0 items-center justify-center rounded-[var(--radius)] border transition-colors hover:bg-background/80"
+          onClick={() => setAdvanced((v) => !v)}
+          tabIndex={controlTabIndex}
+          title="Advanced controls"
+          type="button"
+          aria-label="Toggle advanced controls"
+          aria-pressed={advanced}
+        >
+          <Logs aria-hidden="true" className="size-[15px]" strokeWidth={1.8} />
+        </button>
+        <button
           className="ui-control-destructive inline-flex size-[30px] shrink-0 items-center justify-center rounded-[var(--radius)] border"
           onClick={onRemove}
           tabIndex={controlTabIndex}
@@ -134,12 +388,6 @@ export function ModelConfigCard({
         </button>
       </div>
 
-      <div className="mt-3.5 flex flex-wrap gap-[5px]">
-        {details.map(([label, value]) => (
-          <DetailPill key={label} label={label} value={value} />
-        ))}
-      </div>
-
       {hasError ? (
         <div className="mt-2.5 rounded-[var(--radius)] border border-bad/70 bg-bad/10 px-2.5 py-2 text-[length:var(--density-type-caption)] font-medium text-bad">
           {errorText} Reduce context, remove another allocation, or move the model to a larger{' '}
@@ -148,6 +396,9 @@ export function ModelConfigCard({
       ) : null}
 
       <div className="mt-2.5">
+        <span className="mb-2 block text-[length:var(--density-type-caption)] font-semibold uppercase text-foreground">
+          Runtime
+        </span>
         <CtxSlider
           value={assign.ctx}
           onChange={onCtxChange}
@@ -155,9 +406,168 @@ export function ModelConfigCard({
           invalid={hasError}
           controlTabIndex={controlTabIndex}
         />
-        <p className="mt-1.5 text-right text-[length:var(--density-type-label)] text-fg-faint">
-          max ≈ {fmtCtx(snapCtx(maxAllowedCtx))} on this {node.placement === 'pooled' ? 'pool' : 'GPU'}
-        </p>
+      </div>
+
+      <div className="mt-4 grid gap-x-6 border-t border-border-soft pt-4 md:grid-cols-[minmax(0,1fr)_240px]">
+        <div className="min-w-0 flex flex-col gap-3">
+          <ConfigControl label="Slots" override={hasOverride(modelConfig.slots)}>
+            <SlotMeter
+              value={modelConfig.slots ?? 1}
+              tabIndex={controlTabIndex}
+              onChange={(slots) => patchConfig({ slots })}
+            />
+          </ConfigControl>
+
+          {advanced && (
+            <>
+              <ConfigSectionTitle>Placement</ConfigSectionTitle>
+
+              <ConfigControl label="Split mode" override={hasOverride(modelConfig.splitMode)}>
+                <SegmentedChoice
+                  label="Split mode"
+                  value={modelConfig.splitMode ?? 'auto'}
+                  options={splitModeOptions}
+                  tabIndex={controlTabIndex}
+                  onChange={(splitMode) => patchConfig({ splitMode })}
+                />
+              </ConfigControl>
+
+              <ConfigControl label="Tensor split" override={hasOverride(modelConfig.tensorSplit)}>
+                <TextConfigInput
+                  label="Tensor split"
+                  value={modelConfig.tensorSplit ?? ''}
+                  placeholder="e.g. 50,50 (auto)"
+                  tabIndex={controlTabIndex}
+                  onChange={(tensorSplit) => patchConfig({ tensorSplit })}
+                />
+              </ConfigControl>
+
+              <ConfigSectionTitle>Assets</ConfigSectionTitle>
+
+              <ConfigControl label="mmproj" override={hasOverride(modelConfig.mmproj)}>
+                <TextConfigInput
+                  label="mmproj"
+                  value={modelConfig.mmproj ?? ''}
+                  placeholder="path/to/mmproj.gguf (none)"
+                  tabIndex={controlTabIndex}
+                  onChange={(mmproj) => patchConfig({ mmproj })}
+                />
+              </ConfigControl>
+
+              <ConfigControl label="Draft model" override={hasOverride(modelConfig.draftModelPath)}>
+                <TextConfigInput
+                  label="Draft model"
+                  value={modelConfig.draftModelPath ?? ''}
+                  placeholder="path/to/draft.gguf (none)"
+                  tabIndex={controlTabIndex}
+                  onChange={(draftModelPath) => patchConfig({ draftModelPath })}
+                />
+              </ConfigControl>
+
+              <ConfigSectionTitle>Tuning</ConfigSectionTitle>
+
+              <ConfigControl label="Flash attention" override={hasOverride(modelConfig.flashAttention)}>
+                <SegmentedChoice
+                  label="Flash attention"
+                  value={modelConfig.flashAttention ?? 'auto'}
+                  options={flashAttentionOptions}
+                  tabIndex={controlTabIndex}
+                  onChange={(flashAttention) => patchConfig({ flashAttention })}
+                />
+              </ConfigControl>
+
+              <ConfigControl label="Cache type K" override={hasOverride(modelConfig.cacheTypeK)}>
+                <div className="w-fit max-w-[220px]">
+                  <NativeSelect
+                    ariaLabel="Cache type K"
+                    className="min-w-[160px] max-w-[220px]"
+                    disabled={cacheTypeKOptions.length <= 1}
+                    name="cache-type-k"
+                    onValueChange={(value) => patchConfig({ cacheTypeK: value })}
+                    options={cacheTypeKOptions.map((o) => ({ label: o.label, value: o.value }))}
+                    value={modelConfig.cacheTypeK ?? 'auto'}
+                  />
+                </div>
+              </ConfigControl>
+
+              <ConfigControl label="Cache type V" override={hasOverride(modelConfig.cacheTypeV)}>
+                <div className="w-fit max-w-[220px]">
+                  <NativeSelect
+                    ariaLabel="Cache type V"
+                    className="min-w-[160px] max-w-[220px]"
+                    disabled={cacheTypeVOptions.length <= 1}
+                    name="cache-type-v"
+                    onValueChange={(value) => patchConfig({ cacheTypeV: value })}
+                    options={cacheTypeVOptions.map((o) => ({ label: o.label, value: o.value }))}
+                    value={modelConfig.cacheTypeV ?? 'auto'}
+                  />
+                </div>
+              </ConfigControl>
+            </>
+          )}
+
+          {!advanced && (
+            <>
+              <ConfigControl label="Performance Profile" override={hasOverride(modelConfig.batchProfile)}>
+                <SegmentedChoice
+                  label="Performance Profile"
+                  value={modelConfig.batchProfile ?? 'auto'}
+                  options={batchProfileOptions}
+                  tabIndex={controlTabIndex}
+                  onChange={(batchProfile) => patchConfig({ batchProfile })}
+                />
+              </ConfigControl>
+              <p className="pl-[132px] text-[length:var(--density-type-label)] text-fg-faint">
+                Controls quantization, batch/ubatch
+              </p>
+            </>
+          )}
+        </div>
+        <aside className="w-[240px] shrink-0 self-start rounded-[var(--radius-lg)] border border-[color:color-mix(in_oklab,var(--color-border-soft)_72%,transparent)] bg-[color:color-mix(in_oklab,var(--color-background)_82%,black_18%)] p-3 shadow-[inset_0_1px_0_color-mix(in_oklab,var(--color-foreground)_4%,transparent)]">
+          <div className={summarySectionClass}>Memory</div>
+          <dl className={summaryListClass}>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Weights</dt>
+              <dd className={summaryValueClass}>{formatGBLabel(weightsGB)}</dd>
+            </div>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>KV cache</dt>
+              <dd className={summaryValueClass}>{formatGBLabel(displayKV)}</dd>
+            </div>
+            <div className={`${summaryRowClass} border-t border-border-soft/60 pt-1.5`}>
+              <dt className={summaryTotalLabelClass}>Total</dt>
+              <dd className={summaryValueClass}>{formatGBLabel(total)}</dd>
+            </div>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Headroom</dt>
+              <dd className={summaryMutedValueClass}>{formatGBLabel(headroomGB)}</dd>
+            </div>
+          </dl>
+          <div className="mt-3 border-t border-border-soft/60 pt-3">
+            <div className={summarySectionClass}>Model</div>
+          </div>
+          <dl className={summaryListClass}>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Layers</dt>
+              <dd className={summaryValueClass}>{formatOptional(model.layers)}</dd>
+            </div>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Heads</dt>
+              <dd className={summaryValueClass}>{formatOptional(model.heads)}</dd>
+            </div>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Embed</dt>
+              <dd className={summaryValueClass}>{formatOptional(model.embed)}</dd>
+            </div>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Tokenizer</dt>
+              <dd className={summaryValueClass}>{formatOptional(model.tokenizer)}</dd>
+            </div>
+          </dl>
+          <p className="mt-3 border-t border-border-soft/60 pt-2 text-[length:var(--density-type-label)] font-medium text-fg-faint">
+            max ctx ≈ {fmtCtx(snapCtx(maxAllowedCtx))} on this {node.placement === 'pooled' ? 'pool' : 'GPU'}
+          </p>
+        </aside>
       </div>
     </article>
   )

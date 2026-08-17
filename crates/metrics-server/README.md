@@ -32,6 +32,7 @@ stage, and model identifiers for report export and post-run debugging.
 metrics-server serve --db metrics.sqlite
 metrics-server serve --db metrics.sqlite --debug-retain-raw-otlp
 metrics-server emit-fixture --run-id fixture
+curl http://127.0.0.1:18080/health
 ```
 
 ## Responsibilities
@@ -39,6 +40,7 @@ metrics-server emit-fixture --run-id fixture
 - ingest OTLP traces, metrics, and logs
 - accept OTLP/gRPC on `--otlp-grpc-addr`
 - accept OTLP/HTTP protobuf at `/v1/traces`, `/v1/metrics`, and `/v1/logs`
+- expose `/health` for process-level HTTP health checks
 - persist scalar OTLP gauge/sum data points in `metric_points`
 - index data by run/request/session/stage IDs
 - expose run lifecycle HTTP APIs

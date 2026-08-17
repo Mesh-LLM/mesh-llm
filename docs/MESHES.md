@@ -188,6 +188,14 @@ mesh-llm discover --auto
 ```
 
 `discover --auto` prints the best invite token, which is useful for scripts.
+When using `--mesh-discovery-mode mdns`, discovery is LAN-scoped: mDNS TXT
+records advertise bounded capacity/model summaries and a token fingerprint.
+When the management API is reachable from LAN peers, for example with
+`--listen-all`, they also advertise a short-lived proof challenge and
+`/api/discovery/lan-details`. They never carry the raw invite token. A node can
+request local detail from that endpoint only by posting proof derived from the
+matching invite token, and mDNS re-discovery uses the same supplied-token gate
+if peers are lost.
 
 ## Console and management API
 
@@ -207,7 +215,16 @@ curl -s http://localhost:3131/api/discover | jq .
 ```
 
 `/api/status` reports whether the local mesh publication is `private`,
-`public`, or `publish_failed`.
+`public`, or `publish_failed`. `/api/discover` follows the active discovery
+mode: Nostr mode returns public relay results, while mDNS mode returns LAN
+advertisements with token fingerprints and challenge metadata only.
+
+The same status payload also includes `routing_affinity.target_reputation`.
+Those counters are local behavioral health signals used by the current proxy to
+avoid peers that recently timed out or returned unavailable. They are not
+gossiped, not persisted as mesh trust, and not proof of a peer's identity or
+model honesty. See [NODE_REP.md](NODE_REP.md) for the local reputation model,
+status fields, and testing boundary.
 
 ## Private ownership and trust
 
@@ -240,7 +257,9 @@ mesh-llm auth trust remove <owner-id>
 - `--mesh-discovery-mode mdns` is LAN-only discovery and transport startup:
   it does not contact Nostr relays, does not register with public iroh relays,
   and does not run raw public STUN probing. mDNS TXT records contain only a
-  token fingerprint; joins still require a matching supplied invite token.
+  token fingerprint plus, when the management API is LAN-reachable, challenge
+  metadata; joins and LAN detail requests still require proof from a matching
+  supplied invite token.
 - Mesh connectivity uses managed iroh relay infrastructure by default when
   direct paths are unavailable in Nostr mode.
 - Hidden relay override flags exist for lab/debug deployments, but normal users
@@ -248,3 +267,29 @@ mesh-llm auth trust remove <owner-id>
 - `/v1` request routing and Skippy stage traffic are separate paths. HTTP
   routing is latency-tolerant; stage splits require selected peers with suitable
   topology and latency.
+
+## Admission advertisement
+
+Nodes advertise a coarse inference admission state to mesh peers through an
+additive optional field in peer announcements. This lets peers route around
+nodes that are temporarily not accepting work without breaking mixed-version
+meshes.
+
+The admission enum values are: `UNSPECIFIED` (legacy/eligible),
+`ACCEPTING`, `ACCEPTING_DEPRIORITIZED`, `REMOTE_PAUSED`, and `ALL_PAUSED`.
+Old peers that do not recognize the field treat its absence as eligible and
+continue normal routing.
+
+Advertisement behavior is configured via `[runtime.activity].advertisement`:
+
+- `none`: emit nothing.
+- `availability_only`: publish hosted/serving availability as
+  explicitly-known-and-empty while non-admitting.
+- `coarse_state` (default): emit the admission enum and also publish
+  known-empty availability for old peers.
+- `private_coarse_state`: emit the enum only on private meshes; use
+  known-empty availability publicly.
+
+**Privacy**: only the coarse admission state is advertised. No raw activity
+data, input events, app/window names, usernames, idle durations, timestamps, or
+detector errors are ever encoded in gossip.

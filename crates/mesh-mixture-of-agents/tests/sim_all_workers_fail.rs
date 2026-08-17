@@ -71,18 +71,9 @@ fn three_failing_backends() -> moa::GatewayConfig {
     let backends: Vec<Arc<dyn moa::ModelBackend>> =
         vec![alpha.clone(), beta.clone(), gamma.clone()];
     let models = vec![
-        moa::ModelEntry {
-            name: "alpha-3b".into(),
-            backend_index: 0,
-        },
-        moa::ModelEntry {
-            name: "beta-13b".into(),
-            backend_index: 1,
-        },
-        moa::ModelEntry {
-            name: "gamma-32b".into(),
-            backend_index: 2,
-        },
+        moa::ModelEntry::new("alpha-3b", 0),
+        moa::ModelEntry::new("beta-13b", 1),
+        moa::ModelEntry::new("gamma-32b", 2),
     ];
 
     moa::GatewayConfig {
@@ -92,7 +83,11 @@ fn three_failing_backends() -> moa::GatewayConfig {
         hedge_delay: Duration::from_millis(200),
         reducer_timeout: Duration::from_secs(2),
         first_answer_grace: Duration::ZERO,
+        strong_patience: Duration::ZERO,
         enable_thinking: None,
+        actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     }
 }
 

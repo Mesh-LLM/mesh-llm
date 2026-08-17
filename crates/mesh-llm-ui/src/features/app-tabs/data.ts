@@ -959,28 +959,6 @@ export const CONFIGURATION_DEFAULTS = {
       }
     },
     {
-      id: 'llamacpp-flavor',
-      categoryId: 'runtime',
-      tomlSection: 'defaults.hardware',
-      tomlKey: 'model_runtime',
-      icon: 'binary',
-      label: 'Model Runtime',
-      description: 'Select the default runtime target for new placements.',
-      inheritedLabel: 'Override when a model needs a specialized runner',
-      control: {
-        kind: 'choice',
-        name: 'model_runtime',
-        value: 'cuda',
-        options: [
-          { value: 'cuda', label: 'cuda' },
-          { value: 'rocm', label: 'rocm' },
-          { value: 'metal', label: 'metal' },
-          { value: 'vulkan', label: 'vulkan' },
-          { value: 'cpu', label: 'cpu' }
-        ]
-      }
-    },
-    {
       id: 'hardware-device',
       categoryId: 'runtime',
       tomlSection: 'defaults.hardware',
@@ -1032,7 +1010,7 @@ export const CONFIGURATION_DEFAULTS = {
       inheritedLabel: 'Applied when a placement does not override context size',
       tomlSection: MODEL_FIT_TOML_SECTION,
       mutability: 'restart-required',
-      control: { kind: 'range', name: 'ctx_size', value: '512', min: 512, max: 131072, step: 512, unit: 'tokens' }
+      control: { kind: 'range', name: 'ctx_size', value: '2048', min: 2048, max: 262144, step: 512, unit: 'tokens' }
     },
     {
       id: 'batch',
@@ -1228,8 +1206,7 @@ export const CONFIGURATION_DEFAULTS = {
         options: [
           { value: 'auto', label: 'auto' },
           { value: 'disabled', label: 'disabled' },
-          { value: 'draft', label: 'draft' },
-          { value: 'ngram', label: 'n-gram' }
+          { value: 'draft', label: 'draft' }
         ]
       }
     },
@@ -2060,7 +2037,7 @@ export const DASHBOARD_HARNESS: DashboardHarnessData = {
     description:
       'Build personal AI from open models. Pool machines across your home, office, or friends — no cloud needed.',
     actions: [
-      { label: 'Learn more', href: 'https://docs.meshllm.cloud/', tone: 'link' },
+      { label: 'Learn more', href: 'https://meshllm.cloud/', tone: 'link' },
       { label: 'GitHub', href: 'https://github.com/Mesh-LLM/mesh-llm', tone: 'secondary' }
     ]
   },
@@ -2071,7 +2048,7 @@ export const DASHBOARD_HARNESS: DashboardHarnessData = {
   meshNodeSeeds: MESH_NODES,
   meshId: 'dashboard-mesh',
   connect: {
-    installHref: 'https://docs.meshllm.cloud/#install',
+    installHref: 'https://meshllm.cloud/#install',
     apiStatus: 'configured target',
     runCommand: 'mesh-llm --auto --join <mesh-invite-token>',
     description: 'contribute compute to the mesh'
@@ -2097,11 +2074,11 @@ export const DASHBOARD_HARNESS: DashboardHarnessData = {
 export const SHELL_HARNESS: ShellHarnessData = {
   productName: 'mesh-llm',
   brand: { primary: 'mesh', accent: 'llm' },
-  footerLinks: [{ label: 'Docs', href: 'https://docs.meshllm.cloud/' }],
+  footerLinks: [{ label: 'Docs', href: 'https://meshllm.cloud/' }],
   footerTrailingLink: { label: 'GitHub', href: 'https://github.com/Mesh-LLM/mesh-llm' },
   topNavApiAccessLinks: [
-    { href: 'https://docs.meshllm.cloud/', label: 'Docs' },
-    { href: 'https://docs.meshllm.cloud/#install', label: 'Install' }
+    { href: 'https://meshllm.cloud/', label: 'Docs' },
+    { href: 'https://meshllm.cloud/#install', label: 'Install' }
   ],
   topNavJoinCommands: [
     {
@@ -2119,9 +2096,9 @@ export const SHELL_HARNESS: ShellHarnessData = {
     { label: 'Client-only join command', value: 'mesh-llm client --join <mesh-invite-token>', prefix: '$' }
   ],
   topNavJoinLinks: [
-    { href: 'https://docs.meshllm.cloud/', label: 'Setup' },
-    { href: 'https://docs.meshllm.cloud/#install', label: 'Install' },
-    { href: 'https://docs.meshllm.cloud/#blackboard', label: 'Blackboard' }
+    { href: 'https://meshllm.cloud/', label: 'Setup' },
+    { href: 'https://meshllm.cloud/#install', label: 'Install' },
+    { href: 'https://meshllm.cloud/#blackboard', label: 'Blackboard' }
   ]
 }
 
@@ -2151,6 +2128,219 @@ export const CONFIGURATION_HARNESS: ConfigurationHarnessData = {
   catalog: CFG_CATALOG,
   preferredAssignId: 'a2',
   defaults: CONFIGURATION_DEFAULTS,
+  audit: {
+    categories: [
+      {
+        id: 'logs-general',
+        label: 'General',
+        summary: 'Master enable, summary, and export controls',
+        help: 'General request-log settings written to the local config file',
+        tomlSection: 'logging',
+        order: 10
+      },
+      {
+        id: 'logs-retention',
+        label: 'Retention',
+        summary: 'How long request logs are kept and when cleanup runs',
+        help: 'Retention settings written to the local config file',
+        tomlSection: 'logging',
+        order: 20
+      },
+      {
+        id: 'logs-buffers',
+        label: 'Buffers & Replay',
+        summary: 'In-memory event buffers and the replay window',
+        help: 'Buffer settings written to the local config file',
+        tomlSection: 'logging',
+        order: 30
+      },
+      {
+        id: 'logs-artifacts',
+        label: 'Artifacts & Storage',
+        summary: 'On-disk artifact capture and byte limits',
+        help: 'Artifact settings written to the local config file',
+        tomlSection: 'logging',
+        order: 40
+      },
+      {
+        id: 'logs-webhooks',
+        label: 'Webhooks',
+        summary: 'Outbound webhook delivery of log events',
+        help: 'Webhook settings written to the local config file',
+        tomlSection: 'logging',
+        order: 50
+      },
+      {
+        id: 'logs-audit',
+        label: 'Audit file sink',
+        summary: 'Rotating local audit-file output; separate from the durable Logs ledger',
+        help: 'These settings control the rotating [logging.audit] file sink. The Logs page reads the durable local ledger.',
+        tomlSection: 'logging.audit',
+        order: 60
+      }
+    ],
+    settings: [
+      {
+        id: 'logging.enabled',
+        categoryId: 'logs-general',
+        canonicalPath: 'logging.enabled',
+        tomlSection: 'logging',
+        tomlKey: 'enabled',
+        settingOrder: 10,
+        icon: 'layers',
+        label: 'Request logging enabled',
+        description: 'Enable or disable request log capture.',
+        inheritedLabel: 'Written to the local mesh-llm config file',
+        visibility: 'standard' as const,
+        mutability: 'restart-required' as const,
+        applyMode: 'static_on_load' as const,
+        restartScope: 'process_restart' as const,
+        valueSchema: { kind: 'boolean' },
+        baselineValue: 'on',
+        control: {
+          kind: 'choice',
+          name: 'enabled',
+          value: 'on',
+          presentation: 'toggle',
+          options: [
+            { value: 'on', label: 'On' },
+            { value: 'off', label: 'Off' }
+          ]
+        }
+      },
+      {
+        id: 'logging.retention_ttl_secs',
+        categoryId: 'logs-retention',
+        canonicalPath: 'logging.retention_ttl_secs',
+        tomlSection: 'logging',
+        tomlKey: 'retention_ttl_secs',
+        icon: 'gauge',
+        label: 'Log retention period',
+        description: 'How long captured request logs are retained.',
+        inheritedLabel: 'Written to the local mesh-llm config file',
+        visibility: 'standard' as const,
+        mutability: 'runtime' as const,
+        applyMode: 'dynamic_apply' as const,
+        restartScope: 'none' as const,
+        valueSchema: { kind: 'integer' },
+        baselineValue: '604800',
+        control: {
+          kind: 'range',
+          name: 'retention_ttl_secs',
+          value: '604800',
+          min: 60,
+          max: 604800,
+          step: 60,
+          unit: 'seconds'
+        }
+      },
+      {
+        id: 'logging.replay_capacity',
+        categoryId: 'logs-buffers',
+        canonicalPath: 'logging.replay_capacity',
+        tomlSection: 'logging',
+        tomlKey: 'replay_capacity',
+        icon: 'server',
+        label: 'Replay buffer capacity',
+        description: 'Number of recent log entries kept for replay.',
+        inheritedLabel: 'Written to the local mesh-llm config file',
+        visibility: 'standard' as const,
+        mutability: 'runtime' as const,
+        applyMode: 'dynamic_apply' as const,
+        restartScope: 'none' as const,
+        valueSchema: { kind: 'integer' },
+        baselineValue: '25',
+        control: {
+          kind: 'range',
+          name: 'replay_capacity',
+          value: '25',
+          min: 1,
+          max: 5000,
+          step: 1,
+          unit: 'entries'
+        }
+      },
+      {
+        id: 'logging.artifact.capture_mode',
+        categoryId: 'logs-artifacts',
+        canonicalPath: 'logging.artifact.capture_mode',
+        tomlSection: 'logging.artifact',
+        tomlKey: 'capture_mode',
+        icon: 'folder',
+        label: 'Artifact capture mode',
+        description: 'Control how request artifacts are captured and stored.',
+        inheritedLabel: 'Written to the local mesh-llm config file',
+        visibility: 'standard' as const,
+        mutability: 'restart-required' as const,
+        applyMode: 'static_on_load' as const,
+        restartScope: 'process_restart' as const,
+        valueSchema: { kind: 'enum', values: ['metadata_only', 'redacted_artifacts'] },
+        baselineValue: 'metadata_only',
+        control: {
+          kind: 'choice',
+          name: 'capture_mode',
+          value: 'metadata_only',
+          presentation: 'segmented',
+          options: [
+            { value: 'metadata_only', label: 'Metadata only' },
+            { value: 'redacted_artifacts', label: 'Redacted artifacts' }
+          ]
+        }
+      },
+      {
+        id: 'logging.webhook.url',
+        categoryId: 'logs-webhooks',
+        canonicalPath: 'logging.webhook.url',
+        tomlSection: 'logging.webhook',
+        tomlKey: 'url',
+        icon: 'zap',
+        label: 'Webhook URL',
+        description: 'Destination URL for outbound webhook log delivery.',
+        inheritedLabel: 'Written to the local mesh-llm config file',
+        visibility: 'standard' as const,
+        mutability: 'restart-required' as const,
+        applyMode: 'static_on_load' as const,
+        restartScope: 'process_restart' as const,
+        valueSchema: { kind: 'url' },
+        baselineValue: '',
+        control: {
+          kind: 'text',
+          name: 'url',
+          value: ''
+        }
+      },
+      {
+        id: 'logging.audit.enabled',
+        categoryId: 'logs-audit',
+        canonicalPath: 'logging.audit.enabled',
+        tomlSection: 'logging.audit',
+        tomlKey: 'enabled',
+        settingOrder: 10,
+        icon: 'shield',
+        label: 'Audit file sink enabled',
+        description:
+          'Enable or disable the rotating local audit file sink. This does not erase or replace the durable Logs ledger.',
+        inheritedLabel: 'Written to the local mesh-llm config file',
+        visibility: 'standard' as const,
+        mutability: 'runtime' as const,
+        applyMode: 'dynamic_apply' as const,
+        restartScope: 'none' as const,
+        valueSchema: { kind: 'boolean' },
+        baselineValue: 'on',
+        control: {
+          kind: 'choice',
+          name: 'enabled',
+          value: 'on',
+          presentation: 'toggle',
+          options: [
+            { value: 'on', label: 'On' },
+            { value: 'off', label: 'Off' }
+          ]
+        }
+      }
+    ],
+    preview: [{ label: 'Generated logs settings', value: '6 settings', meta: 'harness' }]
+  },
   configFilePath: '~/.mesh-llm/config.toml',
   validationWarnings: [
     { kind: 'ok', text: 'All pinned models have valid gpu_id targets.' },

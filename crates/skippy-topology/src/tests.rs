@@ -34,11 +34,125 @@ fn placement_signal(node_id: &str) -> NodePlacementSignal {
     }
 }
 
+fn edge(source: &str, target: &str, rtt_ms: u32) -> StageEdgeSignal {
+    StageEdgeSignal {
+        source_node_id: source.to_string(),
+        target_node_id: target.to_string(),
+        rtt_ms: Some(rtt_ms),
+        large_frame_bytes_per_sec: None,
+        direct_prediction_return_supported: true,
+    }
+}
+
 fn stage_layout(plan: &TopologyPlan) -> Vec<(&str, u32, u32)> {
     plan.stages
         .iter()
         .map(|stage| (stage.node_id.as_str(), stage.layer_start, stage.layer_end))
         .collect()
+}
+
+fn role_layout(plan: &TopologyPlan) -> Vec<Vec<StageRole>> {
+    plan.stages
+        .iter()
+        .map(|stage| stage.roles.clone())
+        .collect()
+}
+
+#[test]
+fn transport_aware_plan_orders_same_nodes_by_stage_edge_cost() {
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(9, 10),
+        nodes: vec![
+            weighted_node("node-a", 30),
+            weighted_node("node-b", 30),
+            weighted_node("node-c", 30),
+        ],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_transport(
+        &request,
+        &[],
+        &[
+            edge("node-a", "node-b", 200),
+            edge("node-b", "node-c", 200),
+            edge("node-a", "node-c", 5),
+            edge("node-c", "node-b", 5),
+        ],
+    )
+    .expect("plan");
+
+    assert_eq!(
+        stage_layout(&plan),
+        vec![("node-a", 0, 3), ("node-c", 3, 6), ("node-b", 6, 9)]
+    );
+    assert!(plan.diagnostics.iter().any(|diagnostic| diagnostic.code
+        == PlanReasonCode::NetworkPipelineCost
+        && diagnostic.message.contains("node-a -> node-c")));
+}
+
+#[test]
+fn transport_aware_plan_orders_two_stages_by_edge_cost() {
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(6, 10),
+        nodes: vec![weighted_node("node-a", 30), weighted_node("node-b", 30)],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_transport(
+        &request,
+        &[],
+        &[edge("node-a", "node-b", 200), edge("node-b", "node-a", 5)],
+    )
+    .expect("plan");
+
+    assert_eq!(
+        stage_layout(&plan),
+        vec![("node-b", 0, 3), ("node-a", 3, 6)]
+    );
+}
+
+#[test]
+fn transport_aware_plan_preserves_package_order_when_edges_tie() {
+    let mut warm = placement_signal("warm");
+    warm.cached_slice_bytes = 64;
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(9, 10),
+        nodes: vec![
+            weighted_node("cold-a", 30),
+            weighted_node("warm", 30),
+            weighted_node("cold-b", 30),
+        ],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_transport(
+        &request,
+        &[warm],
+        &[
+            edge("warm", "cold-a", 10),
+            edge("warm", "cold-b", 10),
+            edge("cold-a", "warm", 10),
+            edge("cold-a", "cold-b", 10),
+            edge("cold-b", "warm", 10),
+            edge("cold-b", "cold-a", 10),
+        ],
+    )
+    .expect("plan");
+
+    assert_eq!(
+        stage_layout(&plan),
+        vec![("warm", 0, 3), ("cold-a", 3, 6), ("cold-b", 6, 9)]
+    );
 }
 
 #[test]
@@ -66,6 +180,52 @@ fn dense_attention_plan_allows_costed_kv_migration() {
             .all(|stage| stage.migration_policy == MigrationPolicy::CostedKv)
     );
     assert!(plan.diagnostics.is_empty());
+}
+
+#[test]
+fn split_topology_labels_driver_embedding_intermediate_and_readout_roles() {
+    let request = TopologyPlanRequest {
+        topology_id: "roles".to_string(),
+        model_id: "qwen3".to_string(),
+        layers: dense_attention_layers(9, 10),
+        nodes: nodes(3),
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_even_contiguous(&request).expect("plan");
+
+    assert_eq!(
+        role_layout(&plan),
+        vec![
+            vec![StageRole::Driver, StageRole::Embedding],
+            vec![StageRole::Intermediate],
+            vec![StageRole::Readout],
+        ]
+    );
+}
+
+#[test]
+fn single_stage_topology_labels_combined_driver_embedding_and_readout() {
+    let request = TopologyPlanRequest {
+        topology_id: "single-roles".to_string(),
+        model_id: "qwen3".to_string(),
+        layers: dense_attention_layers(2, 10),
+        nodes: nodes(1),
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_even_contiguous(&request).expect("plan");
+
+    assert_eq!(
+        role_layout(&plan),
+        vec![vec![
+            StageRole::Driver,
+            StageRole::Embedding,
+            StageRole::Readout,
+        ]]
+    );
 }
 
 #[test]
@@ -167,6 +327,70 @@ fn package_aware_plan_prefers_cached_peer_for_equal_capacity() {
             .reason_codes
             .contains(&PlanReasonCode::ArtifactTransferPenalty)
     );
+}
+
+#[test]
+fn package_aware_plan_reports_cold_start_artifact_totals() {
+    let mut transfer_ready = placement_signal("transfer-ready");
+    transfer_ready.missing_artifact_bytes = 32;
+    transfer_ready.artifact_transfer_supported = true;
+    let mut remote_fallback = placement_signal("remote-fallback");
+    remote_fallback.missing_artifact_bytes = 16;
+    remote_fallback.artifact_transfer_supported = false;
+    let mut warm = placement_signal("warm");
+    warm.cached_slice_bytes = 64;
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(9, 10),
+        nodes: vec![
+            weighted_node("transfer-ready", 30),
+            weighted_node("remote-fallback", 30),
+            weighted_node("warm", 30),
+        ],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_signals(
+        &request,
+        &[transfer_ready, remote_fallback, warm],
+    )
+    .expect("plan");
+
+    let diagnostic = plan
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == PlanReasonCode::ArtifactTransferPenalty)
+        .expect("artifact diagnostic");
+    assert!(diagnostic.message.contains("cached=30 bytes"));
+    assert!(diagnostic.message.contains("missing=46 bytes"));
+    assert!(
+        diagnostic
+            .message
+            .contains("peer-transfer-eligible=30 bytes")
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains("remote-download-fallback=16 bytes")
+    );
+}
+
+#[test]
+fn weighted_plan_without_artifact_signals_stays_diagnostic_quiet() {
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(6, 10),
+        nodes: vec![weighted_node("node-a", 30), weighted_node("node-b", 30)],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_weighted_contiguous(&request).expect("plan");
+
+    assert!(plan.diagnostics.is_empty());
 }
 
 #[test]
@@ -697,6 +921,16 @@ fn infers_known_family_capabilities_from_model_identity() {
     assert_eq!(llama.q8_wire_validation, WireValidation::Validated);
     assert_eq!(llama.exact_state_mobility, ExactStateMobility::Accepted);
 
+    let laguna = infer_family_capability(
+        "poolside/Laguna-S-2.1-GGUF@edd093522473dc7313b0738d8b4116b7f8b9745f/laguna-s-2.1-Q4_K_M.gguf",
+        48,
+        3072,
+    )
+    .expect("reviewed Poolside Laguna S 2.1 Q4_K_M");
+    assert_eq!(laguna.family_id, "laguna");
+    assert_eq!(laguna.default_wire_dtype, WireDType::F16);
+    assert_eq!(laguna.q8_wire_validation, WireValidation::Untested);
+
     let gemma4_e4b = infer_family_capability(
             "unsloth/gemma-4-E4B-it-GGUF@315e03409eb1cdde302488d66e586dea1e82aad1/gemma-4-E4B-it-Q4_K_M.gguf",
             42,
@@ -726,6 +960,20 @@ fn infers_known_family_capabilities_from_model_identity() {
             .family_id,
         "qwen3next"
     );
+    let inkling =
+        infer_family_capability("meshllm/inkling-UD-Q2_K_XL-layers", 66, 6144).expect("inkling");
+    assert_eq!(inkling.family_id, "inkling");
+    assert_eq!(inkling.default_wire_dtype, WireDType::F32);
+    assert_eq!(inkling.q8_wire_validation, WireValidation::Rejected);
+    assert_eq!(
+        inkling.exact_state_mobility,
+        ExactStateMobility::RejectedTooLarge
+    );
+    assert_eq!(
+        inkling.recurrent_ranges,
+        vec![LayerRange { start: 0, end: 66 }]
+    );
+
     let rwkv6 =
         infer_family_capability("latestissue/rwkv-6-finch-1b6-gguf:Q4_K", 24, 2048).expect("rwkv6");
     assert_eq!(rwkv6.family_id, "rwkv6");
@@ -795,6 +1043,20 @@ fn infers_known_family_capabilities_from_model_identity() {
     .expect("qwen3moe");
     assert_eq!(qwen3moe.family_id, "qwen3moe");
     assert_eq!(qwen3moe.q8_wire_validation, WireValidation::Validated);
+    for identity in [
+        "laguna",
+        "poolside/Laguna-XS-2.1-GGUF:Q4_K_M",
+        "poolside/Laguna-S-2.1-GGUF:Q4_K_M",
+        "poolside/Laguna-XS.2-GGUF:Q4_K_M",
+        "poolside/Laguna-M.1-GGUF:Q4_K_M",
+    ] {
+        let laguna = infer_family_capability(identity, 48, 3072)
+            .unwrap_or_else(|| panic!("failed to infer {identity}"));
+        assert_eq!(laguna.family_id, "laguna", "{identity}");
+        assert_eq!(laguna.q8_wire_validation, WireValidation::Untested);
+        assert_eq!(laguna.exact_state_mobility, ExactStateMobility::Untested);
+        assert!(laguna.recurrent_ranges.is_empty());
+    }
     let openai_moe =
         infer_family_capability("ggml-org/gpt-oss-20b-GGUF:gpt-oss-20b-mxfp4", 24, 2880)
             .expect("openai_moe/gpt-oss");
@@ -1355,5 +1617,109 @@ fn reviewed_supported_families_smoke_plan_with_expected_policy_signals() {
                 "missing sideband signal for {identity}"
             );
         }
+    }
+}
+
+#[test]
+fn qwen35_series_inference_covers_qwen36_release_names() {
+    // Qwen3.6 and Qwen3.8 load as llama.cpp `qwen35`/`qwen35moe`; there is no
+    // `qwen36` or `qwen38` arch.
+    // Every quant and uploader must resolve to the recurrent series, not qwen3moe.
+    for identity in [
+        "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
+        "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M",
+        "bartowski/Qwen3.6-35B-A3B-GGUF:Q4_K_M",
+        "Qwen/Qwen3.6-35B-A3B-Instruct-GGUF:Q5_K_M",
+        "unsloth/Qwen3.5-35B-A3B-GGUF:Q4_K_M",
+        "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-Q1_0",
+        "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-IQ2_XXS",
+        "meshllm/Qwen3.8-2.4T-A95B-UD-Q1_0-layers",
+        "qwen35moe",
+        "qwen36moe",
+        "qwen38moe",
+    ] {
+        let family = infer_family_capability(identity, 40, 2048)
+            .unwrap_or_else(|| panic!("expected qwen35moe capability for {identity}"));
+        assert_eq!(family.family_id, "qwen35moe", "wrong family for {identity}");
+        assert_eq!(
+            family.recurrent_ranges,
+            vec![LayerRange { start: 0, end: 40 }],
+            "qwen35moe must expose a recurrent range for {identity}"
+        );
+        assert_eq!(
+            family.exact_state_mobility,
+            ExactStateMobility::RejectedTooLarge,
+            "qwen35moe full-state handoff must stay rejected for {identity}"
+        );
+    }
+
+    for identity in [
+        "unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL",
+        "unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
+        "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL",
+        "qwen35",
+        "qwen36",
+        "qwen38",
+    ] {
+        let family = infer_family_capability(identity, 32, 2560)
+            .unwrap_or_else(|| panic!("expected qwen35 capability for {identity}"));
+        assert_eq!(family.family_id, "qwen35", "wrong family for {identity}");
+        assert_eq!(
+            family.recurrent_ranges,
+            vec![LayerRange { start: 0, end: 32 }],
+            "qwen35 must expose a recurrent range for {identity}"
+        );
+    }
+}
+
+#[test]
+fn unknown_qwen3_point_releases_resolve_to_no_family() {
+    // A Qwen3 point release we have no evidence for must not be guessed into
+    // the non-recurrent `qwen3moe`/`qwen3_dense` families. Qwen3.5, 3.6 and
+    // 3.8 are all hybrid, so a wrong guess advertises a non-recurrent policy
+    // for a probably-recurrent model. No capability is the safe answer: it
+    // surfaces the gap at onboarding instead of at runtime.
+    for identity in [
+        "Qwen/Qwen3.9-40B-A3B-GGUF:Q4_K_M",
+        "unsloth/Qwen3.7-27B-GGUF:Q4_K_M",
+        "qwen39",
+        "qwen3.7",
+        // A dotted release whose version is not a single digit must not be
+        // narrowed to its first digit: `Qwen3.50` is not `Qwen3.5`.
+        "Qwen/Qwen3.50-40B-A3B-GGUF:Q4_K_M",
+        "Qwen/Qwen3.58-40B-GGUF:Q4_K_M",
+        "qwen3.50",
+    ] {
+        assert!(
+            infer_family_capability(identity, 40, 2048).is_none(),
+            "{identity} must not resolve to a guessed family"
+        );
+    }
+}
+
+#[test]
+fn qwen3_parameter_sizes_are_not_mistaken_for_qwen35_series() {
+    // `Qwen3-5B` compacts to `qwen35b`: the digit is a parameter count, not a
+    // series number, so these must stay on the non-recurrent Qwen3 families.
+    for (identity, expected) in [
+        ("Qwen/Qwen3-5B-GGUF:Q4_K_M", "qwen3_dense"),
+        ("Qwen/Qwen3-6B-GGUF:Q4_K_M", "qwen3_dense"),
+        ("Qwen/Qwen3-8B-GGUF:Q4_K_M", "qwen3_dense"),
+        // Fractional sizes compact to `qwen30.6b`: the digit after the dot is
+        // a size, not a point release.
+        ("Qwen/Qwen3-0.6B-GGUF:Q8_0", "qwen3_dense"),
+        // Multi-digit runs are parameter counts, not point releases.
+        ("Qwen/Qwen3-235B-A22B-GGUF:Q4_K_M", "qwen3moe"),
+        ("Qwen/Qwen3-0.6B:Q8_0", "qwen3_dense"),
+        ("Qwen/Qwen3-35B-A3B-GGUF:Q4_K_M", "qwen3moe"),
+        ("Qwen/Qwen3-30B-A3B-GGUF:Q4_K_M", "qwen3moe"),
+    ] {
+        let family = infer_family_capability(identity, 40, 2048)
+            .unwrap_or_else(|| panic!("expected capability for {identity}"));
+        assert_eq!(family.family_id, expected, "wrong family for {identity}");
+        assert!(
+            family.recurrent_ranges.is_empty(),
+            "{identity} must not be treated as recurrent"
+        );
     }
 }

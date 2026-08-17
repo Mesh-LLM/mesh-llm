@@ -41,23 +41,27 @@ pub mod context;
 mod fanout;
 pub mod normalize;
 mod reducer;
+mod refinement;
 pub mod session;
 mod tool_guard;
+mod tool_turn;
 pub mod worker;
 
 pub use backend::{HttpBackend, ModelBackend, ModelEntry, SamplingParams, apply_enable_thinking};
+pub(crate) use tool_guard::enforce_tool_call_contract;
 
 use backend::call_backend;
-use fanout::gather_workers_incremental;
-use mesh_llm_guardrails::tool_arguments_wire_string;
+use fanout::{GraceMode, gather_workers_incremental};
+use mesh_llm_guardrails::{sanitize_tool_arguments_for_tool, tool_arguments_wire_string};
 use normalize::WorkerOutput;
 use reducer::{hedged_reducer_call, reducer_candidates};
 use serde_json::{Value, json};
 use session::Session;
 use std::time::{Duration, Instant};
-use tool_guard::enforce_allowed_tools;
 use worker::WorkerRole;
-pub use worker::{strip_thinking, truncate_chars};
+pub use worker::{SMALL_TIER_MAX_B, entry_is_small_tier, strip_thinking, truncate_chars};
+
+const SAME_TOOL_FORCE_ANSWER_THRESHOLD: usize = 3;
 
 /// The virtual model name that triggers MoA routing.
 pub const VIRTUAL_MODEL_NAME: &str = "mesh";
@@ -84,6 +88,15 @@ pub struct GatewayConfig {
     /// (conf >= 0.5) is in, accept it instead of waiting for consensus.
     /// Disabled for tool turns. Zero disables entirely.
     pub first_answer_grace: Duration,
+    /// Tier-gate patience: when the worker pool mixes a big-tier Strong
+    /// worker with small-tier workers, small-tier-only answers and
+    /// consensus are held for up to this long after dispatch to give the
+    /// strong worker a chance to weigh in. A hard bound — once it lapses,
+    /// all decision rules revert to ungated behavior, so a stuck strong
+    /// worker can never hold the turn hostage. Zero disables the gate.
+    /// Has no effect when all workers are the same tier. Tool proposals
+    /// are never held.
+    pub strong_patience: Duration,
     /// Override for whether reasoning workers should think. Propagated to
     /// every worker and the reducer as `chat_template_kwargs.enable_thinking`
     /// (and `reasoning_effort: "none"` when disabled).
@@ -93,6 +106,66 @@ pub struct GatewayConfig {
     /// populates this from the caller's `reasoning_effort` / `enable_thinking`
     /// / `reasoning.enabled` knobs so MoA users get a single switch.
     pub enable_thinking: Option<bool>,
+    /// Actor priority order for tool turns and synthesis, as indices into
+    /// [`Self::models`], best actor first.
+    ///
+    /// In the asymmetric (Hermes-style) tool path the *actor* is the model
+    /// that actually emits the tool call; references only advise. The actor
+    /// should be the best available tool-caller, which is a host-side judgement
+    /// combining gossiped `tool_use` capability, model size, and recent peer
+    /// health — signals the engine crate cannot see. The host computes the
+    /// ordering and passes it here.
+    ///
+    /// Empty (the default) means "no host guidance": the engine falls back to
+    /// its name-derived size tier (big-tier first), preserving prior behaviour
+    /// for tests and any caller that doesn't populate it.
+    pub actor_candidates: Vec<usize>,
+    /// Whether tool turns gather advisory references before the actor acts.
+    pub reference_policy: ReferencePolicy,
+    /// Whether text turns run a cross-peer refinement round before synthesis.
+    pub refinement_policy: RefinementPolicy,
+}
+
+/// When a text turn should run a cross-peer refinement round (Together's
+/// `layers`): every worker sees all round-1 drafts and rewrites its answer
+/// before the reducer synthesizes.
+///
+/// Measured over 40 preregistered reasoning prompts x 3 draws
+/// (`evals/moa-openrouter/RESULTS.md`): a pool of four 8B-class models beat its
+/// own best member **only** with this round — single-round synthesis was
+/// indistinguishable from the aggregator acting solo (26/75/19, p=0.37) while
+/// refine-then-synthesize won (42/66/12, p=5.2e-05). With a 32B aggregator the
+/// round adds much less over single-round synthesis (p=0.015), so it is not
+/// worth a second fan-out there.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RefinementPolicy {
+    /// Refine when the pool is all small-tier — the case where the round is
+    /// what makes the collective beat its best member.
+    #[default]
+    Auto,
+    /// Always run the refinement round.
+    Always,
+    /// Never refine: synthesize the round-1 drafts directly.
+    Never,
+}
+
+/// When the asymmetric tool path should gather advisory references.
+///
+/// Measured on 40 preregistered tool tasks x 10 draws (see
+/// `evals/moa-openrouter/RESULTS.md`): with correct advisor packing, references
+/// are worth +0.017 net uplift to a weak actor but -0.037 to a strong one. They
+/// help where the actor has headroom and cost where it is already reliable, so
+/// the useful default is to gate on actor strength rather than always or never.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ReferencePolicy {
+    /// Gather references only when the acting model looks weak enough to
+    /// benefit. Cheapest correct default.
+    #[default]
+    Auto,
+    /// Always gather references, regardless of actor strength.
+    Always,
+    /// Never gather references: the actor acts alone (Hermes' `enabled: false`).
+    Never,
 }
 
 // ─── Turn result ─────────────────────────────────────────────────────
@@ -151,6 +224,22 @@ pub struct WorkerSummary {
     pub confidence: Option<f32>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ForcedToolChoice {
+    pub(crate) name: String,
+    pub(crate) fallback_arguments: Value,
+}
+
+struct DecisionResolution<'a> {
+    session: &'a Session,
+    decision: arbiter::Decision,
+    outputs: &'a [WorkerOutput],
+    has_tools: bool,
+    selected_tool_names: &'a [String],
+    forced_tool: Option<&'a ForcedToolChoice>,
+    allowed_tools: &'a [String],
+}
+
 // ─── Gateway entry point ─────────────────────────────────────────────
 
 /// Process one MoA turn.
@@ -176,6 +265,7 @@ pub async fn handle_turn(config: &GatewayConfig, body: &Value) -> TurnResult {
     session.ingest(&incoming_messages, &tools);
 
     let turn_type = session.classify_turn();
+    let forced_tool = forced_tool_choice(body, &session, &tools);
     tracing::info!(
         "moa: turn={:?}, {} models, tools={}",
         turn_type,
@@ -190,7 +280,15 @@ pub async fn handle_turn(config: &GatewayConfig, body: &Value) -> TurnResult {
             handle_tool_result(config, &session, has_tools, &allowed_tools, start).await
         }
         session::TurnType::Fresh => {
-            handle_query(config, &session, has_tools, &allowed_tools, start).await
+            handle_query(
+                config,
+                &session,
+                has_tools,
+                &allowed_tools,
+                forced_tool.as_ref(),
+                start,
+            )
+            .await
         }
     }
 }
@@ -202,9 +300,54 @@ async fn handle_query(
     session: &Session,
     has_tools: bool,
     allowed_tools: &[String],
+    forced_tool: Option<&ForcedToolChoice>,
     start: Instant,
 ) -> TurnResult {
+    // Tool-bearing turns take the asymmetric (Hermes-style) path: references
+    // advise tool-free, the best tool-caller acts. Tool authority tracks
+    // capability, not a majority vote — see `tool_turn`. Text-only turns keep
+    // the symmetric fan-out + synthesis-on-divergence path below.
+    if has_tools || forced_tool.is_some() {
+        return tool_turn::handle_tool_query(config, session, allowed_tools, forced_tool, start)
+            .await;
+    }
+
     let assignments = worker::assign_roles(&config.models);
+    let grace_mode = grace_mode_for_turn(session, has_tools);
+
+    // If the caller gave us tools, the workers get tools. Full stop.
+    //
+    // This used to be `matches!(grace_mode, GraceMode::Tool)`, which routed
+    // the decision through `looks_like_tool_intent` — a keyword match against
+    // the user's text ("read ", "search ", "file", "directory", ...). Two
+    // separate concerns were riding on one flag: whether tools are *available*
+    // and whether the chat-only answer grace applies.
+    //
+    // Recorded agentic traces show how badly that misfires
+    // (`evals/moa-openrouter/agentic.jsonl`). "The test suite is failing. Find
+    // out which test fails and why" matches no phrase, so every worker was
+    // dispatched without tool schemas — while the same prompt, given tools,
+    // produced 53 tool calls across 9 models. Same for "Is this project's test
+    // suite passing?" (32) and "Find every place MeshError::Timeout is
+    // constructed in this repo." (20). Five of ten recorded tool scenarios had
+    // tools silently withheld.
+    //
+    // Worse, this flag is also passed to the arbiter as its `has_tools`, so a
+    // pool that unanimously proposed a tool fell through to the answer path and
+    // leaked the proposal's payload text — an agent harness received the prose
+    // "calling search" instead of a `search` tool call.
+    //
+    // Tool availability is now the caller's declaration. `grace_mode` keeps
+    // using the heuristic, which is where a guess is actually appropriate: it
+    // only tunes how long we wait before shipping a partial answer.
+    let query_uses_tools = forced_tool.is_some() || has_tools;
+    let selected_tool_names = if let Some(tool) = forced_tool {
+        vec![tool.name.clone()]
+    } else if query_uses_tools {
+        tool_names_for_turn(session, allowed_tools)
+    } else {
+        Vec::new()
+    };
 
     tracing::info!(
         "moa: dispatching to {} workers: [{}]",
@@ -220,8 +363,37 @@ async fn handle_query(
     let mut dispatched: Vec<fanout::DispatchedWorker> = Vec::with_capacity(assignments.len());
 
     let enable_thinking = config.enable_thinking;
+    // Role tiers (Fast 256 tokens, Specialist 512, Strong 1024) encode a
+    // capability spread so the cheap worker can answer the grace path quickly.
+    // A homogeneous pool has no such spread, and when refinement is expected
+    // every draft is an *input* to the round — a 256-token draft is a ~1000-char
+    // stub that drags the refined answer down. Measured end-to-end, production's
+    // tiered budgets produced ~3.1k-char answers against a ~4.1k-char solo
+    // baseline; the study that showed the gain gave every peer the full budget.
+    // Full-budget drafts for every answer-turn worker. Role tiers (Fast 256 /
+    // Specialist 512 / Strong 1024) existed only so the cheap worker could
+    // answer the grace fast-path quickly with a short reply — but grace no
+    // longer finalizes answer turns (it collects, then synthesizes), so a
+    // truncated draft is now pure downside: it is an *input* to synthesis, and
+    // a 256-token stub drags the aggregated answer down. Measured: an all-small
+    // pool lost 5W/31L through the shipped path with role-tiered drafts
+    // (3399-char MoA vs 4064 solo) while the full-budget harness won 12W/2L on
+    // the same pool. A big pool tolerated tiering only because its aggregator
+    // is strong enough to rebuild a full answer from stubs. See
+    // `evals/moa-openrouter/RESULTS.md`.
+    let uniform_packing = grace_mode == GraceMode::Answer;
     for assignment in &assignments {
-        let packed = context::pack_for_worker(session, assignment.role, has_tools);
+        let pack_role = if uniform_packing {
+            worker::WorkerRole::Generalist
+        } else {
+            assignment.role
+        };
+        let packed = context::pack_for_worker_selected(
+            session,
+            pack_role,
+            query_uses_tools,
+            &selected_tool_names,
+        );
         let model_name = assignment.model_name.clone();
         let role = assignment.role;
         let backend = config.backends[assignment.backend_index].clone();
@@ -230,6 +402,7 @@ async fn handle_query(
         dispatched.push(fanout::DispatchedWorker {
             model: model_name.clone(),
             role,
+            small_tier: assignment.small_tier,
         });
 
         join_set.spawn(async move {
@@ -249,14 +422,86 @@ async fn handle_query(
         });
     }
 
-    let (outputs, summaries, early_decision) = gather_workers_incremental(
+    let (mut outputs, mut summaries, early_decision) = gather_workers_incremental(
         &mut join_set,
         &dispatched,
-        has_tools,
         allowed_tools,
-        config.first_answer_grace,
+        session.tools(),
+        fanout::GatherPolicy {
+            first_answer_grace: config.first_answer_grace,
+            grace_mode,
+            strong_patience: config.strong_patience,
+            // Refinement quality scales with how many perspectives it gets.
+            // MIN_DRAFTS (2) is the minimum for the round to *run*, not a good
+            // target to collect: on a 4-model pool it let grace stop gathering
+            // at 2 of 4, while the study that measured the gain refined over
+            // every draft. Wait for all but one, so a single straggler still
+            // cannot hold the turn and `worker_timeout` still bounds the wait.
+            // Synthesis quality scales with WIDTH — that is the whole small-pool
+            // finding (6x 8B beats its best member, 4x is marginal, 2x is null).
+            // Arming grace on the first answer let it stop collecting at ~2 of 6,
+            // synthesizing a committee too narrow to win. Wait for all but one
+            // draft on any multi-worker answer turn, so a single straggler still
+            // cannot hold the turn and `worker_timeout` remains the hard bound.
+            // Tool turns keep the fast path (first valid proposal wins).
+            min_grace_answers: if refinement::refinement_expected(config) {
+                config
+                    .models
+                    .len()
+                    .saturating_sub(1)
+                    .max(refinement::MIN_DRAFTS)
+            } else {
+                // 1, deliberately: `min_grace_answers` gates whether grace can
+                // ARM at all, so any higher value is a liveness hazard. Setting
+                // it to N-1 on an answer turn meant a 6-worker pool where two
+                // public-mesh peers never returned could never arm grace (only
+                // 4 answers ever arrive), so the turn rode `worker_timeout`
+                // instead — measured 61s on a public mesh against 3-11s for the
+                // released build, for a SHORTER answer.
+                //
+                // Width comes from the grace WINDOW (10s), not from a count
+                // gate: healthy peers all land inside it, and a dead peer costs
+                // 10s rather than 60s. This is also the configuration the
+                // capable-pool win was measured under (71W/8T/1L).
+                1
+            },
+            // Grace finalizes (ships one worker's answer and stops) ONLY on
+            // tool turns, where a fast validated tool call keeps agent loops
+            // snappy. On answer turns grace is a *collection deadline*: stop
+            // waiting for the slow tail, but still synthesize what arrived
+            // instead of shipping one worker's answer. Finalizing answer turns
+            // shipped a single (often role-truncated) answer and skipped
+            // synthesis — measured 80/80 early-exit at capable scale, turning a
+            // 61W/3L committee win into a 26W/40L loss. See
+            // `evals/moa-openrouter/RESULTS.md`.
+            grace_finalizes: grace_mode == GraceMode::Tool,
+        },
     )
     .await;
+
+    // Cross-peer refinement (Together's `layers`): each worker rewrites its
+    // answer after seeing the others'. Runs only for pool shapes where it
+    // measurably pays (`evals/moa-openrouter/RESULTS.md`), and is best-effort —
+    // on shortfall we keep the round-1 outputs.
+    //
+    // An `early_decision` here means the workers actually *agreed* — that is a
+    // real signal and the cheap path, so it still short-circuits. (The other
+    // early-exit source, the answer grace, is a timeout rather than a quality
+    // signal; when refinement is expected it is configured above to bound the
+    // gather without finalizing, so it no longer pre-empts this round.)
+    if early_decision.is_none()
+        && refinement::should_refine(config, outputs.len())
+        && let Some((refined, refine_summaries)) =
+            refinement::refine_round(config, session, &outputs).await
+    {
+        tracing::info!(
+            "moa: refinement round produced {} draft(s) from {}",
+            refined.len(),
+            outputs.len(),
+        );
+        outputs = refined;
+        summaries.extend(refine_summaries);
+    }
 
     if outputs.is_empty() {
         return TurnResult {
@@ -272,14 +517,44 @@ async fn handle_query(
     // Capture whether we took the early-exit path BEFORE we resolve the
     // decision: the arbiter never runs when early_decision is Some.
     let took_early_exit = early_decision.is_some();
-    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs, has_tools));
+    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs));
+
+    // Always synthesize a multi-worker answer turn — never ship one worker's
+    // text verbatim.
+    //
+    // `arbitrate` returns `Answer(payload)` when the drafts agree, which ships
+    // whichever single worker represented the cluster. That is the whole
+    // harness-vs-shipped gap: the eval rig always synthesizes (draft ->
+    // aggregate) and a 6x8B pool wins 12W/2L, while the shipped path shipped one
+    // 8B verbatim on agreement and lost (6W/19L on the same pool). A weak 8B
+    // answer alone loses to a full-budget solo; an aggregation of six beats it.
+    // The synthesizer sees every draft and produces the fuller, better answer —
+    // agreeing drafts are the best possible input to it, not a reason to skip.
+    //
+    // Applies to answer turns with >=2 successful workers. Tool turns keep
+    // their own routing (single best actor). A single surviving worker has
+    // nothing to synthesize, so it still ships directly.
+    let is_answer_turn = grace_mode == GraceMode::Answer;
+    let decision =
+        if is_answer_turn && outputs.len() >= 2 && matches!(decision, arbiter::Decision::Answer(_))
+        {
+            arbiter::Decision::NeedsReducer {
+                reason: format!("{} drafts to synthesize", outputs.len()),
+            }
+        } else {
+            decision
+        };
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
-        session,
-        decision,
-        &outputs,
-        has_tools,
-        allowed_tools,
+        DecisionResolution {
+            session,
+            decision,
+            outputs: &outputs,
+            has_tools: query_uses_tools,
+            selected_tool_names: &selected_tool_names,
+            forced_tool,
+            allowed_tools,
+        },
     )
     .await;
 
@@ -303,6 +578,184 @@ async fn handle_query(
     }
 }
 
+fn grace_mode_for_turn(session: &Session, has_tools: bool) -> GraceMode {
+    if !has_tools {
+        return GraceMode::Answer;
+    }
+    if looks_like_tool_intent(&session.last_user_text()) {
+        GraceMode::Tool
+    } else {
+        GraceMode::Answer
+    }
+}
+
+fn looks_like_tool_intent(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    if contains_any(
+        &text,
+        &[
+            "no tool",
+            "without tool",
+            "do not use tool",
+            "don't use tool",
+            "no web",
+            "without web",
+            "do not browse",
+            "don't browse",
+            "no lookup",
+            "without lookup",
+        ],
+    ) {
+        return false;
+    }
+
+    let tool_intent_phrases = [
+        "use a tool",
+        "using a tool",
+        "read ",
+        "inspect ",
+        "open ",
+        "fetch ",
+        "search ",
+        "look up",
+        "browse",
+        "web",
+        "url",
+        "http://",
+        "https://",
+        "file",
+        "directory",
+        "folder",
+        "list ",
+        "run ",
+        "execute",
+        "terminal",
+        "shell",
+        "github",
+        "issue",
+        "pull request",
+        "pr ",
+        "weather",
+    ];
+    tool_intent_phrases
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+pub(crate) fn tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> Vec<String> {
+    if allowed_tools.is_empty() {
+        session.tool_names()
+    } else {
+        allowed_tools.to_vec()
+    }
+}
+
+fn forced_tool_choice(
+    body: &Value,
+    session: &Session,
+    tools: &Option<Value>,
+) -> Option<ForcedToolChoice> {
+    let name = body
+        .get("tool_choice")?
+        .get("function")?
+        .get("name")?
+        .as_str()?;
+    if name.is_empty() || !session.tool_names().iter().any(|tool| tool == name) {
+        return None;
+    }
+
+    let inferred =
+        infer_tool_arguments_from_prompt(name, tools.as_ref(), &session.last_user_text());
+    let fallback_arguments =
+        sanitize_tool_arguments_for_tool(name, &inferred, tools.as_ref()).unwrap_or(inferred);
+
+    Some(ForcedToolChoice {
+        name: name.to_string(),
+        fallback_arguments,
+    })
+}
+
+fn infer_tool_arguments_from_prompt(name: &str, tools: Option<&Value>, prompt: &str) -> Value {
+    let Some(parameters) = tool_parameters(name, tools) else {
+        return json!({});
+    };
+    let Some(required) = parameters.get("required").and_then(Value::as_array) else {
+        return json!({});
+    };
+    let Some(properties) = parameters.get("properties").and_then(Value::as_object) else {
+        return json!({});
+    };
+
+    let mut args = serde_json::Map::new();
+    for field in required.iter().filter_map(Value::as_str) {
+        let Some(schema) = properties.get(field) else {
+            continue;
+        };
+        if let Some(value) = infer_string_argument(field, schema, prompt) {
+            args.insert(field.to_string(), Value::String(value));
+        }
+    }
+    Value::Object(args)
+}
+
+fn infer_string_argument(field: &str, schema: &Value, prompt: &str) -> Option<String> {
+    if !schema_allows_string(schema) {
+        return None;
+    }
+
+    infer_enum_argument(schema, prompt).or_else(|| infer_assignment_argument(field, prompt))
+}
+
+fn schema_allows_string(schema: &Value) -> bool {
+    match schema.get("type") {
+        Some(Value::String(value)) => value == "string",
+        Some(Value::Array(values)) => values.iter().any(|value| value.as_str() == Some("string")),
+        None => true,
+        _ => false,
+    }
+}
+
+fn infer_enum_argument(schema: &Value, prompt: &str) -> Option<String> {
+    let prompt_lc = prompt.to_ascii_lowercase();
+    schema
+        .get("enum")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|candidate| prompt_lc.contains(&candidate.to_ascii_lowercase()))
+        .map(str::to_string)
+}
+
+fn infer_assignment_argument(field: &str, prompt: &str) -> Option<String> {
+    let prompt_lc = prompt.to_ascii_lowercase();
+    let field_lc = field.to_ascii_lowercase();
+    let marker = format!("{field_lc}=");
+    let start = prompt_lc.find(&marker)? + marker.len();
+    let tail = prompt_lc.get(start..)?;
+    let value = tail
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`');
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn tool_parameters<'a>(tool_name: &str, tools: Option<&'a Value>) -> Option<&'a Value> {
+    tools?
+        .as_array()?
+        .iter()
+        .find(|tool| {
+            tool.pointer("/function/name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name == tool_name)
+        })?
+        .pointer("/function/parameters")
+}
+
 // ─── Tool result handling ────────────────────────────────────────────
 
 async fn handle_tool_result(
@@ -314,7 +767,23 @@ async fn handle_tool_result(
 ) -> TurnResult {
     let candidates = reducer_candidates(config);
     let candidate_count = candidates.len();
-    let (messages, tools) = context::pack_for_tool_result_turn(session, has_tools);
+    let repeated_tool = repeated_identical_tool_results(session);
+    let force_answer = repeated_tool.is_some();
+    let selected_tool_names = if force_answer {
+        Vec::new()
+    } else {
+        tool_names_for_turn(session, allowed_tools)
+    };
+    let tools_enabled_for_reducer = has_tools && !force_answer;
+    let (mut messages, tools) = context::pack_for_tool_result_turn_selected(
+        session,
+        tools_enabled_for_reducer,
+        &selected_tool_names,
+    );
+    if let Some((tool, count)) = repeated_tool {
+        tracing::info!("moa: forcing answer after {count} consecutive completed {tool} tool calls");
+        append_tool_loop_answer_instruction(&mut messages, &tool, count);
+    }
 
     // Hedged ladder: start candidate 0, hedge to candidate 1 after hedge_delay
     // (or immediately on candidate 0 error), race for the first OK. Rescues
@@ -341,7 +810,7 @@ async fn handle_tool_result(
         }) => {
             let mut reduced =
                 normalize::normalize_worker_output(&text, &winner, WorkerRole::Reducer, 0);
-            enforce_allowed_tools(&mut reduced, allowed_tools, &winner);
+            enforce_tool_call_contract(&mut reduced, allowed_tools, session.tools(), &winner);
             (spawned, Some((winner, reduced)))
         }
         Err(reducer::HedgedReducerErr {
@@ -365,14 +834,13 @@ async fn handle_tool_result(
             // missing / non-object arguments to `"{}"`.
             let body = match reduced.kind {
                 normalize::OutputKind::ToolProposal => {
-                    if let Some(tname) = reduced.tool_name.as_ref() {
-                        let args = reduced.tool_arguments.as_ref().unwrap_or(&Value::Null);
-                        tool_call_response(tname, args)
-                    } else {
-                        chat_response(&reduced.payload)
-                    }
+                    tool_proposal_response(&reduced, tools_enabled_for_reducer)
                 }
-                _ => chat_response(&reduced.payload),
+                normalize::OutputKind::Uncertainty => error_response(
+                    "MoA reducer returned no usable answer",
+                    MOA_ERR_NO_USABLE_ANSWER,
+                ),
+                _ => chat_response(&repair_tool_result_answer(session, &reduced.payload)),
             };
             (name, true, body)
         }
@@ -407,26 +875,168 @@ async fn handle_tool_result(
     }
 }
 
+fn repair_tool_result_answer(session: &Session, answer: &str) -> String {
+    let missing = missing_tool_evidence_values(session, answer);
+    if missing.is_empty() {
+        return answer.to_string();
+    }
+
+    let mut repaired = answer.trim().to_string();
+    if !repaired.is_empty() {
+        repaired.push_str("\n\n");
+    }
+    repaired.push_str("Tool facts: ");
+    repaired.push_str(&missing.join(", "));
+    repaired
+}
+
+fn missing_tool_evidence_values(session: &Session, answer: &str) -> Vec<String> {
+    let mut missing = Vec::new();
+    for (_, result) in session.recent_tool_results() {
+        for value in short_tool_result_values(&result) {
+            if !answer.contains(&value) && !missing.iter().any(|seen| seen == &value) {
+                missing.push(value);
+            }
+        }
+    }
+    missing
+}
+
+fn short_tool_result_values(result: &str) -> Vec<String> {
+    let Ok(parsed) = serde_json::from_str::<Value>(result) else {
+        return Vec::new();
+    };
+
+    let mut values = Vec::new();
+    collect_short_tool_result_values(&parsed, &mut values);
+    values
+}
+
+fn collect_short_tool_result_values(value: &Value, values: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, nested) in map {
+                if !tool_result_value_key_is_evidence(key) {
+                    continue;
+                }
+                if let Some(scalar) = nested.as_str().filter(|s| short_exact_value(s)) {
+                    values.push(scalar.to_string());
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_short_tool_result_values(item, values);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn tool_result_value_key_is_evidence(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "value" | "fact" | "result" | "answer"
+    )
+}
+
+fn short_exact_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty() && trimmed.len() <= 160 && !trimmed.contains('\n')
+}
+
+fn repeated_identical_tool_results(session: &Session) -> Option<(String, usize)> {
+    let calls = session.pending_tool_calls();
+    let last = calls.last()?;
+    last.result.as_ref()?;
+
+    let tool_name = last.function_name.as_str();
+    let arguments = &last.arguments;
+    let count = calls
+        .iter()
+        .rev()
+        .take_while(|call| {
+            call.function_name == tool_name && call.arguments == *arguments && call.result.is_some()
+        })
+        .count();
+
+    (count >= SAME_TOOL_FORCE_ANSWER_THRESHOLD).then(|| (tool_name.to_string(), count))
+}
+
+fn append_tool_loop_answer_instruction(messages: &mut [Value], tool: &str, count: usize) {
+    let instruction = format!(
+        "\n\nTool loop guard: the last {count} completed tool calls all used `{tool}`. \
+         Answer now from the gathered tool results. Do not call another tool. \
+         If the evidence is incomplete, say what can be determined and what is missing."
+    );
+
+    let system_content = messages
+        .iter_mut()
+        .find(|msg| msg.get("role").and_then(Value::as_str) == Some("system"))
+        .and_then(|system| {
+            let content = system.get("content").and_then(Value::as_str)?.to_string();
+            Some((system, content))
+        });
+    if let Some((system, content)) = system_content {
+        let mut updated = content.to_string();
+        updated.push_str(&instruction);
+        system["content"] = Value::String(updated);
+    }
+}
+
 // ─── Decision resolution ─────────────────────────────────────────────
 
 /// Returns (response body, reducer_used, reducer_attempts).
 async fn resolve_decision(
     config: &GatewayConfig,
-    session: &Session,
-    decision: arbiter::Decision,
-    outputs: &[WorkerOutput],
-    has_tools: bool,
-    allowed_tools: &[String],
+    request: DecisionResolution<'_>,
 ) -> (Value, bool, u32) {
+    let DecisionResolution {
+        session,
+        decision,
+        outputs,
+        has_tools,
+        selected_tool_names,
+        forced_tool,
+        allowed_tools,
+    } = request;
+
     match decision {
-        arbiter::Decision::Answer(text) => (chat_response(&text), false, 0),
+        arbiter::Decision::Answer(text) => {
+            if let Some(tool) = forced_tool.filter(|_| has_tools) {
+                (
+                    tool_call_response(&tool.name, &tool.fallback_arguments),
+                    false,
+                    0,
+                )
+            } else {
+                (chat_response(&text), false, 0)
+            }
+        }
         arbiter::Decision::ToolCall { name, arguments } => {
-            (tool_call_response(&name, &arguments), false, 0)
+            if has_tools {
+                (tool_call_response(&name, &arguments), false, 0)
+            } else {
+                (
+                    error_response(
+                        "MoA selected a tool call, but tools are disabled for this turn",
+                        MOA_ERR_NO_USABLE_ANSWER,
+                    ),
+                    false,
+                    0,
+                )
+            }
         }
         arbiter::Decision::NeedsReducer { reason } => {
             tracing::info!("moa: reducer — {reason}");
             let candidates = reducer_candidates(config);
-            let (messages, tools) = context::pack_for_reducer(session, outputs, &reason, has_tools);
+            let (messages, tools) = context::pack_for_reducer_selected(
+                session,
+                outputs,
+                &reason,
+                has_tools,
+                selected_tool_names,
+            );
 
             // Hedged ladder over the ordered candidates (see hedged_reducer_call).
             let hedge_result = hedged_reducer_call(
@@ -448,7 +1058,12 @@ async fn resolve_decision(
                 }) => {
                     let mut reduced =
                         normalize::normalize_worker_output(&text, &winner, WorkerRole::Reducer, 0);
-                    enforce_allowed_tools(&mut reduced, allowed_tools, &winner);
+                    enforce_tool_call_contract(
+                        &mut reduced,
+                        allowed_tools,
+                        session.tools(),
+                        &winner,
+                    );
                     (spawned, Some(reduced))
                 }
                 Err(reducer::HedgedReducerErr {
@@ -468,14 +1083,30 @@ async fn resolve_decision(
                         // previous "both name AND args required" gate would
                         // silently fall back to a chat_response and break
                         // the calling agent's tool loop.
-                        if let Some(name) = reduced.tool_name.as_ref() {
-                            let args = reduced.tool_arguments.as_ref().unwrap_or(&Value::Null);
-                            (tool_call_response(name, args), true, attempts)
+                        (tool_proposal_response(&reduced, has_tools), true, attempts)
+                    }
+                    normalize::OutputKind::Uncertainty => {
+                        if let Some(tool) = forced_tool.filter(|_| has_tools) {
+                            (
+                                tool_call_response(&tool.name, &tool.fallback_arguments),
+                                true,
+                                attempts,
+                            )
+                        } else {
+                            (fallback_worker_response(outputs), true, attempts)
+                        }
+                    }
+                    _ => {
+                        if let Some(tool) = forced_tool.filter(|_| has_tools) {
+                            (
+                                tool_call_response(&tool.name, &tool.fallback_arguments),
+                                true,
+                                attempts,
+                            )
                         } else {
                             (chat_response(&reduced.payload), true, attempts)
                         }
                     }
-                    _ => (chat_response(&reduced.payload), true, attempts),
                 },
                 None => {
                     tracing::warn!("moa: all reducer candidates failed, using best worker");
@@ -483,7 +1114,15 @@ async fn resolve_decision(
                     // produce the output we're returning — we fell back to
                     // a worker. attempts still reflects what was spawned so
                     // observability can see "we tried N times and all failed".
-                    (chat_response(&best_answer(outputs)), false, attempts)
+                    if let Some(tool) = forced_tool.filter(|_| has_tools) {
+                        (
+                            tool_call_response(&tool.name, &tool.fallback_arguments),
+                            false,
+                            attempts,
+                        )
+                    } else {
+                        (fallback_worker_response(outputs), false, attempts)
+                    }
                 }
             }
         }
@@ -492,19 +1131,49 @@ async fn resolve_decision(
 
 // ─── Response builders ───────────────────────────────────────────────
 
-fn best_answer(outputs: &[WorkerOutput]) -> String {
+pub(crate) fn best_answer(outputs: &[WorkerOutput]) -> String {
     outputs
         .iter()
-        .filter(|o| matches!(o.kind, normalize::OutputKind::Answer))
+        .filter(|o| {
+            matches!(o.kind, normalize::OutputKind::Answer)
+                && !normalize::is_silent_reply_sentinel(&o.payload)
+        })
         // `total_cmp` is total over all f32 (including NaN/Inf); `partial_cmp`
         // can return `None` on NaN, which would panic on `unwrap`.
         // `normalize_worker_output` now sanitizes non-finite confidences
         // before they reach here, but using `total_cmp` keeps this site
         // panic-free even if a future caller skips the normalizer.
         .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
-        .or(outputs.first())
         .map(|o| o.payload.clone())
         .unwrap_or_default()
+}
+
+pub(crate) fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
+    let answer = best_answer(outputs);
+    if answer.is_empty() {
+        error_response(
+            "MoA could not produce a usable answer",
+            MOA_ERR_NO_USABLE_ANSWER,
+        )
+    } else {
+        chat_response(&answer)
+    }
+}
+
+pub(crate) fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
+    if let (true, Some(name)) = (has_tools, output.tool_name.as_ref()) {
+        let args = output.tool_arguments.as_ref().unwrap_or(&Value::Null);
+        return tool_call_response(name, args);
+    }
+
+    if output.payload.trim().is_empty() || normalize::is_silent_reply_sentinel(&output.payload) {
+        return error_response(
+            "MoA reducer returned no usable answer",
+            MOA_ERR_NO_USABLE_ANSWER,
+        );
+    }
+
+    chat_response(&output.payload)
 }
 
 /// Build a response body that signals MoA-level failure to the client.
@@ -527,7 +1196,7 @@ fn best_answer(outputs: &[WorkerOutput]) -> String {
 ///
 /// The ingress layer is responsible for choosing the HTTP status; this
 /// body is the in-band signal.
-fn error_response(message: &str, code: &str) -> Value {
+pub(crate) fn error_response(message: &str, code: &str) -> Value {
     json!({
         "id": format!("chatcmpl-moa-{}", short_id()),
         "object": "chat.completion",
@@ -570,8 +1239,10 @@ pub const MOA_ERR_ALL_WORKERS_FAILED: &str = "all_workers_failed";
 /// Every reducer candidate failed (in both the tool-result and the
 /// arbiter-escalated paths).
 pub const MOA_ERR_ALL_REDUCERS_FAILED: &str = "all_reducers_failed";
+/// MoA only received silence directives or uncertainty after reduction.
+pub const MOA_ERR_NO_USABLE_ANSWER: &str = "no_usable_answer";
 
-fn chat_response(content: &str) -> Value {
+pub(crate) fn chat_response(content: &str) -> Value {
     json!({
         "id": format!("chatcmpl-moa-{}", short_id()),
         "object": "chat.completion",
@@ -585,7 +1256,7 @@ fn chat_response(content: &str) -> Value {
     })
 }
 
-fn tool_call_response(name: &str, arguments: &Value) -> Value {
+pub(crate) fn tool_call_response(name: &str, arguments: &Value) -> Value {
     // OpenAI tool-call `arguments` is a JSON-object *string*. Three input
     // shapes have to collapse to a valid object string here:
     //
@@ -647,6 +1318,7 @@ mod response_builder_tests {
             model: model.to_string(),
             role: WorkerRole::Fast,
             elapsed_ms: 1,
+            truncated: false,
         }
     }
 
@@ -665,6 +1337,68 @@ mod response_builder_tests {
         // here is *not* about which specific answer wins, only that we do
         // not panic and we return *some* answer.
         assert!(!picked.is_empty());
+    }
+
+    #[test]
+    fn best_answer_ignores_silent_reply_sentinel() {
+        let outputs = vec![
+            answer("a", 0.99, "NO_REPLY"),
+            answer("b", 0.6, "Here is a real response."),
+        ];
+        assert_eq!(best_answer(&outputs), "Here is a real response.");
+    }
+
+    #[test]
+    fn fallback_worker_response_errors_when_only_silent_sentinel_remains() {
+        let outputs = vec![answer("a", 0.99, "NO_REPLY")];
+        let resp = fallback_worker_response(&outputs);
+        assert_eq!(
+            resp.pointer("/error/code").and_then(Value::as_str),
+            Some(MOA_ERR_NO_USABLE_ANSWER)
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/finish_reason")
+                .and_then(Value::as_str),
+            Some("error")
+        );
+    }
+
+    fn tool_proposal(payload: &str) -> WorkerOutput {
+        WorkerOutput {
+            kind: normalize::OutputKind::ToolProposal,
+            confidence: 0.8,
+            tool_name: Some("read_file".to_string()),
+            tool_arguments: Some(json!({"path": "README.md"})),
+            payload: payload.to_string(),
+            model: "reducer".to_string(),
+            role: WorkerRole::Reducer,
+            elapsed_ms: 1,
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn tool_proposal_response_emits_tool_call_when_tools_enabled() {
+        let resp = tool_proposal_response(&tool_proposal("Need to read."), true);
+        assert_eq!(
+            resp.pointer("/choices/0/message/tool_calls/0/function/name")
+                .and_then(Value::as_str),
+            Some("read_file")
+        );
+    }
+
+    #[test]
+    fn tool_proposal_response_does_not_emit_tool_call_when_tools_disabled() {
+        let resp = tool_proposal_response(&tool_proposal("I need to read README.md."), false);
+        assert!(
+            resp.pointer("/choices/0/message/tool_calls").is_none(),
+            "disabled tools must not leak tool_calls: {resp}"
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/message/content")
+                .and_then(Value::as_str),
+            Some("I need to read README.md.")
+        );
     }
 
     #[test]
@@ -757,6 +1491,137 @@ mod response_builder_tests {
     }
 
     #[test]
+    fn forced_tool_choice_infers_enum_argument_from_prompt() {
+        let body = serde_json::json!({
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "lookup_probe_fact"}
+            },
+            "messages": [{
+                "role": "user",
+                "content": "Use lookup_probe_fact with primary and report the result."
+            }],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "lookup_probe_fact",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "key": {
+                                "type": "string",
+                                "enum": ["primary", "secondary"]
+                            }
+                        },
+                        "required": ["key"]
+                    }
+                }
+            }]
+        });
+        let tools = body.get("tools").cloned();
+        let mut session = Session::new();
+        let messages = body
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap();
+        session.ingest(&messages, &tools);
+
+        let forced = forced_tool_choice(&body, &session, &tools).expect("forced tool");
+
+        assert_eq!(forced.name, "lookup_probe_fact");
+        assert_eq!(forced.fallback_arguments, json!({"key": "primary"}));
+    }
+
+    #[test]
+    fn forced_tool_choice_infers_assignment_argument_from_prompt() {
+        let tools = Some(serde_json::json!([{
+            "type": "function",
+            "function": {
+                "name": "lookup_probe_fact",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"key": {"type": "string"}},
+                    "required": ["key"]
+                }
+            }
+        }]));
+
+        let args = infer_tool_arguments_from_prompt(
+            "lookup_probe_fact",
+            tools.as_ref(),
+            "Use key=Primary",
+        );
+
+        assert_eq!(args, json!({"key": "primary"}));
+    }
+
+    #[tokio::test]
+    async fn forced_tool_choice_overrides_answer_decision() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Use lookup_probe_fact with primary"
+            })],
+            &Some(serde_json::json!([{
+                "type": "function",
+                "function": {"name": "lookup_probe_fact"}
+            }])),
+        );
+        let config = GatewayConfig {
+            backends: Vec::new(),
+            models: Vec::new(),
+            worker_timeout: Duration::from_secs(1),
+            reducer_timeout: Duration::from_secs(1),
+            hedge_delay: Duration::from_millis(10),
+            first_answer_grace: Duration::from_millis(10),
+            strong_patience: Duration::ZERO,
+            enable_thinking: Some(false),
+            actor_candidates: Vec::new(),
+            reference_policy: Default::default(),
+            refinement_policy: Default::default(),
+        };
+        let forced_tool = ForcedToolChoice {
+            name: "lookup_probe_fact".to_string(),
+            fallback_arguments: json!({"key": "primary"}),
+        };
+        let selected_tool_names = ["lookup_probe_fact".to_string()];
+        let allowed_tools = ["lookup_probe_fact".to_string()];
+        let (resp, reducer_used, attempts) = resolve_decision(
+            &config,
+            DecisionResolution {
+                session: &session,
+                decision: arbiter::Decision::Answer("I would call the tool.".to_string()),
+                outputs: &[],
+                has_tools: true,
+                selected_tool_names: &selected_tool_names,
+                forced_tool: Some(&forced_tool),
+                allowed_tools: &allowed_tools,
+            },
+        )
+        .await;
+
+        assert!(!reducer_used);
+        assert_eq!(attempts, 0);
+        assert_eq!(
+            resp.pointer("/choices/0/finish_reason")
+                .and_then(Value::as_str),
+            Some("tool_calls")
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/message/tool_calls/0/function/name")
+                .and_then(Value::as_str),
+            Some("lookup_probe_fact")
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/message/tool_calls/0/function/arguments")
+                .and_then(Value::as_str),
+            Some("{\"key\":\"primary\"}")
+        );
+    }
+
+    #[test]
     fn error_response_reports_message_based_completion_tokens() {
         let resp = error_response("All MoA workers failed", MOA_ERR_ALL_WORKERS_FAILED);
         let tokens = resp
@@ -764,5 +1629,258 @@ mod response_builder_tests {
             .and_then(serde_json::Value::as_u64)
             .expect("completion_tokens is u64");
         assert!(tokens > 0);
+    }
+
+    #[test]
+    fn tool_enabled_chat_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "How are you?"})],
+            &Some(serde_json::json!([{"type": "function", "function": {"name": "read"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Answer);
+    }
+
+    #[test]
+    fn tool_intent_uses_tool_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Use a tool to read /tmp/openclaw-tool-baseline.txt",
+            })],
+            &Some(serde_json::json!([{"type": "function", "function": {"name": "read"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Tool);
+    }
+
+    #[test]
+    fn negated_web_prompt_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Plain check with no web lookup: reply OK",
+            })],
+            &Some(serde_json::json!([{"type": "function", "function": {"name": "web_search"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Answer);
+    }
+
+    #[test]
+    fn no_tools_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "Reply OK"})],
+            &None,
+        );
+        assert_eq!(grace_mode_for_turn(&session, false), GraceMode::Answer);
+    }
+
+    #[test]
+    fn tool_turn_preserves_all_caller_tools() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Read both data files, calculate the totals, then write the report."
+            })],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read_file"}},
+                {"type": "function", "function": {"name": "write_file"}}
+            ])),
+        );
+
+        assert_eq!(
+            tool_names_for_turn(&session, &[]),
+            vec!["read_file".to_string(), "write_file".to_string()]
+        );
+    }
+
+    #[test]
+    fn explicit_allowed_tools_remain_an_authoritative_subset() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "Do the task"})],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read_file"}},
+                {"type": "function", "function": {"name": "write_file"}}
+            ])),
+        );
+
+        assert_eq!(
+            tool_names_for_turn(&session, &["read_file".to_string()]),
+            vec!["read_file".to_string()]
+        );
+    }
+
+    #[test]
+    fn two_same_tool_results_do_not_force_answer() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "web_search"),
+                tool_result_msg("call_1", "result 1"),
+                tool_call_msg("call_2", "web_search"),
+                tool_result_msg("call_2", "result 2"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "web_search"}}
+            ])),
+        );
+
+        assert_eq!(repeated_identical_tool_results(&session), None);
+    }
+
+    #[test]
+    fn three_identical_tool_results_force_answer() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "web_search"),
+                tool_result_msg("call_1", "result 1"),
+                tool_call_msg("call_2", "web_search"),
+                tool_result_msg("call_2", "result 2"),
+                tool_call_msg("call_3", "web_search"),
+                tool_result_msg("call_3", "result 3"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "web_search"}}
+            ])),
+        );
+
+        assert_eq!(
+            repeated_identical_tool_results(&session),
+            Some(("web_search".to_string(), 3))
+        );
+    }
+
+    #[test]
+    fn three_same_tool_results_with_different_arguments_do_not_force_answer() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "inspect the project"}),
+                tool_call_msg_with_arguments("call_1", "tree", r#"{"path":"."}"#),
+                tool_result_msg("call_1", "facts src tests"),
+                tool_call_msg_with_arguments("call_2", "tree", r#"{"path":"facts"}"#),
+                tool_result_msg("call_2", "signal.md"),
+                tool_call_msg_with_arguments("call_3", "tree", r#"{"path":"src"}"#),
+                tool_result_msg("call_3", "smoke_calc.py"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "tree"}}
+            ])),
+        );
+
+        assert_eq!(repeated_identical_tool_results(&session), None);
+    }
+
+    #[test]
+    fn repair_tool_result_answer_preserves_short_json_values_on_recall() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "lookup"),
+                tool_result_msg("call_1", r#"{"key":"primary","value":"PRIMARY-FACT-123"}"#),
+                tool_call_msg("call_2", "lookup"),
+                tool_result_msg(
+                    "call_2",
+                    r#"{"key":"secondary","value":"SECONDARY-FACT-456"}"#,
+                ),
+                serde_json::json!({
+                    "role": "user",
+                    "content": "Final recall: include both tool facts."
+                }),
+            ],
+            &None,
+        );
+
+        let repaired =
+            repair_tool_result_answer(&session, "The secondary fact is SECONDARY-FACT-456.");
+
+        assert!(repaired.contains("PRIMARY-FACT-123"));
+        assert!(repaired.contains("SECONDARY-FACT-456"));
+        assert!(!repaired.contains("primary"));
+    }
+
+    #[test]
+    fn repair_tool_result_answer_preserves_structured_result_after_forced_tool_call() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({
+                    "role": "user",
+                    "content": "Call the lookup_fixture_fact tool with key=codeword. Do not answer directly before the tool call."
+                }),
+                tool_call_msg("call_fixture", "lookup_fixture_fact"),
+                tool_result_msg(
+                    "call_fixture",
+                    r#"{"key":"codeword","value":"signal-7429"}"#,
+                ),
+            ],
+            &None,
+        );
+
+        let repaired = repair_tool_result_answer(&session, "Done.");
+
+        assert!(repaired.contains("signal-7429"));
+    }
+
+    #[test]
+    fn repair_tool_result_answer_ignores_large_or_non_evidence_tool_values() {
+        let huge = "x".repeat(200);
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "lookup"),
+                tool_result_msg(
+                    "call_1",
+                    &serde_json::json!({
+                        "value": huge,
+                        "debug": "SHORT-BUT-NOT-EVIDENCE",
+                        "result": "multi\nline",
+                    })
+                    .to_string(),
+                ),
+                serde_json::json!({
+                    "role": "user",
+                    "content": "Final recall: include tool facts."
+                }),
+            ],
+            &None,
+        );
+
+        let repaired = repair_tool_result_answer(&session, "Done.");
+
+        assert_eq!(repaired, "Done.");
+    }
+
+    fn tool_call_msg(id: &str, name: &str) -> Value {
+        tool_call_msg_with_arguments(id, name, r#"{"query":"x"}"#)
+    }
+
+    fn tool_call_msg_with_arguments(id: &str, name: &str, arguments: &str) -> Value {
+        serde_json::json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": id,
+                "type": "function",
+                "function": {"name": name, "arguments": arguments}
+            }]
+        })
+    }
+
+    fn tool_result_msg(id: &str, text: &str) -> Value {
+        serde_json::json!({
+            "role": "tool",
+            "tool_call_id": id,
+            "content": text
+        })
     }
 }

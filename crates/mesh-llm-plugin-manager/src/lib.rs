@@ -21,5 +21,16 @@ pub use mesh_llm_skills::{
 };
 pub use skills::{PluginSkillInstallOptions, discover_plugin_skills, install_available_skills};
 pub use source_ref::{GitHubPluginSource, PluginInstallRef, PluginVersion, parse_install_ref};
-pub use store::{InstalledPluginMetadata, PluginStore, default_store_root};
+pub use store::{
+    InstalledPluginApplyMode, InstalledPluginConditionOperator, InstalledPluginConditionValue,
+    InstalledPluginConditionalDisable, InstalledPluginConfigSchema, InstalledPluginConflictRule,
+    InstalledPluginConstraint, InstalledPluginControlAvailability,
+    InstalledPluginControlAvailabilitySource, InstalledPluginControlBehavior,
+    InstalledPluginControlCondition, InstalledPluginDisabledWritePolicy,
+    InstalledPluginManifestMetadata, InstalledPluginMetadata, InstalledPluginNumericControl,
+    InstalledPluginObjectProperty, InstalledPluginOptionsSource,
+    InstalledPluginPresentationMetadata, InstalledPluginRestartScope, InstalledPluginSettingSchema,
+    InstalledPluginTextFormat, InstalledPluginValueKind, InstalledPluginValueSchema,
+    InstalledPluginVisibility, PluginStore, SUPPORTED_PLUGIN_SCHEMA_VERSION, default_store_root,
+};
 pub use target::{ArchiveExt, PluginTarget, UnsupportedTarget};

@@ -14,7 +14,7 @@ categories = ["network-programming", "api-bindings"]
 name = "mesh_client"
 
 [features]
-host-io = []
+host-io = ["mesh-llm-identity/host-io"]
 
 [dependencies]
 # Allowlist enforced by embedded-client-purity CI (Wave 1C)
@@ -22,19 +22,19 @@ host-io = []
 # model-artifact, iroh, tokio, prost, bytes, rustls, quinn, serde, serde_json, thiserror, anyhow,
 # tracing, sha2, ed25519-dalek, hex, uuid, url, http, base64, async-trait, httparse
 # (httparse is a transitive dep of iroh; not in forbidden list)
-iroh = "1.0.0-rc.0"
-mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.68.0" }
-mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.68.0" }
-mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.68.0" }
-mesh-llm-types = { path = "../mesh-llm-types", version = "0.68.0" }
-model-artifact = { path = "../model-artifact", version = "0.68.0" }
+iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.76.0-rc2", default-features = false }
+mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.76.0-rc2" }
+mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.76.0-rc2" }
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.76.0-rc2" }
+model-artifact = { path = "../model-artifact", version = "0.76.0-rc2" }
 async-trait = "0.1"
 httparse = "1"
 tokio = { version = "1", features = ["io-util", "sync", "net", "time", "rt-multi-thread"] }
 prost = "0.14"
 bytes = "1"
 anyhow = "1"
-nostr-sdk = { version = "0.44.1", default-features = false }
+nostr-sdk = { version = "0.45.1", default-features = false }
 rustls = "0.23"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
@@ -43,7 +43,7 @@ hex = "0.4"
 sha2 = "0.10"
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
-ed25519-dalek = { version = "=3.0.0-pre.7", features = ["rand_core"] }
+ed25519-dalek = { version = "=3.0.0-rc.0", features = ["rand_core"] }
 crypto_box = "0.9"
 rand = "0.10"
 base64 = "0.22"

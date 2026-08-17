@@ -1,0 +1,273 @@
+name: Prepare static ABI input
+description: Build or verify, describe, and archive one immutable static llama ABI input.
+
+inputs:
+  backend:
+    description: Static llama ABI backend.
+    required: true
+  target:
+    description: Native target triple represented by this ABI.
+    required: true
+  build:
+    description: Build the ABI before archiving it.
+    required: false
+    default: "true"
+
+outputs:
+  archive_path:
+    description: Absolute path to the static ABI archive.
+    value: ${{ steps.prepare.outputs.archive_path }}
+  checksum_path:
+    description: Absolute path to the archive checksum sidecar.
+    value: ${{ steps.prepare.outputs.checksum_path }}
+  upload_path:
+    description: Flat glob containing the exact immutable upload payload.
+    value: ${{ steps.prepare.outputs.upload_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare immutable static ABI input
+      id: prepare
+      shell: bash
+      env:
+        INPUT_BACKEND: ${{ inputs.backend }}
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_BUILD: ${{ inputs.build }}
+      run: |
+        set -euo pipefail
+
+        if [[ "$INPUT_BACKEND" != "cpu" ]]; then
+          echo "unsupported shared static ABI backend: $INPUT_BACKEND" >&2
+          exit 1
+        fi
+        case "$INPUT_TARGET" in
+          x86_64-unknown-linux-gnu) expected_arch="x86_64" ;;
+          aarch64-unknown-linux-gnu) expected_arch="aarch64" ;;
+          *)
+            echo "unsupported shared static ABI target: $INPUT_TARGET" >&2
+            exit 1
+            ;;
+        esac
+        case "$(uname -m)" in
+          x86_64|amd64) runner_arch="x86_64" ;;
+          aarch64|arm64) runner_arch="aarch64" ;;
+          *) runner_arch="$(uname -m)" ;;
+        esac
+        if [[ "$runner_arch" != "$expected_arch" ]]; then
+          echo "static ABI target/runner architecture mismatch: $INPUT_TARGET on $runner_arch" >&2
+          exit 1
+        fi
+        case "$INPUT_BUILD" in
+          true|false) ;;
+          *)
+            echo "build must be true or false" >&2
+            exit 1
+            ;;
+        esac
+        toolchain_epoch="${MESH_LLM_LLAMA_TOOLCHAIN_EPOCH:-}"
+        if [[ -z "$toolchain_epoch" ||
+              ! "$toolchain_epoch" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+          echo "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH must identify the pinned build image" >&2
+          exit 1
+        fi
+
+        expected_build_dir=".deps/llama.cpp/build-stage-abi-static"
+        if [[ "${LLAMA_STAGE_BUILD_DIR:-}" != "$expected_build_dir" ]]; then
+          echo "shared static ABI build dir must be $expected_build_dir" >&2
+          exit 1
+        fi
+
+        scripts/prepare-llama.sh pinned
+        if [[ "$INPUT_BUILD" == "true" ]]; then
+          scripts/build-llama.sh
+        fi
+
+        source_build_dir="$LLAMA_STAGE_BUILD_DIR"
+        build_stamp="$source_build_dir/.mesh-llm-build-stamp"
+        patched_sha_file=".deps/llama.cpp/.mesh-llm-patched-sha"
+        required_archives=(
+          "src/libllama.a"
+          "common/libllama-common.a"
+          "common/libllama-common-base.a"
+          "ggml/src/libggml.a"
+          "ggml/src/libggml-base.a"
+          "tools/mtmd/libmtmd.a"
+        )
+        test -s "$build_stamp"
+        test -s "$patched_sha_file"
+        test -s "$source_build_dir/CMakeCache.txt"
+        for relative in "${required_archives[@]}"; do
+          if [[ ! -s "$source_build_dir/$relative" ]]; then
+            echo "static ABI is missing required archive: $relative" >&2
+            exit 1
+          fi
+        done
+        cpu_archive=
+        for candidate in \
+          "ggml/src/libggml-cpu.a" \
+          "ggml/src/ggml-cpu/libggml-cpu.a"; do
+          if [[ -s "$source_build_dir/$candidate" ]]; then
+            cpu_archive="$candidate"
+            break
+          fi
+        done
+        if [[ -z "$cpu_archive" ]]; then
+          echo "static ABI is missing libggml-cpu.a" >&2
+          exit 1
+        fi
+
+        upload_dir="static-abi-artifact-output"
+        if [[ -e "$upload_dir" ]]; then
+          echo "static ABI artifact output already exists: $upload_dir" >&2
+          exit 1
+        fi
+        mkdir -p "$upload_dir"
+
+        stage_root="$(
+          mktemp -d "${RUNNER_TEMP:-/tmp}/mesh-static-abi-stage.XXXXXX"
+        )"
+        trap 'rm -rf -- "$stage_root"' EXIT
+        portable_build_dir="$stage_root/$(basename "$source_build_dir")"
+        mkdir -p "$portable_build_dir"
+
+        copy_archive() {
+          local relative="$1"
+          mkdir -p "$portable_build_dir/$(dirname "$relative")"
+          cp -p "$source_build_dir/$relative" "$portable_build_dir/$relative"
+        }
+        for relative in "${required_archives[@]}"; do
+          copy_archive "$relative"
+        done
+        copy_archive "$cpu_archive"
+        optional_blas_archive="ggml/src/ggml-blas/libggml-blas.a"
+        if [[ -s "$source_build_dir/$optional_blas_archive" ]]; then
+          copy_archive "$optional_blas_archive"
+        fi
+        cp -p "$build_stamp" "$portable_build_dir/.mesh-llm-build-stamp"
+
+        # build.rs only consumes this OpenMP subset for a CPU static ABI.
+        # Excluding the rest removes CMake's producer-local source/build paths
+        # while retaining the exact native link decision.
+        python3 - \
+          "$source_build_dir/CMakeCache.txt" \
+          "$portable_build_dir/CMakeCache.txt" <<'PY'
+        import re
+        import sys
+
+        source, destination = sys.argv[1:]
+        safe_key = re.compile(
+            r"^(?:"
+            r"GGML_OPENMP_ENABLED|"
+            r"OpenMP_(?:C|CXX)_LIB_NAMES|"
+            r"OpenMP_[A-Za-z0-9_]+_LIBRARY"
+            r"):[^=]+="
+        )
+        retained = [
+            line
+            for line in open(source, encoding="utf-8", errors="strict")
+            if safe_key.match(line)
+        ]
+        with open(destination, "w", encoding="utf-8") as handle:
+            handle.write("# Portable MeshLLM static ABI link metadata\n")
+            handle.writelines(retained)
+        PY
+
+        manifest="$portable_build_dir/.mesh-llm-static-abi-input.json"
+        python3 - \
+          "$manifest" \
+          "$INPUT_TARGET" \
+          "$INPUT_BACKEND" \
+          "$(basename "$source_build_dir")" \
+          "$toolchain_epoch" \
+          "$patched_sha_file" \
+          "$portable_build_dir/.mesh-llm-build-stamp" <<'PY'
+        import hashlib
+        import json
+        import sys
+
+        (
+            manifest_path,
+            target,
+            backend,
+            build_dir,
+            toolchain_epoch,
+            patched_sha_path,
+            stamp_path,
+        ) = sys.argv[1:]
+        with open(patched_sha_path, encoding="utf-8") as handle:
+            expected_patched_sha = handle.read().strip()
+        if not expected_patched_sha:
+            raise SystemExit("prepared llama.cpp patched SHA is empty")
+        with open(stamp_path, "rb") as handle:
+            stamp_bytes = handle.read()
+        stamp_sha256 = hashlib.sha256(stamp_bytes).hexdigest()
+        manifest = {
+            "schema_version": 3,
+            "contract": "mesh-llm-static-abi-v3",
+            "target_triple": target,
+            "backend": backend,
+            "build_directory": build_dir,
+            "toolchain_epoch": toolchain_epoch,
+            "build_stamp_sha256": stamp_sha256,
+        }
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        PY
+        expected_patched_sha="$(tr -d '[:space:]' < "$patched_sha_file")"
+        python3 scripts/verify-static-abi-build-stamp.py \
+          "$portable_build_dir/.mesh-llm-build-stamp" \
+          --backend "$INPUT_BACKEND" \
+          --link-mode static \
+          --stamp-version 3 \
+          --toolchain-epoch "$toolchain_epoch" \
+          --patched-sha "$expected_patched_sha"
+
+        # Fail closed if compiler output or staged metadata retained the
+        # producer's checkout/build paths.
+        python3 - \
+          "$portable_build_dir" \
+          "$(pwd -P)" \
+          "$(cd .deps/llama.cpp && pwd -P)" \
+          "$(cd "$source_build_dir" && pwd -P)" <<'PY'
+        import sys
+        from pathlib import Path
+
+        stage = Path(sys.argv[1])
+        forbidden = tuple(
+            value.encode()
+            for value in dict.fromkeys(sys.argv[2:])
+            if value
+        )
+        for path in sorted(stage.rglob("*")):
+            if not path.is_file():
+                continue
+            data = path.read_bytes()
+            for value in forbidden:
+                if value in data:
+                    raise SystemExit(
+                        f"portable static ABI retained producer-local path "
+                        f"{value.decode()!r} in {path.relative_to(stage)}"
+                    )
+        PY
+
+        archive_path="$upload_dir/mesh-llm-static-abi.tar.gz"
+        tar -C "$stage_root" \
+          -czf "$archive_path" \
+          "$(basename "$portable_build_dir")"
+        if command -v sha256sum >/dev/null 2>&1; then
+          archive_sha="$(sha256sum "$archive_path" | awk '{print $1}')"
+        else
+          archive_sha="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+        fi
+        printf '%s  %s\n' "$archive_sha" "$(basename "$archive_path")" \
+          > "$archive_path.sha256"
+        python3 scripts/verify-checksum-sidecar.py "$archive_path"
+
+        upload_root="$(cd "$upload_dir" && pwd)"
+        {
+          echo "archive_path=$upload_root/mesh-llm-static-abi.tar.gz"
+          echo "checksum_path=$upload_root/mesh-llm-static-abi.tar.gz.sha256"
+          echo "upload_path=$upload_root/*"
+        } >> "$GITHUB_OUTPUT"

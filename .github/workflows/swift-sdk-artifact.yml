@@ -1,0 +1,311 @@
+name: Reusable Swift SDK Artifact
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
+      mode:
+        description: "XCFramework coverage: host-only for PR iteration or full for main/release."
+        required: true
+        type: string
+      artifact_name:
+        description: Immutable GitHub artifact name for the verified XCFramework ZIP.
+        required: true
+        type: string
+      release_tag:
+        description: Optional release tag used to verify/update Package.swift.
+        required: false
+        default: ''
+        type: string
+      prepare_release_version:
+        description: Prepare checked-out sources for release_tag before building.
+        required: false
+        default: false
+        type: boolean
+      update_release_manifest:
+        description: Update and upload Package.swift for a dispatched release.
+        required: false
+        default: false
+        type: boolean
+      require_tracked_console:
+        description: Require generated Swift console assets to be tracked.
+        required: false
+        default: false
+        type: boolean
+      retention_days:
+        description: Artifact retention in days.
+        required: false
+        default: 1
+        type: number
+      timeout_minutes:
+        description: Producer timeout in minutes.
+        required: false
+        default: 45
+        type: number
+
+jobs:
+  runner_policy:
+    name: Select Swift SDK runner
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner_macos: ${{ steps.policy.outputs.runner_macos }}
+      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the Swift SDK role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: 'false'
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
+          force_hosted: ${{ inputs.force_hosted }}
+
+  swift_sdk_artifact:
+    name: Swift SDK input (${{ inputs.mode }})
+    needs: runner_policy
+    runs-on: ${{ needs.runner_policy.outputs.runner_macos }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    env:
+      CACHE_NAMESPACE: mesh-llm
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_RETRY: "10"
+      CARGO_HTTP_MULTIPLEXING: "false"
+      LLAMA_STAGE_BACKEND: metal
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'READ_ONLY' || 'READ_WRITE' }}
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_macos, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Validate typed producer inputs
+        shell: bash
+        env:
+          SWIFT_SDK_MODE: ${{ inputs.mode }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
+          UPDATE_RELEASE_MANIFEST: ${{ inputs.update_release_manifest }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          case "$SWIFT_SDK_MODE" in
+            host-only|full) ;;
+            *)
+              echo "unsupported Swift SDK artifact mode: $SWIFT_SDK_MODE" >&2
+              exit 1
+              ;;
+          esac
+          if [[ ( "$PREPARE_RELEASE_VERSION" == "true" ||
+                  "$UPDATE_RELEASE_MANIFEST" == "true" ) &&
+                -z "$RELEASE_TAG" ]]; then
+            echo "release_tag is required for release preparation" >&2
+            exit 1
+          fi
+          if [[ "$PREPARE_RELEASE_VERSION" == "true" &&
+                "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "release source preparation requires workflow_dispatch" >&2
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          package-manager-cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+          cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && 'pnpm' || '' }}
+          cache-dependency-path: |
+            .github/cache-version.txt
+            crates/mesh-llm-ui/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+
+      - name: Install macOS SDK build dependencies
+        run: brew install cmake ninja lld
+
+      - name: Resolve macOS native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          include_tool_versions: "true"
+
+      - if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: swift-sdk
+          key: ${{ steps.native_toolchain.outputs.epoch }}
+          add-job-id-key: "false"
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Restore exact Swift native ABI cache
+        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .deps/llama-build
+          # The full and host-only producers share target-specific ABI directories.
+          # GitHub scopes PR writes to the merge ref, so a trusted main full build
+          # can seed this exact mode-independent key without a PR shadowing it.
+          key: ${{ format('mesh-llm-swift-sdk-{0}-{1}-{2}-{3}', runner.os, runner.arch, steps.native_toolchain.outputs.epoch, hashFiles('Cargo.lock', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'sdk/swift/scripts/build-host-macos-xcframework.sh', 'sdk/swift/scripts/build-xcframework.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/cache-version.txt')) }}
+
+      - name: Prepare dispatched release version
+        if: ${{ inputs.prepare_release_version }}
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+
+      - name: Prepare Swift console resources
+        run: |
+          scripts/package-sdk-console-assets.sh --sdk swift
+          scripts/verify-sdk-console-assets.sh --sdk swift
+
+      - name: Verify tagged Swift console resources
+        if: ${{ inputs.require_tracked_console }}
+        run: git ls-files --error-unmatch sdk/swift/Sources/MeshLLM/Resources/Console/index.html
+
+      - name: Build host-only Swift SDK input
+        if: ${{ inputs.mode == 'host-only' }}
+        run: sdk/swift/scripts/build-host-macos-xcframework.sh
+
+      - name: Build full Swift SDK input
+        if: ${{ inputs.mode == 'full' }}
+        run: sdk/swift/scripts/build-xcframework.sh
+
+      - name: Verify committed Swift binding source is current
+        if: ${{ !inputs.prepare_release_version }}
+        run: |
+          set -euo pipefail
+          generated_binding="sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"
+          git ls-files --error-unmatch "$generated_binding"
+          if ! git diff --exit-code -- "$generated_binding"; then
+            echo "generated Swift UniFFI bindings changed during the protected build" >&2
+            echo "regenerate and commit $generated_binding before publishing" >&2
+            exit 1
+          fi
+
+      - name: Stage immutable generated Swift binding
+        run: |
+          set -euo pipefail
+          generated_binding="sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"
+          staged_binding="dist/swift-generated-binding/mesh_ffi.swift"
+          git ls-files --error-unmatch "$generated_binding"
+          mkdir -p "$(dirname "$staged_binding")"
+          install -m 0644 "$generated_binding" "$staged_binding"
+          cmp "$generated_binding" "$staged_binding"
+
+      - name: Package Swift SDK input
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          rm -f dist/MeshLLMFFI.xcframework.zip
+          ditto -c -k --sequesterRsrc --keepParent \
+            sdk/swift/Generated/MeshLLMFFI.xcframework \
+            dist/MeshLLMFFI.xcframework.zip
+
+      - name: Prepare SwiftPM manifest for dispatched release
+        if: ${{ inputs.update_release_manifest }}
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          scripts/update-swift-package-manifest.sh \
+            "$RELEASE_TAG" \
+            dist/MeshLLMFFI.xcframework.zip
+
+      - name: Verify immutable Swift SDK input
+        env:
+          SWIFT_SDK_MODE: ${{ inputs.mode }}
+        run: |
+          scripts/verify-swift-release-artifact.sh \
+            dist/MeshLLMFFI.xcframework.zip \
+            "$SWIFT_SDK_MODE"
+
+      - name: Verify SwiftPM release manifest
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          scripts/verify-swift-package-manifest.sh \
+            "$RELEASE_TAG" \
+            dist/MeshLLMFFI.xcframework.zip
+
+      - name: Upload generated SwiftPM manifest
+        if: ${{ inputs.update_release_manifest }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: swift-package-manifest
+          path: Package.swift
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Upload immutable Swift SDK input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: dist/MeshLLMFFI.xcframework.zip
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Upload immutable generated Swift binding
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: generated-swift-binding-${{ inputs.artifact_name }}
+          path: dist/swift-generated-binding
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Capture Swift SDK sccache statistics
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-swift-sdk-${{ inputs.mode }}-${{ github.run_attempt }}

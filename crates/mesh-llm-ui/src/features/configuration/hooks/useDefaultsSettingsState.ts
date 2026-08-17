@@ -36,6 +36,13 @@ export function useDefaultsSettingsState(data: ConfigurationDefaultsHarnessData)
   }
 }
 
-export function createDefaultsValues(data: ConfigurationDefaultsHarnessData): ConfigurationDefaultsValues {
-  return Object.fromEntries(data.settings.map((setting) => [setting.id, setting.control.value]))
+export function createDefaultsValues(
+  data: ConfigurationDefaultsHarnessData,
+  ...additionalData: Array<ConfigurationDefaultsHarnessData | undefined>
+): ConfigurationDefaultsValues {
+  return Object.fromEntries(
+    [data, ...additionalData].flatMap((settingsData) =>
+      settingsData ? settingsData.settings.map((setting) => [setting.id, setting.control.value] as const) : []
+    )
+  )
 }

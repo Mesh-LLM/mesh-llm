@@ -6,9 +6,12 @@ use std::{
 
 use anyhow::{Result, bail};
 use openai_frontend::OpenAiHookPolicy;
-use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCachePayload};
+use skippy_protocol::{
+    LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
+};
 use skippy_server::{
-    EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions, telemetry::Telemetry,
+    EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions,
+    NativeMtpProposalConfig, SpeculativeDecodeConfig, telemetry::Telemetry,
 };
 
 use super::super::{
@@ -26,6 +29,12 @@ use super::types::{
     BUILTIN_PREFILL_CHUNK_SIZE, ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig,
     ResolvedStageKvCache,
 };
+
+/// Default maximum number of draft tokens for native MTP sidecar probes when
+/// no explicit `draft_max_tokens` is configured. Three tokens is a reasonable
+/// default: long enough to confirm or reject the draft trajectory without
+/// over-committing speculative decode resources.
+const DEFAULT_NATIVE_MTP_MAX_TOKENS: usize = 3;
 
 impl ResolvedSkippyConfig {
     pub(crate) fn to_model_load_options(
@@ -46,6 +55,7 @@ impl ResolvedSkippyConfig {
             self.ensure_embedded_openai_safe(true)?;
         }
         let mut options = self.base_model_load_options(telemetry);
+        options.native_mtp_enabled = self.speculative.native_mtp_enabled;
         // Pre-compute the package identity so single_stage_config skips the
         // SHA-256 hash. Without this the same hash runs again in
         // SkippyModelHandle::load_with_hooks, doubling I/O (issue #717).
@@ -78,6 +88,8 @@ impl ResolvedSkippyConfig {
 
         options.default_max_tokens = self.request_defaults.max_tokens;
         options.n_gpu_layers = self.hardware.gpu_layers;
+        options.mmap = self.hardware.mmap;
+        options.mlock = self.hardware.mlock;
         if let Some(projector_path) = self.hardware.projector_path.clone() {
             options = options.with_projector_path(projector_path);
         }
@@ -105,6 +117,7 @@ impl ResolvedSkippyConfig {
     ) -> Result<StageConfig> {
         self.ensure_embedded_openai_safe(true)?;
         let mut load_options = self.base_model_load_options(SkippyTelemetryOptions::off());
+        load_options.native_mtp_enabled = self.speculative.native_mtp_enabled;
         if let Some(package_identity) = package_identity {
             load_options.package_identity = Some(package_identity.clone());
             if self.hardware.stage_layer_end.is_none() {
@@ -229,17 +242,22 @@ impl ResolvedSkippyConfig {
             } else {
                 None
             },
-            speculative_window: if mode == "draft" {
-                self.speculative.draft_max_tokens as usize
-            } else {
-                0
-            },
-            adaptive_speculative_window: false,
-            draft_n_gpu_layers: if mode == "draft" {
+            speculative_window: self.speculative_window_for_embedded(mode),
+            adaptive_speculative_window: mode == "draft",
+            draft_n_gpu_layers: if mode == "draft" || self.speculative.native_mtp_enabled {
                 self.speculative.draft_n_gpu_layers
             } else {
                 None
             },
+            speculative: self.speculative_decode_config(),
+            native_mtp_enabled: self.speculative.native_mtp_enabled,
+            native_mtp_draft_model_path: if self.speculative.native_mtp_enabled {
+                self.speculative.draft_model_path.clone()
+            } else {
+                None
+            },
+            native_mtp_max_tokens: self.speculative.decode.native_mtp.max_draft_tokens,
+            native_mtp_min_tokens: self.speculative.decode.native_mtp.min_draft_tokens,
             activation_width,
             wire_dtype: self.skippy.activation_wire_dtype.into(),
             reply_credit_limit: None,
@@ -262,21 +280,32 @@ impl ResolvedSkippyConfig {
             if self.skippy.prefill_controls_explicit {
                 bail!("skippy prefill chunk controls require staged serving");
             }
-            if self.speculative.explicit {
-                bail!("speculative draft controls require staged serving");
-            }
         }
         Ok(())
     }
 
-    fn speculative_mode_for_embedded(&self, staged: bool) -> &'static str {
-        if !staged {
-            return "disabled";
-        }
+    fn speculative_mode_for_embedded(&self, _staged: bool) -> &'static str {
         if self.speculative.mode == "draft" && self.speculative.draft_model_path.is_some() {
             "draft"
+        } else if self.speculative.decode.ngram.is_some()
+            && !self.speculative.decode.native_mtp.enabled
+        {
+            "ngram"
         } else {
             "disabled"
+        }
+    }
+
+    fn speculative_window_for_embedded(&self, mode: &str) -> usize {
+        match mode {
+            "draft" => self.speculative.draft_max_tokens as usize,
+            "ngram" => self
+                .speculative
+                .decode
+                .ngram
+                .as_ref()
+                .map_or(0, |ngram| ngram.max_proposal_tokens),
+            _ => 0,
         }
     }
 
@@ -286,7 +315,15 @@ impl ResolvedSkippyConfig {
     ) -> Result<Option<StageKvCacheConfig>> {
         match &self.model_fit.prefix_cache {
             ResolvedStageKvCache::FamilyDefault => Ok(family_default),
-            ResolvedStageKvCache::Disabled => Ok(None),
+            ResolvedStageKvCache::Disabled => Ok(Some(StageKvCacheConfig {
+                mode: StageKvCacheMode::Disabled,
+                payload: StageKvCachePayload::Auto,
+                max_entries: 0,
+                max_bytes: 0,
+                min_tokens: 0,
+                shared_prefix_stride_tokens: 0,
+                shared_prefix_record_limit: 0,
+            })),
             ResolvedStageKvCache::Explicit(template) => {
                 let mut cache = family_default.unwrap_or(StageKvCacheConfig {
                     mode: template.mode.clone(),
@@ -320,12 +357,19 @@ impl ResolvedSkippyConfig {
     }
 }
 
+impl ResolvedSkippyConfig {
+    fn speculative_decode_config(&self) -> SpeculativeDecodeConfig {
+        self.speculative.decode.clone()
+    }
+}
+
 impl ResolvedEmbeddedOpenAiArgs {
     pub(crate) fn direct_single_stage_defaults(
         model_id: String,
         default_max_tokens: u32,
         generation_concurrency: usize,
         wire_dtype: skippy_protocol::binary::WireActivationDType,
+        native_mtp_enabled: bool,
     ) -> Self {
         Self {
             model_id: Some(model_id),
@@ -342,6 +386,34 @@ impl ResolvedEmbeddedOpenAiArgs {
             speculative_window: 0,
             adaptive_speculative_window: false,
             draft_n_gpu_layers: None,
+            speculative: SpeculativeDecodeConfig {
+                native_mtp: NativeMtpProposalConfig {
+                    enabled: native_mtp_enabled,
+                    max_draft_tokens: if native_mtp_enabled {
+                        DEFAULT_NATIVE_MTP_MAX_TOKENS
+                    } else {
+                        1
+                    },
+                    min_draft_tokens: 0,
+                    reject_cooldown_tokens: 0,
+                    suppress_cooldown_drafts: false,
+                    suppress_cooldown_draft_limit: 0,
+                },
+                effective_strategy: if native_mtp_enabled {
+                    "native-mtp".to_string()
+                } else {
+                    "disabled".to_string()
+                },
+                ..SpeculativeDecodeConfig::default()
+            },
+            native_mtp_enabled,
+            native_mtp_draft_model_path: None,
+            native_mtp_max_tokens: if native_mtp_enabled {
+                DEFAULT_NATIVE_MTP_MAX_TOKENS
+            } else {
+                0
+            },
+            native_mtp_min_tokens: 0,
             activation_width: 0,
             wire_dtype,
             reply_credit_limit: None,
@@ -355,6 +427,7 @@ impl ResolvedEmbeddedOpenAiArgs {
         generation_concurrency: usize,
         activation_width: i32,
         wire_dtype: skippy_protocol::binary::WireActivationDType,
+        native_mtp_enabled: bool,
     ) -> Self {
         Self {
             model_id,
@@ -371,6 +444,34 @@ impl ResolvedEmbeddedOpenAiArgs {
             speculative_window: 0,
             adaptive_speculative_window: false,
             draft_n_gpu_layers: None,
+            speculative: SpeculativeDecodeConfig {
+                native_mtp: NativeMtpProposalConfig {
+                    enabled: native_mtp_enabled,
+                    max_draft_tokens: if native_mtp_enabled {
+                        DEFAULT_NATIVE_MTP_MAX_TOKENS
+                    } else {
+                        1
+                    },
+                    min_draft_tokens: 0,
+                    reject_cooldown_tokens: 0,
+                    suppress_cooldown_drafts: false,
+                    suppress_cooldown_draft_limit: 0,
+                },
+                effective_strategy: if native_mtp_enabled {
+                    "native-mtp".to_string()
+                } else {
+                    "disabled".to_string()
+                },
+                ..SpeculativeDecodeConfig::default()
+            },
+            native_mtp_enabled,
+            native_mtp_draft_model_path: None,
+            native_mtp_max_tokens: if native_mtp_enabled {
+                DEFAULT_NATIVE_MTP_MAX_TOKENS
+            } else {
+                0
+            },
+            native_mtp_min_tokens: 0,
             activation_width,
             wire_dtype,
             reply_credit_limit: None,
@@ -404,6 +505,11 @@ impl ResolvedEmbeddedOpenAiArgs {
             speculative_window: self.speculative_window,
             adaptive_speculative_window: self.adaptive_speculative_window,
             draft_n_gpu_layers: self.draft_n_gpu_layers,
+            speculative: self.speculative,
+            native_mtp_enabled: self.native_mtp_enabled,
+            native_mtp_draft_model_path: self.native_mtp_draft_model_path,
+            native_mtp_max_tokens: self.native_mtp_max_tokens,
+            native_mtp_min_tokens: self.native_mtp_min_tokens,
             activation_width: self.activation_width,
             wire_dtype: self.wire_dtype,
             reply_credit_limit: self.reply_credit_limit,
@@ -412,8 +518,11 @@ impl ResolvedEmbeddedOpenAiArgs {
                 0.0, None,
             )
             .expect("static downstream wire condition should construct"),
+            prediction_returns: None,
             telemetry,
             hook_policy,
+            generation_receipt: None,
+            linear_proposal_ingress: None,
             openai_guardrails: None,
         }
     }

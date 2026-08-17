@@ -1,26 +1,32 @@
 import * as Collapsible from '@radix-ui/react-collapsible'
 import { Fragment, useEffect, useState, type Dispatch, type SetStateAction } from 'react'
-import { MetaPill } from '@/features/configuration/components/MetaPill'
-import { SelectedModelConfig, SelectedReservedConfig } from '@/features/configuration/components/NodeSectionParts'
+import { MetaPill } from '@/components/ui/MetaPill'
+import { AssignedModelConfigs, SelectedReservedConfig } from '@/features/configuration/components/NodeSectionParts'
 import { PlacementToggle } from '@/features/configuration/components/PlacementToggle'
 import { VRAMBar } from '@/features/configuration/components/VRAMBar'
 import {
-  containerUsedGB,
-  findModel,
   hasConfigurablePlacement,
   isUnifiedMemoryNode,
   nodeReservedGB,
+  nodeSystemTotalGB,
   nodeTotalGB,
   nodeUsableGB
 } from '@/features/configuration/lib/config-math'
 import { formatGB, nodeGpuCountLabel, nodeUsedGB } from '@/features/configuration/lib/config-display'
 import { nodeKeyboardAttributes } from '@/features/configuration/lib/node-keyboard'
-import type { ConfigAssign, ConfigModel, ConfigNode, Placement } from '@/features/app-tabs/types'
+import type {
+  ConfigAssign,
+  ConfigModel,
+  ConfigNode,
+  ConfigurationModelPlacementOptions,
+  Placement
+} from '@/features/app-tabs/types'
 
 type NodeSectionProps = {
   node: ConfigNode
   assigns: ConfigAssign[]
   models?: ConfigModel[]
+  modelPlacementOptions?: ConfigurationModelPlacementOptions
   setAssigns: Dispatch<SetStateAction<ConfigAssign[]>>
   selectedId?: string | null
   selectedContainerIdx?: number | null
@@ -39,6 +45,7 @@ export function NodeSection({
   node,
   assigns,
   models,
+  modelPlacementOptions,
   setAssigns,
   selectedId,
   selectedContainerIdx,
@@ -55,6 +62,7 @@ export function NodeSection({
   const [dragKey, setDragKey] = useState<string | null>(null)
   const open = !collapsed
   const totalNodeGB = nodeTotalGB(node)
+  const systemTotalNodeGB = nodeSystemTotalGB(node)
   const reservedNodeGB = nodeReservedGB(node)
   const usableNodeGB = nodeUsableGB(node)
   const usedNodeGB = nodeUsedGB(node, assigns, models)
@@ -62,9 +70,6 @@ export function NodeSection({
   const selectedAssign = assigns.find((assign) => assign.id === selectedId && assign.nodeId === node.id)
   const selectedAssignContainerIdx = node.placement === 'pooled' ? 0 : (selectedAssign?.containerIdx ?? 0)
   const highlightedContainerIdx = selectedContainerIdx ?? (selectedAssign ? selectedAssignContainerIdx : null)
-  const selectedGpu = node.gpus.find((gpu) => gpu.idx === selectedAssignContainerIdx)
-  const selectedModel = selectedAssign ? findModel(selectedAssign.modelId, models) : undefined
-  const selectedFootprint = selectedModel && selectedAssign ? selectedModel.sizeGB : 0
   const unifiedMemory = isUnifiedMemoryNode(node)
   const configurablePlacement = hasConfigurablePlacement(node)
   const singleGpu = !unifiedMemory && node.gpus.length === 1
@@ -76,22 +81,6 @@ export function NodeSection({
       : singleGpu
         ? 'Single-GPU nodes use a fixed placement.'
         : undefined
-  const selectedReservedGB =
-    node.placement === 'pooled'
-      ? node.gpus.reduce((sum, gpu) => sum + (gpu.reservedGB ?? 0), 0)
-      : (selectedGpu?.reservedGB ?? 0)
-  const selectedTotalGB = node.placement === 'pooled' ? totalNodeGB : (selectedGpu?.totalGB ?? 0)
-  const containerFreeGB = selectedAssign
-    ? selectedTotalGB -
-      selectedReservedGB -
-      containerUsedGB(
-        assigns.filter((assign) => assign.id !== selectedId),
-        node.id,
-        selectedAssignContainerIdx,
-        models
-      ) -
-      selectedFootprint
-    : 0
   const { keyShortcuts: nodeKeyShortcuts, shortcutHelp: nodeShortcutHelp } = nodeKeyboardAttributes({
     collapsed,
     placement: node.placement,
@@ -206,7 +195,7 @@ export function NodeSection({
                   main: `${node.hostname} · unified memory`,
                   sub: nodeGpuCountLabel(node)
                 }}
-                totalGB={totalNodeGB}
+                totalGB={systemTotalNodeGB}
                 reservedGB={node.gpus.reduce((sum, gpu) => sum + (gpu.reservedGB ?? 0), 0)}
                 containerIdx={0}
                 assigns={assigns}
@@ -228,15 +217,15 @@ export function NodeSection({
                 locationLabel={`${node.hostname} pool`}
                 reservedGB={node.gpus.reduce((sum, gpu) => sum + (gpu.reservedGB ?? 0), 0)}
               />
-              <SelectedModelConfig
+              <AssignedModelConfigs
                 node={node}
+                assigns={assigns}
                 containerIdx={0}
-                containerFreeGB={containerFreeGB}
                 models={models}
+                modelPlacementOptions={modelPlacementOptions}
                 onPick={onPick}
                 readOnly={readOnly}
-                selectedAssign={selectedAssign}
-                selectedAssignContainerIdx={selectedAssignContainerIdx}
+                selectedId={selectedId}
                 setAssigns={setAssigns}
               />
             </>
@@ -246,7 +235,7 @@ export function NodeSection({
                 <VRAMBar
                   node={node}
                   label={{ prefix: `GPU ${gpu.idx}`, main: gpu.name, sub: `${formatGB(gpu.totalGB)} GB` }}
-                  totalGB={gpu.totalGB}
+                  totalGB={gpu.systemTotalGB ?? gpu.totalGB}
                   reservedGB={gpu.reservedGB}
                   containerIdx={gpu.idx}
                   assigns={assigns}
@@ -269,15 +258,15 @@ export function NodeSection({
                   locationLabel={`GPU ${gpu.idx} · ${gpu.name}`}
                   reservedGB={gpu.reservedGB ?? 0}
                 />
-                <SelectedModelConfig
+                <AssignedModelConfigs
                   node={node}
+                  assigns={assigns}
                   containerIdx={gpu.idx}
-                  containerFreeGB={containerFreeGB}
                   models={models}
+                  modelPlacementOptions={modelPlacementOptions}
                   onPick={onPick}
                   readOnly={readOnly}
-                  selectedAssign={selectedAssign}
-                  selectedAssignContainerIdx={selectedAssignContainerIdx}
+                  selectedId={selectedId}
                   setAssigns={setAssigns}
                 />
               </Fragment>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "HF Quant And Layer Package Jobs"
+  short_description: "Run quantization and layer packaging as one workflow."
+  default_prompt: "Create or monitor a skippy-quantize quantization plus layer-package workflow."

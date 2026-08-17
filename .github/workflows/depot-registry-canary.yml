@@ -1,0 +1,169 @@
+name: Depot Registry Pull-Through Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_image:
+        description: Digest-pinned public image (for example ubuntu@sha256:...).
+        required: true
+        type: string
+      depot_repository:
+        description: Depot pull-through repository name that mirrors the upstream repository.
+        required: true
+        type: string
+      enforce_threshold:
+        description: Fail unless the pull-through mirror meets the adoption gate.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: depot-registry-canary
+  cancel-in-progress: false
+
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.validate.outputs.digest }}
+      depot_image: ${{ steps.validate.outputs.depot_image }}
+    steps:
+      - name: Validate trusted invocation and image references
+        id: validate
+        shell: bash
+        env:
+          DEPOT_REGISTRY_HOST: ${{ vars.DEPOT_REGISTRY_HOST }}
+          DEPOT_REPOSITORY: ${{ inputs.depot_repository }}
+          UPSTREAM_IMAGE: ${{ inputs.upstream_image }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REPOSITORY" != "Mesh-LLM/mesh-llm" ||
+                "$GITHUB_EVENT_NAME" != "workflow_dispatch" ||
+                "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "registry canaries are restricted to a manual main-ref invocation" >&2
+            exit 1
+          fi
+          if [[ ! "$DEPOT_REGISTRY_HOST" =~ ^[a-z0-9-]+\.registry\.depot\.dev$ ]]; then
+            echo "DEPOT_REGISTRY_HOST must be an organization Depot Registry host" >&2
+            exit 1
+          fi
+          if [[ ! "$DEPOT_REPOSITORY" =~ ^[a-z0-9]+([._/-]?[a-z0-9]+)*$ ||
+                "$DEPOT_REPOSITORY" == *..* ]]; then
+            echo "depot_repository is not a safe repository path" >&2
+            exit 1
+          fi
+          if [[ ! "$UPSTREAM_IMAGE" =~ @sha256:([a-f0-9]{64})$ ]]; then
+            echo "upstream_image must be pinned by sha256 digest" >&2
+            exit 1
+          fi
+
+          digest="sha256:${BASH_REMATCH[1]}"
+          {
+            echo "digest=$digest"
+            echo "depot_image=$DEPOT_REGISTRY_HOST/$DEPOT_REPOSITORY@$digest"
+          } >> "$GITHUB_OUTPUT"
+
+  pull:
+    needs: policy
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [upstream, depot]
+        sample: [1, 2, 3, 4, 5]
+    # Depot provisions a fresh runner for every sample and pre-authenticates it
+    # to the organization Registry with a short-lived job credential.
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Pull exact image on a fresh runner
+        shell: bash
+        env:
+          DEPOT_IMAGE: ${{ needs.policy.outputs.depot_image }}
+          EXPECTED_DIGEST: ${{ needs.policy.outputs.digest }}
+          SAMPLE: ${{ matrix.sample }}
+          SOURCE: ${{ matrix.source }}
+          UPSTREAM_IMAGE: ${{ inputs.upstream_image }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${DEPOT_ORG_ID:-}" != "1ntz5vlngn" ]]; then
+            echo "registry canaries require a pre-authenticated Mesh-LLM Depot runner" >&2
+            exit 1
+          fi
+
+          image="$UPSTREAM_IMAGE"
+          if [[ "$SOURCE" == "depot" ]]; then
+            image="$DEPOT_IMAGE"
+          fi
+
+          start_ns="$(date +%s%N)"
+          docker pull "$image"
+          end_ns="$(date +%s%N)"
+          elapsed_ms="$(( (end_ns - start_ns) / 1000000 ))"
+          resolved_digest="$(docker image inspect "$image" \
+            --format '{{join .RepoDigests "\n"}}' | sed -n 's/.*@\(sha256:[a-f0-9]\{64\}\)$/\1/p' | head -1)"
+          if [[ "$resolved_digest" != "$EXPECTED_DIGEST" ]]; then
+            echo "digest mismatch: expected $EXPECTED_DIGEST, got $resolved_digest" >&2
+            exit 1
+          fi
+
+          python3 - "$SOURCE" "$SAMPLE" "$elapsed_ms" "$resolved_digest" <<'PY'
+          import json
+          import sys
+
+          source, sample, elapsed_ms, digest = sys.argv[1:]
+          with open("observation.json", "w", encoding="utf-8") as handle:
+              json.dump(
+                  {
+                      "source": source,
+                      "sample": int(sample),
+                      "elapsed_ms": int(elapsed_ms),
+                      "digest": digest,
+                  },
+                  handle,
+              )
+              handle.write("\n")
+          PY
+
+      - name: Upload pull observation
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: depot-registry-pull-${{ matrix.source }}-${{ matrix.sample }}
+          path: observation.json
+          retention-days: 14
+
+  summary:
+    if: ${{ !cancelled() }}
+    needs: [policy, pull]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Download pull observations
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: depot-registry-pull-*
+          path: registry-pull-observations
+      - name: Evaluate adoption gate
+        shell: bash
+        env:
+          ENFORCE_THRESHOLD: ${{ inputs.enforce_threshold }}
+        run: |
+          set -euo pipefail
+
+          args=(
+            --json-out "$RUNNER_TEMP/depot-registry-pulls.json"
+            --markdown-out "$GITHUB_STEP_SUMMARY"
+          )
+          if [[ "$ENFORCE_THRESHOLD" == "true" ]]; then
+            args+=(--enforce)
+          fi
+          python3 scripts/summarize-depot-registry-pulls.py \
+            "${args[@]}" registry-pull-observations

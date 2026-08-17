@@ -1,0 +1,161 @@
+name: CI Linux Host Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
+      hosts_matrix:
+        description: JSON Linux host rows from the versioned CI plan.
+        required: true
+        type: string
+      ui_artifact_name:
+        description: Immutable console UI producer artifact.
+        required: true
+        type: string
+      profile:
+        description: Host profile selected by the semantic CI profile.
+        required: true
+        type: string
+      max_parallel:
+        description: Host worker budget.
+        required: false
+        default: 2
+        type: number
+      fail_fast:
+        description: Cancel sibling host builds after the first required failure.
+        required: false
+        default: false
+        type: boolean
+      use_depot:
+        description: Opt into the guarded main-only Depot canary.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  runner_policy:
+    name: Select Linux host runner
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner_8: ${{ steps.policy.outputs.runner_8 }}
+      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the host role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
+          force_hosted: ${{ inputs.force_hosted }}
+          manual_use_depot: ${{ inputs.use_depot }}
+
+  linux_host:
+    name: Linux host (${{ matrix.host.architecture }})
+    needs: runner_policy
+    if: ${{ inputs.hosts_matrix != '[]' }}
+    runs-on: ${{ needs.runner_policy.outputs.runner_8 }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: ${{ inputs.fail_fast }}
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        host: ${{ fromJson(inputs.hosts_matrix) }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    defaults:
+      run:
+        shell: bash
+    env:
+      MESH_LLM_SKIP_UI: "1"
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      RUSTC_WRAPPER: sccache
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_8, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - name: Verify prebuilt host environment
+        run: verify-runner-image public
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: ci-host-linux-${{ inputs.profile }}
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
+      - name: Download immutable UI distribution
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.ui_artifact_name }}
+          path: crates/mesh-llm-ui/dist
+      - name: Verify UI distribution input
+        run: test -s crates/mesh-llm-ui/dist/index.html
+      - name: Prepare immutable Linux host
+        uses: ./.github/actions/prepare-host-input
+        with:
+          profile: ${{ inputs.profile }}
+          output_dir: host-input
+          skip_ui: "true"
+      - name: Upload immutable Linux host input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-host-linux-${{ matrix.host.architecture }}
+          path: host-input/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Capture host cache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-ci-host-linux-${{ matrix.host.architecture }}-${{ github.run_attempt }}

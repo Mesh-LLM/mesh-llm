@@ -1,3 +1,4 @@
+huggingface_hub[cli]
 langchain-openai
 litellm
 openai

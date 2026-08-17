@@ -186,6 +186,14 @@
       "notes": "text lane passed in llama-parity-qwen3moe-runtime-slice-2; q8 activation wire validated; ResidentKv native-sequence remap cache smoke passed; MoE expert-stage smoke already passed"
     },
     {
+      "llama_model": "laguna",
+      "family": "laguna",
+      "status": "certified_package_only",
+      "repo": "poolside/Laguna-S-2.1-GGUF",
+      "include": "laguna-s-2.1-Q4_K_M.gguf",
+      "notes": "package-only certification status retained while broader gates remain pending; source revision edd093522473dc7313b0738d8b4116b7f8b9745f (SHA-256 a34c74e46688122bef83122f4133031bababbefcf57436dde97048c91e2cc6ff) and package revision 0c467ad441ee94cb5a76f626294d963c4048507d (manifest SHA-256 0250cfb54ceeb94a9c71e48df447f780e32fc625553844d6403770f315be0237) passed M5 Max package-backed single-step parity at split 24 and three-stage chain parity at splits 16,32 with f16 activation transport: baseline token 674 matched both staged predictions, activation width 3072, payload 12288 bytes, wire payload 6144 bytes; an ordinary M5 Metal plus Australian Vast RTX 6000 Ada CUDA private Mesh run passed normal 0..36/36..48 placement, direct Iroh transport, configured context 262144, a 44460-token prompt, exact 65-token completion agreement, and suffix N-gram verification at depth 2 with 32/64 speculative tokens accepted per request; the final three-request recovery probe decoded at 19.74, 18.24, and 15.42 tok/s and an exact-prefix hit reused 44416 prompt tokens; 63/63 stability requests returned HTTP 200; suffix N-gram min 5, max 32, proposal cap 48, and verify pipeline depth 2 are now the package default and no-config resolver coverage consumes that policy, while a fresh live M5 plus Vast no-override confirmation remains pending; 24/24 full-context placement exhausted the 48 GB CUDA worker, the structured tool harness passed 6/13, and Q8 wire, state handoff, structured tool use, and full native-context saturation remain unproven"
+    },
+    {
       "llama_model": "mistral3",
       "family": "mistral",
       "status": "certified",
@@ -522,6 +530,18 @@
         "mmproj-HunyuanOCR-Q8_0.gguf"
       ],
       "notes": "HunyuanOCR split multimodal serving passed with ggml-org/HunyuanOCR-GGUF:Q8_0 plus mmproj-HunyuanOCR-Q8_0.gguf using the shared Hunyuan-Dense/VL graph filter and the media activation position sideband; default f16 activation wire is the support target"
+    },
+    {
+      "llama_model": "inkling",
+      "family": "inkling",
+      "status": "package_or_remote_only",
+      "repo": "unsloth/inkling-GGUF",
+      "include": [
+        "UD-Q2_K_XL/*.gguf",
+        "mmproj-BF16.gguf"
+      ],
+      "recurrent": "all",
+      "notes": "975B multimodal hybrid attention with per-layer short convolution; Q2 layer-package target; certify text, image, audio, two-stage and multi-stage serving with KvRecurrent before promotion"
     },
     {
       "llama_model": "internlm2",

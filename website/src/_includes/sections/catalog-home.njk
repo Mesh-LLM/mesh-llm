@@ -1,0 +1,554 @@
+{% from "components/ui.njk" import sectionHead %}
+
+<section class="sec pt-14 sm:pt-20 catalog" id="catalog">
+  <div class="shell">
+    {{ sectionHead(
+      "Mesh-ready model refs, ready to copy.",
+      "Browse live Hugging Face catalog data, copy <span class=\"mono\" style=\"color: var(--blue-3);\">org/repo:quant</span> refs, and see which models ship layer packages for multi-machine serving."
+    ) }}
+
+    <div class="toolbar" id="catalog-toolbar">
+      <label class="control control-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <span class="sr-only">Search models</span>
+        <input type="text" id="catalog-search" class="ctrl-input" placeholder="Search models, refs, or families…" aria-label="Search models">
+      </label>
+      <div class="filter-group" aria-label="Filter controls">
+      <label class="control control-select" for="filter-capability">
+        <span class="control-label">Capability</span>
+        <select id="filter-capability" aria-label="Filter by capability">
+          <option value="">Any</option>
+          <option value="Code">Code</option>
+          <option value="Vision">Vision</option>
+          <option value="Long context">Long context</option>
+        </select>
+      </label>
+      <label class="control control-select" for="filter-runtime">
+        <span class="control-label">Runtime</span>
+        <select id="filter-runtime" aria-label="Filter by runtime">
+          <option value="">Any</option>
+          <option value="Multi-machine">Multi-machine</option>
+          <option value="Single machine">Single machine</option>
+        </select>
+      </label>
+      <label class="control control-select" for="filter-hardware">
+        <span class="control-label">Hardware</span>
+        <select id="filter-hardware" aria-label="Filter by hardware">
+          <option value="">Any</option>
+          <option value="&le; 8 GB">&le; 8 GB</option>
+          <option value="11–20 GB">11–20 GB</option>
+          <option value="40 GB +">40 GB+</option>
+        </select>
+      </label>
+      <label class="control control-select" for="filter-source">
+        <span class="control-label">Source</span>
+        <select id="filter-source" aria-label="Filter by source">
+          <option value="">Any</option>
+          <option value="Qwen">Qwen</option>
+          <option value="GLM">GLM</option>
+          <option value="Gemma">Gemma</option>
+          <option value="DeepSeek">DeepSeek</option>
+          <option value="Kimi">Kimi</option>
+          <option value="Llama">Llama</option>
+          <option value="Mistral">Mistral</option>
+          <option value="MiniMax">MiniMax</option>
+        </select>
+      </label>
+      </div>
+    </div>
+
+    <div class="table-card" id="catalog-card">
+      <table>
+        <colgroup>
+          <col class="col-model">
+          <col class="col-size">
+          <col class="col-run">
+          <col class="col-package">
+          <col class="col-ref">
+          <col class="col-links">
+        </colgroup>
+        <thead>
+          <tr>
+            <th class="col-model" scope="col">Model</th>
+            <th class="col-size" scope="col">Size / quant</th>
+            <th class="col-run" scope="col">Run mode</th>
+            <th class="col-package" scope="col">Layer packages</th>
+            <th class="col-ref" scope="col">Model ref</th>
+            <th class="col-links" scope="col">Links</th>
+          </tr>
+        </thead>
+        <tbody id="catalog-rows">
+
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="Kimi">
+            <td class="model-cell col-model" data-label="Model"><strong>Kimi K2 Thinking</strong><br><span>Layer package for unsloth/Kimi-K2-Thinking-GGUF:UD-Q4_K_XL</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">646.2 GB<br><span class="badge">UD-Q4_K_XL</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge green">61 layers</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Kimi-K2-Thinking-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" title="Copy ref" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Kimi-K2-Thinking-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+              <a class="table-link-action" href="https://huggingface.co/meshllm/kimi-k2-thinking-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-0.5B-Instruct</strong><br><span>Draft for Qwen2.5 and DeepSeek-R1-Distill models</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">491 MB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>Qwen/Qwen2.5-0.5B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-3B-Instruct</strong><br><span>Small &amp; fast general chat</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">2.1 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>Qwen/Qwen2.5-3B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-Coder-32B-Instruct</strong><br><span>Top-tier code gen, matches GPT-4o on code</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">20 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>Qwen/Qwen2.5-Coder-32B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-Coder-7B-Instruct</strong><br><span>Code generation &amp; completion</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">4.4 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>Qwen/Qwen2.5-Coder-7B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="40 GB +" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-Next</strong><br><span>~85B dense, frontier coding model</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">48 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>Qwen/Qwen3-Coder-Next-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/Qwen/Qwen3-Coder-Next-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Mistral">
+            <td class="model-cell col-model" data-label="Model"><strong>Hermes-2-Pro-Mistral-7B</strong><br><span>Goose default, strong tool calling for agents</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">4.4 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>bartowski/Hermes-2-Pro-Mistral-7B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/bartowski/Hermes-2-Pro-Mistral-7B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Llama">
+            <td class="model-cell col-model" data-label="Model"><strong>Llama-3.2-1B-Instruct</strong><br><span>Draft for Llama 3.x and Llama 4 models</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">760 MB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>bartowski/Llama-3.2-1B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Llama">
+            <td class="model-cell col-model" data-label="Model"><strong>Llama-3.2-3B-Instruct</strong><br><span>Meta Llama 3.2, goose default, good tool calling</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">2.0 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>bartowski/Llama-3.2-3B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-14B-Instruct</strong><br><span>Solid general chat</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">9.0 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>bartowski/Qwen2.5-14B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-32B-Instruct</strong><br><span>Proven general chat</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">20 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>bartowski/Qwen2.5-32B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-Coder-14B-Instruct</strong><br><span>Strong code gen, fills gap between 7B and 32B</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">9.0 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>bartowski/Qwen2.5-Coder-14B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Gemma">
+            <td class="model-cell col-model" data-label="Model"><strong>Gemma-3-1B-it</strong><br><span>Draft for Gemma 3 models</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">780 MB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>bartowski/google_gemma-3-1b-it-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Gemma">
+            <td class="model-cell col-model" data-label="Model"><strong>Gemma-3-27B-it</strong><br><span>Google Gemma 3 27B, strong reasoning</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">17 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>bartowski/google_gemma-3-27b-it-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Llama">
+            <td class="model-cell col-model" data-label="Model"><strong>Llama-4-Scout</strong><br><span>MoE 109B/17B active, 16 experts top-1, Meta latest, tool calling</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">22.5 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>glogwa68/Llama-4-scout-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/glogwa68/Llama-4-scout-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="DeepSeek">
+            <td class="model-cell col-model" data-label="Model"><strong>DeepSeek-R1-Distill-Qwen-14B</strong><br><span>DeepSeek R1 reasoning distilled into Qwen 14B</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">9.0 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="DeepSeek">
+            <td class="model-cell col-model" data-label="Model"><strong>DeepSeek-R1-Distill-Qwen-32B</strong><br><span>DeepSeek R1 reasoning distilled into Qwen 32B</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">19.9 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="DeepSeek">
+            <td class="model-cell col-model" data-label="Model"><strong>DeepSeek-V3.2</strong><br><span>MoE 671B, frontier general model, requires multi-node</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">382 GB<br><span class="badge">UD-Q4_K_XL</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge green">61 layers</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/DeepSeek-V3.2-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/DeepSeek-V3.2-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+              <a class="table-link-action" href="https://huggingface.co/meshllm/deepseek-v3-2-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Mistral">
+            <td class="model-cell col-model" data-label="Model"><strong>Devstral-Small-2505</strong><br><span>Mistral agentic coding, tool use</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">14.3 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Devstral-Small-2505-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Devstral-Small-2505-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="GLM">
+            <td class="model-cell col-model" data-label="Model"><strong>GLM-4-32B</strong><br><span>Strong 32B, good tool calling</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">19.7 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/GLM-4-32B-0414-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/GLM-4-32B-0414-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="GLM">
+            <td class="model-cell col-model" data-label="Model"><strong>GLM-4.7-Flash</strong><br><span>MoE 30B/3B active, 64 experts top-4, fast inference, tool calling</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">18 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/GLM-4.7-Flash-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="40 GB +" data-source="MiniMax">
+            <td class="model-cell col-model" data-label="Model"><strong>MiniMax-M2.5</strong><br><span>MoE 456B/46B active, 256 experts top-8, Q4_K_M</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">138 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/MiniMax-M2.5-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/MiniMax-M2.5-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Mistral">
+            <td class="model-cell col-model" data-label="Model"><strong>Mistral-Small-3.1-24B-Instruct</strong><br><span>Mistral general chat, good tool calling</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">14.3 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-0.6B</strong><br><span>Draft for Qwen3 models</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">397 MB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-0.6B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-14B</strong><br><span>Qwen3 strong chat, thinking modes</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">9.0 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-14B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-14B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-235B-A22B</strong><br><span>MoE 235B/22B, proven at 16 tok/s across 2 nodes</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">134 GB<br><span class="badge">UD-Q4_K_XL</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge green">94 layers</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-235B-A22B-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-235B-A22B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+              <a class="table-link-action" href="https://huggingface.co/meshllm/qwen3-235b-a22b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-30B-A3B</strong><br><span>MoE general chat, 128 experts top-8, thinking/non-thinking</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">17.3 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-30B-A3B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-30B-A3B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-32B</strong><br><span>Best Qwen3 dense, thinking/non-thinking modes</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">19.8 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-32B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-32B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="11–20 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-32B (UD)</strong><br><span>Qwen3 32B dense, layer package available</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">20.0 GB<br><span class="badge">UD-Q4_K_XL</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge green">64 layers</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-32B-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-32B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+              <a class="table-link-action" href="https://huggingface.co/meshllm/qwen3-32b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-4B</strong><br><span>Qwen3 starter, thinking/non-thinking modes</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">2.5 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-4B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-4B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="&le; 8 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-8B</strong><br><span>Qwen3 mid-tier, strong for its size</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">5.0 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge green">36 layers</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-8B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-8B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+              <a class="table-link-action" href="https://huggingface.co/meshllm/qwen3-8b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-30B-A3B-Instruct</strong><br><span>MoE agentic coding, tool use, 128 experts top-8</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">18.6 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="Code" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-480B-A35B-Instruct</strong><br><span>MoE 480B/35B, largest coding model, requires multi-node</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">294 GB<br><span class="badge">UD-Q4_K_XL</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge green">62 layers</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+              <a class="table-link-action" href="https://huggingface.co/meshllm/qwen3-coder-480b-a35b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="Vision" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3.5-0.8B-Vision</strong><br><span>Tiny vision model, OCR, screenshots, runs anywhere</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">508 MB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3.5-0.8B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="Vision" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3.5-4B-Vision</strong><br><span>Small vision model, good quality/size balance</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">2.7 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3.5-4B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="Vision" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3.5-9B-Vision</strong><br><span>Vision + text, replaces Qwen3-8B with image understanding</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">5.8 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3.5-9B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Gemma">
+            <td class="model-cell col-model" data-label="Model"><strong>Gemma-3-12B-it</strong><br><span>Google Gemma 3 12B, punches above weight</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">7.3 GB<br><span class="badge">Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/gemma-3-12b-it-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/gemma-3-12b-it-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            </div></td>
+          </tr>
+
+
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="11–20 GB" data-source="Gemma">
+            <td class="model-cell col-model" data-label="Model"><strong>Gemma-4-26B-A4B-it</strong><br><span>Layer package for unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M</span></td>
+            <td class="size-cell col-size" data-label="Size / quant">16.9 GB<br><span class="badge">UD-Q4_K_M</span></td>
+            <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
+            <td class="package-cell col-package" data-label="Layers"><span class="badge green">30 layers</span></td>
+            <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/gemma-4-26B-A4B-it-GGUF<span class="col">:UD-Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+            <td class="links-cell col-links" data-label="Links"><div class="table-link-actions">
+              <a class="table-link-action" href="https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+              <a class="table-link-action" href="https://huggingface.co/meshllm/gemma-4-26b-a4b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+            </div></td>
+          </tr>
+
+
+        </tbody>
+      </table>
+      <div class="catalog-foot">
+        <span class="live" id="catalog-count" aria-live="polite" aria-atomic="true">38 models</span>
+        <div class="pg"></div>
+      </div>
+    </div>
+  </div>
+</section>
+

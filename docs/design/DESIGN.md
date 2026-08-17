@@ -12,30 +12,37 @@ need to be split across peers.
 
 ## Architecture
 
-```
-src/
-├── main.rs                  CLI args, orchestration (auto, idle, passive)
-├── lib.rs                   Crate root re-exports
+The workspace is split across many crates (see the root `AGENTS.md` for the
+full map). The shipped `mesh-llm` binary is a thin entry point: Clap parsing
+lives in `mesh-llm-cli`, one-shot command handlers in `mesh-llm-commands`, and
+the host-side runtime in `mesh-llm-host-runtime`, whose module layout carries
+most of the behavior described in this document:
+
+```text
+crates/mesh-llm-host-runtime/src/
+├── lib.rs                   Crate entry; runtime entrypoints called by the binary
 ├── api/                     Management API (:3131): status, models, search, events, discover
-├── cli/                     Clap types, command parsing, command handlers
 ├── crypto/                  Key management, envelope encryption, keychain
 ├── inference/
 │   ├── election.rs          Per-model host election and split planning
 │   ├── skippy/              Embedded staged runtime integration
+│   ├── virtual_llm.rs       Inter-model collaboration hooks
 │   └── pipeline.rs          Inference pipeline coordination
 ├── mesh/mod.rs              Node struct, QUIC endpoint, gossip, peer management, mesh identity
 ├── models/
 │   ├── capabilities.rs      Vision/audio/multimodal/reasoning capability inference
 │   ├── catalog.rs           Model catalog and HuggingFace downloads
-│   ├── resolve.rs           Model path resolution, mmproj lookup
+│   ├── resolve/             Model reference resolution, mmproj lookup
 │   └── ...                  GGUF parsing, inventory, search, topology
 ├── network/
 │   ├── proxy.rs             HTTP proxy: request parsing, model routing, response helpers
 │   ├── router.rs            Request classification, model scoring, multimodal routing
-│   ├── tunnel.rs            TCP ↔ QUIC relay (RPC + HTTP), B2B rewrite map
+│   ├── tunnel.rs            TCP ↔ QUIC relay, B2B tunnel map
 │   ├── nostr.rs             Nostr discovery, score_mesh(), smart_auto()
 │   ├── affinity.rs          Prefix-affinity request routing
-│   └── rewrite.rs           REGISTER_PEER interception and endpoint rewriting
+│   └── openai/              OpenAI transport glue
+├── logging/                 Local request lifecycle, persistence, replay, retention, audit, webhooks
+├── plugin/                  Plugin host, runtime, transport, MCP bridge
 ├── plugins/
 │   └── blobstore/           Request-scoped media object storage for multimodal
 ├── protocol/                Wire protocol types, protobuf encoding/decoding
@@ -48,8 +55,8 @@ src/
 
 ```rust
 enum NodeRole {
-    Worker,                      // rpc-server, provides GPU compute
-    Host { http_port: u16 },     // llama-server + rpc-server, serves HTTP API
+    Worker,                      // provides staged GPU compute for a model
+    Host { http_port: u16 },     // runs the local serving runtime, serves HTTP API
     Client,                      // no compute, just API access via tunnel
 }
 ```
@@ -72,9 +79,9 @@ Single QUIC connection per peer, multiplexed by 1-byte prefix:
 | Byte | Type | Purpose | Format |
 |------|------|---------|--------|
 | 0x01 | GOSSIP | Peer announcements (role, serving, VRAM, models, explicit interest, demand, mesh_id) | protobuf `GossipFrame` |
-| 0x02 | TUNNEL_RPC | TCP relay to remote rpc-server | raw TCP relay |
+| 0x02 | TUNNEL | TCP relay for remote runtime compute traffic | raw TCP relay |
 | 0x03 | TUNNEL_MAP | B2B tunnel port map exchange | protobuf `TunnelMap` |
-| 0x04 | TUNNEL_HTTP | TCP relay to remote llama-server HTTP | raw TCP relay |
+| 0x04 | TUNNEL_HTTP | TCP relay to a remote node's HTTP API | raw TCP relay |
 | 0x05 | ROUTE_REQUEST | Routing table for passive nodes (hosts + models) | protobuf `RouteTableRequest` / `RouteTable` |
 | 0x06 | PEER_DOWN | Death broadcast (immediate, from any node that detects a death) | protobuf `PeerDown` |
 | 0x07 | PEER_LEAVING | Clean shutdown broadcast (ctrl-c) | protobuf `PeerLeaving` |
@@ -158,7 +165,7 @@ Changing mesh requirements creates a new mesh.
 ## Bootstrap Proxy
 
 When joining an existing mesh, a tunnel-only API proxy starts immediately on the
-local port — before rpc-server or llama-server are ready. Requests are tunneled to
+local port — before the local serving runtime is ready. Requests are tunneled to
 mesh hosts via QUIC. When the real `api_proxy` is ready, it takes over the listener.
 
 This gives instant API access (within seconds of `mesh-llm serve --join`) while the local
@@ -241,11 +248,58 @@ When a model requires splitting across nodes:
 
 ## B2B Direct Transfer
 
-When the model is split across workers, activation tensors flow directly
-between workers (1 hop) instead of through the host (2 hops):
-1. Each node broadcasts `{EndpointId → tunnel_port}` via `STREAM_TUNNEL_MAP`
-2. `rewrite.rs` intercepts `REGISTER_PEER` and rewrites ports for local tunnels
-3. llama.cpp's `PUSH_TENSOR_TO_PEER` goes directly between workers
+When the model is split across workers, activation data flows directly
+between workers (1 hop) instead of through the host (2 hops). Each node
+broadcasts `{EndpointId → tunnel_port}` via `STREAM_TUNNEL_MAP` so peers can
+open direct worker-to-worker tunnels. In the current embedded staged runtime,
+stage-to-stage activation traffic uses the Skippy binary stage transport over
+these direct paths; the legacy llama.cpp RPC rewrite path (`rewrite.rs`
+intercepting `REGISTER_PEER`) survives only in the `mesh-client` compatibility
+surface.
+
+## Operator request logging
+
+Request logging is a host-local subsystem, not a mesh protocol. Ingress and
+runtime lifecycle code submit bounded lifecycle facts to the logging service;
+the service holds active state, persists terminal summaries and optional
+artifact pointers, and publishes replayable request, operation, and system
+events. Persistence and artifact work run outside the serving hot path so a
+logging failure can be represented without blocking an inference response.
+
+The embedded console reads this state through trusted-local `/api/logs/**`
+management routes. The list endpoint merges active state with durable history;
+the detail route can read a terminal request immediately after completion.
+Artifact pointer metadata is distinct from content retrieval, and only an
+explicit redacted-artifact capture policy makes content eligible for an
+operator opt-in download. The local log API is never advertised in gossip,
+added to ALPN, or substituted for existing status/runtime SSE.
+
+The Logs page hydrates from the ledger and owns a separate SSE lifecycle for
+`/api/logs/events`. Standard SSE event IDs allow native browser reconnect;
+the stream sends channels, backend-supported request-ID filters, and the last
+received logging replay cursor. Ledger-only filters reopen the stream with
+that last cursor and trigger REST hydration instead of being serialized into
+the SSE request. A replay gap, including an omitted or `null` recovery cursor,
+causes an authoritative ledger refresh, while a disconnected stream eventually
+uses bounded polling. Unsupported hosts keep this lifecycle inert. The logging
+route therefore owns its own connection states without changing the status or
+runtime event contracts.
+
+Retention bounds durable terminal records, pointers, audit records, webhook
+delivery records, persistence queues, replay capacity, exports, and artifacts.
+Scoped cleanup, request deletion, export, and dead-letter retry are audited
+management operations: the host validates the request, including retry delivery
+context/input, and the UI only renders the returned receipt. Artifact download
+is explicit and limited to available redacted captures. Metrics export only
+bounded lifecycle and maintenance outcomes; it never exports local log data or
+payloads. The production `OutputEvent` path is a separate local projection of
+bounded request/event IDs, replay channel/sequence, outcomes, status, duration,
+and token counts; it does not add those IDs or payloads to mesh/network or OTLP
+telemetry.
+
+See [the operator logging guide](../LOGGING.md) for settings and recovery, and
+[telemetry.md](../plugins/telemetry.md) for the explicit metrics privacy
+boundary.
 
 ## Management API (port 3131)
 
@@ -261,7 +315,8 @@ and the embedded web dashboard.
 | `/api/model-interests/{model_ref}` | DELETE | Clear local explicit interest for one canonical model ref |
 | `/api/model-targets` | GET | Ranked model targets from explicit interest, active demand, and serving visibility |
 | `/api/events` | GET | SSE stream of status updates (2s interval + on change) |
-| `/api/discover` | GET | Browse Nostr-published meshes |
+| `/api/discover` | GET | Browse Nostr-published meshes, or LAN mDNS advertisements when `--mesh-discovery-mode mdns` is active |
+| `/api/discovery/lan-details` | POST | Return local LAN discovery detail after invite-token proof; advertised only when the management API is LAN-reachable, and the raw token is never returned |
 | `/api/chat` | POST | Proxy to inference API (`/v1/chat/completions`) |
 | `/` | GET | Embedded web dashboard |
 
@@ -410,6 +465,14 @@ By default, nodes broadcast their GPU name, hostname, VRAM capacity, and reserve
 ```
 
 For ROCm and Intel hosts, `reserved_bytes` is omitted because their standard CLI telemetry exposes live used-memory counters rather than a true reserved/system-memory value.
+
+Routing health in `/api/status.routing_affinity.target_reputation` is local to
+the process that served the management API. It records behavioral routing
+signals such as penalized targets and routes reordered away from penalized
+targets. This is a local availability/reliability aid only: it is not gossiped,
+not a cross-mesh trust score, and not a replacement for owner attestation or
+model-output verification. The operator-facing behavior is specified in
+[Local Node Reputation](../NODE_REP.md).
 
 `peers[]` entries (only when peer has not passed `--no-enumerate-host`):
 ```json

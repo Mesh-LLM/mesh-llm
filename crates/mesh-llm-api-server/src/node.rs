@@ -31,6 +31,7 @@ pub struct DeleteModelOptions {
 #[derive(Clone, Debug, Default)]
 pub struct LoadModelOptions {
     pub device_policy: DevicePolicy,
+    pub profile: String,
 }
 
 #[derive(Clone, Debug)]
@@ -142,6 +143,7 @@ pub struct PruneResult {
 #[derive(Clone, Debug)]
 pub struct ServedModel {
     pub model_ref: String,
+    pub profile: String,
     pub model_id: String,
     pub instance_id: Option<String>,
     pub state: ServingModelState,
@@ -634,6 +636,7 @@ impl From<mesh_llm_node::serving::ServedModel> for ServedModel {
     fn from(value: mesh_llm_node::serving::ServedModel) -> Self {
         Self {
             model_ref: value.model_ref,
+            profile: value.profile,
             model_id: value.model_id,
             instance_id: value.instance_id,
             state: value.state.into(),
@@ -681,6 +684,7 @@ impl MeshServing {
             .load(mesh_llm_node::serving::LoadModelRequest {
                 model_ref: model_ref.as_ref().to_string(),
                 device_policy: options.device_policy.into(),
+                profile: options.profile.clone(),
             })
             .await
             .map(ServedModel::from)

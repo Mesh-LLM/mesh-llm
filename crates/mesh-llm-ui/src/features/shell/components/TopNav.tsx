@@ -12,12 +12,14 @@ import {
   Monitor,
   Moon,
   Network,
+  ScrollText,
   Settings,
   Share2,
   Sun,
   type LucideIcon
 } from 'lucide-react'
 import { HeaderHoverCard } from '@/features/shell/components/HeaderHoverCard'
+import { TopNavPluginPages, type TopNavPluginPageItem } from '@/features/shell/components/TopNavPluginPages'
 import { CopyInstructionRow } from '@/components/ui/CopyInstructionRow'
 import type { LinkItem, TopNavJoinCommand, Theme, AppTab } from '@/features/app-tabs/types'
 import { cn } from '@/lib/cn'
@@ -44,6 +46,8 @@ type TopNavProps = {
   apiAccessLinks?: LinkItem[]
   joinCommands?: TopNavJoinCommand[]
   joinLinks?: LinkItem[]
+  pluginNavItems?: readonly TopNavPluginPageItem[]
+  onPluginPageChange?: (item: TopNavPluginPageItem) => void
 }
 
 export type ApiTargetLiveness = 'checking' | 'live' | 'unavailable'
@@ -51,11 +55,12 @@ export type ApiTargetLiveness = 'checking' | 'live' | 'unavailable'
 const tabs: {
   value: AppTab
   href: string
-  labelKey: 'tabs.network' | 'tabs.reserves' | 'tabs.chat' | 'tabs.configuration'
+  labelKey: 'tabs.network' | 'tabs.reserves' | 'tabs.logs' | 'tabs.chat' | 'tabs.configuration'
 }[] = [
   { value: 'network', href: '/', labelKey: 'tabs.network' },
   { value: 'reserves', href: '/reserves', labelKey: 'tabs.reserves' },
   { value: 'chat', href: '/chat', labelKey: 'tabs.chat' },
+  { value: 'logs', href: '/logs', labelKey: 'tabs.logs' },
   { value: 'configuration', href: '/configuration', labelKey: 'tabs.configuration' }
 ]
 
@@ -68,6 +73,7 @@ const themeOptions: { value: Theme; label: string; description: string; Icon: Lu
 const tabIcons: Record<AppTab, LucideIcon> = {
   network: Network,
   reserves: BatteryCharging,
+  logs: ScrollText,
   chat: BotMessageSquare,
   configuration: Settings
 }
@@ -260,8 +266,8 @@ function HeaderLinks({ links }: { links: { href: string; label: string }[] }) {
 }
 
 const DEFAULT_API_ACCESS_LINKS: LinkItem[] = [
-  { href: 'https://docs.meshllm.cloud/', label: 'Docs' },
-  { href: 'https://docs.meshllm.cloud/#install', label: 'Install' }
+  { href: 'https://meshllm.cloud/', label: 'Docs' },
+  { href: 'https://meshllm.cloud/#install', label: 'Install' }
 ]
 
 function ApiAccessContent({ apiUrl, dataMode, links }: { apiUrl: string; dataMode: DataMode; links?: LinkItem[] }) {
@@ -329,9 +335,9 @@ const DEFAULT_JOIN_COMMANDS: TopNavJoinCommand[] = [
 ]
 
 const DEFAULT_JOIN_LINKS: LinkItem[] = [
-  { href: 'https://docs.meshllm.cloud/', label: 'Setup' },
-  { href: 'https://docs.meshllm.cloud/#install', label: 'Install' },
-  { href: 'https://docs.meshllm.cloud/#blackboard', label: 'Blackboard' }
+  { href: 'https://meshllm.cloud/', label: 'Setup' },
+  { href: 'https://meshllm.cloud/#install', label: 'Install' },
+  { href: 'https://meshllm.cloud/#blackboard', label: 'Blackboard' }
 ]
 
 function JoinInviteContent({ commands, links }: { commands?: TopNavJoinCommand[]; links?: LinkItem[] }) {
@@ -738,6 +744,7 @@ export function TopNav(props: TopNavProps) {
         onTabChange={props.onTabChange}
         className="order-none w-auto min-w-0 pb-0 md:order-none md:w-auto md:pb-0"
       />
+      <TopNavPluginPages items={props.pluginNavItems} onNavigate={props.onPluginPageChange} />
       <div className="hidden flex-1 md:block" />
       <ApiStatusChip
         apiUrl={props.apiUrl}

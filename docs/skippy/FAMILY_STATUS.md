@@ -8,7 +8,18 @@ Certification process lives in `docs/FAMILY_CERTIFY.md`. Payload measurements
 and topology constraints are summarized here so this file stays the only
 customer-facing source of truth.
 
-Last updated: 2026-05-07.
+Last updated: 2026-07-31.
+
+## Context Capacity Contract
+
+The parity-sized family certification lanes do not establish a production
+context window. A reviewed context claim requires a separate staged-serving
+capacity result at `min(native_context, 131072)` tokens. For models with native
+context of at least 131,072, the minimum evidence is a 131,072-token allocation,
+a request reporting at least 120,000 prompt tokens, and a successful
+continuation. The support record must name the tested artifact, KV cache types,
+lane count, and stage plan. Do not infer native-context support from a small
+correctness smoke or from GGUF metadata alone.
 
 ## Customer Support Matrix
 
@@ -44,6 +55,7 @@ Last updated: 2026-05-07.
 | LFM2 | Supported | `meshllm/lfm2-350m-parity-q4_k_m-gguf:q4_k_m` | `layer_end=16`, `splits=5,10`, activation width `1024` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..16` sticky for normal decode. | Use `KvRecurrent` for exact prefix cache restore; native sequence remap cache smoke passed. |
 | Jamba | Supported | `bartowski/ai21labs_AI21-Jamba2-3B-GGUF:Q4_K_M` | `layer_end=28`, `splits=9,18`, activation width `2560` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..28` sticky for normal decode. | Use `KvRecurrent` for exact prefix cache restore; middle-stage recurrent-only slices are valid. |
 | Kimi Linear | Supported | `bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF:IQ2_XXS` | `layer_end=27`, `splits=9,18`, activation width `2304` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent KDA ranges `0..3`, `4..7`, `8..11`, `12..15`, `16..19`, `20..23`, and `24..26` sticky for normal decode. | Use `KvRecurrent`; sparse K-only MLA KV pages plus recurrent state are required for exact prefix restore. |
+| Laguna S 2.1 | Supported for the pinned Q4_K_M package | `meshllm/laguna-s-2.1-Q4_K_M-layers@0c467ad441ee94cb5a76f626294d963c4048507d` | `layer_end=48`, activation width `3072`; observed CUDA plan `0..25 / 25..39 / 39..48` | `f16`; q8 untested | package-default suffix N-gram depth 2 | Keep the hybrid recurrent/attention state on its owning stage; use direct inter-stage paths. | Use one lane with Q4_0 K/V for the reviewed 131,072-token allocation. A 128,080-token cold prompt completed twice; 44,416-token exact-prefix restore passed, while the 128K repeats ran with zero cached tokens. Structured OpenAI tool call and tool-result turns passed. |
 | Mamba | Supported | `mradermacher/mamba-130m-hf-GGUF:Q4_K_M` | `layer_end=24`, `splits=8,16`, activation width `768` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..24` sticky for normal decode. | Use `KvRecurrent`; cache restore can have zero native KV bytes. |
 | Mamba2 | Supported | `mradermacher/mamba-2.8b-hf-GGUF:Q4_K_M` | `layer_end=64`, `splits=21,42`, activation width `2560` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..64` sticky for normal decode. | Use `KvRecurrent`; full-state mobility is rejected as too large. |
 | RWKV6 | Supported | `latestissue/rwkv-6-finch-1b6-gguf:Q4_K` | `layer_end=24`, `splits=8,16`, activation width `2048` | `f16`; q8 rejected | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..24` sticky for normal decode. | Use `KvRecurrent`; cache restore can have zero native KV bytes. |
@@ -70,7 +82,7 @@ Last updated: 2026-05-07.
 | ChatGLM | Supported | `mradermacher/chatglm3-6b-i1-GGUF:IQ2_M` | `layer_end=28`, `splits=9,18`, activation width `4096` | `f16`; q8 rejected | `baseline,ngram,ngram-adaptive` | None | Use `ResidentKv`; borrowed-hit cache restore passed. |
 | CodeShell | Supported | `mradermacher/CodeShell-7B-i1-GGUF:IQ2_M` | `layer_end=42`, `splits=14,28`, activation width `4096` | `f16`; q8 rejected | `baseline,ngram,ngram-adaptive` | None | Use `ResidentKv`; borrowed-hit cache restore passed. |
 | Deci | Supported | `mradermacher/DeciLM-6b-instruct-i1-GGUF:IQ2_M` | `layer_end=32`, `splits=10,21`, activation width `4096` | `f16`; q8 rejected | `baseline,ngram,ngram-adaptive` | None | Use `ResidentKv`; borrowed-hit cache restore passed. |
-| Qwen3.5 recurrent | Supported | `mradermacher/UnifiedReward-Edit-qwen35-4b-i1-GGUF:IQ2_M` | `layer_end=32`, `splits=10,21`, activation width `2560` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..32` sticky for normal decode. | Use `KvRecurrent`; full-state mobility is rejected as too large. |
+| Qwen3.5 recurrent | Supported | `mradermacher/UnifiedReward-Edit-qwen35-4b-i1-GGUF:IQ2_M` | `layer_end=32`, `splits=10,21`, activation width `2560` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..32` sticky for normal decode. | Use `KvRecurrent`; full-state mobility is rejected as too large. Qwen3.6 and Qwen3.8 releases load as this same `qwen35`/`qwen35moe` architecture pair; there is no separate `qwen36` or `qwen38` architecture, so they inherit this row's policy. Qwen3.8 identity routing is wired, but no Qwen3.8 weights have been loaded yet, so it stays a candidate until a real artifact is inspected. |
 | XVerse | Supported | `xverse/XVERSE-7B-Chat-GGUF:q2_k` | `layer_end=32`, `splits=10,21`, activation width `4096` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | None | Use `ResidentKv`; borrowed-hit cache restore passed. |
 | Maincoder | Supported | `mradermacher/Maincoder-1B-GGUF:Q2_K` | `layer_end=32`, `splits=10,21`, activation width `1536` | `f16`; q8 rejected | `baseline,ngram,ngram-adaptive` | None | Use `ResidentKv`; borrowed-hit cache restore passed. |
 | OpenELM | Supported | `LiteLLMs/OpenELM-270M-GGUF:Q2_K` | `layer_end=16`, `splits=5,10`, activation width `1280` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | None | Use `ResidentKv`; borrowed-hit cache restore passed. |
@@ -88,13 +100,22 @@ Last updated: 2026-05-07.
 
 ## Text-Split Candidates
 
-These families now pass the cheap runtime-slice text lane, but are not promoted
-to the customer support matrix until the remaining cache smoke, reviewed
-topology records, and family-specific policy notes are updated.
+These families now pass a cheap runtime-slice or package-backed text lane, but
+are not promoted to the customer support matrix until the remaining cache
+smoke, reviewed topology records, and family-specific policy notes are updated.
 
-```text
-Gemma text
-```
+- **Gemma text:** the sampled `gemma` artifact currently requires an F32
+  activation wire; see the exception below.
+- **Inkling text:** use pinned package
+  `meshllm/inkling-UD-Q2_K_XL-layers@9b4b91a7ddd978dd7a01679bc977f6e53777f2c7`.
+  It has 66 layers, activation width 6144, F32 wire, and Q4_0 K/V policy. PR
+  #1118 has proven ordinary all-CUDA Mesh planning and real split generation at
+  a 131,072-token allocation over a direct approximately 5 ms path, two
+  sequential native OpenAI tool loops, and exact-prefix cache restoration.
+  Promotion still requires a completed long-context continuation plus reliable
+  overlapping-request admission and changed-tail same-prefix cache reuse.
+  F16/Q8 wire, native MTP, and multimodal inference remain outside the current
+  claim.
 
 ## Exceptions
 

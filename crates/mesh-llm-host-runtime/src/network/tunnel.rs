@@ -3,7 +3,7 @@
 
 use crate::mesh::Node;
 use crate::protocol::read_len_prefixed;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use iroh::EndpointId;
 use prost::Message;
 use std::sync::Arc;
@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+const TUNNELED_HTTP_HEADER_READ_CHUNK_BYTES: usize = 8 * 1024;
 
 /// Global byte counter for tunnel traffic
 static BYTES_TRANSFERRED: AtomicU64 = AtomicU64::new(0);
@@ -101,16 +103,67 @@ impl Manager {
 async fn handle_inbound_http_stream(
     node: Node,
     quic_send: iroh::endpoint::SendStream,
-    quic_recv: iroh::endpoint::RecvStream,
+    mut quic_recv: iroh::endpoint::RecvStream,
     http_port: u16,
 ) -> Result<()> {
+    // Admission check for remote QUIC HTTP ingress.
+    match node
+        .activity_policy_guard
+        .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
+    {
+        crate::runtime::AdmissionResult::Allowed => {}
+        crate::runtime::AdmissionResult::Paused { reason, .. } => {
+            tracing::debug!(reason, "Inbound HTTP tunnel rejected by activity policy");
+            anyhow::bail!("remote inference paused: {reason}");
+        }
+    }
+
     tracing::info!("Inbound HTTP tunnel stream -> API proxy :{http_port}");
-    let tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
+    let mut tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
     tcp_stream.set_nodelay(true)?;
     let _inflight = node.begin_inflight_request();
 
+    // Only raw mesh ingress that successfully claimed a parent emits the
+    // private assertion. Direct API requests have it stripped before they can
+    // reach this tunnel, so they retain normal target frontend ownership.
+    let prefix = read_tunneled_http_header_prefix(&mut quic_recv).await?;
+    let _remote_suppression =
+        crate::network::openai::request_parse::raw_lifecycle_owner_from_header_prefix(&prefix)
+            .and_then(|request_id| {
+                crate::logging_runtime_state()
+                    .and_then(|state| state.suppress_remote_tunneled_request(request_id))
+            });
+    tcp_stream.write_all(&prefix).await?;
+
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
     relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+}
+
+/// Read at most one bounded HTTP header prefix without changing the bytes that
+/// the existing relay will subsequently forward. A read may include a small
+/// amount of body data from the same transport chunk; it is forwarded directly
+/// to the local API proxy and is never retained by logging state.
+async fn read_tunneled_http_header_prefix<R>(reader: &mut R) -> Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut prefix = Vec::with_capacity(TUNNELED_HTTP_HEADER_READ_CHUNK_BYTES);
+    let mut chunk = [0u8; TUNNELED_HTTP_HEADER_READ_CHUNK_BYTES];
+    let max_header_bytes = crate::network::openai::request_parse::MAX_HEADER_BYTES;
+
+    while prefix.len() < max_header_bytes {
+        if prefix.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        let read_cap = (max_header_bytes - prefix.len()).min(chunk.len());
+        let bytes_read = reader.read(&mut chunk[..read_cap]).await?;
+        if bytes_read == 0 {
+            break;
+        }
+        prefix.extend_from_slice(&chunk[..bytes_read]);
+    }
+
+    Ok(prefix)
 }
 
 async fn handle_inbound_stage_transport(
@@ -128,46 +181,75 @@ async fn handle_inbound_stage_transport(
         anyhow::bail!("stage transport requester_id does not match QUIC peer identity");
     }
 
-    let statuses = node
+    let bind_addr = resolve_stage_transport_bind_addr(&node, &open).await?;
+    let tcp_stream = TcpStream::connect(&bind_addr).await?;
+    tcp_stream.set_nodelay(true)?;
+    tracing::info!(
+        "Inbound stage transport stream {} → {}",
+        remote.fmt_short(),
+        bind_addr
+    );
+    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
+    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+}
+
+async fn resolve_stage_transport_bind_addr(
+    node: &Node,
+    open: &skippy_protocol::proto::stage::StageTransportOpen,
+) -> Result<String> {
+    let status_result = node
         .query_local_stage_status(crate::inference::skippy::StageStatusFilter {
             topology_id: Some(open.topology_id.clone()),
             run_id: Some(open.run_id.clone()),
             stage_id: Some(open.stage_id.clone()),
         })
-        .await?;
-    let status = statuses
-        .into_iter()
-        .find(|status| {
-            status.topology_id == open.topology_id
-                && status.run_id == open.run_id
-                && status.stage_id == open.stage_id
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "stage {} / {} / {} is not loaded locally",
-                open.topology_id,
-                open.run_id,
-                open.stage_id
-            )
-        })?;
-    if status.state != crate::inference::skippy::StageRuntimeState::Ready {
-        anyhow::bail!(
-            "stage {} / {} / {} is not ready: {:?}",
-            status.topology_id,
-            status.run_id,
-            status.stage_id,
-            status.state
-        );
+        .await;
+    match status_result {
+        Ok(statuses) => {
+            if let Some(status) = statuses.into_iter().find(|status| {
+                status.topology_id == open.topology_id
+                    && status.run_id == open.run_id
+                    && status.stage_id == open.stage_id
+            }) {
+                if status.state != crate::inference::skippy::StageRuntimeState::Ready {
+                    anyhow::bail!(
+                        "stage {} / {} / {} is not ready: {:?}",
+                        status.topology_id,
+                        status.run_id,
+                        status.stage_id,
+                        status.state
+                    );
+                }
+                return Ok(status.bind_addr);
+            }
+        }
+        Err(error) => {
+            if let Some(bind_addr) = node
+                .stage_transport_alias(&open.topology_id, &open.run_id, &open.stage_id)
+                .await
+            {
+                return Ok(bind_addr);
+            }
+            return Err(error).with_context(|| {
+                format!(
+                    "query local stage status for {} / {} / {}",
+                    open.topology_id, open.run_id, open.stage_id
+                )
+            });
+        }
     }
-    let tcp_stream = TcpStream::connect(&status.bind_addr).await?;
-    tcp_stream.set_nodelay(true)?;
-    tracing::info!(
-        "Inbound stage transport stream {} → {}",
-        remote.fmt_short(),
-        status.bind_addr
-    );
-    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+    if let Some(bind_addr) = node
+        .stage_transport_alias(&open.topology_id, &open.run_id, &open.stage_id)
+        .await
+    {
+        return Ok(bind_addr);
+    }
+    anyhow::bail!(
+        "stage {} / {} / {} is not loaded locally",
+        open.topology_id,
+        open.run_id,
+        open.stage_id
+    )
 }
 
 /// Bidirectional relay between a TCP stream and a QUIC bi-stream.
@@ -345,6 +427,18 @@ fn relay_remaining_chunks_error(total: u64, err: std::io::Error) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tunnel_prefetch_forwards_a_complete_bounded_header_prefix() {
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        let request = b"POST /v1/chat/completions HTTP/1.1\r\nx-request-id: 550e8400-e29b-41d4-a716-446655440000\r\n\r\n";
+        writer.write_all(request).await.unwrap();
+
+        let prefix = read_tunneled_http_header_prefix(&mut reader).await.unwrap();
+
+        assert_eq!(prefix, request);
+        assert!(prefix.len() <= crate::network::openai::request_parse::MAX_HEADER_BYTES);
+    }
 
     /// Simulate relay_bidirectional behavior when one direction finishes
     /// before the other — the scenario that caused the remote proxy bug.

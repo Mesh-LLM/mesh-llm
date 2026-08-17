@@ -1,0 +1,111 @@
+name: Resolve native toolchain epoch
+description: Derive one exact, cache-safe native build identity and export it to later steps.
+
+inputs:
+  pinned_epoch:
+    description: Exact prevalidated identity for an immutable toolchain image.
+    required: false
+    default: ""
+  include_tool_versions:
+    description: Include the selected native compiler, CMake, and Ninja versions.
+    required: false
+    default: "false"
+
+outputs:
+  epoch:
+    description: Validated native toolchain identity used by build stamps and cache keys.
+    value: ${{ steps.resolve.outputs.epoch }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve exact native toolchain identity
+      id: resolve
+      shell: bash
+      env:
+        INPUT_PINNED_EPOCH: ${{ inputs.pinned_epoch }}
+        INPUT_INCLUDE_TOOL_VERSIONS: ${{ inputs.include_tool_versions }}
+        RUNNER_OS_VALUE: ${{ runner.os }}
+        RUNNER_ARCH_VALUE: ${{ runner.arch }}
+      run: |
+        set -euo pipefail
+
+        case "$INPUT_INCLUDE_TOOL_VERSIONS" in
+          true|false) ;;
+          *)
+            echo "include_tool_versions must be true or false" >&2
+            exit 1
+            ;;
+        esac
+
+        if [[ -n "$INPUT_PINNED_EPOCH" ]]; then
+          epoch="$INPUT_PINNED_EPOCH"
+          if [[ "$INPUT_INCLUDE_TOOL_VERSIONS" == "true" ]]; then
+            echo "include_tool_versions cannot be combined with pinned_epoch" >&2
+            exit 1
+          fi
+        else
+          image_os="${ImageOS:-}"
+          image_version="${ImageVersion:-}"
+          if [[ -n "$image_os" && -n "$image_version" ]]; then
+            epoch="github-${image_os}-${image_version}-${RUNNER_ARCH_VALUE}"
+          elif [[ "$INPUT_INCLUDE_TOOL_VERSIONS" == "true" ]]; then
+            # Depot macOS runners intentionally do not expose the GitHub-hosted
+            # ImageOS/ImageVersion variables. The exact OS/compiler/tool digest
+            # below is the cache-safe identity for those provider images.
+            epoch="runner-${RUNNER_OS_VALUE}-${RUNNER_ARCH_VALUE}"
+          else
+            echo "ImageOS and ImageVersion are required unless exact native tool versions are included" >&2
+            exit 1
+          fi
+
+          if [[ "$INPUT_INCLUDE_TOOL_VERSIONS" == "true" ]]; then
+            case "$RUNNER_OS_VALUE" in
+              macOS)
+                version_commands=(sw_vers xcodebuild clang cmake ninja)
+                ;;
+              Linux)
+                version_commands=(cc c++ cmake ninja)
+                ;;
+              *)
+                echo "native tool version fingerprinting is unsupported on $RUNNER_OS_VALUE" >&2
+                exit 1
+                ;;
+            esac
+            for command_name in "${version_commands[@]}" shasum; do
+              if ! command -v "$command_name" >/dev/null 2>&1; then
+                echo "$command_name is required to resolve the native toolchain epoch" >&2
+                exit 1
+              fi
+            done
+            if [[ "$RUNNER_OS_VALUE" == "macOS" ]]; then
+              tool_digest="$(
+                {
+                  sw_vers -productVersion
+                  xcodebuild -version
+                  clang --version
+                  cmake --version
+                  ninja --version
+                } | shasum -a 256 | awk '{print $1}'
+              )"
+            else
+              tool_digest="$(
+                {
+                  for command_name in "${version_commands[@]}"; do
+                    "$command_name" --version
+                  done
+                } | shasum -a 256 | awk '{print $1}'
+              )"
+            fi
+            epoch="${epoch}-native-${tool_digest}"
+          fi
+        fi
+
+        if [[ ! "$epoch" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+          echo "resolved native toolchain epoch contains unsafe characters" >&2
+          exit 1
+        fi
+
+        echo "epoch=$epoch" >> "$GITHUB_OUTPUT"
+        echo "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH=$epoch" >> "$GITHUB_ENV"
+        echo "Resolved native toolchain epoch: $epoch"
