@@ -307,7 +307,6 @@ fn split_participant_timeout_error_reports_blocker_summary() {
 #[test]
 fn split_peer_preflight_requires_current_stage_protocol_generation() {
     let mut peer = split_test_peer(0x61, "Qwen3-Coder", false);
-    peer.rtt_ms = Some(crate::mesh::MAX_SPLIT_RTT_MS);
 
     assert_eq!(
         split_peer_preflight_exclusion_reason(&peer, "Qwen3-Coder", "meshllm/Qwen3-Coder-layers"),
@@ -322,55 +321,9 @@ fn split_peer_preflight_requires_current_stage_protocol_generation() {
 }
 
 #[test]
-fn split_peer_preflight_requires_measured_stage_path() {
-    assert_eq!(
-        split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::unknown()),
-        Some(SplitParticipantExclusionReason::MissingStagePath)
-    );
-}
-
-#[test]
-fn split_peer_preflight_rejects_slow_stage_path() {
-    assert_eq!(
-        split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::direct(Some(
-            crate::mesh::MAX_SPLIT_RTT_MS + 1,
-        ))),
-        Some(SplitParticipantExclusionReason::StagePathTooSlow)
-    );
-}
-
-#[test]
-fn split_peer_preflight_rejects_relay_only_stage_path() {
-    assert_eq!(
-        split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::relay(Some(
-            crate::mesh::MAX_SPLIT_RTT_MS,
-        ))),
-        Some(SplitParticipantExclusionReason::StagePathRelayOnly)
-    );
-}
-
-#[test]
-fn split_peer_preflight_rejects_direct_stage_path_without_rtt() {
-    assert_eq!(
-        split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::direct(None)),
-        Some(SplitParticipantExclusionReason::MissingStagePath)
-    );
-}
-
-#[test]
-fn split_peer_preflight_allows_fast_stage_path() {
-    assert_eq!(
-        split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::direct(Some(
-            crate::mesh::MAX_SPLIT_RTT_MS,
-        ))),
-        None
-    );
-}
-
-#[test]
 fn split_peer_preflight_keeps_host_eligibility_separate_from_stage_path() {
     let mut peer = split_test_peer(0x66, "Qwen3-Coder", true);
-    peer.rtt_ms = Some(crate::mesh::MAX_SPLIT_RTT_MS + 1);
+    peer.rtt_ms = Some(u32::MAX);
 
     assert_eq!(
         split_peer_preflight_exclusion_reason(&peer, "Qwen3-Coder", "meshllm/Qwen3-Coder-layers"),

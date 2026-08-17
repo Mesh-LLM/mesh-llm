@@ -61,14 +61,13 @@ pub(crate) fn fixture_row<'a>(
 }
 
 pub(crate) fn check_installer_outcomes(repo_root: &Path, rows: &[FixtureRow]) -> DynResult<()> {
+    const ORIN_CUDA_MAJOR: &str = "13";
+    const ORIN_CUDA_VERSION: &str = "13.1.2";
+
     let linux_arm64_asset = fixture_row(rows, "linux", "aarch64", "cpu")?
         .stable_asset
         .clone()
         .ok_or("linux/aarch64/cpu stable asset missing")?;
-    let linux_arm64_cuda_asset = fixture_row(rows, "linux", "aarch64", "cuda")?
-        .stable_asset
-        .clone()
-        .ok_or("linux/aarch64/cuda stable asset missing")?;
     let macos_arm64_asset = fixture_row(rows, "macos", "aarch64", "metal")?
         .stable_asset
         .clone()
@@ -143,6 +142,7 @@ pub(crate) fn check_installer_outcomes(repo_root: &Path, rows: &[FixtureRow]) ->
         ("MESH_LLM_TEST_UNAME_S", "Linux"),
         ("MESH_LLM_TEST_UNAME_M", "aarch64"),
         ("MESH_LLM_TEST_TEGRA_MODEL", "NVIDIA Jetson AGX Orin"),
+        ("MESH_LLM_TEST_CUDA_MAJOR", ORIN_CUDA_MAJOR),
     ];
     let recommended = sourced_script_stdout(
         repo_root,
@@ -156,6 +156,18 @@ pub(crate) fn check_installer_outcomes(repo_root: &Path, rows: &[FixtureRow]) ->
         &recommended,
         "Linux/aarch64 Orin recommended flavor",
     )?;
+    let expected_cuda_asset = sourced_script_stdout(
+        repo_root,
+        "scripts/package-release.sh",
+        "resolve_release_target; printf '%s\\n' \"$STABLE_ASSET\"",
+        &[
+            ("MESH_RELEASE_OS", "Linux"),
+            ("MESH_RELEASE_ARCH", "aarch64"),
+            ("MESH_RELEASE_FLAVOR", "cuda"),
+            ("MESH_CUDA_VERSION", ORIN_CUDA_VERSION),
+        ],
+        &[],
+    )?;
     let actual_cuda_asset = sourced_script_stdout(
         repo_root,
         "install.sh",
@@ -164,7 +176,7 @@ pub(crate) fn check_installer_outcomes(repo_root: &Path, rows: &[FixtureRow]) ->
         &["cuda"],
     )?;
     ensure_eq(
-        linux_arm64_cuda_asset.as_str(),
+        &expected_cuda_asset,
         &actual_cuda_asset,
         "Linux/aarch64 Orin CUDA asset parity",
     )?;

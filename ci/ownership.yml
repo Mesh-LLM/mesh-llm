@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "unknown_path_policy": "fail",
+  "domains": [
+    "ci-control",
+    "docs",
+    "tooling",
+    "cli",
+    "rust",
+    "ui",
+    "website",
+    "runtime-product",
+    "native-abi",
+    "protocol",
+    "split-serving",
+    "model-download",
+    "sdk-rust",
+    "sdk-kotlin",
+    "sdk-swift",
+    "platform-macos",
+    "platform-windows",
+    "platform-windows-storage",
+    "backend-cuda",
+    "backend-rocm",
+    "backend-vulkan",
+    "runner-infra"
+  ],
+  "path_rules": [
+    {
+      "domain": "ci-control",
+      "patterns": [
+        ".github/**",
+        ".omo/**",
+        "ci/**",
+        "scripts/affected-crates.sh",
+        "scripts/plan-ci.py",
+        "scripts/plan-*.sh",
+        "scripts/collect-ci-metrics.py",
+        "scripts/tests/test_plan_ci.py"
+      ]
+    },
+    {
+      "domain": "runner-infra",
+      "patterns": [
+        ".github/cache-version.txt",
+        ".github/actions/select-ci-runners/**",
+        ".github/actions/configure-sccache-gha/**",
+        ".github/actions/capture-sccache-stats/**",
+        ".github/actions/resolve-native-toolchain-epoch/**",
+        "runner-images/**"
+      ]
+    },
+    {
+      "domain": "tooling",
+      "patterns": [
+        ".agents/**",
+        ".cargo/**",
+        ".dockerignore",
+        ".gitignore",
+        ".nvmrc",
+        ".well-known/**",
+        "LICENSE",
+        "clippy.toml",
+        "contrib/**",
+        "dist/**",
+        "evals/**",
+        "mesh.png",
+        "package-lock.json",
+        "playwright.config.js",
+        "recipes/**",
+        "schemas/**",
+        "scripts/**",
+        "tools/**"
+      ]
+    },
+    {
+      "domain": "docs",
+      "patterns": [
+        "*.md",
+        "**/*.md",
+        "logs-*.png",
+        "docs/**",
+        "AGENTS.md",
+        "**/AGENTS.md"
+      ]
+    },
+    {
+      "domain": "website",
+      "patterns": [
+        "website/**",
+        "install.sh",
+        "install.ps1",
+        "docs/index.html",
+        "docs/CNAME",
+        "docs/assets/**",
+        "docs/catalog/**",
+        "docs/pagefind/**",
+        "docs/.well-known/**"
+      ]
+    },
+    {
+      "domain": "cli",
+      "patterns": [
+        "crates/mesh-llm-cli/src/parser.rs",
+        "crates/mesh-llm-cli/src/models.rs",
+        "crates/mesh-llm-cli/src/runtime.rs",
+        "crates/mesh-llm-cli/src/benchmark.rs"
+      ]
+    },
+    {
+      "domain": "rust",
+      "patterns": [
+        "Cargo.toml",
+        "Cargo.lock",
+        "Justfile",
+        "rust-toolchain",
+        "rust-toolchain.toml",
+        "crates/**",
+        "tools/xtask/**"
+      ]
+    },
+    {
+      "domain": "ui",
+      "patterns": [
+        "crates/mesh-llm-ui/**",
+        "pnpm-lock.yaml",
+        "package.json"
+      ]
+    },
+    {
+      "domain": "runtime-product",
+      "patterns": [
+        "scripts/build-*.sh",
+        "scripts/build-*.ps1",
+        "scripts/ci-*-smoke.sh",
+        "scripts/ci-*-smoke.py",
+        "scripts/ci-*-smoke.cjs",
+        "scripts/compose-product*",
+        "scripts/package-release*",
+        "scripts/verify-host-dependencies.py",
+        "docker/**",
+        "fly/**"
+      ]
+    },
+    {
+      "domain": "native-abi",
+      "patterns": [
+        "third_party/llama.cpp/**",
+        "scripts/prepare-llama.sh",
+        "scripts/build-llama.sh",
+        "scripts/package-native-runtime.sh",
+        "scripts/verify-native-runtime-package.sh",
+        "crates/skippy-ffi/**",
+        "crates/llama-quant-ffi/**"
+      ]
+    },
+    {
+      "domain": "protocol",
+      "patterns": [
+        "crates/mesh-llm-protocol/**",
+        "crates/mesh-llm-routing/**",
+        "crates/mesh-llm-types/**",
+        "crates/skippy-protocol/**"
+      ]
+    },
+    {
+      "domain": "split-serving",
+      "patterns": [
+        "crates/skippy-cache/**",
+        "crates/skippy-coordinator/**",
+        "crates/skippy-correctness/**",
+        "crates/skippy-model-package/**",
+        "crates/skippy-prompt/**",
+        "crates/skippy-runtime/**",
+        "crates/skippy-server/**",
+        "crates/skippy-topology/**"
+      ]
+    },
+    {
+      "domain": "model-download",
+      "patterns": [
+        "crates/model-artifact/**",
+        "crates/model-hf/**",
+        "crates/model-package/**",
+        "crates/model-ref/**",
+        "crates/model-resolver/**",
+        "scripts/ci-hf-download-smoke.sh"
+      ]
+    },
+    {
+      "domain": "sdk-rust",
+      "patterns": [
+        "crates/mesh-llm-sdk/**",
+        "crates/mesh-llm-api-client/**",
+        "crates/mesh-llm-api-server/**",
+        "scripts/ci-rust-sdk-smoke.sh",
+        "sdk/**"
+      ]
+    },
+    {
+      "domain": "sdk-kotlin",
+      "patterns": [
+        "sdk/kotlin/**",
+        "scripts/ci-kotlin-sdk-smoke.sh"
+      ]
+    },
+    {
+      "domain": "sdk-swift",
+      "patterns": [
+        "sdk/swift/**",
+        "Package.swift",
+        "scripts/ci-swift-sdk-smoke.sh"
+      ]
+    },
+    {
+      "domain": "platform-macos",
+      "patterns": [
+        "scripts/build-mac.sh",
+        "scripts/ci-swift-sdk-smoke.sh",
+        ".github/workflows/swift-sdk-artifact.yml"
+      ]
+    },
+    {
+      "domain": "platform-windows",
+      "patterns": [
+        "scripts/build-windows.ps1",
+        "scripts/install-windows-sdk.ps1",
+        "scripts/windows-native-runtime-deps.py",
+        ".github/workflows/windows-warm-caches.yml"
+      ]
+    },
+    {
+      "domain": "backend-cuda",
+      "patterns": [
+        "scripts/detect-cuda-arch.sh",
+        "scripts/build-linux.sh",
+        "scripts/build-windows.ps1"
+      ]
+    },
+    {
+      "domain": "backend-rocm",
+      "patterns": [
+        "scripts/detect-rocm-arch.sh",
+        "scripts/build-linux-rocm.sh",
+        "scripts/build-windows.ps1"
+      ]
+    },
+    {
+      "domain": "backend-vulkan",
+      "patterns": [
+        "scripts/build-linux.sh",
+        "scripts/build-windows.ps1"
+      ]
+    }
+  ],
+  "crate_rules": [
+    {"domain": "rust", "crates": ["*"]},
+    {
+      "domain": "cli",
+      "crates": ["mesh-llm-cli"]
+    },
+    {
+      "domain": "runtime-product",
+      "crates": [
+        "mesh-llm",
+        "mesh-llm-client",
+        "mesh-llm-commands",
+        "mesh-llm-console-server",
+        "mesh-llm-embedded-runtime",
+        "mesh-llm-host-runtime",
+        "mesh-llm-node",
+        "openai-frontend"
+      ]
+    },
+    {
+      "domain": "native-abi",
+      "crates": ["llama-quant-ffi", "skippy-ffi"]
+    },
+    {
+      "domain": "protocol",
+      "crates": [
+        "mesh-llm-protocol",
+        "mesh-llm-routing",
+        "mesh-llm-types",
+        "skippy-protocol"
+      ]
+    },
+    {
+      "domain": "split-serving",
+      "crates": [
+        "skippy-cache",
+        "skippy-coordinator",
+        "skippy-correctness",
+        "skippy-model-package",
+        "skippy-prompt",
+        "skippy-runtime",
+        "skippy-server",
+        "skippy-topology"
+      ]
+    },
+    {
+      "domain": "model-download",
+      "crates": [
+        "model-artifact",
+        "model-hf",
+        "model-package",
+        "model-ref",
+        "model-resolver",
+        "skippy-quantize"
+      ]
+    },
+    {
+      "domain": "sdk-rust",
+      "crates": [
+        "mesh-llm-api-client",
+        "mesh-llm-api-server",
+        "mesh-llm-ffi",
+        "mesh-llm-nodejs",
+        "mesh-llm-sdk"
+      ]
+    },
+    {
+      "domain": "platform-macos",
+      "crates": ["mesh-llm-sdk"]
+    },
+    {
+      "domain": "platform-windows",
+      "crates": ["mesh-llm-nodejs", "skippy-ffi"]
+    },
+    {
+      "domain": "platform-windows-storage",
+      "crates": ["mesh-llm-log-store"]
+    },
+    {
+      "domain": "backend-cuda",
+      "crates": ["llama-spec-bench", "mesh-llm-gpu-bench", "skippy-bench"]
+    },
+    {
+      "domain": "backend-rocm",
+      "crates": ["llama-spec-bench", "mesh-llm-gpu-bench", "skippy-bench"]
+    },
+    {
+      "domain": "backend-vulkan",
+      "crates": ["llama-spec-bench", "mesh-llm-gpu-bench", "skippy-bench"]
+    }
+  ]
+}

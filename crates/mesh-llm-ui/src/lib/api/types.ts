@@ -134,6 +134,14 @@ export interface RuntimeInfo {
   stages?: RuntimeStageInfo[]
 }
 
+export interface LoggingStatus {
+  metadata_available: boolean
+  capture_mode: 'metadata_only' | 'redacted_artifacts' | 'unavailable'
+  artifact_capture_available: boolean
+  artifact_capture_ready: boolean
+  artifact_capture_degradation?: string
+}
+
 export interface StatusPayload {
   node_id: string
   node_state: 'client' | 'standby' | 'loading' | 'serving'
@@ -163,6 +171,7 @@ export interface StatusPayload {
   publication_state?: MeshPublicationState
   first_joined_mesh_ts?: number
   wakeable_nodes?: WakeableNode[]
+  logging?: LoggingStatus
 }
 
 // ============================================================

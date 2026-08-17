@@ -153,6 +153,7 @@ fn status_view_input(
 fn headless_mode_disables_ui_routes_but_preserves_api() {
     assert!(is_ui_only_route("/"));
     assert!(is_ui_only_route("/dashboard"));
+    assert!(is_ui_only_route("/logs"));
     assert!(is_ui_only_route("/chat"));
     assert!(is_ui_only_route("/configuration"));
     assert!(is_ui_only_route("/configuration/defaults"));
@@ -168,6 +169,8 @@ fn headless_mode_disables_ui_routes_but_preserves_api() {
 #[test]
 fn headless_mode_returns_404_for_assets_and_dashboard_routes() {
     assert!(is_ui_only_route("/dashboard/"));
+    assert!(is_ui_only_route("/logs/"));
+    assert!(is_ui_only_route("/logs/request-123"));
     assert!(is_ui_only_route("/chat/"));
     assert!(is_ui_only_route("/chat/some-room"));
     assert!(is_ui_only_route("/configuration/"));
@@ -187,6 +190,7 @@ fn headless_mode_returns_404_for_assets_and_dashboard_routes() {
 fn default_mode_still_serves_embedded_ui_routes() {
     assert!(is_ui_only_route("/"));
     assert!(is_ui_only_route("/dashboard"));
+    assert!(is_ui_only_route("/logs"));
     assert!(is_ui_only_route("/chat"));
     assert!(is_ui_only_route("/configuration/defaults"));
     assert!(is_ui_only_route("/assets/app.js"));
@@ -225,6 +229,35 @@ async fn direct_configuration_deep_link_serves_embedded_ui_index() {
     assert!(
         !response.contains(r#"{"error":"Not found"}"#),
         "UI deep link must not fall through to JSON 404"
+    );
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn direct_logs_deep_link_serves_embedded_ui_index() {
+    assert!(crate::api::server::is_console_index_route("/logs"));
+
+    if mesh_llm_ui::index().is_none() {
+        return;
+    }
+
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let response =
+        send_management_request(addr, "GET /logs HTTP/1.1\r\nHost: localhost\r\n\r\n".into()).await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "expected direct logs deep link to serve UI index, got: {response}"
+    );
+    assert!(
+        response.contains("Content-Type: text/html; charset=utf-8"),
+        "expected HTML response for logs UI deep link, got: {response}"
+    );
+    assert!(
+        !response.contains(r#"{"error":"Not found"}"#),
+        "logs UI deep link must not fall through to JSON 404"
     );
     handle.await.unwrap().unwrap();
 }

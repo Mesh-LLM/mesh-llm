@@ -112,7 +112,8 @@ The current core pack is:
 | Eval id | External harness | Default run |
 |---|---|---|
 | `speed-bench` | llama.cpp `tools/server/bench/speed-bench` | Native SPEED-Bench qualitative run across all categories, no sample limit, `--osl 1024` |
-| `terminal-bench` | Terminal-Bench CLI (`tb`) | `terminal-bench-core==0.1.1`, Terminus agent, no task-id filter |
+| `terminal-bench` | Pinned Harbor (`ff69e554`) | Harbor `terminal-bench@2.0` dataset with Terminus2 |
+| `swe-gym` | Pinned Harbor (`ff69e554`) | SWE-Gym Lite via Harbor `swegym-lite`; use `--task-id` for one task |
 | `swe-bench-pro` | Scale SWE-Bench Pro OS repo | Upstream SWE-agent patch generation, patch gathering, and `swe_bench_pro_eval.py` |
 | `mcp-atlas` | Scale MCP-Atlas repo | Native MCP-Atlas completion script with upstream `--no-filter`, plus scoring through auto-started MCP services |
 
@@ -127,6 +128,26 @@ skippy-bench eval run terminal-bench \
   --metrics-http http://127.0.0.1:18080 \
   --metrics-run-id run-local-qwen
 ```
+
+SWE-Gym Lite one-task smoke:
+
+```bash
+skippy-bench eval sync swe-gym
+skippy-bench eval run swe-gym \
+  --task-id getmoto__moto-5752 \
+  --dataset lite \
+  --base-url http://127.0.0.1:9337/v1 \
+  --session-id swegym-smoke \
+  --model org/repo:Q4_K_M \
+  --metrics-http http://127.0.0.1:18080 \
+  --metrics-run-id swegym-smoke
+```
+
+Start `metrics-server` before the run for request correlation. Full SWE-Gym
+runs use Harbor's official `-d swegym-lite` dataset path. Single-task
+preparation uses `uv run --with swebench adapters/swegym/run_adapter.py`.
+If the task container cannot reach Mesh, provide `--harbor-endpoint-url` with
+a container-reachable URL.
 
 `--timeout-secs` is forwarded to native harnesses as their request/task timeout
 where supported. It is not a SkippyBench dataset limit and does not cap full
@@ -150,9 +171,10 @@ cache behind upstream. Each run records that resolved commit in
 Before launching native harness traffic, `eval run` enforces the same required
 tool checks as `eval doctor`, including Docker container-start readiness for
 Docker-backed evals.
-Terminal-Bench is installed through `uv tool install --python 3.12` because the
-current `tb` CLI is not compatible with Python 3.14. `eval doctor` checks that
-Docker's daemon is reachable and can start a tiny container, not just that the
+Harbor is synced once at pinned commit `ff69e554` and reused by both
+Terminal-Bench and SWE-Gym; runs do not clone it per invocation. The legacy
+direct `tb` runner is unsupported. `eval doctor` checks that Docker's daemon is
+reachable and can start a tiny container, not just that the
 `docker` CLI exists or that `docker info` returns.
 MCP-Atlas starts its Docker agent environment and Python completion service
 when ports `1984` and `3000` are not already reachable, waits for readiness,
@@ -207,10 +229,9 @@ SkippyBench launches it through a small adapter that adds the bearer token from
 `--api-key` without modifying the upstream harness.
 SWE-Bench Pro records OpenAI usage tokens and client-side tok/s when the
 upstream flow produces them.
-Terminal-Bench records pass rate, resolved/unresolved task counts, token totals
-when the agent reports them, and raw harness artifacts. The MCP-Atlas adapter
-records wall time, raw completion CSV artifacts, the native scoring output
-directory, and CSV task row count.
+Terminal-Bench and SWE-Gym record Harbor trial counts, pass rates, and raw
+Harbor job artifacts. The MCP-Atlas adapter records wall time, raw completion
+CSV artifacts, the native scoring output directory, and CSV task row count.
 
 `eval run` requires metrics-server for every external benchmark. `--metrics-http` defaults to
 `http://127.0.0.1:18080`; the command creates a metrics-server run before the

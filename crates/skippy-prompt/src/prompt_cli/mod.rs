@@ -30,7 +30,7 @@ use skippy_protocol::{
     StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };
 use skippy_runtime::{
-    ChatTemplateMessage, ChatTemplateOptions, GGML_TYPE_F16, ModelInfo, RuntimeConfig,
+    ChatTemplateMessage, ChatTemplateOptions, GGML_TYPE_F16, ModelInfo, MtpSource, RuntimeConfig,
     RuntimeLoadMode, StageModel, StageSession,
     package::{PackageStageRequest, inspect_layer_package, materialize_layer_package},
     restore_native_logs, suppress_native_logs,

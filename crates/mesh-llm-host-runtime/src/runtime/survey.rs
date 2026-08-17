@@ -1,3 +1,4 @@
+use crate::logging::{LoggingMetric, LoggingMetricsSink};
 use crate::network::metrics::{
     AttemptOutcome, AttemptTarget, RequestOutcome, RequestService, RoutingTelemetrySink,
 };
@@ -16,6 +17,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
+
+mod logging_metrics;
 
 const DEFAULT_SERVICE_NAME: &str = "mesh-llm";
 const DEFAULT_EXPORT_INTERVAL_SECS: u64 = 15;
@@ -46,6 +49,11 @@ const TELEMETRY_ATTRIBUTE_ALLOWLIST: &[&str] = &[
     "mesh_llm.gpu_stable_id",
     "mesh_llm.is_soc",
     "mesh_llm.launch_kind",
+    "mesh_llm.logging_artifact_capture_status",
+    "mesh_llm.logging_cleanup_outcome",
+    "mesh_llm.logging_terminal_outcome",
+    "mesh_llm.logging_webhook_attempt_state",
+    "mesh_llm.logging_webhook_delivery_outcome",
     "mesh_llm.model",
     "mesh_llm.quantization",
     "mesh_llm.request_outcome",
@@ -220,6 +228,11 @@ impl SurveyTelemetry {
     }
 
     pub(crate) fn guardrail_sink(&self) -> Option<Arc<dyn GuardrailTelemetrySink>> {
+        self.inner.as_ref()?;
+        Some(Arc::new(self.clone()))
+    }
+
+    pub(crate) fn logging_sink(&self) -> Option<Arc<dyn LoggingMetricsSink>> {
         self.inner.as_ref()?;
         Some(Arc::new(self.clone()))
     }
@@ -932,6 +945,9 @@ enum SurveyEvent {
         source: SurveyTelemetrySource,
         current: u64,
     },
+    LoggingMetric {
+        metric: LoggingMetric,
+    },
 }
 
 #[derive(Debug)]
@@ -955,6 +971,21 @@ impl SurveyEventQueue {
             .events
             .lock()
             .expect("telemetry event queue lock poisoned");
+        if events.len() == self.capacity {
+            events.pop_front();
+        }
+        events.push_back(event);
+        drop(events);
+        self.notify.notify_one();
+    }
+
+    /// Logging metrics use this path so a contended telemetry queue cannot
+    /// delay logging or request-serving work. The loss is intentionally
+    /// fail-open because telemetry is observational only.
+    fn try_push(&self, event: SurveyEvent) {
+        let Ok(mut events) = self.events.try_lock() else {
+            return;
+        };
         if events.len() == self.capacity {
             events.pop_front();
         }
@@ -991,6 +1022,18 @@ struct SurveyRecorder {
     guardrail_decision_total: Counter<u64>,
     guardrail_outcome_total: Counter<u64>,
     requests_inflight: Gauge<u64>,
+    logging_lifecycle_terminal_total: Counter<u64>,
+    logging_persistence_queue_dropped_total: Counter<u64>,
+    logging_persistence_failure_total: Counter<u64>,
+    logging_persistence_shutdown_loss_total: Counter<u64>,
+    logging_persistence_outstanding: Gauge<u64>,
+    logging_replay_evicted_total: Counter<u64>,
+    logging_replay_gap_total: Counter<u64>,
+    logging_replay_dropped_total: Counter<u64>,
+    logging_cleanup_total: Counter<u64>,
+    logging_webhook_delivery_total: Counter<u64>,
+    logging_webhook_attempt_total: Counter<u64>,
+    logging_artifact_capture_total: Counter<u64>,
     launch_duration_ms: Histogram<f64>,
     uptime_s: Histogram<f64>,
     loaded_count: u64,
@@ -1084,6 +1127,58 @@ impl SurveyRecorder {
                 .u64_gauge("mesh_llm_requests_inflight")
                 .with_description("Current in-flight requests fronted by this node.")
                 .build(),
+            logging_lifecycle_terminal_total: meter
+                .u64_counter("mesh_llm_logging_lifecycle_terminal_total")
+                .with_description("Logging lifecycle terminal outcomes.")
+                .build(),
+            logging_persistence_queue_dropped_total: meter
+                .u64_counter("mesh_llm_logging_persistence_queue_dropped_total")
+                .with_description("Logging persistence queue entries dropped.")
+                .build(),
+            logging_persistence_failure_total: meter
+                .u64_counter("mesh_llm_logging_persistence_failure_total")
+                .with_description("Logging persistence sink failures.")
+                .build(),
+            logging_persistence_shutdown_loss_total: meter
+                .u64_counter("mesh_llm_logging_persistence_shutdown_loss_total")
+                .with_description("Logging persistence entries lost after bounded shutdown.")
+                .build(),
+            logging_persistence_outstanding: meter
+                .u64_gauge("mesh_llm_logging_persistence_outstanding")
+                .with_description(
+                    "Logging persistence entries currently owned by a queue or worker.",
+                )
+                .build(),
+            logging_replay_evicted_total: meter
+                .u64_counter("mesh_llm_logging_replay_evicted_total")
+                .with_description("Logging replay entries evicted by the bounded window.")
+                .build(),
+            logging_replay_gap_total: meter
+                .u64_counter("mesh_llm_logging_replay_gap_total")
+                .with_description("Replay recovery gaps emitted by the logging SSE session.")
+                .build(),
+            logging_replay_dropped_total: meter
+                .u64_counter("mesh_llm_logging_replay_dropped_total")
+                .with_description(
+                    "Logging replay entries rejected because the replay window is disabled.",
+                )
+                .build(),
+            logging_cleanup_total: meter
+                .u64_counter("mesh_llm_logging_cleanup_total")
+                .with_description("Logging retention cleanup outcomes.")
+                .build(),
+            logging_webhook_delivery_total: meter
+                .u64_counter("mesh_llm_logging_webhook_delivery_total")
+                .with_description("Durable logging webhook delivery outcomes.")
+                .build(),
+            logging_webhook_attempt_total: meter
+                .u64_counter("mesh_llm_logging_webhook_attempt_total")
+                .with_description("Durable logging webhook attempt states.")
+                .build(),
+            logging_artifact_capture_total: meter
+                .u64_counter("mesh_llm_logging_artifact_capture_total")
+                .with_description("Logging artifact capture outcomes.")
+                .build(),
             launch_duration_ms: meter
                 .f64_histogram("mesh_llm_model_launch_duration_ms")
                 .with_description("Local model launch duration.")
@@ -1160,6 +1255,7 @@ impl SurveyRecorder {
             SurveyEvent::InflightRequests { source, current } => {
                 self.requests_inflight.record(current, &source.key_values());
             }
+            SurveyEvent::LoggingMetric { metric } => self.record_logging_metric(metric),
         }
     }
 }
@@ -1410,6 +1506,11 @@ mod tests {
                 "mesh_llm.gpu_stable_id",
                 "mesh_llm.is_soc",
                 "mesh_llm.launch_kind",
+                "mesh_llm.logging_artifact_capture_status",
+                "mesh_llm.logging_cleanup_outcome",
+                "mesh_llm.logging_terminal_outcome",
+                "mesh_llm.logging_webhook_attempt_state",
+                "mesh_llm.logging_webhook_delivery_outcome",
                 "mesh_llm.model",
                 "mesh_llm.quantization",
                 "mesh_llm.request_outcome",

@@ -112,7 +112,7 @@ After successful core setup, an interactive setup may offer to star
 Eligibility:
 
 - `gh` is on PATH
-- `gh auth status --active --hostname github.com` succeeds
+- `gh api --hostname github.com /user --silent` succeeds using the account selected by `gh`
 - the authenticated viewer has not already starred the repo
 - a visible interactive prompt is shown
 

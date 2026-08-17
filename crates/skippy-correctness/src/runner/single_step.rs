@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use model_artifact::ModelIdentity;
 use serde_json::json;
 use skippy_protocol::binary::{StageWireMessage, WireReplyKind, recv_reply, write_stage_message};
-use skippy_runtime::{GGML_TYPE_F16, RuntimeConfig, RuntimeLoadMode, StageModel};
+use skippy_runtime::{GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel};
 
 use crate::{
     cli::{RuntimeArgs, ServerArgs, SingleStepArgs},
@@ -129,6 +129,7 @@ pub(in crate::runner) fn run_full_model_decode(args: &RuntimeArgs) -> Result<Ful
         projector_path: None,
         include_embeddings: true,
         include_output: true,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: false,
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,
@@ -211,6 +212,7 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         projector_path: None,
         include_embeddings: true,
         include_output: false,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,

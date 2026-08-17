@@ -2,7 +2,6 @@ use crate::frontend::generation::CONTEXT_BUDGET_MAX_TOKENS;
 use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::util::context_budget_completion_tokens;
-use crate::frontend::util::ensure_context_capacity;
 use crate::runtime_state::RuntimeState;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
@@ -11,6 +10,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use axum::http::StatusCode;
+use openai_frontend::CancellationToken;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiErrorKind;
 use openai_frontend::OpenAiResult;
@@ -21,8 +21,10 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
+#[cfg(test)]
 use tokio::sync::TryAcquireError;
 
 pub(in crate::frontend) struct GenerationQueueReservation {
@@ -35,25 +37,67 @@ impl Drop for GenerationQueueReservation {
     }
 }
 
+pub(in crate::frontend) async fn acquire_generation_permit_with_queue_reservation(
+    generation_limit: Arc<Semaphore>,
+    reservation: GenerationQueueReservation,
+    admission_timeout: Duration,
+    deadline: Instant,
+    cancellation: &CancellationToken,
+) -> OpenAiResult<OwnedSemaphorePermit> {
+    if cancellation.is_cancelled() {
+        return Err(OpenAiError::cancelled("request cancelled"));
+    }
+
+    let timeout = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        generation_limit.acquire_owned(),
+    );
+    tokio::select! {
+        result = timeout => {
+            drop(reservation);
+            match result {
+                Ok(Ok(permit)) if cancellation.is_cancelled() => {
+                    drop(permit);
+                    Err(OpenAiError::cancelled("request cancelled"))
+                }
+                Ok(Ok(permit)) => Ok(permit),
+                Ok(Err(_)) => Err(generation_lanes_busy_error()),
+                Err(_) => Err(generation_queue_timeout_error(admission_timeout)),
+            }
+        }
+        () = cancellation.cancelled() => {
+            drop(reservation);
+            Err(OpenAiError::cancelled("request cancelled"))
+        }
+    }
+}
+
+#[cfg(test)]
 pub(in crate::frontend) async fn acquire_generation_permit_with_queue(
     generation_limit: Arc<Semaphore>,
     generation_queue_depth: Arc<AtomicUsize>,
     generation_queue_limit: usize,
     admission_timeout: Duration,
 ) -> OpenAiResult<OwnedSemaphorePermit> {
+    let deadline = Instant::now() + admission_timeout;
     match generation_limit.clone().try_acquire_owned() {
         Ok(permit) => return Ok(permit),
         Err(TryAcquireError::Closed) => return Err(generation_lanes_busy_error()),
         Err(TryAcquireError::NoPermits) => {}
     }
 
-    let _queue_reservation =
+    let queue_reservation =
         reserve_generation_queue(generation_queue_depth, generation_queue_limit)
             .ok_or_else(generation_queue_full_error)?;
-    tokio::time::timeout(admission_timeout, generation_limit.acquire_owned())
-        .await
-        .map_err(|_| generation_queue_timeout_error(admission_timeout))?
-        .map_err(|_| generation_lanes_busy_error())
+    let cancellation = CancellationToken::new();
+    acquire_generation_permit_with_queue_reservation(
+        generation_limit,
+        queue_reservation,
+        admission_timeout,
+        deadline,
+        &cancellation,
+    )
+    .await
 }
 
 pub(in crate::frontend) fn reserve_generation_queue(
@@ -117,8 +161,19 @@ impl GenerationTokenLimit {
     ) -> OpenAiResult<u32> {
         match self {
             Self::Explicit(max_tokens) => {
-                ensure_context_capacity(prompt_token_count, max_tokens, ctx_size)?;
-                Ok(max_tokens)
+                // Client-asserted ceiling. `max_tokens` is an upper bound on
+                // the reply, not a reservation the server must be able to
+                // honour in full: OpenAI-compatible clients routinely send a
+                // very large value to mean "no limit" (Buzz Agent Desktop
+                // defaults to 65,536). Clamp to the remaining context and let
+                // generation stop with `finish_reason: "length"`. A prompt that
+                // overflows the window on its own is still a real error.
+                //
+                // Rejecting a ceiling that wouldn't fit made routing and the
+                // backend disagree about a request the server could serve
+                // comfortably — issue #1350.
+                let remaining = context_budget_completion_tokens(prompt_token_count, ctx_size)?;
+                Ok(remaining.min(max_tokens))
             }
             Self::Default(default_max_tokens) => {
                 // Server-picked default. Always clamp to the remaining

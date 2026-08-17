@@ -485,6 +485,7 @@ pub(crate) mod tests {
             first_joined_mesh_ts: Some(123),
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         assert_eq!(
@@ -1480,7 +1481,7 @@ pub(crate) mod tests {
             .unwrap();
         let collector = node.runtime_data_collector();
         let upstream_port = start_local_http_server(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 33\r\n\r\n{\"usage\":{\"completion_tokens\":7}}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 69\r\n\r\n{\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":7,\"total_tokens\":10}}",
         )
         .await;
         let (proxy_stream, client_reader) = connected_proxy_stream().await;
@@ -1491,11 +1492,15 @@ pub(crate) mod tests {
             Some("glm"),
             election::InferenceTarget::Local(upstream_port),
             b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}",
-            ResponseAdapter::None,
+            crate::network::openai::transport::RouteTargetContext {
+                request_id: mesh_llm_events::logging::identifiers::RequestId::default(),
+                response_adapter: ResponseAdapter::None,
+                route_observer: crate::logging::OpenAiRouteObserver::default(),
+            },
         )
         .await;
 
-        assert!(routed);
+        assert!(routed.response_written());
         let response = String::from_utf8(client_reader.await.unwrap()).unwrap();
         assert!(response.starts_with("HTTP/1.1 200 OK"));
 

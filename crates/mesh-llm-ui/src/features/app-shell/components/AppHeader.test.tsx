@@ -76,10 +76,6 @@ function renderHeader({
           themeMode="auto"
           setThemeMode={vi.fn()}
           statusError={null}
-          inviteWithModelCommand="mesh-llm --join invite-token --model GLM-4.7-Flash-Q4_K_M"
-          inviteWithModelName="GLM-4.7-Flash-Q4_K_M"
-          inviteClientCommand="mesh-llm --client --join invite-token"
-          inviteToken="invite-token"
           apiDirectUrl=""
           isPublicMesh={false}
           {...headerOverrides}
@@ -156,16 +152,17 @@ describe('AppHeader', () => {
     expect(screen.getByText('mesh-llm goose')).toBeInTheDocument()
   })
 
-  it('keeps private meshes focused on invite flows without OpenCode', async () => {
-    renderHeader({
-      headerOverrides: { isPublicMesh: false, inviteToken: 'private-token' }
-    })
+  it('keeps private mesh commands free of invitation secrets', async () => {
+    renderHeader({ headerOverrides: { isPublicMesh: false } })
 
     fireEvent.click(screen.getByRole('button', { name: 'API access' }))
 
-    await screen.findByText('mesh-llm claude --join private-token')
-    expect(screen.getByText('mesh-llm goose --join private-token')).toBeInTheDocument()
+    await screen.findByText('For a private mesh, request connection details through a trusted local operator channel.')
+    expect(screen.getByText('mesh-llm claude')).toBeInTheDocument()
+    expect(screen.getByText('mesh-llm goose')).toBeInTheDocument()
     expect(screen.queryByText(/mesh-llm opencode/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Copy opencode command' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/invite-token|private-token/)).not.toBeInTheDocument()
+    expect(screen.queryByText('http://127.0.0.1:9337/v1')).not.toBeInTheDocument()
   })
 })

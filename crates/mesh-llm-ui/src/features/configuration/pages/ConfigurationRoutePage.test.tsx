@@ -14,6 +14,7 @@ const routerMocks = vi.hoisted(() => {
 
 const featureFlagMocks = vi.hoisted(() => ({
   integrationsEnabled: false,
+  logsSettingsEnabled: false,
   newConfigurationPageEnabled: true,
   signingAttestationEnabled: false,
   wakePolicyConfigurationEnabled: false
@@ -54,6 +55,7 @@ vi.mock('@/features/configuration/pages/ConfigurationPage', () => ({
 vi.mock('@/lib/feature-flags', () => ({
   useBooleanFeatureFlag: vi.fn((path: string) => {
     if (path === 'configuration/integrations') return featureFlagMocks.integrationsEnabled
+    if (path === 'configuration/logsSettings') return featureFlagMocks.logsSettingsEnabled
     if (path === 'configuration/signingAttestation') return featureFlagMocks.signingAttestationEnabled
     if (path === 'configuration/wakePolicyConfiguration') return featureFlagMocks.wakePolicyConfigurationEnabled
     return featureFlagMocks.newConfigurationPageEnabled
@@ -66,6 +68,7 @@ describe('ConfigurationRoutePage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     featureFlagMocks.integrationsEnabled = false
+    featureFlagMocks.logsSettingsEnabled = false
     featureFlagMocks.newConfigurationPageEnabled = true
     featureFlagMocks.signingAttestationEnabled = false
     featureFlagMocks.wakePolicyConfigurationEnabled = false
@@ -131,10 +134,16 @@ describe('ConfigurationRoutePage', () => {
     rerender(<ConfigurationRoutePage />)
 
     expect(screen.getByTestId('redirect')).toHaveTextContent('general')
+
+    routerMocks.useParams.mockReturnValue({ configurationTab: 'audit' })
+    rerender(<ConfigurationRoutePage />)
+
+    expect(screen.getByTestId('redirect')).toHaveTextContent('general')
   })
 
   it('restores gated temporary section paths when their flags are enabled', () => {
     featureFlagMocks.integrationsEnabled = true
+    featureFlagMocks.logsSettingsEnabled = true
     featureFlagMocks.signingAttestationEnabled = true
     featureFlagMocks.wakePolicyConfigurationEnabled = true
     routerMocks.useParams.mockReturnValue({ configurationTab: 'wake-policy' })
@@ -152,6 +161,11 @@ describe('ConfigurationRoutePage', () => {
     rerender(<ConfigurationRoutePage />)
 
     expect(screen.getByRole('button', { name: 'Active tab: plugins' })).toBeInTheDocument()
+
+    routerMocks.useParams.mockReturnValue({ configurationTab: 'audit' })
+    rerender(<ConfigurationRoutePage />)
+
+    expect(screen.getByRole('button', { name: 'Active tab: audit' })).toBeInTheDocument()
   })
 
   it('redirects unknown tab paths back to the default tab path', () => {
@@ -160,5 +174,23 @@ describe('ConfigurationRoutePage', () => {
     render(<ConfigurationRoutePage />)
 
     expect(screen.getByTestId('redirect')).toHaveTextContent('general')
+  })
+
+  it('redirects audit tab to general when logsSettings flag is disabled', () => {
+    featureFlagMocks.logsSettingsEnabled = false
+    routerMocks.useParams.mockReturnValue({ configurationTab: 'audit' })
+
+    render(<ConfigurationRoutePage />)
+
+    expect(screen.getByTestId('redirect')).toHaveTextContent('general')
+  })
+
+  it('restores audit tab when logsSettings flag is enabled', () => {
+    featureFlagMocks.logsSettingsEnabled = true
+    routerMocks.useParams.mockReturnValue({ configurationTab: 'audit' })
+
+    render(<ConfigurationRoutePage />)
+
+    expect(screen.getByRole('button', { name: 'Active tab: audit' })).toBeInTheDocument()
   })
 })

@@ -47,6 +47,22 @@ fn client_mode_does_not_require_a_native_runtime() {
     ));
 }
 
+#[tokio::test]
+async fn plugin_mode_skips_malformed_host_config() {
+    let mut malformed_config = tempfile::NamedTempFile::new().expect("create malformed config");
+    std::io::Write::write_all(&mut malformed_config, b"[logging\n")
+        .expect("write malformed config");
+    let plugin = RuntimeOptions {
+        plugin: Some("blobstore".to_string()),
+        config: Some(malformed_config.path().to_path_buf()),
+        ..Default::default()
+    };
+
+    initialize_host_runtime_for_options(&plugin)
+        .await
+        .expect("plugin mode should not load host config");
+}
+
 #[test]
 fn mesh_requirements_policy_change_changes_mesh_id() {
     mesh::requirements::tests::assert_mesh_requirements_policy_change_changes_mesh_id();

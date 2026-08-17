@@ -85,25 +85,13 @@ fn four_workers_two_fast_consensus() -> moa::GatewayConfig {
 
     let backends: Vec<Arc<dyn moa::ModelBackend>> = vec![fast_a, fast_b, slow_a, slow_b];
     let models = vec![
-        moa::ModelEntry {
-            name: "fast-a-3b".into(),
-            backend_index: 0,
-        },
-        moa::ModelEntry {
-            name: "fast-b-3b".into(),
-            backend_index: 1,
-        },
+        moa::ModelEntry::new("fast-a-3b", 0),
+        moa::ModelEntry::new("fast-b-3b", 1),
         // The two big-tier models — one of them will be picked as
         // `Strong`. They are deliberately slow so the early-exit path
         // is hit before they finish.
-        moa::ModelEntry {
-            name: "slow-a-32b".into(),
-            backend_index: 2,
-        },
-        moa::ModelEntry {
-            name: "slow-b-32b".into(),
-            backend_index: 3,
-        },
+        moa::ModelEntry::new("slow-a-32b", 2),
+        moa::ModelEntry::new("slow-b-32b", 3),
     ];
 
     moa::GatewayConfig {

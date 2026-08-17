@@ -333,22 +333,68 @@ recommended_flavor() {
     esac
 }
 
+cuda_library_major() {
+    local library="$1"
+    local probe_root="${MESH_LLM_TEST_CUDA_PROBE_ROOT:-}"
+    local major=""
+    local lib
+
+    major="$(ldconfig -p 2>/dev/null | grep -oE "${library}\.so\.[0-9]+" | awk -F. '{print $3}' | sort -rn | head -n 1 || true)"
+    if [[ -n "$major" ]]; then
+        printf '%s\n' "$major"
+        return 0
+    fi
+
+    for lib in \
+        "$probe_root"/usr/local/cuda*/lib64/"$library".so.* \
+        "$probe_root"/usr/local/cuda*/targets/*/lib/"$library".so.* \
+        "$probe_root"/usr/local/cuda*/targets/*/lib/stubs/"$library".so.*; do
+        if [[ -f "$lib" ]]; then
+            major="$(basename "$lib" | grep -oE "${library}\.so\.[0-9]+" | awk -F. '{print $3}' | head -n 1 || true)"
+            if [[ -n "$major" ]]; then
+                printf '%s\n' "$major"
+                return 0
+            fi
+        fi
+    done
+
+    printf '\n'
+}
+
 detect_cuda_major() {
     local ver=""
-    if command -v nvcc >/dev/null 2>&1; then
-        ver="$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+' | awk '{print $2}' | head -n 1)"
-    fi
-    if [[ -z "$ver" ]]; then
-        local lib
-        for lib in /usr/local/cuda*/targets/*/lib/libcudart.so.* /usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
-            if [[ -f "$lib" ]]; then
-                ver="$(basename "$lib" | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | head -n 1)"
-                break
+    if [[ "${MESH_LLM_TEST_CUDA_MAJOR+x}" == x ]]; then
+        # Platform fixtures must not depend on the CUDA installation of the host
+        # running the test.
+        ver="$MESH_LLM_TEST_CUDA_MAJOR"
+    else
+        local driver_max=""
+        local cudart_major
+        local cublas_major
+        local cublas_lt_major
+
+        # nvidia-smi reports the maximum CUDA major supported by the driver. It
+        # does not prove that the matching runtime libraries are installed, so
+        # use it only as an upper bound for the library evidence below.
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            driver_max="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: *[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)"
+            if [[ -n "$driver_max" ]] && (( driver_max > 13 )); then
+                driver_max=13
             fi
-        done
-    fi
-    if [[ -z "$ver" ]]; then
-        ver="$(ldconfig -p 2>/dev/null | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | sort -rn | head -n 1)"
+        fi
+
+        cudart_major="$(cuda_library_major libcudart)"
+        cublas_major="$(cuda_library_major libcublas)"
+        cublas_lt_major="$(cuda_library_major libcublasLt)"
+        if [[ -n "$cudart_major" && "$cudart_major" == "$cublas_major" && "$cudart_major" == "$cublas_lt_major" ]]; then
+            ver="$cudart_major"
+            if [[ -n "$ver" ]] && (( ver > 13 )); then
+                ver=13
+            fi
+            if [[ -n "$driver_max" ]] && (( ver > driver_max )); then
+                ver=""
+            fi
+        fi
     fi
     case "$ver" in
         12|13) printf '%s\n' "$ver" ;;
@@ -368,11 +414,12 @@ asset_name() {
                         cuda)
                             local cuda_major
                             cuda_major="$(detect_cuda_major)"
-                            if [[ -n "$cuda_major" ]]; then
-                                printf 'mesh-llm-aarch64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
-                            else
-                                printf 'mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz\n'
+                            if [[ -z "$cuda_major" ]]; then
+                                echo "error: detected an NVIDIA GPU but could not determine a supported CUDA major version (expected 12 or 13)." >&2
+                                echo "       install a CUDA toolkit, or re-run with --flavor cpu to use a non-CUDA build." >&2
+                                return 1
                             fi
+                            printf 'mesh-llm-aarch64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
                             ;;
                         *) echo "error: unsupported aarch64 flavor '$flavor'" >&2; return 1 ;;
                     esac
@@ -383,11 +430,12 @@ asset_name() {
                         cuda)
                             local cuda_major
                             cuda_major="$(detect_cuda_major)"
-                            if [[ -n "$cuda_major" ]]; then
-                                printf 'mesh-llm-x86_64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
-                            else
-                                printf 'mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz\n'
+                            if [[ -z "$cuda_major" ]]; then
+                                echo "error: detected an NVIDIA GPU but could not determine a supported CUDA major version (expected 12 or 13)." >&2
+                                echo "       install a CUDA toolkit, or re-run with --flavor cpu (or --flavor vulkan) to use a non-CUDA build." >&2
+                                return 1
                             fi
+                            printf 'mesh-llm-x86_64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
                             ;;
                         rocm) printf 'mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz\n' ;;
                         vulkan) printf 'mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz\n' ;;

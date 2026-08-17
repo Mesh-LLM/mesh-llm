@@ -1,7 +1,10 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
-use mesh_llm_events::LogFormat;
+use mesh_llm_events::{
+    LogFormat,
+    audit::{AuditLevel, AuditLogFormat},
+};
 
 use crate::crypto::TrustPolicy;
 use crate::discovery::MeshDiscoveryMode;
@@ -67,6 +70,8 @@ pub struct RuntimeOptions {
     pub split_topology_lock: Option<PathBuf>,
     pub ctx_size: Option<u32>,
     pub max_vram: Option<f64>,
+    pub kv_cache_disk: String,
+    pub kv_cache_disk_dir: Option<PathBuf>,
     pub no_enumerate_host: bool,
     pub bin_dir: Option<PathBuf>,
     pub llama_flavor: Option<mesh_llm_system::backend::BinaryFlavor>,
@@ -90,6 +95,11 @@ pub struct RuntimeOptions {
     pub trust_policy: Option<TrustPolicy>,
     pub trust_owner: Vec<String>,
     pub nostr_discovery: bool,
+    pub audit_log_path: Option<PathBuf>,
+    pub audit_log_format: AuditLogFormat,
+    pub audit_log_level: AuditLevel,
+    pub audit_max_file_size: u64,
+    pub audit_max_files: usize,
 }
 
 impl Default for RuntimeOptions {
@@ -139,6 +149,8 @@ impl Default for RuntimeOptions {
             split_topology_lock: None,
             ctx_size: None,
             max_vram: None,
+            kv_cache_disk: "auto".to_string(),
+            kv_cache_disk_dir: None,
             no_enumerate_host: false,
             bin_dir: None,
             llama_flavor: None,
@@ -162,6 +174,11 @@ impl Default for RuntimeOptions {
             trust_policy: None,
             trust_owner: Vec::new(),
             nostr_discovery: false,
+            audit_log_path: None,
+            audit_log_format: AuditLogFormat::JsonLines,
+            audit_log_level: AuditLevel::Info,
+            audit_max_file_size: 100 * 1024 * 1024,
+            audit_max_files: 10,
         }
     }
 }

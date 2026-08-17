@@ -1,0 +1,17 @@
+name: CI orchestrator migration compatibility
+
+# This reusable-only shim keeps the pre-migration protected runner contract
+# valid while PR #1282 removes the all-lanes orchestrator. It has no event
+# trigger, calls no lane, and cannot create a monolithic PR graph.
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  compatibility:
+    name: Focused CI lanes active
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - run: echo "CI is owned by the five focused topic and platform lanes."

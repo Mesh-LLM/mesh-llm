@@ -1,16 +1,15 @@
+use super::logging_projection::{canonical_terminal_request_id, projected_summary_line};
 use super::merging::*;
 use super::rendering::*;
 use super::state::*;
 use super::{
     DashboardEndpointRow, DashboardModelRow, DashboardProcessRow, DashboardSnapshot,
-    LlamaInstanceKind, OutputEvent, PRETTY_TUI_JOIN_TOKEN_COPY_STATUS_TTL,
-    PRETTY_TUI_STARTUP_PROGRESS_MIN_STEPS, RuntimeStatus, TuiControlFlow, TuiEvent,
-    TuiEventListRenderer, TuiKeyEvent, format_invite_mesh_label,
+    LlamaInstanceKind, OutputEvent, PRETTY_TUI_STARTUP_PROGRESS_MIN_STEPS, RuntimeStatus,
+    TuiControlFlow, TuiEvent, TuiEventListRenderer, TuiKeyEvent, format_invite_mesh_label,
 };
-use crate::output::formatting::{OutputEventPresentation, dashboard_layout_for_terminal_size};
+use crate::output::formatting::dashboard_layout_for_terminal_size;
 use chrono::Local;
 use ratatui::layout::Rect;
-use tokio::time::Instant;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum DashboardAction {
@@ -29,7 +28,6 @@ pub(super) enum DashboardAction {
     CancelEventsFilter,
     SelectPreviousRequestWindow,
     SelectNextRequestWindow,
-    SetJoinTokenCopyStatus(DashboardJoinTokenCopyStatus),
     #[cfg(test)]
     SetPanelScroll {
         panel: DashboardPanel,
@@ -325,11 +323,6 @@ impl DashboardState {
             DashboardAction::SelectNextRequestWindow => {
                 self.request_window = self.request_window.next();
             }
-            DashboardAction::SetJoinTokenCopyStatus(copy_status) => {
-                if let Some(join_token) = self.join_token.as_mut() {
-                    join_token.copy_status = copy_status;
-                }
-            }
             #[cfg(test)]
             DashboardAction::SetPanelScroll {
                 panel,
@@ -355,11 +348,8 @@ impl DashboardState {
     pub(in crate::output) fn apply_layout(&mut self, layout: DashboardLayoutState) {
         self.panel_layout = layout;
         for panel in DashboardPanel::ALL {
-            self.panel_view_state_mut(panel).viewport_rows = if panel == DashboardPanel::JoinToken {
-                self.join_token_viewport_columns()
-            } else {
-                tui_panel_viewport_rows(panel, self.panel_layout.rows_for(panel))
-            };
+            self.panel_view_state_mut(panel).viewport_rows =
+                tui_panel_viewport_rows(panel, self.panel_layout.rows_for(panel));
             self.clamp_panel_view(panel);
         }
         self.sync_full_screen_panel_viewport();
@@ -376,17 +366,12 @@ impl DashboardState {
     }
 
     pub(super) fn full_screen_panel_viewport_rows(&self, panel: DashboardPanel) -> usize {
-        let Some((columns, rows)) = self.terminal_size else {
+        let Some((_columns, rows)) = self.terminal_size else {
             return self.panel_view_state(panel).viewport_rows.max(1);
         };
-        let panel_area = Rect::new(0, 0, columns, rows);
         let inner_rows = usize::from(rows.saturating_sub(2)).max(1);
         match panel {
-            DashboardPanel::JoinToken => usize::from(join_token_content_width(
-                panel_area,
-                tui_join_token_copy_button_area(panel_area),
-            ))
-            .max(1),
+            DashboardPanel::JoinToken => inner_rows,
             DashboardPanel::LlamaCpp | DashboardPanel::Webserver => {
                 inner_rows.saturating_sub(1).max(1)
             }
@@ -1227,11 +1212,7 @@ impl DashboardState {
 
     pub(in crate::output) fn row_count_for_panel(&self, panel: DashboardPanel) -> usize {
         match panel {
-            DashboardPanel::JoinToken => self
-                .join_token
-                .as_ref()
-                .map(|join_token| join_token_char_count(&join_token.token))
-                .unwrap_or(0),
+            DashboardPanel::JoinToken => usize::from(self.join_token.is_some()),
             DashboardPanel::Events => self.filtered_mesh_events().len(),
             DashboardPanel::LlamaCpp => self.llama_process_rows.len(),
             DashboardPanel::Webserver => self.webserver_rows.len(),
@@ -1483,59 +1464,6 @@ impl DashboardState {
         panel_view.selected_row = None;
     }
 
-    pub(super) fn join_token_viewport_columns(&self) -> usize {
-        let Some((columns, rows)) = self.terminal_size else {
-            return 1;
-        };
-        let areas = tui_layout(
-            Rect {
-                x: 0,
-                y: 0,
-                width: columns,
-                height: rows,
-            },
-            self,
-        );
-        usize::from(join_token_content_width(
-            areas.join_token_panel,
-            areas.join_token_copy_button,
-        ))
-        .max(1)
-    }
-
-    pub(super) fn scroll_join_token_by(&mut self, delta: isize) {
-        let row_count = self.row_count_for_panel(DashboardPanel::JoinToken);
-        if row_count == 0 {
-            return;
-        }
-        let viewport_columns = self.join_token_viewport_columns();
-        let max_scroll_offset = row_count.saturating_sub(viewport_columns);
-        let current = self
-            .panel_view_state(DashboardPanel::JoinToken)
-            .scroll_offset
-            .min(max_scroll_offset);
-        let next = current.saturating_add_signed(delta).min(max_scroll_offset);
-        let join_token_view = self.panel_view_state_mut(DashboardPanel::JoinToken);
-        join_token_view.viewport_rows = viewport_columns.max(1);
-        join_token_view.scroll_offset = next;
-        join_token_view.selected_row = None;
-    }
-
-    pub(super) fn jump_join_token_to_start(&mut self) {
-        self.panel_view_state_mut(DashboardPanel::JoinToken)
-            .scroll_offset = 0;
-    }
-
-    pub(super) fn jump_join_token_to_end(&mut self) {
-        let row_count = self.row_count_for_panel(DashboardPanel::JoinToken);
-        let viewport_columns = self.join_token_viewport_columns();
-        let max_scroll_offset = row_count.saturating_sub(viewport_columns);
-        let join_token_view = self.panel_view_state_mut(DashboardPanel::JoinToken);
-        join_token_view.viewport_rows = viewport_columns.max(1);
-        join_token_view.scroll_offset = max_scroll_offset;
-        join_token_view.selected_row = None;
-    }
-
     pub(super) fn sync_follow_with_events_view(&mut self, panel: DashboardPanel) {
         if panel != DashboardPanel::Events {
             return;
@@ -1566,10 +1494,19 @@ impl DashboardState {
     }
 
     pub(super) fn record_mesh_event(&mut self, event: &OutputEvent) {
+        if let Some(request_id) = canonical_terminal_request_id(event) {
+            if self.terminal_request_ids.contains(&request_id) {
+                return;
+            }
+            self.terminal_request_ids.push_back(request_id);
+            while self.terminal_request_ids.len() > self.mesh_event_limit {
+                self.terminal_request_ids.pop_front();
+            }
+        }
         self.mesh_events.push_back(MeshEventState {
             timestamp: Local::now().format("%H:%M:%S").to_string(),
             level: event.level(),
-            summary: event.summary_line(),
+            summary: projected_summary_line(event),
         });
         while self.mesh_events.len() > self.mesh_event_limit {
             self.mesh_events.pop_front();
@@ -1599,60 +1536,6 @@ impl DashboardState {
         }
     }
 
-    pub(super) fn copy_join_token(&mut self) {
-        let Some(token) = self
-            .join_token
-            .as_ref()
-            .map(|join_token| join_token.token.clone())
-        else {
-            return;
-        };
-        let now = Instant::now();
-        let copy_status = match copy_join_token_to_clipboard(&token) {
-            Ok(()) => DashboardJoinTokenCopyStatus::Copied { at: now },
-            Err(message) => DashboardJoinTokenCopyStatus::Failed { message, at: now },
-        };
-        self.reduce(DashboardAction::SetJoinTokenCopyStatus(copy_status));
-    }
-
-    pub(super) fn join_token_copy_shortcut_enabled(&self) -> bool {
-        !self.events_filter.editing && self.join_token.is_some()
-    }
-
-    pub(in crate::output) fn clear_expired_join_token_copy_status(&mut self, now: Instant) -> bool {
-        let Some(join_token) = self.join_token.as_mut() else {
-            return false;
-        };
-        let Some(feedback_at) = join_token.copy_status.feedback_at() else {
-            return false;
-        };
-        if now.saturating_duration_since(feedback_at) < PRETTY_TUI_JOIN_TOKEN_COPY_STATUS_TTL {
-            return false;
-        }
-        join_token.copy_status = DashboardJoinTokenCopyStatus::Idle;
-        true
-    }
-
-    pub(super) fn join_token_copy_button_contains(&self, column: u16, row: u16) -> bool {
-        let Some((columns, rows)) = self.terminal_size else {
-            return false;
-        };
-        if self.full_screen_panel == Some(DashboardPanel::JoinToken) {
-            let panel_area = Rect::new(0, 0, columns, rows);
-            return point_in_rect(column, row, tui_join_token_copy_button_area(panel_area));
-        }
-        let areas = tui_layout(
-            Rect {
-                x: 0,
-                y: 0,
-                width: columns,
-                height: rows,
-            },
-            self,
-        );
-        point_in_rect(column, row, areas.join_token_copy_button)
-    }
-
     pub(super) fn join_token_panel_contains(&self, column: u16, row: u16) -> bool {
         let Some((columns, rows)) = self.terminal_size else {
             return false;
@@ -1680,9 +1563,6 @@ impl DashboardState {
             return flow;
         }
         if let Some(flow) = self.apply_global_tui_key_event(event) {
-            return flow;
-        }
-        if let Some(flow) = self.apply_join_token_tui_key_event(event) {
             return flow;
         }
         if let Some(flow) = self.apply_requests_tui_key_event(event) {
@@ -1715,11 +1595,6 @@ impl DashboardState {
         let TuiEvent::MouseDown { column, row } = event else {
             return None;
         };
-        if self.join_token_copy_button_contains(column, row) {
-            self.panel_focus = DashboardPanel::JoinToken;
-            self.copy_join_token();
-            return Some(TuiControlFlow::Continue);
-        }
         if self.join_token_panel_contains(column, row) {
             self.panel_focus = DashboardPanel::JoinToken;
             self.events_filter.editing = false;
@@ -1766,44 +1641,6 @@ impl DashboardState {
                 self.reduce(DashboardAction::ToggleEventsFollow);
                 Some(TuiControlFlow::Continue)
             }
-            TuiEvent::Key(TuiKeyEvent::Char('c')) if self.join_token_copy_shortcut_enabled() => {
-                self.copy_join_token();
-                Some(TuiControlFlow::Continue)
-            }
-            _ => None,
-        }
-    }
-
-    pub(super) fn apply_join_token_tui_key_event(
-        &mut self,
-        event: TuiEvent,
-    ) -> Option<TuiControlFlow> {
-        if self.events_filter.editing || self.panel_focus != DashboardPanel::JoinToken {
-            return None;
-        }
-        match event {
-            TuiEvent::Key(TuiKeyEvent::Left) | TuiEvent::Key(TuiKeyEvent::Char('h')) => {
-                self.scroll_join_token_by(-1);
-                Some(TuiControlFlow::Continue)
-            }
-            TuiEvent::Key(TuiKeyEvent::Right) | TuiEvent::Key(TuiKeyEvent::Char('l')) => {
-                self.scroll_join_token_by(1);
-                Some(TuiControlFlow::Continue)
-            }
-            TuiEvent::Key(TuiKeyEvent::Char('g')) => {
-                self.jump_join_token_to_start();
-                Some(TuiControlFlow::Continue)
-            }
-            TuiEvent::Key(TuiKeyEvent::Char('G')) => {
-                self.jump_join_token_to_end();
-                Some(TuiControlFlow::Continue)
-            }
-            TuiEvent::Key(TuiKeyEvent::Up)
-            | TuiEvent::Key(TuiKeyEvent::Char('k'))
-            | TuiEvent::Key(TuiKeyEvent::Down)
-            | TuiEvent::Key(TuiKeyEvent::Char('j'))
-            | TuiEvent::Key(TuiKeyEvent::PageUp)
-            | TuiEvent::Key(TuiKeyEvent::PageDown) => Some(TuiControlFlow::Continue),
             _ => None,
         }
     }

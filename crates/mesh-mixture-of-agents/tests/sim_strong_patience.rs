@@ -88,18 +88,9 @@ fn mixed_pool(
 
     let backends: Vec<Arc<dyn moa::ModelBackend>> = vec![small_a, small_b, strong];
     let models = vec![
-        moa::ModelEntry {
-            name: "qwen-3b".into(),
-            backend_index: 0,
-        },
-        moa::ModelEntry {
-            name: "qwen-8b".into(),
-            backend_index: 1,
-        },
-        moa::ModelEntry {
-            name: "MiniMax-M2.5".into(),
-            backend_index: 2,
-        },
+        moa::ModelEntry::new("qwen-3b", 0),
+        moa::ModelEntry::new("qwen-8b", 1),
+        moa::ModelEntry::new("MiniMax-M2.5", 2),
     ];
 
     moa::GatewayConfig {
@@ -196,18 +187,9 @@ async fn same_tier_pool_keeps_early_exit() {
 
     let backends: Vec<Arc<dyn moa::ModelBackend>> = vec![fast_a, fast_b, slow];
     let models = vec![
-        moa::ModelEntry {
-            name: "qwen-3b".into(),
-            backend_index: 0,
-        },
-        moa::ModelEntry {
-            name: "llama-7b".into(),
-            backend_index: 1,
-        },
-        moa::ModelEntry {
-            name: "qwen-8b".into(),
-            backend_index: 2,
-        },
+        moa::ModelEntry::new("qwen-3b", 0),
+        moa::ModelEntry::new("llama-7b", 1),
+        moa::ModelEntry::new("qwen-8b", 2),
     ];
     let config = moa::GatewayConfig {
         backends,

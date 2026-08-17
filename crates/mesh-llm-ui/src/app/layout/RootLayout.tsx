@@ -29,15 +29,17 @@ import type { ShellHarnessData, AppTab } from '@/features/app-tabs/types'
 function pathToTab(pathname: string): AppTab | null {
   if (pathname.startsWith('/chat')) return 'chat'
   if (pathname.startsWith('/reserves')) return 'reserves'
+  if (pathname.startsWith('/logs')) return 'logs'
   if (pathname.startsWith('/configuration')) return 'configuration'
   if (pathname.startsWith('/plugins/')) return null
   if (env.isDevelopment && pathname.startsWith('/__playground')) return null
   return 'network'
 }
 
-function tabToPath(tab: Exclude<AppTab, 'configuration'>): '/' | '/chat' | '/reserves' {
+function tabToPath(tab: Exclude<AppTab, 'configuration'>): '/' | '/chat' | '/reserves' | '/logs' {
   if (tab === 'chat') return '/chat'
   if (tab === 'reserves') return '/reserves'
+  if (tab === 'logs') return '/logs'
   return '/'
 }
 
@@ -73,9 +75,11 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
   const { theme, accent, density, panelStyle, setTheme, setAccent, setDensity, setPanelStyle } = useUIPreferences()
   const newConfigurationPageEnabled = useBooleanFeatureFlag('global/newConfigurationPage')
   const newReservesPageEnabled = useBooleanFeatureFlag('global/newReservesPage')
+  const logsPageEnabled = useBooleanFeatureFlag('global/logsPage')
   const signingAttestationEnabled = useBooleanFeatureFlag('configuration/signingAttestation')
   const integrationsEnabled = useBooleanFeatureFlag('configuration/integrations')
   const wakePolicyConfigurationEnabled = useBooleanFeatureFlag('configuration/wakePolicyConfiguration')
+  const logsSettingsEnabled = useBooleanFeatureFlag('configuration/logsSettings')
   const activeTab = pathToTab(pathname)
   const [preferencesOpen, setPreferencesOpen] = useState(false)
   const topNavData = useMemo(
@@ -89,14 +93,16 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
       getEnabledConfigurationTabIds({
         pluginsEnabled: integrationsEnabled,
         signingAttestationEnabled,
-        wakePolicyEnabled: wakePolicyConfigurationEnabled
+        wakePolicyEnabled: wakePolicyConfigurationEnabled,
+        logsSettingsEnabled
       }),
-    [integrationsEnabled, signingAttestationEnabled, wakePolicyConfigurationEnabled]
+    [integrationsEnabled, signingAttestationEnabled, wakePolicyConfigurationEnabled, logsSettingsEnabled]
   )
   const tabHrefs = useMemo(
     () => ({
       network: hrefWithBasePath('/'),
       reserves: hrefWithBasePath('/reserves'),
+      logs: hrefWithBasePath('/logs'),
       chat: hrefWithBasePath('/chat'),
       configuration: hrefWithBasePath(
         `/configuration/${pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'general'}`
@@ -109,11 +115,14 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
       ? null
       : activeTab === 'reserves' && !newReservesPageEnabled
         ? null
-        : activeTab
+        : activeTab === 'logs' && !logsPageEnabled
+          ? null
+          : activeTab
   const showDevelopmentNavControls = env.isDevelopment
 
   const onTabChange = useCallback(
     (tab: AppTab | null) => {
+      if (tab === 'logs' && !logsPageEnabled) return
       if (tab === 'reserves' && !newReservesPageEnabled) return
       if (tab === 'configuration' && !newConfigurationPageEnabled) return
       if (tab === 'configuration') {
@@ -125,7 +134,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
       }
       void router.navigate({ to: tabToPath(tab!) })
     },
-    [router, pathname, enabledConfigurationTabs, newConfigurationPageEnabled, newReservesPageEnabled]
+    [router, pathname, enabledConfigurationTabs, newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled]
   )
 
   const onTogglePreferences = useCallback(() => setPreferencesOpen((value) => !value), [])
@@ -137,8 +146,8 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
   const onOpenIdentity = useCallback(() => setPreferencesOpen(true), [])
 
   const enabledTabs = useMemo(
-    () => ({ reserves: newReservesPageEnabled, configuration: newConfigurationPageEnabled }),
-    [newConfigurationPageEnabled, newReservesPageEnabled]
+    () => ({ reserves: newReservesPageEnabled, logs: logsPageEnabled, configuration: newConfigurationPageEnabled }),
+    [newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled]
   )
 
   const pluginNavItems = useMemo<readonly TopNavPluginPageItem[]>(() => {

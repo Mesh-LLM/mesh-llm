@@ -1,3 +1,4 @@
+use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::transport as proxy;
 use mesh_mixture_of_agents as moa;
 use tokio::io::AsyncWriteExt;
@@ -54,7 +55,8 @@ pub(super) async fn write_moa_response(
     extra_headers: &[(&str, String)],
     was_streaming: bool,
     response_adapter: proxy::ResponseAdapter,
-) {
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<u16> {
     let body = &moa_result.response_body;
     let is_failure = is_moa_failure_body(body);
     // Streaming + failure: respond as non-streaming HTTP 502 with the
@@ -89,7 +91,14 @@ pub(super) async fn write_moa_response(
     } else if is_failure {
         (
             "JSON-502",
-            proxy::send_json_with_status_and_headers(tcp_stream, 502, body, extra_headers).await,
+            proxy::send_json_with_status_and_headers_observed(
+                tcp_stream,
+                502,
+                body,
+                extra_headers,
+                route_observer,
+            )
+            .await,
         )
     } else if response_adapter == proxy::ResponseAdapter::OpenAiResponsesJson {
         // Non-streaming Responses-API request: emit a Responses-shape
@@ -109,9 +118,12 @@ pub(super) async fn write_moa_response(
             proxy::send_json_ok_with_headers(tcp_stream, body, extra_headers).await,
         )
     };
-    if let Err(e) = result {
-        tracing::warn!("MoA: response write failed ({mode}): {e}");
-    }
+    result
+        .map(|()| if is_failure { 502 } else { 200 })
+        .map_err(|error| {
+            tracing::warn!("MoA: response write failed ({mode}): {error}");
+            error
+        })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

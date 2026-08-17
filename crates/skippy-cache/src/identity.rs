@@ -1,6 +1,6 @@
-use skippy_protocol::StageConfig;
+use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 
-pub const NATIVE_KV_RUNTIME_ABI_VERSION: &str = "stage-abi-0.1/native-kv-page-v1";
+pub const NATIVE_KV_RUNTIME_ABI_VERSION: &str = "stage-abi-0.1/native-kv-page-v2";
 pub const NATIVE_KV_DTYPE: &str = "ggml-native-kv";
 const NATIVE_KV_LAYER_CONTIGUOUS_LAYOUT: i32 = 4;
 
@@ -41,6 +41,120 @@ pub fn prefix_hash(config: &StageConfig, token_start: u64, token_ids: &[i32]) ->
     prefix_hash_with_namespace(config, token_start, token_ids, None)
 }
 
+/// Hash the identity of the *machine* the page bytes were produced on.
+///
+/// Page files are raw runtime memory. Their interpretation depends on the CPU
+/// architecture, the native byte order, and the pointer width of the process
+/// that exported them, and none of those appear anywhere else in the identity.
+/// In the default machine-local cache directory that is harmless. It stops
+/// being harmless the moment a directory is shared or copied:
+/// `SKIPPY_KV_DISK_TIER_DIR` accepts any path, the stage directory key holds
+/// only model and stage shape, and `backend_device` does not separate an
+/// x86_64 CUDA host from an aarch64 CUDA host, nor two CPU-only hosts that
+/// both record `<no-selected-device>`. The checksums would confirm the copied
+/// bytes arrived intact and the runtime would then import them as native — a
+/// silent misread, not a detected error.
+///
+/// Note that the identity hash deliberately encodes its own integers as
+/// little-endian, so two hosts of *different* native endianness otherwise
+/// compute the *same* page id. That is correct for a portable identifier and
+/// exactly why the byte order has to be named explicitly here.
+fn update_platform_identity(hasher: &mut blake3::Hasher) {
+    hasher.update(b"kv-platform-identity-v1");
+    hasher.update(std::env::consts::ARCH.as_bytes());
+    hasher.update(if cfg!(target_endian = "little") {
+        b"endian:le"
+    } else {
+        b"endian:be"
+    });
+    hasher.update(&(usize::BITS).to_le_bytes());
+}
+
+/// Hash the parts of a stage configuration that change the *bytes* of an
+/// exported KV page without changing the token sequence.
+///
+/// Identity must cover every input that alters the serialized layout or the
+/// numerical content of a page. In-process this is nearly free to get wrong —
+/// a single running stage has one configuration, so a collision cannot occur.
+/// It becomes **silent numerical corruption** the moment a page outlives the
+/// process that wrote it (the mmap tier) or crosses a node boundary: flipping
+/// `kv_cache_policy` from `quality` to `saver` rewrites `cache_type_k`/`_v`
+/// from `f16` to `q8_0`, and without these fields in the hash the stale q8_0
+/// bytes collide with an f16 `page_id` and get imported as f16.
+///
+/// `NATIVE_KV_DTYPE` is a fixed layout tag and does **not** vary with the
+/// configured cache types, so it cannot stand in for them.
+fn update_layout_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
+    hasher.update(b"kv-layout-identity-v1");
+    hasher.update(config.cache_type_k.as_bytes());
+    hasher.update(b"/");
+    hasher.update(config.cache_type_v.as_bytes());
+    // Flash attention changes the KV layout the runtime allocates.
+    hasher.update(match config.flash_attn_type {
+        FlashAttentionType::Auto => b"fa:auto",
+        FlashAttentionType::Disabled => b"fa:offf",
+        FlashAttentionType::Enabled => b"fa:onnn",
+    });
+    // The CPU/GPU layer split decides which layers live in device memory and
+    // therefore how the exported page is assembled.
+    hasher.update(&config.n_gpu_layers.to_le_bytes());
+    // Backend identity: CUDA/Metal/Vulkan/CPU pages are not interchangeable.
+    match config.selected_device.as_ref() {
+        Some(device) => hasher.update(device.backend_device.as_bytes()),
+        None => hasher.update(b"<no-selected-device>"),
+    };
+}
+
+/// Hash the identity of the *weights* a stage is serving.
+///
+/// `model_id` is a human-facing display name (`runtime_model_name`), not a
+/// content digest. Two runs can present the same `model_id` while serving
+/// genuinely different tensors — a different quantization of the same repo, a
+/// re-published layer package, a direct GGUF swapped underneath the same
+/// alias. KV pages from different weights are not interchangeable, and
+/// importing one under the other is silent numerical corruption.
+///
+/// While `topology_id` was in the hash this was masked: it is derived from
+/// `unix_nanos` per process, so every restart produced fresh page ids and no
+/// stale page could ever be read back. Removing it to make the disk tier work
+/// across restarts removes that accidental protection, so weight identity now
+/// has to be explicit.
+///
+/// `manifest_sha256` and `source_model_sha256` are content-derived and stable
+/// across restarts for the same artifact — exactly the property required: they
+/// change when the bytes change and only then. Both are hashed when present,
+/// with the absent case tagged distinctly so `None` cannot alias a real value.
+fn update_weight_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
+    hasher.update(b"kv-weight-identity-v1");
+    hasher.update(config.model_id.as_bytes());
+    for (tag, value) in [
+        (&b"manifest:"[..], config.manifest_sha256.as_deref()),
+        (&b"source:"[..], config.source_model_sha256.as_deref()),
+        (&b"package:"[..], config.package_ref.as_deref()),
+    ] {
+        hasher.update(tag);
+        match value {
+            Some(value) => {
+                hasher.update(b"=");
+                hasher.update(value.as_bytes());
+            }
+            None => {
+                hasher.update(b"<absent>");
+            }
+        }
+    }
+    // Layer packages and direct GGUFs assemble tensors differently even for
+    // the same underlying model.
+    // Matched exhaustively on purpose: a new load mode is a new way of
+    // assembling tensors, and it must be forced through this hash rather than
+    // silently aliasing an existing one.
+    hasher.update(match config.load_mode {
+        LoadMode::LayerPackage => b"load:package-",
+        LoadMode::RuntimeSlice => b"load:runslice",
+        LoadMode::ArtifactSlice => b"load:artslice",
+    });
+}
+
 pub fn prefix_hash_with_namespace(
     config: &StageConfig,
     token_start: u64,
@@ -48,8 +162,20 @@ pub fn prefix_hash_with_namespace(
     cache_namespace: Option<&str>,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(config.model_id.as_bytes());
-    hasher.update(config.topology_id.as_bytes());
+    update_weight_identity(&mut hasher, config);
+    // `topology_id` is deliberately **not** hashed. It is an instance
+    // identifier, not a description of the work a stage does: local serving
+    // derives it as `topology-mesh-skippy-{unix_nanos}`, so it is unique per
+    // process. Hashing it would make every page id change on restart and
+    // silently reduce any persistent tier to dead weight — the bytes survive
+    // and can never be found again.
+    //
+    // What actually has to match for a page to be reusable is the *shape* of
+    // the stage: the model, which layers this stage owns, and its position in
+    // the pipeline. Those are hashed below, along with the runtime layout
+    // fields in `update_layout_identity`. Two stages that agree on all of
+    // them produce byte-compatible KV pages regardless of which run created
+    // them, which is exactly the reuse a persistent tier exists to provide.
     hasher.update(config.stage_id.as_bytes());
     hasher.update(&config.stage_index.to_le_bytes());
     hasher.update(&config.layer_start.to_le_bytes());
@@ -57,6 +183,8 @@ pub fn prefix_hash_with_namespace(
     hasher.update(NATIVE_KV_RUNTIME_ABI_VERSION.as_bytes());
     hasher.update(&NATIVE_KV_LAYER_CONTIGUOUS_LAYOUT.to_le_bytes());
     hasher.update(NATIVE_KV_DTYPE.as_bytes());
+    update_layout_identity(&mut hasher, config);
+    update_platform_identity(&mut hasher);
     hasher.update(format!("ctx:{}", config.ctx_size).as_bytes());
     if let Some(cache_namespace) = cache_namespace {
         hasher.update(b"openai-cache-namespace-v1");
@@ -88,4 +216,359 @@ pub fn page_id(
 
 pub fn activation_page_id(page_id: &str, activation_width: i32) -> String {
     format!("act:{}:w{}", page_id, activation_width.max(0))
+}
+
+#[cfg(test)]
+mod identity_completeness_tests {
+    use skippy_protocol::{LoadMode, StageDevice};
+
+    use super::*;
+
+    fn test_config() -> StageConfig {
+        StageConfig {
+            run_id: "run".to_string(),
+            topology_id: "topology".to_string(),
+            model_id: "org/model:Q4_K_M".to_string(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: None,
+            projector_path: None,
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 4,
+            ctx_size: 8192,
+            lane_count: 2,
+            n_batch: None,
+            n_ubatch: None,
+            n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: FlashAttentionType::Auto,
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: true,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_string(),
+            upstream: None,
+            downstream: None,
+        }
+    }
+
+    fn hash_of(config: &StageConfig) -> String {
+        prefix_hash(config, 0, &[1, 2, 3, 4])
+    }
+
+    /// The motivating W0 corruption case: `kv_cache_policy: saver` rewrites
+    /// `cache_type_k`/`_v` to `q8_0`. Before this was hashed, the q8_0 bytes
+    /// on disk collided with an f16 `page_id` and were imported as f16.
+    #[test]
+    fn kv_cache_dtype_changes_page_identity() {
+        let quality = test_config();
+        let saver = StageConfig {
+            cache_type_k: "q8_0".to_string(),
+            cache_type_v: "q8_0".to_string(),
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&quality), hash_of(&saver));
+        assert_ne!(
+            prefix_identity(&quality, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&saver, 0, &[1, 2, 3, 4]).page_id
+        );
+    }
+
+    #[test]
+    fn k_and_v_cache_types_are_independently_hashed() {
+        let mixed = StageConfig {
+            cache_type_v: "q8_0".to_string(),
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&test_config()), hash_of(&mixed));
+    }
+
+    #[test]
+    fn flash_attention_changes_page_identity() {
+        let enabled = StageConfig {
+            flash_attn_type: FlashAttentionType::Enabled,
+            ..test_config()
+        };
+        let disabled = StageConfig {
+            flash_attn_type: FlashAttentionType::Disabled,
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&test_config()), hash_of(&enabled));
+        assert_ne!(hash_of(&enabled), hash_of(&disabled));
+    }
+
+    #[test]
+    fn gpu_layer_split_changes_page_identity() {
+        let offloaded = StageConfig {
+            n_gpu_layers: 32,
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&test_config()), hash_of(&offloaded));
+    }
+
+    /// The platform tag is part of the hash, so a page written on one
+    /// architecture cannot be read back on another through a shared or copied
+    /// cache directory. Asserted against the real values rather than a
+    /// hand-built string so that dropping the call from `prefix_hash` fails
+    /// here.
+    #[test]
+    fn platform_identity_is_bound_into_the_page_hash() {
+        let mut with_platform = blake3::Hasher::new();
+        update_platform_identity(&mut with_platform);
+        let mut other_arch = blake3::Hasher::new();
+        other_arch.update(b"kv-platform-identity-v1");
+        other_arch.update(b"some-other-arch");
+        other_arch.update(b"endian:le");
+        other_arch.update(&(usize::BITS).to_le_bytes());
+
+        assert_ne!(with_platform.finalize(), other_arch.finalize());
+
+        let mut other_endian = blake3::Hasher::new();
+        other_endian.update(b"kv-platform-identity-v1");
+        other_endian.update(std::env::consts::ARCH.as_bytes());
+        other_endian.update(if cfg!(target_endian = "little") {
+            b"endian:be"
+        } else {
+            b"endian:le"
+        });
+        other_endian.update(&(usize::BITS).to_le_bytes());
+
+        assert_ne!(with_platform.finalize(), other_endian.finalize());
+
+        let mut other_width = blake3::Hasher::new();
+        other_width.update(b"kv-platform-identity-v1");
+        other_width.update(std::env::consts::ARCH.as_bytes());
+        other_width.update(if cfg!(target_endian = "little") {
+            b"endian:le"
+        } else {
+            b"endian:be"
+        });
+        other_width.update(&(usize::BITS / 2).to_le_bytes());
+
+        assert_ne!(with_platform.finalize(), other_width.finalize());
+    }
+
+    /// Pages are not portable across backends. A CUDA page must never be
+    /// mistaken for a Metal page with the same tokens.
+    #[test]
+    fn backend_device_changes_page_identity() {
+        let cuda = StageConfig {
+            selected_device: Some(StageDevice {
+                backend_device: "CUDA0".to_string(),
+                stable_id: None,
+                index: Some(0),
+                vram_bytes: None,
+            }),
+            ..test_config()
+        };
+        let metal = StageConfig {
+            selected_device: Some(StageDevice {
+                backend_device: "Metal".to_string(),
+                stable_id: None,
+                index: Some(0),
+                vram_bytes: None,
+            }),
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&cuda), hash_of(&metal));
+        assert_ne!(hash_of(&test_config()), hash_of(&cuda));
+    }
+
+    /// Identity must stay stable for an unchanged configuration, otherwise
+    /// nothing is ever reused across restarts.
+    #[test]
+    fn identical_configs_produce_identical_identity() {
+        assert_eq!(hash_of(&test_config()), hash_of(&test_config()));
+    }
+
+    /// Cross-session sharing is by design: identity has no `session_id`.
+    #[test]
+    fn identity_is_shared_across_sessions_by_design() {
+        let config = test_config();
+        let tokens = (0..512).collect::<Vec<_>>();
+
+        assert_eq!(
+            prefix_identity(&config, 0, &tokens).page_id,
+            prefix_identity(&config, 0, &tokens).page_id
+        );
+    }
+}
+
+#[cfg(test)]
+mod identity_stability_tests {
+    use skippy_protocol::LoadMode;
+
+    use super::*;
+
+    fn config_with_topology(topology_id: &str) -> StageConfig {
+        StageConfig {
+            run_id: "run".to_string(),
+            topology_id: topology_id.to_string(),
+            model_id: "org/model:Q4_K_M".to_string(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: None,
+            projector_path: None,
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 24,
+            ctx_size: 8192,
+            lane_count: 2,
+            n_batch: None,
+            n_ubatch: None,
+            n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: FlashAttentionType::Auto,
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: true,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_string(),
+            upstream: None,
+            downstream: None,
+        }
+    }
+
+    /// Local serving derives `topology_id` from a nanosecond timestamp, so it
+    /// differs on every start. Identity must ignore it, or a persistent cache
+    /// can never be read back after a restart.
+    #[test]
+    fn identity_is_stable_across_process_restarts() {
+        let first = config_with_topology("topology-mesh-skippy-1739000000000000000");
+        let second = config_with_topology("topology-mesh-skippy-1739999999999999999");
+        let tokens = (0..2048).collect::<Vec<_>>();
+
+        assert_eq!(
+            prefix_identity(&first, 0, &tokens).page_id,
+            prefix_identity(&second, 0, &tokens).page_id,
+            "a restart must not invalidate cached prefixes"
+        );
+    }
+
+    /// Weight identity is the protection that replaced `topology_id`.
+    ///
+    /// Two runs can share a `model_id` while serving different tensors — a
+    /// different quant, a re-published layer package, a swapped GGUF. Before
+    /// the disk tier this was masked by the per-process `topology_id`; now it
+    /// must be caught explicitly, because a false hit here imports the wrong
+    /// weights' KV and silently corrupts output.
+    #[test]
+    fn identity_separates_different_weights_behind_the_same_model_id() {
+        let tokens = (0..1024).collect::<Vec<_>>();
+        let base = StageConfig {
+            manifest_sha256: Some("a".repeat(64)),
+            source_model_sha256: Some("b".repeat(64)),
+            ..config_with_topology("topology-a")
+        };
+        let repacked = StageConfig {
+            manifest_sha256: Some("c".repeat(64)),
+            ..base.clone()
+        };
+        let requantized = StageConfig {
+            source_model_sha256: Some("d".repeat(64)),
+            ..base.clone()
+        };
+
+        assert_eq!(base.model_id, repacked.model_id);
+        assert_ne!(
+            prefix_identity(&base, 0, &tokens).page_id,
+            prefix_identity(&repacked, 0, &tokens).page_id,
+            "a different manifest must not reuse cached pages"
+        );
+        assert_ne!(
+            prefix_identity(&base, 0, &tokens).page_id,
+            prefix_identity(&requantized, 0, &tokens).page_id,
+            "different source weights must not reuse cached pages"
+        );
+    }
+
+    /// A missing digest must not alias a present one, or an artifact with no
+    /// recorded hash could collide with a real one.
+    #[test]
+    fn absent_weight_digests_do_not_alias_present_ones() {
+        let tokens = (0..1024).collect::<Vec<_>>();
+        let absent = StageConfig {
+            manifest_sha256: None,
+            source_model_sha256: None,
+            ..config_with_topology("topology-a")
+        };
+        let present = StageConfig {
+            manifest_sha256: Some("absent".to_string()),
+            ..absent.clone()
+        };
+
+        assert_ne!(
+            prefix_identity(&absent, 0, &tokens).page_id,
+            prefix_identity(&present, 0, &tokens).page_id
+        );
+    }
+
+    /// Weight identity must not undo the restart-stability fix: the same
+    /// artifact across two runs still has to hit.
+    #[test]
+    fn weight_identity_stays_stable_for_the_same_artifact() {
+        let tokens = (0..1024).collect::<Vec<_>>();
+        let run_one = StageConfig {
+            manifest_sha256: Some("a".repeat(64)),
+            source_model_sha256: Some("b".repeat(64)),
+            ..config_with_topology("topology-mesh-skippy-1739000000000000000")
+        };
+        let run_two = StageConfig { ..run_one.clone() };
+        let run_two = StageConfig {
+            topology_id: "topology-mesh-skippy-1739999999999999999".to_string(),
+            run_id: "a-different-run".to_string(),
+            ..run_two
+        };
+
+        assert_eq!(
+            prefix_identity(&run_one, 0, &tokens).page_id,
+            prefix_identity(&run_two, 0, &tokens).page_id
+        );
+    }
+
+    /// Stage shape still has to match: a different layer range is a different
+    /// page and must never collide.
+    #[test]
+    fn identity_still_separates_different_stage_shapes() {
+        let base = config_with_topology("topology-a");
+        let other_layers = StageConfig {
+            layer_start: 24,
+            layer_end: 48,
+            stage_index: 1,
+            stage_id: "stage-1".to_string(),
+            ..config_with_topology("topology-a")
+        };
+        let tokens = (0..2048).collect::<Vec<_>>();
+
+        assert_ne!(
+            prefix_identity(&base, 0, &tokens).page_id,
+            prefix_identity(&other_layers, 0, &tokens).page_id
+        );
+    }
 }

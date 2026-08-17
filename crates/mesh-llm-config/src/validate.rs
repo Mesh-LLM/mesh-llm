@@ -91,6 +91,9 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
     if let Err(diagnostic) = validate_telemetry_config(&config.telemetry) {
         diagnostics.push(diagnostic);
     }
+    diagnostics.extend(validate_logging_config(&config.logging));
+    diagnostics.extend(validate_audit_config(&config.logging.audit));
+
     diagnostics.extend(validate_runtime_config(&config.runtime));
     if let Err(diagnostic) = validate_plugin_entries(&config.plugins) {
         diagnostics.push(diagnostic);
@@ -126,6 +129,43 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
 
     validate_duplicate_model_entries(&config.models, &mut diagnostics);
 
+    diagnostics
+}
+
+fn validate_audit_config(config: &AuditConfig) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
+    if config.enabled == Some(true)
+        && config.log_path.as_ref().is_none_or(|path| {
+            path.as_os_str().is_empty() || path.to_string_lossy().trim().is_empty()
+        })
+    {
+        diagnostics.push(validation_diagnostic(
+            "logging.audit.log_path",
+            "logging.audit.log_path must be set when logging.audit.enabled is true",
+        ));
+    }
+    if config
+        .log_format
+        .as_deref()
+        .is_some_and(|format| format != "json_lines")
+    {
+        diagnostics.push(validation_diagnostic(
+            "logging.audit.log_format",
+            "logging.audit.log_format must be json_lines",
+        ));
+    }
+    if config.max_file_size_mb.is_some_and(|value| value == 0) {
+        diagnostics.push(validation_diagnostic(
+            "logging.audit.max_file_size_mb",
+            "logging.audit.max_file_size_mb must be at least 1",
+        ));
+    }
+    if config.max_files.is_some_and(|value| value == 0) {
+        diagnostics.push(validation_diagnostic(
+            "logging.audit.max_files",
+            "logging.audit.max_files must be at least 1",
+        ));
+    }
     diagnostics
 }
 
@@ -350,9 +390,414 @@ fn validate_telemetry_config(config: &TelemetryConfig) -> DiagnosticResult {
     Ok(())
 }
 
+fn validate_logging_config(config: &crate::LoggingConfig) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
+
+    // Application state root validation.
+    if let Some(root) = &config.application_state_root {
+        validate_application_state_root(root, &mut diagnostics);
+    }
+
+    // Numeric bounds validation.
+    for (path, value, min, max) in [
+        (
+            "logging.summary_line_limit",
+            config.summary_line_limit,
+            1_u64,
+            65_536,
+        ),
+        (
+            "logging.event_buffer_size",
+            config.event_buffer_size,
+            50,
+            100_000,
+        ),
+        (
+            "logging.retention_ttl_secs",
+            config.retention_ttl_secs,
+            3600,      // minimum 1 hour
+            7_776_000, // maximum 90 days
+        ),
+        (
+            "logging.retention_max_rows",
+            config.retention_max_rows,
+            1,
+            1_000_000,
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {min} and {max}, got {value}"),
+            ));
+        }
+    }
+
+    for (path, value, min, max) in [
+        (
+            "logging.replay_capacity",
+            config.replay_capacity as u64,
+            1_u64,
+            10_000,
+        ),
+        (
+            "logging.queue_capacity",
+            config.queue_capacity as u64,
+            64,
+            131_072,
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {} and {}, got {}", min, max, value),
+            ));
+        }
+    }
+
+    if config.replay_capacity as u64 > config.event_buffer_size {
+        diagnostics.push(validation_diagnostic(
+            "logging.replay_capacity",
+            "logging.replay_capacity must not exceed logging.event_buffer_size",
+        ));
+    }
+
+    // Artifact byte limits.
+    for (path, value, min, max) in [
+        (
+            "logging.artifact.byte_limit_bytes",
+            config.artifact.byte_limit_bytes,
+            1024_u64,
+            16 * 1024 * 1024,
+        ),
+        (
+            "logging.artifact.aggregate_limit_bytes",
+            config.artifact.aggregate_limit_bytes,
+            512 * 1024,        // minimum 512 KiB
+            500 * 1024 * 1024, // maximum 500 MiB
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {} and {}, got {}", min, max, value),
+            ));
+        }
+    }
+
+    // Export limit.
+    let export_min = 64 * 1024_u64; // 64 KiB
+    let export_max = 100 * 1024 * 1024_u64; // 100 MiB
+    if !(export_min..=export_max).contains(&config.export_limit_bytes) {
+        diagnostics.push(validation_diagnostic(
+            "logging.export_limit_bytes",
+            format!(
+                "logging.export_limit_bytes must be between {} and {}, got {}",
+                export_min, export_max, config.export_limit_bytes
+            ),
+        ));
+    }
+
+    // Cleanup cadence.
+    if !(300..=86_400).contains(&config.cleanup_cadence_secs) {
+        diagnostics.push(validation_diagnostic(
+            "logging.cleanup_cadence_secs",
+            format!(
+                "logging.cleanup_cadence_secs must be between 300 and 86400, got {}",
+                config.cleanup_cadence_secs
+            ),
+        ));
+    }
+
+    // Webhook validation.
+    validate_webhook_config(&config.webhook, &mut diagnostics);
+
+    diagnostics
+}
+
+fn validate_application_state_root(
+    root: &std::path::PathBuf,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) {
+    if root.as_os_str().is_empty() {
+        diagnostics.push(validation_diagnostic(
+            "logging.application_state_root",
+            "logging.application_state_root must not be empty",
+        ));
+        return;
+    }
+
+    let contains_parent_dir = root
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+        // A configuration can be authored on another OS, so reject Windows
+        // separators even when validation runs on Unix (and vice versa).
+        || root
+            .to_string_lossy()
+            .split(['/', '\\'])
+            .any(|segment| segment == "..");
+    if contains_parent_dir {
+        diagnostics.push(validation_diagnostic(
+            "logging.application_state_root",
+            "logging.application_state_root must not contain directory traversal sequences",
+        ));
+    }
+
+    // Reject absolute system paths that should never contain application state.
+    let forbidden_roots = ["/etc", "/dev", "/proc", "/sys"];
+    if let Some(path_str) = root.to_str() {
+        if path_str == "/" {
+            diagnostics.push(validation_diagnostic(
+                "logging.application_state_root",
+                "logging.application_state_root must not be the filesystem root \"/\"",
+            ));
+        } else {
+            for forbidden_root in forbidden_roots {
+                let is_descendant = path_str
+                    .strip_prefix(forbidden_root)
+                    .is_some_and(|suffix| suffix.starts_with('/'));
+                if path_str == forbidden_root || is_descendant {
+                    diagnostics.push(validation_diagnostic(
+                    "logging.application_state_root",
+                    format!(
+                            "logging.application_state_root must not target system directories; rejecting path at or below \"{forbidden_root}\""
+                    ),
+                ));
+                    break;
+                }
+            }
+        }
+    }
+
+    // On Unix, check for world-writable if path exists.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(metadata) = std::fs::metadata(root) {
+            let mode = metadata.mode() & 0o777;
+            if mode & 0o002 != 0 {
+                diagnostics.push(validation_diagnostic(
+                    "logging.application_state_root",
+                    format!(
+                        "logging.application_state_root must not be world-writable; current mode is {:04o}",
+                        metadata.mode() & 0o7777
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_webhook_config(
+    config: &crate::LoggingWebhookConfig,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) {
+    let configured_url = config
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty());
+    if config.enabled && configured_url.is_none() {
+        diagnostics.push(validation_diagnostic(
+            "logging.webhook.url",
+            "logging.webhook.url is required when logging.webhook.enabled is true",
+        ));
+    }
+    if let Some(url) = configured_url {
+        if let Err(diag) = validate_optional_http_url(Some(url), "logging.webhook.url") {
+            diagnostics.push(diag);
+        } else if let Ok(parsed) = url::Url::parse(url)
+            && (!parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some())
+        {
+            diagnostics.push(validation_diagnostic(
+                "logging.webhook.url",
+                "logging.webhook.url must not include credentials, a query string, or a fragment",
+            ));
+        }
+    }
+
+    for (path, value, min, max) in [
+        (
+            "logging.webhook.max_attempts",
+            config.max_attempts as u64,
+            1_u64,
+            20,
+        ),
+        (
+            "logging.webhook.timeout_secs",
+            config.timeout_secs,
+            1_u64,
+            60,
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {} and {}, got {}", min, max, value),
+            ));
+        }
+    }
+
+    // Dead-letter retention.
+    let dlr = config.dead_letter_retention_secs;
+    if !(3600..=1_555_200).contains(&dlr) {
+        diagnostics.push(validation_diagnostic(
+            "logging.webhook.dead_letter_retention_secs",
+            format!(
+                "logging.webhook.dead_letter_retention_secs must be between 3600 and 1555200, got {}",
+                dlr
+            ),
+        ));
+    }
+}
+
 #[cfg(test)]
 mod schema_tests {
     use super::*;
+
+    #[test]
+    fn audit_rotation_limits_must_be_nonzero() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[logging.audit]
+max_file_size_mb = 0
+max_files = 0
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let paths = diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.path.as_ref().map(ConfigPath::render))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                "logging.audit.max_file_size_mb".to_string(),
+                "logging.audit.max_files".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn enabled_audit_requires_a_path_and_json_lines_format() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[logging.audit]
+enabled = true
+log_format = "json"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let paths = validate_config_diagnostics(&config)
+            .iter()
+            .filter_map(|diagnostic| diagnostic.path.as_ref().map(ConfigPath::render))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec!["logging.audit.log_path", "logging.audit.log_format"]
+        );
+    }
+
+    #[test]
+    fn audit_json_lines_format_is_the_only_valid_exported_format() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[logging.audit]
+enabled = true
+log_path = "audit.jsonl"
+log_format = "json_lines"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        assert!(
+            validate_config_diagnostics(&config)
+                .iter()
+                .all(
+                    |diagnostic| diagnostic.path.as_ref().map(ConfigPath::render)
+                        != Some("logging.audit.log_format".to_string())
+                )
+        );
+    }
+
+    #[test]
+    fn logging_summary_and_event_buffer_limits_accept_boundaries_and_reject_underflow() {
+        let mut config = MeshConfig::default();
+        config.logging.summary_line_limit = 1;
+        config.logging.event_buffer_size = 50;
+        config.logging.replay_capacity = 50;
+        assert!(validate_config_diagnostics(&config).is_empty());
+
+        config.logging.summary_line_limit = 0;
+        config.logging.event_buffer_size = 49;
+        let paths = validate_config_diagnostics(&config)
+            .iter()
+            .filter_map(|diagnostic| diagnostic.path.as_ref().map(ConfigPath::render))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                "logging.summary_line_limit".to_string(),
+                "logging.event_buffer_size".to_string(),
+                "logging.replay_capacity".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_state_root_rejects_parent_components_on_all_platforms() {
+        for root in ["../outside", "state/../outside", r"..\outside"] {
+            let mut config = MeshConfig::default();
+            config.logging.application_state_root = Some(root.into());
+            assert!(
+                validate_config_diagnostics(&config)
+                    .iter()
+                    .any(|diagnostic| {
+                        diagnostic.path.as_ref().map(ConfigPath::render)
+                            == Some("logging.application_state_root".to_string())
+                    })
+            );
+        }
+    }
+
+    #[test]
+    fn application_state_root_rejects_exact_system_directories() {
+        for root in ["/etc", "/dev", "/proc", "/sys"] {
+            let mut config = MeshConfig::default();
+            config.logging.application_state_root = Some(root.into());
+            assert!(
+                validate_config_diagnostics(&config)
+                    .iter()
+                    .any(|diagnostic| {
+                        diagnostic.path.as_ref().map(ConfigPath::render)
+                            == Some("logging.application_state_root".to_string())
+                    }),
+                "{root} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn enabled_audit_rejects_an_empty_log_path() {
+        let mut config = MeshConfig::default();
+        config.logging.audit.enabled = Some(true);
+        config.logging.audit.log_path = Some(std::path::PathBuf::new());
+
+        assert!(
+            validate_config_diagnostics(&config)
+                .iter()
+                .any(
+                    |diagnostic| diagnostic.path.as_ref().map(ConfigPath::render)
+                        == Some("logging.audit.log_path".to_string())
+                )
+        );
+    }
 
     #[test]
     fn drain_default_cannot_exceed_maximum() {
@@ -594,5 +1039,102 @@ resume_debounce_secs = 300
             let diagnostics = validate_config_diagnostics(&config);
             assert!(diagnostics.is_empty());
         }
+    }
+
+    #[test]
+    fn config_v1_without_logging_section_applies_bounded_defaults() {
+        // Regression: existing v1 configs without [logging] must parse cleanly,
+        // produce zero diagnostics, and apply bounded metadata-only defaults.
+        let toml = r#"
+[runtime]
+listen_all = true
+
+[owner_control]
+bind = "0.0.0.0:9337"
+"#;
+
+        let config: MeshConfig =
+            toml::from_str(toml).expect("v1 config without [logging] should parse");
+
+        // Zero validation warnings for missing logging section.
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(
+            diagnostics.is_empty(),
+            "Expected zero diagnostics; got {:?}",
+            diagnostics
+        );
+
+        // Logging subsystem enabled by default with bounded defaults.
+        assert!(
+            config.logging.enabled,
+            "logging.enabled should default to true"
+        );
+        assert_eq!(config.logging.summary_line_limit, 2048);
+        assert_eq!(config.logging.event_buffer_size, 10_000);
+        assert_eq!(config.logging.retention_ttl_secs, 36 * 3600); // 36 hours
+        assert_eq!(config.logging.retention_max_rows, 100_000);
+        assert_eq!(config.logging.replay_capacity, 128);
+        assert_eq!(config.logging.queue_capacity, 4096);
+        assert_eq!(config.logging.export_limit_bytes, 5 * 1024 * 1024); // 5 MB
+        assert_eq!(config.logging.cleanup_cadence_secs, 3600);
+
+        // Artifact capture defaults to safe metadata-only (no raw content).
+        use crate::model::CaptureMode;
+        assert_eq!(
+            config.logging.artifact.capture_mode,
+            CaptureMode::MetadataOnly
+        );
+
+        // Webhook disabled by default.
+        assert!(!config.logging.webhook.enabled);
+    }
+
+    #[test]
+    fn logging_retention_max_rows_reports_a_stable_validation_path() {
+        let mut config = crate::MeshConfig::default();
+        config.logging.retention_max_rows = 0;
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .path
+                .as_ref()
+                .is_some_and(|path| path.render() == "logging.retention_max_rows")
+                && diagnostic.message.contains("must be between 1 and 1000000")
+        }));
+    }
+
+    #[test]
+    fn enabled_webhook_requires_a_plain_http_url_without_secret_components() {
+        let mut config = crate::MeshConfig::default();
+        config.logging.webhook.enabled = true;
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .path
+                .as_ref()
+                .is_some_and(|path| path.render() == "logging.webhook.url")
+                && diagnostic.message.contains("required")
+        }));
+
+        config.logging.webhook.url =
+            Some("https://operator:secret@example.invalid/hook?token=secret#fragment".into());
+        let diagnostics = validate_config_diagnostics(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .path
+                .as_ref()
+                .is_some_and(|path| path.render() == "logging.webhook.url")
+                && diagnostic.message.contains("must not include credentials")
+        }));
+        assert!(diagnostics.iter().all(|diagnostic| {
+            !diagnostic.message.contains("operator")
+                && !diagnostic.message.contains("secret")
+                && !diagnostic.message.contains("example.invalid")
+        }));
+
+        config.logging.webhook.url = Some("http://127.0.0.1:4567/hook".into());
+        assert!(validate_config_diagnostics(&config).is_empty());
     }
 }

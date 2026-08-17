@@ -3,6 +3,11 @@ name: Reusable SDK Smoke Tests
 on:
   workflow_call:
     inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
       sdk_kind:
         required: true
         type: string
@@ -94,6 +99,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Validate bounded SDK smoke inputs
@@ -249,7 +255,7 @@ jobs:
           model_file: ${{ inputs.model_file }}
           model_cache_scope: ${{ inputs.model_cache_scope }}
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
-          save_model_cache: ${{ github.ref == 'refs/heads/main' }}
+          save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
 
       - name: Rust SDK smoke test
         if: ${{ inputs.sdk_kind == 'rust' }}

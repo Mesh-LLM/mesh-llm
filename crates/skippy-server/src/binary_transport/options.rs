@@ -2,6 +2,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use skippy_protocol::{StageConfig, StageTopology, binary::WireActivationDType};
+use skippy_runtime::MtpSource;
 
 use crate::{
     cli::ServeBinaryArgs, config::load_json, frontend::SpeculativeDecodeConfig,
@@ -123,6 +124,23 @@ impl BinaryStageOptions {
             native_mtp_enabled,
             openai,
         })
+    }
+
+    pub(crate) fn resolved_mtp_source(&self) -> MtpSource {
+        if !self.native_mtp_enabled || !self.config.native_mtp_enabled {
+            return MtpSource::Disabled;
+        }
+        let Some(openai) = self.openai.as_ref() else {
+            return MtpSource::Integrated;
+        };
+        if !openai.speculative.native_mtp.enabled {
+            return MtpSource::Disabled;
+        }
+        if openai.native_mtp_draft_model_path.is_some() {
+            MtpSource::External
+        } else {
+            MtpSource::Integrated
+        }
     }
 }
 
@@ -252,6 +270,7 @@ mod tests {
         };
 
         let options = BinaryStageOptions::from_cli_args(args).expect("resolve binary stage");
+        assert_eq!(options.resolved_mtp_source(), MtpSource::Integrated);
         let openai = options.openai.expect("embedded OpenAI configuration");
 
         assert!(options.native_mtp_enabled);
@@ -263,12 +282,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("create temp directory");
         let stage_path = dir.path().join("stage.json");
         let sidecar_path = dir.path().join("sidecar-mtp.gguf");
+        let plan_path = dir.path().join("speculative.json");
         fs::write(
             &stage_path,
             serde_json::to_vec(&stage_config()).expect("serialize stage config"),
         )
         .expect("write stage config");
         fs::write(&sidecar_path, b"gguf-stub").expect("write sidecar stub");
+        fs::write(
+            &plan_path,
+            serde_json::to_vec(&cache_composite_plan()).expect("serialize speculative config"),
+        )
+        .expect("write speculative config");
 
         let cli = Cli::try_parse_from([
             "skippy-server",
@@ -279,6 +304,8 @@ mod tests {
             "2048",
             "--openai-bind-addr",
             "127.0.0.1:9337",
+            "--openai-speculative-config",
+            plan_path.to_str().expect("UTF-8 speculative path"),
             "--openai-native-mtp-draft-model-path",
             sidecar_path.to_str().expect("UTF-8 sidecar path"),
         ])
@@ -288,6 +315,7 @@ mod tests {
         };
 
         let options = BinaryStageOptions::from_cli_args(args).expect("resolve binary stage");
+        assert_eq!(options.resolved_mtp_source(), MtpSource::External);
         let openai = options.openai.expect("embedded OpenAI configuration");
 
         // The sidecar attaches MTP heads to the served model; it must not be
@@ -297,6 +325,35 @@ mod tests {
             Some(sidecar_path.as_path())
         );
         assert_eq!(openai.draft_model_path, None);
+    }
+
+    #[test]
+    fn disabled_native_mtp_keeps_a_terminal_stage_out_of_integrated_mode() {
+        let dir = tempfile::tempdir().expect("create temp directory");
+        let stage_path = dir.path().join("stage.json");
+        let mut config = stage_config();
+        config.native_mtp_enabled = false;
+        fs::write(
+            &stage_path,
+            serde_json::to_vec(&config).expect("serialize stage config"),
+        )
+        .expect("write stage config");
+
+        let cli = Cli::try_parse_from([
+            "skippy-server",
+            "serve-binary",
+            "--config",
+            stage_path.to_str().expect("UTF-8 stage path"),
+            "--activation-width",
+            "2048",
+        ])
+        .expect("parse binary stage CLI");
+        let Command::ServeBinary(args) = cli.command else {
+            panic!("expected serve-binary command");
+        };
+
+        let options = BinaryStageOptions::from_cli_args(args).expect("resolve binary stage");
+        assert_eq!(options.resolved_mtp_source(), MtpSource::Disabled);
     }
 
     #[test]

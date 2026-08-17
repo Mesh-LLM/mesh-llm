@@ -1,17 +1,6 @@
+use crate::logging::OpenAiRouteObserver;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-
-pub async fn send_json_ok(mut stream: TcpStream, data: &serde_json::Value) -> std::io::Result<()> {
-    let body = data.to_string();
-    let resp = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream.write_all(resp.as_bytes()).await?;
-    stream.shutdown().await?;
-    Ok(())
-}
 
 /// RFC 7230 tchar set for header field names: ASCII alphanumeric plus
 /// `!#$%&'*+-.^_`|~`. We additionally forbid `:` because it terminates
@@ -82,21 +71,30 @@ pub async fn send_json_ok_with_headers(
     Ok(())
 }
 
-/// Send a JSON body with a non-200 status and the given extra headers.
-///
-/// The body is sent verbatim — caller controls the shape. Use for cases
-/// where the in-band payload is already a structured error (e.g. MoA's
-/// `error_response`) and we still want to attach observability headers
-/// while signalling failure via the HTTP status line.
-pub async fn send_json_with_status_and_headers(
+/// Send a bounded JSON error and record it only after the exact client-visible
+/// body has been written successfully.
+pub(crate) async fn send_json_with_status_and_headers_observed(
+    stream: TcpStream,
+    code: u16,
+    data: &serde_json::Value,
+    extra_headers: &[(&str, String)],
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<()> {
+    send_json_with_status_and_headers_inner(stream, code, data, extra_headers, Some(route_observer))
+        .await
+}
+
+async fn send_json_with_status_and_headers_inner(
     mut stream: TcpStream,
     code: u16,
     data: &serde_json::Value,
     extra_headers: &[(&str, String)],
+    route_observer: Option<OpenAiRouteObserver<'_>>,
 ) -> std::io::Result<()> {
     let status = match code {
         400 => "Bad Request",
         404 => "Not Found",
+        410 => "Gone",
         409 => "Conflict",
         422 => "Unprocessable Content",
         429 => "Too Many Requests",
@@ -115,26 +113,61 @@ pub async fn send_json_with_status_and_headers(
     stream.write_all(headers.as_bytes()).await?;
     stream.write_all(body.as_bytes()).await?;
     stream.shutdown().await?;
+    if let Some(route_observer) = route_observer {
+        route_observer.capture_response_body(body.as_bytes(), Some("application/json"));
+    }
     Ok(())
 }
 
-pub async fn send_400(mut stream: TcpStream, msg: &str) -> std::io::Result<()> {
-    let body = openai_error_body(400, msg);
-    let headers = format!(
-        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(headers.as_bytes()).await?;
-    stream.write_all(&body).await?;
-    stream.shutdown().await?;
-    Ok(())
+pub async fn send_400(stream: TcpStream, msg: &str) -> std::io::Result<()> {
+    send_openai_error(stream, 400, msg, None).await
 }
 
-pub async fn send_error(mut stream: TcpStream, code: u16, msg: &str) -> std::io::Result<()> {
+#[cfg(test)]
+pub async fn send_error(stream: TcpStream, code: u16, msg: &str) -> std::io::Result<()> {
+    send_openai_error(stream, code, msg, None).await
+}
+
+/// Write a locally generated bounded OpenAI JSON error and record the exact
+/// body only after the client write succeeds. The observer remains the narrow
+/// logging boundary: it receives no request headers or arbitrary media type.
+pub(crate) async fn send_error_observed(
+    stream: TcpStream,
+    code: u16,
+    msg: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<()> {
+    send_openai_error(stream, code, msg, Some(route_observer)).await
+}
+
+pub(crate) async fn send_400_observed(
+    stream: TcpStream,
+    msg: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<()> {
+    send_error_observed(stream, 400, msg, route_observer).await
+}
+
+pub(crate) async fn send_503_observed(
+    stream: TcpStream,
+    reason: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<()> {
+    tracing::warn!("503 → client: {reason}");
+    send_error_observed(stream, 503, reason, route_observer).await
+}
+
+async fn send_openai_error(
+    mut stream: TcpStream,
+    code: u16,
+    msg: &str,
+    route_observer: Option<OpenAiRouteObserver<'_>>,
+) -> std::io::Result<()> {
     let status = match code {
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
+        410 => "Gone",
         409 => "Conflict",
         413 => "Payload Too Large",
         422 => "Unprocessable Content",
@@ -158,24 +191,16 @@ pub async fn send_error(mut stream: TcpStream, code: u16, msg: &str) -> std::io:
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
+    if let Some(route_observer) = route_observer {
+        route_observer.capture_response_body(&body, Some("application/json"));
+    }
     Ok(())
 }
 
+#[cfg(test)]
 pub async fn send_503(stream: TcpStream, reason: &str) -> std::io::Result<()> {
     tracing::warn!("503 → client: {reason}");
-    send_503_inner(stream, reason).await
-}
-
-async fn send_503_inner(mut stream: TcpStream, reason: &str) -> std::io::Result<()> {
-    let body = openai_error_body(503, reason);
-    let resp = format!(
-        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        String::from_utf8_lossy(&body)
-    );
-    stream.write_all(resp.as_bytes()).await?;
-    stream.shutdown().await?;
-    Ok(())
+    send_openai_error(stream, 503, reason, None).await
 }
 
 fn openai_error_body(status_code: u16, message: &str) -> Vec<u8> {
@@ -191,7 +216,7 @@ const fn openai_error_kind_for_status(status_code: u16) -> openai_frontend::Open
     match status_code {
         401 => openai_frontend::OpenAiErrorKind::Authentication,
         403 => openai_frontend::OpenAiErrorKind::Permission,
-        404 => openai_frontend::OpenAiErrorKind::NotFound,
+        404 | 410 => openai_frontend::OpenAiErrorKind::NotFound,
         413 => openai_frontend::OpenAiErrorKind::PayloadTooLarge,
         429 => openai_frontend::OpenAiErrorKind::RateLimit,
         500 => openai_frontend::OpenAiErrorKind::Internal,
@@ -208,6 +233,7 @@ const fn openai_error_code_for_status(status_code: u16) -> &'static str {
         401 => "invalid_api_key",
         403 => "permission_denied",
         404 => "model_not_found",
+        410 => "legacy_route_gone",
         409 => "conflict",
         413 => "payload_too_large",
         422 => "unprocessable_content",
@@ -223,7 +249,10 @@ const fn openai_error_code_for_status(status_code: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logging::{OpenAiArtifactCapture, OpenAiRouteObserver};
+    use mesh_llm_events::logging::identifiers::RequestId;
     use std::future::Future;
+    use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
 
     #[test]
@@ -294,6 +323,74 @@ mod tests {
         );
         assert_eq!(body["error"]["type"], "server_error");
         assert_eq!(body["error"]["code"], "service_unavailable");
+    }
+
+    type CapturedArtifact = (String, Vec<u8>, Option<String>);
+
+    #[derive(Default)]
+    struct Captures(Mutex<Vec<CapturedArtifact>>);
+
+    impl OpenAiArtifactCapture for Captures {
+        fn capture_body(
+            &self,
+            _request_id: RequestId,
+            kind: &'static str,
+            content: &[u8],
+            media_kind: Option<&str>,
+        ) {
+            self.0.lock().unwrap().push((
+                kind.to_owned(),
+                content.to_vec(),
+                media_kind.map(str::to_owned),
+            ));
+        }
+
+        fn capture_unavailable(
+            &self,
+            _request_id: RequestId,
+            _kind: &'static str,
+            _reason: crate::logging::ArtifactUnavailableReason,
+        ) {
+        }
+    }
+
+    #[tokio::test]
+    async fn observed_error_captures_exact_json_only_after_a_successful_write() {
+        let captures = Arc::new(Captures::default());
+        let capture: Arc<dyn OpenAiArtifactCapture> = captures.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let capture = capture.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            super::send_error_observed(
+                stream,
+                404,
+                "model missing",
+                OpenAiRouteObserver::capture_test_observer(RequestId::new(), &capture),
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut client, &mut output)
+            .await
+            .unwrap();
+        server.await.unwrap();
+        let body = response_json_body(std::str::from_utf8(&output).unwrap());
+        let body_bytes = &output[output
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap()
+            + 4..];
+        assert_eq!(body["error"]["message"], "model missing");
+        let recorded = captures.0.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, "response");
+        assert_eq!(recorded[0].1, body_bytes);
+        assert_eq!(recorded[0].2.as_deref(), Some("application/json"));
     }
     async fn capture_proxy_error_response<F, Fut>(send: F) -> String
     where

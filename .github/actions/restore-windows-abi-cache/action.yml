@@ -27,6 +27,10 @@ inputs:
     description: Windows ROCm HIP SDK filename/version; required for the ROCm backend.
     required: false
     default: ""
+  allow-native-github-cache:
+    description: Whether the protected provider policy permits native GitHub cache APIs.
+    required: false
+    default: "false"
 
 outputs:
   cache-hit:
@@ -203,6 +207,7 @@ runs:
 
     - name: Restore exact Windows ABI cache
       id: restore
+      if: ${{ inputs.allow-native-github-cache == 'true' }}
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: ${{ steps.identity.outputs.build-dir }}

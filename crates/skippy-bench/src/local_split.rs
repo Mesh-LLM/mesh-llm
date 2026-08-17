@@ -10,7 +10,7 @@ use skippy_protocol::binary::{
     StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_reply,
     write_stage_message,
 };
-use skippy_runtime::{RuntimeConfig, RuntimeLoadMode, StageModel};
+use skippy_runtime::{MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel};
 use skippy_topology::{
     BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
     dense_attention_layers, infer_family_capability, plan_contiguous_with_splits,
@@ -234,6 +234,7 @@ fn run_full_model_decode(
         projector_path: None,
         include_embeddings: true,
         include_output: true,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: false,
     };
     let model = StageModel::open(model_path, &config).context("failed to open full model")?;
@@ -304,6 +305,7 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         projector_path: None,
         include_embeddings: true,
         include_output: false,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
     };
     let stage0 =
@@ -491,6 +493,7 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         projector_path: None,
         include_embeddings: true,
         include_output: false,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
     };
     let stage0 =
@@ -848,6 +851,7 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         projector_path: None,
         include_embeddings: true,
         include_output: false,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
     };
     let stage1_config = RuntimeConfig {
@@ -871,6 +875,7 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         projector_path: None,
         include_embeddings: false,
         include_output: true,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
     };
 

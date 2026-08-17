@@ -917,6 +917,7 @@ mod tests {
             plugins: Vec::new(),
             owner_control: Default::default(),
             telemetry: Default::default(),
+            logging: Default::default(),
             defaults: None,
             runtime: Default::default(),
             extra: Default::default(),

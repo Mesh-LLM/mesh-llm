@@ -7,7 +7,13 @@ use std::io::{self, IsTerminal};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 
+pub mod audit;
+pub mod logging;
 pub mod terminal_progress;
+
+mod command_lifecycle;
+pub use audit::*;
+pub use command_lifecycle::{CliCommandFamily, CliCommandOutcome, emit_cli_command_event};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum LogFormat {
@@ -401,6 +407,10 @@ impl LlamaInstanceKind {
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum OutputEvent {
+    CliCommandLifecycle {
+        family: CliCommandFamily,
+        outcome: CliCommandOutcome,
+    },
     Info {
         message: String,
         context: Option<String>,
@@ -576,11 +586,14 @@ pub enum OutputEvent {
         category: &'static str,
         params: Vec<(String, Value)>,
     },
+    /// A privacy-safe presentation of a canonical logging lifecycle event.
+    CanonicalLog(Box<logging::envelope::CanonicalEnvelope>),
 }
 
 impl OutputEvent {
     pub fn event_name(&self) -> &'static str {
         match self {
+            OutputEvent::CliCommandLifecycle { .. } => "cli_command_lifecycle",
             OutputEvent::Info { .. } => "info",
             OutputEvent::Startup { .. } => "startup",
             OutputEvent::LaunchPlan { .. } => "launch_plan",
@@ -621,15 +634,18 @@ impl OutputEvent {
             OutputEvent::ShutdownRequested { signal } => signal,
             OutputEvent::Shutdown { .. } => "shutdown",
             OutputEvent::LlamaNativeLog { category, .. } => category,
+            OutputEvent::CanonicalLog(envelope) => envelope.presentation_event_name(),
         }
     }
 
     pub fn level(&self) -> OutputLevel {
         match self {
+            OutputEvent::CliCommandLifecycle { outcome, .. } => outcome.level(),
             OutputEvent::RpcStartupFailed { .. } | OutputEvent::LlamaStartupFailed { .. } => {
                 OutputLevel::Error
             }
             OutputEvent::LlamaNativeLog { .. } => OutputLevel::Debug,
+            OutputEvent::CanonicalLog(envelope) => envelope.presentation_level(),
             OutputEvent::Warning { .. } => OutputLevel::Warn,
             OutputEvent::Error { .. } => OutputLevel::Error,
             OutputEvent::Fatal { .. } => OutputLevel::Fatal,
@@ -639,6 +655,9 @@ impl OutputEvent {
 
     pub fn message(&self) -> String {
         match self {
+            OutputEvent::CliCommandLifecycle { family, outcome } => {
+                format!("CLI command {} ({})", outcome.as_str(), family.as_str())
+            }
             OutputEvent::Info { message, .. } => message.clone(),
             OutputEvent::Startup { message, .. } => message
                 .clone()
@@ -654,10 +673,12 @@ impl OutputEvent {
                 None => format!("node {node_id} initialized"),
             },
             OutputEvent::InviteToken {
-                mesh_id, mesh_name, ..
+                token,
+                mesh_id,
+                mesh_name,
             } => {
                 let mesh_label = format_invite_mesh_label(mesh_name.as_deref(), mesh_id);
-                format!("invite token ready for mesh {mesh_label}")
+                format!("invite token ready for mesh {mesh_label}: {token}")
             }
             OutputEvent::DiscoveryStarting { source } => format!("discovering mesh via {source}"),
             OutputEvent::MeshFound { mesh, peers, .. } => {
@@ -794,6 +815,16 @@ impl OutputEvent {
                 .clone()
                 .unwrap_or_else(|| "mesh-llm shutting down".to_string()),
             OutputEvent::LlamaNativeLog { message, .. } => message.clone(),
+            OutputEvent::CanonicalLog(envelope) => envelope.presentation_message(),
+        }
+    }
+
+    /// Timestamp supplied by canonical lifecycle events. Other events are
+    /// timestamped when the output formatter renders them.
+    pub fn occurred_at(&self) -> Option<&str> {
+        match self {
+            OutputEvent::CanonicalLog(envelope) => Some(&envelope.occurred_at),
+            _ => None,
         }
     }
 }

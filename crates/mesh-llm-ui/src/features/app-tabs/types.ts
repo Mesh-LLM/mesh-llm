@@ -10,7 +10,7 @@ export type Theme = 'auto' | ResolvedTheme
 export type Accent = 'blue' | 'cyan' | 'violet' | 'green' | 'amber' | 'pink'
 export type Density = 'compact' | 'normal' | 'sparse'
 export type PanelStyle = 'solid' | 'soft'
-export type AppTab = 'network' | 'reserves' | 'chat' | 'configuration'
+export type AppTab = 'network' | 'reserves' | 'logs' | 'chat' | 'configuration'
 
 export type StatusBadgeTone = 'good' | 'warn' | 'bad' | 'muted' | 'accent'
 export type StatusMetric = {
@@ -274,6 +274,7 @@ export type ConfigurationDefaultsCategoryId =
   | 'meshllm'
   | 'network'
   | 'attestation'
+  | 'audit'
   | 'telemetry'
   | 'runtime-policy'
   | 'runtime'
@@ -292,6 +293,7 @@ export type ConfigurationTomlSectionId =
   | 'mesh_requirements'
   | 'telemetry'
   | 'telemetry.metrics'
+  | 'logging'
   | 'defaults'
   | 'defaults.model_fit'
   | 'defaults.hardware'
@@ -451,6 +453,8 @@ export type ConfigurationDefaultsSetting = {
   baselineValue?: string
   visibility?: 'standard' | 'advanced'
   mutability?: 'runtime' | 'restart-required'
+  applyMode?: 'static_on_load' | 'dynamic_validation_only' | 'dynamic_apply'
+  restartScope?: 'none' | 'model_reload' | 'process_restart' | 'mesh_restart'
   controlBehavior?: ConfigurationSettingControlBehavior
   validationConstraints?: readonly ConfigurationSettingValidationConstraint[]
   controlState?: ConfigurationRuntimeControlStateEntry
@@ -506,6 +510,7 @@ export type ConfigurationHarnessData = {
   validationWarnings?: TomlValidationWarning[]
   launchSummaryConfig?: { httpBind?: string; mmap?: string }
   meshllm?: ConfigurationSettingsHarnessData
+  audit?: ConfigurationSettingsHarnessData
   runtimeSettings?: ConfigurationSettingsHarnessData
   modelSettings?: ConfigurationSettingsHarnessData
   network?: ConfigurationSettingsHarnessData

@@ -63,7 +63,7 @@ impl StageOpenAiBackend {
         params: LinearProposalExecutionParams<'_>,
         queried: QueriedLinearProposal,
         cancellation: Option<&openai_frontend::CancellationToken>,
-        on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
+        on_token: &mut (impl FnMut(i32) -> OpenAiResult<TokenControl> + ?Sized),
     ) -> OpenAiResult<Option<LinearProposalReceipt>> {
         ensure_request_active(cancellation)?;
         let proposal_token_count = queried.proposal.token_ids.len();
@@ -149,7 +149,7 @@ impl StageOpenAiBackend {
         proposal_tokens: &[i32],
         verify_inputs: &[i32],
         cancellation: Option<&openai_frontend::CancellationToken>,
-        on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
+        on_token: &mut (impl FnMut(i32) -> OpenAiResult<TokenControl> + ?Sized),
     ) -> OpenAiResult<Option<LinearProposalExecution>> {
         ensure_request_active(cancellation)?;
         let verify_timer = Instant::now();

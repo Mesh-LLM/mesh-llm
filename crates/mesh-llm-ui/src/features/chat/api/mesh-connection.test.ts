@@ -72,6 +72,19 @@ function createAbortError() {
   return error
 }
 
+function createModelNotFoundResponse() {
+  return new Response(JSON.stringify({ error: { message: "model 'apple/system' not found" } }), {
+    status: 404,
+    headers: { 'Content-Type': 'application/json' }
+  })
+}
+
+function spyAbortSignalListeners(signal: AbortSignal) {
+  const addEventListener = vi.spyOn(signal, 'addEventListener')
+  const removeEventListener = vi.spyOn(signal, 'removeEventListener')
+  return { addEventListener, removeEventListener }
+}
+
 function createPendingAbortReaderStream(abortSignal: AbortSignal) {
   const reader = {
     read: vi.fn<() => Promise<ReadableStreamReadResult<Uint8Array>>>(() => {
@@ -445,6 +458,139 @@ describe('createMeshConnectionAdapter', () => {
       body: 'Backend exploded',
       message: 'Chat request failed: 503'
     })
+  })
+
+  it('retries a transient model-not-found response while public routing converges', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "model 'apple/system' not found" } }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          createSSEStream(['data: {"type":"response.output_text.delta","delta":"Recovered"}\n', 'data: [DONE]\n']),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+    const chunks: StreamChunk[] = []
+    try {
+      const first = await iterator.next()
+      if (!first.done) chunks.push(first.value)
+
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(500)
+
+      while (true) {
+        const next = await pendingNext
+        if (!next.done) chunks.push(next.value)
+        break
+      }
+      while (true) {
+        const next = await iterator.next()
+        if (next.done) break
+        chunks.push(next.value)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+        .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+        .join('')
+    ).toContain('Recovered')
+  })
+
+  it('does not schedule a route retry for an already-aborted request', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    abortController.abort()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createModelNotFoundResponse()))
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+      expect(setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 500)).toHaveLength(0)
+      expect(listeners.addEventListener).not.toHaveBeenCalled()
+      expect(listeners.removeEventListener).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cleans up the route retry timer and abort listener when the request is aborted', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createModelNotFoundResponse()))
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+
+      abortController.abort()
+
+      await expect(pendingNext).resolves.toEqual({ done: true, value: undefined })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(listeners.addEventListener).toHaveBeenCalledTimes(1)
+      expect(listeners.removeEventListener).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cleans up the route retry timer and abort listener after a retry timeout', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(createModelNotFoundResponse())
+      .mockResolvedValueOnce(
+        new Response(createSSEStream(['data: [DONE]\n']), {
+          status: 200
+        })
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(500)
+
+      await expect(pendingNext).resolves.toMatchObject({ done: false, value: { type: EventType.RUN_FINISHED } })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(listeners.addEventListener).toHaveBeenCalledTimes(1)
+      expect(listeners.removeEventListener).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('stops before /api/responses when attachment upload fails', async () => {

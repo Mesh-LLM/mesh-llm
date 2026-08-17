@@ -1,6 +1,6 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 37;
+pub const ABI_VERSION_PATCH: u32 = 39;
 pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
@@ -151,6 +151,15 @@ pub enum LoadMode {
     ArtifactSlice = 2,
 }
 
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MtpSource {
+    #[default]
+    Disabled = 0,
+    Integrated = 1,
+    External = 2,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum TensorRole {
@@ -226,6 +235,7 @@ pub struct RuntimeConfig {
     pub filter_tensors_on_load: bool,
     pub include_embeddings: bool,
     pub include_output: bool,
+    pub mtp_source: MtpSource,
     pub selected_backend_device: *const c_char,
     pub glm_dsa_policy_profile: i32,
     pub glm_dsa_policy_flags: u32,
@@ -545,6 +555,27 @@ pub struct SamplingConfig {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KvPageComponentDesc {
+    pub version: u32,
+    pub role: u32,
+    pub token_start: u64,
+    pub token_count: u64,
+    pub layer_count: u32,
+    pub k_type: u32,
+    pub v_type: u32,
+    pub k_row_bytes: u32,
+    pub v_row_bytes: u32,
+    pub v_element_bytes: u32,
+    pub payload_offset: u64,
+    pub payload_bytes: u64,
+    pub flags: u64,
+}
+
+pub const KV_PAGE_CODEC_SINGLE_V1: u32 = 1;
+pub const KV_PAGE_CODEC_ISWA_COMPOSITE_V1: u32 = 2;
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KvPageDesc {
     pub version: u32,
@@ -560,6 +591,9 @@ pub struct KvPageDesc {
     pub v_element_bytes: u32,
     pub payload_bytes: u64,
     pub flags: u64,
+    pub codec: u32,
+    pub component_count: u32,
+    pub components: [KvPageComponentDesc; 2],
 }
 
 pub const NATIVE_MTP_MAX_DRAFT_TOKENS: usize = 8;

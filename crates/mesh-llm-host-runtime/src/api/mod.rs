@@ -46,6 +46,7 @@
 mod access;
 mod assets;
 mod http;
+mod management_lifecycle;
 mod model_target_capacity;
 mod model_targets;
 mod routes;
@@ -66,11 +67,11 @@ pub(crate) use self::status::classify_runtime_error;
 
 use self::state::ApiInner;
 use self::status::{
-    IntentSummary, LifecycleInstancePayload, MeshModelPayload, OpenAiGuardrailsPayload,
-    RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload,
-    StatusPayload, build_runtime_processes_payload, build_runtime_stage_payloads,
-    build_runtime_status_payload, derive_daemon_state, runtime_stage_state_label,
-    runtime_stage_wire_dtype_label,
+    IntentSummary, LifecycleInstancePayload, LoggingStatusPayload, MeshModelPayload,
+    OpenAiGuardrailsPayload, RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload,
+    RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
+    build_runtime_stage_payloads, build_runtime_status_payload, derive_daemon_state,
+    runtime_stage_state_label, runtime_stage_wire_dtype_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
@@ -1001,6 +1002,8 @@ impl MeshApi {
         payload.wanted_model_refs = self.wanted_model_refs().await;
         payload.mesh_requirements = node.mesh_requirement_policy_summary().await;
         payload.recent_mesh_rejections = node.recent_mesh_requirement_rejections().await;
+        payload.logging =
+            crate::logging_runtime_state().map(|state| LoggingStatusPayload::from(state.status()));
         payload
     }
 

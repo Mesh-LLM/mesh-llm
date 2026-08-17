@@ -11,6 +11,7 @@ use crate::errors::OpenAiError;
 const MAX_AGENT_SESSION_ID_BYTES: usize = 512;
 const INTERNAL_AGENT_SESSION_ID: &str = "mesh_internal_agent_session_id";
 const INTERNAL_AGENT_SESSION_SOURCE: &str = "mesh_internal_agent_session_source";
+const INTERNAL_AGENT_SESSION_TRUSTED: &str = "mesh_internal_agent_session_trusted";
 
 /// Where the OpenAI frontend obtained a stable, caller-authenticated session
 /// identity. The identity is routing/lifecycle metadata, not a request ID. A
@@ -77,6 +78,7 @@ pub(crate) fn set_agent_session_metadata(
 ) {
     extra.remove(INTERNAL_AGENT_SESSION_ID);
     extra.remove(INTERNAL_AGENT_SESSION_SOURCE);
+    extra.remove(INTERNAL_AGENT_SESSION_TRUSTED);
     if let Some(identity) = identity {
         extra.insert(
             INTERNAL_AGENT_SESSION_SOURCE.to_owned(),

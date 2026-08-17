@@ -1,109 +1,100 @@
-name: PR Website Checks
+name: PR · Website
 
 on:
-  workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 permissions:
+  checks: write
   contents: read
 
+concurrency:
+  group: pr-website-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
-  changes:
+  plan:
+    name: Plan website
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      pull-requests: read
     outputs:
-      website_changed: ${{ steps.compute.outputs.website_changed }}
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      plan_digest: ${{ steps.plan.outputs.plan_digest }}
+      lane_plan: ${{ steps.plan.outputs.website_lane_plan }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/compute-changes
-        id: compute
-        with:
-          event_name: ${{ github.event_name }}
-          base_sha: ${{ github.event.pull_request.base.sha || '' }}
-          head_sha: ${{ github.event.pull_request.head.sha || '' }}
-
-  website-build:
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.website_changed == 'true'
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: website
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: website/package-lock.json
-      - name: Install dependencies
-        run: npm ci
-      - name: Build public website
-        run: npm run build
-      - name: Verify website output exists
-        working-directory: .
-        run: |
-          required=(
-            docs/index.html
-            docs/CNAME
-            docs/funding.json
-            docs/install.sh
-            docs/install.ps1
-            docs/mesh-llm-logo.svg
-            docs/assets/site.css
-            docs/docs/index.html
-            docs/catalog/index.html
-            docs/.well-known/funding-manifest-urls
-          )
-          for f in "${required[@]}"; do
-            if [[ ! -f "$f" ]]; then
-              echo "ERROR: Missing generated output: $f" >&2
-              exit 1
-            fi
-          done
-          echo "All required website output files exist."
-
-  summary:
-    needs: [changes, website-build]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check website gate
+      - name: Validate immutable PR identity
+        id: identity
         env:
-          CHANGES: ${{ needs.changes.result }}
-          WEBSITE_CHANGED: ${{ needs.changes.outputs.website_changed }}
-          WEBSITE_BUILD: ${{ needs.website-build.result }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          {
-            echo "## PR Website Checks"
-            echo
-            echo "| Check | Result |"
-            echo "| --- | --- |"
-            printf '| %s | %s |\n' "changes" "$CHANGES"
-            printf '| %s | %s |\n' "website_changed" "${WEBSITE_CHANGED:-false}"
-            printf '| %s | %s |\n' "website-build" "$WEBSITE_BUILD"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          FAILED=false
-          for STATUS in "$CHANGES" "$WEBSITE_BUILD"; do
-            if [[ "$STATUS" == "failure" || "$STATUS" == "cancelled" ]]; then
-              FAILED=true
-            fi
-          done
-
-          if [[ "$FAILED" == "true" ]]; then
-            echo "ERROR: One or more website checks failed." >&2
+          set -euo pipefail
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "pull request source identity is malformed" >&2
             exit 1
           fi
+          git fetch --no-tags origin "$SOURCE_SHA"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Compute changed files and affected crates
+        id: changes
+        uses: ./.github/actions/compute-changes
+        with:
+          event_name: pull_request
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          head_sha: ${{ steps.identity.outputs.source_sha }}
+      - name: Build canonical plan
+        id: plan
+        uses: ./.github/actions/plan-ci
+        with:
+          event_name: pull_request
+          source_sha: ${{ steps.identity.outputs.source_sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          draft: ${{ github.event.pull_request.draft || false }}
+          changed_files: ${{ steps.changes.outputs.changed_files }}
+          affected_crates: ${{ steps.changes.outputs.affected_crates }}
+
+  lane:
+    name: Website
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && fromJson(needs.plan.outputs.lane_plan).required }}
+    permissions:
+      checks: write
+      contents: read
+    uses: Mesh-LLM/mesh-llm/.github/workflows/ci-website-lane.yml@main
+    with:
+      lane_plan_json: ${{ needs.plan.outputs.lane_plan }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+      original_event_name: pull_request
+      supersession_key: pr-${{ github.event.pull_request.number }}
+
+  required:
+    name: PR / Website
+    needs: [plan, lane]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Enforce website result
+        env:
+          LANE_PLAN: ${{ needs.plan.outputs.lane_plan }}
+          LANE_RESULT: ${{ needs.lane.result }}
+          PLAN_DIGEST: ${{ needs.plan.outputs.plan_digest }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+        run: |
+          set -euo pipefail
+          [[ "$PLAN_RESULT" == "success" ]]
+          required=$(jq -r '.required' <<<"$LANE_PLAN")
+          if [[ "$required" == "true" ]]; then
+            [[ "$LANE_RESULT" == "success" ]]
+          else
+            [[ "$LANE_RESULT" == "skipped" ]]
+          fi
+          echo "Plan digest: \`$PLAN_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"

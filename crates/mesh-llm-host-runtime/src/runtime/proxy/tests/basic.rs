@@ -1,4 +1,34 @@
 #[tokio::test]
+async fn legacy_lifecycle_paths_are_gone_from_openai_ingress() {
+    let (upstream_port, upstream_rx, upstream_handle) =
+        spawn_capturing_upstream(r#"{"unexpected":true}"#).await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(local_targets(&[("test", upstream_port)])).await;
+
+    for (path, body) in [
+        ("/mesh/load", r#"{"model":"test"}"#),
+        ("/mesh/drop?model=test", r#"{"model":"test"}"#),
+    ] {
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+        assert!(response.starts_with("HTTP/1.1 410 Gone"), "response: {response}");
+        assert!(response.contains("legacy_route_gone"), "response: {response}");
+    }
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), upstream_rx)
+            .await
+            .is_err(),
+        "legacy lifecycle paths must not reach an inference target"
+    );
+    proxy_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
 async fn test_api_proxy_integration_fragmented_post_body() {
     let (upstream_port, upstream_rx, upstream_handle) =
         spawn_capturing_upstream(r#"{"ok":true}"#).await;

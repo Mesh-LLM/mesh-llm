@@ -45,6 +45,65 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             metadata,
         )
 
+    def test_release_source_version_is_synchronized_before_builds(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        metadata = job_block(workflow, "metadata", "build")
+        publish = job_block(
+            workflow,
+            "publish",
+            "dispatch_packaging_release",
+        )
+
+        source = metadata.index("name: Prepare canonical release source")
+        selector = metadata.index("uses: ./.github/actions/select-ci-runners")
+        self.assertLess(source, selector)
+        self.assertIn("source_sha: ${{ steps.source.outputs.sha }}", metadata)
+        self.assertIn(
+            "release_notes_base: "
+            "${{ steps.source.outputs.release_notes_base }}",
+            metadata,
+        )
+        self.assertIn('scripts/release-version.sh "$RELEASE_TAG"', metadata)
+        self.assertIn("Canary release: leaving main unchanged", metadata)
+        self.assertIn(
+            'git push "$release_remote" "$source_sha:refs/heads/main"',
+            metadata,
+        )
+        self.assertIn(
+            "does not contain its complete version update",
+            metadata,
+        )
+        self.assertIn(
+            "ref: ${{ needs.metadata.outputs.source_sha }}",
+            publish,
+        )
+        self.assertIn("generate_release_notes: true", publish)
+        self.assertIn(
+            "previous_tag: "
+            "${{ needs.metadata.outputs.release_notes_base }}",
+            publish,
+        )
+        self.assertIn(
+            'python3 scripts/select-release-notes-base.py "$RELEASE_TAG"',
+            metadata,
+        )
+        manual_version_update = metadata.index(
+            'else\n            scripts/release-version.sh "$RELEASE_TAG"',
+        )
+        format_check = metadata.index(
+            "cargo fmt --all -- --check",
+            manual_version_update,
+        )
+        whitespace_check = metadata.index("git diff --check", format_check)
+        stage_release_source = metadata.index("git add --update", whitespace_check)
+        push_release_source = metadata.index(
+            'git push "$release_remote" "$source_sha:refs/heads/main"',
+        )
+        self.assertLess(manual_version_update, format_check)
+        self.assertLess(format_check, whitespace_check)
+        self.assertLess(whitespace_check, stage_release_source)
+        self.assertLess(stage_release_source, push_release_source)
+
     def test_release_depot_policy_is_main_ref_only_and_selected_once(
         self,
     ) -> None:
@@ -160,6 +219,60 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertNotIn("USE_SELF_HOSTED", arm_smoke)
 
+    def test_native_runtime_cache_policy_tracks_effective_runner(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        native_runtime = job_block(
+            workflow,
+            "build_native_runtime",
+            "build_native_runtime_linux_aarch64_cuda",
+        )
+        rocm = job_block(
+            workflow,
+            "build_native_runtime_linux_x86_64_rocm",
+            "build_native_runtime_linux_x86_64_vulkan",
+        )
+        vulkan = job_block(
+            workflow,
+            "build_native_runtime_linux_x86_64_vulkan",
+            "build_swift_sdk_artifact",
+        )
+        self.assertIn(
+            "allow_native_github_cache: ${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || 'true' }}",
+            native_runtime,
+        )
+        for target, runner_8, runner_arm_8, expected in (
+            ("x86_64-unknown-linux-gnu", "depot-ubuntu-24.04-8", "ubuntu-24.04-arm", "false"),
+            ("x86_64-unknown-linux-gnu", "ubuntu-24.04", "ubuntu-24.04-arm", "true"),
+            ("aarch64-unknown-linux-gnu", "ubuntu-24.04", "depot-ubuntu-24.04-arm-8", "false"),
+            ("aarch64-apple-darwin", "depot-ubuntu-24.04-8", "depot-ubuntu-24.04-arm-8", "true"),
+        ):
+            depot = (
+                target == "x86_64-unknown-linux-gnu" and runner_8.startswith("depot-")
+            ) or (
+                target == "aarch64-unknown-linux-gnu"
+                and runner_arm_8.startswith("depot-")
+            )
+            self.assertEqual("false" if depot else "true", expected)
+
+        for runner_16, expected in (
+            ("depot-ubuntu-24.04-16", "false"),
+            ("ubuntu-24.04", "true"),
+        ):
+            self.assertEqual(
+                "false" if runner_16.startswith("depot-") else "true",
+                expected,
+            )
+
+        effective_runner_16_cache_gate = (
+            "if: ${{ !startsWith(needs.metadata.outputs.runner_16, 'depot-') }}"
+        )
+        provider_level_cache_gate = (
+            "if: ${{ needs.metadata.outputs.allow_native_github_cache == 'true' }}"
+        )
+        for producer in (rocm, vulkan):
+            self.assertIn(effective_runner_16_cache_gate, producer)
+            self.assertNotIn(provider_level_cache_gate, producer)
+
     def test_inference_smoke_consumes_composed_product(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
@@ -186,7 +299,8 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         smoke = (
             ROOT / ".github" / "workflows" / "smoke.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("runs-on: ubuntu-24.04", smoke)
+        self.assertIn("default: 'ubuntu-24.04'", smoke)
+        self.assertIn("|| 'ubuntu-24.04'", smoke)
 
     def test_swift_release_reuses_full_typed_producer(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
@@ -241,6 +355,11 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
     def test_release_permissions_are_least_privilege(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         header = workflow[: workflow.index("\njobs:\n")]
+        metadata = job_block(
+            workflow,
+            "metadata",
+            "build",
+        )
         publish = job_block(
             workflow,
             "publish",
@@ -253,6 +372,11 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertNotIn("contents: write", header)
         self.assertNotIn("packages: write", header)
+        self.assertIn(
+            "    permissions:\n      contents: write",
+            metadata,
+        )
+        self.assertNotIn("packages: write", metadata)
         self.assertIn(
             "    permissions:\n      contents: write",
             publish,

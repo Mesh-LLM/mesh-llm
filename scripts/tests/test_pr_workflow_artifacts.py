@@ -1,667 +1,275 @@
-from __future__ import annotations
-
 from pathlib import Path
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
-PR_WORKFLOW = ROOT / ".github" / "workflows" / "pr_builds.yml"
+WORKFLOWS = ROOT / ".github" / "workflows"
+PLATFORM = WORKFLOWS / "ci-platform-checks-slice.yml"
+NON_VALIDATION_PR_WORKFLOWS = {"pr_auto_assign.yml", "pr_cleanup.yml"}
 
 
-def job_section(
-    workflow: str,
-    job_name: str,
-    next_job_name: str | None = None,
-) -> str:
-    start = workflow.index(f"  {job_name}:")
-    if next_job_name is None:
-        return workflow[start:]
-    end = workflow.index(f"  {next_job_name}:", start)
-    return workflow[start:end]
-
-
-def planned_condition(job_name: str) -> str:
-    return (
-        "if: ${{ contains("
-        "fromJson(needs.changes.outputs.required_jobs_json), "
-        f"'{job_name}') }}}}"
-    )
+def workflow_triggers(path: Path) -> set[str]:
+    document = yaml.safe_load(path.read_text()) or {}
+    raw = document.get("on", document.get(True, {}))
+    if isinstance(raw, str):
+        return {raw}
+    if isinstance(raw, list):
+        return {str(trigger) for trigger in raw}
+    if isinstance(raw, dict):
+        return {str(trigger) for trigger in raw}
+    return set()
 
 
 class PrWorkflowArtifactTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.workflow = PR_WORKFLOW.read_text(encoding="utf-8")
-        cls.host = job_section(
-            cls.workflow,
-            "linux_host_input",
-            "linux_cpu_runtime_input",
-        )
-        cls.cpu_runtime = job_section(
-            cls.workflow,
-            "linux_cpu_runtime_input",
-            "linux_cpu_artifact",
-        )
-        cls.cpu_product = job_section(
-            cls.workflow,
-            "linux_cpu_artifact",
-            "linux_cuda_runtime_input",
-        )
-        cls.backend_runtimes = {
-            "cuda": job_section(
-                cls.workflow,
-                "linux_cuda_runtime_input",
-                "linux_cuda_product",
-            ),
-            "rocm": job_section(
-                cls.workflow,
-                "linux_rocm_runtime_input",
-                "linux_rocm_product",
-            ),
-            "vulkan": job_section(
-                cls.workflow,
-                "linux_vulkan_runtime_input",
-                "linux_vulkan_product",
-            ),
-        }
-        cls.backend_products = {
-            "cuda": job_section(
-                cls.workflow,
-                "linux_cuda_product",
-                "linux_rocm_runtime_input",
-            ),
-            "rocm": job_section(
-                cls.workflow,
-                "linux_rocm_product",
-                "linux_vulkan_runtime_input",
-            ),
-            "vulkan": job_section(
-                cls.workflow,
-                "linux_vulkan_product",
-                "linux_static_abi_input",
-            ),
-        }
-        cls.macos_host = job_section(
-            cls.workflow,
-            "macos_host_input",
-            "macos_metal_runtime_input",
-        )
-        cls.swift_input = job_section(
-            cls.workflow,
-            "swift_sdk_input",
-            "macos_host_input",
-        )
-        cls.macos_runtime = job_section(
-            cls.workflow,
-            "macos_metal_runtime_input",
-            "macos_cpu_artifact",
-        )
-        cls.macos_product = job_section(
-            cls.workflow,
-            "macos_cpu_artifact",
-            "swift_sdk_smoke",
-        )
-        cls.windows_checks = job_section(
-            cls.workflow,
-            "windows_checks",
-            "windows_host_input",
-        )
-        cls.windows_host = job_section(
-            cls.workflow,
-            "windows_host_input",
-            "windows_cpu_runtime_input",
-        )
-        cls.windows_cpu_runtime = job_section(
-            cls.workflow,
-            "windows_cpu_runtime_input",
-            "windows_gpu_runtime_inputs",
-        )
-        cls.windows_gpu_runtimes = job_section(
-            cls.workflow,
-            "windows_gpu_runtime_inputs",
-            "windows_cpu_product",
-        )
-        cls.windows_cpu_product = job_section(
-            cls.workflow,
-            "windows_cpu_product",
-            "windows_gpu_products",
-        )
-        cls.windows_gpu_products = job_section(
-            cls.workflow,
-            "windows_gpu_products",
-            "summary",
-        )
+    def workflow(self, name: str) -> str:
+        return (WORKFLOWS / name).read_text()
 
-    def test_host_profile_covers_every_backend_product_route(self) -> None:
-        self.assertIn(planned_condition("linux_host_input"), self.host)
+    def test_windows_log_store_privacy_checks_are_platform_owned(self):
+        workflow = PLATFORM.read_text()
+        self.assertIn("name: Test Windows log artifact privacy ACL", workflow)
         self.assertIn(
-            "needs.changes.outputs.backend_changed == 'true' "
-            "|| needs.changes.outputs.benchmarks == 'true'",
-            self.host,
+            "windows_artifact_paths_have_current_owner_and_exact_user_only_dacl",
+            workflow,
         )
-        self.assertIn("&& 'release' || 'debug'", self.host)
+        self.assertIn("name: Test Windows log SQLite storage ACL", workflow)
+        self.assertIn(
+            "sqlite_root_database_and_sidecars_have_only_current_user_acl",
+            workflow,
+        )
 
-        for backend, runtime in self.backend_runtimes.items():
+    def test_pr_entrypoints_call_protected_native_lanes(self):
+        for lane in ("quality", "website", "linux", "macos", "windows"):
+            workflow = self.workflow(f"pr_{lane}.yml")
+            self.assertIn("pull_request:", workflow)
             self.assertIn(
-                planned_condition(f"linux_{backend}_runtime_input"),
-                runtime,
+                f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main",
+                workflow,
+            )
+            self.assertNotIn("actions.createWorkflowDispatch", workflow)
+            self.assertNotIn("prepare-host-input", workflow)
+
+    def test_legacy_entrypoints_are_inert_migration_shims(self):
+        for filename in ("pr_builds.yml", "ci-orchestrator.yml", "ci.yml"):
+            with self.subTest(filename=filename):
+                workflow = self.workflow(filename)
+                self.assertIn("workflow_call:", workflow)
+                self.assertNotIn("pull_request:", workflow)
+                self.assertNotIn("\n  push:\n", workflow)
+                self.assertNotIn("uses: ./.github/workflows/ci-", workflow)
+                self.assertNotIn("Mesh-LLM/mesh-llm/.github/workflows/ci-", workflow)
+
+    def test_pr_validation_has_exactly_five_focused_entrypoints(self):
+        expected = {
+            "pr_quality.yml": "quality",
+            "pr_website.yml": "website",
+            "pr_linux.yml": "linux",
+            "pr_macos.yml": "macos",
+            "pr_windows.yml": "windows",
+        }
+        workflow_paths = sorted(
+            [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]
+        )
+        pr_attached = {
+            path.name
+            for path in workflow_paths
+            if {"pull_request", "pull_request_target"} & workflow_triggers(path)
+        }
+        self.assertTrue(NON_VALIDATION_PR_WORKFLOWS <= pr_attached)
+        actual = pr_attached - NON_VALIDATION_PR_WORKFLOWS
+        self.assertEqual(set(expected), actual)
+        orchestrator = self.workflow("ci-orchestrator.yml")
+        self.assertNotIn("pull_request:", orchestrator)
+        self.assertNotIn("lane_plan_json", orchestrator)
+
+        for filename, lane in expected.items():
+            workflow = self.workflow(filename)
+            protected_calls = [
+                line.strip()
+                for line in workflow.splitlines()
+                if line.strip().startswith("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-")
+            ]
+            self.assertEqual(
+                [f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"],
+                protected_calls,
+            )
+            self.assertNotIn("paths:", workflow)
+            self.assertNotIn("createWorkflowDispatch", workflow)
+
+    def test_main_validation_has_exactly_five_focused_entrypoints(self):
+        expected = {
+            "main_quality.yml": "quality",
+            "main_website.yml": "website",
+            "main_linux.yml": "linux",
+            "main_macos.yml": "macos",
+            "main_windows.yml": "windows",
+        }
+        main_paths = sorted(
+            [*WORKFLOWS.glob("main_*.yml"), *WORKFLOWS.glob("main_*.yaml")]
+        )
+        actual = {
+            path.name for path in main_paths if "push" in workflow_triggers(path)
+        }
+        self.assertEqual(set(expected), actual)
+
+        for filename, lane in expected.items():
+            workflow = self.workflow(filename)
+            local_calls = [
+                line.strip()
+                for line in workflow.splitlines()
+                if line.strip().startswith("uses: ./.github/workflows/ci-")
+            ]
+            self.assertEqual(
+                [f"uses: ./.github/workflows/ci-{lane}-lane.yml"],
+                local_calls,
+            )
+            self.assertNotIn("paths:", workflow)
+            self.assertNotIn("concurrency:", workflow)
+            self.assertNotIn("createWorkflowDispatch", workflow)
+
+        controller = self.workflow("ci-control.yml")
+        self.assertIn("workflow_dispatch:", controller)
+        self.assertNotIn("workflow_run:", controller)
+        self.assertNotIn("\n  push:\n", controller)
+
+    def test_ci_docs_forbid_monolithic_or_dispatch_only_pr_visibility(self):
+        docs = (ROOT / "ci" / "ci.md").read_text()
+        self.assertIn("The five-way split is a hard CI architecture invariant", docs)
+        self.assertIn("`dispatched`, with the real work detached", docs)
+        self.assertIn("Do not reintroduce", docs)
+        self.assertIn("Do not funnel main pushes through `ci-control.yml`", docs)
+
+    def test_controller_dispatches_only_named_topic_and_platform_workflows(self):
+        workflow = self.workflow("ci-control.yml")
+        for lane in ("quality", "website", "linux", "macos", "windows"):
+            self.assertIn(f"'ci-{lane}-lane.yml'", workflow)
+        self.assertEqual(1, workflow.count("uses: ./.github/actions/plan-ci"))
+        self.assertIn("name: 'CI Required'", workflow)
+        compatibility = self.workflow("ci.yml")
+        self.assertNotIn("ci-orchestrator.yml", compatibility)
+        self.assertNotIn("createWorkflowDispatch", compatibility)
+
+    def test_platform_consumers_require_only_matching_producers(self):
+        for platform in ("linux", "macos", "windows"):
+            with self.subTest(platform=platform):
+                lane = self.workflow(f"ci-{platform}-lane.yml")
+                self.assertIn("needs: [hosts, native_runtimes]", lane)
+                self.assertIn("needs.hosts.result == 'success'", lane)
+                self.assertIn("needs.native_runtimes.result == 'success'", lane)
+                native_start = lane.index("  native_runtimes:")
+                product_start = lane.index("  runtime_product:")
+                self.assertLess(native_start, product_start)
+                native = lane[native_start:product_start]
+                self.assertNotIn("needs.hosts", native)
+
+    def test_host_slices_are_platform_pure(self):
+        expected = {
+            "linux": ("Linux", "ci-host-linux-", "macOS host", "Windows host"),
+            "macos": ("macOS", "ci-host-macos-", "Linux host", "Windows host"),
+            "windows": ("Windows", "ci-host-windows-", "Linux host", "macOS host"),
+        }
+        for platform, (label, artifact, other_a, other_b) in expected.items():
+            with self.subTest(platform=platform):
+                workflow = self.workflow(f"ci-{platform}-host-slice.yml")
+                self.assertIn(f"name: {label} host (", workflow)
+                self.assertIn(f"name: {artifact}", workflow)
+                self.assertIn("name: ${{ inputs.ui_artifact_name }}", workflow)
+                self.assertNotIn(other_a, workflow)
+                self.assertNotIn(other_b, workflow)
+        windows = self.workflow("ci-windows-host-slice.yml")
+        self.assertIn("prepare-windows-host-input", windows)
+        self.assertNotIn("build-windows.ps1", windows)
+
+    def test_runtime_producers_and_product_composers_are_separate(self):
+        for platform in ("linux", "macos", "windows"):
+            with self.subTest(platform=platform):
+                runtime = self.workflow(f"ci-{platform}-runtime-slice.yml")
+                product = self.workflow(f"ci-{platform}-product-slice.yml")
+                self.assertIn("prepare-native-runtime-input", runtime)
+                self.assertNotIn("compose-product-input", runtime)
+                self.assertIn("compose-product-input", product)
+                self.assertNotIn("prepare-native-runtime-input", product)
+                self.assertNotIn("cargo build", product)
+                self.assertNotIn("compose_products", runtime + product)
+
+    def test_control_plane_fail_open_executes_both_web_rows(self):
+        workflow = self.workflow("ci-website-lane.yml")
+        control_domain = "contains(fromJson(inputs.lane_plan_json).domains, 'ci-control')"
+        self.assertIn(
+            "ui_changed: ${{ fromJson(inputs.lane_plan_json).signals.ui_changed || "
+            f"{control_domain} }}}}",
+            workflow,
+        )
+        self.assertIn(
+            "website_changed: ${{ fromJson(inputs.lane_plan_json).signals.website_changed || "
+            f"{control_domain} }}}}",
+            workflow,
+        )
+
+    def test_rust_test_batches_isolate_cargo_feature_resolution(self):
+        workflow = self.workflow("ci-rust-tests-slice.yml")
+        self.assertIn('cargo test --locked -p "$crate"', workflow)
+        self.assertNotIn('args+=("-p" "$crate")', workflow)
+
+    def test_full_swift_sdk_has_a_cold_native_build_budget(self):
+        workflow = self.workflow("ci-macos-lane.yml")
+        self.assertIn("timeout_minutes: 90", workflow)
+
+    def test_pr_platform_critical_matrices_fail_fast_by_profile(self):
+        slices = (
+            "ci-rust-tests-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
+            "ci-linux-product-slice.yml",
+            "ci-macos-host-slice.yml",
+            "ci-macos-runtime-slice.yml",
+            "ci-macos-product-slice.yml",
+            "ci-windows-host-slice.yml",
+            "ci-windows-runtime-slice.yml",
+            "ci-windows-product-slice.yml",
+            "ci-platform-checks-slice.yml",
+        )
+        for filename in slices:
+            with self.subTest(filename=filename):
+                workflow = self.workflow(filename)
+                self.assertIn("fail_fast:", workflow)
+                self.assertIn("fail-fast: ${{ inputs.fail_fast }}", workflow)
+
+        for platform in ("linux", "macos", "windows"):
+            lane = self.workflow(f"ci-{platform}-lane.yml")
+            self.assertIn(
+                "fail_fast: ${{ inputs.original_event_name == 'pull_request' }}",
+                lane,
             )
 
-    def test_cpu_runtime_only_runs_for_cpu_product_consumers(self) -> None:
-        self.assertIn(
-            planned_condition("linux_cpu_runtime_input"),
-            self.cpu_runtime,
-        )
-        self.assertNotIn("benchmarks", self.cpu_runtime)
+        quality = self.workflow("ci-quality-slice.yml")
+        self.assertIn("fail-fast: false", quality)
+        self.assertNotIn("fail-fast: ${{ inputs.fail_fast }}", quality)
 
-    def test_cpu_product_uses_matching_immutable_inputs(self) -> None:
-        self.assertIn("name: pr-linux-host-input", self.host)
-        self.assertIn("name: pr-linux-cpu-runtime-input", self.cpu_runtime)
+    def test_pr_cache_publishers_are_exact_and_bounded(self):
+        ui_artifact = self.workflow("ci-ui-artifact-slice.yml")
+        website = self.workflow("ci-web-slice.yml")
+        self.assertNotIn("name: Save pnpm store", ui_artifact)
+        self.assertEqual(1, website.count("name: Save pnpm store"))
         self.assertIn(
-            "needs: [changes, linux_host_input, linux_cpu_runtime_input]",
-            self.cpu_product,
+            "cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && 'npm' || '' }}",
+            website,
         )
-        self.assertIn("name: pr-linux-host-input", self.cpu_product)
-        self.assertIn("path: host-input", self.cpu_product)
-        self.assertIn("name: pr-linux-cpu-runtime-input", self.cpu_product)
-        self.assertIn("path: runtime-input", self.cpu_product)
-        self.assertIn("output_dir: ci-product", self.cpu_product)
-        self.assertIn(
-            "path: ${{ steps.compose.outputs.archive_path }}",
-            self.cpu_product,
-        )
+        self.assertIn("website/package-lock.json", website)
 
-    def test_backend_runtime_inputs_are_independent_producers(self) -> None:
-        artifacts = {
-            "cuda": "pr-linux-cuda-runtime-input",
-            "rocm": "pr-linux-rocm-runtime-input",
-            "vulkan": "pr-linux-vulkan-runtime-input",
-        }
-        expected = {
-            "cuda": (
-                "sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd",
-                'LLAMA_STAGE_CUDA_ARCHITECTURES: "86"',
-            ),
-            "rocm": (
-                "sha256:6b88ca9371ada2c507d6e36b71f0e0538fee378c6a5e2b39c17249b4b7e5088a",
-                "LLAMA_STAGE_AMDGPU_TARGETS: gfx1100",
-            ),
-            "vulkan": (
-                "sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80",
-                "build-stage-abi-dynamic-vulkan",
-            ),
-        }
+        windows = self.workflow("ci-windows-runtime-slice.yml")
+        self.assertIn("name: Save exact PR-scoped Windows ABI build", windows)
+        self.assertIn("key: ${{ steps.llama_cache.outputs.cache-primary-key }}", windows)
+        self.assertNotIn("restore-keys:", windows)
 
-        self.assertNotIn("  linux_targets:", self.workflow)
-        for backend, runtime in self.backend_runtimes.items():
-            with self.subTest(backend=backend):
-                self.assertIn("needs: changes", runtime)
-                self.assertIn(
-                    "runs-on: ${{ needs.changes.outputs.runner_8 }}",
-                    runtime,
-                )
-                self.assertIn(expected[backend][0], runtime)
-                self.assertIn(expected[backend][1], runtime)
-                self.assertIn(
-                    "uses: ./.github/actions/prepare-native-runtime-input",
-                    runtime,
-                )
-                self.assertIn(f"backend: {backend}", runtime)
-                self.assertIn(f"name: {artifacts[backend]}", runtime)
-                self.assertIn("runtime-input/*.tar.gz", runtime)
-                self.assertIn("runtime-input/*.sha256", runtime)
-                self.assertNotIn("linux_host_input", runtime)
-                self.assertNotIn("name: pr-linux-host-input", runtime)
-                self.assertNotIn("prepare-host-input", runtime)
-                self.assertNotIn("compose-product-input", runtime)
+        platform = self.workflow("ci-platform-checks-slice.yml")
+        self.assertIn("inputs.original_event_name == 'pull_request'", platform)
+        self.assertIn("key: ${{ steps.llama_cache.outputs.cache-primary-key }}", platform)
 
-        self.assertIn("Cache Vulkan ABI build", self.backend_runtimes["vulkan"])
-        self.assertNotIn("Cache Vulkan ABI build", self.backend_runtimes["cuda"])
-        self.assertNotIn("Cache Vulkan ABI build", self.backend_runtimes["rocm"])
-
-    def test_backend_products_reuse_exact_immutable_inputs(self) -> None:
-        neutral_image = (
-            "sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
-        )
-
-        self.assertNotIn("pr-linux-release-host-input", self.workflow)
-        for backend, product in self.backend_products.items():
-            with self.subTest(backend=backend):
-                self.assertIn(
-                    "needs: [changes, linux_host_input, "
-                    f"linux_{backend}_runtime_input]",
-                    product,
-                )
-                self.assertIn(
-                    planned_condition(f"linux_{backend}_product"),
-                    product,
-                )
-                self.assertIn(
-                    "runs-on: ${{ needs.changes.outputs.runner_4 }}",
-                    product,
-                )
-                self.assertIn(neutral_image, product)
-                self.assertIn("name: pr-linux-host-input", product)
-                self.assertIn("path: host-input", product)
-                self.assertIn(
-                    f"name: pr-linux-{backend}-runtime-input",
-                    product,
-                )
-                self.assertIn("path: runtime-input", product)
-                self.assertIn(
-                    "uses: ./.github/actions/compose-product-input",
-                    product,
-                )
-                self.assertIn(f"backend: {backend}", product)
-                self.assertIn("output_dir: product-input", product)
-                self.assertIn(f"name: pr-linux-{backend}-product", product)
-                self.assertIn(
-                    "path: ${{ steps.compose.outputs.archive_path }}",
-                    product,
-                )
-                self.assertNotIn("prepare-native-runtime-input", product)
-                self.assertNotIn("configure-sccache-gha", product)
-                self.assertNotIn("LLAMA_STAGE_BUILD_DIR", product)
-                self.assertNotIn("matrix.", product)
-
-    def test_cuda_runtime_uses_the_production_multiarch_image(self) -> None:
-        self.assertIn(
-            "sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd",
-            self.workflow,
-        )
-        self.assertNotIn(
-            "sha256:295341c6c9f17c9eb69281fd454bda953799406d6915f472c914fb5f024a88ed",
-            self.workflow,
-        )
-
-    def test_public_mesh_admission_is_manual_not_a_pr_gate(self) -> None:
-        admission = job_section(
-            self.workflow,
-            "linux_public_mesh_admission",
-            "hf_download_smoke",
-        )
-
-        self.assertIn(
-            planned_condition("linux_public_mesh_admission"),
-            admission,
-        )
-        self.assertNotIn("linux_client_auto_boot:", self.workflow)
-        self.assertIn("scripts/ci-client-auto-test.sh", admission)
-        self.assertIn("uses: ./.github/actions/restore-smoke-inputs", admission)
-        self.assertIn(
-            "artifact_name: ci-linux-inference-binaries",
-            admission,
-        )
-        self.assertIn(
-            "staged_binary_path: target/debug/mesh-llm",
-            admission,
-        )
-        self.assertNotIn("uses: actions/download-artifact@", admission)
-        self.assertNotIn("chmod +x target/debug/mesh-llm", admission)
-
-    def test_linux_test_groups_use_the_same_dynamic_plan_as_main(self) -> None:
-        groups = job_section(
-            self.workflow,
-            "linux_test_groups",
-            "linux_public_mesh_admission",
-        )
-
-        self.assertIn(
-            "linux_test_groups_json: "
-            "${{ steps.compute.outputs.linux_test_groups_json }}",
-            self.workflow,
-        )
-        self.assertIn(
-            "needs: [changes, linux_static_abi_input]",
-            groups,
-        )
-        self.assertNotIn("linux_cpu_artifact", groups)
-        self.assertIn(
-            "include: "
-            "${{ fromJson(needs.changes.outputs.linux_test_groups_json) }}",
-            groups,
-        )
-        self.assertNotIn("- group: protocol", groups)
-        self.assertNotIn("- group: skippy-smoke", groups)
-
-    def test_linux_tests_share_one_static_abi_producer(self) -> None:
-        producer = job_section(
-            self.workflow,
-            "linux_static_abi_input",
-            "rust_crate_tests",
-        )
-        crate_tests = job_section(
-            self.workflow,
-            "rust_crate_tests",
-            "linux_test_groups",
-        )
-        grouped_tests = job_section(
-            self.workflow,
-            "linux_test_groups",
-            "linux_public_mesh_admission",
-        )
-
-        self.assertIn(
-            "uses: ./.github/workflows/static-abi-artifact.yml",
-            producer,
-        )
-        self.assertIn("artifact_name: pr-linux-static-abi-input", producer)
-        self.assertIn("runner_size: '8'", producer)
-        self.assertNotIn("runs_on:", producer)
-        self.assertNotIn("allow_depot_remote_cache:", producer)
-        self.assertIn(
-            planned_condition("linux_static_abi_input"),
-            producer,
-        )
-        for consumer in (crate_tests, grouped_tests):
-            with self.subTest(consumer=consumer.splitlines()[0].strip()):
-                self.assertIn("linux_static_abi_input", consumer)
-                self.assertIn("name: pr-linux-static-abi-input", consumer)
-                self.assertIn("Restore immutable static ABI input", consumer)
-                self.assertIn("scripts/restore-static-abi-input.sh", consumer)
-                self.assertNotIn("tar -xzf", consumer)
-                self.assertNotIn("run: scripts/build-llama.sh", consumer)
-                self.assertNotIn("Cache patched llama.cpp ABI build", consumer)
-
-    def test_macos_producers_keep_the_existing_product_route(self) -> None:
-        self.assertIn("needs: changes", self.macos_host)
-        self.assertIn(
-            planned_condition("macos_host_input"),
-            self.macos_host,
-        )
-        self.assertIn("needs: changes", self.macos_runtime)
-        self.assertIn(
-            planned_condition("macos_metal_runtime_input"),
-            self.macos_runtime,
-        )
-
-    def test_macos_host_and_runtime_are_independent_producers(self) -> None:
-        self.assertIn(
-            "uses: ./.github/actions/prepare-host-input",
-            self.macos_host,
-        )
-        self.assertIn("profile: debug", self.macos_host)
-        self.assertIn("name: pr-macos-host-input", self.macos_host)
-        self.assertNotIn("prepare-native-runtime-input", self.macos_host)
-        self.assertNotIn("compose-product-input", self.macos_host)
-
-        self.assertIn(
-            "uses: ./.github/actions/prepare-native-runtime-input",
-            self.macos_runtime,
-        )
-        self.assertIn(
-            "LLAMA_STAGE_BUILD_DIR: "
-            ".deps/llama-build/build-stage-abi-dynamic-metal",
-            self.macos_runtime,
-        )
-        self.assertIn("backend: metal", self.macos_runtime)
-        self.assertIn("target: aarch64-apple-darwin", self.macos_runtime)
-        self.assertIn(
-            "name: pr-macos-metal-runtime-input",
-            self.macos_runtime,
-        )
-        self.assertNotIn("macos_host_input", self.macos_runtime)
-        self.assertNotIn("prepare-host-input", self.macos_runtime)
-        self.assertNotIn("compose-product-input", self.macos_runtime)
-
-    def test_macos_product_only_composes_immutable_inputs(self) -> None:
-        self.assertIn(
-            "needs: [changes, macos_host_input, macos_metal_runtime_input]",
-            self.macos_product,
-        )
-        self.assertIn(
-            planned_condition("macos_cpu_artifact"),
-            self.macos_product,
-        )
-        self.assertIn("name: pr-macos-host-input", self.macos_product)
-        self.assertIn(
-            "name: pr-macos-metal-runtime-input",
-            self.macos_product,
-        )
-        self.assertIn(
-            "uses: ./.github/actions/compose-product-input",
-            self.macos_product,
-        )
-        self.assertIn("backend: metal", self.macos_product)
-        self.assertIn("output_dir: ci-product", self.macos_product)
-        self.assertIn(
-            "name: ci-macos-inference-binaries",
-            self.macos_product,
-        )
-        self.assertIn(
-            "path: ${{ steps.compose.outputs.archive_path }}",
-            self.macos_product,
-        )
-        self.assertNotIn("prepare-host-input", self.macos_product)
-        self.assertNotIn("prepare-native-runtime-input", self.macos_product)
-        self.assertNotIn("scripts/build-host.sh", self.macos_product)
-        self.assertNotIn(
-            "scripts/package-native-runtime.sh",
-            self.macos_product,
-        )
-        self.assertNotIn("brew install", self.macos_product)
-        self.assertNotIn("Swatinem/rust-cache", self.macos_product)
-
-    def test_kotlin_smoke_reuses_parallel_debug_native_sdk_input(self) -> None:
-        producer = job_section(
-            self.workflow,
-            "kotlin_sdk_input",
-            "kotlin_sdk_smoke",
-        )
-        consumer = job_section(
-            self.workflow,
-            "kotlin_sdk_smoke",
-            "swift_sdk_input",
-        )
-
-        self.assertIn(
-            "needs: [changes, linux_static_abi_input]",
-            producer,
-        )
-        self.assertNotIn("linux_cpu_artifact", producer)
-        self.assertIn(
-            planned_condition("kotlin_sdk_input"),
-            producer,
-        )
-        self.assertIn(
-            "uses: ./.github/workflows/native-sdk-artifact.yml",
-            producer,
-        )
-        self.assertIn("profile: debug", producer)
-        self.assertIn(
-            "artifact_name: pr-kotlin-native-sdk-input",
-            producer,
-        )
-        self.assertIn(
-            "static_abi_artifact_name: pr-linux-static-abi-input",
-            producer,
-        )
-        self.assertIn("runner_size: '8'", producer)
-        self.assertNotIn("runs_on:", producer)
-        self.assertNotIn("allow_depot_remote_cache:", producer)
-
-        self.assertIn(
-            "needs: [changes, linux_cpu_artifact, kotlin_sdk_input]",
-            consumer,
-        )
-        self.assertIn(
-            planned_condition("kotlin_sdk_smoke"),
-            consumer,
-        )
-        self.assertIn(
-            "kotlin_artifact_name: pr-kotlin-native-sdk-input",
-            consumer,
-        )
-        self.assertIn("kotlin_artifact_profile: debug", consumer)
-        self.assertIn(
-            "uses: ./.github/workflows/sdk-smoke.yml",
-            consumer,
-        )
-
-    def test_macos_swift_gate_and_supported_targets_are_preserved(self) -> None:
-        swift = job_section(
-            self.workflow,
-            "swift_sdk_smoke",
-            "macos_unit_tests",
-        )
-        unit_tests = job_section(
-            self.workflow,
-            "macos_unit_tests",
-            "windows_checks",
-        )
-
-        self.assertIn("needs: changes", self.swift_input)
-        self.assertIn(
-            "uses: ./.github/workflows/swift-sdk-artifact.yml",
-            self.swift_input,
-        )
-        self.assertIn("mode: host-only", self.swift_input)
-        self.assertIn("artifact_name: pr-swift-sdk-input", self.swift_input)
-        self.assertNotIn("macos_runner:", self.swift_input)
-        self.assertIn(
-            planned_condition("swift_sdk_input"),
-            self.swift_input,
-        )
-        self.assertNotIn("macos_cpu_artifact", self.swift_input)
-        self.assertNotIn("macos_unit_tests", self.swift_input)
-
-        self.assertIn(
-            "needs: [changes, macos_cpu_artifact, swift_sdk_input]",
-            swift,
-        )
-        self.assertNotIn("always()", swift)
-        self.assertIn(planned_condition("swift_sdk_smoke"), swift)
-        self.assertNotIn("macos_unit_tests", swift)
-        self.assertIn("artifact_name: ci-macos-inference-binaries", swift)
-        self.assertIn("swift_artifact_name: pr-swift-sdk-input", swift)
-        self.assertIn("swift_artifact_mode: host-only", swift)
-        self.assertNotIn("macos_runner:", swift)
-        self.assertIn("needs: changes", unit_tests)
-        self.assertNotIn("macos_cpu_artifact", unit_tests)
-        self.assertIn(
-            "LLAMA_STAGE_BUILD_DIR: "
-            ".deps/llama-build/build-stage-abi-static-metal",
-            unit_tests,
-        )
-        self.assertIn(
-            "actions/checkout@"
-            "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
-            unit_tests,
-        )
-        self.assertIn(
-            "dtolnay/rust-toolchain@"
-            "4cda84d5c5c54efe2404f9d843567869ab1699d4",
-            unit_tests,
-        )
-        self.assertIn(
-            "Swatinem/rust-cache@"
-            "e18b497796c12c097a38f9edb9d0641fb99eee32",
-            unit_tests,
-        )
-        self.assertIn(
-            "actions/cache@"
-            "caa296126883cff596d87d8935842f9db880ef25",
-            unit_tests,
-        )
-        self.assertNotIn("  macos_targets:", self.workflow)
-        self.assertNotIn("Skip unsupported macOS GPU backend", self.workflow)
-
-    def test_windows_pr_keeps_broad_rust_signals_lightweight(self) -> None:
-        self.assertIn(
-            planned_condition("windows_checks"),
-            self.windows_checks,
-        )
-        self.assertIn("name: Windows lightweight checks", self.windows_checks)
-        self.assertIn("cargo check --locked -p mesh-llm --bin mesh-llm", self.windows_checks)
-        self.assertNotIn("prepare-windows-host-input", self.windows_checks)
-        self.assertNotIn("prepare-native-runtime-input", self.windows_checks)
-        self.assertNotIn("compose-product-input", self.windows_checks)
-
-        for producer in (
-            self.windows_host,
-            self.windows_cpu_runtime,
-            self.windows_gpu_runtimes,
-        ):
-            with self.subTest(producer=producer.splitlines()[0].strip()):
-                self.assertNotIn("needs.changes.outputs.all_rust", producer)
-
-    def test_windows_pr_builds_one_debug_host_and_independent_runtimes(self) -> None:
-        self.assertIn(
-            "uses: ./.github/actions/prepare-windows-host-input",
-            self.windows_host,
-        )
-        self.assertIn("profile: debug", self.windows_host)
-        self.assertIn("name: pr-windows-host-input", self.windows_host)
-        self.assertNotIn("prepare-native-runtime-input", self.windows_host)
-        self.assertNotIn("compose-product-input", self.windows_host)
-
-        self.assertIn(
-            planned_condition("windows_cpu_runtime_input"),
-            self.windows_cpu_runtime,
-        )
-        self.assertIn(
-            "uses: ./.github/actions/prepare-native-runtime-input",
-            self.windows_cpu_runtime,
-        )
-        self.assertIn("backend: cpu", self.windows_cpu_runtime)
-        self.assertIn(
-            "name: pr-windows-cpu-runtime-input",
-            self.windows_cpu_runtime,
-        )
-        self.assertNotIn("prepare-windows-host-input", self.windows_cpu_runtime)
-        self.assertNotIn("compose-product-input", self.windows_cpu_runtime)
-
-        self.assertIn(
-            planned_condition("windows_gpu_runtime_inputs"),
-            self.windows_gpu_runtimes,
-        )
-        for backend in ("cuda", "rocm", "vulkan"):
-            self.assertIn(f"backend: {backend}", self.windows_gpu_runtimes)
-        self.assertIn(
-            "uses: ./.github/actions/prepare-native-runtime-input",
-            self.windows_gpu_runtimes,
-        )
-        self.assertIn(
-            "name: pr-windows-${{ matrix.backend }}-runtime-input",
-            self.windows_gpu_runtimes,
-        )
-        self.assertNotIn("prepare-windows-host-input", self.windows_gpu_runtimes)
-        self.assertNotIn("compose-product-input", self.windows_gpu_runtimes)
-
-    def test_windows_pr_products_only_compose_matching_inputs(self) -> None:
-        products = (
-            (
-                self.windows_cpu_product,
-                "pr-windows-cpu-runtime-input",
-                "backend: cpu",
-            ),
-            (
-                self.windows_gpu_products,
-                "pr-windows-${{ matrix.backend }}-runtime-input",
-                "backend: ${{ matrix.backend }}",
-            ),
-        )
-
-        for product, runtime_artifact, backend in products:
-            with self.subTest(product=product.splitlines()[0].strip()):
-                self.assertIn("name: pr-windows-host-input", product)
-                self.assertIn(f"name: {runtime_artifact}", product)
-                self.assertIn(
-                    "uses: ./.github/actions/compose-product-input",
-                    product,
-                )
-                self.assertIn(backend, product)
-                self.assertIn("binary_name: mesh-llm.exe", product)
-                self.assertIn('readiness_smoke: "true"', product)
-                self.assertNotIn("prepare-windows-host-input", product)
-                self.assertNotIn("prepare-native-runtime-input", product)
-                self.assertNotIn("rust-toolchain", product)
-                self.assertNotIn("rust-cache", product)
-                self.assertNotIn("sccache-action", product)
-                self.assertNotIn("cargo ", product)
-                self.assertNotIn("build-windows.ps1", product)
-
-        self.assertNotIn("  windows_targets:", self.workflow)
+        rust_tests = self.workflow("ci-rust-tests-slice.yml")
+        self.assertIn("github.ref == 'refs/heads/main'", rust_tests)
+        self.assertIn("original_event_name != 'pull_request'", rust_tests)
 
 
 if __name__ == "__main__":

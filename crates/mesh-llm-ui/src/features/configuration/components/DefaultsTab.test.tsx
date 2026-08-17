@@ -768,6 +768,92 @@ describe('DefaultsTab', () => {
     expect(previewSource().value).not.toContain('[defaults.request_defaults]')
   })
 
+  it('shows schema-derived live and restart metadata for logging settings', async () => {
+    const user = userEvent.setup()
+    const loggingData = {
+      categories: [
+        {
+          id: 'logs-retention',
+          label: 'Retention',
+          summary: 'Schema-derived retention settings.',
+          help: 'Retention settings written to the local config file.'
+        },
+        {
+          id: 'logs-artifacts',
+          label: 'Artifacts & Storage',
+          summary: 'Schema-derived artifact settings.',
+          help: 'Artifact settings written to the local config file.'
+        }
+      ],
+      settings: [
+        {
+          id: 'logging.retention_ttl_secs',
+          categoryId: 'logs-retention',
+          icon: 'gauge',
+          label: 'Retention TTL',
+          description: 'Server-provided retention copy.',
+          inheritedLabel: 'Written to the local mesh-llm config file',
+          visibility: 'advanced',
+          mutability: 'runtime',
+          applyMode: 'dynamic_apply',
+          restartScope: 'none',
+          valueSchema: { kind: 'integer' },
+          validationConstraints: [{ kind: 'range', min: '60', max: '604800' }],
+          control: { kind: 'range', name: 'retention_ttl_secs', value: '60', min: 60, max: 604800, step: 1 }
+        },
+        {
+          id: 'logging.artifact.byte_limit_bytes',
+          categoryId: 'logs-artifacts',
+          icon: 'folder',
+          label: 'Artifact size limit',
+          description: 'Server-provided artifact limit copy.',
+          inheritedLabel: 'Written to the local mesh-llm config file',
+          visibility: 'advanced',
+          mutability: 'restart-required',
+          applyMode: 'static_on_load',
+          restartScope: 'process_restart',
+          valueSchema: { kind: 'integer' },
+          controlState: {
+            enabled: false,
+            reason: 'Artifact capture is unavailable while capture mode is metadata_only.',
+            source: 'runtime',
+            write_policy: 'reject_when_disabled'
+          },
+          control: { kind: 'text', name: 'artifact_byte_limit_bytes', value: '' }
+        },
+        {
+          id: 'logging.audit.webhook_timeout_secs',
+          categoryId: 'logs-retention',
+          icon: 'gauge',
+          label: 'Webhook timeout',
+          description: 'Validated before the configuration is saved.',
+          inheritedLabel: 'Written to the local mesh-llm config file',
+          visibility: 'advanced',
+          mutability: 'runtime',
+          applyMode: 'dynamic_validation_only',
+          restartScope: 'none',
+          valueSchema: { kind: 'integer' },
+          control: { kind: 'text', name: 'webhook_timeout_secs', value: '10' }
+        }
+      ],
+      preview: []
+    } satisfies ConfigurationDefaultsHarnessData
+
+    renderDefaultsTab({ data: loggingData })
+
+    await user.click(screen.getByRole('button', { name: /show advanced/i }))
+
+    const retentionRow = within(settingsRow('Retention TTL'))
+    const artifactRow = within(settingsRow('Artifact size limit'))
+    const webhookRow = within(settingsRow('Webhook timeout'))
+    expect(retentionRow.getByText('Applies live')).toBeInTheDocument()
+    expect(artifactRow.getByText('Restart required')).toBeInTheDocument()
+    expect(webhookRow.getByText('Validated on save')).toBeInTheDocument()
+    expect(retentionRow.getByRole('slider', { name: 'Retention TTL' })).toHaveAttribute('min', '60')
+    expect(artifactRow.getByRole('spinbutton', { name: 'Artifact size limit' })).toBeDisabled()
+    expect(artifactRow.getByRole('button', { name: /why unavailable/i })).toBeInTheDocument()
+  })
+
   it('shows reset actions beside controls for restart-required settings and resets only that setting', async () => {
     const user = userEvent.setup()
     const onSettingValueChange = vi.fn()

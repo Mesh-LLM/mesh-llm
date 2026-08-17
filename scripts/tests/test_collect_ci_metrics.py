@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "collect-ci-metrics.py"
@@ -287,7 +288,7 @@ class CollectCiMetricsTests(unittest.TestCase):
 
             report = json.loads(json_path.read_text(encoding="utf-8"))
             markdown = markdown_path.read_text(encoding="utf-8")
-            self.assertEqual(report["schema_version"], 2)
+            self.assertEqual(report["schema_version"], 3)
             self.assertEqual(report["benchmark_labels"], {"provider": "fixture"})
             self.assertIn("# CI timing summary", markdown)
             self.assertIn("Runner dimensions", markdown)
@@ -393,6 +394,237 @@ class CollectCiMetricsTests(unittest.TestCase):
         )
         slowest = report["jobs"]["slowest_observations"][0]
         self.assertEqual(slowest["runner_dimensions"]["runner_size"], "8")
+
+    def test_timing_decomposition_keeps_dependency_wait_explicit(self):
+        raw = run(
+            105,
+            "2026-07-04T00:00:00Z",
+            "2026-07-04T00:00:01Z",
+            "2026-07-04T00:03:00Z",
+            [
+                job(
+                    "runtime",
+                    "2026-07-04T00:00:10Z",
+                    "2026-07-04T00:00:20Z",
+                    "2026-07-04T00:02:20Z",
+                    labels=["depot-ubuntu-24.04-8"],
+                )
+            ],
+        )
+        raw["jobs"][0]["dependency_ready_at"] = "2026-07-04T00:00:18Z"
+        raw["jobs"][0]["runner_role"] = "linux-native-16"
+        raw["jobs"][0]["operating_system"] = "Linux"
+        normalized = self.collector.normalize_run(raw)
+        report = self.collector.analyze(
+            [normalized],
+            requested_status="success",
+            top=5,
+            source={"description": "decomposition"},
+            labels={"provider": "depot"},
+        )
+        runner = report["jobs"]["by_runner"][0]
+        self.assertEqual(runner["operating_system"], "linux")
+        self.assertEqual(runner["runner_role"], "linux-native-16")
+        self.assertEqual(report["jobs"]["queue_seconds"]["p50"], 10.0)
+        self.assertEqual(report["jobs"]["runner_queue_seconds"]["p50"], 2.0)
+        self.assertEqual(report["jobs"]["dependency_wait_seconds"]["p50"], 8.0)
+        self.assertEqual(report["jobs"]["execution_seconds"]["p50"], 120.0)
+        self.assertEqual(report["jobs"]["wall_seconds"]["p50"], 130.0)
+        self.assertEqual(report["heuristics"]["state"], "insufficient_sample")
+
+    def test_capacity_contamination_and_queue_heuristic_are_deterministic(self):
+        raw_runs = self.sample_runs()
+        for raw_run in raw_runs:
+            for raw_job in raw_run["jobs"]:
+                if raw_job["conclusion"] == "skipped":
+                    continue
+                raw_job["created_at"] = "2026-06-30T00:00:00Z"
+                raw_job["labels"] = ["depot-ubuntu-24.04-8"]
+        report = self.collector.analyze(
+            [self.collector.normalize_run(raw) for raw in raw_runs],
+            requested_status="success",
+            top=5,
+            source={"description": "contaminated"},
+            labels={"provider": "depot"},
+        )
+        self.assertTrue(report["heuristics"]["capacity_contaminated"])
+        self.assertEqual(report["heuristics"]["state"], "rollback")
+        self.assertGreaterEqual(report["capacity"]["runner_minutes"], 28.0)
+
+    def test_capacity_peak_total_merges_runner_dimension_groups(self):
+        raw = run(
+            106,
+            "2026-07-05T00:00:00Z",
+            "2026-07-05T00:00:01Z",
+            "2026-07-05T00:11:00Z",
+            [
+                job(
+                    "linux build",
+                    "2026-07-05T00:00:05Z",
+                    "2026-07-05T00:00:10Z",
+                    "2026-07-05T00:10:00Z",
+                    labels=["depot-ubuntu-24.04-8"],
+                ),
+                job(
+                    "windows build",
+                    "2026-07-05T00:00:06Z",
+                    "2026-07-05T00:00:10Z",
+                    "2026-07-05T00:10:00Z",
+                    labels=["depot-windows-2022-8"],
+                ),
+            ],
+        )
+        report = self.collector.analyze(
+            [self.collector.normalize_run(raw)],
+            requested_status="success",
+            top=5,
+            source={"description": "capacity overlap"},
+            labels={},
+        )
+
+        self.assertEqual(report["capacity"]["peak_workers"]["total"], 2)
+        self.assertEqual(
+            report["capacity"]["peak_workers"]["by_provider_os_role"],
+            {
+                "depot/linux/unknown": 1,
+                "depot/windows/unknown": 1,
+            },
+        )
+
+    def test_observation_capacity_contamination_uses_runner_queue(self):
+        raw = run(
+            107,
+            "2026-07-06T00:00:00Z",
+            "2026-07-06T00:00:01Z",
+            "2026-07-06T00:10:00Z",
+            [
+                job(
+                    "dependency build",
+                    "2026-07-06T00:00:05Z",
+                    "2026-07-06T00:08:35Z",
+                    "2026-07-06T00:09:35Z",
+                    labels=["depot-ubuntu-24.04-8"],
+                )
+            ],
+        )
+        raw["jobs"][0]["dependency_ready_at"] = "2026-07-06T00:08:25Z"
+        normalized = self.collector.normalize_run(raw)
+        sample = self.collector.observation(normalized, normalized["jobs"][0])
+
+        self.assertEqual(sample["queue_seconds"], 510.0)
+        self.assertEqual(sample["runner_queue_seconds"], 10.0)
+        self.assertFalse(sample["capacity_contaminated"])
+
+    def test_analysis_reuses_terminal_sample(self):
+        raw = self.sample_runs()[0]
+        normalized = self.collector.normalize_run(raw)
+
+        with mock.patch.object(
+            self.collector,
+            "observation",
+            wraps=self.collector.observation,
+        ) as observation_mock:
+            self.collector.analyze(
+                [normalized],
+                requested_status="success",
+                top=5,
+                source={"description": "terminal reuse"},
+                labels={},
+            )
+
+        self.assertEqual(
+            observation_mock.call_count,
+            sum(job["conclusion"] != "skipped" for job in normalized["jobs"]),
+        )
+
+    def test_compare_reports_requires_provider_cohort_separation(self):
+        baseline_raw = self.sample_runs()
+        candidate_raw = self.sample_runs()
+        for raw_runs in (baseline_raw, candidate_raw):
+            raw_runs[0]["jobs"][1]["name"] = "test suite"
+            raw_runs[1]["jobs"].append(
+                job(
+                    "Quality / Runner and cache contracts / Runner and cache contract",
+                    "2026-07-02T00:00:20Z",
+                    "2026-07-02T00:00:25Z",
+                    "2026-07-02T00:00:35Z",
+                )
+            )
+        baseline = self.collector.analyze(
+            [self.collector.normalize_run(raw) for raw in baseline_raw],
+            requested_status="success",
+            top=5,
+            source={"description": "github historical"},
+            labels={"provider": "github"},
+        )
+        for raw_run in candidate_raw:
+            for raw_job in raw_run["jobs"]:
+                if self.collector.is_comparison_executor(raw_job["name"]):
+                    raw_job["labels"] = ["depot-ubuntu-24.04-8"]
+        candidate = self.collector.analyze(
+            [self.collector.normalize_run(raw) for raw in candidate_raw],
+            requested_status="success",
+            top=5,
+            source={"description": "depot candidate"},
+            labels={"provider": "depot"},
+        )
+        comparison = self.collector.compare_reports(baseline, candidate)
+        self.assertTrue(comparison["provider_cohort_separation"]["disjoint"])
+        self.assertEqual(comparison["recommendation"], "eligible")
+        self.assertEqual(
+            candidate["jobs"]["comparison_cohort"]["providers"],
+            ["depot"],
+        )
+
+    def test_compare_reports_holds_when_baseline_cohort_is_too_small(self):
+        baseline_raw = [self.sample_runs()[0]]
+        candidate_raw = self.sample_runs()
+        candidate_raw[0]["jobs"][1]["name"] = "test suite"
+        for raw_run in candidate_raw:
+            for raw_job in raw_run["jobs"]:
+                if self.collector.is_comparison_executor(raw_job["name"]):
+                    raw_job["labels"] = ["depot-ubuntu-24.04-8"]
+        baseline = self.collector.analyze(
+            [self.collector.normalize_run(raw) for raw in baseline_raw],
+            requested_status="success",
+            top=5,
+            source={"description": "small github baseline"},
+            labels={},
+        )
+        candidate = self.collector.analyze(
+            [self.collector.normalize_run(raw) for raw in candidate_raw],
+            requested_status="success",
+            top=5,
+            source={"description": "depot candidate"},
+            labels={},
+        )
+        comparison = self.collector.compare_reports(baseline, candidate)
+        self.assertFalse(comparison["sample_counts"]["sufficient"])
+        self.assertEqual(comparison["recommendation"], "hold")
+
+    def test_runner_dimensions_cover_depot_platforms_and_hosted_intel_macos(self):
+        depot_32 = self.collector.runner_dimensions(["depot-ubuntu-24.04-32"])
+        depot_64 = self.collector.runner_dimensions(["depot-ubuntu-24.04-64"])
+        depot_2 = self.collector.runner_dimensions(["depot-ubuntu-24.04-2"])
+        depot_macos = self.collector.runner_dimensions(["depot-macos-15"])
+        depot_windows = self.collector.runner_dimensions(["depot-windows-2022-8"])
+        hosted_intel = self.collector.runner_dimensions(["macos-15-intel"])
+        self.assertEqual(depot_32["runner_size"], "32")
+        self.assertEqual(depot_64["runner_size"], "64")
+        self.assertEqual(depot_2["runner_size"], "default")
+        self.assertEqual(
+            depot_macos,
+            {
+                "provider": "depot",
+                "architecture": "arm64",
+                "runner_size": "default",
+                "operating_system": "macos",
+                "runner_role": None,
+            },
+        )
+        self.assertEqual(depot_windows["operating_system"], "windows")
+        self.assertEqual(depot_windows["architecture"], "amd64")
+        self.assertEqual(hosted_intel["architecture"], "amd64")
 
     def test_cli_rejects_run_list_json_without_detailed_jobs(self):
         with tempfile.TemporaryDirectory() as directory:

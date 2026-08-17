@@ -1,8 +1,8 @@
 use super::{
     Constraint, DashboardPanel, DashboardState, Direction, Flex, Layout,
     PRETTY_TUI_EVENTS_COLUMN_PERCENT, PRETTY_TUI_JOIN_TOKEN_PANEL_HEIGHT,
-    PRETTY_TUI_REMAINING_COLUMN_WEIGHT, Rect, tui_join_token_copy_button_area, tui_logo_line_width,
-    tui_processes_block, tui_ready_logo_text,
+    PRETTY_TUI_REMAINING_COLUMN_WEIGHT, Rect, tui_logo_line_width, tui_processes_block,
+    tui_ready_logo_text,
 };
 
 #[derive(Clone, Copy)]
@@ -88,7 +88,7 @@ pub(in crate::output) fn tui_layout(area: Rect, state: &DashboardState) -> TuiFr
         ])
         .areas(content_area);
 
-    let join_token_copy_button = tui_join_token_copy_button_area(join_token_panel);
+    let join_token_copy_button = zero;
 
     let [events_column, processes_column, models_column] = Layout::default()
         .direction(Direction::Horizontal)

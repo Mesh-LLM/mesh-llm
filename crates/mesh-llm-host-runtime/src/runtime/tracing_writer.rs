@@ -3,10 +3,15 @@ thread_local! {
 }
 
 use anyhow::Result;
-use mesh_llm_events::{OutputEvent, emit_event, flush_output};
+use mesh_llm_events::{
+    OutputEvent,
+    audit::{AuditLevel, AuditLogFormat, FileAuditSink, FileAuditSinkConfig, set_audit_sink},
+    emit_event, flush_output,
+};
 use std::cell::Cell;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing_subscriber::fmt::MakeWriter;
 
 pub(super) struct MeshTracingStderr;
@@ -265,6 +270,29 @@ pub(super) async fn emit_shutdown(reason: Option<String>) {
     crate::system::backend::mark_runtime_shutting_down();
     let _ = emit_event(OutputEvent::Shutdown { reason });
     let _ = flush_output().await;
+}
+
+/// Initialize the audit logging sink based on configuration
+pub(super) fn init_audit_logging(
+    audit_log_path: Option<PathBuf>,
+    audit_log_format: AuditLogFormat,
+    audit_log_level: AuditLevel,
+    max_file_size: u64,
+    max_files: usize,
+) -> Result<()> {
+    if let Some(path) = audit_log_path {
+        let config = FileAuditSinkConfig {
+            path,
+            max_file_size,
+            max_files,
+            min_level: audit_log_level,
+            format: audit_log_format,
+        };
+        let sink = FileAuditSink::new(config)?;
+        set_audit_sink(Arc::new(sink));
+        tracing::info!("Audit logging initialized");
+    }
+    Ok(())
 }
 
 pub(super) fn runtime_tracing_subscriber()

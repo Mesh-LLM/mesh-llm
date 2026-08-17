@@ -1,0 +1,12 @@
+{
+  "profile": "main",
+  "event_name": "push",
+  "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "base_sha": "",
+  "changed_files": ["crates/mesh-llm/src/lib.rs"],
+  "workspace_packages": [
+    {"name": "mesh-llm", "path": "crates/mesh-llm"},
+    {"name": "mesh-llm-host-runtime", "path": "crates/mesh-llm-host-runtime"},
+    {"name": "mesh-llm-config", "path": "crates/mesh-llm-config"}
+  ]
+}
