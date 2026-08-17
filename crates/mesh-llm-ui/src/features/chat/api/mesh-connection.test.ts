@@ -637,7 +637,9 @@ describe('createMeshConnectionAdapter', () => {
   })
 
   it('measures UTF-8 byte length correctly when compacting multibyte text', async () => {
-    const multibyteContent = '🌟🚀💡'.repeat(1000) + '你好世界'.repeat(500)
+    // Keep one retained turn below the retry budget while the full history
+    // remains large enough to exercise UTF-8 byte-based compaction.
+    const multibyteContent = '🌟🚀💡'.repeat(300) + '你好世界'.repeat(200)
     const longMessages = Array.from({ length: 8 }, (_, index) => ({
       id: `message-${index}`,
       role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
