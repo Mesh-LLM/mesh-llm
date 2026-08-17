@@ -214,7 +214,9 @@ fn append_healthy_process_models(
                 models.push(process.model.clone());
             }
             RuntimeStatus::Exited | RuntimeStatus::Error => has_failure = true,
-            RuntimeStatus::ShuttingDown | RuntimeStatus::Stopped => {}
+            RuntimeStatus::ShuttingDown | RuntimeStatus::Stopped => {
+                // Graceful drain and shutdown are not failures or active work.
+            }
             RuntimeStatus::NotReady
             | RuntimeStatus::Starting
             | RuntimeStatus::Loading
@@ -338,6 +340,20 @@ mod tests {
                 &mut models,
             ),
             (false, true)
+        );
+        assert!(models.is_empty());
+
+        let mut models = Vec::new();
+        assert_eq!(
+            append_healthy_process_models(
+                &[crate::runtime_data::RuntimeProcessSnapshot {
+                    model: "draining-model".to_string(),
+                    state: "shutting down".to_string(),
+                    ..Default::default()
+                }],
+                &mut models,
+            ),
+            (false, false)
         );
         assert!(models.is_empty());
     }
