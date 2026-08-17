@@ -9,7 +9,17 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
-const DECODE_BATCH_HEADROOM_TOKENS: usize = 512;
+/// Decode headroom this server actually reserves per in-flight request.
+///
+/// A client's `max_tokens` is a *ceiling*, not a reservation: most replies are
+/// far shorter, so reserving each request's full ceiling would let a couple of
+/// clients with generous defaults exhaust the KV budget. Admission therefore
+/// reserves `min(max_tokens, DECODE_BATCH_HEADROOM_TOKENS)`.
+///
+/// Exported because host-runtime routing must use the same rule when it decides
+/// whether a target's context can fit a request. Two different rules here mean
+/// routing can refuse a request the server would have served (see issue #1350).
+pub const DECODE_BATCH_HEADROOM_TOKENS: usize = 512;
 
 #[derive(Debug)]
 pub(super) struct GenerationTokenBudget {

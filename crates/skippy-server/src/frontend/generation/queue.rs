@@ -2,7 +2,6 @@ use crate::frontend::generation::CONTEXT_BUDGET_MAX_TOKENS;
 use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::util::context_budget_completion_tokens;
-use crate::frontend::util::ensure_context_capacity;
 use crate::runtime_state::RuntimeState;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
@@ -162,8 +161,19 @@ impl GenerationTokenLimit {
     ) -> OpenAiResult<u32> {
         match self {
             Self::Explicit(max_tokens) => {
-                ensure_context_capacity(prompt_token_count, max_tokens, ctx_size)?;
-                Ok(max_tokens)
+                // Client-asserted ceiling. `max_tokens` is an upper bound on
+                // the reply, not a reservation the server must be able to
+                // honour in full: OpenAI-compatible clients routinely send a
+                // very large value to mean "no limit" (Buzz Agent Desktop
+                // defaults to 65,536). Clamp to the remaining context and let
+                // generation stop with `finish_reason: "length"`. A prompt that
+                // overflows the window on its own is still a real error.
+                //
+                // Rejecting a ceiling that wouldn't fit made routing and the
+                // backend disagree about a request the server could serve
+                // comfortably — issue #1350.
+                let remaining = context_budget_completion_tokens(prompt_token_count, ctx_size)?;
+                Ok(remaining.min(max_tokens))
             }
             Self::Default(default_max_tokens) => {
                 // Server-picked default. Always clamp to the remaining
