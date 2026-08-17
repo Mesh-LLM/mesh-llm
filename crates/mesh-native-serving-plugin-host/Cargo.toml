@@ -19,4 +19,4 @@ skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.0-rc2" }
 workspace = true
 
 [dev-dependencies]
-skippy-server = { path = "../skippy-server", version = "0.72.1", features = ["test-support"] }
+skippy-server = { path = "../skippy-server", version = "0.76.0-rc2", features = ["test-support"] }
