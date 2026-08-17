@@ -63,6 +63,22 @@ CHILD_PID="$(tr -d '[:space:]' < "$PID_FILE")"
 }
 kill -0 "$CHILD_PID"
 
+GENERATING=0
+for _ in $(seq 1 200); do
+    if grep -q '"type":"delta"' "$STDOUT_LOG" 2>/dev/null; then
+        GENERATING=1
+        break
+    fi
+    kill -0 "$CHILD_PID" 2>/dev/null || break
+    sleep 0.05
+done
+[[ "$GENERATING" == "1" ]] || {
+    echo "provider did not emit a generation event before supervisor termination" >&2
+    cat "$STDOUT_LOG" >&2 || true
+    cat "$STDERR_LOG" >&2 || true
+    exit 1
+}
+
 kill -KILL "$SUPERVISOR_PID"
 wait "$SUPERVISOR_PID" 2>/dev/null || true
 SUPERVISOR_PID=""

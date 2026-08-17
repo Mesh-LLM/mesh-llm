@@ -33,7 +33,9 @@ for layout in "${layouts[@]}"; do
     ditto "$PACKAGE_ROOT" "$destination"
     binary="$destination/bin/mesh-apple-runtime"
     codesign --verify --strict --verbose=2 "$binary"
-    "$binary" status > "$OUTPUT_DIR/$(echo "$layout" | tr '/@' '__').json"
+    name="$(echo "$layout" | tr '/@' '__')"
+    shasum -a 256 "$binary" | awk '{print $1}' > "$OUTPUT_DIR/$name.sha256"
+    "$binary" status > "$OUTPUT_DIR/$name.json"
 done
 
 python3 - "$PACKAGE_ROOT/manifest.json" "$OUTPUT_DIR" <<'PY'
@@ -58,6 +60,10 @@ for path in sorted(output_dir.glob("*.json")):
     system_model = next(model for model in status["models"] if model["modelID"] == "apple/system")
     assert system_model["availability"] == "available", system_model
     results.append(path.stem)
+
+for digest_path in sorted(output_dir.glob("*.sha256")):
+    digest = digest_path.read_text().strip()
+    assert digest == expected, (digest_path.name, digest, expected)
 
 summary = {"status": "pass", "carriers": results, "binary_sha256": actual}
 (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")

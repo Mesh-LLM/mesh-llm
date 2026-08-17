@@ -131,6 +131,20 @@ public struct AppleStructuredResult: Codable, Equatable, Sendable {
   public let confidence: Int
   public let explanation: String
   public let usage: AppleUsage
+
+  public init(
+    modelID: String,
+    label: String,
+    confidence: Int,
+    explanation: String,
+    usage: AppleUsage
+  ) {
+    self.modelID = modelID
+    self.label = label
+    self.confidence = confidence
+    self.explanation = explanation
+    self.usage = usage
+  }
 }
 
 public struct AppleToolResult: Codable, Equatable, Sendable {
@@ -138,6 +152,18 @@ public struct AppleToolResult: Codable, Equatable, Sendable {
   public let content: String
   public let invokedKeys: [String]
   public let usage: AppleUsage
+
+  public init(
+    modelID: String,
+    content: String,
+    invokedKeys: [String],
+    usage: AppleUsage
+  ) {
+    self.modelID = modelID
+    self.content = content
+    self.invokedKeys = invokedKeys
+    self.usage = usage
+  }
 }
 
 public struct AppleRuntimeEvent: Codable, Equatable, Sendable {
