@@ -9,6 +9,7 @@ use openai_frontend::OpenAiHookPolicy;
 use skippy_protocol::{
     LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };
+use skippy_runtime::MtpSource;
 use skippy_server::{
     EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions,
     NativeMtpProposalConfig, SpeculativeDecodeConfig, telemetry::Telemetry,
@@ -160,6 +161,15 @@ impl ResolvedSkippyConfig {
             topology: None,
             n_threads: self.throughput.threads,
             n_threads_batch: self.throughput.threads_batch,
+            mtp_source: if self.speculative.native_mtp_enabled {
+                if self.speculative.draft_model_path.is_some() {
+                    MtpSource::External
+                } else {
+                    MtpSource::Integrated
+                }
+            } else {
+                MtpSource::Disabled
+            },
             metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: telemetry.queue_capacity,
             telemetry_level: telemetry.level,
