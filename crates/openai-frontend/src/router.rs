@@ -48,6 +48,45 @@ use crate::{
 };
 
 const AGENT_SESSION_HEADER_ENV: &str = "MESH_AGENT_SESSION_HEADER";
+const BACKEND_TIMEOUT_SECS_ENV: &str = "MESH_OPENAI_BACKEND_TIMEOUT_SECS";
+
+/// Backend timeout override, in whole seconds. `0` disables the timeout.
+///
+/// Returning `None` means "no override configured", which leaves
+/// [`OpenAiFrontendConfig::DEFAULT_BACKEND_TIMEOUT`] in place. Returning
+/// `Some(None)` means the operator explicitly disabled the timeout.
+fn configured_backend_timeout() -> Option<Option<Duration>> {
+    let value = match std::env::var(BACKEND_TIMEOUT_SECS_ENV) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            tracing::warn!(
+                env = BACKEND_TIMEOUT_SECS_ENV,
+                "ignoring non-UTF-8 backend timeout configuration"
+            );
+            return None;
+        }
+    };
+    match parse_backend_timeout_secs(&value) {
+        Some(timeout) => Some(timeout),
+        None => {
+            tracing::warn!(
+                env = BACKEND_TIMEOUT_SECS_ENV,
+                value = %value,
+                "ignoring invalid backend timeout configuration; expected whole seconds"
+            );
+            None
+        }
+    }
+}
+
+fn parse_backend_timeout_secs(value: &str) -> Option<Option<Duration>> {
+    match value.trim().parse::<u64>() {
+        Ok(0) => Some(None),
+        Ok(secs) => Some(Some(Duration::from_secs(secs))),
+        Err(_) => None,
+    }
+}
 
 fn parse_agent_session_header(value: &str) -> Option<HeaderName> {
     HeaderName::from_bytes(value.as_bytes()).ok()
@@ -139,7 +178,14 @@ impl std::fmt::Debug for OpenAiFrontendConfig {
 
 impl OpenAiFrontendConfig {
     pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
-    pub const DEFAULT_BACKEND_TIMEOUT: Duration = Duration::from_secs(300);
+    /// Safety net for a wedged backend, not a latency budget.
+    ///
+    /// A cold prefill of a large prompt on a single local machine is measured
+    /// in minutes: a 60k-token prompt takes ~250s on an M5 Max. A tighter
+    /// budget here makes the frontend give up while the runtime is still
+    /// legitimately working. This matches the proxy's own local first-byte
+    /// safety net so neither layer aborts a healthy long prefill.
+    pub const DEFAULT_BACKEND_TIMEOUT: Duration = Duration::from_secs(600);
 
     pub fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
         self.max_request_body_bytes = max_request_body_bytes;
@@ -172,7 +218,8 @@ impl Default for OpenAiFrontendConfig {
     fn default() -> Self {
         Self {
             max_request_body_bytes: Self::DEFAULT_MAX_REQUEST_BODY_BYTES,
-            backend_timeout: Some(Self::DEFAULT_BACKEND_TIMEOUT),
+            backend_timeout: configured_backend_timeout()
+                .unwrap_or(Some(Self::DEFAULT_BACKEND_TIMEOUT)),
             agent_session_header: configured_agent_session_header(),
             lifecycle_observer: None,
         }

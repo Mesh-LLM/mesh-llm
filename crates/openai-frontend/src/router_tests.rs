@@ -25,6 +25,37 @@ fn trusted_agent_session_header_parser_accepts_valid_names() {
 fn trusted_agent_session_header_parser_rejects_invalid_names() {
     assert!(parse_agent_session_header("not a header").is_none());
 }
+
+#[test]
+fn backend_timeout_parser_accepts_whole_seconds() {
+    assert_eq!(
+        parse_backend_timeout_secs("900"),
+        Some(Some(Duration::from_secs(900)))
+    );
+    assert_eq!(
+        parse_backend_timeout_secs(" 900 "),
+        Some(Some(Duration::from_secs(900)))
+    );
+}
+
+#[test]
+fn backend_timeout_parser_treats_zero_as_disabled() {
+    assert_eq!(parse_backend_timeout_secs("0"), Some(None));
+}
+
+#[test]
+fn backend_timeout_parser_rejects_non_numeric_values() {
+    assert!(parse_backend_timeout_secs("10m").is_none());
+    assert!(parse_backend_timeout_secs("-1").is_none());
+    assert!(parse_backend_timeout_secs("").is_none());
+}
+
+#[test]
+fn default_backend_timeout_exceeds_a_cold_large_prompt_prefill() {
+    // A 60k-token cold prefill on a single Apple-silicon host measures ~250s.
+    // The default must leave headroom above that, not abort it.
+    assert!(OpenAiFrontendConfig::DEFAULT_BACKEND_TIMEOUT >= Duration::from_secs(600));
+}
 use crate::{
     FinishReason,
     backend::{
