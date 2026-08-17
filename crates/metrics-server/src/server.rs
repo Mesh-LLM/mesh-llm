@@ -31,22 +31,39 @@ pub(crate) struct AppState {
 }
 
 #[derive(Debug)]
-pub(crate) struct AppError(anyhow::Error);
+pub(crate) struct AppError {
+    status: StatusCode,
+    error: anyhow::Error,
+}
+
+impl AppError {
+    /// Build an error that responds with a specific HTTP status code and
+    /// message instead of the default `500 Internal Server Error`.
+    pub(crate) fn status(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            error: anyhow::Error::msg(message.into()),
+        }
+    }
+}
 
 impl<E> From<E> for AppError
 where
     E: Into<anyhow::Error>,
 {
     fn from(error: E) -> Self {
-        Self(error.into())
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            error: error.into(),
+        }
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": self.0.to_string() })),
+            self.status,
+            Json(json!({ "error": self.error.to_string() })),
         )
             .into_response()
     }
