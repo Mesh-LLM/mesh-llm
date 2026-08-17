@@ -705,6 +705,76 @@ fn test_build_startup_model_specs_uses_config_models_when_cli_is_empty() {
     assert!(specs[1].config_owned);
 }
 
+#[test]
+fn gguf_with_plain_model_name_binds_the_name_to_the_local_file() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let model_path = temp_dir.path().join("deepseek.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model");
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--gguf",
+        model_path.to_str().expect("model path"),
+        "--model",
+        "deepseek-v4-flash",
+    ]);
+
+    let specs =
+        build_startup_model_specs(&options, &plugin::MeshConfig::default()).expect("startup specs");
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].model_ref, model_path);
+    assert_eq!(specs[0].declared_ref.as_deref(), Some("deepseek-v4-flash"));
+}
+
+#[test]
+fn gguf_with_hugging_face_model_ref_still_serves_two_models() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let model_path = temp_dir.path().join("deepseek.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model");
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--gguf",
+        model_path.to_str().expect("model path"),
+        "--model",
+        "unsloth/Qwen3-8B-GGUF:Q4_K_M",
+    ]);
+
+    let specs =
+        build_startup_model_specs(&options, &plugin::MeshConfig::default()).expect("startup specs");
+    assert_eq!(specs.len(), 2);
+    assert_eq!(specs[0].declared_ref, None);
+    assert_eq!(
+        specs[1].model_ref,
+        PathBuf::from("unsloth/Qwen3-8B-GGUF:Q4_K_M")
+    );
+    assert_eq!(specs[1].declared_ref, None);
+}
+
+#[tokio::test]
+async fn gguf_alias_resolves_without_catalog_lookup() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let model_path = temp_dir.path().join("deepseek.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model");
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--gguf",
+        model_path.to_str().expect("model path"),
+        "--model",
+        "deepseek-v4-flash",
+    ]);
+    let specs =
+        build_startup_model_specs(&options, &plugin::MeshConfig::default()).expect("startup specs");
+
+    let plans = resolve_startup_models(&specs, false)
+        .await
+        .expect("startup models resolve");
+    assert_eq!(plans.len(), 1);
+    assert_eq!(plans[0].declared_ref, "deepseek-v4-flash");
+    assert_eq!(
+        std::fs::canonicalize(&plans[0].resolved_path).expect("canonical resolved path"),
+        std::fs::canonicalize(&model_path).expect("canonical model path")
+    );
+}
+
 #[tokio::test]
 async fn config_hardware_model_path_loads_local_file_under_logical_model_identity() {
     let temp_dir = tempfile::tempdir().expect("tempdir");

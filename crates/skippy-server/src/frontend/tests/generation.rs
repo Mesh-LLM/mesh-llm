@@ -376,10 +376,10 @@ fn model_matching_normalizes_default_revision() {
 }
 
 #[test]
-fn rejects_requests_that_exceed_context_window() {
-    ensure_context_capacity(4, 4, 8).unwrap();
+fn rejects_requests_whose_prompt_alone_exceeds_context_window() {
+    assert_eq!(context_budget_completion_tokens(4, 8).unwrap(), 4);
 
-    let error = ensure_context_capacity(5, 4, 8).unwrap_err();
+    let error = context_budget_completion_tokens(9, 8).unwrap_err();
     assert_eq!(
         error.body().error.code.as_deref(),
         Some("context_length_exceeded")
@@ -432,13 +432,19 @@ fn omitted_max_tokens_errors_only_when_prompt_already_exceeds_ctx() {
 }
 
 #[test]
-fn explicit_max_tokens_still_errors_when_too_large_for_ctx() {
-    // Client-asserted max_tokens that won't fit is still a hard error.
-    // The clamping behavior applies only to the server-picked default.
+fn explicit_max_tokens_clamps_to_remaining_context() {
+    // `max_tokens` is a ceiling, not a reservation. A client asking for more
+    // than fits gets the remaining context and stops at `length`, matching the
+    // server-picked default path. Only a prompt that overflows on its own is
+    // an error. See issue #1350.
     let limit = GenerationTokenLimit::from_request(Some(4), 999);
     assert_eq!(limit.resolve(4, 8).unwrap(), 4);
+    assert_eq!(limit.resolve(5, 8).unwrap(), 3);
 
-    let error = limit.resolve(5, 8).unwrap_err();
+    let limit = GenerationTokenLimit::from_request(Some(65_536), 999);
+    assert_eq!(limit.resolve(8_911, 65_536).unwrap(), 65_536 - 8_911);
+
+    let error = limit.resolve(65_537, 65_536).unwrap_err();
     assert_eq!(
         error.body().error.code.as_deref(),
         Some("context_length_exceeded")

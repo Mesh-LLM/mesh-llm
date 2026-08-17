@@ -20,6 +20,11 @@ on:
         description: Original event used to derive isolated cache-write policy.
         required: true
         type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       max_parallel:
         description: Platform worker budget.
         required: false
@@ -41,10 +46,54 @@ env:
   MESH_LLM_SKIP_UI: "1"
 
 jobs:
+  runner_policy:
+    name: Select platform-check runner
+    if: ${{ inputs.platform_checks_matrix != '[]' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner_macos: ${{ steps.policy.outputs.runner_macos }}
+      runner_windows: ${{ steps.policy.outputs.runner_windows }}
+      runner_by_platform: ${{ steps.platform_runners.outputs.runner_by_platform }}
+      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for platform checks
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: 'false'
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
+          force_hosted: ${{ inputs.force_hosted }}
+      - name: Map platform runners explicitly
+        id: platform_runners
+        env:
+          RUNNER_MACOS: ${{ steps.policy.outputs.runner_macos }}
+          RUNNER_WINDOWS: ${{ steps.policy.outputs.runner_windows }}
+        run: |
+          set -euo pipefail
+          printf 'runner_by_platform={"macos":"%s","windows":"%s"}\n' \
+            "$RUNNER_MACOS" "$RUNNER_WINDOWS" >> "$GITHUB_OUTPUT"
+
   platform_checks:
     name: Platform checks (${{ matrix.check.id }})
+    needs: runner_policy
     if: ${{ inputs.platform_checks_matrix != '[]' }}
-    runs-on: ${{ matrix.check.platform == 'macos' && 'macos-15' || 'windows-2022' }}
+    runs-on: ${{ fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform] }}
     timeout-minutes: 75
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
@@ -52,6 +101,12 @@ jobs:
       matrix:
         check: ${{ fromJson(inputs.platform_checks_matrix) }}
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform], 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -112,7 +167,7 @@ jobs:
         if: ${{ matrix.check.kind == 'unit' }}
         run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
       - name: Restore static Metal ABI build
-        if: ${{ matrix.check.kind == 'unit' }}
+        if: ${{ matrix.check.kind == 'unit' && needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
         id: llama_cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
@@ -128,7 +183,7 @@ jobs:
         if: ${{ matrix.check.kind == 'unit' && steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
       - name: Save static Metal ABI build
-        if: ${{ matrix.check.kind == 'unit' && steps.llama_cache.outputs.cache-hit != 'true' && (inputs.original_event_name == 'pull_request' || (github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request_target')) }}
+        if: ${{ matrix.check.kind == 'unit' && needs.runner_policy.outputs.allow_native_github_cache == 'true' && steps.llama_cache.outputs.cache-hit != 'true' && (inputs.original_event_name == 'pull_request' || (github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request_target')) }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}

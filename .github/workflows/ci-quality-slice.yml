@@ -8,6 +8,16 @@ on:
         required: false
         default: ''
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       clippy_matrix:
         description: Validated JSON array of Clippy batches.
         required: false
@@ -55,6 +65,9 @@ jobs:
       runner_4: ${{ steps.policy.outputs.runner_4 }}
       runner_8: ${{ steps.policy.outputs.runner_8 }}
       allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
+      authority_sentinel_runner: ${{ steps.sentinel_policy.outputs.runner }}
+      authority_sentinel_depot_enabled: ${{ steps.sentinel_policy.outputs.depot_enabled }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -65,9 +78,37 @@ jobs:
         uses: ./.github/actions/select-ci-runners
         with:
           event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
           ref: ${{ github.ref }}
           depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
+          force_hosted: ${{ inputs.force_hosted }}
           manual_use_depot: ${{ inputs.use_depot }}
+      - name: Select provider for the protected authority sentinel
+        id: sentinel_policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          # The diagnostic is selected only by its exact sentinel ref. The
+          # ordinary and global PR gates must not activate this exception.
+          depot_main_enabled: 'false'
+          depot_pr_enabled: 'false'
+          pr_canary_ref: ${{ vars.DEPOT_PR_SENTINEL_REF }}
+          pr_approved_ref: ''
+          pr_approved_sha: ''
+          force_hosted: ${{ inputs.force_hosted }}
+          manual_use_depot: 'false'
 
   quality_contracts:
     name: CI contracts and consistency
@@ -75,6 +116,12 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -106,6 +153,12 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 15
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -129,9 +182,6 @@ jobs:
         batch: ${{ fromJson(inputs.clippy_matrix) }}
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ github.token }}
     defaults:
       run:
         shell: bash
@@ -139,6 +189,12 @@ jobs:
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_8, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -148,7 +204,9 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target
@@ -185,6 +243,12 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 5
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -198,3 +262,239 @@ jobs:
             echo "Rust CLI surface changed without a public website docs/example update." >&2
             exit 1
           fi
+
+  # Explicit diagnostic exception: this no-checkout job attests the
+  # provider-injected cache authority itself, outside the normal build-cache
+  # gate and build graph.
+  authority_sentinel:
+    name: Depot PR authority sentinel
+    needs: runner_policy
+    if: >-
+      needs.runner_policy.outputs.authority_sentinel_depot_enabled == 'true' &&
+      inputs.original_event_name == 'pull_request' &&
+      github.event_name == 'pull_request' &&
+      github.ref == vars.DEPOT_PR_SENTINEL_REF
+    runs-on: ${{ needs.runner_policy.outputs.authority_sentinel_runner }}
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Validate protected sentinel identity
+        id: validate
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ vars.DEPOT_PR_SENTINEL_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CONFIGURED_SENTINEL_REF: ${{ vars.DEPOT_PR_SENTINEL_REF }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SENTINEL_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "DEPOT_PR_SENTINEL_ID must be exactly 32 lowercase hexadecimal characters" >&2
+            exit 1
+          fi
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            echo "github.event.pull_request.number must be a canonical positive integer" >&2
+            exit 1
+          fi
+          expected_ref="refs/pull/${PR_NUMBER}/merge"
+          if [[ "$CONFIGURED_SENTINEL_REF" != "$expected_ref" ]]; then
+            echo "DEPOT_PR_SENTINEL_REF does not match the pull-request merge ref" >&2
+            exit 1
+          fi
+          seed_key="mesh-llm-depot-authority-seed-v1-${SENTINEL_ID}"
+          poison_key="mesh-llm-depot-authority-pr-v1-${SENTINEL_ID}-pr-${PR_NUMBER}"
+          {
+            printf 'sentinel_id=%s\n' "$SENTINEL_ID"
+            printf 'pr_number=%s\n' "$PR_NUMBER"
+            printf 'seed_key=%s\n' "$seed_key"
+            printf 'poison_key=%s\n' "$poison_key"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest provider-injected cache backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep this parser identical in every no-checkout authority phase.
+          # A local composite action would require checkout here, weakening
+          # the pinned-cache/no-checkout boundary.
+          is_loopback_authority() {
+            local authority="$1"
+            [[ "$authority" =~ ^localhost(:[0-9]{1,5})?$ ]] && return 0
+            [[ "$authority" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(:[0-9]{1,5})?$ ]] && return 0
+            if [[ "$authority" != \[*\]* ]]; then
+              return 1
+            fi
+            if ! command -v python3 >/dev/null 2>&1; then
+              return 2
+            fi
+            local host="${authority#\[}"
+            host="${host%%\]*}"
+            local python_status
+            if printf '%s\n' "$host" | python3 -c '
+          import ipaddress
+          import sys
+
+          value = sys.stdin.read().strip()
+          if sys.version_info < (3, 8):
+              raise SystemExit(2)
+          try:
+              address = ipaddress.ip_address(value)
+          except ValueError:
+              raise SystemExit(2)
+          mapped = getattr(address, "ipv4_mapped", None)
+          raise SystemExit(0 if address.is_loopback or (mapped is not None and mapped.is_loopback) else 3)
+          ' >/dev/null 2>&1; then
+              return 0
+            else
+              python_status=$?
+            fi
+            if (( python_status == 3 )); then
+              return 1
+            fi
+            return 2
+          }
+
+          attest_cache_endpoint() {
+            local endpoint_name="$1"
+            local endpoint="${!endpoint_name:-}"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            local reason=""
+            if [[ -z "$endpoint" ]]; then
+              reason=missing
+            elif [[ "$endpoint" =~ [[:space:]] ]]; then
+              reason=whitespace
+            elif [[ "$endpoint_lower" != http://* ]]; then
+              reason=scheme
+            else
+              local remainder="${endpoint_lower#http://}"
+              local authority="${remainder%%[/?#]*}"
+              local suffix="${remainder#"$authority"}"
+              local port=""
+              if [[ -z "$authority" ]]; then
+                reason=authority
+              elif [[ "$authority" == *"@"* ]]; then
+                reason=userinfo
+              elif [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]; then
+                reason=github
+              elif is_loopback_authority "$authority"; then
+                reason=loopback
+              elif [[ "$?" -eq 2 ]]; then
+                reason=parser
+              elif [[ "$suffix" != /* ]]; then
+                reason=path
+              elif [[ "$authority" =~ ^\[[^]]+\]:([0-9]+)$ ]]; then
+                port="${BASH_REMATCH[1]}"
+              elif [[ "$authority" =~ ^[^:]+:([0-9]+)$ ]]; then
+                port="${BASH_REMATCH[1]}"
+              else
+                reason=port
+              fi
+              if [[ -z "$reason" ]] &&
+                 ! [[ "$port" =~ ^[0-9]{1,5}$ ]] ; then
+                reason=port
+              fi
+              if [[ -z "$reason" ]] &&
+                 ! (( 10#$port >= 1 && 10#$port <= 65535 )); then
+                reason=port
+              fi
+            fi
+            if [[ -n "$reason" ]]; then
+              printf 'cache backend attestation failed (variable=%s reason=%s)\n' \
+                "$endpoint_name" "$reason" >&2
+              return 1
+            fi
+          }
+          attest_cache_endpoint ACTIONS_CACHE_URL
+          attest_cache_endpoint ACTIONS_RESULTS_URL
+
+      - name: Restore trusted authority marker
+        id: restore_seed
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .depot-authority-sentinel
+          key: ${{ steps.validate.outputs.seed_key }}
+          fail-on-cache-miss: false
+
+      - name: Validate trusted seed marker content on hit
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ steps.validate.outputs.sentinel_id }}
+          CACHE_HIT: ${{ steps.restore_seed.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [[ "$CACHE_HIT" != "true" ]]; then
+            exit 0
+          fi
+          expected_file="$(mktemp)"
+          trap 'rm -f "$expected_file"' EXIT
+          printf 'mesh-llm-depot-authority-marker-v1\nsentinel_id=%s\n' \
+            "$SENTINEL_ID" > "$expected_file"
+          if [[ ! -f .depot-authority-sentinel/marker ]] ||
+             ! cmp -s "$expected_file" .depot-authority-sentinel/marker; then
+            echo "trusted authority marker content mismatch" >&2
+            exit 1
+          fi
+
+      - name: Replace with deterministic PR poison marker
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ steps.validate.outputs.sentinel_id }}
+          PR_NUMBER: ${{ steps.validate.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          rm -rf -- .depot-authority-sentinel
+          mkdir -p .depot-authority-sentinel
+          printf 'mesh-llm-depot-authority-pr-marker-v1\nsentinel_id=%s\npr_number=%s\n' \
+            "$SENTINEL_ID" "$PR_NUMBER" > .depot-authority-sentinel/marker
+
+      - name: Save PR poison marker
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .depot-authority-sentinel
+          key: ${{ steps.validate.outputs.poison_key }}
+
+      - name: Clear local poison marker before proof restore
+        shell: bash
+        run: rm -rf -- .depot-authority-sentinel
+
+      - name: Restore saved PR poison marker
+        id: restore_poison
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .depot-authority-sentinel
+          key: ${{ steps.validate.outputs.poison_key }}
+          fail-on-cache-miss: true
+
+      - name: Validate saved PR poison marker content
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ steps.validate.outputs.sentinel_id }}
+          PR_NUMBER: ${{ steps.validate.outputs.pr_number }}
+          CACHE_HIT: ${{ steps.restore_poison.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [[ "$CACHE_HIT" != "true" ]]; then
+            echo "saved PR poison marker restore did not report a cache hit" >&2
+            exit 1
+          fi
+          expected_file="$(mktemp)"
+          trap 'rm -f "$expected_file"' EXIT
+          printf 'mesh-llm-depot-authority-pr-marker-v1\nsentinel_id=%s\npr_number=%s\n' \
+            "$SENTINEL_ID" "$PR_NUMBER" > "$expected_file"
+          if [[ ! -f .depot-authority-sentinel/marker ]] ||
+             ! cmp -s "$expected_file" .depot-authority-sentinel/marker; then
+            echo "saved PR poison marker content mismatch" >&2
+            exit 1
+          fi
+
+      - name: Require trusted seed isolation after poison publication
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.restore_seed.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [[ "$CACHE_HIT" == "true" ]]; then
+            echo "Trusted authority marker was readable by the PR probe" >&2
+            exit 1
+          fi
+          echo "Trusted seed was not readable; pending trusted-main verify-pr-write."

@@ -2,7 +2,7 @@ use crate::frontend::admission::GenerationTokenBudgetRequest;
 use crate::frontend::generation::{
     EmbeddedStageZeroGeneration, GENERATION_ADMISSION_TIMEOUT, GeneratedText, GenerationTokenLimit,
     LocalGeneration, OpenAiBackendMode, OpenAiGenerationIds, PhaseTimer, PreparedGenerationPrompt,
-    StageOpenAiBackend, TextGenerationCollector, emulation_generation_active,
+    PreparedTextPrompt, StageOpenAiBackend, TextGenerationCollector, emulation_generation_active,
 };
 use crate::frontend::util::{generation_stop_values, openai_backend_error};
 use openai_frontend::{ChatCompletionRequest, OpenAiError, OpenAiResult};
@@ -10,11 +10,40 @@ use serde_json::json;
 use skippy_runtime::SamplingConfig;
 
 impl StageOpenAiBackend {
+    pub(in crate::frontend) fn prepare_text_prompt(
+        &self,
+        prompt: &PreparedGenerationPrompt,
+        max_tokens: GenerationTokenLimit,
+        ids: &OpenAiGenerationIds,
+    ) -> OpenAiResult<PreparedTextPrompt> {
+        let tokenize_timer = PhaseTimer::start();
+        let token_ids = self.tokenize(&prompt.text)?;
+        let mut tokenize_attrs = self.openai_attrs(ids);
+        tokenize_attrs.insert(
+            "llama_stage.prompt_chars".to_string(),
+            json!(prompt.text.len()),
+        );
+        tokenize_attrs.insert(
+            "llama_stage.prompt_token_count".to_string(),
+            json!(token_ids.len()),
+        );
+        self.emit_openai_phase("stage.openai_tokenize", tokenize_timer, tokenize_attrs);
+        if token_ids.is_empty() {
+            return Err(OpenAiError::invalid_request("prompt produced no tokens"));
+        }
+        let max_tokens = max_tokens.resolve(token_ids.len(), self.ctx_size)?;
+        Ok(PreparedTextPrompt {
+            token_ids,
+            max_tokens,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in crate::frontend) fn generate_text(
         &self,
         prompt: PreparedGenerationPrompt,
         max_tokens: GenerationTokenLimit,
+        prepared_text: Option<PreparedTextPrompt>,
         stop: Option<&openai_frontend::StopSequence>,
         sampling: SamplingConfig,
         hook_request: Option<ChatCompletionRequest>,
@@ -51,25 +80,16 @@ impl StageOpenAiBackend {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let tokenize_timer = PhaseTimer::start();
-        let prompt_token_ids = self.tokenize(&prompt.text)?;
+        let PreparedTextPrompt {
+            token_ids: prompt_token_ids,
+            max_tokens,
+        } = match prepared_text {
+            Some(prepared) => prepared,
+            None => self.prepare_text_prompt(&prompt, max_tokens, &ids)?,
+        };
         if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
             return Err(OpenAiError::backend("request cancelled"));
         }
-        let mut tokenize_attrs = self.openai_attrs(&ids);
-        tokenize_attrs.insert(
-            "llama_stage.prompt_chars".to_string(),
-            json!(prompt.text.len()),
-        );
-        tokenize_attrs.insert(
-            "llama_stage.prompt_token_count".to_string(),
-            json!(prompt_token_ids.len()),
-        );
-        self.emit_openai_phase("stage.openai_tokenize", tokenize_timer, tokenize_attrs);
-        if prompt_token_ids.is_empty() {
-            return Err(OpenAiError::invalid_request("prompt produced no tokens"));
-        }
-        let max_tokens = max_tokens.resolve(prompt_token_ids.len(), self.ctx_size)?;
         let token_admit_timer = PhaseTimer::start();
         let token_budget_reservation = self.generation_token_budget.reserve_cancellable(
             GenerationTokenBudgetRequest::new(prompt_token_ids.len(), max_tokens),

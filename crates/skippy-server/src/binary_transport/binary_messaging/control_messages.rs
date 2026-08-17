@@ -7,7 +7,7 @@ use super::session_tracker::ConnectionSessionTracker;
 use super::summary::BinaryRequestSummary;
 use crate::binary_transport::WireCondition;
 use crate::binary_transport::binary_kv::{
-    maybe_prefix_cache_control, maybe_record_binary_full_prefill,
+    maybe_prefix_cache_control, maybe_record_binary_full_prefill, take_shared_prefill_tokens,
 };
 use crate::binary_transport::direct_return::PredictionReturnSinks;
 use crate::binary_transport::restore_prefill_decode::handle_binary_restore_prefill_decode_control;
@@ -46,7 +46,6 @@ pub(super) fn handle_stop(
     pending_prefill_replies: usize,
     pending_reply_stats: &mut StageReplyStats,
     request_summary: &mut BinaryRequestSummary,
-    accumulated_prefill_tokens: &mut BTreeMap<String, Vec<i32>>,
     async_forwarder: Option<&mut AsyncForwarder>,
     session_tracker: &mut ConnectionSessionTracker,
     prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
@@ -82,14 +81,15 @@ pub(super) fn handle_stop(
     let lock_timer = Instant::now();
     let mut runtime = runtime.lock().expect("runtime lock poisoned");
     let runtime_lock_wait_ms = elapsed_ms(lock_timer);
-    let accumulated = std::mem::take(accumulated_prefill_tokens);
-    for (prefill_session_key, tokens) in accumulated {
+    let accumulated =
+        kv.and_then(|cache| take_shared_prefill_tokens(&cache.split_prefill_tokens, session_key));
+    if let Some(tokens) = accumulated {
         let record = maybe_record_binary_full_prefill(
             config,
             &mut runtime,
             kv,
             telemetry,
-            &prefill_session_key,
+            session_key,
             message,
             &tokens,
         );

@@ -76,10 +76,7 @@ async fn dump_all_small_pool_requests() {
     let mut backends: Vec<Arc<dyn moa::ModelBackend>> = Vec::new();
     let mut models = Vec::new();
     for (i, n) in names.iter().enumerate() {
-        models.push(moa::ModelEntry {
-            name: (*n).to_string(),
-            backend_index: i,
-        });
+        models.push(moa::ModelEntry::new((*n).to_string(), i));
         backends.push(Arc::new(RecordingBackend {
             name: (*n).to_string(),
             reply: format!("DRAFT-FROM-{n}: backpressure means slowing the producer."),

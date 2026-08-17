@@ -112,11 +112,11 @@ mesh-llm serve \
   --join <token>
 ```
 
-Use directly reachable, low-latency UDP paths. If a cloud provider remaps the
+Prefer directly reachable, low-latency UDP paths. If a cloud provider remaps the
 container UDP port to a different public port, confirm that the invite advertises
-the reachable public endpoint and that runtime diagnostics report a direct path
-before paying the model-load cost. A relay-only peer is deliberately excluded
-from the Inkling split plan.
+the reachable public endpoint. Iroh owns path selection and may use or upgrade
+between relay and direct paths; split admission does not second-guess that choice
+with path-kind or RTT gates.
 
 Current Inkling policy uses an F32 activation wire and Q4_0 K/V cache. F16 and
 Q8 activation wires are not interchangeable shortcuts: both failed the current

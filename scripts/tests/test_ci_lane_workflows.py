@@ -342,13 +342,43 @@ class CiLaneWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("DISPATCH_ORIGINAL_EVENT_NAME", selector)
-        self.assertIn("pull_request|pull_request_target) effective_event_name=pull_request", selector)
+        self.assertIn("pull_request|pull_request_target)", selector)
+        self.assertIn("is_dispatched_pull_request=true", selector)
         for name in ("static-abi-artifact.yml", "native-sdk-artifact.yml"):
             workflow = self.workflow(name)
             self.assertIn(
-                "github.event.inputs.original_event_name || github.event_name",
+                "original_event_name: ${{ inputs.original_event_name }}",
                 workflow,
             )
+            self.assertIn("repository: ${{ github.repository }}", workflow)
+            self.assertIn(
+                "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
+                workflow,
+            )
+            self.assertIn(
+                "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+                workflow,
+            )
+
+    def test_runner_contract_changes_force_all_pr_build_slices_hosted(self) -> None:
+        signal = (
+            "force_hosted: "
+            "${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}"
+        )
+        minimum_calls = {
+            "ci-quality-lane.yml": 1,
+            "ci-website-lane.yml": 1,
+            "ci-linux-lane.yml": 7,
+            "ci-macos-lane.yml": 6,
+            "ci-windows-lane.yml": 5,
+        }
+        for name, minimum in minimum_calls.items():
+            with self.subTest(workflow=name):
+                self.assertGreaterEqual(self.workflow(name).count(signal), minimum)
+        selector = (ROOT / ".github/actions/select-ci-runners/action.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"$INPUT_FORCE_HOSTED" == "false"', selector)
 
     def test_reporter_completes_only_correlated_checks(self) -> None:
         action = (ROOT / ".github/actions/report-ci-lane/action.yml").read_text(

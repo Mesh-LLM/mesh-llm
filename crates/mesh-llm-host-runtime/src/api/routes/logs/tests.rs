@@ -1,4 +1,8 @@
 use mesh_llm_events::logging::identifiers::RequestId;
+use openai_frontend::{
+    OpenAiBackendOperation, OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent,
+    OpenAiRequestMethod, OpenAiTerminalResult, OpenAiUsage, Usage,
+};
 
 use super::*;
 
@@ -23,6 +27,56 @@ fn runtime() -> (tempfile::TempDir, LoggingRuntimeState) {
         ..Default::default()
     };
     (temp, LoggingRuntimeState::initialize(&foundation, &config))
+}
+
+#[tokio::test]
+async fn disk_prefix_cached_tokens_reach_durable_usage_dto() {
+    let (_temp, state) = runtime();
+    let request_id = RequestId::new();
+    let context = OpenAiLifecycleContext::new(
+        request_id,
+        OpenAiRequestMethod::Post,
+        OpenAiFrontendRoute::ChatCompletions,
+    );
+    let operation = OpenAiBackendOperation::ChatCompletionStream;
+    let observer = state
+        .openai_lifecycle_observer()
+        .expect("OpenAI lifecycle observer");
+
+    observer.observe(&OpenAiLifecycleEvent::Admitted {
+        context: context.clone(),
+    });
+    // A disk-prefix restoration is surfaced by the backend through the
+    // OpenAI usage detail; exercise that production conversion before logging.
+    let disk_prefix_usage = Usage::new(21, 8).with_cached_tokens(13);
+    observer.observe(&OpenAiLifecycleEvent::ResponseCompleted {
+        context: context.clone(),
+        operation,
+        usage: OpenAiUsage::from(&disk_prefix_usage),
+    });
+    observer.observe(&OpenAiLifecycleEvent::StreamTerminal {
+        context,
+        result: OpenAiTerminalResult::Completed { status_code: 200 },
+    });
+    assert!(state.pump_persistence_for_test().await > 0);
+
+    let request_key = request_id.as_uuid().to_string();
+    let events = request_events(
+        &state,
+        "/api/logs/requests/id/events?limit=20",
+        &request_key,
+    )
+    .await
+    .expect("durable request events");
+    let wire = serde_json::to_value(events).expect("event DTO JSON");
+    let usage = wire["items"]
+        .as_array()
+        .expect("event items")
+        .iter()
+        .find(|event| event["kind"] == "usage_recorded")
+        .expect("durable usage record");
+
+    assert_eq!(usage["cachedPromptTokens"], 13);
 }
 
 #[tokio::test]

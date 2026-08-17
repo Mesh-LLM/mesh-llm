@@ -325,7 +325,12 @@ impl StageOpenAiBackend {
                             "skippy.kv.decision".to_string(),
                             json!("stage0_record_error"),
                         );
-                        attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
+                        attrs.insert(
+                            "skippy.kv.error_class".to_string(),
+                            json!(crate::kv_integration::telemetry_error_class_from_message(
+                                &error.to_string()
+                            )),
+                        );
                         self.telemetry
                             .emit("stage.openai_kv_record_decision", attrs);
                     }

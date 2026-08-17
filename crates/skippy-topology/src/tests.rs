@@ -1622,7 +1622,8 @@ fn reviewed_supported_families_smoke_plan_with_expected_policy_signals() {
 
 #[test]
 fn qwen35_series_inference_covers_qwen36_release_names() {
-    // Qwen3.6 loads as llama.cpp `qwen35`/`qwen35moe`; there is no `qwen36` arch.
+    // Qwen3.6 and Qwen3.8 load as llama.cpp `qwen35`/`qwen35moe`; there is no
+    // `qwen36` or `qwen38` arch.
     // Every quant and uploader must resolve to the recurrent series, not qwen3moe.
     for identity in [
         "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
@@ -1630,8 +1631,12 @@ fn qwen35_series_inference_covers_qwen36_release_names() {
         "bartowski/Qwen3.6-35B-A3B-GGUF:Q4_K_M",
         "Qwen/Qwen3.6-35B-A3B-Instruct-GGUF:Q5_K_M",
         "unsloth/Qwen3.5-35B-A3B-GGUF:Q4_K_M",
+        "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-Q1_0",
+        "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-IQ2_XXS",
+        "meshllm/Qwen3.8-2.4T-A95B-UD-Q1_0-layers",
         "qwen35moe",
         "qwen36moe",
+        "qwen38moe",
     ] {
         let family = infer_family_capability(identity, 40, 2048)
             .unwrap_or_else(|| panic!("expected qwen35moe capability for {identity}"));
@@ -1651,8 +1656,10 @@ fn qwen35_series_inference_covers_qwen36_release_names() {
     for identity in [
         "unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL",
         "unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
+        "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL",
         "qwen35",
         "qwen36",
+        "qwen38",
     ] {
         let family = infer_family_capability(identity, 32, 2560)
             .unwrap_or_else(|| panic!("expected qwen35 capability for {identity}"));
@@ -1666,12 +1673,43 @@ fn qwen35_series_inference_covers_qwen36_release_names() {
 }
 
 #[test]
+fn unknown_qwen3_point_releases_resolve_to_no_family() {
+    // A Qwen3 point release we have no evidence for must not be guessed into
+    // the non-recurrent `qwen3moe`/`qwen3_dense` families. Qwen3.5, 3.6 and
+    // 3.8 are all hybrid, so a wrong guess advertises a non-recurrent policy
+    // for a probably-recurrent model. No capability is the safe answer: it
+    // surfaces the gap at onboarding instead of at runtime.
+    for identity in [
+        "Qwen/Qwen3.9-40B-A3B-GGUF:Q4_K_M",
+        "unsloth/Qwen3.7-27B-GGUF:Q4_K_M",
+        "qwen39",
+        "qwen3.7",
+        // A dotted release whose version is not a single digit must not be
+        // narrowed to its first digit: `Qwen3.50` is not `Qwen3.5`.
+        "Qwen/Qwen3.50-40B-A3B-GGUF:Q4_K_M",
+        "Qwen/Qwen3.58-40B-GGUF:Q4_K_M",
+        "qwen3.50",
+    ] {
+        assert!(
+            infer_family_capability(identity, 40, 2048).is_none(),
+            "{identity} must not resolve to a guessed family"
+        );
+    }
+}
+
+#[test]
 fn qwen3_parameter_sizes_are_not_mistaken_for_qwen35_series() {
     // `Qwen3-5B` compacts to `qwen35b`: the digit is a parameter count, not a
     // series number, so these must stay on the non-recurrent Qwen3 families.
     for (identity, expected) in [
         ("Qwen/Qwen3-5B-GGUF:Q4_K_M", "qwen3_dense"),
         ("Qwen/Qwen3-6B-GGUF:Q4_K_M", "qwen3_dense"),
+        ("Qwen/Qwen3-8B-GGUF:Q4_K_M", "qwen3_dense"),
+        // Fractional sizes compact to `qwen30.6b`: the digit after the dot is
+        // a size, not a point release.
+        ("Qwen/Qwen3-0.6B-GGUF:Q8_0", "qwen3_dense"),
+        // Multi-digit runs are parameter counts, not point releases.
+        ("Qwen/Qwen3-235B-A22B-GGUF:Q4_K_M", "qwen3moe"),
         ("Qwen/Qwen3-0.6B:Q8_0", "qwen3_dense"),
         ("Qwen/Qwen3-35B-A3B-GGUF:Q4_K_M", "qwen3moe"),
         ("Qwen/Qwen3-30B-A3B-GGUF:Q4_K_M", "qwen3moe"),

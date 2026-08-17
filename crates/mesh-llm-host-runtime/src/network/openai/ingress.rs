@@ -3,6 +3,7 @@ use crate::logging::{OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
 use crate::network::affinity;
 use crate::network::openai::auto_route;
+use crate::network::openai::automatic;
 use crate::network::openai::transport as proxy;
 use crate::network::router;
 use mesh_llm_events::audit::{audit_events, emit_audit};
@@ -182,7 +183,14 @@ async fn resolve_auto_routed_model(
     required_tokens: Option<u32>,
     affinity: &affinity::AffinityRouter,
 ) -> AutoRouteResolution {
-    if request.model_name.is_some() && request.model_name.as_deref() != Some("auto") {
+    // An explicitly named model routes to itself. The automatic directive (in
+    // either spelling) resolves here, so `mesh` reaches the same
+    // media-capability filter and readiness/affinity selection as `auto` —
+    // without it, a `mesh` request with an image skipped the filter entirely
+    // and had its image silently dropped downstream.
+    if let Some(model) = request.model_name.as_deref()
+        && !automatic::is_directive(model)
+    {
         return AutoRouteResolution::Continue {
             effective_model: request.model_name.clone(),
             classification: None,
@@ -196,6 +204,32 @@ async fn resolve_auto_routed_model(
             classification: None,
         };
     };
+
+    automatic::warn_if_deprecated_alias(request.model_name.as_deref());
+
+    let mode = automatic::serving_mode(automatic::AutomaticRequest {
+        model: request.model_name.as_deref(),
+        // The forwarded path: `/v1/responses` has already been normalised onto
+        // chat completions by this point, so it stays committee-eligible.
+        path: &request.path,
+        body: body_json,
+    });
+    match mode {
+        // Committee mode keeps the directive as the effective model so the MoA
+        // gateway picks the request up.
+        automatic::ServingMode::Committee => {
+            return AutoRouteResolution::Continue {
+                effective_model: Some(automatic::DIRECTIVE.to_string()),
+                classification: None,
+            };
+        }
+        // Single-model mode falls through to the capability-, readiness- and
+        // affinity-aware selection below.
+        automatic::ServingMode::SingleModel(reason) => tracing::debug!(
+            reason = reason.as_str(),
+            "automatic routing: serving from a single model"
+        ),
+    }
 
     let classification = router::classify(body_json);
     let media = router::media_requirements(body_json);
@@ -315,15 +349,40 @@ async fn auto_route_model_has_ready_ingress_target(
     auto_route::model_is_locally_served(node, model).await
 }
 
+/// Commit an automatic routing decision to the request that will be forwarded.
+///
+/// The backend reads `model` out of `request.raw` and rejects anything that is
+/// not its own advertised identity (`ensure_requested_model`,
+/// `skippy-server/src/frontend/generation/parsing.rs:21-32`), so a selected
+/// model that is not written back 404s. This gate previously matched only
+/// `None` and `auto`, which left a single-model `mesh` request forwarding
+/// `"model":"mesh"` while routing to a concrete target.
+///
+/// The tokenize guard is load-bearing, not a precaution. Tokenize forces
+/// `model_name` to `expected_identity.model_id` (`request_parse.rs:319-330`),
+/// and that string could itself be `mesh` or `auto` — which the widened
+/// predicate below would match and then rewrite, diverging the wire identity
+/// from the authoritative expected identity. `transport.rs` carries the same
+/// guard for the same reason.
 fn maybe_enable_auto_route_hooks(
     request: &mut proxy::BufferedHttpRequest,
     effective_model: Option<&str>,
 ) {
-    if request.model_name.is_none() || request.model_name.as_deref() == Some("auto") {
-        proxy::inject_mesh_hooks_flag(&mut request.raw, true);
-        if let Some(model) = effective_model {
-            proxy::rewrite_model_field(request, model);
-        }
+    if request.is_tokenize_request() {
+        return;
+    }
+    let is_automatic = request
+        .model_name
+        .as_deref()
+        .is_none_or(automatic::is_directive);
+    if !is_automatic {
+        return;
+    }
+    proxy::inject_mesh_hooks_flag(&mut request.raw, true);
+    // The directive itself is not a model. Committee mode keeps it in the body
+    // for the MoA gateway; only a resolved concrete model gets written back.
+    if let Some(model) = effective_model.filter(|name| !automatic::is_directive(name)) {
+        proxy::rewrite_model_field(request, model);
     }
 }
 
@@ -745,22 +804,28 @@ async fn maybe_handle_control_request(
     Err(tcp_stream)
 }
 
-async fn try_pipeline_route(
-    tcp_stream: &mut tokio::net::TcpStream,
-    request: &mut proxy::BufferedHttpRequest,
-    ctx: &IngressRouteContext<'_>,
+fn pipeline_route_model<'a>(
+    request: &proxy::BufferedHttpRequest,
     decision: &AutoRouteDecision,
-) -> Option<proxy::RouteDispatchOutcome> {
+    routing_model: Option<&'a str>,
+) -> Option<&'a str> {
     let use_pipeline = decision
         .classification
         .as_ref()
         .map(pipeline::should_pipeline)
         .unwrap_or(false)
         && request.response_adapter == proxy::ResponseAdapter::None;
-    if !use_pipeline {
-        return None;
-    }
-    let strong_name = decision.effective_model.as_deref()?;
+    use_pipeline.then_some(routing_model).flatten()
+}
+
+async fn try_pipeline_route(
+    tcp_stream: &mut tokio::net::TcpStream,
+    request: &mut proxy::BufferedHttpRequest,
+    ctx: &IngressRouteContext<'_>,
+    decision: &AutoRouteDecision,
+    routing_model: Option<&str>,
+) -> Option<proxy::RouteDispatchOutcome> {
+    let strong_name = pipeline_route_model(request, decision, routing_model)?;
     try_pipeline_proxy(ctx.node, tcp_stream, request, ctx.targets, strong_name).await
 }
 
@@ -945,8 +1010,14 @@ async fn handle_buffered_api_request(
     };
 
     let mut tcp_stream = tcp_stream;
-    if let Some(outcome) =
-        try_pipeline_route(&mut tcp_stream, &mut request, &ctx.route, &decision).await
+    if let Some(outcome) = try_pipeline_route(
+        &mut tcp_stream,
+        &mut request,
+        &ctx.route,
+        &decision,
+        routing_model.as_deref(),
+    )
+    .await
     {
         proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
         lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
@@ -1132,6 +1203,10 @@ pub(crate) fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
 mod durable_artifacts;
 
 #[cfg(test)]
+#[path = "ingress_tests/automatic_routing.rs"]
+mod automatic_routing;
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
@@ -1314,14 +1389,11 @@ mod tests {
         assert_eq!(profile, "profile");
     }
 
-    /// Regression: single-model `model=mesh` must degrade to the real model.
+    /// Regression: the MoA intercept must surface a single-model degradation.
     ///
-    /// When MoA cannot form a committee (one model in the mesh), the gateway
-    /// rewrites the request to the real model and hands the stream back. The
-    /// intercept must surface that as `Degraded { model }` so routing uses the
-    /// rewritten model — reusing the stale `decision.effective_model` (still
-    /// "mesh") 404s every single-node `model=mesh` request. Broken by the
-    /// ingress rewrite in #1175, which collapsed `Degraded` into `NotMoa`.
+    /// This helper-level test verifies that the gateway rewrites the request
+    /// and returns the resolved model to its caller. The separate pipeline
+    /// regression below verifies that the caller actually consumes that model.
     #[tokio::test]
     async fn moa_single_model_degrade_rewrites_routing_model() {
         let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
@@ -1336,7 +1408,8 @@ mod tests {
         );
         let affinity = affinity::AffinityRouter::new();
 
-        // Real connected TcpStream pair; the degrade path hands it back unused.
+        // The helper returns the connected stream; this test only inspects the
+        // degradation result and intentionally does not dispatch it.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
@@ -1419,6 +1492,45 @@ mod tests {
                 panic!("expected degrade passthrough, got handled outcome: {outcome:?}");
             }
         }
+    }
+
+    #[test]
+    fn moa_degraded_model_is_consumed_by_pipeline_dispatch() {
+        use crate::network::router::{Category, Classification, Complexity};
+
+        let request = proxy::BufferedHttpRequest {
+            raw: Vec::new(),
+            method: "POST".to_owned(),
+            path: "/v1/chat/completions".to_owned(),
+            client_path: "/v1/chat/completions".to_owned(),
+            request_id: RequestId::default(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: 0,
+            completion_tokens: None,
+            stream: None,
+            model_name: Some("local/only-model:Q4_K_M".to_owned()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: proxy::ResponseAdapter::None,
+            correlation_id: None,
+        };
+        let decision = AutoRouteDecision {
+            effective_model: Some("mesh".to_owned()),
+            classification: Some(Classification {
+                category: Category::Code,
+                complexity: Complexity::Deep,
+                needs_tools: true,
+                has_media_inputs: false,
+            }),
+            required_tokens: None,
+        };
+
+        assert_eq!(
+            pipeline_route_model(&request, &decision, request.model_name.as_deref(),),
+            Some("local/only-model:Q4_K_M"),
+            "pipeline dispatch must consume the post-degradation model, not stale 'mesh'"
+        );
     }
 
     // --- Routing behavior tests for model-independent daemon support ---

@@ -72,6 +72,8 @@ jobs:
     uses: ./.github/workflows/ci-ui-artifact-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       artifact_name: ci-ui-dist-macos-${{ github.run_id }}
       retention_days: 1
 
@@ -82,6 +84,8 @@ jobs:
     uses: ./.github/workflows/ci-macos-host-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       hosts_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}
       ui_artifact_name: ci-ui-dist-macos-${{ github.run_id }}
       profile: release
@@ -94,6 +98,8 @@ jobs:
     uses: ./.github/workflows/ci-macos-runtime-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
@@ -105,6 +111,8 @@ jobs:
     uses: ./.github/workflows/ci-macos-product-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
@@ -115,9 +123,10 @@ jobs:
     uses: ./.github/workflows/ci-platform-checks-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       platform_checks_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.platform_checks) }}
       profile: ${{ fromJson(inputs.lane_plan_json).profile }}
-      original_event_name: ${{ inputs.original_event_name }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
@@ -127,6 +136,8 @@ jobs:
     uses: ./.github/workflows/swift-sdk-artifact.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       mode: ${{ (fromJson(inputs.lane_plan_json).profile == 'main' || fromJson(inputs.lane_plan_json).profile == 'manual-full') && 'full' || 'host-only' }}
       artifact_name: ci-sdk-swift
       retention_days: 1

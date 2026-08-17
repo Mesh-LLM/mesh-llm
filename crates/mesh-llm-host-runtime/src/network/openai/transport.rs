@@ -456,8 +456,16 @@ async fn build_mesh_request_plan(
     rewrite_public_model_alias(request, &served, &descriptors);
 
     let tokenize_request = request.is_tokenize_request();
+    // The automatic directive (either spelling) and a model-less request both
+    // resolve through the auto selector, so they get the media-capability
+    // filter, readiness, affinity and context-budget fit. A `mesh` request
+    // reaches here only in single-model mode — the MoA gateway has already
+    // taken any request it is serving as a committee.
     let is_auto_request = !tokenize_request
-        && (request.model_name.is_none() || request.model_name.as_deref() == Some("auto"));
+        && request
+            .model_name
+            .as_deref()
+            .is_none_or(crate::network::openai::automatic::is_directive);
     let auto_session_key = auto_session_key_for_request(request, is_auto_request);
     let required_tokens = request_context_budget(request);
     let effective_model = match resolve_auto_model_request(AutoModelRequestArgs {

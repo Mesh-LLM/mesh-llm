@@ -133,6 +133,11 @@ pub(in crate::frontend) struct GenerationMetrics {
     pub(in crate::frontend) eog_check_ms: f64,
 }
 
+pub(in crate::frontend) struct PreparedTextPrompt {
+    pub(in crate::frontend) token_ids: Vec<i32>,
+    pub(in crate::frontend) max_tokens: u32,
+}
+
 pub(in crate::frontend) struct LocalGeneration<'a> {
     pub(in crate::frontend) prompt_token_ids: &'a [i32],
     pub(in crate::frontend) max_tokens: u32,

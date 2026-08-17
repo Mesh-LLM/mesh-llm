@@ -55,10 +55,12 @@ pub(in crate::binary_transport) struct BinaryRestoredPrefix {
     resident_seq_id: Option<i32>,
     resident_borrowed: Option<bool>,
     exact: bool,
+    /// Which tier served the payload, for hit attribution.
+    source: &'static str,
 }
 
 impl BinaryRestoredPrefix {
-    fn exact(page_id: String, token_count: usize, entries: usize) -> Self {
+    fn exact(page_id: String, token_count: usize, entries: usize, source: &'static str) -> Self {
         Self {
             page_id,
             token_count,
@@ -66,6 +68,25 @@ impl BinaryRestoredPrefix {
             resident_seq_id: None,
             resident_borrowed: None,
             exact: true,
+            source,
+        }
+    }
+
+    /// A prefix imported from the disk tier.
+    ///
+    /// Deliberately not `resident`: a disk restore imports KV directly into
+    /// the live session and owns no cache sequence, so there is no `seq_id` to
+    /// release and nothing is borrowed. Reporting a synthetic sequence here
+    /// would invite a caller to try to drop it.
+    fn from_disk(page_id: String, token_count: usize, entries: usize) -> Self {
+        Self {
+            page_id,
+            token_count,
+            entries,
+            resident_seq_id: None,
+            resident_borrowed: None,
+            exact: false,
+            source: "disk",
         }
     }
 
@@ -83,10 +104,15 @@ impl BinaryRestoredPrefix {
             resident_seq_id: Some(seq_id),
             resident_borrowed: Some(borrowed),
             exact: false,
+            source: "ram",
         }
     }
 
     fn insert_hit_attrs(&self, attrs: &mut BTreeMap<String, Value>) {
+        attrs.insert(
+            "skippy.exact_cache.hit_source".to_string(),
+            json!(self.source),
+        );
         if self.exact {
             attrs.insert(
                 "skippy.exact_cache.hit_page_id".to_string(),
@@ -279,7 +305,10 @@ pub(in crate::binary_transport) fn maybe_prefix_cache_control(
                         _ => "restore_error",
                     };
                     attrs.insert("skippy.kv.decision".to_string(), json!(decision));
-                    attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
+                    attrs.insert(
+                        "skippy.kv.error_class".to_string(),
+                        json!(crate::kv_integration::telemetry_error_class(&error)),
+                    );
                 }
             }
         }
@@ -305,20 +334,45 @@ fn restore_binary_prefix(
             restored.page_id,
             restored.token_count,
             restored.entries,
+            restored.source.as_str(),
         ))),
-        None => kv
-            .restore_resident_prefix(runtime, session_id, identities, token_ids)
-            .map(|restored| {
-                restored.map(|restored| {
-                    BinaryRestoredPrefix::resident(
-                        restored.page_id,
-                        restored.token_count,
-                        restored.seq_id,
-                        restored.entries,
-                        restored.borrowed,
-                    )
-                })
-            }),
+        None => {
+            if let Some(restored) =
+                kv.restore_resident_prefix(runtime, session_id, identities, token_ids)?
+            {
+                return Ok(Some(BinaryRestoredPrefix::resident(
+                    restored.page_id,
+                    restored.token_count,
+                    restored.seq_id,
+                    restored.entries,
+                    restored.borrowed,
+                )));
+            }
+            // Third tier: a prefix this stage archived in an earlier process.
+            //
+            // Placed here rather than in the callers so both lookup branches
+            // (the activation-paired one used when this stage has a
+            // downstream, and the plain one) get it from a single site, and so
+            // a disk hit is indistinguishable from a resident hit to
+            // everything above. That matters for split serving: the
+            // cross-stage agreement protocol in `frontend/prefix_cache.rs`
+            // vetoes the whole attempt unless *every* stage reports a hit, and
+            // it keys on hit/miss counts rather than on how the hit was
+            // obtained. Returning a normal resident hit here means a stage can
+            // satisfy its part of a negotiated restore from disk without the
+            // protocol needing to know.
+            let restored = kv.restore_dense_prefix_from_disk(runtime, session_id, identities)?;
+            Ok(restored.map(|restored| {
+                BinaryRestoredPrefix::from_disk(
+                    restored.page_id,
+                    // Clamp exactly as the resident path does. Reporting more
+                    // tokens than were asked for would make stage 0 skip
+                    // tokens that downstream stages never received.
+                    (restored.token_count as usize).min(token_ids.len()),
+                    1,
+                )
+            }))
+        }
     }
 }
 pub(in crate::binary_transport) fn emit_binary_proactive_eviction(
@@ -481,7 +535,10 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
                     "skippy.kv.decision".to_string(),
                     json!("activation_hit_kv_error"),
                 );
-                attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
+                attrs.insert(
+                    "skippy.kv.error_class".to_string(),
+                    json!(crate::kv_integration::telemetry_error_class(&error)),
+                );
                 telemetry.emit("stage.binary_kv_lookup_decision", attrs);
                 return result;
             }
@@ -523,7 +580,10 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
                 json!(elapsed_ms(started)),
             );
             attrs.insert("skippy.kv.decision".to_string(), json!("resident_error"));
-            attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
+            attrs.insert(
+                "skippy.kv.error_class".to_string(),
+                json!(crate::kv_integration::telemetry_error_class(&error)),
+            );
             telemetry.emit("stage.binary_kv_lookup_decision", attrs);
             return result;
         }
@@ -536,6 +596,16 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
     attrs.insert("skippy.kv.decision".to_string(), json!("resident_miss"));
     telemetry.emit("stage.binary_kv_lookup_decision", attrs);
     result
+}
+
+/// Whether a record candidate is already covered by this request's restore.
+///
+/// `min_record_tokens` is the restored prefix length. Candidates at or below
+/// it are resident already, so recording them again is wasted work — but they
+/// are still the right thing to *archive*, which is why this is a named
+/// predicate rather than an inline `continue` guard.
+fn candidate_already_resident(token_count: u64, min_record_tokens: u64) -> bool {
+    token_count <= min_record_tokens
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -583,16 +653,31 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
         telemetry.emit("stage.binary_kv_record_decision", attrs);
         return result;
     }
+    let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
     {
         let mut runtime = runtime.lock().expect("runtime lock poisoned");
         for identity in identities {
             let token_count = identity.identity.token_count;
-            if token_count <= min_record_tokens {
-                continue;
-            }
             let token_count_usize = usize::try_from(token_count)
                 .unwrap_or(usize::MAX)
                 .min(token_ids.len());
+            // Offer every candidate to the archive before the resident cache
+            // gets a say. The two tiers have different cost models and must
+            // not share a veto: a candidate the resident cache declines --
+            // because it is already resident from a restore, below the
+            // resident floor, already present, or over the resident budget --
+            // is still a perfectly good page to persist, and the session holds
+            // its tokens right now. Gating archival on resident success is
+            // what pinned stage-0 of a split to a single 768-token page while
+            // stage-1 archived the full ladder.
+            crate::kv_integration::offer_archive_candidate(
+                &mut archive_candidate,
+                &identity,
+                token_ids.len(),
+            );
+            if candidate_already_resident(token_count, min_record_tokens) {
+                continue;
+            }
             if token_count_usize == token_ids.len() {
                 match kv.record_exact_state(&mut runtime, session_id, &identity) {
                     Ok(Some(record)) => {
@@ -635,8 +720,8 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
                     Ok(None) => {}
                     Err(error) => {
                         attrs.insert(
-                            "skippy.exact_cache.record_error".to_string(),
-                            json!(error.to_string()),
+                            "skippy.exact_cache.record_error_class".to_string(),
+                            json!(crate::kv_integration::telemetry_error_class(&error)),
                         );
                     }
                 }
@@ -661,8 +746,8 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
                 Ok(None) => {}
                 Err(error) => {
                     attrs.insert(
-                        "skippy.kv.record_error".to_string(),
-                        json!(error.to_string()),
+                        "skippy.kv.record_error_class".to_string(),
+                        json!(crate::kv_integration::telemetry_error_class(&error)),
                     );
                     break;
                 }
@@ -689,6 +774,27 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
             message,
             &records,
         );
+    }
+    // At most one archive per request: each one is a full KV export plus a
+    // synced write, and this runs under the runtime lock, which serializes
+    // every other lane on this stage. This is deliberately outside the
+    // downstream branch: the last stage of a split has no downstream, and
+    // gating archival on one meant the tail of every chain never persisted.
+    if let Some(identity) = archive_candidate.take() {
+        let mut runtime = runtime.lock().expect("runtime lock poisoned");
+        match kv.archive_dense_prefix(&mut runtime, session_id, &identity) {
+            Ok(outcome) => outcome.insert_attrs(&identity, &mut attrs),
+            Err(error) => {
+                attrs.insert(
+                    "skippy.kv.archive_status".to_string(),
+                    json!("failed_error"),
+                );
+                attrs.insert(
+                    "skippy.kv.archive_error_class".to_string(),
+                    json!(crate::kv_integration::telemetry_error_class(&error)),
+                );
+            }
+        }
     }
     attrs.insert(
         "skippy.kv.record_ms".to_string(),
@@ -730,7 +836,29 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
     result
 }
 
-pub(in crate::binary_transport) fn accumulate_prefill_tokens(
+pub(in crate::binary_transport) fn accumulate_shared_prefill_tokens(
+    accumulated: &Mutex<BTreeMap<String, Vec<i32>>>,
+    session_id: &str,
+    token_start: usize,
+    token_ids: &[i32],
+) {
+    let mut accumulated = accumulated
+        .lock()
+        .expect("split prefill token lock poisoned");
+    accumulate_prefill_tokens(&mut accumulated, session_id, token_start, token_ids);
+}
+
+pub(in crate::binary_transport) fn take_shared_prefill_tokens(
+    accumulated: &Mutex<BTreeMap<String, Vec<i32>>>,
+    session_id: &str,
+) -> Option<Vec<i32>> {
+    accumulated
+        .lock()
+        .expect("split prefill token lock poisoned")
+        .remove(session_id)
+}
+
+fn accumulate_prefill_tokens(
     accumulated: &mut BTreeMap<String, Vec<i32>>,
     session_id: &str,
     token_start: usize,
@@ -776,10 +904,18 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
         json!("full_prefill_record"),
     );
     let started = Instant::now();
+    let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
     for identity in identities {
         let token_count_usize = usize::try_from(identity.identity.token_count)
             .unwrap_or(usize::MAX)
             .min(token_ids.len());
+        // See the chunked recorder: archival admission is independent of
+        // whether the resident cache accepts this candidate.
+        crate::kv_integration::offer_archive_candidate(
+            &mut archive_candidate,
+            &identity,
+            token_ids.len(),
+        );
         if token_count_usize == token_ids.len() {
             match kv.record_exact_state(runtime, session_id, &identity) {
                 Ok(Some(record)) => {
@@ -818,8 +954,8 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
                 Ok(None) => {}
                 Err(error) => {
                     attrs.insert(
-                        "skippy.exact_cache.record_error".to_string(),
-                        json!(error.to_string()),
+                        "skippy.exact_cache.record_error_class".to_string(),
+                        json!(crate::kv_integration::telemetry_error_class(&error)),
                     );
                 }
             }
@@ -851,10 +987,27 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
             Ok(None) => {}
             Err(error) => {
                 attrs.insert(
-                    "skippy.kv.record_error".to_string(),
-                    json!(error.to_string()),
+                    "skippy.kv.record_error_class".to_string(),
+                    json!(crate::kv_integration::telemetry_error_class(&error)),
                 );
                 break;
+            }
+        }
+    }
+    // One archive per request; see the chunked recorder. The caller already
+    // holds the runtime lock on this path.
+    if let Some(identity) = archive_candidate.take() {
+        match kv.archive_dense_prefix(runtime, session_id, &identity) {
+            Ok(outcome) => outcome.insert_attrs(&identity, &mut attrs),
+            Err(error) => {
+                attrs.insert(
+                    "skippy.kv.archive_status".to_string(),
+                    json!("failed_error"),
+                );
+                attrs.insert(
+                    "skippy.kv.archive_error_class".to_string(),
+                    json!(crate::kv_integration::telemetry_error_class(&error)),
+                );
             }
         }
     }
@@ -904,7 +1057,7 @@ pub(in crate::binary_transport) fn add_binary_record_stats(
 mod tests {
     use super::binary_full_prefill_record_identities;
     use crate::binary_transport::stage_execution::prefix_cache_test_config;
-    use crate::kv_integration::KvStageIntegration;
+    use crate::kv_integration::{ArchiveCandidate, KvStageIntegration, offer_archive_candidate};
     use skippy_protocol::binary::{
         StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
     };
@@ -976,5 +1129,149 @@ mod tests {
 
         assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
         assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+    }
+
+    #[test]
+    fn chunked_4905_token_prefill_archives_chain_compatible_4864_candidate() {
+        let config = prefix_cache_test_config();
+        let kv = KvStageIntegration::from_config(&config)
+            .unwrap()
+            .expect("resident prefix cache enabled");
+        let message = prefill_message();
+        let logical_prompt = (0..4905).collect::<Vec<i32>>();
+        let identities = binary_full_prefill_record_identities(
+            &kv,
+            &config,
+            "downstream-session",
+            &message,
+            &logical_prompt,
+        );
+        let mut archive = ArchiveCandidate::default();
+        for identity in &identities {
+            offer_archive_candidate(&mut archive, identity, logical_prompt.len());
+        }
+
+        let archived = archive.take().expect("archive candidate");
+        assert_eq!(archived.identity.token_count, 4864);
+        assert_eq!(
+            archived.identity.prefix_hash,
+            identities[1].identity.prefix_hash
+        );
+    }
+}
+
+#[cfg(test)]
+mod record_gate_tests {
+    use std::{collections::BTreeMap, sync::Mutex};
+
+    use super::{
+        accumulate_shared_prefill_tokens, candidate_already_resident, take_shared_prefill_tokens,
+    };
+    use crate::kv_integration::{ArchiveCandidate, PrefillKvIdentity};
+
+    #[test]
+    fn concurrent_lanes_preserve_each_sessions_accumulation() {
+        let accumulated = Mutex::new(BTreeMap::new());
+
+        accumulate_shared_prefill_tokens(&accumulated, "lane-a", 0, &[1, 2]);
+        accumulate_shared_prefill_tokens(&accumulated, "lane-b", 0, &[7, 8]);
+        accumulate_shared_prefill_tokens(&accumulated, "lane-a", 2, &[3, 4]);
+
+        let accumulated = accumulated.lock().expect("test lock poisoned");
+        assert_eq!(accumulated.get("lane-a"), Some(&vec![1, 2, 3, 4]));
+        assert_eq!(accumulated.get("lane-b"), Some(&vec![7, 8]));
+    }
+
+    #[test]
+    fn stopping_one_lane_removes_only_its_session() {
+        let accumulated = Mutex::new(BTreeMap::from([
+            ("lane-a".to_string(), vec![1, 2]),
+            ("lane-b".to_string(), vec![7, 8]),
+        ]));
+
+        assert_eq!(
+            take_shared_prefill_tokens(&accumulated, "lane-a"),
+            Some(vec![1, 2])
+        );
+        let accumulated = accumulated.lock().expect("test lock poisoned");
+        assert!(!accumulated.contains_key("lane-a"));
+        assert_eq!(accumulated.get("lane-b"), Some(&vec![7, 8]));
+    }
+
+    fn identity(tokens: u64) -> PrefillKvIdentity {
+        PrefillKvIdentity {
+            page_id: format!("page-{tokens}"),
+            identity: crate::kv_proto::PageIdentity {
+                token_count: tokens,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn restored_candidates_are_not_re_recorded_into_the_resident_cache() {
+        assert!(candidate_already_resident(2048, 2048));
+        assert!(candidate_already_resident(512, 2048));
+        assert!(!candidate_already_resident(2176, 2048));
+    }
+
+    /// The split-serving regression: on a warm restore the downstream stage
+    /// skipped recording the shared-bulk candidates, and because the archive
+    /// was fed only from recorded candidates its ladder ratcheted down to the
+    /// floor. Candidates below the restore point must still be offered for
+    /// archival.
+    /// The stage-0 defect found on the two-machine split: a candidate the
+    /// resident cache declines was never offered for archival, so a stage
+    /// whose resident cache rejected most of its ladder archived one page (or
+    /// none) while its peer archived all 63.
+    #[test]
+    fn candidates_the_resident_cache_declines_are_still_archived() {
+        let full = 8458usize;
+        let mut pick = ArchiveCandidate::default();
+        // Simulate a stage where the resident cache accepts nothing at all.
+        for tokens in [8458u64, 8192, 4096, 768, 512] {
+            crate::kv_integration::offer_archive_candidate(&mut pick, &identity(tokens), full);
+        }
+        assert_eq!(
+            pick.take().expect("candidate").identity.token_count,
+            8192,
+            "archival must not depend on resident-cache admission"
+        );
+    }
+
+    /// The archive exports from the live session, so a candidate claiming more
+    /// tokens than this request carried has nothing valid behind it.
+    #[test]
+    fn candidates_longer_than_the_request_are_not_offered() {
+        let mut pick = ArchiveCandidate::default();
+        crate::kv_integration::offer_archive_candidate(&mut pick, &identity(9000), 8458);
+        crate::kv_integration::offer_archive_candidate(&mut pick, &identity(0), 8458);
+        assert!(pick.take().is_none());
+    }
+
+    #[test]
+    fn restored_candidates_are_still_offered_for_archival() {
+        let full = 2214usize;
+        let min_record_tokens = 2048u64;
+        let mut pick = ArchiveCandidate::default();
+        let mut resident_records = 0usize;
+        for tokens in [2214u64, 2176, 2048, 512] {
+            let token_count_usize = usize::try_from(tokens).unwrap().min(full);
+            // Mirrors the recorder: archival is offered for every candidate,
+            // resident recording only for those above the restore point.
+            pick.offer(&identity(tokens), token_count_usize, full);
+            if !candidate_already_resident(tokens, min_record_tokens) {
+                resident_records += 1;
+            }
+        }
+        assert_eq!(
+            resident_records, 2,
+            "only candidates longer than the restore should re-enter the resident cache"
+        );
+        assert_eq!(
+            pick.take().expect("candidate").identity.token_count,
+            2176,
+            "the shared bulk must still be archivable after a warm restore"
+        );
     }
 }

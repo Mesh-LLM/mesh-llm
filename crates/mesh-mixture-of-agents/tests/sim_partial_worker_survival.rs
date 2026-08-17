@@ -66,10 +66,7 @@ fn config(backends: Vec<Arc<dyn moa::ModelBackend>>, names: &[&str]) -> moa::Gat
     let models = names
         .iter()
         .enumerate()
-        .map(|(i, n)| moa::ModelEntry {
-            name: (*n).to_string(),
-            backend_index: i,
-        })
+        .map(|(i, n)| moa::ModelEntry::new((*n).to_string(), i))
         .collect();
     moa::GatewayConfig {
         backends,

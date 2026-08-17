@@ -6,6 +6,10 @@ title: OpenAI-Compatible API
 
 Mesh exposes one local OpenAI-compatible API. Clients call the local API; Mesh decides which local or peer model handles the request.
 
+Name a model to route to it directly, or send `"model": "mesh"` to let Mesh
+choose how to serve the request — see [Automatic routing](/docs/pages/automatic-routing/).
+`"model": "auto"` is a deprecated alias for `"mesh"`.
+
 ## Base URL
 
 ```text

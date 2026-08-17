@@ -38,6 +38,37 @@ pub(in crate::network::openai) async fn select_remote_host(
     unknown
 }
 
+/// Capabilities the automatic directive can serve: the union across the mesh.
+///
+/// A committee is text-only by construction, but the directive is not the
+/// committee — a media request is served by a modality-capable model instead.
+/// So what the directive can accept is what *any* served model can accept.
+pub(in crate::network::openai) fn virtual_mesh_capabilities(
+    models: &[String],
+    descriptors: &[mesh::ServedModelDescriptor],
+) -> crate::models::ModelCapabilities {
+    let mut union = crate::models::ModelCapabilities {
+        // `moe` describes one model's architecture, not something a caller can
+        // request, so it is not part of an admission union.
+        moe: false,
+        ..Default::default()
+    };
+    for model in models {
+        if model == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME {
+            continue;
+        }
+        let (base_model, _) = crate::network::openai::ingress::parse_model_with_profile(model);
+        let caps =
+            crate::network::openai::transport::capabilities_for_model(base_model, descriptors);
+        union.multimodal |= caps.multimodal;
+        union.vision = union.vision.max(caps.vision);
+        union.audio = union.audio.max(caps.audio);
+        union.reasoning = union.reasoning.max(caps.reasoning);
+        union.tool_use = union.tool_use.max(caps.tool_use);
+    }
+    union
+}
+
 pub(in crate::network::openai) fn virtual_mesh_context_length(
     models: &[String],
     runtimes: &[mesh::ModelRuntimeDescriptor],
@@ -61,12 +92,15 @@ pub(in crate::network::openai) fn virtual_mesh_context_length(
 }
 
 pub(in crate::network::openai) fn should_advertise_virtual_mesh(models: &[String]) -> bool {
+    // Advertise the automatic directive whenever the node can serve anything at
+    // all. It used to require two models, back when the name promised "a
+    // committee will form". It now means "serve this request as well as you
+    // can", which a single-model node does by serving that model — so hiding
+    // the name would remove the one name clients are told to send, and break
+    // any client that validates against `/v1/models`.
     models
         .iter()
-        .filter(|model| model.as_str() != mesh_mixture_of_agents::VIRTUAL_MODEL_NAME)
-        .take(2)
-        .count()
-        >= 2
+        .any(|model| model.as_str() != mesh_mixture_of_agents::VIRTUAL_MODEL_NAME)
 }
 
 #[cfg(test)]
@@ -141,11 +175,24 @@ mod tests {
     }
 
     #[test]
-    fn virtual_mesh_requires_two_concrete_models() {
-        assert!(!should_advertise_virtual_mesh(&["only".to_string()]));
+    fn virtual_mesh_is_advertised_whenever_any_model_is_served() {
+        // The directive is the one name clients are told to send, so it must be
+        // listed on a single-model node too — it previously required two models
+        // and vanished from `/v1/models` below that, breaking clients that
+        // validate the model list before sending.
+        assert!(should_advertise_virtual_mesh(&["only".to_string()]));
         assert!(should_advertise_virtual_mesh(&[
             "a".to_string(),
             "b".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn virtual_mesh_is_not_advertised_when_nothing_is_served() {
+        // Nothing to route to, so the directive would 503. Do not offer it.
+        assert!(!should_advertise_virtual_mesh(&[]));
+        assert!(!should_advertise_virtual_mesh(&[
+            mesh_mixture_of_agents::VIRTUAL_MODEL_NAME.to_string(),
         ]));
     }
 }

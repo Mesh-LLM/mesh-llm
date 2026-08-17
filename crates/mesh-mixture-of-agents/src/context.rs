@@ -1031,6 +1031,23 @@ mod tests {
             }},
         ])
     }
+
+    fn read_write_tools() -> Value {
+        json!([
+            {"type": "function", "function": {
+                "name": "read_file",
+                "description": "Read a file from disk",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
+            }},
+            {"type": "function", "function": {
+                "name": "write_file",
+                "description": "Write a file to disk",
+                "parameters": {"type": "object", "properties": {
+                    "path": {"type": "string"}, "content": {"type": "string"}
+                }}
+            }},
+        ])
+    }
     fn weather_tools() -> Value {
         json!([
             {"type": "function", "function": {
@@ -1435,27 +1452,22 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_reducer_filters_native_tool_schemas() {
+    fn tool_result_reducer_keeps_read_and_write_schemas_across_the_chain() {
         let s = session_with(
             &[
-                user_msg("Read /tmp/a"),
-                assistant_tool_msg("call_read", "read_file", json!({"path": "/tmp/a"})),
-                tool_result_msg("call_read", "done"),
+                user_msg("Read both inputs, calculate the totals, then write the report."),
+                assistant_tool_msg("call_read_a", "read_file", json!({"path": "/tmp/a"})),
+                tool_result_msg("call_read_a", "north: 174"),
+                assistant_tool_msg("call_read_b", "read_file", json!({"path": "/tmp/b"})),
+                tool_result_msg("call_read_b", "south: 174"),
             ],
-            Some(tools_two()),
+            Some(read_write_tools()),
         );
-        let selected = vec!["read_file".to_string()];
+        let selected = vec!["read_file".to_string(), "write_file".to_string()];
         let (_messages, tools) = pack_for_tool_result_turn_selected(&s, true, &selected);
-        let tools = tools
-            .as_ref()
-            .and_then(Value::as_array)
-            .expect("selected tools array");
+        let names = tool_names_from(tools.as_ref());
 
-        assert_eq!(tools.len(), 1);
-        assert_eq!(
-            tools[0].pointer("/function/name").and_then(Value::as_str),
-            Some("read_file")
-        );
+        assert_eq!(names, vec!["read_file", "write_file"]);
     }
 
     #[test]
