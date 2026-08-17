@@ -241,6 +241,11 @@ impl OpenAiBackend for FakeBackend {
         if request.model == "missing" {
             return Err(OpenAiError::model_not_found(request.model));
         }
+        if request.model == "context-overflow" {
+            return Err(OpenAiError::context_length_exceeded(
+                "prompt tokens plus requested completion exceed context window",
+            ));
+        }
         if request.model == "stream-error" {
             return Ok(Box::pin(stream::iter(vec![Err(OpenAiError::backend(
                 "stream backend failed",
@@ -963,6 +968,23 @@ async fn chat_completion_stream_suppresses_usage_unless_requested() {
     assert!(!body.contains(r#""total_tokens":5"#));
     assert!(body.contains("data: [DONE]"));
     assert_stream_terminal_usage(&observer, 3, 2, 5);
+}
+
+#[tokio::test]
+async fn chat_completion_stream_maps_pre_stream_context_overflow() {
+    let response = post_json(
+        "/v1/chat/completions",
+        json!({
+            "model": "context-overflow",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_completion_tokens": 768,
+            "stream": true
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_body_json(response).await;
+    assert_eq!(body["error"]["code"], "context_length_exceeded");
 }
 
 #[tokio::test]

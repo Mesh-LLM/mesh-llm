@@ -745,6 +745,7 @@ impl StageOpenAiBackend {
             let output = backend.generate_text(
                 prompt,
                 max_tokens,
+                None,
                 stop.as_ref(),
                 sampling,
                 hook_request,
@@ -782,6 +783,22 @@ impl StageOpenAiBackend {
         context: OpenAiRequestContext,
         ids: OpenAiGenerationIds,
     ) -> OpenAiResult<GenerationStream> {
+        let prepared_text = if prompt.has_media() {
+            None
+        } else {
+            let backend = self.clone();
+            let prompt_for_tokenize = prompt.clone();
+            let ids_for_tokenize = ids.clone();
+            Some(
+                task::spawn_blocking(move || {
+                    backend.prepare_text_prompt(&prompt_for_tokenize, max_tokens, &ids_for_tokenize)
+                })
+                .await
+                .map_err(|error| {
+                    OpenAiError::backend(format!("prompt tokenization task failed: {error}"))
+                })??,
+            )
+        };
         let admit_timer = PhaseTimer::start();
         let cancellation = context.cancellation_token();
         let (permit, session_permit) = self
@@ -815,6 +832,7 @@ impl StageOpenAiBackend {
             let result = backend.generate_text(
                 prompt,
                 max_tokens,
+                prepared_text,
                 stop.as_ref(),
                 sampling,
                 hook_request,
