@@ -53,11 +53,16 @@ def cpu_count() -> int:
 
 class DetectJobsTests(unittest.TestCase):
     def test_cuda_parallelism_capped_by_memory_not_cpu_count(self) -> None:
-        """16 GiB permits 5 CUDA compiles at the assumed 3 GiB each."""
-        result = print_jobs(backend="cuda", memory_bytes=16 * GIB)
+        """6 GiB permits 2 CUDA compiles at the assumed 3 GiB each.
+
+        The budget must bind below the CPU count even on a small runner, so
+        this asserts a cap lower than any machine CI runs on.
+        """
+        result = print_jobs(backend="cuda", memory_bytes=6 * GIB)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "5")
+        self.assertEqual(result.stdout.strip(), "2")
+        self.assertLess(2, cpu_count())
 
     def test_cap_is_reported_so_a_slow_build_is_explainable(self) -> None:
         result = print_jobs(backend="cuda", memory_bytes=4 * GIB)
