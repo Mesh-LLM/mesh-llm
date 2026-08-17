@@ -244,9 +244,6 @@ impl StageOpenAiBackend {
             &receipt.committed_tokens,
         );
         committed_token_ids.extend_from_slice(&receipt.committed_tokens);
-        state
-            .pending_linear_proposal_tokens
-            .extend_from_slice(&receipt.committed_tokens);
         let stopped_by_proposal = receipt.disposition == LinearProposalDisposition::Stopped;
         if state.emit_token_debug {
             let mut proposal_attrs = BTreeMap::new();
