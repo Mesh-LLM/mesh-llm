@@ -72,16 +72,9 @@ impl StageOpenAiBackend {
             {
                 let mut prefix_options = options.clone();
                 prefix_options.add_assistant = false;
-                Some(
-                    self.render_chat_prompt(
-                        request,
-                        &prefix_options,
-                        &marker,
-                        Some(&rewritten),
-                        false,
-                    )?
-                    .prompt,
-                )
+                self.render_chat_prompt(request, &prefix_options, &marker, Some(&rewritten), false)
+                    .ok()
+                    .map(|rendered| rendered.prompt)
             } else {
                 None
             };
@@ -102,10 +95,9 @@ impl StageOpenAiBackend {
         {
             let mut prefix_options = options.clone();
             prefix_options.add_assistant = false;
-            Some(
-                self.render_chat_prompt(request, &prefix_options, &marker, None, true)?
-                    .prompt,
-            )
+            self.render_chat_prompt(request, &prefix_options, &marker, None, true)
+                .ok()
+                .map(|rendered| rendered.prompt)
         } else {
             None
         };

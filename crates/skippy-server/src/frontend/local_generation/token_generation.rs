@@ -100,9 +100,9 @@ pub(in crate::frontend) fn post_decode_checkpoint_tokens(
 
 pub(in crate::frontend) fn linear_proposal_allowed(
     recurrent_checkpoint_required: bool,
-    checkpoint_recorded: bool,
+    checkpoint_attempted: bool,
 ) -> bool {
-    !recurrent_checkpoint_required || checkpoint_recorded
+    !recurrent_checkpoint_required || checkpoint_attempted
 }
 
 impl StageOpenAiBackend {
@@ -1214,7 +1214,13 @@ impl StageOpenAiBackend {
             .kv
             .as_ref()
             .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent);
-        let mut first_post_decode_checkpoint_recorded = !recurrent_checkpoint_required;
+        // A recurrent request needs one serial decode before proposals can
+        // advance the native session beyond the prompt boundary. The serial
+        // attempt is the gate: a short prompt may be below the policy's
+        // minimum checkpoint size, in which case recording is correctly
+        // skipped but proposals must not remain disabled for the rest of the
+        // request.
+        let mut first_post_decode_checkpoint_attempted = !recurrent_checkpoint_required;
         while !state.stopped && state.decoded_tokens < request.max_tokens as usize {
             if request
                 .cancellation
@@ -1225,7 +1231,7 @@ impl StageOpenAiBackend {
             }
             let linear_progress = if linear_proposal_allowed(
                 recurrent_checkpoint_required,
-                first_post_decode_checkpoint_recorded,
+                first_post_decode_checkpoint_attempted,
             ) {
                 self.try_execute_linear_proposal(request, session_id, &mut state, emit_token)?
             } else {
@@ -1241,9 +1247,9 @@ impl StageOpenAiBackend {
                 LinearProposalProgress::NotUsed => {}
             }
             let control = self.decode_one_token(request, session_id, &mut state, emit_token)?;
-            if !first_post_decode_checkpoint_recorded && state.generated_token_ids.len() == 1 {
-                first_post_decode_checkpoint_recorded =
-                    self.record_post_decode_exact_state(request, session_id, &state);
+            if !first_post_decode_checkpoint_attempted && state.generated_token_ids.len() == 1 {
+                first_post_decode_checkpoint_attempted = true;
+                self.record_post_decode_exact_state(request, session_id, &state);
             }
             if state.linear_proposal_max_tokens > 0 {
                 state.pending_linear_proposal_tokens.push(state.current);
@@ -1254,7 +1260,12 @@ impl StageOpenAiBackend {
         }
         let model_generation_elapsed =
             self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;
-        let _ = self.record_post_decode_exact_state(request, session_id, &state);
+        // The first-token checkpoint names the prompt boundary. Avoid
+        // exporting the same recurrent state twice for a one-token response;
+        // longer responses still get their final exact boundary recorded.
+        if state.generated_token_ids.len() > 1 {
+            let _ = self.record_post_decode_exact_state(request, session_id, &state);
+        }
         Ok(model_generation_elapsed)
     }
 }
