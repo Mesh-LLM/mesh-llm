@@ -628,6 +628,7 @@ describe('createMeshConnectionAdapter', () => {
     expect(compactedBody.input.length).toBeLessThan(firstBody.input.length)
     expect(JSON.stringify(compactedBody)).toContain('turn-7')
     expect(JSON.stringify(compactedBody)).not.toContain('turn-0')
+    expect((compactedBody.input[0] as { role: string }).role).toBe('user')
     expect(
       chunks
         .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
@@ -682,6 +683,63 @@ describe('createMeshConnectionAdapter', () => {
         .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
         .join('')
     ).toContain('OK')
+  })
+
+  it('reuses uploaded attachments while compacting a context-rejected conversation', async () => {
+    const messages = [
+      {
+        id: 'message-0',
+        role: 'user' as const,
+        parts: [{ type: 'text' as const, content: 'Earlier question' }],
+        createdAt: new Date('2026-05-06T00:00:00.000Z')
+      },
+      {
+        id: 'message-1',
+        role: 'assistant' as const,
+        parts: [{ type: 'text' as const, content: 'Earlier answer' }],
+        createdAt: new Date('2026-05-06T00:01:00.000Z')
+      },
+      {
+        id: 'message-2',
+        role: 'user' as const,
+        parts: [
+          { type: 'text' as const, content: 'Please inspect this' },
+          {
+            type: 'audio' as const,
+            source: { type: 'data' as const, value: 'YXVkaW8=', mimeType: 'audio/mpeg' },
+            metadata: { fileName: 'clip.mp3' }
+          }
+        ],
+        createdAt: new Date('2026-05-06T00:02:00.000Z')
+      },
+      {
+        id: 'message-3',
+        role: 'assistant' as const,
+        parts: [{ type: 'text' as const, content: 'Latest answer' }],
+        createdAt: new Date('2026-05-06T00:03:00.000Z')
+      }
+    ]
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: 'cached-token' }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: 'no context-compatible target' } }), { status: 503 })
+      )
+      .mockResolvedValueOnce(new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    for await (const _chunk of adapter.connect(messages, undefined, undefined)) {
+      // Consume the stream.
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/objects')
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/objects')).toHaveLength(1)
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as { input: unknown[] }
+    const compactedBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body)) as { input: unknown[] }
+    expect(JSON.stringify(firstBody)).toContain('cached-token')
+    expect(JSON.stringify(compactedBody)).toContain('cached-token')
   })
 
   it('stops before /api/responses when attachment upload fails', async () => {

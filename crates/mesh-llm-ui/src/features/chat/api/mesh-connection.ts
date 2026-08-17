@@ -7,7 +7,7 @@ import { ApiError, parseApiErrorBody } from '@/lib/api/errors'
 import { getClientId } from '@/lib/api/client-id'
 import { generateRequestId } from '@/lib/api/request-id'
 import type { ChatSSEEvent } from '@/lib/api/types'
-import { buildResponsesInput } from '@/features/chat/api/build-input'
+import { buildResponsesInput, type AttachmentUploadCache } from '@/features/chat/api/build-input'
 import type { ChatResponseMetadata } from '@/features/chat/api/response-metadata'
 import { isMeshVirtualModel, syntheticMoaProgressKey } from '@/features/chat/lib/moa-progress'
 
@@ -102,13 +102,24 @@ async function compactResponsesInput(
   model: string,
   clientId: string,
   requestId: string,
-  systemPrompt: string
+  systemPrompt: string,
+  uploadCache: AttachmentUploadCache
 ) {
   if (messages.length < 2) return undefined
 
   const firstMessage = Math.max(1, messages.length - 8)
   for (let start = firstMessage; start < messages.length; start += 1) {
-    const candidate = await buildResponsesInput(messages.slice(start), model, clientId, requestId, systemPrompt)
+    // A compacted request must begin at a user turn. Starting at an assistant
+    // message would detach it from the user turn that produced it.
+    if (messages[start]?.role !== 'user') continue
+    const candidate = await buildResponsesInput(
+      messages.slice(start),
+      model,
+      clientId,
+      requestId,
+      systemPrompt,
+      uploadCache
+    )
     const serialized = JSON.stringify(candidate)
     const byteLength = new TextEncoder().encode(serialized).length
     if (byteLength <= CONTEXT_COMPACTION_RETRY_BODY_BYTES) return candidate
@@ -235,7 +246,15 @@ async function* runConnect(
 
   let response: Response
   try {
-    let requestBody = await buildResponsesInput(messages, model, clientId, requestId, systemPrompt)
+    const attachmentUploadCache: AttachmentUploadCache = new Map()
+    let requestBody = await buildResponsesInput(
+      messages,
+      model,
+      clientId,
+      requestId,
+      systemPrompt,
+      attachmentUploadCache
+    )
     for (let attempt = 0; ; attempt += 1) {
       response = await fetch(`${env.managementApiUrl}/api/responses`, {
         method: 'POST',
@@ -259,7 +278,14 @@ async function* runConnect(
 
       const shouldCompactContext = attempt === 0 && isContextRouteUnavailable(response.status, errorBody)
       if (shouldCompactContext) {
-        const compactedBody = await compactResponsesInput(messages, model, clientId, requestId, systemPrompt)
+        const compactedBody = await compactResponsesInput(
+          messages,
+          model,
+          clientId,
+          requestId,
+          systemPrompt,
+          attachmentUploadCache
+        )
         if (compactedBody) {
           requestBody = compactedBody
           continue
