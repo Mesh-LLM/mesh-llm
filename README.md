@@ -85,7 +85,7 @@ mesh-llm serve --auto --headless
 |---|---|---|
 | Try the public mesh | `mesh-llm serve --auto` | [docs/MESHES.md](docs/MESHES.md) |
 | Start a private mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M` | [docs/MESHES.md](docs/MESHES.md) |
-| Serve one model without mesh networking | `mesh-llm serve --local-model-only --model /models/model.gguf` | OpenAI API defaults to `127.0.0.1:9337` (`--port` and `--listen-all` change it) |
+| Serve one model without mesh networking (debugging/dev) | `mesh-llm serve --local-model-only --gguf /models/model.gguf` | OpenAI API defaults to `127.0.0.1:9337` (`--port` and `--listen-all` change it) |
 | Publish your own mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M --publish` | [docs/MESHES.md](docs/MESHES.md) |
 | Join by invite token | `mesh-llm serve --join <token>` | [docs/MESHES.md](docs/MESHES.md) |
 | Run an API-only client | `mesh-llm client --auto` | [docs/MESHES.md](docs/MESHES.md) |
@@ -121,15 +121,28 @@ command and switch, see [docs/CLI.md](docs/CLI.md).
 
 ### Local model-only serving
 
+> **Debugging and development endpoint.** `--local-model-only` wires the OpenAI
+> frontend directly to one local Skippy instance and bypasses mesh networking
+> entirely. The supported path for OpenAI clients in production — including tool
+> calls — is the regular mesh inference port, which includes the host-runtime
+> normalizer. Use `--local-model-only` when you want a lightweight single-process
+> setup without joining a mesh, not as a drop-in for the full serving path.
+
 Use the direct topology when a process should expose one complete local model
 through the OpenAI API without becoming a mesh node:
 
 ```bash
 mesh-llm serve \
   --local-model-only \
-  --model /models/model.gguf \
+  --gguf /models/model.gguf \
   --port 9337
 ```
+
+Use `--gguf <absolute-path>` to serve a specific GGUF file directly. `--model
+<absolute-path>` also works. Note that `--model <catalog-name>` does **not** work
+here — catalog and HF-ref resolution is a mesh function and is not available in
+the direct topology; the resulting error is not obvious. See the path requirements
+below.
 
 This mode starts the OpenAI frontend and one local Skippy model runtime. It does
 not start QUIC, discovery, peer maintenance, split planning, plugins, release
@@ -139,7 +152,9 @@ does not fit within detected local capacity (or `--max-vram`); it never falls
 back to distributed serving.
 
 For `--local-model-only`, `--model`, `--gguf`, and `--mmproj` values must be
-absolute paths and must not be symlinks.
+absolute paths and must not be symlinks. If you downloaded a model through
+Hugging Face, resolve the cache symlink before passing the path:
+`realpath <path-from-hf-cache>`.
 
 ## Mixture-of-Agents (`model: "mesh"`) — experimental
 
