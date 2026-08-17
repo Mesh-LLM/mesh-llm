@@ -44,6 +44,7 @@ use self::capacity::{
     RuntimeCapacityLedger, RuntimeCapacityReservation, model_fits_runtime_capacity,
 };
 use self::context_planning::RuntimeResourcePlanningProfile;
+pub(crate) use self::dashboard::runtime_status_from_process_status;
 use self::discovery::{lan_rediscovery, nostr_rediscovery, start_new_mesh};
 pub(crate) use self::instance_lifecycle::{
     DrainCoordinator, DrainResult, InstanceAdmissionError, InstanceLifecycleRecord,

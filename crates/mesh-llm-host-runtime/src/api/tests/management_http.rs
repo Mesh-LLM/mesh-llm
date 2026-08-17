@@ -65,7 +65,7 @@ async fn management_health_is_a_json_liveness_response() {
     assert!(response.starts_with("HTTP/1.1 200 OK"), "response: {response}");
     assert!(response.contains("Content-Type: application/json"));
     assert_eq!(json_body(&response)["status"], "ok");
-    assert_eq!(json_body(&response)["mesh"]["status"], "disconnected");
+    assert_eq!(json_body(&response)["mesh"]["status"], "standalone");
     assert_eq!(json_body(&response)["serving"]["status"], "idle");
 }
 
@@ -222,8 +222,8 @@ async fn management_health_reports_failed_host_process_as_unhealthy() {
             .publish_local_processes(|processes| {
                 processes.clear();
                 processes.push(crate::runtime_data::RuntimeProcessSnapshot {
-                    model: "failed-host-model".to_string(),
-                    state: "failed".to_string(),
+                    model: "exited-host-model".to_string(),
+                    state: "exited".to_string(),
                     ..Default::default()
                 });
                 true
@@ -243,6 +243,78 @@ async fn management_health_reports_failed_host_process_as_unhealthy() {
     assert_eq!(
         json_body(&response)["serving"]["models"],
         serde_json::json!([])
+    );
+}
+
+#[tokio::test]
+async fn management_health_treats_graceful_host_shutdown_as_idle() {
+    for process_state in ["shutting down", "stopped"] {
+        let state = build_test_mesh_api().await;
+        let node = state.node().await;
+        node.set_role(crate::mesh::NodeRole::Host { http_port: 9337 })
+            .await;
+        {
+            let inner = state.inner.lock().await;
+            inner
+                .runtime_data_producer
+                .publish_local_processes(|processes| {
+                    processes.clear();
+                    processes.push(crate::runtime_data::RuntimeProcessSnapshot {
+                        model: "stopping-host-model".to_string(),
+                        state: process_state.to_string(),
+                        ..Default::default()
+                    });
+                    true
+                });
+        }
+
+        let (address, server) = spawn_management_test_server(state).await;
+        let response = send_management_request(
+            address,
+            "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
+        )
+        .await;
+        server.await.unwrap().unwrap();
+
+        assert_eq!(json_body(&response)["mode"], "serving");
+        assert_eq!(
+            json_body(&response)["serving"]["status"],
+            "idle",
+            "state={process_state}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn management_health_reports_failed_local_stage_on_serving_host() {
+    let state = build_test_mesh_api().await;
+    let node = state.node().await;
+    node.set_role(crate::mesh::NodeRole::Host { http_port: 9337 })
+        .await;
+    node.set_hosted_models(vec!["healthy-host-model".to_string()])
+        .await;
+    node.stage_topologies
+        .lock()
+        .await
+        .record_status(health_test_stage_status(
+            Some(node.id()),
+            "failed-host-stage-model",
+            crate::inference::skippy::StageRuntimeState::Failed,
+        ));
+
+    let (address, server) = spawn_management_test_server(state).await;
+    let response = send_management_request(
+        address,
+        "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
+    )
+    .await;
+    server.await.unwrap().unwrap();
+
+    assert_eq!(json_body(&response)["mode"], "serving");
+    assert_eq!(json_body(&response)["serving"]["status"], "degraded");
+    assert_eq!(
+        json_body(&response)["serving"]["models"],
+        serde_json::json!(["healthy-host-model"])
     );
 }
 

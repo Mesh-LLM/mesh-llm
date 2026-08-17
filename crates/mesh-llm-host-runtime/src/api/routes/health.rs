@@ -4,7 +4,10 @@
 //! process returns HTTP 200 even when it has not joined a mesh or is not
 //! currently serving a model. The nested fields are advisory readiness signals
 //! for operators and infrastructure that wants more detail without fetching
-//! the full `/api/status` payload.
+//! the full `/api/status` payload. Like `/api/status`, it is readable on a
+//! remotely bound management API and therefore discloses model names and peer
+//! counts. GET probes are read-only observations and never enter the management
+//! workload lifecycle ledger.
 
 use super::super::{MeshApi, http::respond_json};
 use crate::mesh::NodeRole;
@@ -50,6 +53,12 @@ struct ServingHealth {
     models: Vec<String>,
 }
 
+#[derive(Debug, Default)]
+struct CachedPluginModels {
+    models: Vec<String>,
+    read_failed: bool,
+}
+
 pub(super) async fn handle(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     respond_json(stream, 200, &health_response(state).await).await
 }
@@ -76,9 +85,9 @@ async fn health_response(state: &MeshApi) -> HealthResponse {
     let plugin_models = if matches!(mode, HealthMode::Serving) {
         cached_plugin_models(&plugin_manager).await
     } else {
-        Vec::new()
+        CachedPluginModels::default()
     };
-    let local_stage_statuses = if matches!(mode, HealthMode::Worker) {
+    let local_stage_statuses = if !matches!(mode, HealthMode::Client) {
         // This is deliberately the cached status map. Health probes must not
         // dial stage peers or ask a local runtime to refresh its status.
         node.stage_runtime_statuses().await
@@ -99,11 +108,7 @@ async fn health_response(state: &MeshApi) -> HealthResponse {
         status: "ok",
         mode,
         mesh: MeshHealth {
-            status: if connectivity.connected_peer_count > 0 {
-                "connected"
-            } else {
-                "disconnected"
-            },
+            status: mesh_status(connectivity),
             admitted_peer_count: connectivity.admitted_peer_count,
             connected_peer_count: connectivity.connected_peer_count,
         },
@@ -114,11 +119,30 @@ async fn health_response(state: &MeshApi) -> HealthResponse {
     }
 }
 
-async fn cached_plugin_models(plugin_manager: &crate::plugin::PluginManager) -> Vec<String> {
+async fn cached_plugin_models(plugin_manager: &crate::plugin::PluginManager) -> CachedPluginModels {
     // `inference_models` reads the plugin endpoint health snapshot; it does
-    // not probe the endpoint. Keep this route cache-only and fail closed when
-    // the cached inventory is unavailable.
-    plugin_manager.inference_models().await.unwrap_or_default()
+    // not probe the endpoint. Preserve read failures so a plugin-only host is
+    // not misreported as idle when its cached inventory is unavailable.
+    match plugin_manager.inference_models().await {
+        Ok(models) => CachedPluginModels {
+            models,
+            read_failed: false,
+        },
+        Err(_) => CachedPluginModels {
+            models: Vec::new(),
+            read_failed: true,
+        },
+    }
+}
+
+fn mesh_status(connectivity: crate::mesh::MeshConnectivitySnapshot) -> &'static str {
+    if connectivity.connected_peer_count > 0 {
+        "connected"
+    } else if connectivity.admitted_peer_count > 0 {
+        "disconnected"
+    } else {
+        "standalone"
+    }
 }
 
 fn health_mode(role: &NodeRole, is_host: bool, is_client: bool) -> HealthMode {
@@ -136,38 +160,30 @@ async fn local_serving_state(
     mode: HealthMode,
     local_processes: &[crate::runtime_data::RuntimeProcessSnapshot],
     local_stage_statuses: &[crate::mesh::StageRuntimeStatus],
-    plugin_models: Vec<String>,
+    plugin_models: CachedPluginModels,
 ) -> (Vec<String>, bool, bool) {
     let mut models = Vec::new();
     let mut has_work = false;
     let mut has_failure = false;
     if matches!(mode, HealthMode::Serving) {
         models.extend(node.hosted_models().await);
-        models.extend(plugin_models);
-        models.extend(
-            local_processes
-                .iter()
-                .filter(|process| matches!(process.state.as_str(), "ready" | "serving"))
-                .map(|process| process.model.clone()),
-        );
-        has_work = !node.serving_models().await.is_empty() || !local_processes.is_empty();
-        has_failure = local_processes.iter().any(|process| {
-            matches!(
-                process.state.as_str(),
-                "error" | "exited" | "failed" | "stopped"
-            )
-        });
-    } else if matches!(mode, HealthMode::Worker) {
+        models.extend(plugin_models.models);
+        let (process_has_work, process_has_failure) =
+            append_healthy_process_models(local_processes, &mut models);
+        has_work = !node.serving_models().await.is_empty() || process_has_work;
+        has_failure = plugin_models.read_failed || process_has_failure;
+    }
+    if !matches!(mode, HealthMode::Client) {
         let local_node_id = node.id();
         let local_stages = local_stage_statuses
             .iter()
             .filter(|status| status.node_id == Some(local_node_id))
             .collect::<Vec<_>>();
-        has_work = local_stages
+        has_work |= local_stages
             .iter()
             .any(|status| status.state != crate::inference::skippy::StageRuntimeState::Stopped)
             || !node.serving_models().await.is_empty();
-        has_failure = local_stages
+        has_failure |= local_stages
             .iter()
             .any(|status| status.state == crate::inference::skippy::StageRuntimeState::Failed);
         models.extend(
@@ -181,6 +197,31 @@ async fn local_serving_state(
     models.sort();
     models.dedup();
     (models, has_work, has_failure)
+}
+
+fn append_healthy_process_models(
+    local_processes: &[crate::runtime_data::RuntimeProcessSnapshot],
+    models: &mut Vec<String>,
+) -> (bool, bool) {
+    use mesh_llm_events::RuntimeStatus;
+
+    let mut has_work = false;
+    let mut has_failure = false;
+    for process in local_processes {
+        match crate::runtime::runtime_status_from_process_status(&process.state) {
+            RuntimeStatus::Ready => {
+                has_work = true;
+                models.push(process.model.clone());
+            }
+            RuntimeStatus::Exited | RuntimeStatus::Error => has_failure = true,
+            RuntimeStatus::ShuttingDown | RuntimeStatus::Stopped => {}
+            RuntimeStatus::NotReady
+            | RuntimeStatus::Starting
+            | RuntimeStatus::Loading
+            | RuntimeStatus::Warning => has_work = true,
+        }
+    }
+    (has_work, has_failure)
 }
 
 fn serving_status(
@@ -207,7 +248,10 @@ fn serving_status(
 
 #[cfg(test)]
 mod tests {
-    use super::{HealthMode, health_mode, serving_status};
+    use super::{
+        CachedPluginModels, HealthMode, append_healthy_process_models, health_mode,
+        local_serving_state, mesh_status, serving_status,
+    };
     use crate::mesh::NodeRole;
 
     #[test]
@@ -259,6 +303,77 @@ mod tests {
         assert_eq!(
             serving_status(HealthMode::Serving, true, true, true),
             "degraded"
+        );
+    }
+
+    #[test]
+    fn process_statuses_use_the_runtime_mapping() {
+        let processes = [
+            crate::runtime_data::RuntimeProcessSnapshot {
+                model: "ready-model".to_string(),
+                state: "ready".to_string(),
+                ..Default::default()
+            },
+            crate::runtime_data::RuntimeProcessSnapshot {
+                model: "stopped-model".to_string(),
+                state: "stopped".to_string(),
+                ..Default::default()
+            },
+        ];
+        let mut models = Vec::new();
+        assert_eq!(
+            append_healthy_process_models(&processes, &mut models),
+            (true, false)
+        );
+        assert_eq!(models, ["ready-model"]);
+
+        let mut models = Vec::new();
+        assert_eq!(
+            append_healthy_process_models(
+                &[crate::runtime_data::RuntimeProcessSnapshot {
+                    model: "exited-model".to_string(),
+                    state: "exited".to_string(),
+                    ..Default::default()
+                }],
+                &mut models,
+            ),
+            (false, true)
+        );
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn mesh_status_distinguishes_standalone_from_disconnected() {
+        use crate::mesh::MeshConnectivitySnapshot;
+
+        assert_eq!(
+            mesh_status(MeshConnectivitySnapshot::default()),
+            "standalone"
+        );
+        assert_eq!(
+            mesh_status(MeshConnectivitySnapshot {
+                admitted_peer_count: 1,
+                connected_peer_count: 0,
+            }),
+            "disconnected"
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_inventory_failure_is_not_idle() {
+        let node = crate::mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
+            .await
+            .unwrap();
+        let plugin_models = CachedPluginModels {
+            models: Vec::new(),
+            read_failed: true,
+        };
+        let (models, has_work, has_failure) =
+            local_serving_state(&node, HealthMode::Serving, &[], &[], plugin_models).await;
+        assert!(models.is_empty());
+        assert_eq!(
+            serving_status(HealthMode::Serving, false, has_work, has_failure),
+            "unhealthy"
         );
     }
 }

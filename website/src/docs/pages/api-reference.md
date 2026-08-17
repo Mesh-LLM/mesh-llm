@@ -36,6 +36,11 @@ Use `GET /health` for a lightweight management-process probe:
 GET /health
 ```
 
+This endpoint is served on the management port (default `3131`). The
+OpenAI-compatible serving port has its own `/health`, `/healthz`, and `/readyz`
+probes; those do not include the management endpoint's mesh and local-model
+summary.
+
 An answering management process always returns HTTP `200` with
 `Content-Type: application/json` and `"status":"ok"`. This is deliberately a
 liveness contract: joining a mesh, having peers, loading a model, and
@@ -63,12 +68,13 @@ Representative response:
 ```
 
 The exact `mode` vocabulary is `worker`, `client`, or `serving`. Mesh
-`status` is `connected` only when at least one admitted peer has a current
-control connection; otherwise it is `disconnected`. Serving `status` is
-`healthy` when local models or worker stages are ready, `degraded` when ready
-work coexists with a terminal local failure, `unhealthy` when local work has
-failed and none is ready, `starting` when local work exists but has not reached
-readiness, `idle` when a worker/serving node has no local work, and
+`status` is `standalone` when there are no admitted peers, `connected` when at
+least one admitted peer has a current control connection, and `disconnected`
+when admitted membership exists without a current connection. Serving `status`
+is `healthy` when local models or worker stages are ready, `degraded` when
+ready work coexists with a terminal local failure, `unhealthy` when local work
+has failed and none is ready, `starting` when local work exists but has not
+reached readiness, `idle` when a worker/serving node has no local work, and
 `not_applicable` for clients. Worker `models` contains ready local split-stage
 model IDs; serving `models` contains healthy local or cached plugin-inference
 models.

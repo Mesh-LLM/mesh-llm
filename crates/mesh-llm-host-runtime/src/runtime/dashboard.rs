@@ -346,7 +346,7 @@ impl DashboardSnapshotProvider for RuntimeDashboardSnapshotProvider {
 }
 
 #[allow(dead_code)]
-pub(super) fn runtime_status_from_process_status(status: &str) -> RuntimeStatus {
+pub(crate) fn runtime_status_from_process_status(status: &str) -> RuntimeStatus {
     match status {
         "ready" => RuntimeStatus::Ready,
         "shutting down" | "shutting_down" => RuntimeStatus::ShuttingDown,
