@@ -2,6 +2,7 @@ mod chat;
 mod control_apply_diagnostics;
 mod diagnostics;
 mod discover;
+mod health;
 pub(crate) mod logs;
 mod mcp;
 mod mesh_hook;
@@ -42,6 +43,10 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 }
                 ("GET", "/api/discover") => {
                     discover::handle(stream, state).await?;
+                    Ok(true)
+                }
+                ("GET", "/health") => {
+                    health::handle(stream, state).await?;
                     Ok(true)
                 }
                 ("POST", p) if p == crate::network::discovery::LAN_DETAILS_PATH => {

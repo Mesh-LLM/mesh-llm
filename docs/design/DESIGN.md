@@ -308,6 +308,7 @@ and the embedded web dashboard.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
+| `/health` | GET | Lightweight management liveness and local mesh/serving summary (JSON); returns 200 whenever the management process answers |
 | `/api/status` | GET | Live mesh state (JSON): node, peers, routing, targets |
 | `/api/models` | GET | Mesh model inventory for the dashboard and operators |
 | `/api/search` | GET | Search the built-in catalog or Hugging Face with the same JSON payload shape as `mesh-llm models search --json` |

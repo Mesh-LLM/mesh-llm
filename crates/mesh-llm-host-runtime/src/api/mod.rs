@@ -1,6 +1,7 @@
 //! Mesh management API — read-only dashboard on port 3131 (default).
 //!
 //! Endpoints:
+//!   GET  /health         — lightweight liveness plus mesh/serving summary (JSON, always 200 when answering)
 //!   GET  /api/status    — live mesh state plus local-only routing metrics (JSON)
 //!   GET  /api/models    — mesh model inventory plus local-only routing metrics (JSON)
 //!   GET  /api/search    — catalog or Hugging Face model search with the same JSON payload as `mesh-llm models search --json`

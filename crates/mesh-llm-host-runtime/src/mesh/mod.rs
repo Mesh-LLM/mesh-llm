@@ -82,6 +82,7 @@ mod artifact_transfer_io;
 mod capacity;
 mod connection_reservation;
 mod connections;
+mod connectivity;
 mod direct_path;
 mod gossip;
 mod heartbeat;
