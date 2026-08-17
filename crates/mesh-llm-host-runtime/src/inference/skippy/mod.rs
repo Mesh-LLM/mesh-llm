@@ -12,7 +12,9 @@ mod resolver;
 mod stage;
 mod topology;
 
-use crate::runtime::survey;
+use crate::runtime::{
+    NativeSkippyOperationalEvent, record_native_skippy_operational_event, survey,
+};
 use std::{
     env,
     path::{Path, PathBuf},
@@ -514,6 +516,32 @@ fn resolve_serving_hooks(
         .context("product-neutral serving hook factory rejected the loaded model")
 }
 
+struct NativeSkippyStartupAudit {
+    ready: bool,
+}
+
+impl NativeSkippyStartupAudit {
+    fn new() -> Self {
+        record_native_skippy_operational_event(NativeSkippyOperationalEvent::RuntimeStartupStarted);
+        Self { ready: false }
+    }
+
+    fn mark_ready(&mut self) {
+        self.ready = true;
+        record_native_skippy_operational_event(NativeSkippyOperationalEvent::RuntimeReady);
+    }
+}
+
+impl Drop for NativeSkippyStartupAudit {
+    fn drop(&mut self) {
+        if !self.ready {
+            record_native_skippy_operational_event(
+                NativeSkippyOperationalEvent::RuntimeStartupFailed,
+            );
+        }
+    }
+}
+
 impl SkippyModelHandle {
     pub(crate) fn load(options: SkippyModelLoadOptions) -> Result<Self> {
         Self::load_with_hooks(options, None, survey::SurveyTelemetry::disabled())
@@ -524,6 +552,7 @@ impl SkippyModelHandle {
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
+        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         let stage_config = single_stage_config(&options)?;
         let runtime = SkippyRuntimeHandle::load(EmbeddedRuntimeOptions {
             config: stage_config.clone(),
@@ -576,6 +605,7 @@ impl SkippyModelHandle {
             Some(usize::try_from(stage_config.ctx_size).unwrap_or(usize::MAX)),
             guardrail_telemetry.guardrail_sink(),
         );
+        lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
             backend,
@@ -598,6 +628,7 @@ impl SkippyModelHandle {
         model_open_event_reporter: Option<NativeModelOpenEventReporter>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
+        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         let stage_config = single_stage_config(&options)?;
         let runtime = SkippyRuntimeHandle::load_with_open_events(
             EmbeddedRuntimeOptions {
@@ -653,6 +684,7 @@ impl SkippyModelHandle {
             Some(usize::try_from(stage_config.ctx_size).unwrap_or(usize::MAX)),
             guardrail_telemetry.guardrail_sink(),
         );
+        lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
             backend,
@@ -732,6 +764,7 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
+        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
         let materialized_pin = if config.load_mode == LoadMode::LayerPackage {
@@ -808,6 +841,7 @@ impl SkippyModelHandle {
             Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
             guardrails.telemetry.guardrail_sink(),
         );
+        lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
             backend,
@@ -833,6 +867,7 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
+        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
         let materialized_pin = if config.load_mode == LoadMode::LayerPackage {
@@ -911,6 +946,7 @@ impl SkippyModelHandle {
             Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
             guardrails.telemetry.guardrail_sink(),
         );
+        lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
             backend,
@@ -959,10 +995,13 @@ impl SkippyModelHandle {
             .runtime
             .tokenizer_capability()
             .context("loaded Skippy runtime cannot provide its stage-0 tokenizer capability")?;
-        let server = skippy_server::start_openai_backend_with_tokenizer(
+        let lifecycle_observer =
+            crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer());
+        let server = skippy_server::start_openai_backend_with_tokenizer_and_lifecycle_observer(
             bind_addr,
             self.backend(),
             tokenizer,
+            lifecycle_observer,
         );
         Ok(SkippyHttpHandle { port, server })
     }
@@ -987,6 +1026,9 @@ impl SkippyModelHandle {
             }
             state.state = SkippyModelState::Stopping;
         }
+        record_native_skippy_operational_event(
+            NativeSkippyOperationalEvent::RuntimeShutdownStarted,
+        );
         self.runtime.shutdown();
         let mut state = self.status.lock().expect("skippy status lock poisoned");
         state.state = SkippyModelState::Stopped;

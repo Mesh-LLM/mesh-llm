@@ -23,7 +23,6 @@ type ReserveSurfaceAction =
   | { kind: 'wake-provider'; providerId: string }
   | { kind: 'retry-all'; providerId: string }
   | { kind: 'retry-node'; providerId: string; nodeId: string }
-  | { kind: 'logs'; providerId: string; nodeId: string }
   | { kind: 'dismiss'; providerId: string; nodeId: string }
 
 function cloneProviders(providers: ReserveProvider[]) {
@@ -186,8 +185,6 @@ export function ReservesSurface({ configurationHref, liveMeshVramGB, providers }
           return updateProviderNodes(currentProviders, action.providerId, (nodes) =>
             nodes.filter((node) => node.id !== action.nodeId)
           )
-        case 'logs':
-          return currentProviders
       }
     })
   }
@@ -228,16 +225,6 @@ export function ReservesSurface({ configurationHref, liveMeshVramGB, providers }
         description:
           'Re-run the wake attempt for this node without contacting a provider API. The mockup moves the row back into active wake state.',
         confirmLabel: 'Retry node',
-        confirmTone: 'default' as const
-      }
-    }
-
-    if (action.kind === 'logs') {
-      return {
-        title: `Logs for ${selectedNode.id}`,
-        description:
-          'Inspect the last visible wake failure details. This preview keeps log text inline until backend log streaming exists.',
-        confirmLabel: 'Close',
         confirmTone: 'default' as const
       }
     }
@@ -289,7 +276,9 @@ export function ReservesSurface({ configurationHref, liveMeshVramGB, providers }
         <ReserveFleetPanel
           liveMeshVramGB={liveMeshVramGB}
           onDismissNode={(provider, node) => setAction({ kind: 'dismiss', providerId: provider.id, nodeId: node.id })}
-          onOpenLogs={(provider, node) => setAction({ kind: 'logs', providerId: provider.id, nodeId: node.id })}
+          onOpenLogs={(provider) => {
+            void navigate({ to: '/logs', search: { provider: provider.id } })
+          }}
           onRetryAll={(provider) => setAction({ kind: 'retry-all', providerId: provider.id })}
           onRetryNode={(provider, node) => setAction({ kind: 'retry-node', providerId: provider.id, nodeId: node.id })}
           onWakeProvider={(provider) => setAction({ kind: 'wake-provider', providerId: provider.id })}
@@ -331,7 +320,7 @@ export function ReservesSurface({ configurationHref, liveMeshVramGB, providers }
             if (!open) setAction(null)
           }}
           open={action !== null}
-          showCancel={action?.kind !== 'logs'}
+          showCancel
           title={dialogCopy.title}
         >
           {selectedProvider ? (
@@ -361,12 +350,6 @@ export function ReservesSurface({ configurationHref, liveMeshVramGB, providers }
                   The action will target the next standby reserve in this provider group.
                 </div>
               )}
-              {action?.kind === 'logs' && selectedNode ? (
-                <div className="rounded-[var(--radius)] border border-border bg-panel px-3 py-2 font-mono text-[length:var(--density-type-caption)] text-fg-dim">
-                  [{selectedNode.id}] wake attempt timed out while waiting for provider health checks. retryable=
-                  {String(selectedNode.retryable !== false)}
-                </div>
-              ) : null}
             </div>
           ) : null}
         </ReserveActionDialog>

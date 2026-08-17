@@ -689,11 +689,11 @@ For stale instances (crashed mesh-llm leaving behind a runtime dir):
 
 See `RELEASE.md` for the full process.
 
-Current release flow: kick off the **Release** workflow (`.github/workflows/release.yml`) from the GitHub Actions UI via `workflow_dispatch` with the version input (e.g. `v0.X.Y`).
+Current release flow: kick off the **Release** workflow (`.github/workflows/release.yml`) from the GitHub Actions UI via `workflow_dispatch` with the version input (e.g. `v0.X.Y`), or run `just release v0.X.Y` to preflight and dispatch that same workflow.
 
-The dispatched workflow handles everything: it bumps versions via `scripts/release-version.sh`, generates and patches the SwiftPM manifest, packages SDK console assets, creates and pushes the release tag at a release-prep commit, builds the full artifact matrix (macOS, Linux CPU/ARM64/CUDA/CUDA-Blackwell/ROCm/Vulkan, Windows CPU/CUDA/ROCm/Vulkan), and publishes the GitHub release. Dispatch inputs include `skip_gpu_bundles` and `canary` (dry-run: build + smoke without publishing).
+The dispatched workflow handles everything: it bumps versions via `scripts/release-version.sh`, commits the tracked version surface to `main` before building, generates and patches the SwiftPM manifest, packages SDK console assets, creates and pushes the release tag at a release-prep commit, builds the full artifact matrix (macOS, Linux CPU/ARM64/CUDA/CUDA-Blackwell/ROCm/Vulkan, Windows CPU/CUDA/ROCm/Vulkan), and publishes the GitHub release with generated notes. Dispatch inputs include `skip_gpu_bundles` and `canary` (dry-run: build + smoke without mutating `main` or publishing).
 
-Pushing a `v*` tag manually also triggers the workflow, but that path requires preparing `Package.swift` and SDK console assets in the tag commit yourself — see `RELEASE.md`. Prefer the dispatch path.
+Pushing a `v*` tag manually also triggers the workflow, but the tag must point to `main` history with the matching `scripts/release-version.sh` update already committed; it also requires preparing `Package.swift` and SDK console assets in the tag commit yourself. The workflow rejects a drifted tag. See `RELEASE.md` and prefer the dispatch path.
 
 ### Installer checksum sidecars
 

@@ -24,6 +24,9 @@ const DEBUG_PLACEMENT_MIN_DISTANCE_PERCENT = 7
 const DEBUG_PLACEMENT_CLUSTER_PADDING_PERCENT = 24
 const DEBUG_PLACEMENT_CLUSTER_GROWTH_PERCENT = 4
 
+// Full-surface UI workflows can exceed Vitest's default timeout under CI worker contention.
+vi.setConfig({ testTimeout: 15_000 })
+
 function TestProviders({ children }: { children: ReactNode }) {
   return (
     <AppProviders initialDataMode="harness" persistDataMode={false}>

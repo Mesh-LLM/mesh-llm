@@ -5,11 +5,17 @@ import { cn } from '@/lib/utils'
 
 const ScrollArea = React.forwardRef<
   React.ElementRef<typeof ScrollAreaPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root> & { horizontal?: boolean }
->(({ className, children, horizontal = false, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root> & {
+    readonly horizontal?: boolean
+    readonly viewportLabel?: string
+  }
+>(({ className, children, horizontal = false, viewportLabel, ...props }, ref) => (
   <ScrollAreaPrimitive.Root ref={ref} className={cn('relative overflow-hidden', className)} {...props}>
     <ScrollAreaPrimitive.Viewport
+      aria-label={viewportLabel}
       className={cn('max-h-[inherit] w-full rounded-[inherit]', !horizontal && 'overflow-x-hidden')}
+      role={viewportLabel ? 'region' : undefined}
+      tabIndex={viewportLabel ? 0 : undefined}
     >
       {children}
     </ScrollAreaPrimitive.Viewport>

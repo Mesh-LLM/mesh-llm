@@ -65,6 +65,10 @@ pub(crate) struct GatherPolicy {
 pub(crate) struct DispatchedWorker {
     pub model: String,
     pub role: WorkerRole,
+    /// Size tier resolved at dispatch, from the host's verified parameter count
+    /// when it supplied one. Carried here so the patience gate never has to
+    /// re-derive a tier from the model name, which mis-sizes quantised names.
+    pub small_tier: bool,
 }
 
 /// What a spawned worker task yields: `(model, role, reply, elapsed_ms)`.
@@ -109,7 +113,7 @@ pub(crate) async fn gather_workers_incremental(
     // that sank PR #820).
     let mut strong_finished = false;
     let gate_enabled = !strong_patience.is_zero()
-        && crate::worker::has_quality_gap(dispatched.iter().map(|d| (d.model.as_str(), d.role)));
+        && crate::worker::has_quality_gap(dispatched.iter().map(|d| (d.small_tier, d.role)));
     let strong_gate = |strong_finished: bool, elapsed: Duration| -> arbiter::StrongGate {
         if !gate_enabled || elapsed >= strong_patience {
             return arbiter::StrongGate::Off;
@@ -597,6 +601,9 @@ mod tests {
         DispatchedWorker {
             model: model.to_string(),
             role,
+            // No verified size in these tests, so the tier comes from the name
+            // — the same fallback a host that gossips no size would get.
+            small_tier: crate::worker::entry_is_small_tier(&crate::ModelEntry::new(model, 0)),
         }
     }
 

@@ -56,18 +56,25 @@ impl OpenAiGenerationIds {
     ) -> Self {
         let request_started_at = Instant::now();
         let sequence = OPENAI_GENERATION_COUNTER.fetch_add(1, Ordering::Relaxed);
-        // A trusted agent session is the logical conversation boundary for
-        // OpenAI requests. Keep its native session identity stable so the
-        // prefix KV cache can restore a prior prompt across turns. Requests
-        // still need distinct wire IDs for tracing and in-flight ownership.
-        let session_label = agent_session_id
+        let process_nonce = process_nonce();
+        // Only identity supplied by the configured trusted transport header is
+        // allowed to bind multiple requests to one native KV session. Request
+        // payload metadata and protocol-level conversation IDs remain isolated.
+        let trusted_session_id = agent_session_id
             .filter(|_| agent_session_trusted)
+            .map(|id| stable_wire_id(&[b"openai-agent-session", id.as_bytes()]));
+        let session_label = trusted_session_id
             .map(|id| format!("openai-agent-session-{id}"))
-            .unwrap_or_else(|| format!("openai-session-{}-{sequence}", now_unix_millis()));
-        let request_id = request_id(&session_label, sequence, process_nonce());
+            .unwrap_or_else(|| {
+                format!(
+                    "openai-session-{}-{process_nonce}-{sequence}",
+                    now_unix_millis()
+                )
+            });
         Self {
-            session_id: stable_wire_id(&[session_label.as_bytes()]),
-            request_id,
+            session_id: trusted_session_id
+                .unwrap_or_else(|| stable_wire_id(&[session_label.as_bytes()])),
+            request_id: request_id(&session_label, sequence, process_nonce),
             session_label,
             request_started_at,
             agent_session_id: agent_session_id.map(Into::into),
@@ -104,7 +111,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agent_session_reuses_native_session_but_not_request_id() {
+    fn trusted_agent_session_reuses_native_session_but_not_request_id() {
         let first = OpenAiGenerationIds::new_with_trust(
             OpenAiCacheHints::default(),
             Some("agent-42"),
@@ -116,7 +123,8 @@ mod tests {
             true,
         );
 
-        assert_eq!(first.session_label, "openai-agent-session-agent-42");
+        assert!(first.session_label.starts_with("openai-agent-session-"));
+        assert!(!first.session_label.contains("agent-42"));
         assert_eq!(first.session_label, second.session_label);
         assert_eq!(first.session_id, second.session_id);
         assert_ne!(first.request_id, second.request_id);
@@ -127,6 +135,7 @@ mod tests {
         let first = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);
         let second = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);
 
+        assert!(first.session_label.contains(process_nonce()));
         assert_ne!(first.session_id, second.session_id);
         assert_ne!(first.request_id, second.request_id);
     }

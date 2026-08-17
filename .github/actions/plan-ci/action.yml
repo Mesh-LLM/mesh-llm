@@ -1,0 +1,331 @@
+name: Plan CI
+description: Produce the versioned provider-neutral CI plan for one entry workflow
+
+inputs:
+  event_name:
+    description: GitHub event name
+    required: true
+  source_sha:
+    description: Source revision being validated
+    required: true
+  base_sha:
+    description: Comparison base revision, or empty for main/manual runs
+    required: false
+    default: ""
+  draft:
+    description: Whether a pull request is still a draft
+    required: false
+    default: "false"
+  changed_files:
+    description: Newline-delimited changed repository paths
+    required: false
+    default: ""
+  affected_crates:
+    description: JSON array of Cargo crates in the reverse dependency closure
+    required: false
+    default: "[]"
+  upload_artifact:
+    description: Upload the plan as short-lived evidence
+    required: false
+    default: "false"
+  artifact_name:
+    description: Short-lived artifact name when upload_artifact is true
+    required: false
+    default: ""
+
+outputs:
+  plan_path:
+    description: Relative path of the generated plan JSON
+    value: ${{ steps.plan.outputs.plan_path }}
+  plan_json:
+    description: Compact JSON plan for downstream job outputs
+    value: ${{ steps.plan.outputs.plan_json }}
+  plan_digest:
+    description: SHA-256 digest of the compact plan
+    value: ${{ steps.plan.outputs.plan_digest }}
+  profile:
+    description: Selected semantic profile
+    value: ${{ steps.plan.outputs.profile }}
+  required_slices:
+    description: JSON array of selected slice IDs
+    value: ${{ steps.plan.outputs.required_slices }}
+  domains:
+    description: JSON array of direct semantic domains
+    value: ${{ steps.plan.outputs.domains }}
+  affected_crates:
+    description: JSON array of affected Cargo crates
+    value: ${{ steps.plan.outputs.affected_crates }}
+  clippy_matrix:
+    description: JSON Clippy matrix
+    value: ${{ steps.plan.outputs.clippy_matrix }}
+  rust_tests_matrix:
+    description: JSON Rust-test matrix
+    value: ${{ steps.plan.outputs.rust_tests_matrix }}
+  hosts_matrix:
+    description: JSON host matrix
+    value: ${{ steps.plan.outputs.hosts_matrix }}
+  runtime_products_matrix:
+    description: JSON runtime/product matrix
+    value: ${{ steps.plan.outputs.runtime_products_matrix }}
+  platform_checks_matrix:
+    description: JSON platform-check matrix
+    value: ${{ steps.plan.outputs.platform_checks_matrix }}
+  smoke_matrix:
+    description: JSON product-smoke matrix
+    value: ${{ steps.plan.outputs.smoke_matrix }}
+  sdk_matrix:
+    description: JSON SDK matrix
+    value: ${{ steps.plan.outputs.sdk_matrix }}
+  linux_hosts_matrix:
+    description: JSON Linux host matrix
+    value: ${{ steps.plan.outputs.linux_hosts_matrix }}
+  macos_hosts_matrix:
+    description: JSON macOS host matrix
+    value: ${{ steps.plan.outputs.macos_hosts_matrix }}
+  windows_hosts_matrix:
+    description: JSON Windows host matrix
+    value: ${{ steps.plan.outputs.windows_hosts_matrix }}
+  linux_runtime_products_matrix:
+    description: JSON Linux runtime/product matrix
+    value: ${{ steps.plan.outputs.linux_runtime_products_matrix }}
+  macos_runtime_products_matrix:
+    description: JSON macOS runtime/product matrix
+    value: ${{ steps.plan.outputs.macos_runtime_products_matrix }}
+  windows_runtime_products_matrix:
+    description: JSON Windows runtime/product matrix
+    value: ${{ steps.plan.outputs.windows_runtime_products_matrix }}
+  rust_changed:
+    description: Planner-owned Rust change signal
+    value: ${{ steps.plan.outputs.rust_changed }}
+  ui_changed:
+    description: Planner-owned UI change signal
+    value: ${{ steps.plan.outputs.ui_changed }}
+  website_changed:
+    description: Planner-owned website change signal
+    value: ${{ steps.plan.outputs.website_changed }}
+  website_docs_changed:
+    description: Planner-owned website docs change signal
+    value: ${{ steps.plan.outputs.website_docs_changed }}
+  cli_surface_changed:
+    description: Planner-owned CLI surface change signal
+    value: ${{ steps.plan.outputs.cli_surface_changed }}
+  docs_only:
+    description: Planner-owned docs-only signal
+    value: ${{ steps.plan.outputs.docs_only }}
+  backend_changed:
+    description: Planner-owned native/backend change signal
+    value: ${{ steps.plan.outputs.backend_changed }}
+  runner_contract_required:
+    description: Planner-owned runner contract signal
+    value: ${{ steps.plan.outputs.runner_contract_required }}
+  linux_max_parallel:
+    description: Validated Linux worker ceiling for the selected profile
+    value: ${{ steps.plan.outputs.linux_max_parallel }}
+  macos_max_parallel:
+    description: Validated macOS worker ceiling for the selected profile
+    value: ${{ steps.plan.outputs.macos_max_parallel }}
+  windows_max_parallel:
+    description: Validated Windows worker ceiling for the selected profile
+    value: ${{ steps.plan.outputs.windows_max_parallel }}
+  total_max_workers:
+    description: Validated total worker ceiling for the selected profile
+    value: ${{ steps.plan.outputs.total_max_workers }}
+  quality_lane_plan:
+    description: Derived bounded plan for the quality workflow
+    value: ${{ steps.plan.outputs.quality_lane_plan }}
+  website_lane_plan:
+    description: Derived bounded plan for the website workflow
+    value: ${{ steps.plan.outputs.website_lane_plan }}
+  linux_lane_plan:
+    description: Derived bounded plan for the Linux workflow
+    value: ${{ steps.plan.outputs.linux_lane_plan }}
+  macos_lane_plan:
+    description: Derived bounded plan for the macOS workflow
+    value: ${{ steps.plan.outputs.macos_lane_plan }}
+  windows_lane_plan:
+    description: Derived bounded plan for the Windows workflow
+    value: ${{ steps.plan.outputs.windows_lane_plan }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build versioned CI plan
+      id: plan
+      shell: bash
+      env:
+        EVENT_NAME: ${{ inputs.event_name }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        BASE_SHA: ${{ inputs.base_sha }}
+        DRAFT: ${{ inputs.draft }}
+        CHANGED_FILES: ${{ inputs.changed_files }}
+        AFFECTED_CRATES: ${{ inputs.affected_crates }}
+        UPLOAD_ARTIFACT: ${{ inputs.upload_artifact }}
+        ARTIFACT_NAME: ${{ inputs.artifact_name }}
+      run: |
+        set -euo pipefail
+
+        profile=manual-full
+        changed_files_json=$(printf '%s\n' "$CHANGED_FILES" | jq -Rsc 'split("\n") | map(select(length > 0))')
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          profile=pr-ready
+          if [[ "$DRAFT" == "true" ]]; then
+            profile=pr-draft
+          fi
+        elif [[ "$EVENT_NAME" == "push" ]]; then
+          profile=main
+        else
+          changed_files_json='["__force_all__"]'
+        fi
+
+        affected_crates_json="${AFFECTED_CRATES:-[]}"
+        jq -e 'type == "array"' <<<"$affected_crates_json" >/dev/null
+        jq -cn \
+          --arg profile "$profile" \
+          --arg event_name "$EVENT_NAME" \
+          --arg source_sha "$SOURCE_SHA" \
+          --arg base_sha "$BASE_SHA" \
+          --argjson changed_files "$changed_files_json" \
+          --argjson affected_crates "$affected_crates_json" \
+          '{profile: $profile, event_name: $event_name, source_sha: $source_sha, base_sha: $base_sha, changed_files: $changed_files}
+           + if ($affected_crates | length) > 0 then {affected_crates: $affected_crates} else {} end' \
+          | python3 scripts/plan-ci.py > ci-plan.json
+
+        plan_json=$(jq -c . ci-plan.json)
+        plan_digest=$(printf '%s' "$plan_json" | sha256sum | awk '{print $1}')
+        jq -e '.schema_version == 1' ci-plan.json >/dev/null
+        quality_lane_plan=$(jq -ce '
+          {
+            lane: "quality",
+            required: (([.required_slices[] | select(. == "quality" or . == "runner-contract")] | length) > 0),
+            profile,
+            domains,
+            required_slices,
+            signals,
+            budgets,
+            matrices: {clippy: .matrices.clippy}
+          }
+        ' ci-plan.json)
+        website_lane_plan=$(jq -ce '
+          {
+            lane: "website",
+            required: ((.required_slices | index("web")) != null),
+            profile,
+            domains,
+            required_slices,
+            signals,
+            budgets,
+            matrices: {}
+          }
+        ' ci-plan.json)
+        {
+          echo "plan_path=ci-plan.json"
+          echo "plan_json=$plan_json"
+          echo "plan_digest=$plan_digest"
+          echo "profile=$(jq -r '.profile' ci-plan.json)"
+          echo "required_slices=$(jq -c '.required_slices' ci-plan.json)"
+          echo "domains=$(jq -c '.domains' ci-plan.json)"
+          echo "affected_crates=$(jq -c '.affected_crates' ci-plan.json)"
+          echo "clippy_matrix=$(jq -c '.matrices.clippy' ci-plan.json)"
+          echo "rust_tests_matrix=$(jq -c '.matrices.rust_tests' ci-plan.json)"
+          echo "hosts_matrix=$(jq -c '.matrices.hosts' ci-plan.json)"
+          echo "runtime_products_matrix=$(jq -c '.matrices.runtime_products' ci-plan.json)"
+          echo "platform_checks_matrix=$(jq -c '.matrices.platform_checks' ci-plan.json)"
+          echo "smoke_matrix=$(jq -c '.matrices.smoke' ci-plan.json)"
+          echo "sdk_matrix=$(jq -c '.matrices.sdk' ci-plan.json)"
+          echo "linux_hosts_matrix=$(jq -c '[.matrices.hosts[] | select(.platform == "linux")]' ci-plan.json)"
+          echo "macos_hosts_matrix=$(jq -c '[.matrices.hosts[] | select(.platform == "macos")]' ci-plan.json)"
+          echo "windows_hosts_matrix=$(jq -c '[.matrices.hosts[] | select(.platform == "windows")]' ci-plan.json)"
+          echo "linux_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "linux")]' ci-plan.json)"
+          echo "macos_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "macos")]' ci-plan.json)"
+          echo "windows_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "windows")]' ci-plan.json)"
+          for signal in rust_changed ui_changed website_changed website_docs_changed cli_surface_changed docs_only backend_changed runner_contract_required; do
+            echo "${signal}=$(jq -r --arg signal "$signal" '.signals[$signal]' ci-plan.json)"
+          done
+          echo "linux_max_parallel=$(jq -r '.budgets.linux_max_parallel' ci-plan.json)"
+          echo "macos_max_parallel=$(jq -r '.budgets.macos_max_parallel' ci-plan.json)"
+          echo "windows_max_parallel=$(jq -r '.budgets.windows_max_parallel' ci-plan.json)"
+          echo "total_max_workers=$(jq -r '.budgets.total_max_workers' ci-plan.json)"
+          echo "quality_lane_plan=$quality_lane_plan"
+          echo "website_lane_plan=$website_lane_plan"
+          echo "linux_lane_plan=$(jq -c '
+            {
+              lane: "linux",
+              profile,
+              domains,
+              required_slices,
+              signals,
+              budgets,
+              matrices: {
+                rust_tests: .matrices.rust_tests,
+                hosts: [.matrices.hosts[] | select(.platform == "linux")],
+                runtime_products: [.matrices.runtime_products[] | select(.platform == "linux")],
+                smoke: [.matrices.smoke[] | select(.id != "metal-model-load")],
+                sdk: [.matrices.sdk[] | select(.platform == "linux")]
+              }
+            }
+            | .required = (
+                (.matrices.rust_tests | length) > 0
+                or (.matrices.hosts | length) > 0
+                or (.matrices.runtime_products | length) > 0
+                or (.matrices.smoke | length) > 0
+                or (.matrices.sdk | length) > 0
+                or ((.required_slices | index("static-abi")) != null)
+              )
+          ' ci-plan.json)"
+          echo "macos_lane_plan=$(jq -c '
+            {
+              lane: "macos",
+              profile,
+              domains,
+              required_slices,
+              signals,
+              budgets,
+              matrices: {
+                hosts: [.matrices.hosts[] | select(.platform == "macos")],
+                runtime_products: [.matrices.runtime_products[] | select(.platform == "macos")],
+                platform_checks: [.matrices.platform_checks[] | select(.platform == "macos")],
+                smoke: [.matrices.smoke[] | select(.id == "metal-model-load")],
+                sdk: [.matrices.sdk[] | select(.platform == "macos")]
+              }
+            }
+            | .required = ([.matrices[] | length] | add) > 0
+          ' ci-plan.json)"
+          echo "windows_lane_plan=$(jq -c '
+            {
+              lane: "windows",
+              profile,
+              domains,
+              required_slices,
+              signals,
+              budgets,
+              matrices: {
+                hosts: [.matrices.hosts[] | select(.platform == "windows")],
+                runtime_products: [.matrices.runtime_products[] | select(.platform == "windows")],
+                platform_checks: [.matrices.platform_checks[] | select(.platform == "windows")]
+              }
+            }
+            | .required = ([.matrices[] | length] | add) > 0
+          ' ci-plan.json)"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "## CI plan"
+          echo
+          echo "- Profile: \`$(jq -r '.profile' ci-plan.json)\`"
+          echo "- Plan digest: \`$plan_digest\`"
+          echo "- Domains: $(jq -r '(.domains // []) | join(", ")' ci-plan.json)"
+          echo "- Slices: $(jq -r '(.required_slices // []) | join(", ")' ci-plan.json)"
+          echo
+          jq -r '.matrices | to_entries[] | "- \(.key): \(.value | length) rows"' ci-plan.json
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [[ "$UPLOAD_ARTIFACT" == "true" ]]; then
+          [[ -n "$ARTIFACT_NAME" ]] || { echo "artifact_name is required" >&2; exit 1; }
+        fi
+    - name: Upload CI plan evidence
+      if: ${{ inputs.upload_artifact == 'true' }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ci-plan.json
+        if-no-files-found: error
+        retention-days: 1

@@ -45,7 +45,7 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
         eprintln!("- Runtime: {}", runtime_summary(plan, actions));
         eprintln!("- Service: {}", service_summary(plan, actions));
         eprintln!(
-            "- GitHub: {}",
+            "- GitHub star: {}",
             super::github::github_summary(plan, &actions.github_outcome)
         );
         return;
@@ -55,7 +55,7 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
     eprintln!("  Runtime  {}", runtime_brief(plan, actions));
     eprintln!("  Service  {}", service_brief(plan, actions));
     if let Some(github) = github_brief(actions) {
-        eprintln!("  GitHub   {github}");
+        eprintln!("  GitHub star  {github}");
     }
 }
 
@@ -170,8 +170,12 @@ fn github_brief(actions: &CliSetupActions<'_>) -> Option<String> {
         | super::github::SetupGitHubOutcome::EligibilityCheckFailed(_) => {
             Some(style_warn("not starred"))
         }
-        super::github::SetupGitHubOutcome::CliUnavailable => Some(style_muted("gh unavailable")),
-        super::github::SetupGitHubOutcome::NotAuthenticated => Some(style_muted("gh signed out")),
+        super::github::SetupGitHubOutcome::CliUnavailable => {
+            Some(style_muted("skipped; gh unavailable"))
+        }
+        super::github::SetupGitHubOutcome::NotAuthenticated => {
+            Some(style_muted("skipped; gh not authenticated"))
+        }
         super::github::SetupGitHubOutcome::NotEvaluated => Some(style_muted("not recorded")),
         _ => None,
     }
@@ -225,7 +229,7 @@ mod tests {
 
         assert_eq!(
             github_brief(&actions).map(|brief| strip_ansi_styles(&brief)),
-            Some("gh unavailable".to_string())
+            Some("skipped; gh unavailable".to_string())
         );
     }
 
@@ -235,7 +239,7 @@ mod tests {
 
         assert_eq!(
             github_brief(&actions).map(|brief| strip_ansi_styles(&brief)),
-            Some("gh signed out".to_string())
+            Some("skipped; gh not authenticated".to_string())
         );
     }
 }

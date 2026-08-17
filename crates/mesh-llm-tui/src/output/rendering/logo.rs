@@ -4,7 +4,8 @@ use super::{
     PRETTY_TUI_SPLASH_ANSI, PRETTY_TUI_SPLASH_TEXT, Paragraph, Rect, Span, StartupLifecycleState,
     Style, Text, event_line, single_line_status_text, truncate_with_ellipsis, tui_theme,
 };
-use crate::output::formatting::{OutputEventPresentation, format_model_download_progress_message};
+use crate::output::formatting::format_model_download_progress_message;
+use crate::output::logging_projection::projected_summary_line;
 use ansi_to_tui::IntoText as _;
 use mesh_llm_events::{ModelProgressStatus, OutputEvent};
 
@@ -613,10 +614,10 @@ pub(in crate::output) fn startup_history_summary(event: &OutputEvent) -> Option<
         | OutputEvent::ApiReady { .. }
         | OutputEvent::RuntimeReady { .. }
         | OutputEvent::Error { .. }
-        | OutputEvent::Warning { .. } => Some(event.summary_line()),
+        | OutputEvent::Warning { .. } => Some(projected_summary_line(event)),
         OutputEvent::ModelDownloadProgress { status, .. } => {
             if matches!(status, ModelProgressStatus::Ready) {
-                Some(event.summary_line())
+                Some(projected_summary_line(event))
             } else {
                 None
             }

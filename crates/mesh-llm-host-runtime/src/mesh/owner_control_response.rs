@@ -38,6 +38,52 @@ pub(super) fn config_diagnostics_to_proto(
 pub(super) fn proto_apply_mode(apply_mode: ConfigApplyMode) -> i32 {
     match apply_mode {
         ConfigApplyMode::Staged => node::ConfigApplyMode::Staged as i32,
+        ConfigApplyMode::Live => node::ConfigApplyMode::Live as i32,
         ConfigApplyMode::Noop => node::ConfigApplyMode::Noop as i32,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn staged_config_changes_never_advertise_live_application() {
+        assert_eq!(
+            proto_apply_mode(ConfigApplyMode::Staged),
+            node::ConfigApplyMode::Staged as i32
+        );
+        assert_ne!(
+            proto_apply_mode(ConfigApplyMode::Staged),
+            node::ConfigApplyMode::Live as i32
+        );
+    }
+
+    #[test]
+    fn live_config_changes_advertise_live_application() {
+        assert_eq!(
+            proto_apply_mode(ConfigApplyMode::Live),
+            node::ConfigApplyMode::Live as i32
+        );
+    }
+
+    #[test]
+    fn config_apply_modes_map_to_explicit_protocol_modes() {
+        for apply_mode in [
+            ConfigApplyMode::Staged,
+            ConfigApplyMode::Live,
+            ConfigApplyMode::Noop,
+        ] {
+            assert_ne!(
+                proto_apply_mode(apply_mode),
+                node::ConfigApplyMode::Unspecified as i32,
+                "{apply_mode:?} must not be advertised as unspecified"
+            );
+        }
+
+        assert_eq!(
+            proto_apply_mode(ConfigApplyMode::Noop),
+            node::ConfigApplyMode::Noop as i32
+        );
     }
 }

@@ -334,9 +334,11 @@ mesh-llm --llama-flavor cuda serve \
   </picture>
 </a>
 
-Mesh LLM is adopting [Depot's managed GitHub Actions
-runners](https://depot.dev/docs/github-actions/overview) for non-GPU CI builds.
-Hardware-qualified GPU tests remain on dedicated runners.
+Trusted `main` Linux jobs may use [Depot's managed GitHub Actions
+runners](https://depot.dev/docs/github-actions/overview) through the checked-in
+runner policy. Pull requests remain on GitHub-hosted runners until the cache
+isolation and protected-workflow gates in [`ci/DEPOT_MIGRATION.md`](ci/DEPOT_MIGRATION.md)
+are proven. Hardware-qualified GPU tests remain on dedicated runners.
 
 ## Community
 

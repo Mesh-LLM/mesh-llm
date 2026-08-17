@@ -729,9 +729,13 @@ gpu_id = "pci:0000:65:00.0"
             ("AdvancedServerConfig", 2),
             ("TelemetryConfig", 1),
             ("TelemetryMetricsConfig", 1),
+            ("AuditConfig", 1),
             ("PluginConfigEntry", 1),
             ("PluginStartupConfig", 1),
             ("RuntimeActivityConfig", 1),
+            ("LoggingConfig", 1),
+            ("LoggingArtifactConfig", 1),
+            ("LoggingWebhookConfig", 1),
         ];
         let nested = [
             "GpuConfig",
@@ -741,6 +745,7 @@ gpu_id = "pci:0000:65:00.0"
             "NativeRuntimeConfig",
             "TelemetryConfig",
             "TelemetryMetricsConfig",
+            "AuditConfig",
             "ModelConfigDefaults",
             "ModelConfigEntry",
             "ModelFitConfig",
@@ -756,6 +761,9 @@ gpu_id = "pci:0000:65:00.0"
             "PluginConfigEntry",
             "PluginStartupConfig",
             "RuntimeActivityConfig",
+            "LoggingConfig",
+            "LoggingArtifactConfig",
+            "LoggingWebhookConfig",
         ];
         let ignored = [
             "extra",

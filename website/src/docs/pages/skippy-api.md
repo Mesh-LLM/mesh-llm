@@ -1122,7 +1122,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
 <a id="skippy-fn-skippy-import-kv-page"></a>
 #### `skippy_import_kv_page`
 
-Imports a described KV page into a session.
+Imports a described KV page. Composite pages require a fresh session and are cleared on failure.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_import_kv_page(
@@ -1282,7 +1282,7 @@ LLAMA_API enum skippy_status skippy_parse_chat_response_json(
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 38`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 39`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_slice_plan`, `skippy_tensor_info`
@@ -1290,6 +1290,6 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `sampling.h`: `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`
 - `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`
 - `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`
-- `state.h`: `skippy_kv_page_flag`, `skippy_kv_page_desc`
+- `state.h`: `skippy_kv_page_flag`, `skippy_kv_page_codec`, `skippy_kv_page_component_role`, `skippy_kv_page_component_desc`, `skippy_kv_page_desc`
 
 Source directory: `include/skippy/`. Regenerate this page after changing any public header or exported function.

@@ -383,10 +383,7 @@ fn declared_tiers_match_moa_role_assignment() {
     let models: Vec<ModelEntry> = pool
         .iter()
         .enumerate()
-        .map(|(i, m)| ModelEntry {
-            name: m.id.to_string(),
-            backend_index: i,
-        })
+        .map(|(i, m)| ModelEntry::new(m.id.to_string(), i))
         .collect();
     let assignments = moa::worker::assign_roles(&models);
 
@@ -421,10 +418,7 @@ fn moa_config(pool: &[PoolModel], api_key: &str, realism: bool) -> GatewayConfig
         } else {
             base
         };
-        models.push(ModelEntry {
-            name: m.id.to_string(),
-            backend_index: backends.len(),
-        });
+        models.push(ModelEntry::new(m.id.to_string(), backends.len()));
         backends.push(backend);
     }
     GatewayConfig {
@@ -2175,10 +2169,7 @@ fn e2e_config(pool: &[String], api_key: &str) -> GatewayConfig {
     let mut backends: Vec<Arc<dyn ModelBackend>> = Vec::new();
     let mut models = Vec::new();
     for id in pool {
-        models.push(ModelEntry {
-            name: id.clone(),
-            backend_index: backends.len(),
-        });
+        models.push(ModelEntry::new(id.clone(), backends.len()));
         backends.push(Arc::new(OpenRouterBackend::new(api_key.to_string())));
     }
     GatewayConfig {

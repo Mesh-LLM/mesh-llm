@@ -4,6 +4,8 @@ use crate::runtime::RuntimeOptions;
 use mesh_llm_events::{OutputEvent, emit_event};
 use std::cmp::Reverse;
 
+use super::operational_logging::{DiscoveryOperationalEvent, record_discovery_operational_event};
+
 /// Health probe: try QUIC connect to the mesh's bootstrap node.
 /// Returns Ok if reachable within 10s, Err if not.
 /// Re-discover meshes via Nostr when all peers are lost.
@@ -192,6 +194,7 @@ async fn discover_rediscovery_meshes(
     match nostr::discover(nostr_relays, &filter, None).await {
         Ok(meshes) => Some(meshes),
         Err(err) => {
+            record_discovery_operational_event(DiscoveryOperationalEvent::DiscoveryFailed);
             let _ = emit_event(OutputEvent::DiscoveryFailed {
                 message: "Nostr re-discovery failed".to_string(),
                 detail: Some(err.to_string()),
@@ -228,6 +231,7 @@ async fn discover_lan_rediscovery_candidates(
         {
             Ok(mut discovered) => candidates.append(&mut discovered),
             Err(err) => {
+                record_discovery_operational_event(DiscoveryOperationalEvent::DiscoveryFailed);
                 let _ = emit_event(OutputEvent::DiscoveryFailed {
                     message: "mDNS LAN re-discovery failed".to_string(),
                     detail: Some(err.to_string()),
@@ -266,6 +270,7 @@ fn report_no_rediscovery_meshes(
     mesh_name: Option<&str>,
     alone_since: &mut Option<std::time::Instant>,
 ) {
+    record_discovery_operational_event(DiscoveryOperationalEvent::DiscoveryFailed);
     let name_hint = mesh_name.unwrap_or("any");
     let _ = emit_event(OutputEvent::DiscoveryFailed {
         message: format!("No meshes found on Nostr matching \"{name_hint}\" — will retry"),
@@ -278,6 +283,7 @@ fn report_no_lan_rediscovery_meshes(
     mesh_name: Option<&str>,
     alone_since: &mut Option<std::time::Instant>,
 ) {
+    record_discovery_operational_event(DiscoveryOperationalEvent::DiscoveryFailed);
     let name_hint = mesh_name.unwrap_or("any");
     let _ = emit_event(OutputEvent::DiscoveryFailed {
         message: format!(
@@ -333,11 +339,13 @@ async fn try_rejoin_rediscovery_candidates(
     candidates: &[(&nostr::DiscoveredMesh, i64)],
     our_mesh_id: Option<&str>,
 ) -> bool {
+    record_discovery_operational_event(DiscoveryOperationalEvent::JoinStarted);
     for (mesh, _score) in candidates {
         if rediscovery_candidate_is_current_mesh(mesh, our_mesh_id) {
             continue;
         }
         if try_rejoin_rediscovery_mesh(node, mesh).await {
+            record_discovery_operational_event(DiscoveryOperationalEvent::JoinSucceeded);
             return true;
         }
     }
@@ -385,6 +393,7 @@ async fn try_rejoin_rediscovery_mesh(node: &mesh::Node, mesh: &nostr::Discovered
 }
 
 fn report_rediscovery_retry(alone_since: &mut Option<std::time::Instant>) {
+    record_discovery_operational_event(DiscoveryOperationalEvent::JoinFailed);
     let _ = emit_event(OutputEvent::DiscoveryFailed {
         message: "Could not re-join any mesh — will retry".to_string(),
         detail: None,

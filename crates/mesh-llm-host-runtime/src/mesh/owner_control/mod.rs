@@ -124,6 +124,46 @@ where
     })?
 }
 
+fn apply_owner_control_config_with_persistence<F>(
+    config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
+    mesh_config: crate::plugin::MeshConfig,
+    expected_revision: u64,
+    persist: F,
+) -> (crate::runtime::config_state::ApplyResult, u64, [u8; 32])
+where
+    F: FnOnce(
+        &crate::runtime::config_state::PendingConfigApply,
+    ) -> crate::runtime::config_state::ConfigPersistence,
+{
+    use crate::runtime::config_state::apply_prepared_config_with_live_logging;
+
+    // Applies must remain serialized from revision preflight through commit so
+    // a stale request cannot persist after a newer revision wins. The lock is
+    // independent from `config_state`, letting snapshots and watches proceed
+    // while the synchronous config and sidecar writes run.
+    let apply_serialization_lock = {
+        let state = config_state.blocking_lock();
+        state.apply_serialization_lock()
+    };
+    let _apply_serialization_guard = apply_serialization_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let preparation = {
+        let state = config_state.blocking_lock();
+        state.prepare_apply(mesh_config, expected_revision)
+    };
+    let result =
+        apply_prepared_config_with_live_logging(preparation, persist, |pending, persistence| {
+            let mut state = config_state.blocking_lock();
+            state.finish_apply(pending, persistence)
+        });
+    let state = config_state.blocking_lock();
+    let current_revision = state.revision();
+    let current_hash = *state.config_hash();
+    (result, current_revision, current_hash)
+}
+
 async fn await_owner_control_terminal_completion<F, E, T>(future: F) -> anyhow::Result<()>
 where
     F: Future<Output = Result<Option<T>, E>>,
@@ -760,11 +800,12 @@ impl Node {
         let expected_revision = apply.expected_revision;
         let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             preflight_pushed_config_for_current_node(&mesh_config)?;
-            let mut state = config_state.blocking_lock();
-            let result = state.apply(mesh_config, expected_revision);
-            let current_revision = state.revision();
-            let current_hash = *state.config_hash();
-            Ok((result, current_revision, current_hash))
+            Ok(apply_owner_control_config_with_persistence(
+                config_state,
+                mesh_config,
+                expected_revision,
+                crate::runtime::config_state::PendingConfigApply::persist,
+            ))
         })
         .await
         .map_err(|e| anyhow::anyhow!("config apply task panicked: {e}"))?;
@@ -793,7 +834,7 @@ impl Node {
                 apply_mode,
                 diagnostics,
             } => {
-                if apply_mode == ConfigApplyMode::Staged {
+                if apply_mode != ConfigApplyMode::Noop {
                     let _ = self.config_revision_tx.send(revision);
                 }
                 owner_control_response::apply_response_envelope(
@@ -804,6 +845,28 @@ impl Node {
                         config_hash: hash.to_vec(),
                         error: None,
                         apply_mode: owner_control_response::proto_apply_mode(apply_mode),
+                        diagnostics: owner_control_response::config_diagnostics_to_proto(
+                            &diagnostics,
+                        ),
+                    },
+                )
+            }
+            ApplyResult::AppliedWithRestartRequired {
+                revision,
+                hash,
+                diagnostics,
+            } => {
+                let _ = self.config_revision_tx.send(revision);
+                owner_control_response::apply_response_envelope(
+                    request_id,
+                    crate::proto::node::OwnerControlApplyConfigResponse {
+                        success: true,
+                        current_revision: revision,
+                        config_hash: hash.to_vec(),
+                        error: None,
+                        apply_mode: owner_control_response::proto_apply_mode(
+                            ConfigApplyMode::Staged,
+                        ),
                         diagnostics: owner_control_response::config_diagnostics_to_proto(
                             &diagnostics,
                         ),
@@ -1027,6 +1090,48 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn config_persistence_releases_config_state_mutex() {
+        let directory = std::env::temp_dir().join(format!(
+            "mesh-llm-owner-control-config-lock-{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&directory).expect("create test directory");
+        let config_path = directory.join("config.toml");
+        let config_state = Arc::new(tokio::sync::Mutex::new(
+            crate::runtime::config_state::ConfigState::load(&config_path)
+                .expect("load config state"),
+        ));
+        let persistence_lock_check = Arc::clone(&config_state);
+        let apply_state = Arc::clone(&config_state);
+        let config = crate::plugin::MeshConfig {
+            version: Some(1),
+            ..Default::default()
+        };
+
+        let (result, revision, _hash) = tokio::task::spawn_blocking(move || {
+            apply_owner_control_config_with_persistence(apply_state, config, 0, |pending| {
+                assert!(
+                    persistence_lock_check.try_lock().is_ok(),
+                    "config_state mutex must be released while config persistence runs"
+                );
+                pending.persist()
+            })
+        })
+        .await
+        .expect("config apply task should not panic");
+
+        assert!(
+            matches!(
+                result,
+                crate::runtime::config_state::ApplyResult::Applied { revision: 1, .. }
+            ),
+            "config apply should commit after persistence: {result:?}"
+        );
+        assert_eq!(revision, 1);
+        std::fs::remove_dir_all(&directory).ok();
+    }
 
     #[tokio::test(start_paused = true)]
     async fn response_write_timeout_is_bounded() {

@@ -7,7 +7,19 @@ use crate::benchmark::{BenchmarkCommand, GpuBenchmarkBackend};
 use crate::models;
 use crate::runtime::RuntimeCommand;
 use mesh_llm_events::LogFormat;
+use mesh_llm_events::audit::{AuditLevel, AuditLogFormat};
 use serde::Serialize;
+
+fn parse_kv_cache_disk(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("auto") || value.eq_ignore_ascii_case("off") {
+        return Ok(value.to_ascii_lowercase());
+    }
+    match value.parse::<f64>() {
+        Ok(gb) if gb.is_finite() && gb > 0.0 && gb * 1024.0 >= 1.0 => Ok(value.to_string()),
+        _ => Err("expected a positive size in GB, `auto`, or `off`".to_string()),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum BinaryFlavor {
@@ -425,6 +437,18 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = LogFormat::Pretty)]
     pub log_format: LogFormat,
 
+    /// Audit log file path (enables audit logging when set).
+    #[arg(long, hide = true)]
+    pub audit_log_path: Option<PathBuf>,
+
+    /// Audit log format.
+    #[arg(long, value_enum, default_value_t = AuditLogFormat::JsonLines, hide = true)]
+    pub audit_log_format: AuditLogFormat,
+
+    /// Minimum audit log level.
+    #[arg(long, value_enum, default_value_t = AuditLevel::Info, hide = true)]
+    pub audit_log_level: AuditLevel,
+
     /// Enable mesh runtime debug output; set MESH_LLM_DEBUG_NATIVE_VERBOSE=1 for verbose llama.cpp native logs.
     #[arg(long)]
     pub debug: bool,
@@ -657,6 +681,22 @@ pub struct Cli {
     /// Cap VRAM used for planning, local-fit decisions, and mesh advertisement (GB).
     #[arg(long)]
     pub max_vram: Option<f64>,
+
+    /// Keep agent prompt prefixes on disk so they survive a restart, capped at
+    /// this many GB for the whole node. Defaults to `auto`, sized from free
+    /// space. Use `off` to disable the disk cache.
+    #[arg(
+        long,
+        value_name = "GB|auto|off",
+        default_value = "auto",
+        value_parser = parse_kv_cache_disk
+    )]
+    pub kv_cache_disk: String,
+
+    /// Directory for the on-disk KV prefix cache. Defaults to
+    /// `~/.mesh-llm/kv-cache`.
+    #[arg(long, value_name = "PATH")]
+    pub kv_cache_disk_dir: Option<PathBuf>,
 
     /// Disable broadcasting GPU name, hostname, VRAM, and reserved bytes to peers. By default all nodes announce this hardware info.
     #[arg(long = "no-enumerate-host", hide = true)]
@@ -1182,6 +1222,33 @@ mod tests {
     use crate::models::{ModelSearchSort, ModelsCommand};
     use clap::{CommandFactory, Parser, error::ErrorKind};
     use mesh_llm_events::LogFormat;
+
+    #[test]
+    fn disk_cache_defaults_to_auto_and_accepts_explicit_off() {
+        let default = Cli::try_parse_from(["mesh-llm", "serve"]).expect("default CLI");
+        assert_eq!(default.kv_cache_disk, "auto");
+
+        let normalized = crate::parser::normalize_runtime_surface_args([
+            "mesh-llm",
+            "serve",
+            "--kv-cache-disk",
+            "off",
+        ]);
+        let off = Cli::try_parse_from(normalized.normalized).expect("off CLI");
+        assert_eq!(off.kv_cache_disk, "off");
+    }
+
+    #[test]
+    fn disk_cache_rejects_invalid_or_zero_budgets() {
+        for value in ["0", "-1", "tiny", "0.0001"] {
+            let argument = format!("--kv-cache-disk={value}");
+            let normalized =
+                crate::parser::normalize_runtime_surface_args(["mesh-llm", "serve", &argument]);
+            let error =
+                Cli::try_parse_from(normalized.normalized).expect_err("invalid disk cache budget");
+            assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        }
+    }
 
     #[test]
     fn native_serving_plugin_deadline_rejects_zero() {

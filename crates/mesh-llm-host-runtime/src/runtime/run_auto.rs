@@ -1,4 +1,5 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
+use super::plugin_host_role;
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
 use super::status::mesh_guardrail_mode_to_openai;
 use super::{
@@ -7,21 +8,22 @@ use super::{
     PreparedRuntimeStartup, RunAutoAdditionalModelsContext, RunAutoConsoleStateContext,
     RunAutoRuntimeLifecycleContext, RunAutoServingSurface, RunAutoServingSurfaceContext,
     RuntimeCapacityLedger, RuntimeDashboardSnapshotProvider, RuntimeEvent, RuntimeInstanceRegistry,
-    RuntimeModelHandleEntry, RuntimeOptions, RuntimeResourcePlanningProfile, RuntimeSurface,
-    SkippyNativeLogForwardingGuard, StartupLocalModelTask, StartupMeshCreationState,
-    StartupModelPlan, StartupModelSpec, StartupReadyReporter, bridge_skippy_native_logs,
-    build_serving_list, cli_has_explicit_models, configure_skippy_native_logging,
-    emit_configuration_ui_read_only_hint, initialize_embedded_runtime_entrypoint,
-    initialize_runtime_entrypoint, maybe_discover_join_candidates, next_runtime_instance_id,
-    nostr_rediscovery, nostr_relays, openai_guardrail_policy_handle, owner_runtime_config,
-    prepare_runtime_startup, publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
-    resolve_runtime_owner_key_path, resolve_startup_mesh_creation_state, run_auto_join_mesh_phase,
-    run_auto_model_identity, run_auto_model_path_or_shutdown, run_auto_runtime_loop_and_shutdown,
-    run_local_model_only, runtime_data_producer_for_console, runtime_startup_requirements,
-    setup_run_auto_console_state, setup_run_auto_serving_surface,
-    spawn_embedded_runtime_control_forwarder, spawn_run_auto_additional_model_tasks,
-    spawn_run_auto_discovery_publisher, start_run_auto_bootstrap_proxy, startup_local_model_loop,
-    swarm_capture_observer_requested,
+    RuntimeModelHandleEntry, RuntimeOperationalEvent, RuntimeOptions,
+    RuntimeResourcePlanningProfile, RuntimeSurface, SkippyNativeLogForwardingGuard,
+    StartupLocalModelTask, StartupMeshCreationState, StartupModelPlan, StartupModelSpec,
+    StartupReadyReporter, bridge_skippy_native_logs, build_serving_list, cli_has_explicit_models,
+    configure_skippy_native_logging, emit_configuration_ui_read_only_hint,
+    initialize_embedded_runtime_entrypoint, initialize_runtime_entrypoint,
+    maybe_discover_join_candidates, next_runtime_instance_id, nostr_rediscovery, nostr_relays,
+    openai_guardrail_policy_handle, owner_runtime_config, prepare_runtime_startup,
+    publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
+    record_runtime_operational_event, resolve_runtime_owner_key_path,
+    resolve_startup_mesh_creation_state, run_auto_join_mesh_phase, run_auto_model_identity,
+    run_auto_model_path_or_shutdown, run_auto_runtime_loop_and_shutdown, run_local_model_only,
+    runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
+    setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
+    spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
+    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -35,7 +37,9 @@ use crate::network::{
 use crate::plugin;
 use crate::runtime::release_attestation;
 use crate::runtime::survey;
-use crate::runtime::{InstanceLifecycleRecord, InstanceLifecycleState};
+use crate::runtime::{
+    InstanceLifecycleRecord, InstanceLifecycleState, tracing_writer::init_audit_logging,
+};
 use crate::system::{autoupdate, benchmark, hardware};
 use anyhow::Result;
 use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
@@ -182,6 +186,8 @@ pub(crate) async fn run_cli(
 
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
     initialize_embedded_runtime_entrypoint()?;
+    crate::sdk::embedded_logging::initialize_embedded_logging(options.config_path.as_deref())
+        .await?;
 
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
@@ -247,14 +253,17 @@ pub(super) async fn run_runtime_cli(
         });
     }
 
-    // This topology is intentionally selected before plugin startup, release
-    // lookup, config-driven mesh discovery, and `mesh::Node::start`. Its only
-    // long-lived serving surfaces are the local Skippy runtime and OpenAI API.
+    // These topologies are intentionally selected before plugin startup,
+    // release lookup, config-driven mesh discovery, and `mesh::Node::start`.
+    // Load config only to configure their optional audit sink; failures stay
+    // nonfatal so they retain their early-return behavior.
     if options.local_model_only {
+        initialize_early_topology_audit_logging(&mut options)?;
         return run_local_model_only(options).await;
     }
 
     if let Some(name) = options.plugin.clone() {
+        initialize_early_topology_audit_logging(&mut options)?;
         return plugin::run_plugin_process(name).await;
     }
 
@@ -280,6 +289,9 @@ pub(super) async fn run_runtime_cli(
     options.client = effective_mode == mesh_llm_config::RuntimeMode::Client;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     apply_runtime_config_options(&mut options, &config);
+
+    initialize_audit_logging_for_options(&options)?;
+
     let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&options, &config)?;
     let cli_has_explicit_models = cli_has_explicit_models(&options);
     let has_config_models = !config.models.is_empty();
@@ -340,6 +352,78 @@ pub(super) fn apply_runtime_config_options(
 ) {
     options.debug |= config.runtime.debug;
     options.listen_all |= config.runtime.listen_all;
+
+    let cli_path_supplied = options.audit_log_path.is_some();
+    let audit = &config.logging.audit;
+    let config_enabled =
+        config.logging.enabled && audit.enabled.unwrap_or(audit.log_path.is_some());
+    options.audit_max_file_size = audit
+        .max_file_size_mb
+        .unwrap_or(100)
+        .saturating_mul(1024 * 1024);
+    options.audit_max_files = audit.max_files.unwrap_or(10);
+    if !cli_path_supplied && config_enabled {
+        options.audit_log_path = audit.log_path.clone();
+        options.audit_log_format = audit
+            .log_format
+            .as_deref()
+            .and_then(|s| {
+                (s == "json_lines").then_some(mesh_llm_events::audit::AuditLogFormat::JsonLines)
+            })
+            .unwrap_or(mesh_llm_events::audit::AuditLogFormat::JsonLines);
+        options.audit_log_level = audit
+            .log_level
+            .as_deref()
+            .and_then(|s| match s {
+                "info" => Some(mesh_llm_events::audit::AuditLevel::Info),
+                "warn" => Some(mesh_llm_events::audit::AuditLevel::Warn),
+                "error" => Some(mesh_llm_events::audit::AuditLevel::Error),
+                "critical" => Some(mesh_llm_events::audit::AuditLevel::Critical),
+                _ => None,
+            })
+            .unwrap_or(mesh_llm_events::audit::AuditLevel::Info);
+    }
+}
+
+fn initialize_early_topology_audit_logging(options: &mut RuntimeOptions) -> Result<()> {
+    let config_path = options.config.clone();
+    initialize_early_topology_audit_logging_with(
+        options,
+        || plugin::load_config(config_path.as_deref()),
+        initialize_audit_logging_for_options,
+    )
+}
+
+pub(super) fn initialize_early_topology_audit_logging_with(
+    options: &mut RuntimeOptions,
+    load_config: impl FnOnce() -> Result<plugin::MeshConfig>,
+    initialize_audit_logging: impl FnOnce(&RuntimeOptions) -> Result<()>,
+) -> Result<()> {
+    match load_config() {
+        Ok(config) => apply_runtime_config_options(options, &config),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "failed to load config for early topology audit logging; continuing without config-derived audit settings"
+            );
+        }
+    }
+    initialize_audit_logging(options)
+}
+
+fn initialize_audit_logging_for_options(options: &RuntimeOptions) -> Result<()> {
+    // An effective path is the enabling condition. A CLI path is an explicit
+    // opt-in even when the persisted config disables its own sink.
+    if options.audit_log_path.is_some() {
+        init_audit_logging(
+            options.audit_log_path.clone(),
+            options.audit_log_format,
+            options.audit_log_level,
+            options.audit_max_file_size,
+            options.audit_max_files,
+        )?;
+    }
+    Ok(())
 }
 
 pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
@@ -520,7 +604,53 @@ pub(super) fn configure_run_auto_process_state(
     skippy_runtime::set_filtered_native_logs_enabled(true);
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
+    configure_kv_disk_cache(options);
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));
+}
+
+/// Propagate CLI policy through a typed process-local configuration. This does
+/// not mutate process environment; lower-level legacy environment variables
+/// remain available when skippy-server is used without this host configuration.
+fn configure_kv_disk_cache(options: &RuntimeOptions) {
+    let budget = parse_kv_cache_disk(&options.kv_cache_disk)
+        .expect("CLI validates --kv-cache-disk before runtime startup");
+    let budget = match budget {
+        KvDiskBudget::Off => skippy_server::KvDiskCacheBudget::Off,
+        KvDiskBudget::Auto => skippy_server::KvDiskCacheBudget::Auto,
+        KvDiskBudget::Mib(mib) => {
+            skippy_server::KvDiskCacheBudget::Bytes(mib.saturating_mul(1024 * 1024))
+        }
+    };
+    let config = skippy_server::KvDiskCacheConfig {
+        budget,
+        directory: options.kv_cache_disk_dir.clone(),
+    };
+    if skippy_server::configure_kv_disk_cache(config).is_err() {
+        tracing::debug!("KV disk cache policy was already configured");
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum KvDiskBudget {
+    Off,
+    Auto,
+    Mib(u64),
+}
+
+fn parse_kv_cache_disk(raw: &str) -> Option<KvDiskBudget> {
+    let value = raw.trim();
+    if value.eq_ignore_ascii_case("off") {
+        return Some(KvDiskBudget::Off);
+    }
+    if value.eq_ignore_ascii_case("auto") {
+        return Some(KvDiskBudget::Auto);
+    }
+    match value.parse::<f64>() {
+        Ok(gb) if gb.is_finite() && gb > 0.0 && gb * 1024.0 >= 1.0 => {
+            Some(KvDiskBudget::Mib((gb * 1024.0).round() as u64))
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
@@ -729,6 +859,12 @@ pub(super) fn run_auto_survey_hardware(is_client: bool) -> hardware::HardwareSur
     }
 }
 
+fn attach_logging_metrics_to_survey(survey_telemetry: &survey::SurveyTelemetry) {
+    if let Some(logging) = crate::logging_runtime_state() {
+        logging.set_metrics_sink(survey_telemetry.logging_sink());
+    }
+}
+
 pub(super) async fn build_run_auto_node_setup(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -763,6 +899,7 @@ pub(super) async fn build_run_auto_node_setup(
             node_role: if is_client { "client" } else { "worker" }.into(),
         },
     );
+    attach_logging_metrics_to_survey(&survey_telemetry);
     node.set_routing_telemetry_sink(survey_telemetry.routing_sink());
     node.set_available_models(local_models.clone()).await;
     let _activity_policy_task = super::activity_policy::spawn_native_activity_policy(
@@ -913,6 +1050,10 @@ pub(super) struct RunAutoRuntimeState {
     pub(super) dashboard_context_usage: DashboardContextUsage,
     pub(super) input_handler_enabled: bool,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
+    /// The installed process-local logging service owned by this runtime
+    /// invocation. It is started only after the Phase 1 state has completed
+    /// its confined store/artifact recovery, then drained before runtime exit.
+    pub(super) logging_service: Option<Arc<crate::logging::LoggingService>>,
 }
 
 pub(super) struct RunAutoStartupTasksContext<'a> {
@@ -959,7 +1100,21 @@ pub(super) fn initialize_run_auto_runtime_state(options: &RuntimeOptions) -> Run
         openai_guardrail_policy: openai_guardrail_policy_handle(mesh_guardrail_mode_to_openai(
             options.mesh_guardrails,
         )),
+        logging_service: None,
     }
+}
+
+/// Start the one persistence worker owned by the current runtime invocation.
+///
+/// The logging state is optional because disabled or fail-open initialization
+/// must never prevent serving. The state itself owns the corrected shared
+/// `LogStore`/artifact-capture resources, including startup recovery, so this
+/// function intentionally does not reopen either resource.
+pub(super) async fn start_run_auto_logging_service() -> Option<Arc<crate::logging::LoggingService>>
+{
+    crate::logging_runtime_state()?
+        .start_persistence_worker()
+        .await
 }
 
 pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksContext<'_>) {
@@ -1243,6 +1398,33 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
 
     let tunnel_mgr =
         tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
+    // Both halves of inbound reachability are established here for any node
+    // that can serve, rather than only as a side effect of a local model
+    // finishing load.
+    //
+    // `set_http_port` is what lets a plugin-only node (no local model ever
+    // loads) accept inbound requests at all: the api proxy it points at is
+    // already bound and already answers correctly with no models loaded, so a
+    // tunneled request arriving before any model is ready gets a normal "not
+    // available" response instead of being silently dropped (the previous
+    // behavior whenever this was still 0 — see `network/tunnel.rs`'s
+    // `port == 0` early-return). The three call sites in `startup_handles.rs`
+    // remain and are now redundant-but-harmless — same node, same `api_port`,
+    // for the lifetime of the process.
+    //
+    // `plugin_host_role::spawn` is the other half: whether peers actually
+    // route here.
+    //
+    // Both are gated on `!is_client`. A client node has no compute to offer
+    // and never advertises `Host`, so nothing selects it as a route target;
+    // leaving its inbound HTTP tunnel terminated at the `port == 0` check
+    // keeps it exactly as reachable as it was before this change — not at
+    // all — instead of turning it into a mesh-internal request relay for any
+    // admitted peer that dials it.
+    if !is_client {
+        tunnel_mgr.set_http_port(api_port);
+        plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
+    }
 
     // Election publishes per-model targets
     let (target_tx, target_rx) = tokio::sync::watch::channel(election::ModelTargets::default());
@@ -1255,6 +1437,8 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     let (runtime_event_tx, mut runtime_event_rx) =
         tokio::sync::mpsc::unbounded_channel::<RuntimeEvent>();
     let mut runtime_state = initialize_run_auto_runtime_state(&options);
+    runtime_state.logging_service = start_run_auto_logging_service().await;
+    record_runtime_operational_event(RuntimeOperationalEvent::StartupStarted);
 
     // Model intent channel: owner-control commands send intents here, control loop polls.
     let mut model_intent_rx = install_run_auto_model_intent_channel(node.clone()).await;
@@ -1340,6 +1524,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
                 "Runtime daemon ready; no local models are loaded".to_string()
             }),
         });
+        record_runtime_operational_event(RuntimeOperationalEvent::Ready);
     }
 
     // Discovery publish loop (if --publish) or Nostr watchdog (if --auto, to take over if publisher dies).
@@ -1381,4 +1566,31 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         anyhow::bail!("{summary}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod kv_cache_disk_tests {
+    use super::{KvDiskBudget, parse_kv_cache_disk};
+
+    #[test]
+    fn sizes_are_read_as_gigabytes() {
+        assert_eq!(parse_kv_cache_disk("8"), Some(KvDiskBudget::Mib(8192)));
+        assert_eq!(parse_kv_cache_disk(" 0.5 "), Some(KvDiskBudget::Mib(512)));
+    }
+
+    #[test]
+    fn auto_defers_to_the_free_space_policy() {
+        assert_eq!(parse_kv_cache_disk("auto"), Some(KvDiskBudget::Auto));
+        assert_eq!(parse_kv_cache_disk("AUTO"), Some(KvDiskBudget::Auto));
+        assert_eq!(parse_kv_cache_disk("off"), Some(KvDiskBudget::Off));
+    }
+
+    /// Each of these would otherwise disable the tier while looking like the
+    /// user had enabled it, which is the one outcome worth being loud about.
+    #[test]
+    fn unusable_budgets_are_rejected_rather_than_silently_ignored() {
+        for raw in ["0", "-4", "", "lots", "0.0001", "nan", "inf"] {
+            assert_eq!(parse_kv_cache_disk(raw), None, "should reject {raw:?}");
+        }
+    }
 }

@@ -78,11 +78,13 @@ class InstallScriptTests(unittest.TestCase):
                 """
                 export MESH_LLM_TEST_UNAME_S=Linux
                 export MESH_LLM_TEST_UNAME_M=aarch64
+                # No CUDA evidence of any kind on this host.
+                detect_cuda_major() { printf '\\n'; }
                 printf 'support=%s\\n' "$(platform_support_status)"
                 printf 'flavors=%s\\n' "$(supported_flavors)"
                 printf 'recommended=%s\\n' "$(recommended_flavor)"
                 printf 'cpu=%s\\n' "$(asset_name cpu)"
-                printf 'cuda=%s\\n' "$(asset_name cuda)"
+                printf 'cuda=%s\\n' "$(asset_name cuda || true)"
                 """,
             )
 
@@ -91,7 +93,120 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn("flavors=cuda cpu", result.stdout)
             self.assertIn("recommended=cpu", result.stdout)
             self.assertIn("cpu=mesh-llm-aarch64-unknown-linux-gnu.tar.gz", result.stdout)
-            self.assertIn("cuda=mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz", result.stdout)
+            # With no CUDA evidence at all there is no publishable cuda asset name.
+            # Releases stopped publishing the legacy bare -cuda archive when the
+            # lanes split into -cuda-12/-cuda-13, so asset_name must refuse rather
+            # than emit a name that always 404s.
+            self.assertIn("cuda=\n", result.stdout)
+            self.assertNotIn("mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz", result.stdout)
+            self.assertIn("could not determine a supported CUDA major version", result.stderr)
+            self.assertIn("--flavor cpu", result.stderr)
+            self.assertNotIn("--flavor vulkan", result.stderr)
+
+    def test_asset_name_uses_detected_cuda_major_lane(self) -> None:
+        for arch in ("aarch64", "x86_64"):
+            with self.subTest(arch=arch):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = Path(tmp)
+                    install_dir = tmp_path / "bin"
+                    install_dir.mkdir()
+
+                    result = self._run_helper(
+                        tmp_path,
+                        install_dir,
+                        f"""
+                        export MESH_LLM_TEST_UNAME_S=Linux
+                        export MESH_LLM_TEST_UNAME_M={arch}
+                        detect_cuda_major() {{ printf '13\\n'; }}
+                        asset_name cuda
+                        """,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        result.stdout.strip(),
+                        f"mesh-llm-{arch}-unknown-linux-gnu-cuda-13.tar.gz",
+                    )
+
+    def test_asset_name_uses_test_cuda_major_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                """
+                export MESH_LLM_TEST_UNAME_S=Linux
+                export MESH_LLM_TEST_UNAME_M=aarch64
+                export MESH_LLM_TEST_CUDA_MAJOR=13
+                asset_name cuda
+                """,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.strip(),
+                "mesh-llm-aarch64-unknown-linux-gnu-cuda-13.tar.gz",
+            )
+
+    def test_detect_cuda_major_requires_matching_cuda_libraries(self) -> None:
+        library_names = ("libcudart", "libcublas", "libcublasLt")
+        cases = (
+            # A driver report alone is not enough to select an archive.
+            ("CUDA Version: 13.0", None, ""),
+            ("CUDA Version: 13.0", ("13", "13", "13"), "13"),
+            ("CUDA Version: 12.4", ("12", "12", "12"), "12"),
+            ("CUDA Version: 12.4", ("13", "13", "13"), ""),
+            # A driver newer than any lane we publish clamps to the newest lane.
+            ("CUDA Version: 14.2", ("14", "14", "14"), "13"),
+            ("CUDA Version: 13.0", ("13", "12", "13"), ""),
+        )
+        for header, library_majors, expected in cases:
+            with self.subTest(header=header, library_majors=library_majors):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = Path(tmp)
+                    install_dir = tmp_path / "bin"
+                    install_dir.mkdir()
+                    probe_root = tmp_path / "cuda-probe-root"
+                    probe_root.mkdir()
+                    wrappers = tmp_path / "wrappers"
+                    wrappers.mkdir()
+                    for absent in ("nvcc",):
+                        stub = wrappers / absent
+                        stub.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+                        stub.chmod(0o755)
+                    ldconfig = wrappers / "ldconfig"
+                    if library_majors is None:
+                        ldconfig.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+                    else:
+                        output = "".join(
+                            f"printf '%s\\n' '{name}.so.{major}'\n"
+                            for name, major in zip(library_names, library_majors)
+                        )
+                        ldconfig.write_text(f"#!/usr/bin/env bash\n{output}", encoding="utf-8")
+                    ldconfig.chmod(0o755)
+                    nvidia_smi = wrappers / "nvidia-smi"
+                    nvidia_smi.write_text(
+                        "#!/usr/bin/env bash\n"
+                        f"printf '%s\\n' '| NVIDIA-SMI 595.84  Driver Version: 595.84  {header} |'\n",
+                        encoding="utf-8",
+                    )
+                    nvidia_smi.chmod(0o755)
+
+                    result = self._run_helper(
+                        tmp_path,
+                        install_dir,
+                        f"""
+                        export PATH={shlex_quote(str(wrappers))}:$PATH
+                        export MESH_LLM_TEST_CUDA_PROBE_ROOT={shlex_quote(str(probe_root))}
+                        detect_cuda_major
+                        """,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), expected)
 
     def test_release_target_helpers_recommend_cuda_on_jetson_orin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,26 +259,34 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), digest.lower())
 
-    def test_detect_cuda_major_reads_ldconfig_libcudart_version(self) -> None:
+    def test_detect_cuda_major_reads_matching_ldconfig_library_versions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             install_dir = tmp_path / "bin"
             install_dir.mkdir()
             wrappers = tmp_path / "wrappers"
             wrappers.mkdir()
+            probe_root = tmp_path / "cuda-probe-root"
+            probe_root.mkdir()
             ldconfig = wrappers / "ldconfig"
             ldconfig.write_text(
                 "#!/usr/bin/env bash\n"
-                "printf '%s\\n' 'libcudart.so.12 (libc6,AArch64) => /usr/local/cuda/lib64/libcudart.so.12'\n",
+                "printf '%s\\n' 'libcudart.so.12'\n"
+                "printf '%s\\n' 'libcublas.so.12'\n"
+                "printf '%s\\n' 'libcublasLt.so.12'\n",
                 encoding="utf-8",
             )
             ldconfig.chmod(0o755)
+            nvidia_smi = wrappers / "nvidia-smi"
+            nvidia_smi.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+            nvidia_smi.chmod(0o755)
 
             result = self._run_helper(
                 tmp_path,
                 install_dir,
                 f"""
                 export PATH={shlex_quote(str(wrappers))}:$PATH
+                export MESH_LLM_TEST_CUDA_PROBE_ROOT={shlex_quote(str(probe_root))}
                 detect_cuda_major
                 """,
             )

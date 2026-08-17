@@ -1,4 +1,7 @@
-use super::super::{MeshApi, http::respond_error};
+use super::super::{
+    MeshApi,
+    http::{respond_error, write_managed_response_head},
+};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
@@ -75,7 +78,7 @@ async fn write_response(
         head.push_str("Connection: close\r\n");
     }
     head.push_str("\r\n");
-    stream.write_all(head.as_bytes()).await?;
+    write_managed_response_head(stream, head.into_bytes()).await?;
 
     let mut body = response.into_body();
     while let Some(frame) = body.frame().await {
@@ -85,4 +88,65 @@ async fn write_response(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use mesh_llm_events::logging::identifiers::RequestId;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use super::write_response;
+
+    #[tokio::test]
+    async fn mcp_success_response_uses_the_scoped_id_and_completes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (mut server, _) = listener.accept().await.unwrap();
+        let request_id = RequestId::new();
+        let service = Arc::new(crate::logging::LoggingService::new_disabled(
+            Default::default(),
+        ));
+        let lifecycle = crate::logging::ManagementRequestLifecycle::register(
+            Arc::clone(&service),
+            request_id,
+            "management_post",
+        );
+        let response = http::Response::builder()
+            .status(http::StatusCode::CREATED)
+            .header("X-Request-Id", "plugin-supplied-id")
+            .body(Full::new(Bytes::from_static(b"{} ")).boxed())
+            .unwrap();
+
+        super::super::super::management_lifecycle::scope(lifecycle, async {
+            write_response(&mut server, response)
+                .await
+                .expect("write MCP response");
+        })
+        .await;
+        server.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 201 Created\r\n"));
+        assert!(response.contains(&format!("x-request-id: {}\r\n", request_id.as_uuid())));
+        assert!(!response.contains("plugin-supplied-id"));
+        assert_eq!(response.matches("x-request-id:").count(), 1);
+        assert_eq!(
+            service
+                .registry_ref()
+                .get_recent(&request_id.as_uuid().to_string())
+                .expect("MCP lifecycle terminal entry")
+                .state,
+            "completed"
+        );
+    }
 }

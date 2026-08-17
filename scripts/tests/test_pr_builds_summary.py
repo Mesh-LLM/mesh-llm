@@ -1,112 +1,102 @@
-from __future__ import annotations
-
-from collections import Counter
-import importlib.util
 from pathlib import Path
 import re
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PR_BUILDS = ROOT / ".github" / "workflows" / "pr_builds.yml"
-PLANNER_PATH = ROOT / "scripts" / "plan-pr-build-jobs.py"
-JOB_HEADER = re.compile(r"(?m)^  ([A-Za-z0-9_-]+):\n")
-
-PLANNER_SPEC = importlib.util.spec_from_file_location(
-    "plan_pr_build_jobs",
-    PLANNER_PATH,
-)
-if PLANNER_SPEC is None or PLANNER_SPEC.loader is None:
-    raise RuntimeError(f"unable to import {PLANNER_PATH}")
-PLANNER = importlib.util.module_from_spec(PLANNER_SPEC)
-PLANNER_SPEC.loader.exec_module(PLANNER)
+WORKFLOWS = ROOT / ".github" / "workflows"
 
 
-def job_sections(workflow: str) -> dict[str, str]:
-    jobs_start = workflow.index("jobs:\n") + len("jobs:\n")
-    jobs_body = workflow[jobs_start:]
-    matches = list(JOB_HEADER.finditer(jobs_body))
-    sections: dict[str, str] = {}
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(jobs_body)
-        sections[match.group(1)] = jobs_body[match.start() : end]
-    return sections
+class RequiredSummaryTests(unittest.TestCase):
+    def test_each_pr_entry_owns_a_native_required_job(self):
+        labels = {"quality": "Quality", "website": "Website", "linux": "Linux", "macos": "macOS", "windows": "Windows"}
+        for lane, label in labels.items():
+            workflow = (WORKFLOWS / f"pr_{lane}.yml").read_text()
+            self.assertIn(f"name: PR / {label}", workflow)
+            self.assertIn("needs: [plan, lane]", workflow)
+            self.assertNotIn("checks.create", workflow)
 
+    def test_manual_plan_owns_stable_correlated_checks(self):
+        workflow = (WORKFLOWS / "ci-control.yml").read_text()
+        self.assertIn("name: CI · Manual Full", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("workflow_run:", workflow)
+        self.assertIn("name: 'CI Required'", workflow)
+        for lane in ("Quality", "Website", "Linux", "macOS", "Windows"):
+            self.assertIn(f"'CI / {lane}'", workflow)
+        self.assertIn("external_id: process.env.CORRELATION_ID", workflow)
 
-def summary_needs(summary: str) -> list[str]:
-    needs_match = re.search(
-        r"(?ms)^    needs:\n(?P<items>(?:      - [A-Za-z0-9_-]+\n)+)",
-        summary,
-    )
-    if needs_match is None:
-        raise AssertionError("PR Builds summary must use an explicit needs list")
-    return re.findall(r"(?m)^      - ([A-Za-z0-9_-]+)$", needs_match.group("items"))
+    def test_each_main_entry_owns_a_native_required_job(self):
+        labels = {"quality": "Quality", "website": "Website", "linux": "Linux", "macos": "macOS", "windows": "Windows"}
+        for lane, label in labels.items():
+            workflow = (WORKFLOWS / f"main_{lane}.yml").read_text()
+            self.assertIn(f"name: Main / {label}", workflow)
+            self.assertIn("needs: [plan, lane]", workflow)
+            self.assertNotIn("checks.create", workflow)
 
+    def test_each_lane_has_one_cancellation_safe_summary(self):
+        checks = {
+            "quality": ("CI / Quality", ("quality", "runner_contract")),
+            "website": ("CI / Website", ("web",)),
+            "linux": (
+                "CI / Linux",
+                (
+                    "ui_artifact",
+                    "static_abi",
+                    "rust_tests",
+                    "hosts",
+                    "native_runtimes",
+                    "runtime_product",
+                    "kotlin_sdk_input",
+                    "sdk",
+                    "product_smoke",
+                ),
+            ),
+            "macos": (
+                "CI / macOS",
+                (
+                    "validate_plan",
+                    "ui_artifact",
+                    "hosts",
+                    "native_runtimes",
+                    "runtime_product",
+                    "platform_checks",
+                    "swift_sdk_input",
+                    "sdk",
+                    "product_smoke",
+                ),
+            ),
+            "windows": (
+                "CI / Windows",
+                (
+                    "ui_artifact",
+                    "hosts",
+                    "native_runtimes",
+                    "runtime_product",
+                    "platform_checks",
+                ),
+            ),
+        }
+        for lane, (check_name, jobs) in checks.items():
+            with self.subTest(lane=lane):
+                workflow = (WORKFLOWS / f"ci-{lane}-lane.yml").read_text()
+                summary_start = workflow.index("  summary:")
+                summary = workflow[summary_start:]
+                self.assertEqual(1, workflow.count("\n  summary:\n"))
+                self.assertIn(f"    name: {check_name}", summary)
+                self.assertIn("if: ${{ !cancelled() }}", summary)
+                self.assertNotIn("always()", summary)
+                for job in jobs:
+                    self.assertRegex(
+                        summary,
+                        rf"(?:needs: \[[^\]]*\b{re.escape(job)}\b|      - {re.escape(job)}\n)",
+                    )
 
-class PrBuildsSummaryTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.workflow = PR_BUILDS.read_text(encoding="utf-8")
-        cls.jobs = job_sections(cls.workflow)
-        cls.summary = cls.jobs["summary"]
-
-    def test_summary_has_a_stable_branch_protection_name(self) -> None:
-        self.assertIn("    name: PR Builds Summary\n", self.summary)
-        self.assertNotIn("${{", self.summary.split("    name:", 1)[1].splitlines()[0])
-        self.assertIn("    if: ${{ !cancelled() }}\n", self.summary)
-        self.assertNotIn("always()", self.summary)
-
-    def test_summary_directly_needs_every_other_top_level_job(self) -> None:
-        expected = [job for job in self.jobs if job != "summary"]
-        self.assertEqual(summary_needs(self.summary), expected)
-
-    def test_every_conditional_job_is_mapped_exactly_once(self) -> None:
-        mapped_jobs = [job_id for job_id, _route in PLANNER.JOB_ROUTES]
-        counts = Counter(mapped_jobs)
-        self.assertTrue(all(count == 1 for count in counts.values()))
-        self.assertEqual(
-            mapped_jobs,
-            [job for job in self.jobs if job not in {"changes", "summary"}],
-        )
-
-    def test_every_conditional_job_consumes_the_shared_plan(self) -> None:
-        for job_name, section in self.jobs.items():
-            if job_name in {"changes", "summary"}:
-                continue
-            with self.subTest(job=job_name):
-                expected = (
-                    "    if: ${{ contains("
-                    "fromJson(needs.changes.outputs.required_jobs_json), "
-                    f"'{job_name}') }}}}\n"
-                )
-                job_level_conditions = re.findall(
-                    r"(?m)^    if: .+$",
-                    section,
-                )
-                self.assertEqual(job_level_conditions, [expected.rstrip()])
-
-    def test_changes_exports_the_checked_in_plan(self) -> None:
-        changes = self.jobs["changes"]
-        self.assertIn(
-            "required_jobs_json: ${{ steps.plan.outputs.required_jobs_json }}",
-            changes,
-        )
-        self.assertIn("python3 scripts/plan-pr-build-jobs.py", changes)
-        self.assertIn("PR_BUILD_PLAN_INPUT:", changes)
-
-    def test_summary_evaluates_the_complete_needs_result_object(self) -> None:
-        self.assertIn("NEEDS_RESULTS: ${{ toJson(needs) }}", self.summary)
-        self.assertIn(
-            "REQUIRED_JOBS: ${{ needs.changes.outputs.required_jobs_json }}",
-            self.summary,
-        )
-        self.assertIn("set -euo pipefail", self.summary)
-        self.assertIn('$entry.value.result == "success"', self.summary)
-        self.assertIn('$entry.value.result == "skipped"', self.summary)
-        self.assertIn("($required | index($entry.key)) == null", self.summary)
-        self.assertIn("has($job)", self.summary)
-        self.assertIn("select(accepted | not)", self.summary)
-        self.assertIn("exit 1", self.summary)
+    def test_lane_validator_rejects_required_skips_and_extra_work(self):
+        validator = (ROOT / "scripts/validate-ci-lane-results.py").read_text()
+        self.assertIn('if result != "success"', validator)
+        self.assertIn('if result != "skipped"', validator)
+        self.assertIn("required lane has no planned jobs", validator)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 use super::super::{
     MeshApi,
-    http::{respond_error, respond_json},
+    http::{
+        MAX_FORWARDED_RESPONSE_HEADER_BYTES, respond_bytes, respond_error, respond_json,
+        take_bounded_response_head, write_managed_response_head,
+    },
 };
 use crate::plugin::stapler;
 use serde_json::{Map, Value};
@@ -294,12 +297,14 @@ async fn handle_call(
             .await
         {
             Ok(result) if !result.is_error => {
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    result.content_json.len(),
-                    result.content_json
-                );
-                stream.write_all(resp.as_bytes()).await?;
+                respond_bytes(
+                    stream,
+                    200,
+                    "OK",
+                    "application/json",
+                    result.content_json.as_bytes(),
+                )
+                .await?;
             }
             Ok(result) => {
                 respond_error(stream, 502, &result.content_json).await?;
@@ -441,7 +446,23 @@ async fn handle_streamed_http_binding(
     plugin_stream.write_all(&forwarded_request).await?;
     plugin_stream.shutdown().await?;
 
+    let mut buffered_head = Vec::with_capacity(MAX_FORWARDED_RESPONSE_HEADER_BYTES);
     let mut buf = [0u8; 16 * 1024];
+    loop {
+        let read = plugin_stream.read(&mut buf).await?;
+        if read == 0 {
+            anyhow::bail!("plugin response ended before a complete HTTP header");
+        }
+        buffered_head.extend_from_slice(&buf[..read]);
+        let Some((head, body)) = take_bounded_response_head(&mut buffered_head)? else {
+            continue;
+        };
+        write_managed_response_head(client_stream, head).await?;
+        if !body.is_empty() {
+            client_stream.write_all(&body).await?;
+        }
+        break;
+    }
     loop {
         let read = plugin_stream.read(&mut buf).await?;
         if read == 0 {
@@ -601,6 +622,7 @@ mod tests {
         PluginStore, SUPPORTED_PLUGIN_SCHEMA_VERSION,
     };
     use serial_test::serial;
+
     use std::path::{Path, PathBuf};
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;

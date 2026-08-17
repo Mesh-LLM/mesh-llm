@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{oneshot, watch};
 
 async fn spawn_api_proxy_test_harness(
     targets: election::ModelTargets,
@@ -23,12 +23,10 @@ async fn spawn_api_proxy_test_harness(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (_target_tx, target_rx) = watch::channel(targets);
-    let (drop_tx, _drop_rx) = mpsc::unbounded_channel();
     let handle = tokio::spawn(api_proxy(
         node,
         addr.port(),
         target_rx,
-        drop_tx,
         Some(listener),
         false,
         affinity::AffinityRouter::default(),
@@ -50,12 +48,10 @@ async fn spawn_api_proxy_test_harness_with_contexts(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (_target_tx, target_rx) = watch::channel(targets);
-    let (drop_tx, _drop_rx) = mpsc::unbounded_channel();
     let handle = tokio::spawn(api_proxy(
         node,
         addr.port(),
         target_rx,
-        drop_tx,
         Some(listener),
         false,
         affinity::AffinityRouter::default(),
@@ -74,12 +70,10 @@ async fn spawn_api_proxy_test_harness_with_plugin_manager(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (_target_tx, target_rx) = watch::channel(targets);
-    let (drop_tx, _drop_rx) = mpsc::unbounded_channel();
     let handle = tokio::spawn(api_proxy(
         node,
         addr.port(),
         target_rx,
-        drop_tx,
         Some(listener),
         false,
         affinity::AffinityRouter::default(),

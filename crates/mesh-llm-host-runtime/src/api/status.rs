@@ -418,6 +418,70 @@ pub(crate) struct StatusPayload {
     pub(crate) mesh_requirements: Option<MeshRequirementPolicySummary>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) recent_mesh_rejections: Vec<MeshRequirementRejectionEvent>,
+    /// Local-only logging capability and worker health. Omitted until logging
+    /// state has been initialized so older consumers retain their prior shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) logging: Option<LoggingStatusPayload>,
+}
+
+/// Path-free local logging health. This is deliberately absent from mesh
+/// payloads and contains no storage paths, raw identifiers, or backend errors.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct LoggingStatusPayload {
+    pub(crate) metadata_available: bool,
+    pub(crate) capture_mode: &'static str,
+    /// Artifact storage availability only; see `artifact_capture_ready` for
+    /// whether production request paths are actually wired to capture.
+    pub(crate) artifact_capture_available: bool,
+    pub(crate) artifact_capture_ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) artifact_capture_degradation: Option<&'static str>,
+    pub(crate) persistence: LoggingPersistenceStatusPayload,
+    pub(crate) cleanup: LoggingCleanupStatusPayload,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct LoggingPersistenceStatusPayload {
+    pub(crate) state: &'static str,
+    pub(crate) queue_drops: u64,
+    pub(crate) failures: u64,
+    pub(crate) shutdown_losses: u64,
+    pub(crate) outstanding: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct LoggingCleanupStatusPayload {
+    pub(crate) state: &'static str,
+    pub(crate) shutdown_timeouts: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_outcome: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_deleted_count: Option<u64>,
+}
+
+impl From<crate::logging::LoggingRuntimeStatus> for LoggingStatusPayload {
+    fn from(status: crate::logging::LoggingRuntimeStatus) -> Self {
+        Self {
+            metadata_available: status.metadata_available,
+            capture_mode: status.capture_mode,
+            artifact_capture_available: status.artifact_capture_available,
+            artifact_capture_ready: status.artifact_capture_ready,
+            artifact_capture_degradation: status.artifact_capture_degradation,
+            persistence: LoggingPersistenceStatusPayload {
+                state: status.persistence_worker_state,
+                queue_drops: status.persistence_queue_drops,
+                failures: status.persistence_failures,
+                shutdown_losses: status.persistence_shutdown_losses,
+                outstanding: status.persistence_outstanding,
+            },
+            cleanup: LoggingCleanupStatusPayload {
+                state: status.cleanup_worker_state,
+                shutdown_timeouts: status.cleanup_shutdown_timeouts,
+                last_outcome: status.cleanup_last_outcome,
+                last_deleted_count: status.cleanup_last_deleted_count,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1146,6 +1210,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1154,6 +1219,10 @@ mod tests {
         assert!(json.contains("\"mesh_discovery_mode\":\"nostr\""));
         assert!(json.contains("\"discovery_scope\":\"public\""));
         assert!(json.contains("\"discovery_source\":\"nostr-relay\""));
+        assert!(
+            !json.contains("\"logging\""),
+            "uninitialized logging must preserve the older status shape"
+        );
     }
 
     #[test]
@@ -1212,6 +1281,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1282,6 +1352,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -1347,6 +1418,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            logging: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -1496,5 +1568,161 @@ mod tests {
 
         let json = serde_json::to_string(&instance).expect("serialization failed");
         assert!(json.contains("\"is_self\":true"));
+    }
+
+    #[test]
+    fn logging_status_serializes_only_fixed_local_health_values() {
+        let cases = [
+            (
+                "healthy",
+                LoggingStatusPayload {
+                    metadata_available: true,
+                    capture_mode: "redacted_artifacts",
+                    artifact_capture_available: true,
+                    artifact_capture_ready: true,
+                    artifact_capture_degradation: None,
+                    persistence: LoggingPersistenceStatusPayload {
+                        state: "running",
+                        queue_drops: 0,
+                        failures: 0,
+                        shutdown_losses: 0,
+                        outstanding: 1,
+                    },
+                    cleanup: LoggingCleanupStatusPayload {
+                        state: "running",
+                        shutdown_timeouts: 0,
+                        last_outcome: Some("completed"),
+                        last_deleted_count: Some(3),
+                    },
+                },
+            ),
+            (
+                "disabled",
+                LoggingStatusPayload {
+                    metadata_available: false,
+                    capture_mode: "unavailable",
+                    artifact_capture_available: false,
+                    artifact_capture_ready: false,
+                    artifact_capture_degradation: None,
+                    persistence: LoggingPersistenceStatusPayload {
+                        state: "unavailable",
+                        queue_drops: 0,
+                        failures: 0,
+                        shutdown_losses: 0,
+                        outstanding: 0,
+                    },
+                    cleanup: LoggingCleanupStatusPayload {
+                        state: "not_started",
+                        shutdown_timeouts: 0,
+                        last_outcome: None,
+                        last_deleted_count: None,
+                    },
+                },
+            ),
+            (
+                "artifact_degraded",
+                LoggingStatusPayload {
+                    metadata_available: true,
+                    capture_mode: "redacted_artifacts",
+                    artifact_capture_available: false,
+                    artifact_capture_ready: false,
+                    artifact_capture_degradation: Some(
+                        "artifact_capture_disabled_privacy_unavailable",
+                    ),
+                    persistence: LoggingPersistenceStatusPayload {
+                        state: "running",
+                        queue_drops: 4,
+                        failures: 2,
+                        shutdown_losses: 0,
+                        outstanding: 0,
+                    },
+                    cleanup: LoggingCleanupStatusPayload {
+                        state: "running",
+                        shutdown_timeouts: 0,
+                        last_outcome: Some("failed"),
+                        last_deleted_count: None,
+                    },
+                },
+            ),
+            (
+                "shutdown",
+                LoggingStatusPayload {
+                    metadata_available: true,
+                    capture_mode: "redacted_artifacts",
+                    artifact_capture_available: true,
+                    artifact_capture_ready: true,
+                    artifact_capture_degradation: None,
+                    persistence: LoggingPersistenceStatusPayload {
+                        state: "stopped",
+                        queue_drops: 0,
+                        failures: 0,
+                        shutdown_losses: 2,
+                        outstanding: 0,
+                    },
+                    cleanup: LoggingCleanupStatusPayload {
+                        state: "stopped",
+                        shutdown_timeouts: 0,
+                        last_outcome: Some("completed"),
+                        last_deleted_count: Some(0),
+                    },
+                },
+            ),
+        ];
+
+        for (name, payload) in cases {
+            let json = serde_json::to_string(&payload).expect("serialize logging status");
+            assert!(json.contains("\"metadata_available\""), "{name}");
+            assert!(json.contains("\"persistence\""), "{name}");
+            assert!(json.contains("\"cleanup\""), "{name}");
+            for forbidden in [
+                "sqlite",
+                "database",
+                "error_message",
+                "path",
+                "request_id",
+                "token",
+                "secret",
+                "/private/",
+            ] {
+                assert!(
+                    !json.contains(forbidden),
+                    "{name} status leaked forbidden {forbidden}: {json}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn logging_status_maps_runtime_snapshot_without_backend_details() {
+        let payload = LoggingStatusPayload::from(crate::logging::LoggingRuntimeStatus {
+            metadata_available: true,
+            capture_mode: "redacted_artifacts",
+            artifact_capture_available: false,
+            artifact_capture_ready: false,
+            artifact_capture_degradation: Some("artifact_capture_disabled_privacy_unavailable"),
+            persistence_worker_state: "stopped",
+            persistence_queue_drops: 5,
+            persistence_failures: 3,
+            persistence_shutdown_losses: 2,
+            persistence_outstanding: 0,
+            cleanup_worker_state: "stopped",
+            cleanup_shutdown_timeouts: 0,
+            cleanup_last_outcome: Some("failed"),
+            cleanup_last_deleted_count: None,
+        });
+
+        let json = serde_json::to_value(payload).expect("serialize runtime status mapping");
+        assert_eq!(
+            json["artifact_capture_degradation"],
+            "artifact_capture_disabled_privacy_unavailable"
+        );
+        assert_eq!(json["persistence"]["state"], "stopped");
+        assert_eq!(json["persistence"]["queue_drops"], 5);
+        assert_eq!(json["persistence"]["failures"], 3);
+        assert_eq!(json["persistence"]["shutdown_losses"], 2);
+        assert_eq!(json["cleanup"]["state"], "stopped");
+        assert_eq!(json["cleanup"]["shutdown_timeouts"], 0);
+        assert_eq!(json["cleanup"]["last_outcome"], "failed");
+        assert!(json["cleanup"].get("last_deleted_count").is_none());
     }
 }

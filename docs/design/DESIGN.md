@@ -41,6 +41,7 @@ crates/mesh-llm-host-runtime/src/
 │   ├── nostr.rs             Nostr discovery, score_mesh(), smart_auto()
 │   ├── affinity.rs          Prefix-affinity request routing
 │   └── openai/              OpenAI transport glue
+├── logging/                 Local request lifecycle, persistence, replay, retention, audit, webhooks
 ├── plugin/                  Plugin host, runtime, transport, MCP bridge
 ├── plugins/
 │   └── blobstore/           Request-scoped media object storage for multimodal
@@ -255,6 +256,50 @@ stage-to-stage activation traffic uses the Skippy binary stage transport over
 these direct paths; the legacy llama.cpp RPC rewrite path (`rewrite.rs`
 intercepting `REGISTER_PEER`) survives only in the `mesh-client` compatibility
 surface.
+
+## Operator request logging
+
+Request logging is a host-local subsystem, not a mesh protocol. Ingress and
+runtime lifecycle code submit bounded lifecycle facts to the logging service;
+the service holds active state, persists terminal summaries and optional
+artifact pointers, and publishes replayable request, operation, and system
+events. Persistence and artifact work run outside the serving hot path so a
+logging failure can be represented without blocking an inference response.
+
+The embedded console reads this state through trusted-local `/api/logs/**`
+management routes. The list endpoint merges active state with durable history;
+the detail route can read a terminal request immediately after completion.
+Artifact pointer metadata is distinct from content retrieval, and only an
+explicit redacted-artifact capture policy makes content eligible for an
+operator opt-in download. The local log API is never advertised in gossip,
+added to ALPN, or substituted for existing status/runtime SSE.
+
+The Logs page hydrates from the ledger and owns a separate SSE lifecycle for
+`/api/logs/events`. Standard SSE event IDs allow native browser reconnect;
+the stream sends channels, backend-supported request-ID filters, and the last
+received logging replay cursor. Ledger-only filters reopen the stream with
+that last cursor and trigger REST hydration instead of being serialized into
+the SSE request. A replay gap, including an omitted or `null` recovery cursor,
+causes an authoritative ledger refresh, while a disconnected stream eventually
+uses bounded polling. Unsupported hosts keep this lifecycle inert. The logging
+route therefore owns its own connection states without changing the status or
+runtime event contracts.
+
+Retention bounds durable terminal records, pointers, audit records, webhook
+delivery records, persistence queues, replay capacity, exports, and artifacts.
+Scoped cleanup, request deletion, export, and dead-letter retry are audited
+management operations: the host validates the request, including retry delivery
+context/input, and the UI only renders the returned receipt. Artifact download
+is explicit and limited to available redacted captures. Metrics export only
+bounded lifecycle and maintenance outcomes; it never exports local log data or
+payloads. The production `OutputEvent` path is a separate local projection of
+bounded request/event IDs, replay channel/sequence, outcomes, status, duration,
+and token counts; it does not add those IDs or payloads to mesh/network or OTLP
+telemetry.
+
+See [the operator logging guide](../LOGGING.md) for settings and recovery, and
+[telemetry.md](../plugins/telemetry.md) for the explicit metrics privacy
+boundary.
 
 ## Management API (port 3131)
 

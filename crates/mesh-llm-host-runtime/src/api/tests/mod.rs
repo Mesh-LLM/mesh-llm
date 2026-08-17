@@ -49,6 +49,7 @@ impl Drop for HomeEnvGuard {
 
 mod apply_config_diagnostics;
 mod apply_config_validation_authority;
+mod logs_api_routes;
 mod runtime_config;
 mod runtime_config_validation_authority;
 mod runtime_control_state;

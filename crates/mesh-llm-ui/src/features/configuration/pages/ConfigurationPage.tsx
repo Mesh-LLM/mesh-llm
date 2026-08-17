@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { AlertTriangle, Blocks, Brackets, Computer, Cpu, Network, ShieldCheck, SlidersHorizontal } from 'lucide-react'
+import {
+  AlertTriangle,
+  Blocks,
+  Brackets,
+  Computer,
+  Cpu,
+  FileText,
+  Network,
+  ShieldCheck,
+  SlidersHorizontal
+} from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { CatalogPopover } from '@/features/configuration/components/CatalogPopover'
@@ -138,6 +148,7 @@ export function ConfigurationPageContent({
   if (
     liveData.defaults.settings.length === 0 &&
     (liveData.meshllm?.settings.length ?? 0) === 0 &&
+    (liveData.audit?.settings.length ?? 0) === 0 &&
     (liveData.runtimeSettings?.settings.length ?? 0) === 0 &&
     (liveData.network?.settings.length ?? 0) === 0 &&
     (livePluginSettingsData?.settings.length ?? 0) === 0
@@ -190,6 +201,7 @@ function ConfigurationEditorPage({
   const signingAttestationEnabled = useBooleanFeatureFlag('configuration/signingAttestation')
   const pluginsEnabled = useBooleanFeatureFlag('configuration/integrations')
   const wakePolicyConfigurationEnabled = useBooleanFeatureFlag('configuration/wakePolicyConfiguration')
+  const logsSettingsEnabled = useBooleanFeatureFlag('configuration/logsSettings')
   const pluginsSettingsData = displayData.plugins ?? displayData.integrations
   const runtimeControlDisabled = liveMode && Boolean(runtimeControlBootstrap && !runtimeControlBootstrap.enabled)
   const runtimeControlDisabledReason = runtimeControlDisabled
@@ -202,6 +214,7 @@ function ConfigurationEditorPage({
       createDefaultsValues(
         displayData.defaults,
         displayData.meshllm,
+        displayData.audit,
         displayData.runtimeSettings,
         displayData.modelSettings,
         displayData.network,
@@ -210,6 +223,7 @@ function ConfigurationEditorPage({
       ),
     [
       displayData.attestation,
+      displayData.audit,
       displayData.defaults,
       displayData.meshllm,
       displayData.modelSettings,
@@ -400,6 +414,7 @@ function ConfigurationEditorPage({
   const modelSettingsDirty = settingsDirty(modelSettingsData)
   const networkDirty = settingsDirty(displayData.network)
   const attestationDirty = settingsDirty(displayData.attestation)
+  const auditDirty = settingsDirty(displayData.audit)
   const pluginsDirty = settingsDirty(pluginsSettingsData)
   const localDeploymentDirty = useMemo(
     () =>
@@ -643,6 +658,7 @@ function ConfigurationEditorPage({
     () =>
       combineSettingsData(
         displayData.meshllm,
+        displayData.audit,
         displayData.runtimeSettings,
         modelSettingsData,
         displayData.network,
@@ -651,6 +667,7 @@ function ConfigurationEditorPage({
       ),
     [
       displayData.attestation,
+      displayData.audit,
       displayData.meshllm,
       displayData.network,
       displayData.runtimeSettings,
@@ -844,6 +861,41 @@ function ConfigurationEditorPage({
         </ConfigurationPlaceholderPanel>
       )
     },
+    ...(logsSettingsEnabled
+      ? [
+          {
+            id: 'audit',
+            label: 'Logs',
+            icon: FileText,
+            dirty: auditDirty,
+            content: displayData.audit?.settings.length ? (
+              <DefaultsTab
+                data={displayData.audit}
+                values={defaultsValues}
+                onResetAll={() => resetSettings(displayData.audit)}
+                onSettingValueChange={updateDefaultSetting}
+                configFilePath={displayData.configFilePath}
+                readOnlyNotice={runtimeControlNotice}
+                previewTitle="[audit] / [logging]"
+                screenLabel="Configuration · logs"
+                summaryDescription={
+                  <>
+                    Logs settings control security event recording and request-log retention. Configure log path,
+                    format, level, rotation policy, artifact capture, and replay capacity. Written to config.toml under
+                    the [audit] and [logging] sections.
+                  </>
+                }
+                summaryTitle="Logs"
+                summaryTitleId="logs-summary-heading"
+              />
+            ) : (
+              <ConfigurationPlaceholderPanel title="Logs" icon={FileText}>
+                No writable logs settings are exposed by the current runtime schema.
+              </ConfigurationPlaceholderPanel>
+            )
+          } satisfies ConfigurationTabItem
+        ]
+      : []),
     {
       id: 'local-deployment',
       label: 'Model Deployment',

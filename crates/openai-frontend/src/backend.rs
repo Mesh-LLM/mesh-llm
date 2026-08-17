@@ -15,6 +15,7 @@ use crate::{
     chat::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse},
     completions::{CompletionChunk, CompletionRequest, CompletionResponse},
     errors::OpenAiError,
+    lifecycle::RequestId,
     models::ModelObject,
 };
 
@@ -65,8 +66,7 @@ impl CancellationToken {
 #[derive(Debug, Clone)]
 pub struct OpenAiRequestContext {
     cancellation: CancellationToken,
-    request_id: Option<String>,
-    started_at: Instant,
+    request_id: Option<RequestId>,
     stream_usage_observation: bool,
     trusted_agent_session: bool,
 }
@@ -76,21 +76,25 @@ impl OpenAiRequestContext {
         Self::default()
     }
 
-    pub fn with_request_id(request_id: impl Into<String>) -> Self {
+    /// Create a backend context correlated to a frontend request identifier.
+    pub fn with_request_id(request_id: RequestId) -> Self {
         Self {
-            request_id: Some(request_id.into()),
+            request_id: Some(request_id),
             ..Self::default()
         }
     }
 
-    /// Enables internal stream-usage observation for an HTTP adapter. This is
-    /// deliberately separate from the client's `include_usage` wire option so
-    /// direct backend consumers retain their existing stream semantics.
+    /// Enable internal usage observation for an HTTP streaming adapter.
+    ///
+    /// This is deliberately independent of the client's `include_usage` wire
+    /// option: a backend may provide usage to the frontend for lifecycle
+    /// accounting while the frontend still suppresses it on the client wire.
     pub fn with_stream_usage_observation(mut self) -> Self {
         self.stream_usage_observation = true;
         self
     }
 
+    /// Return whether an HTTP adapter requested internal stream usage.
     pub fn observes_stream_usage(&self) -> bool {
         self.stream_usage_observation
     }
@@ -100,18 +104,15 @@ impl OpenAiRequestContext {
         self
     }
 
-    /// Returns whether the request entered through the configured trusted
-    /// agent-session header. Direct backend calls cannot set this marker.
+    /// Return whether the endpoint's configured trusted header supplied the
+    /// agent-session identity. Request body metadata cannot set this marker.
     pub fn has_trusted_agent_session(&self) -> bool {
         self.trusted_agent_session
     }
 
-    pub fn request_id(&self) -> Option<&str> {
-        self.request_id.as_deref()
-    }
-
-    pub fn elapsed(&self) -> std::time::Duration {
-        self.started_at.elapsed()
+    /// Return the frontend request identifier when the caller supplied one.
+    pub fn request_id(&self) -> Option<RequestId> {
+        self.request_id
     }
 
     pub fn cancellation_token(&self) -> CancellationToken {
@@ -132,7 +133,6 @@ impl Default for OpenAiRequestContext {
         Self {
             cancellation: CancellationToken::new(),
             request_id: None,
-            started_at: Instant::now(),
             stream_usage_observation: false,
             trusted_agent_session: false,
         }

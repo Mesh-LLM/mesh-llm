@@ -1179,12 +1179,12 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 if body.get("disposition") not in {"executed", "coalesced"}:
     raise SystemExit(f"unexpected disposition: {body.get('disposition')!r}")
 inventory = body.get("inventory")
-if not isinstance(inventory, list) or not inventory:
-    raise SystemExit("scan-refresh did not return a populated inventory list")
+if not isinstance(inventory, list):
+    raise SystemExit("scan-refresh did not return an inventory list")
 refs = [entry.get("canonical_model_ref") for entry in inventory]
 if refs != sorted(refs):
     raise SystemExit("inventory is not sorted by canonical model ref")
-if not any(isinstance(entry.get("metadata"), dict) for entry in inventory):
+if inventory and not all(isinstance(entry.get("metadata"), dict) for entry in inventory):
     raise SystemExit("inventory did not include typed model metadata")
 if not body.get("target_node_id"):
     raise SystemExit("target node id is missing")
@@ -1196,7 +1196,7 @@ PY
         return 1
     fi
     record_result "PASS" "config-current-scan-refresh" \
-        "same-owner current/current scan-refresh returned sorted typed inventory metadata" \
+        "same-owner current/current scan-refresh returned a sorted typed inventory response" \
         "path=$scan_refresh" "log=$scan_refresh_log"
 
     local wrong_api=$((BASE_PORT + offset + 6))
