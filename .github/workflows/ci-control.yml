@@ -1,26 +1,29 @@
-name: CI Control
-run-name: CI Control · ${{ github.event.workflow_run.head_branch }}
+name: CI · Manual Full
+run-name: CI · Manual Full · ${{ github.ref_name }}
 
 on:
-  workflow_run:
-    workflows: [PR CI, Main CI]
-    types: [completed]
+  workflow_dispatch:
+    inputs:
+      use_depot:
+        description: Opt into the guarded main-only Depot canary.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-control-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch }}
-  cancel-in-progress: ${{ github.event.workflow_run.event == 'pull_request' }}
+  group: ci-manual-full-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   plan:
     name: Compute canonical CI shape
-    if: ${{ github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push') && github.event.workflow_run.head_repository.full_name == github.repository }}
+    if: ${{ github.ref_name == github.event.repository.default_branch }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      pull-requests: read
     outputs:
       should_dispatch: ${{ steps.resolve.outputs.should_dispatch }}
       source_sha: ${{ steps.resolve.outputs.source_sha }}
@@ -29,6 +32,7 @@ jobs:
       draft: ${{ steps.resolve.outputs.draft }}
       correlation_id: ${{ steps.resolve.outputs.correlation_id }}
       supersession_key: ${{ steps.resolve.outputs.supersession_key }}
+      use_depot: ${{ steps.resolve.outputs.use_depot }}
       plan_json: ${{ steps.plan.outputs.plan_json }}
       plan_digest: ${{ steps.plan.outputs.plan_digest }}
       quality_lane_plan: ${{ steps.plan.outputs.quality_lane_plan }}
@@ -42,58 +46,38 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
-            const run = context.payload.workflow_run;
-            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+            core.setOutput('should_dispatch', 'true');
+            const sourceSha = context.sha;
+            const commit = await github.rest.repos.getCommit({
               ...context.repo,
-              run_id: run.id,
-              per_page: 100,
+              ref: sourceSha,
             });
-            const bootstrapped = jobs.some((job) =>
-              job.conclusion !== 'skipped' && (
-                job.name === 'Bootstrap PR CI' ||
-                job.name === 'Bootstrap main CI' ||
-                job.name.startsWith('Bootstrap PR CI / ') ||
-                job.name.startsWith('Bootstrap main CI / ')
-              )
-            );
-            core.setOutput('should_dispatch', String(!bootstrapped));
-            if (bootstrapped) return;
-            let sourceSha = run.head_sha;
-            let baseSha = '';
-            let draft = false;
-            if (run.event === 'pull_request') {
-              const pull = run.pull_requests?.[0];
-              if (!pull) throw new Error('pull_request workflow run has no pull request identity');
-              sourceSha = pull.head.sha;
-              baseSha = pull.base.sha;
-              const response = await github.rest.pulls.get({
-                ...context.repo,
-                pull_number: pull.number,
-              });
-              draft = response.data.draft === true;
-              core.setOutput('supersession_key', `pr-${pull.number}`);
-            } else {
-              const commit = await github.rest.repos.getCommit({
-                ...context.repo,
-                ref: sourceSha,
-              });
-              baseSha = commit.data.parents?.[0]?.sha ?? '';
-              core.setOutput('supersession_key', 'main');
-            }
+            const baseSha = commit.data.parents?.[0]?.sha ?? '';
             if (!/^[0-9a-f]{40}$/.test(sourceSha) || (baseSha && !/^[0-9a-f]{40}$/.test(baseSha))) {
               throw new Error('resolved source identity is malformed');
             }
             core.setOutput('source_sha', sourceSha);
             core.setOutput('base_sha', baseSha);
-            core.setOutput('original_event_name', run.event);
-            core.setOutput('draft', String(draft));
-            core.setOutput('correlation_id', `ci-${run.id}-${sourceSha.slice(0, 12)}`);
+            core.setOutput('original_event_name', 'workflow_dispatch');
+            core.setOutput('draft', 'false');
+            core.setOutput('correlation_id', `ci-${context.runId}-${sourceSha.slice(0, 12)}`);
+            core.setOutput('supersession_key', `manual-${context.runId}`);
+            const useDepot = (
+              context.payload.inputs?.use_depot === true ||
+              context.payload.inputs?.use_depot === 'true'
+            );
+            core.setOutput('use_depot', String(useDepot));
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         if: ${{ steps.resolve.outputs.should_dispatch == 'true' }}
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Fetch immutable comparison source
+        if: ${{ steps.resolve.outputs.should_dispatch == 'true' }}
+        env:
+          SOURCE_SHA: ${{ steps.resolve.outputs.source_sha }}
+        run: git fetch --no-tags origin "$SOURCE_SHA"
       - name: Compute changed files and affected crates
         if: ${{ steps.resolve.outputs.should_dispatch == 'true' }}
         id: changes
@@ -113,6 +97,28 @@ jobs:
           draft: ${{ steps.resolve.outputs.draft }}
           changed_files: ${{ steps.changes.outputs.changed_files }}
           affected_crates: ${{ steps.changes.outputs.affected_crates }}
+      - name: Render selected CI workflows
+        if: ${{ steps.resolve.outputs.should_dispatch == 'true' }}
+        env:
+          PLAN_JSON: ${{ steps.plan.outputs.plan_json }}
+          PLAN_DIGEST: ${{ steps.plan.outputs.plan_digest }}
+        run: |
+          {
+            echo "## CI plan"
+            echo
+            jq -r '"Profile: " + .profile + "  ", "Source: " + .source_sha + "  "' <<<"$PLAN_JSON"
+            printf 'Digest: %s\n' "$PLAN_DIGEST"
+            echo
+            echo "| Workflow | Selected rows |"
+            echo "| --- | ---: |"
+            jq -r '
+              "| Quality | " + ((.matrices.clippy | length) | tostring) + " |",
+              "| Website | " + (([.required_slices[] | select(. == "web")] | length) | tostring) + " |",
+              "| Linux | " + (([(.matrices.hosts // [])[], (.matrices.runtime_products // [])[], (.matrices.rust_tests // [])[], (.matrices.smoke // [])[], (.matrices.sdk // [])[]] | map(select(.platform == "linux" or .platform == null)) | length) | tostring) + " |",
+              "| macOS | " + (([(.matrices.hosts // [])[], (.matrices.runtime_products // [])[], (.matrices.platform_checks // [])[], (.matrices.smoke // [])[], (.matrices.sdk // [])[]] | map(select(.platform == "macos")) | length) | tostring) + " |",
+              "| Windows | " + (([(.matrices.hosts // [])[], (.matrices.runtime_products // [])[], (.matrices.platform_checks // [])[]] | map(select(.platform == "windows")) | length) | tostring) + " |"
+            ' <<<"$PLAN_JSON"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   dispatch:
     name: Dispatch topic and platform workflows
@@ -132,6 +138,7 @@ jobs:
           ORIGINAL_EVENT_NAME: ${{ needs.plan.outputs.original_event_name }}
           CORRELATION_ID: ${{ needs.plan.outputs.correlation_id }}
           SUPERSESSION_KEY: ${{ needs.plan.outputs.supersession_key }}
+          USE_DEPOT: ${{ needs.plan.outputs.use_depot }}
           PLAN_JSON: ${{ needs.plan.outputs.plan_json }}
           PLAN_DIGEST: ${{ needs.plan.outputs.plan_digest }}
           QUALITY_LANE_PLAN: ${{ needs.plan.outputs.quality_lane_plan }}
@@ -207,6 +214,9 @@ jobs:
                 };
                 if (lane.name === 'CI / Quality') {
                   inputs.canonical_plan_json = process.env.PLAN_JSON;
+                }
+                if (lane.name === 'CI / Quality' || lane.name === 'CI / Linux') {
+                  inputs.use_depot = process.env.USE_DEPOT;
                 }
                 await github.rest.actions.createWorkflowDispatch({
                   ...context.repo,

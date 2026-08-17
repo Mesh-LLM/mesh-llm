@@ -2,18 +2,6 @@ use crate::logging::OpenAiRouteObserver;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-pub async fn send_json_ok(mut stream: TcpStream, data: &serde_json::Value) -> std::io::Result<()> {
-    let body = data.to_string();
-    let resp = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream.write_all(resp.as_bytes()).await?;
-    stream.shutdown().await?;
-    Ok(())
-}
-
 /// RFC 7230 tchar set for header field names: ASCII alphanumeric plus
 /// `!#$%&'*+-.^_`|~`. We additionally forbid `:` because it terminates
 /// the field-name in the wire grammar. Used to reject caller-provided
@@ -106,6 +94,7 @@ async fn send_json_with_status_and_headers_inner(
     let status = match code {
         400 => "Bad Request",
         404 => "Not Found",
+        410 => "Gone",
         409 => "Conflict",
         422 => "Unprocessable Content",
         429 => "Too Many Requests",
@@ -178,6 +167,7 @@ async fn send_openai_error(
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
+        410 => "Gone",
         409 => "Conflict",
         413 => "Payload Too Large",
         422 => "Unprocessable Content",
@@ -226,7 +216,7 @@ const fn openai_error_kind_for_status(status_code: u16) -> openai_frontend::Open
     match status_code {
         401 => openai_frontend::OpenAiErrorKind::Authentication,
         403 => openai_frontend::OpenAiErrorKind::Permission,
-        404 => openai_frontend::OpenAiErrorKind::NotFound,
+        404 | 410 => openai_frontend::OpenAiErrorKind::NotFound,
         413 => openai_frontend::OpenAiErrorKind::PayloadTooLarge,
         429 => openai_frontend::OpenAiErrorKind::RateLimit,
         500 => openai_frontend::OpenAiErrorKind::Internal,
@@ -243,6 +233,7 @@ const fn openai_error_code_for_status(status_code: u16) -> &'static str {
         401 => "invalid_api_key",
         403 => "permission_denied",
         404 => "model_not_found",
+        410 => "legacy_route_gone",
         409 => "conflict",
         413 => "payload_too_large",
         422 => "unprocessable_content",

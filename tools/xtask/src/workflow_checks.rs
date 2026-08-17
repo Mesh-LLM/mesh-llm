@@ -17,8 +17,20 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     let justfile = fs::read_to_string(repo_root.join("Justfile"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
     let ci_workflow = fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))?;
-    let pr_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
-    let orchestrator = fs::read_to_string(repo_root.join(".github/workflows/ci-orchestrator.yml"))?;
+    let pr_workflows = ["quality", "website", "linux", "macos", "windows"]
+        .into_iter()
+        .map(|lane| {
+            fs::read_to_string(repo_root.join(format!(".github/workflows/pr_{lane}.yml")))
+                .map(|workflow| (lane, workflow))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let main_workflows = ["quality", "website", "linux", "macos", "windows"]
+        .into_iter()
+        .map(|lane| {
+            fs::read_to_string(repo_root.join(format!(".github/workflows/main_{lane}.yml")))
+                .map(|workflow| (lane, workflow))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let controller = fs::read_to_string(repo_root.join(".github/workflows/ci-control.yml"))?;
     let lane_workflows = ["quality", "website", "linux", "macos", "windows"]
         .into_iter()
@@ -29,9 +41,29 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
         .collect::<Result<Vec<_>, _>>()?;
     let quality = fs::read_to_string(repo_root.join(".github/workflows/ci-quality-slice.yml"))?;
     let web = fs::read_to_string(repo_root.join(".github/workflows/ci-web-slice.yml"))?;
-    let host = fs::read_to_string(repo_root.join(".github/workflows/ci-host-slice.yml"))?;
-    let runtime =
-        fs::read_to_string(repo_root.join(".github/workflows/ci-runtime-product-slice.yml"))?;
+    let host = ["linux", "macos", "windows"]
+        .into_iter()
+        .map(|platform| {
+            fs::read_to_string(
+                repo_root.join(format!(".github/workflows/ci-{platform}-host-slice.yml")),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n");
+    let runtime_and_product = ["linux", "macos", "windows"]
+        .into_iter()
+        .flat_map(|platform| {
+            ["runtime", "product"]
+                .into_iter()
+                .map(move |component| (platform, component))
+        })
+        .map(|(platform, component)| {
+            fs::read_to_string(repo_root.join(format!(
+                ".github/workflows/ci-{platform}-{component}-slice.yml"
+            )))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n");
     let rust_tests =
         fs::read_to_string(repo_root.join(".github/workflows/ci-rust-tests-slice.yml"))?;
     let static_abi =
@@ -66,14 +98,15 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     check_workflow_invariants(
         &release_workflow,
         &ci_workflow,
-        &pr_workflow,
+        &pr_workflows,
+        &main_workflows,
         &website_pages,
     )?;
     check_producer_invariants(&ProducerInvariantSources {
         quality: &quality,
         web: &web,
         host: &host,
-        runtime: &runtime,
+        runtime_and_product: &runtime_and_product,
         rust_tests: &rust_tests,
         static_abi: &static_abi,
         native_sdk: &native_sdk,
@@ -83,8 +116,9 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
         compose_product: &compose_product,
     })?;
     check_orchestrator_invariants(
-        &orchestrator,
         &controller,
+        &pr_workflows,
+        &main_workflows,
         &lane_workflows,
         &compute_changes,
     )?;
@@ -92,7 +126,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     check_release_container_contracts(&release_workflow, &configure_sccache)?;
     check_windows_dynamic_runtime_contract(
         &host,
-        &runtime,
+        &runtime_and_product,
         &prepare_windows_host,
         &prepare_runtime,
         &compose_product,
@@ -133,7 +167,8 @@ fn check_documentation_invariants(
             "just check-release",
             "CONTRIBUTING release consistency command",
         ),
-        (ci_docs, "ci-orchestrator.yml", "CI topology orchestrator"),
+        (ci_docs, "CI · Manual Full", "CI manual-full workflow"),
+        (ci_docs, "Main / Quality", "native main workflow results"),
         (ci_docs, "CI Required", "CI topology required summary"),
         (
             depot_docs,
@@ -149,7 +184,8 @@ fn check_documentation_invariants(
 fn check_workflow_invariants(
     release_workflow: &str,
     ci_workflow: &str,
-    pr_workflow: &str,
+    pr_workflows: &[(&str, String)],
+    main_workflows: &[(&str, String)],
     website_pages: &str,
 ) -> DynResult<()> {
     for (text, needle, context) in [
@@ -177,26 +213,58 @@ fn check_workflow_invariants(
         ensure_contains(text, needle, context)?;
     }
 
-    ensure_contains(
+    ensure_contains(ci_workflow, "workflow_call:", "legacy main CI shim")?;
+    ensure_not_contains(ci_workflow, "push:", "legacy main CI event trigger")?;
+    for (lane, workflow) in pr_workflows {
+        ensure_contains(workflow, "pull_request:", &format!("PR {lane} trigger"))?;
+        ensure_contains(
+            workflow,
+            &format!("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"),
+            &format!("PR protected native {lane} lane call"),
+        )?;
+        ensure_contains(
+            workflow,
+            "needs: [plan, lane]",
+            &format!("PR {lane} required job"),
+        )?;
+        ensure_not_contains(
+            workflow,
+            "pull_request_target",
+            &format!("PR {lane} trust boundary"),
+        )?;
+        ensure_not_contains(workflow, "secrets:", &format!("PR {lane} secret boundary"))?;
+    }
+    for (lane, workflow) in main_workflows {
+        ensure_contains(
+            workflow,
+            "push:\n    branches: [main]",
+            &format!("main {lane} trigger"),
+        )?;
+        ensure_contains(
+            workflow,
+            &format!("uses: ./.github/workflows/ci-{lane}-lane.yml"),
+            &format!("main same-commit {lane} lane call"),
+        )?;
+        ensure_contains(
+            workflow,
+            "needs: [plan, lane]",
+            &format!("main {lane} required job"),
+        )?;
+        ensure_not_contains(
+            workflow,
+            "createWorkflowDispatch",
+            &format!("main {lane} native visibility"),
+        )?;
+        ensure_not_contains(
+            workflow,
+            "concurrency:",
+            &format!("main {lane} exhaustive evidence"),
+        )?;
+    }
+    ensure_not_contains(
         ci_workflow,
-        "push:\n    branches: [main]",
-        "main CI push trigger",
-    )?;
-    ensure_contains(pr_workflow, "pull_request:", "PR pull-request trigger")?;
-    ensure_contains(
-        pr_workflow,
         "uses: ./.github/workflows/ci-orchestrator.yml",
-        "PR shared orchestrator",
-    )?;
-    ensure_not_contains(
-        pr_workflow,
-        "pull_request_target",
-        "PR must not use pull_request_target",
-    )?;
-    ensure_not_contains(
-        pr_workflow,
-        "secrets:",
-        "PR entrypoint must not pass repository secrets",
+        "main entrypoint must not expand the monolithic bootstrap graph",
     )?;
     Ok(())
 }
@@ -205,7 +273,7 @@ struct ProducerInvariantSources<'a> {
     quality: &'a str,
     web: &'a str,
     host: &'a str,
-    runtime: &'a str,
+    runtime_and_product: &'a str,
     rust_tests: &'a str,
     static_abi: &'a str,
     native_sdk: &'a str,
@@ -220,7 +288,7 @@ fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) -> DynResul
         (sources.quality, "quality slice"),
         (sources.web, "web slice"),
         (sources.host, "host slice"),
-        (sources.runtime, "runtime/product slice"),
+        (sources.runtime_and_product, "runtime/product slice"),
         (sources.rust_tests, "Rust test slice"),
         (sources.static_abi, "static ABI producer"),
         (sources.native_sdk, "native SDK producer"),
@@ -259,17 +327,17 @@ fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) -> DynResul
         "Windows host producer",
     )?;
     ensure_contains(
-        sources.runtime,
+        sources.runtime_and_product,
         "uses: ./.github/actions/prepare-native-runtime-input",
         "runtime immutable producer",
     )?;
     ensure_contains(
-        sources.runtime,
+        sources.runtime_and_product,
         "uses: ./.github/actions/compose-product-input",
         "composition-only product producer",
     )?;
     ensure_contains(
-        sources.runtime,
+        sources.runtime_and_product,
         "binary_name: mesh-llm.exe",
         "Windows product executable",
     )?;
@@ -300,20 +368,16 @@ fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) -> DynResul
 }
 
 fn check_orchestrator_invariants(
-    orchestrator: &str,
     controller: &str,
+    pr_workflows: &[(&str, String)],
+    main_workflows: &[(&str, String)],
     lanes: &[(&str, String)],
     compute_changes: &str,
 ) -> DynResult<()> {
     ensure_contains(
-        orchestrator,
-        "uses: ./.github/workflows/ci-quality-slice.yml",
-        "bootstrap orchestrator quality call",
-    )?;
-    ensure_contains(
-        orchestrator,
-        "uses: ./.github/workflows/ci-runtime-product-slice.yml",
-        "bootstrap orchestrator runtime call",
+        controller,
+        "name: CI · Manual Full",
+        "manual-full workflow identity",
     )?;
     ensure_contains(
         controller,
@@ -325,28 +389,77 @@ fn check_orchestrator_invariants(
         "github.rest.actions.createWorkflowDispatch",
         "controller native lane dispatch",
     )?;
+    ensure_contains(controller, "workflow_dispatch:", "manual-full trigger")?;
+    ensure_not_contains(controller, "workflow_run:", "manual controller trigger")?;
+    ensure_not_contains(controller, "\n  push:\n", "manual controller push trigger")?;
     let lane_workflow = |name: &str| {
         lanes
             .iter()
             .find_map(|(lane, workflow)| (*lane == name).then_some(workflow.as_str()))
             .unwrap_or("")
     };
+    for lane in ["quality", "website", "linux", "macos", "windows"] {
+        let pr_workflow = pr_workflows
+            .iter()
+            .find_map(|(name, workflow)| (*name == lane).then_some(workflow.as_str()))
+            .unwrap_or("");
+        ensure_contains(
+            pr_workflow,
+            &format!("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"),
+            &format!("native PR {lane} lane call"),
+        )?;
+        let main_workflow = main_workflows
+            .iter()
+            .find_map(|(name, workflow)| (*name == lane).then_some(workflow.as_str()))
+            .unwrap_or("");
+        ensure_contains(
+            main_workflow,
+            &format!("uses: ./.github/workflows/ci-{lane}-lane.yml"),
+            &format!("native main {lane} lane call"),
+        )?;
+        ensure_contains(
+            lane_workflow(lane),
+            "workflow_call:",
+            &format!("{lane} reusable lane trigger"),
+        )?;
+    }
     ensure_contains(
         lane_workflow("quality"),
         "uses: ./.github/workflows/ci-quality-slice.yml",
         "quality lane slice call",
     )?;
     for lane in ["linux", "macos", "windows"] {
+        for component in ["host", "runtime", "product"] {
+            ensure_contains(
+                lane_workflow(lane),
+                &format!("uses: ./.github/workflows/ci-{lane}-{component}-slice.yml"),
+                &format!("{lane} lane {component} call"),
+            )?;
+        }
+        for legacy in ["ci-host-slice.yml", "ci-runtime-product-slice.yml"] {
+            ensure_not_contains(
+                lane_workflow(lane),
+                legacy,
+                &format!("{lane} lane cross-platform placeholder graph"),
+            )?;
+        }
+    }
+    for (lane, component) in [
+        ("linux", "product-smoke"),
+        ("linux", "sdk"),
+        ("macos", "product-smoke"),
+        ("macos", "sdk"),
+    ] {
         ensure_contains(
             lane_workflow(lane),
-            "uses: ./.github/workflows/ci-runtime-product-slice.yml",
-            &format!("{lane} lane runtime call"),
+            &format!("uses: ./.github/workflows/ci-{lane}-{component}-slice.yml"),
+            &format!("{lane} lane {component} call"),
         )?;
     }
     ensure_contains(
-        orchestrator,
-        "name: CI Required",
-        "stable CI required summary",
+        controller,
+        "name: 'CI Required'",
+        "stable dispatched CI required check",
     )?;
     ensure_contains(
         compute_changes,
@@ -368,37 +481,38 @@ fn check_protected_reusable_runner_policy(workflow: &str, context: &str) -> DynR
         ("runner_policy:", "protected runner policy job"),
         ("runs-on: ubuntu-24.04", "fixed hosted policy runner"),
         (
-            "POLICY_REPOSITORY: ${{ github.repository }}",
+            "uses: ./.github/actions/select-ci-runners",
+            "central protected runner selector",
+        ),
+        (
+            "repository: ${{ github.repository }}",
             "immutable repository context",
         ),
-        ("POLICY_REF: ${{ github.ref }}", "immutable ref context"),
         (
-            "POLICY_EVENT_NAME: ${{ github.event.inputs.original_event_name || github.event_name }}",
+            "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
+            "same-repository PR head context",
+        ),
+        ("ref: ${{ github.ref }}", "immutable ref context"),
+        (
+            "original_event_name: ${{ inputs.original_event_name }}",
             "protected original event context",
         ),
         (
-            "POLICY_DEPOT_ENABLED: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
+            "depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
             "repository Depot gate",
         ),
         (
-            "POLICY_MANUAL_USE_DEPOT: ${{ inputs.use_depot }}",
+            "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+            "repository PR Depot gate",
+        ),
+        (
+            "manual_use_depot: ${{ inputs.use_depot }}",
             "typed main-dispatch canary flag",
         ),
         (
-            r#"POLICY_REPOSITORY" == "Mesh-LLM/mesh-llm""#,
-            "exact repository guard",
+            "runner_size must be one of: default, 4, 8, 16",
+            "bounded runner-size validation",
         ),
-        (
-            r#"POLICY_REF" == "refs/heads/main""#,
-            "exact main-ref guard",
-        ),
-        (
-            r#"POLICY_MANUAL_USE_DEPOT" == "true""#,
-            "main-dispatch canary decision",
-        ),
-        ("default|4|8|16", "bounded runner-size validation"),
-        ("depot-ubuntu-24.04", "allowlisted Depot AMD64 label"),
-        ("depot-ubuntu-24.04-arm", "allowlisted Depot ARM64 label"),
         (
             "runs-on: ${{ needs.runner_policy.outputs.runner }}",
             "derived producer runner",
@@ -728,7 +842,7 @@ fn release_container_job_names(release_workflow: &str) -> Vec<&str> {
 
 fn check_windows_dynamic_runtime_contract(
     host_workflow: &str,
-    runtime_workflow: &str,
+    runtime_and_product_workflows: &str,
     prepare_windows_host_action: &str,
     prepare_native_runtime_action: &str,
     compose_product_action: &str,
@@ -766,9 +880,9 @@ fn check_windows_dynamic_runtime_contract(
 
     let host = workflow_job_section(host_workflow, "windows_host")
         .ok_or("host slice: missing `windows_host` job")?;
-    let runtime = workflow_job_section(runtime_workflow, "windows_runtime")
+    let runtime = workflow_job_section(runtime_and_product_workflows, "windows_runtime")
         .ok_or("runtime slice: missing `windows_runtime` job")?;
-    let product = workflow_job_section(runtime_workflow, "windows_product")
+    let product = workflow_job_section(runtime_and_product_workflows, "windows_product")
         .ok_or("runtime slice: missing `windows_product` job")?;
 
     ensure_contains(

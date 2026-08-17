@@ -88,6 +88,8 @@ def _required_jobs(lane_plan: dict[str, Any]) -> set[str]:
             jobs.add("sdk")
         if _ids(lane_plan, "smoke"):
             jobs.add("product_smoke")
+        if jobs:
+            jobs.add("validate_plan")
     elif lane == "windows":
         hosts = _ids(lane_plan, "hosts")
         runtimes = _ids(lane_plan, "runtime_products")

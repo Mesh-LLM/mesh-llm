@@ -111,6 +111,105 @@ afterEach(() => {
 })
 
 describe('useLogsLiveRecovery', () => {
+  it('preserves lifecycle gap recovery when the initial hydration is still in flight', async () => {
+    let resolveInitial: (() => void) | undefined
+    let calls = 0
+    const hydrate = vi.fn(() => {
+      calls += 1
+      if (calls > 1) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        resolveInitial = resolve
+      })
+    })
+    const sources: FakeEventSource[] = []
+    const factory: LogsEventSourceFactory = (url) => {
+      const source = new FakeEventSource(url)
+      sources.push(source)
+      return source
+    }
+    const { result } = renderHook(() =>
+      useLogsLiveRecovery({
+        enabled: true,
+        search: { replayCursor: 'v1:0.0.0' },
+        hydrate,
+        eventSourceFactory: factory
+      })
+    )
+    act(() => sources[0]?.open())
+    act(() =>
+      sources[0]?.emit(
+        'replay_gap',
+        JSON.stringify({
+          channel: 'requests',
+          fromSequence: 1,
+          toSequence: 2,
+          recovery: { endpoint: '/api/logs/requests', cursor: 'next-page' }
+        }),
+        'v1:2.0.0'
+      )
+    )
+    expect(result.current.state).toBe('gap')
+
+    resolveInitial?.()
+    await flush()
+    await flush()
+
+    expect(hydrate).toHaveBeenCalledTimes(2)
+    expect(result.current.state).toBe('connected')
+  })
+
+  it('preserves audit gap recovery when the initial hydration is still in flight', async () => {
+    let resolveInitial: (() => void) | undefined
+    let calls = 0
+    const hydrateAudit = vi.fn(() => {
+      calls += 1
+      if (calls > 1) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        resolveInitial = resolve
+      })
+    })
+    const { result, sources } = renderLive({ auditEnabled: true, hydrateAudit })
+    act(() => {
+      sources[0]?.open()
+      sources[1]?.open()
+    })
+    act(() =>
+      sources[1]?.emit(
+        'replay_gap',
+        JSON.stringify({
+          channel: 'audit',
+          fromSequence: 1,
+          toSequence: 2,
+          recovery: { endpoint: '/api/logs/audit', cursor: 'a1:2' }
+        }),
+        'a1:2'
+      )
+    )
+    expect(result.current.state).toBe('gap')
+
+    resolveInitial?.()
+    await flush()
+    await flush()
+
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+    expect(result.current.state).toBe('connected')
+  })
+
+  it('reconciles cross-process audit rows while SSE remains connected', async () => {
+    vi.useFakeTimers()
+    const { hydrateAudit, result, sources } = renderLive({ enabled: false, auditEnabled: true })
+    await flush()
+    act(() => sources[0]?.open())
+    expect(result.current.state).toBe('connected')
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+
+    act(() => vi.advanceTimersByTime(5_000))
+    await flush()
+
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+    expect(result.current.state).toBe('connected')
+  })
+
   it('does not hydrate, open a stream, or schedule timers while logs are unsupported', async () => {
     vi.useFakeTimers()
     const { hydrate, sources } = renderLive({ enabled: false })

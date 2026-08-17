@@ -43,10 +43,14 @@ owning source, and update the inventory and topology in the same change.
 
 ### Entrypoints and reusable slices
 
-- Event entrypoints own triggers, concurrency, and top-level read permissions.
-  The protected default-branch controller owns source resolution, profile
-  selection, one canonical plan, bounded lane dispatch, and the stable overall
-  required check. They do not own duplicated build implementations.
+- Event entrypoints own triggers, concurrency, and top-level permissions.
+  Pull requests use separate Quality, Website, Linux, macOS, and Windows
+  workflows. Each entry computes the canonical plan, then calls only its
+  matching reusable lane so jobs remain attached to a small topic/platform
+  run. PR callers use the protected default-branch lane definition; main
+  callers use the same-commit local lane definition. Explicit manual-full
+  diagnostics alone may use the protected default-branch dispatch controller.
+  No path owns duplicated build implementations.
 - New PR and main behavior must be implemented in a typed reusable workflow or
   local action consumed by both entrypoints. Do not copy a job between PR and
   main and do not add a third implementation to release.
@@ -62,19 +66,74 @@ owning source, and update the inventory and topology in the same change.
   use `secrets: inherit` in CI slice calls.
 - Keep reusable-workflow nesting shallow and the slice catalog small. Separate
   topic/platform graphs may be dispatched with native, bounded inputs from the
-  protected controller. Each lane still owns a static superset of typed calls
-  gated by the checked plan; do not generate workflow YAML at run time.
+  protected controller. Each lane owns a platform-local static superset of
+  typed calls gated by the checked plan; a platform lane must not call a
+  cross-platform reusable workflow with empty placeholder matrices. Do not
+  generate workflow YAML at run time.
 - Prefer local composite actions for repeated steps inside a job and reusable
   workflows for repeated jobs or job graphs.
 
+### PR workflow visibility and split invariant
+
+- PR validation has exactly five event entrypoints:
+  `pr_quality.yml`, `pr_website.yml`, `pr_linux.yml`, `pr_macos.yml`, and
+  `pr_windows.yml`. Keep this topic/platform split unless a maintainer
+  explicitly changes the architecture contract.
+- Each PR entrypoint may call only its matching protected default-branch lane.
+  It owns an independent concurrency group and stable `PR / <lane>` result.
+  Compose additional work inside that lane's typed reusable graph; do not add
+  cross-lane jobs to an entrypoint.
+- Native PR visibility is an operability requirement. Reviewers must be able
+  to open the PR checks view, select Quality, Website, Linux, macOS, or Windows,
+  and drill directly into that lane's jobs and logs. A custom `dispatched`
+  placeholder or a separate workflow-dispatch run does not satisfy this
+  requirement for PRs.
+- Never introduce a monolithic PR workflow or reusable PR composer that calls
+  all five lanes in one run. Do not replace the five entrypoints with one
+  matrix, one giant dependency graph, or one aggregate workflow whose only
+  visible PR result is a dispatch/controller job.
+- A reusable-only, no-op filename shim is temporarily allowed when the
+  protected pre-migration runner contract requires a deleted entrypoint to be
+  present while the migration PR is open. It must have no event trigger, call
+  no lane or producer, be documented as removable after merge, and must never
+  regain the behavior implied by its legacy filename.
+- Do not add `paths` filters to the five PR entrypoints. All five stable results
+  must be created for every relevant PR synchronization; the checked planner
+  makes an unselected lane skip its expensive work and lets its stable result
+  succeed. This prevents required checks from remaining absent or pending.
+
+### Main workflow visibility and split invariant
+
+- Routine main validation has exactly five push entrypoints:
+  `main_quality.yml`, `main_website.yml`, `main_linux.yml`, `main_macos.yml`,
+  and `main_windows.yml`. Each calls only its matching same-commit reusable
+  lane and owns one stable `Main / <lane>` result.
+- Native main visibility is an operability requirement. A maintainer must be
+  able to open a main push run for one topic/platform and drill directly into
+  its jobs and logs. Do not route routine main pushes through a dispatch-only
+  controller, synthetic check graph, monolithic matrix, or all-lanes composer.
+- The five main workflows must not use path filters or cancel one another or
+  older main revisions. Main is exhaustive evidence; supersession cancellation
+  remains PR-only. Planner-owned skips and matrix fail-fast behavior must not
+  make the top-level main result disappear.
+- `ci-control.yml` is reserved for an explicit default-branch manual-full run.
+  It may dispatch the five lanes with correlated synthetic checks because the
+  operator deliberately chose the detached diagnostic surface. It must not be
+  triggered by `push`, `pull_request`, or `workflow_run`.
+
 ### Planning and routing
 
-- Compute changed files and the CI plan once in the protected controller. Pass
-  digest-bound lane projections through native workflow-dispatch inputs; do
-  not allocate one planner per lane or use an artifact as dispatch state. The
-  bootstrap reusable graph may plan once when the controller or lane files are
-  not yet available on the required refs. All lane conditions and summaries
-  consume that same plan or its bounded projection.
+- Compute changed files and the CI plan once per entry graph. Each independent
+  PR topic/platform workflow projects only its own lane and calls that protected
+  default-branch lane natively, so every nested job and log stays visible from
+  the matching PR run without a monolithic matrix. Each main topic/platform
+  workflow computes the same exhaustive plan and calls its same-commit lane
+  natively. Only manual-full passes digest-bound lane projections through
+  native workflow-dispatch inputs. Do not use an artifact as dispatch state.
+  Fork PRs use the same
+  no-secret reusable path after fetching the immutable head SHA through the
+  base repository. All lane conditions and summaries consume the same plan or
+  its bounded projection.
 - Keep direct semantic ownership separate from Cargo reverse dependencies:
   direct paths/crates select product, SDK, backend, platform, protocol, model,
   UI, website, and infrastructure slices; affected crates select Rust compile,
@@ -103,9 +162,9 @@ owning source, and update the inventory and topology in the same change.
 - If a consumer downloads an artifact, its producer must be reachable under
   the same plan and declared through `needs`. Consumers never rebuild missing
   producer inputs.
-- Every lane has one unique, stable, non-matrix summary, and the controller
-  owns one stable aggregate required check. The bootstrap graph owns the same
-  aggregate name until protected dispatch is available.
+- Every lane has one unique, stable, non-matrix summary. Each PR/main entry has
+  one stable native result; the manual-only controller owns one stable
+  synthetic aggregate check.
 - Each lane summary directly needs every top-level slice call in that lane,
   runs with `if: ${{ !cancelled() }}`, and validates results against its
   digest-bound plan projection. The aggregate completes only after every
@@ -116,6 +175,20 @@ owning source, and update the inventory and topology in the same change.
 - Cancel superseded PR runs. Do not cancel releases, deployments, cache
   warming, cleanup, or publishing unless their rollback semantics explicitly
   permit it.
+- Treat each focused PR workflow as an independent failure domain. A Quality
+  or Website failure must not cancel platform compilation, tests, products, or
+  smoke jobs, and a platform failure must not cancel another focused PR
+  workflow.
+- Within a PR platform lane, compilation, functional-test, product, and smoke
+  matrices fail fast so a required row failure cancels their queued and
+  in-progress sibling rows. Keep this profile-derived: exhaustive main/manual
+  runs continue sibling rows to retain complete diagnostics, and Quality
+  matrices continue all rows because they are independent diagnostics rather
+  than producer/consumer gates.
+- Prefer declared `needs` edges to suppress impossible consumers after a
+  producer failure. Do not cancel an entire workflow run through the Actions
+  API on first failure: that prevents the stable lane summary from reporting a
+  terminal failure and discards unrelated failure-domain evidence.
 - Control fan-out in the graph. Use bounded matrices and `max-parallel` after
   eliminating irrelevant work; do not use additional runner capacity as a
   substitute for routing and composition.
@@ -131,7 +204,8 @@ owning source, and update the inventory and topology in the same change.
 - A caller may not choose a privileged runner label or independently grant
   remote-cache access. The workflow that owns `runs-on` must derive both from
   repository, event, ref, trust profile, architecture, and a bounded size.
-- Ordinary PR jobs remain GitHub-hosted; an explicitly approved ephemeral,
+- Ordinary PR jobs remain GitHub-hosted unless the bounded same-repository
+  Depot risk exception below is active; an explicitly approved ephemeral,
   uncredentialed hardware runner may own a documented GPU smoke exception.
   Eligible trusted main jobs may use
   Depot only through the exact-string `DEPOT_RUNNERS_ENABLED` gate and retain a
@@ -149,14 +223,14 @@ owning source, and update the inventory and topology in the same change.
 - Provider changes must not alter source checkout, commands, profile,
   artifacts, tests, required checks, or plan membership.
 
-### Depot PR prohibition and future gate
+### Bounded Depot PR cache-risk exception
 
 Depot Cache currently scopes entries by repository but not by branch and
 automatically connects GitHub-cache API consumers on Depot runners. Cache-key
 prefixes, job-local sccache, and a trusted caller do not prevent checked-out PR
 code from using injected cache authority directly.
 
-Do not enable Depot for PR code until all of the following are proven:
+The provider-isolation requirements below remain the desired end state:
 
 1. Automatic Depot Cache connectivity is disabled for the PR runner context,
    or Depot supplies a comparably strong per-PR namespace and read/write policy.
@@ -172,18 +246,55 @@ Do not enable Depot for PR code until all of the following are proven:
 6. GitHub-hosted rollback remains one checked provider-policy change and does
    not change the plan or artifact graph.
 
-This is future work. Do not mutate Depot organization settings, runner groups,
-or PR runner routing as part of ordinary workflow refactoring.
+Until the provider supplies that end state, maintainers may deliberately accept
+the documented repository-wide cache risk for one exact same-repository PR
+head under all of these controls:
+
+- the exception has a checked-in UTC expiry and fails hosted after it;
+- `DEPOT_PR_RUNNERS_ENABLED` is exactly `true`;
+- `DEPOT_PR_APPROVED_REF` exactly matches `refs/pull/<number>/merge` and
+  `DEPOT_PR_APPROVED_SHA` exactly matches the current PR head SHA;
+- the head repository is exactly `Mesh-LLM/mesh-llm`; forks remain hosted;
+- CI-control, workflow, runner-policy and cache-policy changes force hosted;
+- the protected default-branch runner-owning workflows remain the executor;
+- PR jobs receive no repository secrets or registry credentials; and
+- rollback is deletion/false of the PR gate or either exact approval value.
+
+This is an explicit speed-versus-isolation decision, not evidence that Depot
+cache is isolated. While active, GitHub Actions cache API consumers on selected
+Depot PR and trusted-main jobs may share Depot's repository-wide namespace.
+Treat that namespace as attacker-controlled and keep release, publishing,
+deployment and credential-bearing jobs off it. Record the rationale, known
+failure modes, owner, start, expiry and rollback in
+`ci/DEPOT_PR_RISK_EXCEPTION.md`.
+
+GitHub's `all_external_contributors` workflow-approval policy does not cover a
+same-repository branch pushed by a collaborator. Do not describe that setting
+as the approval boundary for this exception. The exact maintainer-controlled
+ref and head-SHA variables are the checked-in per-PR approval boundary and must
+be refreshed after every PR synchronization.
 
 ## Cache contract
 
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
-- GitHub-hosted PR writes remain isolated from trusted main: bootstrap/fork
-  jobs use the pull-request merge ref, while protected same-repository lanes
-  explicitly force restore-only cache mode even though their workflow ref is
-  the default branch. Trusted main/release/warmers own shared publication. Do
-  not save large shared Rust/native caches from PRs.
+- GitHub-hosted PR writes remain isolated from trusted main: normal protected
+  same-repository and fork lanes explicitly force restore-only cache mode even
+  though their workflow ref is the default branch. The bounded Depot exception
+  is the documented cross-branch deviation. Trusted
+  main/release/warmers own shared publication. Do not save large shared
+  Rust/native caches from PRs.
+- GitHub scopes caches created by `pull_request` runs to that PR's merge ref.
+  Small exact caches may publish in that isolated scope when their key covers
+  every compatibility boundary and their contents are verified before use;
+  this is the approved mechanism for accelerating reruns of the same PR.
+  Never use a restore prefix for these PR-produced native caches.
+- Keep multi-gigabyte Cargo target caches restore-only on PRs. Per-PR copies
+  multiply by matrix row, consume repository cache quota, and can evict the
+  trusted main caches that every PR can restore. Prefer small exact native ABI
+  caches and package-manager download stores with lockfile-exact keys.
+- Assign one publisher for a shared package-manager key. Other focused PR
+  workflows may restore it but must not race to upload the same cache entry.
 - Keep PR sccache job-local unless a provider proves safe isolation. A cache
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.

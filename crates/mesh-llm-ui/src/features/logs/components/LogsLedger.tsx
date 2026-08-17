@@ -36,6 +36,7 @@ import { LogEventInspector } from '@/features/logs/components/LogEventInspector'
 import { LogOperations } from '@/features/logs/components/LogOperations'
 import { RequestsOverTimeChart } from '@/features/logs/components/RequestsOverTimeChart'
 import type { LogRequest } from '@/features/logs/api/schemas'
+import type { LoggingStatus } from '@/lib/api/types'
 import {
   filterLogEventRows,
   formatLogEventTimestamp,
@@ -66,6 +67,7 @@ type LogsLedgerProps = {
   readonly search: LogsLedgerSearch
   readonly onSearchChange: (search: LogsLedgerSearch) => void
   readonly onMaintenanceMutationSucceeded?: () => void
+  readonly loggingStatus?: LoggingStatus
 }
 
 const ledgerFilterCategories: Array<FilterCategory<LedgerFilterKey>> = [{ key: 'category', label: 'Category' }]
@@ -83,9 +85,12 @@ function activeFilterGroupCount(search: LogsLedgerSearch) {
   ].filter(Boolean).length
 }
 
-function selectedCategories(search: LogsLedgerSearch, options: readonly FilterValueOption[]): Set<LogEventCategory> {
-  if (search.categories === 'none') return new Set()
-  if (search.categories) return new Set(search.categories)
+function selectedCategories(
+  categories: LogsLedgerSearch['categories'],
+  options: readonly FilterValueOption[]
+): Set<LogEventCategory> {
+  if (categories === 'none') return new Set()
+  if (categories) return new Set(categories)
   return new Set(options.map((option) => option.value).filter(isLogEventCategory))
 }
 
@@ -120,6 +125,12 @@ function eventSearchText(row: LogEventLedgerRow): string {
         row.audit.code,
         row.audit.source,
         row.audit.severity,
+        row.audit.subjectKind,
+        row.audit.subjectId,
+        row.audit.operationId,
+        row.audit.requestId,
+        row.audit.reasonCode,
+        row.audit.outcome,
         String(row.audit.sequence)
       ]
         .filter(Boolean)
@@ -132,6 +143,10 @@ function eventRowAriaLabel(row: LogEventLedgerRow): string {
   return row.type === 'request'
     ? `Inspect request ${row.request.requestId.toString()}`
     : `Inspect operational event ${row.audit.code}`
+}
+
+function eventRowId(row: LogEventLedgerRow): string {
+  return row.id
 }
 
 function liveStateLabel(state: LogsLiveConnectionState) {
@@ -328,7 +343,7 @@ function TableCapture({ table, onCapture }: TableCaptureProps) {
 /* LogsLedger                                                          */
 /* ------------------------------------------------------------------ */
 
-export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSucceeded }: LogsLedgerProps) {
+export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSucceeded, loggingStatus }: LogsLedgerProps) {
   const ledgerNow = useAdvancingChartClock()
   const requestScope = useMemo(() => toLogsRequestQuery(search, ledgerNow), [ledgerNow, search])
   const auditBounds = useMemo(
@@ -388,7 +403,10 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
     [filteredAuditEntries, requestRows]
   )
   const categoryOptions = useMemo<FilterValueOption[]>(() => logEventCategoryOptions(mergedRows), [mergedRows])
-  const selectedCategoryValues = useMemo(() => selectedCategories(search, categoryOptions), [categoryOptions, search])
+  const selectedCategoryValues = useMemo(
+    () => selectedCategories(search.categories, categoryOptions),
+    [categoryOptions, search.categories]
+  )
   const optionsByCategory = useMemo<Record<LedgerFilterKey, FilterValueOption[]>>(
     () => ({ category: categoryOptions }),
     [categoryOptions]
@@ -493,6 +511,18 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
               <StatusBadge tone="muted" size="caption">
                 Local only
               </StatusBadge>
+              {loggingStatus ? (
+                <StatusBadge
+                  size="caption"
+                  tone={
+                    loggingStatus.capture_mode === 'redacted_artifacts' && !loggingStatus.artifact_capture_ready
+                      ? 'warn'
+                      : 'muted'
+                  }
+                >
+                  {captureStatusLabel(loggingStatus)}
+                </StatusBadge>
+              ) : null}
             </div>
           ) : undefined
         }
@@ -755,7 +785,7 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
               enablePagination
               footerClassName=""
               getRowAriaLabel={eventRowAriaLabel}
-              getRowId={(row) => row.id}
+              getRowId={eventRowId}
               onRowActivate={handleEventOpen}
               tableClassName="min-w-[780px] text-[length:var(--density-type-caption-lg)] [&_td]:py-3 [&_thead]:bg-transparent"
             >
@@ -781,4 +811,15 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
       />
     </div>
   )
+}
+
+function captureStatusLabel(status: LoggingStatus): string {
+  switch (status.capture_mode) {
+    case 'metadata_only':
+      return 'Payloads · Metadata only'
+    case 'redacted_artifacts':
+      return status.artifact_capture_ready ? 'Payloads · Redacted · Ready' : 'Payloads · Redacted · Unavailable'
+    case 'unavailable':
+      return 'Payloads · Unavailable'
+  }
 }

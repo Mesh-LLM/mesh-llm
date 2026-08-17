@@ -32,7 +32,10 @@ pub use crypto::{
     parse_release_signer_public_key, release_signer_key_id, save_release_signer_trust_store,
     verify_release_attestation,
 };
-pub use logging::{LoggingRuntimeState, OperationalAuditRecord, OperationalAuditSeverity};
+pub use logging::{
+    LoggingRuntimeState, OperationalAuditContext, OperationalAuditRecord, OperationalAuditSeverity,
+    OperationalAuditSubjectKind,
+};
 pub use mesh::requirements::{
     BootstrapStatus, DIRECT_NODE_ADMISSION_PROOF_MAX_CLOCK_SKEW_MS, DirectNodeAdmissionProof,
     DirectPeerProofStatus, MeshGenesisPolicy, MeshRequirementDecision,

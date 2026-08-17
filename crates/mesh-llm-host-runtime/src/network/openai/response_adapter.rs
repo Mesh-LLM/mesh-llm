@@ -11,7 +11,7 @@ pub(crate) use openai_frontend::{
     translate_chat_completion_to_responses,
 };
 
-fn sse_frame(event: Option<&str>, data: &str) -> Vec<u8> {
+pub(crate) fn sse_frame(event: Option<&str>, data: &str) -> Vec<u8> {
     let mut frame = Vec::new();
     if let Some(event_name) = event {
         frame.extend_from_slice(format!("event: {event_name}\n").as_bytes());

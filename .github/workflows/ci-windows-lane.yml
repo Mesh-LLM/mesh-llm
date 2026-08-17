@@ -38,7 +38,6 @@ on:
         type: string
   workflow_dispatch:
     inputs: *lane_inputs
-
 permissions:
   contents: read
   packages: read
@@ -54,6 +53,8 @@ jobs:
     uses: ./.github/workflows/ci-ui-artifact-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       artifact_name: ci-ui-dist-windows-${{ github.run_id }}
       retention_days: 1
 
@@ -61,45 +62,41 @@ jobs:
     name: Neutral Windows host
     needs: [ui_artifact]
     if: ${{ !cancelled() && needs.ui_artifact.result == 'success' && fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
-    uses: ./.github/workflows/ci-host-slice.yml
+    uses: ./.github/workflows/ci-windows-host-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      linux_hosts_matrix: '[]'
-      macos_hosts_matrix: '[]'
-      windows_hosts_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      hosts_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}
       ui_artifact_name: ci-ui-dist-windows-${{ github.run_id }}
       profile: release
-      linux_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
-      macos_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
-      windows_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   native_runtimes:
     name: Native Windows runtimes
     if: ${{ fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null }}
-    uses: ./.github/workflows/ci-runtime-product-slice.yml
+    uses: ./.github/workflows/ci-windows-runtime-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      linux_runtime_matrix: '[]'
-      macos_runtime_matrix: '[]'
-      windows_runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      linux_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
-      macos_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
-      windows_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   runtime_product:
     name: Windows products
     needs: [hosts, native_runtimes]
     if: ${{ !cancelled() && needs.hosts.result == 'success' && needs.native_runtimes.result == 'success' }}
-    uses: ./.github/workflows/ci-runtime-product-slice.yml
+    uses: ./.github/workflows/ci-windows-product-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      linux_runtime_matrix: '[]'
-      macos_runtime_matrix: '[]'
-      windows_runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      linux_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
-      macos_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
-      windows_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
-      compose_products: true
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   platform_checks:
     name: Windows checks
@@ -107,9 +104,12 @@ jobs:
     uses: ./.github/workflows/ci-platform-checks-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       platform_checks_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.platform_checks) }}
       profile: ${{ fromJson(inputs.lane_plan_json).profile }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   summary:
     name: CI / Windows

@@ -2,8 +2,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 mod kv_cache;
+mod split_bundle;
 
 pub use kv_cache::{GgufKvCacheQuant, GgufKvCacheType};
+pub use split_bundle::scan_gguf_bundle_total_parameters;
 
 const MAX_GGUF_STRING_BYTES: u64 = 1_000_000;
 const MAX_GGUF_ARRAY_ELEMENTS: u64 = 1_000_000;

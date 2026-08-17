@@ -29,9 +29,15 @@ pub(crate) fn served_model_metadata_for_path(
             // cannot be summed from its GGUF, it advertises no size and MoA
             // tiering treats it as the lowest-param (weakest) model rather than
             // guessing from a brittle name label (per i386 review).
+            //
+            // Summed across the whole shard set: `find_model_path` resolves a
+            // split GGUF to its first part, and each shard's tensor-info table
+            // holds only that shard's weights. Scanning one part reported
+            // roughly `total / shard_count` — an ~80B 4-shard model advertised
+            // 24.6B — which silently mis-ranked every size-based decision.
             let parameter_count_b = path
                 .exists()
-                .then(|| crate::models::gguf::scan_gguf_total_parameters(path))
+                .then(|| crate::models::gguf::scan_gguf_bundle_total_parameters(path))
                 .flatten()
                 .map(|total| total as f64 / 1e9);
             let kv_head_count = meta.effective_kv_head_count();

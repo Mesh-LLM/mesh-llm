@@ -655,6 +655,7 @@ fn unavailable_foundation_is_sanitized_and_fail_open() {
         state.status(),
         LoggingRuntimeStatus {
             metadata_available: false,
+            capture_mode: "unavailable",
             artifact_capture_available: false,
             artifact_capture_ready: false,
             artifact_capture_degradation: None,

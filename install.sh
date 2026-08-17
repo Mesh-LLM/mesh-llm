@@ -333,32 +333,67 @@ recommended_flavor() {
     esac
 }
 
+cuda_library_major() {
+    local library="$1"
+    local probe_root="${MESH_LLM_TEST_CUDA_PROBE_ROOT:-}"
+    local major=""
+    local lib
+
+    major="$(ldconfig -p 2>/dev/null | grep -oE "${library}\.so\.[0-9]+" | awk -F. '{print $3}' | sort -rn | head -n 1 || true)"
+    if [[ -n "$major" ]]; then
+        printf '%s\n' "$major"
+        return 0
+    fi
+
+    for lib in \
+        "$probe_root"/usr/local/cuda*/lib64/"$library".so.* \
+        "$probe_root"/usr/local/cuda*/targets/*/lib/"$library".so.* \
+        "$probe_root"/usr/local/cuda*/targets/*/lib/stubs/"$library".so.*; do
+        if [[ -f "$lib" ]]; then
+            major="$(basename "$lib" | grep -oE "${library}\.so\.[0-9]+" | awk -F. '{print $3}' | head -n 1 || true)"
+            if [[ -n "$major" ]]; then
+                printf '%s\n' "$major"
+                return 0
+            fi
+        fi
+    done
+
+    printf '\n'
+}
+
 detect_cuda_major() {
     local ver=""
-    if command -v nvcc >/dev/null 2>&1; then
-        ver="$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+' | awk '{print $2}' | head -n 1 || true)"
-    fi
-    if [[ -z "$ver" ]]; then
-        local lib
-        local probe_root="${MESH_LLM_TEST_CUDA_PROBE_ROOT:-}"
-        for lib in "$probe_root"/usr/local/cuda*/targets/*/lib/libcudart.so.* "$probe_root"/usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
-            if [[ -f "$lib" ]]; then
-                ver="$(basename "$lib" | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | head -n 1)"
-                break
+    if [[ "${MESH_LLM_TEST_CUDA_MAJOR+x}" == x ]]; then
+        # Platform fixtures must not depend on the CUDA installation of the host
+        # running the test.
+        ver="$MESH_LLM_TEST_CUDA_MAJOR"
+    else
+        local driver_max=""
+        local cudart_major
+        local cublas_major
+        local cublas_lt_major
+
+        # nvidia-smi reports the maximum CUDA major supported by the driver. It
+        # does not prove that the matching runtime libraries are installed, so
+        # use it only as an upper bound for the library evidence below.
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            driver_max="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: *[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)"
+            if [[ -n "$driver_max" ]] && (( driver_max > 13 )); then
+                driver_max=13
             fi
-        done
-    fi
-    if [[ -z "$ver" ]]; then
-        ver="$(ldconfig -p 2>/dev/null | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | sort -rn | head -n 1 || true)"
-    fi
-    # Inference-only hosts carry an NVIDIA driver but no CUDA toolkit, so none of
-    # the probes above find anything. The driver still advertises the highest CUDA
-    # it supports in the nvidia-smi header ("CUDA Version: 13.0"); use that as an
-    # upper bound and clamp it to a CUDA lane we actually publish.
-    if [[ -z "$ver" ]] && command -v nvidia-smi >/dev/null 2>&1; then
-        ver="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: *[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)"
-        if [[ -n "$ver" ]] && (( ver > 13 )); then
-            ver=13
+        fi
+
+        cudart_major="$(cuda_library_major libcudart)"
+        cublas_major="$(cuda_library_major libcublas)"
+        cublas_lt_major="$(cuda_library_major libcublasLt)"
+        if [[ -n "$cudart_major" && "$cudart_major" == "$cublas_major" && "$cudart_major" == "$cublas_lt_major" ]]; then
+            ver="$cudart_major"
+            if [[ -n "$ver" ]] && (( ver > 13 )); then
+                ver=13
+            fi
+            if [[ -n "$driver_max" ]] && (( ver > driver_max )); then
+                ver=""
+            fi
         fi
     fi
     case "$ver" in

@@ -1,0 +1,256 @@
+name: Audit Depot PR authority
+description: Enforce the selected PR cache-risk policy and reject unapproved Depot or registry authority.
+
+inputs:
+  original_event_name:
+    description: Original event used to derive the trust boundary.
+    required: false
+    default: ''
+  depot_selected:
+    description: Whether the centralized runner policy selected a Depot executor.
+    required: true
+  allow_native_github_cache:
+    description: Central cache policy output for native GitHub Actions cache APIs.
+    required: true
+  allow_depot_remote_cache:
+    description: Central cache policy output for Depot's remote cache.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify PR runner has no privileged Depot credentials
+      shell: bash
+      env:
+        INPUT_ORIGINAL_EVENT_NAME: ${{ inputs.original_event_name }}
+        INPUT_DEPOT_SELECTED: ${{ inputs.depot_selected }}
+        INPUT_ALLOW_NATIVE_GITHUB_CACHE: ${{ inputs.allow_native_github_cache }}
+        INPUT_ALLOW_DEPOT_REMOTE_CACHE: ${{ inputs.allow_depot_remote_cache }}
+      run: |
+        set -euo pipefail
+        original_event="${INPUT_ORIGINAL_EVENT_NAME:-${GITHUB_EVENT_NAME:-}}"
+        depot_selected="${INPUT_DEPOT_SELECTED:-}"
+        if [[ "$depot_selected" != "true" && "$depot_selected" != "false" ]]; then
+          echo "depot_selected must be true or false (depot_selected)" >&2
+          exit 1
+        fi
+        allow_native_github_cache="${INPUT_ALLOW_NATIVE_GITHUB_CACHE:-}"
+        if [[ "$allow_native_github_cache" != "true" &&
+              "$allow_native_github_cache" != "false" ]]; then
+          echo "allow_native_github_cache must be true or false (allow_native_github_cache)" >&2
+          exit 1
+        fi
+        allow_depot_remote_cache="${INPUT_ALLOW_DEPOT_REMOTE_CACHE:-}"
+        if [[ "$allow_depot_remote_cache" != "true" &&
+              "$allow_depot_remote_cache" != "false" ]]; then
+          echo "allow_depot_remote_cache must be true or false (allow_depot_remote_cache)" >&2
+          exit 1
+        fi
+
+        # allow_native_github_cache is derived by the protected runner policy.
+        # During the bounded risk exception it intentionally enables GitHub
+        # Actions cache API consumers on Depot's cross-branch proxy. Keep the
+        # separate direct Depot remote-cache path disabled.
+        if [[ "$depot_selected" == "true" &&
+              "$allow_depot_remote_cache" != "false" ]]; then
+          echo "Depot selection requires remote cache disabled (allow_depot_remote_cache)" >&2
+          exit 1
+        fi
+
+        if [[ "$original_event" != "pull_request" &&
+              "$original_event" != "pull_request_target" ]]; then
+          exit 0
+        fi
+
+        forbidden_names=(
+          DEPOT_CACHE_TOKEN
+          DEPOT_TOKEN
+          DEPOT_REGISTRY_PULL_TOKEN
+          DEPOT_REGISTRY_TOKEN
+          DEPOT_CACHE_URL
+          DEPOT_CACHE_API_URL
+          DEPOT_REGISTRY_URL
+          DEPOT_REGISTRY_HOST
+          SCCACHE_WEBDAV_ENDPOINT
+          SCCACHE_WEBDAV_TOKEN
+          SCCACHE_WEBDAV_USERNAME
+          SCCACHE_WEBDAV_PASSWORD
+          SCCACHE_BUCKET
+          SCCACHE_ENDPOINT
+          TURBO_TOKEN
+          TURBO_API
+          TURBO_TEAM
+          GOCACHEPROG
+          REGISTRY_TOKEN
+          REGISTRY_USERNAME
+          REGISTRY_PASSWORD
+          REGISTRY_AUTH_TOKEN
+          NPM_TOKEN
+          NODE_AUTH_TOKEN
+          CARGO_REGISTRIES_CRATES_IO_TOKEN
+        )
+        for name in "${forbidden_names[@]}"; do
+          if [[ -n "${!name:-}" ]]; then
+            echo "PR runner received forbidden credential/cache authority ($name)" >&2
+            exit 1
+          fi
+        done
+
+        endpoint_host() {
+          local endpoint="$1"
+          local authority="${endpoint#*://}"
+          authority="${authority%%[/?#]*}"
+          printf '%s' "$authority"
+        }
+
+        is_github_endpoint() {
+          local endpoint="$1"
+          local endpoint_lower
+          endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+          local authority
+          authority="$(endpoint_host "$endpoint_lower")"
+          [[ "$endpoint_lower" == https://* ]] || return 1
+          [[ "$authority" != *"@"* ]] || return 1
+          [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]
+        }
+
+        is_loopback_endpoint() {
+          local endpoint="$1"
+          local endpoint_lower
+          endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+          # Loopback proxies require a numeric TCP port and an explicit path.
+          if [[ ! "$endpoint_lower" =~ ^https?://(localhost|127\.0\.0\.1|\[::1\]):([0-9]{1,5})/[^[:space:]]*$ ]]; then
+            return 1
+          fi
+          local port="${BASH_REMATCH[2]}"
+          (( port >= 1 && port <= 65535 ))
+        }
+
+        for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_RUNTIME_URL; do
+          endpoint="${!endpoint_name:-}"
+          if [[ -z "$endpoint" ]]; then
+            continue
+          fi
+          endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+          # A selected Depot PR with native cache enabled is the explicit,
+          # time-bounded exception: its Actions endpoints may be Depot's
+          # repository-wide proxy. All other PR contexts remain fail-closed.
+          if [[ "$endpoint_lower" == *depot.dev* &&
+                !( "$depot_selected" == "true" &&
+                   "$allow_native_github_cache" == "true" ) ]]; then
+            echo "PR runner received a Depot Actions endpoint ($endpoint_name)" >&2
+            exit 1
+          fi
+          authority="$(endpoint_host "$endpoint_lower")"
+          if [[ "$authority" == *"@"* ]]; then
+            echo "PR runner received an Actions endpoint with URL userinfo ($endpoint_name)" >&2
+            exit 1
+          fi
+          if [[ "$depot_selected" != "true" ]]; then
+            continue
+          fi
+          if [[ "$allow_native_github_cache" == "true" ]]; then
+            if [[ ! "$endpoint_lower" =~ ^https?:// || -z "$authority" ]]; then
+              echo "PR runner received a malformed Actions endpoint ($endpoint_name)" >&2
+              exit 1
+            fi
+            continue
+          fi
+          if ! is_github_endpoint "$endpoint" &&
+             ! is_loopback_endpoint "$endpoint"; then
+            echo "PR runner received a non-GitHub/non-loopback Actions endpoint ($endpoint_name)" >&2
+            exit 1
+          fi
+        done
+
+        # Docker configuration is parsed with the runner's Python 3 standard
+        # library.  The audit runs before checkout/setup steps, so do not rely
+        # on a repository virtualenv or a package installed by the job.  The
+        # hosted GitHub images and the pinned Depot runner image both provide
+        # python3/python; an unexpected image without either fails closed.
+        python_bin=""
+        for candidate in python3 python; do
+          if command -v "$candidate" >/dev/null 2>&1; then
+            python_bin="$(command -v "$candidate")"
+            break
+          fi
+        done
+        if [[ -z "$python_bin" ]]; then
+          echo "Docker auth JSON audit requires Python 3 on the runner (runtime)" >&2
+          exit 1
+        fi
+        if ! "$python_bin" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 6) else 1)' >/dev/null 2>&1; then
+          echo "Docker auth JSON audit requires Python 3.6 or newer (runtime)" >&2
+          exit 1
+        fi
+        docker_config="${DOCKER_CONFIG:-${HOME:-}/.docker}/config.json"
+        docker_auth_config="${DOCKER_AUTH_CONFIG:-}"
+        AUDIT_DOCKER_AUTH_CONFIG="$docker_auth_config" \
+          AUDIT_DOCKER_CONFIG_PATH="$docker_config" \
+          AUDIT_DEPOT_SELECTED="$depot_selected" \
+          "$python_bin" - <<'PY'
+        import json
+        import os
+        import sys
+
+        depot_selected = os.environ.get("AUDIT_DEPOT_SELECTED", "")
+        auth_config = os.environ.get("AUDIT_DOCKER_AUTH_CONFIG", "")
+        config_path = os.environ.get("AUDIT_DOCKER_CONFIG_PATH", "")
+
+        def fail(message):
+            print(message, file=sys.stderr)
+            raise SystemExit(1)
+
+        def reject_constant(value):
+            raise ValueError(f"non-standard JSON constant: {value}")
+
+        def parse_source(label, raw):
+            try:
+                document = json.loads(raw, parse_constant=reject_constant)
+            except (TypeError, ValueError, RecursionError):
+                fail(f"PR runner Docker auth JSON is malformed ({label})")
+            if not isinstance(document, dict):
+                fail(f"PR runner Docker auth JSON is malformed ({label})")
+
+            if depot_selected == "true":
+                # Preserve the strict Depot policy: a Docker auth/config
+                # section is forbidden even when it is empty.  A valid config
+                # without any auth section remains an inert Docker config.
+                if any(name in document for name in ("auths", "credHelpers", "credsStore")):
+                    fail(f"PR runner has Docker registry authentication configured ({label})")
+                return
+
+            for name in ("auths", "credHelpers"):
+                if name not in document:
+                    continue
+                section = document[name]
+                if not isinstance(section, dict):
+                    fail(f"PR runner Docker auth JSON is malformed ({label})")
+                if any("depot.dev" in key.casefold() for key in section):
+                    fail(
+                        "Hosted PR runner has Depot Docker registry authentication "
+                        f"configured ({label})"
+                    )
+            if "credsStore" in document:
+                store = document["credsStore"]
+                if not isinstance(store, str):
+                    fail(f"PR runner Docker auth JSON is malformed ({label})")
+                if "depot.dev" in store.casefold():
+                    fail(
+                        "Hosted PR runner has Depot Docker registry authentication "
+                        f"configured ({label})"
+                    )
+
+        if depot_selected == "true" and auth_config:
+            fail("PR runner has Docker registry authentication configured (DOCKER_AUTH_CONFIG)")
+        if auth_config:
+            parse_source("DOCKER_AUTH_CONFIG", auth_config)
+        if os.path.isfile(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as config_file:
+                    parse_source("config.json", config_file.read())
+            except UnicodeError:
+                fail("PR runner Docker auth JSON is malformed (config.json)")
+            except OSError:
+                fail("PR runner Docker auth JSON could not be read (config.json)")
+        PY

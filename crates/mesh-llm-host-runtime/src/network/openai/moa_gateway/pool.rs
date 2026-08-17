@@ -12,9 +12,11 @@ use crate::mesh;
 use mesh_mixture_of_agents as moa;
 use std::collections::HashMap;
 
-/// Boundary between small- and big-tier in billions of parameters. Matches the
-/// old single-digit-B name heuristic (1–9B = small).
-const SMALL_TIER_MAX_B: f64 = 10.0;
+/// Boundary between small- and big-tier in billions of parameters.
+///
+/// Taken from the engine so host admission/capping and MoA's own role
+/// assignment can never disagree about where the tier boundary sits.
+const SMALL_TIER_MAX_B: f64 = moa::SMALL_TIER_MAX_B;
 
 /// Model size class used for the destructive admission/cap decisions.
 ///
@@ -77,6 +79,7 @@ async fn resolve_one_worker_from_aliases(
     http: &reqwest::Client,
     aliases: &[String],
     required_tokens: Option<u32>,
+    sizes: &HashMap<String, f64>,
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
     local_count: &mut usize,
@@ -86,6 +89,7 @@ async fn resolve_one_worker_from_aliases(
         targets,
         http,
         required_tokens,
+        sizes,
     };
     for name in aliases {
         if add_worker_backend(&resolution, name, backends, models, local_count).await {
@@ -170,6 +174,18 @@ struct WorkerBackendResolution<'a> {
     targets: Option<&'a election::ModelTargets>,
     http: &'a reqwest::Client,
     required_tokens: Option<u32>,
+    /// Verified sizes by canonical base, so each worker carries its real size
+    /// into the engine instead of leaving the engine to parse the name.
+    sizes: &'a HashMap<String, f64>,
+}
+
+impl WorkerBackendResolution<'_> {
+    /// Gossiped size for `name`, keyed by canonical base so any alias of the
+    /// same model resolves to the same figure. `None` when no peer has
+    /// advertised a verified size, which the engine treats as unknown.
+    fn verified_size(&self, name: &str) -> Option<f64> {
+        self.sizes.get(&canonical_base_name(name)).copied()
+    }
 }
 
 async fn add_worker_backend(
@@ -196,10 +212,10 @@ async fn add_worker_backend(
                 port,
                 http: resolution.http.clone(),
             }));
-            models.push(moa::ModelEntry {
-                name: name.to_string(),
-                backend_index: backend_idx,
-            });
+            models.push(
+                moa::ModelEntry::new(name, backend_idx)
+                    .with_parameter_count_b(resolution.verified_size(name)),
+            );
             *local_count += 1;
             return true;
         } else {
@@ -227,10 +243,10 @@ async fn add_worker_backend(
             node: resolution.node.clone(),
             peer_id,
         }));
-        models.push(moa::ModelEntry {
-            name: name.to_string(),
-            backend_index: backend_idx,
-        });
+        models.push(
+            moa::ModelEntry::new(name, backend_idx)
+                .with_parameter_count_b(resolution.verified_size(name)),
+        );
         return true;
     }
     false
@@ -262,6 +278,12 @@ pub(super) async fn assemble_worker_pool(
         .filter(|n| n != moa::VIRTUAL_MODEL_NAME)
         .collect();
 
+    // Verified sizes gossiped by peers (metadata.parameter_count_b). The
+    // orchestrator has no peer GGUFs, so this is the only authoritative size
+    // source — for the destructive admission/cap decisions below and for the
+    // per-worker size each `ModelEntry` carries into the engine.
+    let sizes = gossiped_sizes(node).await;
+
     // Group aliases by canonical base and resolve one worker per base, trying
     // aliases in order so a longer-named reachable alias still resolves when
     // the shortest one is offline (PR #566).
@@ -272,6 +294,7 @@ pub(super) async fn assemble_worker_pool(
             http,
             &aliases,
             required_tokens,
+            &sizes,
             &mut backends,
             &mut models,
             &mut local_count,
@@ -285,10 +308,6 @@ pub(super) async fn assemble_worker_pool(
     // expected noise-to-harm. When tiers are mixed, keep only big-tier workers;
     // an all-small or all-big pool is untouched. A lone big model then serves
     // solo (fails the caller's <2 check), the safe outcome.
-    // Verified sizes gossiped by peers (metadata.parameter_count_b). The
-    // orchestrator has no peer GGUFs, so this is the only authoritative size
-    // source for the destructive admission/cap decisions.
-    let sizes = gossiped_sizes(node).await;
     apply_admission_control(&mut backends, &mut models, &sizes);
 
     // Same-model fill: if only one model resolved but it is served by >=2
@@ -392,12 +411,10 @@ fn keep_best_member_only(
     );
 
     let backend = backends[models[best].backend_index].clone();
-    let name = models[best].name.clone();
+    let mut kept = models[best].clone();
+    kept.backend_index = 0;
     *backends = vec![backend];
-    *models = vec![moa::ModelEntry {
-        name,
-        backend_index: 0,
-    }];
+    *models = vec![kept];
 }
 
 fn committee_cap(models: &[moa::ModelEntry], sizes: &HashMap<String, f64>) -> usize {
@@ -448,8 +465,8 @@ async fn cap_committee(
         let new_idx = kept_backends.len();
         kept_backends.push(backends[m.backend_index].clone());
         kept_models.push(moa::ModelEntry {
-            name: m.name.clone(),
             backend_index: new_idx,
+            ..m.clone()
         });
     }
     *backends = kept_backends;
@@ -529,10 +546,12 @@ async fn self_fill_from_extra_instances(
         endpoints.len()
     );
     *backends = endpoints;
+    // Every entry is the same model on a different endpoint, so they all carry
+    // the size the original entry resolved.
     *models = (0..backends.len())
         .map(|i| moa::ModelEntry {
-            name: name.clone(),
             backend_index: i,
+            ..existing.clone()
         })
         .collect();
 }
@@ -589,8 +608,8 @@ fn apply_admission_control(
         let new_idx = kept_backends.len();
         kept_backends.push(backends[m.backend_index].clone());
         kept_models.push(moa::ModelEntry {
-            name: m.name.clone(),
             backend_index: new_idx,
+            ..m.clone()
         });
     }
     *backends = kept_backends;
@@ -640,8 +659,8 @@ pub(super) async fn compute_actor_candidates(
             .cmp(&tool_a)
             // 2) big-tier before small-tier
             .then_with(|| {
-                let small_a = moa::model_name_is_small_tier(&ma.name);
-                let small_b = moa::model_name_is_small_tier(&mb.name);
+                let small_a = moa::entry_is_small_tier(ma);
+                let small_b = moa::entry_is_small_tier(mb);
                 small_a.cmp(&small_b) // false (big) sorts before true (small)
             })
             // 3) stable index order
@@ -709,10 +728,7 @@ mod tests {
         let mut b: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
         let mut m = Vec::new();
         for name in names {
-            m.push(moa::ModelEntry {
-                name: (*name).to_string(),
-                backend_index: b.len(),
-            });
+            m.push(moa::ModelEntry::new(*name, b.len()));
             b.push(std::sync::Arc::new(FakeBackend));
         }
         (b, m)
@@ -743,6 +759,59 @@ mod tests {
         assert_eq!(m[0].name, "Qwen3.5-9B", "largest verified size wins");
         assert_eq!(b.len(), 1);
         assert_eq!(m[0].backend_index, 0, "backend index reindexed");
+    }
+
+    /// The verified size must travel with the entry into the engine — that is
+    /// the whole point of resolving it host-side. Re-indexing steps (admission
+    /// control, committee capping, the all-small collapse) rebuild entries, so
+    /// they must carry the size across rather than reconstruct a bare entry.
+    #[test]
+    fn reindexing_preserves_the_verified_size() {
+        // Two verified bigs plus a small, the shape where admission actually
+        // drops the small worker and rebuilds the surviving entries.
+        let (mut b, mut m) = pool(&["Qwen3-8B", "Llama-3.3-70B-Instruct-4bit", "Qwen3-32B"]);
+        m[0].parameter_count_b = Some(8.2);
+        m[1].parameter_count_b = Some(70.6);
+        m[2].parameter_count_b = Some(32.8);
+        let sizes = sizes_of(&[
+            ("Qwen3-8B", 8.2),
+            ("Llama-3.3-70B-Instruct-4bit", 70.6),
+            ("Qwen3-32B", 32.8),
+        ]);
+
+        apply_admission_control(&mut b, &mut m, &sizes);
+
+        assert_eq!(m.len(), 2, "the verified small worker is excluded");
+        let quantised = m
+            .iter()
+            .find(|entry| entry.name == "Llama-3.3-70B-Instruct-4bit")
+            .expect("the verified 70B must survive admission");
+        assert_eq!(
+            quantised.parameter_count_b,
+            Some(70.6),
+            "re-indexing must preserve the verified size, or the engine falls \
+             back to parsing '-4bit' as a size and calls this model small"
+        );
+        for (i, entry) in m.iter().enumerate() {
+            assert_eq!(
+                entry.backend_index, i,
+                "backend indices are rebuilt densely"
+            );
+        }
+    }
+
+    /// The all-small collapse also rebuilds its single entry.
+    #[test]
+    fn best_member_collapse_preserves_the_verified_size() {
+        let (mut b, mut m) = pool(&["Qwen3-8B", "Qwen3.5-9B"]);
+        m[0].parameter_count_b = Some(8.0);
+        m[1].parameter_count_b = Some(9.0);
+        let sizes = sizes_of(&[("Qwen3-8B", 8.0), ("Qwen3.5-9B", 9.0)]);
+
+        keep_best_member_only(&mut b, &mut m, &sizes);
+
+        assert_eq!(m[0].name, "Qwen3.5-9B");
+        assert_eq!(m[0].parameter_count_b, Some(9.0));
     }
 
     #[test]
@@ -846,10 +915,7 @@ mod tests {
         // All-small pool: cap is wide (6) so a 6× 8B mesh keeps its width —
         // measured 12W/2L p=0.013 at width 6, only marginal at 4.
         let small: Vec<moa::ModelEntry> = (0..8)
-            .map(|i| moa::ModelEntry {
-                name: "Qwen3-8B".to_string(),
-                backend_index: i,
-            })
+            .map(|i| moa::ModelEntry::new("Qwen3-8B".to_string(), i))
             .collect();
         let sizes = sizes_of(&[("Qwen3-8B", 8.0)]);
         assert_eq!(committee_cap(&small, &sizes), COMMITTEE_CAP_SMALL);
@@ -857,14 +923,8 @@ mod tests {
         // A verified big model present -> tight cap (4); extra workers past a
         // 24–32B pair buy nothing.
         let mixed = vec![
-            moa::ModelEntry {
-                name: "Qwen3-32B".to_string(),
-                backend_index: 0,
-            },
-            moa::ModelEntry {
-                name: "Qwen3-8B".to_string(),
-                backend_index: 1,
-            },
+            moa::ModelEntry::new("Qwen3-32B".to_string(), 0),
+            moa::ModelEntry::new("Qwen3-8B".to_string(), 1),
         ];
         let sizes = sizes_of(&[("Qwen3-32B", 32.0), ("Qwen3-8B", 8.0)]);
         assert_eq!(committee_cap(&mixed, &sizes), COMMITTEE_CAP_BIG);

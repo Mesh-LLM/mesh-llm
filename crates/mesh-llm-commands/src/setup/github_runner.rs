@@ -4,7 +4,6 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const GITHUB_REPOSITORY: &str = "Mesh-LLM/mesh-llm";
 const GH_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const GH_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -20,20 +19,21 @@ impl GhCommand {
     const fn args(self) -> &'static [&'static str] {
         match self {
             Self::CheckAvailability => &["--version"],
-            Self::CheckAuthentication => {
-                &["auth", "status", "--active", "--hostname", "github.com"]
-            }
+            Self::CheckAuthentication => &["api", "--hostname", "github.com", "/user", "--silent"],
             Self::CheckViewerHasStarred => &[
-                "repo",
-                "view",
-                GITHUB_REPOSITORY,
-                "--json",
-                "viewerHasStarred",
+                "api",
+                "--hostname",
+                "github.com",
+                "graphql",
+                "-f",
+                "query=query { repository(owner: \"Mesh-LLM\", name: \"mesh-llm\") { viewerHasStarred } }",
                 "--jq",
-                ".viewerHasStarred",
+                ".data.repository.viewerHasStarred",
             ],
             Self::StarRepository => &[
                 "api",
+                "--hostname",
+                "github.com",
                 "--method",
                 "PUT",
                 "/user/starred/Mesh-LLM/mesh-llm",
@@ -45,11 +45,11 @@ impl GhCommand {
     pub(crate) const fn display_name(self) -> &'static str {
         match self {
             Self::CheckAvailability => "gh --version",
-            Self::CheckAuthentication => "gh auth status --active --hostname github.com",
-            Self::CheckViewerHasStarred => {
-                "gh repo view Mesh-LLM/mesh-llm --json viewerHasStarred --jq .viewerHasStarred"
+            Self::CheckAuthentication => "gh api --hostname github.com /user --silent",
+            Self::CheckViewerHasStarred => "gh api --hostname github.com graphql <star query>",
+            Self::StarRepository => {
+                "gh api --hostname github.com --method PUT /user/starred/Mesh-LLM/mesh-llm --silent"
             }
-            Self::StarRepository => "gh api --method PUT /user/starred/Mesh-LLM/mesh-llm --silent",
         }
     }
 }
@@ -153,5 +153,36 @@ impl GhCommandRunner for ProcessGhCommandRunner {
                 Err(error) => return Err(GhCommandError::WaitFailed(error.to_string())),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GhCommand;
+
+    #[test]
+    fn github_api_commands_are_pinned_to_dot_com() {
+        for command in [
+            GhCommand::CheckAuthentication,
+            GhCommand::CheckViewerHasStarred,
+            GhCommand::StarRepository,
+        ] {
+            assert!(
+                command
+                    .args()
+                    .windows(2)
+                    .any(|args| args == ["--hostname", "github.com"]),
+                "{} must explicitly target github.com",
+                command.display_name()
+            );
+        }
+    }
+
+    #[test]
+    fn authentication_probe_checks_the_selected_api_credential() {
+        assert_eq!(
+            GhCommand::CheckAuthentication.args(),
+            &["api", "--hostname", "github.com", "/user", "--silent"]
+        );
     }
 }

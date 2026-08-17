@@ -1,26 +1,27 @@
 import { useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react'
 import {
-  type ColumnDef,
   type ColumnFiltersState,
+  type ColumnVisibilityState,
   type PaginationState,
+  type RowData,
   type SortingState,
-  type Table as TanStackTable,
-  type VisibilityState,
   flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  useReactTable
+  useTable
 } from '@tanstack/react-table'
 import { Search } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DataTablePagination } from '@/components/ui/data-table-pagination'
+import {
+  dataTableFeatures,
+  type ColumnDef,
+  type DataTableFeatures,
+  type TanStackTable
+} from '@/components/ui/data-table-features'
 
-export type DataTableProps<TData, TValue> = {
-  readonly columns: ColumnDef<TData, TValue>[]
+export type DataTableProps<TData extends RowData> = {
+  readonly columns: ColumnDef<TData>[]
   readonly data: TData[]
   readonly ariaLabel?: string
   readonly children?: (table: TanStackTable<TData>) => ReactNode
@@ -37,7 +38,7 @@ export type DataTableProps<TData, TValue> = {
   readonly tableClassName?: string
 }
 
-export function DataTable<TData, TValue>({
+export function DataTable<TData extends RowData>({
   columns,
   data,
   ariaLabel,
@@ -53,14 +54,15 @@ export function DataTable<TData, TValue>({
   getRowAriaLabel,
   onRowActivate,
   tableClassName
-}: DataTableProps<TData, TValue>) {
+}: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [columnVisibility, setColumnVisibility] = useState<ColumnVisibilityState>({})
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: defaultPageSize })
 
   const tableOptions = useMemo(
     () => ({
+      features: dataTableFeatures,
       data,
       columns,
       getRowId,
@@ -68,21 +70,17 @@ export function DataTable<TData, TValue>({
         sorting,
         columnFilters,
         columnVisibility,
-        ...(enablePagination ? { pagination } : {})
+        pagination
       },
       onSortingChange: setSorting,
       onColumnFiltersChange: setColumnFilters,
       onColumnVisibilityChange: setColumnVisibility,
-      ...(enablePagination ? { onPaginationChange: setPagination } : {}),
-      getCoreRowModel: getCoreRowModel(),
-      getSortedRowModel: getSortedRowModel(),
-      getFilteredRowModel: getFilteredRowModel(),
-      ...(enablePagination ? { getPaginationRowModel: getPaginationRowModel() } : {})
+      onPaginationChange: setPagination,
+      manualPagination: !enablePagination
     }),
     [columnFilters, columnVisibility, columns, data, enablePagination, getRowId, pagination, sorting]
   )
-  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table intentionally exposes a mutable table instance.
-  const table = useReactTable(tableOptions)
+  const table = useTable<DataTableFeatures, TData>(tableOptions)
 
   const filterValue = filterColumnId ? ((table.getColumn(filterColumnId)?.getFilterValue() as string) ?? '') : undefined
 
@@ -172,6 +170,6 @@ export function DataTable<TData, TValue>({
 }
 
 export type DataTableSortingState = SortingState
-export type DataTableColumnVisibility = VisibilityState
+export type DataTableColumnVisibility = ColumnVisibilityState
 export type DataTableFlexRenderProps = ComponentPropsWithoutRef<'th'> & { colSpan?: number }
-export type { ColumnDef, TanStackTable }
+export type { ColumnDef, DataTableColumn, TanStackTable } from '@/components/ui/data-table-features'

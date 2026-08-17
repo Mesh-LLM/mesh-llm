@@ -1,17 +1,14 @@
 use super::*;
 use tokio::sync::watch;
 
-/// RTT re-election: when a peer's RTT drops from above the 80ms split
-/// threshold to below it (e.g. relay → direct), update_peer_rtt must
-/// trigger a peer_change event so the election loop re-runs and can
-/// now include the peer in split mode.
+/// RTT changes do not affect split eligibility, so they must not trigger
+/// topology re-election.
 #[tokio::test]
-async fn test_rtt_drop_triggers_reelection() -> Result<()> {
+async fn test_rtt_improvement_does_not_trigger_reelection() -> Result<()> {
     let node = make_test_node(super::super::NodeRole::Worker).await?;
     let peer_key = SecretKey::generate();
     let peer_id = EndpointId::from(peer_key.public());
 
-    // Add a fake peer with high relay RTT
     {
         let mut state = node.state.lock().await;
         state
@@ -20,48 +17,11 @@ async fn test_rtt_drop_triggers_reelection() -> Result<()> {
     }
 
     let rx = node.peer_change_rx.clone();
-
-    // Update RTT to still-high value — should NOT trigger
-    node.update_peer_rtt(peer_id, 500).await;
-    assert!(
-        !rx.has_changed()
-            .expect("peer_change_rx closed unexpectedly"),
-        "RTT 2600→500 (both above threshold) should not trigger re-election"
-    );
-
-    // Update RTT to below threshold — SHOULD trigger
-    node.update_peer_rtt(peer_id, 15).await;
-    assert!(
-        rx.has_changed()
-            .expect("peer_change_rx closed unexpectedly"),
-        "RTT 500→15 (crossing threshold) must trigger re-election"
-    );
-
-    Ok(())
-}
-
-/// RTT re-election should NOT trigger when RTT was already below threshold.
-#[tokio::test]
-async fn test_rtt_below_threshold_no_reelection() -> Result<()> {
-    let node = make_test_node(super::super::NodeRole::Worker).await?;
-    let peer_key = SecretKey::generate();
-    let peer_id = EndpointId::from(peer_key.public());
-
-    {
-        let mut state = node.state.lock().await;
-        state
-            .peers
-            .insert(peer_id, make_test_peer(peer_id, Some(20), 16));
-    }
-
-    let rx = node.peer_change_rx.clone();
-
-    // Update RTT to another low value — should NOT trigger
     node.update_peer_rtt(peer_id, 15).await;
     assert!(
         !rx.has_changed()
             .expect("peer_change_rx closed unexpectedly"),
-        "RTT 20→15 (both below threshold) should not trigger re-election"
+        "RTT improvement must not trigger split re-election"
     );
 
     Ok(())

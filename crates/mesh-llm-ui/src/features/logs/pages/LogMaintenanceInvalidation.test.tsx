@@ -34,6 +34,10 @@ vi.mock('@/features/logs/components/LogsLedger', async () => {
   }
 })
 
+vi.mock('@/features/network/api/use-status-query', () => ({
+  useStatusQuery: () => ({ data: undefined })
+}))
+
 import { LogsLedgerPage } from '@/features/logs/pages/LogsLedgerPage'
 
 describe('log maintenance invalidation', () => {

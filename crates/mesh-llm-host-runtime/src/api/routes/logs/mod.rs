@@ -529,8 +529,8 @@ pub(crate) async fn proxy_records(
     .await
 }
 
-/// Parse and run `GET /api/logs/audit`. Operational audit rows are sparse,
-/// privacy-safe projections with no request IDs or detail payloads.
+/// Parse and run `GET /api/logs/audit`. Operational audit rows expose only a
+/// bounded typed context; arbitrary detail payloads remain private.
 pub(crate) async fn list_audits(
     state: &LoggingRuntimeState,
     path: &str,

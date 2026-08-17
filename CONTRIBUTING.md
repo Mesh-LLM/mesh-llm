@@ -143,12 +143,13 @@ For the current PR and main topology, read [`ci/ci.md`](ci/ci.md), the
 [`manage-ci` skill](.agents/skills/manage-ci/SKILL.md) before editing CI.
 `.github/AGENTS.md` enforces that sequence.
 
-`pr_builds.yml` and `ci.yml` are thin event entrypoints. On protected main,
+The five `pr_{quality,website,linux,macos,windows}.yml` files are focused PR
+entrypoints, while `ci.yml` is the thin main entrypoint. On protected main,
 `ci-control.yml` computes one versioned plan from `ci/ownership.yml` and
 `ci/slices.yml`, then dispatches separate Quality, Website, Linux, macOS and
-Windows workflow graphs with bounded native inputs. The bootstrap orchestrator
-provides the same planned slices in one monolithic graph for forks, manual runs
-and the controller migration.
+Windows workflow graphs with bounded native inputs. Each PR entry invokes only
+its matching protected reusable lane, keeping platform/topic logs in separate
+PR-associated runs.
 A PR selects representative rows from the same catalog that `main` runs; it
 does not maintain a second build graph. GitHub-hosted runners are the PR
 provider.

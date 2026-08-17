@@ -121,18 +121,16 @@ async function waitForModelRouteRetry(abortSignal?: AbortSignal): Promise<boolea
   if (abortSignal?.aborted) return false
 
   return new Promise((resolve) => {
-    let timerId: ReturnType<typeof setTimeout> | undefined
-    let abortHandler: (() => void) | undefined
+    const abortHandler = () => finish(false)
+    const timerId = setTimeout(() => finish(true), MODEL_ROUTE_RETRY_DELAY_MS)
 
-    const finish = (shouldRetry: boolean) => {
-      if (timerId !== undefined) clearTimeout(timerId)
-      if (abortHandler) abortSignal?.removeEventListener('abort', abortHandler)
+    function finish(shouldRetry: boolean) {
+      clearTimeout(timerId)
+      abortSignal?.removeEventListener('abort', abortHandler)
       resolve(shouldRetry)
     }
 
-    abortHandler = () => finish(false)
     abortSignal?.addEventListener('abort', abortHandler, { once: true })
-    timerId = setTimeout(() => finish(true), MODEL_ROUTE_RETRY_DELAY_MS)
   })
 }
 

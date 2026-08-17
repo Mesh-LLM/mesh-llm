@@ -72,6 +72,19 @@ function createAbortError() {
   return error
 }
 
+function createModelNotFoundResponse() {
+  return new Response(JSON.stringify({ error: { message: "model 'apple/system' not found" } }), {
+    status: 404,
+    headers: { 'Content-Type': 'application/json' }
+  })
+}
+
+function spyAbortSignalListeners(signal: AbortSignal) {
+  const addEventListener = vi.spyOn(signal, 'addEventListener')
+  const removeEventListener = vi.spyOn(signal, 'removeEventListener')
+  return { addEventListener, removeEventListener }
+}
+
 function createPendingAbortReaderStream(abortSignal: AbortSignal) {
   const reader = {
     read: vi.fn<() => Promise<ReadableStreamReadResult<Uint8Array>>>(() => {
@@ -500,6 +513,86 @@ describe('createMeshConnectionAdapter', () => {
     ).toContain('Recovered')
   })
 
+  it('does not schedule a route retry for an already-aborted request', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    abortController.abort()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createModelNotFoundResponse()))
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+      expect(setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 500)).toHaveLength(0)
+      expect(listeners.addEventListener).not.toHaveBeenCalled()
+      expect(listeners.removeEventListener).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cleans up the route retry timer and abort listener when the request is aborted', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createModelNotFoundResponse()))
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+
+      abortController.abort()
+
+      await expect(pendingNext).resolves.toEqual({ done: true, value: undefined })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(listeners.addEventListener).toHaveBeenCalledTimes(1)
+      expect(listeners.removeEventListener).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cleans up the route retry timer and abort listener after a retry timeout', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(createModelNotFoundResponse())
+      .mockResolvedValueOnce(
+        new Response(createSSEStream(['data: [DONE]\n']), {
+          status: 200
+        })
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(500)
+
+      await expect(pendingNext).resolves.toMatchObject({ done: false, value: { type: EventType.RUN_FINISHED } })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(listeners.addEventListener).toHaveBeenCalledTimes(1)
+      expect(listeners.removeEventListener).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('compacts an oversized conversation after a context-route rejection', async () => {
     const longMessages = Array.from({ length: 8 }, (_, index) => ({
       id: `message-${index}`,
@@ -544,10 +637,6 @@ describe('createMeshConnectionAdapter', () => {
   })
 
   it('measures UTF-8 byte length correctly when compacting multibyte text', async () => {
-    // Construct messages with multibyte characters (emoji + CJK) where UTF-16 .length
-    // would undercount the actual UTF-8 byte size, potentially allowing an oversized body.
-    // Each emoji is ~4 UTF-8 bytes but 2 UTF-16 code units (.length counts UTF-16).
-    // Each CJK character is ~3 UTF-8 bytes but 1 UTF-16 code unit.
     const multibyteContent = '🌟🚀💡'.repeat(1000) + '你好世界'.repeat(500)
     const longMessages = Array.from({ length: 8 }, (_, index) => ({
       id: `message-${index}`,
@@ -581,19 +670,10 @@ describe('createMeshConnectionAdapter', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const compactedBodyString = String(fetchMock.mock.calls[1]?.[1]?.body)
     const compactedBody = JSON.parse(compactedBodyString) as { input: unknown[] }
-
-    // Verify the compacted body is smaller than the original
     const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { input: unknown[] }
     expect(compactedBody.input.length).toBeLessThan(firstBody.input.length)
-
-    // Critical assertion: the serialized body must be at most CONTEXT_COMPACTION_RETRY_BODY_BYTES
-    // when measured in UTF-8 bytes (not UTF-16 code units).
-    const utf8ByteLength = new TextEncoder().encode(compactedBodyString).length
-    expect(utf8ByteLength).toBeLessThanOrEqual(14_000)
-
-    // Verify string .length would have undercounted (demonstrating the bug would have occurred)
-    expect(compactedBodyString.length).toBeLessThan(utf8ByteLength)
-
+    expect(new TextEncoder().encode(compactedBodyString).length).toBeLessThanOrEqual(14_000)
+    expect(compactedBodyString.length).toBeLessThan(new TextEncoder().encode(compactedBodyString).length)
     expect(
       chunks
         .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)

@@ -1,10 +1,72 @@
 use super::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-fn audit_runtime_model_load_result<T>(result: Result<T>) -> Result<T> {
+fn audit_runtime_model_load_result<T>(
+    result: Result<T>,
+    context: OperationalAuditContext,
+    load_started: Instant,
+) -> Result<T> {
     result.inspect_err(|_| {
-        record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadFailed);
+        record_runtime_operational_event_with_context(
+            RuntimeOperationalEvent::ModelLoadFailed,
+            context
+                .outcome("failed")
+                .duration_ms(u64::try_from(load_started.elapsed().as_millis()).unwrap_or(u64::MAX)),
+        );
     })
+}
+
+fn record_runtime_model_load_terminal(
+    event: RuntimeOperationalEvent,
+    model: &str,
+    instance_id: &str,
+    outcome: &'static str,
+    load_started: Instant,
+) {
+    record_runtime_operational_event_with_context(
+        event,
+        runtime_model_audit_context(Some(model), instance_id)
+            .outcome(outcome)
+            .duration_ms(u64::try_from(load_started.elapsed().as_millis()).unwrap_or(u64::MAX)),
+    );
+}
+
+fn spawn_runtime_model_exit_watcher(
+    event_tx: tokio::sync::mpsc::UnboundedSender<RuntimeEvent>,
+    instance_id: String,
+    model: String,
+    port: u16,
+    death_rx: tokio::sync::oneshot::Receiver<()>,
+) {
+    tokio::spawn(async move {
+        let _ = death_rx.await;
+        let _ = event_tx.send(RuntimeEvent::Exited {
+            instance_id,
+            model,
+            port,
+        });
+    });
+}
+
+async fn plan_runtime_model_bytes(model_path: &Path, requested_model: &str) -> u64 {
+    let planning_path = model_path.to_path_buf();
+    tokio::task::spawn_blocking(move || runtime_model_planning_bytes(&planning_path))
+        .await
+        .unwrap_or_else(|err| {
+            Err(anyhow::anyhow!(
+                "join runtime model byte planning task: {err}"
+            ))
+        })
+        .unwrap_or_else(|err| {
+            let fallback = election::total_model_bytes(model_path);
+            tracing::warn!(
+                model = %requested_model,
+                error = %err,
+                fallback_bytes = fallback,
+                "failed to resolve runtime model planning bytes; using filesystem size fallback"
+            );
+            fallback
+        })
 }
 
 /// Run auto-load for a runtime model.
@@ -13,33 +75,23 @@ pub(crate) async fn run_auto_load_runtime_model(
     spec: String,
     profile: String,
 ) -> Result<api::RuntimeLoadResponse> {
-    record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadStarted);
-    let model_path = audit_runtime_model_load_result(resolve_model(&PathBuf::from(&spec)).await)?;
+    let load_started = Instant::now();
+    let instance_id = next_runtime_instance_id(ctx.next_runtime_instance_sequence);
+    record_runtime_operational_event_with_context(
+        RuntimeOperationalEvent::ModelLoadStarted,
+        runtime_model_audit_context(None, &instance_id).outcome("started"),
+    );
+    let model_path = audit_runtime_model_load_result(
+        resolve_model(&PathBuf::from(&spec)).await,
+        runtime_model_audit_context(None, &instance_id),
+        load_started,
+    )?;
     let runtime_model_name = find_remote_catalog_model_exact_blocking(spec.clone())
         .await
         .map(|model| models::remote_catalog_model_ref(&model))
         .unwrap_or_else(|| models::model_ref_for_path(&model_path));
     let requested_model = spec.clone();
-    let model_bytes = {
-        let p = model_path.clone();
-        tokio::task::spawn_blocking(move || runtime_model_planning_bytes(&p))
-            .await
-            .unwrap_or_else(|err| {
-                Err(anyhow::anyhow!(
-                    "join runtime model byte planning task: {err}"
-                ))
-            })
-            .unwrap_or_else(|err| {
-                let fallback = election::total_model_bytes(&model_path);
-                tracing::warn!(
-                    model = %requested_model,
-                    error = %err,
-                    fallback_bytes = fallback,
-                    "failed to resolve runtime model planning bytes; using filesystem size fallback"
-                );
-                fallback
-            })
-    };
+    let model_bytes = plan_runtime_model_bytes(&model_path, &requested_model).await;
     let model_overrides = ctx
         .config
         .models
@@ -50,16 +102,18 @@ pub(crate) async fn run_auto_load_runtime_model(
         model_overrides.and_then(|m| m.parallel),
         &ctx.config.gpu,
     );
-    let instance_id = next_runtime_instance_id(ctx.next_runtime_instance_sequence);
-    let capacity_reservation =
-        audit_runtime_model_load_result(reserve_runtime_capacity_for_model(
+    let capacity_reservation = audit_runtime_model_load_result(
+        reserve_runtime_capacity_for_model(
             ctx.runtime_capacity_ledger,
             &instance_id,
             &runtime_model_name,
             None,
             ctx.node.local_runtime_capacity_bytes(),
             model_bytes,
-        ))?;
+        ),
+        runtime_model_audit_context(Some(&runtime_model_name), &instance_id),
+        load_started,
+    )?;
     add_serving_assignment(ctx.node, ctx.primary_model_name, &runtime_model_name).await;
     let launch_started = Instant::now();
     let capacity_budget_bytes = capacity_reservation.capacity_budget_bytes();
@@ -108,7 +162,13 @@ pub(crate) async fn run_auto_load_runtime_model(
                 launch_started.elapsed(),
                 survey::classify_launch_failure(&err),
             );
-            record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadFailed);
+            record_runtime_model_load_terminal(
+                RuntimeOperationalEvent::ModelLoadFailed,
+                &runtime_model_name,
+                &instance_id,
+                "failed",
+                load_started,
+            );
             return Err(err);
         }
     };
@@ -157,18 +217,13 @@ pub(crate) async fn run_auto_load_runtime_model(
         cs.upsert_local_process(payload).await;
     }
 
-    let event_tx = ctx.runtime_event_tx.clone();
-    let event_instance_id = instance_id.clone();
-    let event_name = loaded_name.clone();
-    let event_port = handle.port;
-    tokio::spawn(async move {
-        let _ = death_rx.await;
-        let _ = event_tx.send(RuntimeEvent::Exited {
-            instance_id: event_instance_id,
-            model: event_name,
-            port: event_port,
-        });
-    });
+    spawn_runtime_model_exit_watcher(
+        ctx.runtime_event_tx.clone(),
+        instance_id.clone(),
+        loaded_name.clone(),
+        handle.port,
+        death_rx,
+    );
 
     let _ = emit_event(OutputEvent::Info {
         message: format!(
@@ -204,7 +259,13 @@ pub(crate) async fn run_auto_load_runtime_model(
             lifecycle,
         },
     );
-    record_runtime_operational_event(RuntimeOperationalEvent::ModelReady);
+    record_runtime_model_load_terminal(
+        RuntimeOperationalEvent::ModelReady,
+        &loaded_name,
+        &instance_id,
+        "ready",
+        load_started,
+    );
     Ok(api::RuntimeLoadResponse {
         model_ref: requested_model,
         model: loaded_name,

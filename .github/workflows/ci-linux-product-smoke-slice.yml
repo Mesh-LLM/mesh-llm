@@ -1,15 +1,14 @@
-name: CI Product Smoke Slice
+name: CI Linux Product Smoke Slice
 
 on:
   workflow_call:
     inputs:
       source_sha:
         description: Immutable product source revision.
-        required: false
-        default: ''
+        required: true
         type: string
       smoke_matrix:
-        description: JSON product-smoke rows from the versioned CI plan.
+        description: JSON platform smoke rows from the versioned CI plan.
         required: true
         type: string
       binary_target:
@@ -31,11 +30,11 @@ permissions:
 jobs:
   core:
     name: Core inference smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"core"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      artifact_name: ci-product-linux-cpu
+      artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       mesh_binary_target: ${{ inputs.binary_target }}
       cache_key_prefix: ""
@@ -45,11 +44,11 @@ jobs:
 
   core_cuda:
     name: CUDA inference smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"core-cuda"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      artifact_name: ci-product-linux-cuda
+      artifact_name: ci-product-linux-amd64-cuda
       artifact_path: ci-artifacts/linux-cuda
       mesh_binary_target: ${{ inputs.binary_target }}
       cache_key_prefix: ""
@@ -58,11 +57,11 @@ jobs:
 
   two_node_client:
     name: Two-node client smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"two-node-client"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'two-node-client') }}
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      artifact_name: ci-product-linux-cpu
+      artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       staged_binary_path: ${{ inputs.binary_target }}
       model_cache_scope: two-node-smoke-model
@@ -73,11 +72,11 @@ jobs:
 
   two_node_split:
     name: Two-node split smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"two-node-split"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'two-node-split') }}
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      artifact_name: ci-product-linux-cpu
+      artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       staged_binary_path: ${{ inputs.binary_target }}
       model_cache_scope: two-node-split-smoke-model
@@ -86,24 +85,9 @@ jobs:
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
-  metal_model_load:
-    name: Metal model-load smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"metal-model-load"') }}
-    uses: ./.github/workflows/smoke.yml
-    with:
-      source_sha: ${{ inputs.source_sha }}
-      artifact_name: ci-product-macos-metal
-      artifact_path: ci-artifacts/macos
-      mesh_binary_target: ${{ inputs.binary_target }}
-      cache_key_prefix: ""
-      runner: macos-15
-      timeout_minutes: ${{ inputs.timeout_minutes }}
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-
   model_download:
     name: Model download smoke
-    if: ${{ contains(inputs.smoke_matrix, '"id":"model-download"') }}
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'model-download') }}
     uses: ./.github/workflows/hf-download-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}

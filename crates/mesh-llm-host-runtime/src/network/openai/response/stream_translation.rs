@@ -1,13 +1,25 @@
 use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body};
 use super::probe::{ResponseProbe, response_is_event_stream, try_parse_response_headers};
 use super::relay::{relay_error_response, relay_success_response};
-use crate::logging::{ArtifactUnavailableReason, OpenAiRouteObserver};
+use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::ChatStreamNormalizationState;
 use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+async fn write_captured_sse_event(
+    tcp_stream: &mut TcpStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
+    event: Option<&str>,
+    data: &str,
+) -> std::io::Result<()> {
+    if let Some(capture) = capture {
+        capture.push(&response_adapter::sse_frame(event, data));
+    }
+    response_adapter::write_chunked_sse_event(tcp_stream, event, data).await
+}
 
 struct ResponsesStreamRelayState {
     created_at: i64,
@@ -85,8 +97,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     let mut observed_usage = None;
     let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
     tcp_stream.write_all(header.as_bytes()).await?;
-    route_observer
-        .capture_response_unavailable(ArtifactUnavailableReason::StreamingResponseNotAssembled);
+    let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
 
     let mut done_seen = false;
@@ -108,7 +119,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
             let data = data_lines.join("\n");
             if data == "[DONE]" {
                 done_seen = true;
-                response_adapter::write_chunked_sse_event(tcp_stream, None, "[DONE]").await?;
+                write_captured_sse_event(tcp_stream, &mut response_capture, None, "[DONE]").await?;
                 break;
             }
 
@@ -116,7 +127,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
                 observed_usage = Some(usage);
             }
             let normalized = state.normalize_data(&data);
-            response_adapter::write_chunked_sse_event(tcp_stream, None, &normalized).await?;
+            write_captured_sse_event(tcp_stream, &mut response_capture, None, &normalized).await?;
             if first_chunk_seen {
                 route_observer.stream_chunk();
             } else {
@@ -150,6 +161,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         route_observer.stream_error("upstream_stream_incomplete");
         return Err(anyhow!("upstream chat stream ended before [DONE]"));
     }
+    route_observer.complete_stream_response_capture(response_capture);
     route_observer.stream_completed(observed_usage);
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
@@ -190,8 +202,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     let mut state = ResponsesStreamRelayState::new();
     let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
     tcp_stream.write_all(header.as_bytes()).await?;
-    route_observer
-        .capture_response_unavailable(ArtifactUnavailableReason::StreamingResponseNotAssembled);
+    let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
 
     let mut done_seen = false;
@@ -220,7 +231,13 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
                 continue;
             }
 
-            process_translated_responses_frame(tcp_stream, &mut state, &data).await?;
+            process_translated_responses_frame(
+                tcp_stream,
+                &mut response_capture,
+                &mut state,
+                &data,
+            )
+            .await?;
             if first_chunk_seen {
                 route_observer.stream_chunk();
             } else {
@@ -253,10 +270,11 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         route_observer.stream_error("upstream_stream_incomplete");
         return Err(anyhow!("upstream Responses stream ended before [DONE]"));
     }
-    finish_translated_responses_stream(tcp_stream, &mut state).await?;
-    response_adapter::write_chunked_sse_event(tcp_stream, Some("done"), "[DONE]").await?;
+    finish_translated_responses_stream(tcp_stream, &mut response_capture, &mut state).await?;
+    write_captured_sse_event(tcp_stream, &mut response_capture, Some("done"), "[DONE]").await?;
     let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
     let _ = tcp_stream.shutdown().await;
+    route_observer.complete_stream_response_capture(response_capture);
     route_observer.stream_completed(state.observed_usage);
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
@@ -266,15 +284,16 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
 
 async fn process_translated_responses_frame(
     tcp_stream: &mut TcpStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
     data: &str,
 ) -> Result<()> {
     let chunk = openai_frontend::parse_chat_stream_chunk(data)
         .context("parse typed upstream chat stream chunk")?;
     update_translated_responses_model(state, &chunk);
-    emit_translated_response_created(tcp_stream, state).await?;
-    emit_translated_reasoning_delta(tcp_stream, state, &chunk).await?;
-    emit_translated_output_delta(tcp_stream, state, &chunk).await?;
+    emit_translated_response_created(tcp_stream, capture, state).await?;
+    emit_translated_reasoning_delta(tcp_stream, capture, state, &chunk).await?;
+    emit_translated_output_delta(tcp_stream, capture, state, &chunk).await?;
     update_translated_responses_usage(state, &chunk);
     Ok(())
 }
@@ -290,6 +309,7 @@ fn update_translated_responses_model(
 
 async fn emit_translated_response_created(
     tcp_stream: &mut TcpStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
 ) -> Result<()> {
     if state.created_emitted || state.model.is_empty() {
@@ -304,14 +324,14 @@ async fn emit_translated_response_created(
         ),
     )
     .context("serialize response.created stream event")?;
-    response_adapter::write_chunked_sse_event(tcp_stream, Some("response.created"), &created)
-        .await?;
+    write_captured_sse_event(tcp_stream, capture, Some("response.created"), &created).await?;
     state.created_emitted = true;
     Ok(())
 }
 
 async fn emit_translated_reasoning_delta(
     tcp_stream: &mut TcpStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
     chunk: &openai_frontend::responses::ChatCompletionStreamChunk,
 ) -> Result<()> {
@@ -332,8 +352,9 @@ async fn emit_translated_reasoning_delta(
         ),
     )
     .context("serialize response.reasoning_text.delta event")?;
-    response_adapter::write_chunked_sse_event(
+    write_captured_sse_event(
         tcp_stream,
+        capture,
         Some("response.reasoning_text.delta"),
         &event,
     )
@@ -343,6 +364,7 @@ async fn emit_translated_reasoning_delta(
 
 async fn emit_translated_output_delta(
     tcp_stream: &mut TcpStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
     chunk: &openai_frontend::responses::ChatCompletionStreamChunk,
 ) -> Result<()> {
@@ -354,7 +376,7 @@ async fn emit_translated_output_delta(
     else {
         return Ok(());
     };
-    emit_translated_output_item_prelude(tcp_stream, state).await?;
+    emit_translated_output_item_prelude(tcp_stream, capture, state).await?;
     let logprobs = chunk
         .choices
         .first()
@@ -370,8 +392,9 @@ async fn emit_translated_output_delta(
         ),
     )
     .context("serialize response.output_text.delta event")?;
-    response_adapter::write_chunked_sse_event(
+    write_captured_sse_event(
         tcp_stream,
+        capture,
         Some("response.output_text.delta"),
         &event,
     )
@@ -381,6 +404,7 @@ async fn emit_translated_output_delta(
 
 async fn emit_translated_output_item_prelude(
     tcp_stream: &mut TcpStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
 ) -> Result<()> {
     if state.output_item_emitted {
@@ -393,8 +417,9 @@ async fn emit_translated_output_item_prelude(
             item_added_sequence_number,
         ))
         .context("serialize response.output_item.added event")?;
-    response_adapter::write_chunked_sse_event(
+    write_captured_sse_event(
         tcp_stream,
+        capture,
         Some("response.output_item.added"),
         &item_added,
     )
@@ -407,8 +432,9 @@ async fn emit_translated_output_item_prelude(
         ),
     )
     .context("serialize response.content_part.added event")?;
-    response_adapter::write_chunked_sse_event(
+    write_captured_sse_event(
         tcp_stream,
+        capture,
         Some("response.content_part.added"),
         &part_added,
     )
@@ -435,13 +461,15 @@ fn update_translated_responses_usage(
 
 async fn finish_translated_responses_stream(
     tcp_stream: &mut TcpStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
 ) -> Result<()> {
-    emit_translated_fallback_created(tcp_stream, state).await?;
-    emit_translated_output_item_prelude(tcp_stream, state).await?;
+    emit_translated_fallback_created(tcp_stream, capture, state).await?;
+    emit_translated_output_item_prelude(tcp_stream, capture, state).await?;
     let text_done_sequence_number = state.next_sequence_number();
     emit_translated_stream_done_event(
         tcp_stream,
+        capture,
         Some("response.output_text.done"),
         serde_json::to_string(
             &response_adapter::responses_stream_text_done_event_with_sequence(
@@ -456,6 +484,7 @@ async fn finish_translated_responses_stream(
     let content_part_done_sequence_number = state.next_sequence_number();
     emit_translated_stream_done_event(
         tcp_stream,
+        capture,
         Some("response.content_part.done"),
         serde_json::to_string(&response_adapter::responses_stream_content_part_done_event(
             &state.item_id,
@@ -468,6 +497,7 @@ async fn finish_translated_responses_stream(
     let output_item_done_sequence_number = state.next_sequence_number();
     emit_translated_stream_done_event(
         tcp_stream,
+        capture,
         Some("response.output_item.done"),
         serde_json::to_string(&response_adapter::responses_stream_output_item_done_event(
             &state.item_id,
@@ -490,13 +520,13 @@ async fn finish_translated_responses_stream(
         ),
     )
     .context("serialize response.completed event")?;
-    response_adapter::write_chunked_sse_event(tcp_stream, Some("response.completed"), &completed)
-        .await?;
+    write_captured_sse_event(tcp_stream, capture, Some("response.completed"), &completed).await?;
     Ok(())
 }
 
 async fn emit_translated_fallback_created(
     tcp_stream: &mut TcpStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
 ) -> Result<()> {
     if state.created_emitted {
@@ -511,40 +541,50 @@ async fn emit_translated_fallback_created(
         ),
     )
     .context("serialize response.created stream event")?;
-    response_adapter::write_chunked_sse_event(tcp_stream, Some("response.created"), &created)
-        .await?;
+    write_captured_sse_event(tcp_stream, capture, Some("response.created"), &created).await?;
     state.created_emitted = true;
     Ok(())
 }
 
 async fn emit_translated_stream_done_event(
     tcp_stream: &mut TcpStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
     event_name: Option<&str>,
     payload: String,
 ) -> Result<()> {
-    response_adapter::write_chunked_sse_event(tcp_stream, event_name, &payload).await?;
+    write_captured_sse_event(tcp_stream, capture, event_name, &payload).await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logging::OpenAiArtifactCapture;
+    use crate::logging::{ArtifactUnavailableReason, OpenAiArtifactCapture};
     use mesh_llm_events::logging::identifiers::RequestId;
     use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
 
+    #[derive(Debug, Eq, PartialEq)]
+    enum CapturedArtifact {
+        Body(Vec<u8>, Option<String>),
+        Unavailable(ArtifactUnavailableReason),
+    }
+
     #[derive(Default)]
-    struct Captures(Mutex<Vec<ArtifactUnavailableReason>>);
+    struct Captures(Mutex<Vec<CapturedArtifact>>);
 
     impl OpenAiArtifactCapture for Captures {
         fn capture_body(
             &self,
             _request_id: RequestId,
             _kind: &'static str,
-            _content: &[u8],
-            _media_kind: Option<&str>,
+            content: &[u8],
+            media_kind: Option<&str>,
         ) {
+            self.0.lock().unwrap().push(CapturedArtifact::Body(
+                content.to_vec(),
+                media_kind.map(str::to_owned),
+            ));
         }
 
         fn capture_unavailable(
@@ -553,7 +593,10 @@ mod tests {
             _kind: &'static str,
             reason: ArtifactUnavailableReason,
         ) {
-            self.0.lock().unwrap().push(reason);
+            self.0
+                .lock()
+                .unwrap()
+                .push(CapturedArtifact::Unavailable(reason));
         }
     }
 
@@ -703,10 +746,13 @@ mod tests {
         assert!(String::from_utf8_lossy(&output).contains("hello"));
         let captured = capture.0.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(
-            captured[0],
-            ArtifactUnavailableReason::StreamingResponseNotAssembled
-        );
+        let CapturedArtifact::Body(body, media_kind) = &captured[0] else {
+            panic!("completed bounded stream should retain a response body")
+        };
+        let body = String::from_utf8_lossy(body);
+        assert!(body.contains("hello"));
+        assert!(body.contains("data: [DONE]"));
+        assert_eq!(media_kind.as_deref(), Some("text/event-stream"));
     }
 
     #[tokio::test]

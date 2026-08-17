@@ -8,6 +8,16 @@ on:
         required: false
         default: ''
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       backend:
         description: Native SDK backend.
         required: true
@@ -88,73 +98,87 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      contents: none
+      contents: read
     outputs:
-      runner: ${{ steps.policy.outputs.runner }}
-      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      runner: ${{ steps.resolve.outputs.runner }}
+      allow_depot_remote_cache: ${{ steps.resolve.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.resolve.outputs.allow_native_github_cache }}
     steps:
-      - name: Derive protected runner policy
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the native SDK role
         id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
+          force_hosted: ${{ inputs.force_hosted }}
+          manual_use_depot: ${{ inputs.use_depot }}
+      - name: Resolve runner size and target
+        id: resolve
         shell: bash
         env:
-          POLICY_REPOSITORY: ${{ github.repository }}
-          POLICY_REF: ${{ github.ref }}
-          POLICY_EVENT_NAME: ${{ github.event.inputs.original_event_name || github.event_name }}
-          POLICY_DEPOT_ENABLED: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
-          POLICY_MANUAL_USE_DEPOT: ${{ inputs.use_depot }}
-          POLICY_TARGET: ${{ inputs.target }}
-          POLICY_RUNNER_SIZE: ${{ inputs.runner_size }}
+          TARGET: ${{ inputs.target }}
+          RUNNER_SIZE: ${{ inputs.runner_size }}
+          POLICY_EVENT_NAME: ${{ github.event_name }}
+          ALLOW_DEPOT_REMOTE_CACHE: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+          ALLOW_NATIVE_GITHUB_CACHE: ${{ steps.policy.outputs.allow_native_github_cache }}
+          RUNNER_DEFAULT: ${{ steps.policy.outputs.runner }}
+          RUNNER_4: ${{ steps.policy.outputs.runner_4 }}
+          RUNNER_8: ${{ steps.policy.outputs.runner_8 }}
+          RUNNER_16: ${{ steps.policy.outputs.runner_16 }}
+          RUNNER_ARM: ${{ steps.policy.outputs.runner_arm }}
+          RUNNER_ARM_4: ${{ steps.policy.outputs.runner_arm_4 }}
+          RUNNER_ARM_8: ${{ steps.policy.outputs.runner_arm_8 }}
+          RUNNER_ARM_16: ${{ steps.policy.outputs.runner_arm_16 }}
+          RUNNER_MACOS: ${{ steps.policy.outputs.runner_macos }}
         run: |
           set -euo pipefail
-
-          case "$POLICY_RUNNER_SIZE" in
-            default|4|8|16) ;;
-            *)
-              echo "runner_size must be one of: default, 4, 8, 16" >&2
-              exit 1
-              ;;
+          case "$RUNNER_SIZE" in
+            default) runner="$RUNNER_DEFAULT" ;;
+            4) runner="$RUNNER_4" ;;
+            8) runner="$RUNNER_8" ;;
+            16) runner="$RUNNER_16" ;;
+            *) echo "runner_size must be one of: default, 4, 8, 16" >&2; exit 1 ;;
           esac
-
-          case "$POLICY_TARGET" in
-            x86_64-unknown-linux-gnu)
-              hosted_runner=ubuntu-24.04
-              depot_runner=depot-ubuntu-24.04
-              ;;
+          case "$TARGET" in
+            x86_64-unknown-linux-gnu) ;;
             aarch64-unknown-linux-gnu)
-              hosted_runner=ubuntu-24.04-arm
-              depot_runner=depot-ubuntu-24.04-arm
+              case "$RUNNER_SIZE" in
+                default) runner="$RUNNER_ARM" ;;
+                4) runner="$RUNNER_ARM_4" ;;
+                8) runner="$RUNNER_ARM_8" ;;
+                16) runner="$RUNNER_ARM_16" ;;
+              esac
               ;;
             aarch64-apple-darwin)
-              hosted_runner=macos-15
-              depot_runner=
+              # Preserve the existing trusted-main provider. Only a direct PR
+              # may consume the PR-specific Depot macOS selection.
+              if [[ "$POLICY_EVENT_NAME" == "pull_request" ]]; then
+                runner="$RUNNER_MACOS"
+              else
+                runner=macos-15
+                ALLOW_NATIVE_GITHUB_CACHE=true
+              fi
+              ALLOW_DEPOT_REMOTE_CACHE=false
               ;;
-            *)
-              echo "unsupported native SDK producer target: $POLICY_TARGET" >&2
-              exit 1
-              ;;
+            *) echo "unsupported native SDK producer target: $TARGET" >&2; exit 1 ;;
           esac
-
-          allow_depot_remote_cache=false
-          runner=$hosted_runner
-          if [[ "$POLICY_REPOSITORY" == "Mesh-LLM/mesh-llm" &&
-                "$POLICY_REF" == "refs/heads/main" &&
-                ( "$POLICY_EVENT_NAME" == "push" ||
-                  "$POLICY_EVENT_NAME" == "workflow_dispatch" ) &&
-                ( "$POLICY_DEPOT_ENABLED" == "true" ||
-                  ( "$POLICY_EVENT_NAME" == "workflow_dispatch" &&
-                    "$POLICY_MANUAL_USE_DEPOT" == "true" ) ) &&
-                -n "$depot_runner" ]]; then
-            suffix=
-            if [[ "$POLICY_RUNNER_SIZE" != "default" ]]; then
-              suffix="-$POLICY_RUNNER_SIZE"
-            fi
-            runner="${depot_runner}${suffix}"
-            allow_depot_remote_cache=true
-          fi
-
           {
             echo "runner=$runner"
-            echo "allow_depot_remote_cache=$allow_depot_remote_cache"
+            echo "allow_depot_remote_cache=$ALLOW_DEPOT_REMOTE_CACHE"
+            echo "allow_native_github_cache=$ALLOW_NATIVE_GITHUB_CACHE"
           } >> "$GITHUB_OUTPUT"
 
   produce_linux_static_abi:
@@ -166,6 +190,8 @@ jobs:
       packages: read
     uses: ./.github/workflows/static-abi-artifact.yml
     with:
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ inputs.force_hosted }}
       backend: ${{ inputs.backend }}
       target: ${{ inputs.target }}
       artifact_name: ${{ inputs.static_abi_artifact_name }}
@@ -185,15 +211,18 @@ jobs:
       packages: read
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ github.token }}
     defaults:
       run:
         shell: bash
     env:
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -231,6 +260,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
 
       - name: Prepare patched llama.cpp checkout for ABI reuse
         if: ${{ inputs.static_abi_artifact_name != '' }}
@@ -295,6 +325,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -318,6 +354,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
 
       - name: Install macOS native SDK dependencies
         run: brew install cmake ninja lld

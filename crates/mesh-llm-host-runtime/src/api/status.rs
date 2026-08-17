@@ -429,6 +429,7 @@ pub(crate) struct StatusPayload {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct LoggingStatusPayload {
     pub(crate) metadata_available: bool,
+    pub(crate) capture_mode: &'static str,
     /// Artifact storage availability only; see `artifact_capture_ready` for
     /// whether production request paths are actually wired to capture.
     pub(crate) artifact_capture_available: bool,
@@ -462,6 +463,7 @@ impl From<crate::logging::LoggingRuntimeStatus> for LoggingStatusPayload {
     fn from(status: crate::logging::LoggingRuntimeStatus) -> Self {
         Self {
             metadata_available: status.metadata_available,
+            capture_mode: status.capture_mode,
             artifact_capture_available: status.artifact_capture_available,
             artifact_capture_ready: status.artifact_capture_ready,
             artifact_capture_degradation: status.artifact_capture_degradation,
@@ -1575,6 +1577,7 @@ mod tests {
                 "healthy",
                 LoggingStatusPayload {
                     metadata_available: true,
+                    capture_mode: "redacted_artifacts",
                     artifact_capture_available: true,
                     artifact_capture_ready: true,
                     artifact_capture_degradation: None,
@@ -1597,6 +1600,7 @@ mod tests {
                 "disabled",
                 LoggingStatusPayload {
                     metadata_available: false,
+                    capture_mode: "unavailable",
                     artifact_capture_available: false,
                     artifact_capture_ready: false,
                     artifact_capture_degradation: None,
@@ -1619,6 +1623,7 @@ mod tests {
                 "artifact_degraded",
                 LoggingStatusPayload {
                     metadata_available: true,
+                    capture_mode: "redacted_artifacts",
                     artifact_capture_available: false,
                     artifact_capture_ready: false,
                     artifact_capture_degradation: Some(
@@ -1643,6 +1648,7 @@ mod tests {
                 "shutdown",
                 LoggingStatusPayload {
                     metadata_available: true,
+                    capture_mode: "redacted_artifacts",
                     artifact_capture_available: true,
                     artifact_capture_ready: true,
                     artifact_capture_degradation: None,
@@ -1690,6 +1696,7 @@ mod tests {
     fn logging_status_maps_runtime_snapshot_without_backend_details() {
         let payload = LoggingStatusPayload::from(crate::logging::LoggingRuntimeStatus {
             metadata_available: true,
+            capture_mode: "redacted_artifacts",
             artifact_capture_available: false,
             artifact_capture_ready: false,
             artifact_capture_degradation: Some("artifact_capture_disabled_privacy_unavailable"),

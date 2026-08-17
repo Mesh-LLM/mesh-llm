@@ -97,6 +97,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: "false"
+          allow_native_github_cache: "true"
       - name: Build, smoke, and stage immutable addon
         env:
           NODE_SDK_TARGET: ${{ inputs.target }}
@@ -191,6 +192,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: "false"
+          allow_native_github_cache: "true"
       - name: Install macOS native dependencies
         run: brew install cmake ninja lld
       - name: Configure and validate macOS x64 linker
@@ -301,6 +303,7 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: "false"
+          allow_native_github_cache: "true"
       - name: Build, smoke, and stage immutable addon
         env:
           NODE_SDK_TARGET: ${{ inputs.target }}

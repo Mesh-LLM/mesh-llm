@@ -1,59 +1,17 @@
-name: Main CI
+name: Main CI migration compatibility
 
+# Routine main validation is owned by the five main_<lane>.yml workflows. This
+# reusable-only shim preserves the legacy filename during the migration; it has
+# no event trigger and cannot dispatch or compose a main graph.
 on:
-  workflow_dispatch:
-    inputs:
-      use_depot:
-        description: Opt into the guarded main-only Depot canary.
-        required: false
-        default: false
-        type: boolean
-  push:
-    branches: [main]
+  workflow_call:
 
-permissions:
-  contents: read
-  packages: read
-  pull-requests: read
+permissions: {}
 
 jobs:
-  route:
-    name: Route main CI
+  compatibility:
+    name: Split main entrypoints active
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    outputs:
-      bootstrap: ${{ steps.route.outputs.bootstrap }}
+    permissions: {}
     steps:
-      - name: Select protected dispatch or bootstrap graph
-        id: route
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
-        with:
-          script: |
-            let controllerReady = false;
-            try {
-              await github.rest.repos.getContent({
-                ...context.repo,
-                path: '.github/workflows/ci-control.yml',
-                ref: context.payload.repository.default_branch,
-              });
-              controllerReady = true;
-            } catch (error) {
-              if (error.status !== 404) throw error;
-            }
-            const bootstrap = context.eventName === 'workflow_dispatch' || !controllerReady;
-            core.setOutput('bootstrap', String(bootstrap));
-            core.summary.addHeading('CI routing', 2);
-            core.summary.addRaw(`Protected controller available: ${controllerReady}\n`);
-            core.summary.addRaw(`Bootstrap graph: ${bootstrap}\n`);
-            await core.summary.write();
-
-  bootstrap:
-    name: Bootstrap main CI
-    needs: route
-    if: ${{ needs.route.outputs.bootstrap == 'true' }}
-    uses: ./.github/workflows/ci-orchestrator.yml
-    with:
-      use_depot: ${{ github.event_name == 'workflow_dispatch' && inputs.use_depot == true }}
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      - run: echo "Main validation is owned by the five main_<lane>.yml workflows."

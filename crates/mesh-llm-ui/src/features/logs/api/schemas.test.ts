@@ -375,6 +375,34 @@ describe('dedicated logs SSE frame parser', () => {
     ).toThrow(LogsDtoError)
   })
 
+  it('accepts the bounded typed audit context while preserving old-row compatibility', () => {
+    const oldEntry = {
+      entryId: 'audit-old',
+      occurredAt: TIMESTAMP,
+      source: 'runtime',
+      code: 'runtime_ready',
+      sequence: 1
+    }
+    const typedEntry = {
+      ...oldEntry,
+      entryId: 'audit-typed',
+      sequence: 2,
+      contextVersion: 1,
+      subjectKind: 'model',
+      subjectId: 'unsloth/Qwen3.5-4B-GGUF',
+      operationId: 'runtime-instance-7',
+      requestId: REQUEST_ID,
+      reasonCode: 'model_loaded',
+      outcome: 'ready',
+      durationMs: 412,
+      numericSummaries: { layers: 36 }
+    }
+
+    const page = parseLogAuditPage({ items: [oldEntry, typedEntry], nextCursor: null })
+    expect(page.items[0]).toEqual(oldEntry)
+    expect(page.items[1]).toEqual(typedEntry)
+  })
+
   it('parses lifecycle, gap, and typed stream-error frames', () => {
     const event = parseLogsSseFrame({
       event: 'log_event',

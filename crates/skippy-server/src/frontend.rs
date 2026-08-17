@@ -29,6 +29,7 @@ use self::{
     decode_scheduler::*, native_mtp::*, request::*, speculative::*, util::*, wire_messages::*,
 };
 
+pub use self::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use self::generation::*;
 pub use self::generation::{
     CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs,

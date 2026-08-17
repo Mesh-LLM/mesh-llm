@@ -39,9 +39,13 @@ on:
         required: false
         default: "[]"
         type: string
+      use_depot:
+        description: Opt into the guarded main-only Depot canary.
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs: *lane_inputs
-
 permissions:
   contents: read
   packages: read
@@ -62,6 +66,9 @@ jobs:
       cli_surface_changed: ${{ fromJson(inputs.lane_plan_json).signals.cli_surface_changed }}
       website_docs_changed: ${{ fromJson(inputs.lane_plan_json).signals.website_docs_changed }}
       clippy_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+      original_event_name: ${{ inputs.original_event_name }}
+      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      use_depot: ${{ inputs.use_depot }}
 
   runner_contract:
     name: Runner and cache contracts

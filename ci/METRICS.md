@@ -1,9 +1,10 @@
 # CI measurement contract
 
 Use `scripts/collect-ci-metrics.py` for repeatable, read-only GitHub Actions
-measurements. This document defines method, not a historical baseline. Store raw
-observations as workflow artifacts or in the owning tracking issue; do not add
-dated run conclusions to authoritative CI documentation.
+measurements. The collector emits schema version 3 reports and deterministic
+rollout signals; this document defines method, not a historical baseline.
+Store raw observations as workflow artifacts or in the owning tracking issue;
+do not add dated run conclusions to authoritative CI documentation.
 
 ## Collection
 
@@ -12,7 +13,7 @@ Collect a bounded comparable cohort:
 ```bash
 python3 scripts/collect-ci-metrics.py \
   --repo Mesh-LLM/mesh-llm \
-  --workflow pr_builds.yml \
+  --workflow pr_linux.yml \
   --event pull_request \
   --limit 20 \
   --label profile=pr-ready \
@@ -41,19 +42,61 @@ python3 scripts/collect-ci-metrics.py \
   --markdown-out /tmp/ci-canary-recomputed.md
 ```
 
+Build a historical PR cohort and compare a candidate cohort without mixing
+provider dimensions. The input labelled `provider=github` below is a cohort
+label for the report; the runner labels in the report remain the source of
+truth for the actual provider.
+
+```bash
+python3 scripts/collect-ci-metrics.py \
+  --repo Mesh-LLM/mesh-llm \
+  --workflow pr_linux.yml \
+  --event pull_request \
+  --limit 20 \
+  --label cohort=historical-pr \
+  --label provider=github \
+  --raw-out /tmp/pr-github-history.json \
+  --json-out /tmp/pr-github-history.metrics.json
+
+python3 scripts/collect-ci-metrics.py \
+  --input /tmp/pr-depot-candidate.json \
+  --label cohort=depot-candidate \
+  --label provider=depot \
+  --compare-input /tmp/pr-github-history.json \
+  --json-out /tmp/pr-depot-comparison.metrics.json \
+  --markdown-out /tmp/pr-depot-comparison.metrics.md
+```
+
+Use the same workflow, event, plan/profile, selected slice IDs and source
+conditions for both cohorts. A single `--limit` query is not a provider filter;
+inspect `jobs.by_runner` and retain the included/excluded run IDs in the
+tracking artifact. Run the command separately for each focused PR entrypoint
+when monitoring the complete five-lane graph.
+
 ## Definitions
 
 - **Workflow wall time:** run `created_at` to terminal `updated_at` for a first
   attempt.
 - **Workflow queue time:** run `created_at` to `started_at` for a first attempt.
 - **Job queue time:** job `created_at` to `started_at`.
-- **Dependency wait:** workflow/job readiness delay caused by `needs`, distinct
-  from runner queue.
-- **Job execution:** job `started_at` to `completed_at`.
+- **Dependency wait:** the interval from job `created_at` to an instrumented
+  dependency-ready time (or explicit `dependency_wait_seconds`), distinct from
+  runner queue. The standard GitHub jobs API does not expose dependency-ready
+  timestamps; the collector reports `n/a`, never a fabricated zero, when they
+  are absent.
+- **Runner queue time:** `started_at` minus dependency-ready time when that
+  timestamp exists. Without instrumentation, the collector falls back to the
+  raw creation-to-start interval for compatibility and the report's
+  definitions identify that dependency/runner separation is unavailable.
+- **Job execution:** job `started_at` to `completed_at` (`execution_seconds`,
+  with `duration_seconds` retained as a compatibility alias).
+- **Job wall time:** job `created_at` to `completed_at`; this includes runner
+  queue and any measured dependency wait.
 - **Step execution:** step start to completion as returned by the jobs API.
 - **Runner-minutes:** sum of allocated job execution seconds divided by 60.
 - **Peak workers:** maximum overlap of started, incomplete allocated jobs,
-  grouped by platform, provider and runner role.
+  grouped by operating system, provider and semantic runner role when those
+  dimensions are present.
 - **Critical path candidate:** the dependency chain ending at the last required
   successful job, reconstructed from checked workflow `needs` where possible.
 - **Cancelled work:** execution time consumed by a run later cancelled or
@@ -84,7 +127,9 @@ and a larger runner does not explain reduced queue time.
 
 Treat a run as capacity-contaminated for provider execution comparisons when
 job runner-queue p95 or the terminal required job's runner queue is at least five
-minutes. It may still prove correctness and artifact reuse.
+minutes. The report records this per cohort in `heuristics.capacity_contaminated`
+and in the affected run reports. It may still prove correctness and artifact
+reuse, but it must not be used as clean provider-latency evidence.
 
 ## Required observations
 
@@ -100,6 +145,23 @@ Every PR/main graph comparison records:
 - fallback rebuild count in consumers;
 - cache mode, hit/miss/error counts and cache publication authority;
 - expected and unexpected skips.
+
+The report's schema-v3 timing fields are deliberately separate:
+
+| Report path | Meaning |
+| --- | --- |
+| `workflow.wall_seconds` | first-attempt workflow wall p50/p90/p95 and sample count |
+| `workflow.queue_seconds` | first-attempt workflow queue p50/p90/p95 |
+| `workflow.dependency_wait_seconds` | measured dependency wait, or zero samples when unavailable |
+| `jobs.by_runner` | provider, OS, architecture, role, runner size and timing percentiles |
+| `jobs.execution_seconds` | allocated build execution timing |
+| `jobs.runner_queue_seconds` | runner assignment queue, separated when dependency-ready instrumentation exists |
+| `capacity` | runner-minutes, cancelled runner-minutes and peak workers |
+| `heuristics` | queue thresholds, contamination and deterministic state |
+| `comparison` | provider separation and candidate-vs-baseline p95 deltas when `--compare-input` is used |
+
+Every percentile is accompanied by `count`; a missing count or a cohort with
+fewer than three job samples is not rollout evidence.
 
 Do not infer compiler-cache behavior from workflow time. Instrument sccache
 jobs with machine-readable statistics, reset counters immediately before the
@@ -140,7 +202,28 @@ Do not loosen correctness or expand fan-out merely to meet a timing target.
 ## Depot comparisons
 
 Depot comparisons must use the same checked plan and slice inputs as GitHub.
-Record provider-specific queue and startup separately from build execution.
+Record provider-specific queue and startup separately from build execution and
+keep the provider cohorts disjoint. Provider comparison is scoped to build and
+test executors; hosted orchestration, summaries, runner selectors, and
+credentialed smoke jobs remain visible in the full report but are excluded from
+the provider cohort. `compare_reports` marks a comparison `hold` when those
+executor provider sets overlap, no job family or OS/architecture family is
+common, either baseline or candidate has fewer than three runner-queue samples,
+or the candidate queue heuristic is not eligible. This prevents hosted control
+jobs or weak historical evidence from masking a provider or build-graph change.
+
+The built-in, date-independent heuristic constants are:
+
+| Signal | Rule |
+| --- | --- |
+| Minimum evidence | fewer than 3 `jobs.runner_queue_seconds` samples → `insufficient_sample` (checked before queue warning and capacity contamination) |
+| Queue warning | with minimum evidence met, `jobs.runner_queue_seconds` p95 above 60 seconds, or unavailable → `hold` |
+| Capacity contamination | `jobs.runner_queue_seconds` or terminal-job runner queue p95 at least 300 seconds → `rollback` |
+| Provider cohort separation | baseline and candidate runner-provider sets must be disjoint |
+
+These are rollout/rollback heuristics, not historical conclusions. A maintainer
+may override a state only with an issue/artifact containing comparable runs,
+correctness results and an explicit reason.
 
 PR-on-Depot cache isolation is a security gate, not a performance experiment.
 Do not run untrusted PR content on Depot until `DEPOT_MIGRATION.md` requirements
@@ -157,6 +240,12 @@ A migration report states:
 - queue-contaminated samples;
 - correctness, artifact and cache conclusions separately;
 - rollback decision.
+
+For a PR-Depot rollout, include the five focused lane reports, a comparable
+historical PR cohort, and the exact plan/profile and cache mode. Keep queue,
+dependency wait, execution and wall-time conclusions separate. Do not infer
+cache or compiler throughput from workflow wall time, and do not treat a Depot
+run as proof of cache isolation.
 
 Do not commit raw timing JSON, dated tables, canary anecdotes or transient run
 URLs under `ci/`. Promote only durable methodology or policy into these docs.

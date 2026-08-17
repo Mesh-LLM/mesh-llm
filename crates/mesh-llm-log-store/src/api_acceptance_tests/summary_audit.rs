@@ -372,6 +372,36 @@ fn audit_entries_page_by_occurred_at_and_entry_id_without_detail_leakage() {
 }
 
 #[test]
+fn audit_entries_project_only_versioned_bounded_context() {
+    let (store, _, _tmp) = open_store();
+    store
+        .insert_audit_entry(
+            "audit-context-0001",
+            None,
+            "2026-08-12T12:00:00Z",
+            "runtime",
+            "runtime_model_ready",
+            Some(
+                r#"{"severity":"info","context_version":1,"subject_kind":"model","subject_id":"local-gguf/sha256-safe","operation_id":"runtime-7","outcome":"ready","duration_ms":42,"numeric_summaries":{"bytes":4096},"secret":"SENTINEL-AUDIT-SECRET"}"#,
+            ),
+        )
+        .unwrap();
+
+    let page = store
+        .list_audit_entries(Some(1), None, AuditEntryFilters::default())
+        .unwrap();
+    let row = &page.items[0];
+    assert_eq!(row.context_version, Some(1));
+    assert_eq!(row.subject_kind.as_deref(), Some("model"));
+    assert_eq!(row.subject_id.as_deref(), Some("local-gguf/sha256-safe"));
+    assert_eq!(row.operation_id.as_deref(), Some("runtime-7"));
+    assert_eq!(row.outcome.as_deref(), Some("ready"));
+    assert_eq!(row.duration_ms, Some(42));
+    assert_eq!(row.numeric_summaries.get("bytes"), Some(&4096));
+    assert!(!format!("{row:?}").contains("SENTINEL-AUDIT-SECRET"));
+}
+
+#[test]
 fn audit_entry_query_rejects_malformed_cursor_and_out_of_range_limit() {
     let (store, _, _tmp) = open_store();
 

@@ -8,6 +8,16 @@ on:
         required: false
         default: ''
         type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
       rust_tests_matrix:
         description: Validated JSON array of deterministic Rust test batches.
         required: true
@@ -25,6 +35,11 @@ on:
         required: false
         default: 4
         type: number
+      fail_fast:
+        description: Cancel sibling test batches after the first required failure.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -36,21 +51,52 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
-  rust_tests:
-    name: Rust tests (${{ matrix.batch.id }})
+  runner_policy:
+    name: Select Rust test runner
     if: ${{ inputs.rust_tests_matrix != '[]' }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.policy.outputs.runner }}
+      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the Rust test role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          # Rust tests are not in the existing trusted-main Depot allowlist.
+          depot_main_enabled: 'false'
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
+          force_hosted: ${{ inputs.force_hosted }}
+
+  rust_tests:
+    name: Rust tests (${{ matrix.batch.id }})
+    needs: runner_policy
+    if: ${{ inputs.rust_tests_matrix != '[]' }}
+    runs-on: ${{ needs.runner_policy.outputs.runner }}
     timeout-minutes: 60
     strategy:
-      fail-fast: false
+      fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
       matrix:
         batch: ${{ fromJson(inputs.rust_tests_matrix) }}
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ github.token }}
     defaults:
       run:
         shell: bash
@@ -62,6 +108,12 @@ jobs:
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
     steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -74,8 +126,10 @@ jobs:
           pinned_epoch: ${{ inputs.static_abi_toolchain_epoch }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
-          allow_depot_remote_cache: "false"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target
@@ -86,7 +140,7 @@ jobs:
       - name: Prepare UI placeholder
         run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
       - name: Prepare patched llama.cpp when required
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-quantize') || contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-ffi') }}
+        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-quantize') || contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package') || contains(toJson(matrix.batch.crates), 'skippy-ffi') }}
         run: scripts/prepare-llama.sh pinned
       - name: Download immutable static ABI input
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -96,7 +150,7 @@ jobs:
       - name: Restore immutable static ABI input
         run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
       - name: Download Skippy correctness model when required
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') }}
+        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package') }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/skippy-correctness-model"

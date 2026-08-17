@@ -1,4 +1,8 @@
 use mesh_llm_events::logging::identifiers::RequestId;
+use openai_frontend::{
+    OpenAiBackendOperation, OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent,
+    OpenAiRequestMethod, OpenAiTerminalResult, OpenAiUsage, Usage,
+};
 
 use super::*;
 
@@ -23,6 +27,56 @@ fn runtime() -> (tempfile::TempDir, LoggingRuntimeState) {
         ..Default::default()
     };
     (temp, LoggingRuntimeState::initialize(&foundation, &config))
+}
+
+#[tokio::test]
+async fn disk_prefix_cached_tokens_reach_durable_usage_dto() {
+    let (_temp, state) = runtime();
+    let request_id = RequestId::new();
+    let context = OpenAiLifecycleContext::new(
+        request_id,
+        OpenAiRequestMethod::Post,
+        OpenAiFrontendRoute::ChatCompletions,
+    );
+    let operation = OpenAiBackendOperation::ChatCompletionStream;
+    let observer = state
+        .openai_lifecycle_observer()
+        .expect("OpenAI lifecycle observer");
+
+    observer.observe(&OpenAiLifecycleEvent::Admitted {
+        context: context.clone(),
+    });
+    // A disk-prefix restoration is surfaced by the backend through the
+    // OpenAI usage detail; exercise that production conversion before logging.
+    let disk_prefix_usage = Usage::new(21, 8).with_cached_tokens(13);
+    observer.observe(&OpenAiLifecycleEvent::ResponseCompleted {
+        context: context.clone(),
+        operation,
+        usage: OpenAiUsage::from(&disk_prefix_usage),
+    });
+    observer.observe(&OpenAiLifecycleEvent::StreamTerminal {
+        context,
+        result: OpenAiTerminalResult::Completed { status_code: 200 },
+    });
+    assert!(state.pump_persistence_for_test().await > 0);
+
+    let request_key = request_id.as_uuid().to_string();
+    let events = request_events(
+        &state,
+        "/api/logs/requests/id/events?limit=20",
+        &request_key,
+    )
+    .await
+    .expect("durable request events");
+    let wire = serde_json::to_value(events).expect("event DTO JSON");
+    let usage = wire["items"]
+        .as_array()
+        .expect("event items")
+        .iter()
+        .find(|event| event["kind"] == "usage_recorded")
+        .expect("durable usage record");
+
+    assert_eq!(usage["cachedPromptTokens"], 13);
 }
 
 #[tokio::test]
@@ -550,6 +604,38 @@ async fn audit_filters_by_severity() {
     let json = serde_json::to_value(page).expect("serialize page");
     assert_eq!(json["items"].as_array().expect("items").len(), 1);
     assert_eq!(json["items"][0]["severity"], "warning");
+}
+
+#[tokio::test]
+async fn audit_list_exposes_typed_context_without_arbitrary_detail() {
+    let (_temp, state) = runtime();
+    state
+        .store()
+        .expect("store")
+        .insert_audit_entry(
+            "00000000-0000-4000-8000-000000000022",
+            None,
+            "2026-08-12T12:00:00Z",
+            "runtime",
+            "runtime_model_ready",
+            Some(
+                r#"{"severity":"info","context_version":1,"subject_kind":"model","subject_id":"local-gguf/sha256-safe","operation_id":"runtime-7","outcome":"ready","duration_ms":42,"secret":"SENTINEL-AUDIT-SECRET"}"#,
+            ),
+        )
+        .expect("seed typed audit row");
+
+    let page = list_audits(&state, "/api/logs/audit?limit=10")
+        .await
+        .expect("list typed audit row");
+    let json = serde_json::to_value(page).expect("serialize page");
+    let row = &json["items"][0];
+    assert_eq!(row["contextVersion"], 1);
+    assert_eq!(row["subjectKind"], "model");
+    assert_eq!(row["subjectId"], "local-gguf/sha256-safe");
+    assert_eq!(row["operationId"], "runtime-7");
+    assert_eq!(row["outcome"], "ready");
+    assert_eq!(row["durationMs"], 42);
+    assert!(!json.to_string().contains("SENTINEL-AUDIT-SECRET"));
 }
 
 #[tokio::test]

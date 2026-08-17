@@ -46,6 +46,7 @@ pub(crate) use metrics::{
 };
 pub(crate) use openai_lifecycle::{
     OpenAiArtifactCapture, OpenAiLifecycleAttachment, OpenAiRouteAttempt, OpenAiRouteObserver,
+    OpenAiStreamArtifactCapture,
 };
 pub use persistence::LogStoreSink;
 pub(crate) use raw_mesh_lifecycle::{
@@ -63,8 +64,9 @@ pub use runtime_state::{LoggingRuntimeApplyError, LoggingRuntimeHealth, LoggingR
 pub use sequences::SequenceGenerators;
 pub(crate) use service::ArtifactUnavailableReason;
 pub use service::{
-    ArtifactCaptureEntry, ArtifactPersistenceStatus, Clock, LoggingService, OperationalAuditRecord,
-    OperationalAuditSeverity, PersistSink, ServiceConfig, SystemClock,
+    ArtifactCaptureEntry, ArtifactPersistenceStatus, Clock, LoggingService,
+    OperationalAuditContext, OperationalAuditRecord, OperationalAuditSeverity,
+    OperationalAuditSubjectKind, PersistSink, ServiceConfig, SystemClock,
 };
 pub(crate) use webhook_delivery::{
     RandomWebhookJitter, ReqwestWebhookTransport, SystemWebhookWorkerClock, WebhookDeliveryWorker,

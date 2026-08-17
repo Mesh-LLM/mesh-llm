@@ -8,7 +8,7 @@ import { DEFAULT_SYSTEM_PROMPT } from '@/constants/system-prompt'
 import { useMeshChat } from '@/features/chat/api/use-chat'
 
 type UseChatOptions = {
-  id: string
+  threadId: string
   connection: ConnectConnectionAdapter
   initialMessages: UIMessage[]
 }

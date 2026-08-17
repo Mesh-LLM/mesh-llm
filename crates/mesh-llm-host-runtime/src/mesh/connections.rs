@@ -1770,10 +1770,10 @@ impl Node {
                 .await;
         });
 
-        // Schedule a delayed RTT recheck: the first gossip often goes via relay
-        // (high RTT) because direct holepunch hasn't completed yet. After a few
-        // seconds the direct path is usually ready, so re-check path info to get
-        // the real RTT and potentially trigger a re-election for split mode.
+        // Schedule a delayed selected-path refresh: the first gossip often goes
+        // via relay because direct holepunch has not completed yet. Iroh may
+        // upgrade the connection after admission, and diagnostics should report
+        // the selected path it ultimately owns.
         self.schedule_selected_path_recheck(peer_id);
         self.finish_pending_connection(owner, PendingConnectionOutcome::Admitted)
             .await;

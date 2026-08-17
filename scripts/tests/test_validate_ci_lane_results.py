@@ -68,6 +68,7 @@ class ValidateCiLaneResultsTests(unittest.TestCase):
             },
         }
         expected = {
+            "validate_plan",
             "ui_artifact",
             "hosts",
             "native_runtimes",

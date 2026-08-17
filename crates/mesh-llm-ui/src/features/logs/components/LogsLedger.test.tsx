@@ -457,6 +457,28 @@ describe('LogsLedger', () => {
     expect(screen.queryByText('Polling paused')).not.toBeInTheDocument()
   })
 
+  it.each([
+    ['metadata_only', true, 'Payloads · Metadata only'],
+    ['redacted_artifacts', true, 'Payloads · Redacted · Ready'],
+    ['redacted_artifacts', false, 'Payloads · Redacted · Unavailable'],
+    ['unavailable', false, 'Payloads · Unavailable']
+  ] as const)('shows the active %s payload capture state', (captureMode, artifactCaptureReady, label) => {
+    render(
+      <LogsLedger
+        loggingStatus={{
+          metadata_available: true,
+          capture_mode: captureMode,
+          artifact_capture_available: captureMode === 'redacted_artifacts',
+          artifact_capture_ready: artifactCaptureReady
+        }}
+        onSearchChange={vi.fn()}
+        search={parseLogsLedgerSearch({})}
+      />
+    )
+
+    expect(screen.getByText(label, { exact: true })).toBeVisible()
+  })
+
   it('keeps polling interactive while an in-flight hydration is shown as updating', () => {
     queryState.current = { ...supported([request(REQUEST_A, 'active', 'active')]), isFetching: true }
     liveState.current = {

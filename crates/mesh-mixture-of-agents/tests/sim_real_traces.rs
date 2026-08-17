@@ -202,10 +202,7 @@ fn config_for(case: &RecordedCase) -> moa::GatewayConfig {
     let mut backends: Vec<Arc<dyn moa::ModelBackend>> = Vec::new();
     let mut models = Vec::new();
     for w in &case.workers {
-        models.push(moa::ModelEntry {
-            name: w.model.clone(),
-            backend_index: backends.len(),
-        });
+        models.push(moa::ModelEntry::new(w.model.clone(), backends.len()));
         backends.push(ReplayBackend::new(w.clone()));
     }
 

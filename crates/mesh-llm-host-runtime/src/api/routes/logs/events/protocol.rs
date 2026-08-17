@@ -1,9 +1,11 @@
 use mesh_llm_events::logging::envelope::CanonicalEnvelope;
 use mesh_llm_events::logging::replay::ReplayChannel;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 use super::super::event_kind;
 use super::query::{AuditCursor, Cursor};
+use crate::logging::OperationalAuditContext;
 use crate::logging::{AuditReplayRecord, ReplayRecord};
 
 pub(in crate::api::routes::logs) const MAX_FRAME_BYTES: usize = 16 * 1024;
@@ -151,7 +153,7 @@ fn frame<T: Serialize>(event: &str, id: &str, data: &T) -> Result<String, ()> {
 }
 
 /// Audit entry frame: privacy-safe projection of an audit replay record.
-/// Never contains `canonical_envelope`, request IDs, or `detail_json`.
+/// Never contains `canonical_envelope` or arbitrary `detail_json`.
 pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()> {
     let payload: serde_json::Value = serde_json::from_str(&record.entry.payload).map_err(|_| ())?;
     let entry_id = payload
@@ -178,6 +180,47 @@ pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()
         .get("severity")
         .and_then(|v| v.as_str())
         .map(str::to_owned);
+    let context_version = payload
+        .get("context_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|value| *value == 1);
+    let context_string = |key: &str| {
+        context_version.and_then(|_| {
+            payload
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty() && value.chars().count() <= 256)
+                .map(str::to_owned)
+        })
+    };
+    let context_code = |key: &str| {
+        context_version.and_then(|_| {
+            payload
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| OperationalAuditContext::valid_static_code(value))
+                .map(str::to_owned)
+        })
+    };
+    let subject_kind = context_version.and_then(|_| {
+        payload
+            .get("subject_kind")
+            .and_then(serde_json::Value::as_str)
+            .and_then(crate::logging::OperationalAuditSubjectKind::parse)
+            .map(|kind| kind.as_str().to_owned())
+    });
+    let numeric_summaries = context_version.map_or_else(BTreeMap::new, |_| {
+        payload
+            .get("numeric_summaries")
+            .and_then(serde_json::Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| OperationalAuditContext::valid_static_code(key))
+            .filter_map(|(key, value)| value.as_u64().map(|value| (key.clone(), value)))
+            .take(8)
+            .collect()
+    });
 
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -188,6 +231,24 @@ pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()
         code: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         severity: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        context_version: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subject_kind: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subject_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason_code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+        numeric_summaries: BTreeMap<String, u64>,
         sequence: u64,
     }
 
@@ -197,6 +258,19 @@ pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()
         source,
         code,
         severity,
+        context_version,
+        subject_kind,
+        subject_id: context_string("subject_id"),
+        operation_id: context_string("operation_id"),
+        request_id: context_string("request_id"),
+        reason_code: context_code("reason_code"),
+        outcome: context_code("outcome"),
+        duration_ms: context_version.and_then(|_| {
+            payload
+                .get("duration_ms")
+                .and_then(serde_json::Value::as_u64)
+        }),
+        numeric_summaries,
         sequence: record.sequence,
     };
     frame(
@@ -271,6 +345,49 @@ mod tests {
         .to_string();
         let frame = audit_entry_frame(&record).expect("audit entry without severity");
         assert!(!frame.contains("severity"));
+    }
+
+    #[test]
+    fn audit_entry_frame_filters_invalid_typed_context_fields() {
+        let mut record = audit_record(4);
+        record.entry.payload = serde_json::json!({
+            "kind": "audit",
+            "entry_id": "id-4",
+            "occurred_at": "2026-01-01T00:00:00Z",
+            "source": "runtime",
+            "code": "startup_complete",
+            "context_version": 1,
+            "subject_kind": "not_a_subject",
+            "reason_code": "NOT VALID",
+            "outcome": "completed",
+            "numeric_summaries": {
+                "bad-key": 0,
+                "metric_0": 0,
+                "metric_1": 1,
+                "metric_2": 2,
+                "metric_3": 3,
+                "metric_4": 4,
+                "metric_5": 5,
+                "metric_6": 6,
+                "metric_7": 7,
+                "metric_8": 8
+            }
+        })
+        .to_string();
+        let frame = audit_entry_frame(&record).expect("audit context frame");
+        let data = frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .expect("audit frame data");
+
+        assert!(data.get("subjectKind").is_none());
+        assert!(data.get("reasonCode").is_none());
+        assert_eq!(data["outcome"], "completed");
+        assert_eq!(data["numericSummaries"].as_object().unwrap().len(), 8);
+        assert!(data["numericSummaries"].get("metric_7").is_some());
+        assert!(data["numericSummaries"].get("metric_8").is_none());
+        assert!(data["numericSummaries"].get("bad-key").is_none());
     }
 
     #[test]

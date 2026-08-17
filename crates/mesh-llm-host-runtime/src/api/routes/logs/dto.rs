@@ -6,6 +6,7 @@ use mesh_llm_log_store::{
     RequestRecord,
 };
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 use super::{LogsError, event_kind};
 use crate::logging::RequestSummaryEntry;
@@ -293,9 +294,9 @@ impl From<ProxyRecord> for ProxyDto {
     }
 }
 
-/// Sparse, privacy-safe projection of a durable audit entry for the
-/// trusted-local management API. No `request_id`, no `detail_json`, no
-/// message text — only the fixed vocabulary needed for operational review.
+/// Privacy-safe projection of a durable audit entry for the trusted-local
+/// management API. Arbitrary `detail_json` and message text never cross this
+/// boundary; only the versioned typed context allowlist is exposed.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuditDto {
@@ -306,6 +307,24 @@ pub(crate) struct AuditDto {
     code: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     severity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_version: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    numeric_summaries: BTreeMap<String, u64>,
 }
 
 impl From<AuditEntryRow> for AuditDto {
@@ -321,6 +340,15 @@ impl From<AuditEntryRow> for AuditDto {
                 AuditEntrySeverity::Warning => "warning".to_string(),
                 AuditEntrySeverity::Error => "error".to_string(),
             }),
+            context_version: row.context_version,
+            subject_kind: row.subject_kind,
+            subject_id: row.subject_id.as_deref().map(safe_metadata),
+            operation_id: row.operation_id.as_deref().map(safe_metadata),
+            request_id: row.correlation_request_id.as_deref().map(safe_metadata),
+            reason_code: row.reason_code,
+            outcome: row.outcome,
+            duration_ms: row.duration_ms,
+            numeric_summaries: row.numeric_summaries,
         }
     }
 }

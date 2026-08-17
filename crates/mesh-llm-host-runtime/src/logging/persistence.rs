@@ -339,9 +339,14 @@ impl PersistSink for LogStoreSink {
         let detail_json = if let Some(detail_json) = record.detail_json() {
             Some(apply_redaction(&sanitize_paths_in_text(detail_json)).0)
         } else {
-            record
-                .severity()
-                .map(|severity| serde_json::json!({ "severity": severity.as_str() }).to_string())
+            let mut detail = record.context().map_or_else(
+                serde_json::Map::new,
+                super::service::OperationalAuditContext::fields,
+            );
+            if let Some(severity) = record.severity() {
+                detail.insert("severity".into(), serde_json::json!(severity.as_str()));
+            }
+            (!detail.is_empty()).then(|| serde_json::Value::Object(detail).to_string())
         };
         self.run_blocking(move |store| {
             store.insert_audit_entry(

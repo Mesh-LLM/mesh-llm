@@ -166,9 +166,6 @@ pub(super) enum SplitParticipantExclusionReason {
     MissingVram,
     MissingModelInterest,
     StageProtocolGeneration,
-    MissingStagePath,
-    StagePathRelayOnly,
-    StagePathTooSlow,
     StageControlUnreachable,
     ArtifactTransferUnavailable,
     StageInventoryEmpty,
@@ -183,9 +180,6 @@ impl SplitParticipantExclusionReason {
             Self::MissingVram => "missing_vram",
             Self::MissingModelInterest => "missing_model_interest",
             Self::StageProtocolGeneration => "stage_protocol_generation",
-            Self::MissingStagePath => "missing_stage_path",
-            Self::StagePathRelayOnly => "stage_path_relay_only",
-            Self::StagePathTooSlow => "stage_path_too_slow",
             Self::StageControlUnreachable => "stage_control_unreachable",
             Self::ArtifactTransferUnavailable => "artifact_transfer_unavailable",
             Self::StageInventoryEmpty => "stage_inventory_empty",
@@ -206,13 +200,6 @@ impl SplitParticipantExclusionReason {
             Self::StageProtocolGeneration => {
                 "Upgrade this peer so it advertises current stage protocol support."
             }
-            Self::MissingStagePath => {
-                "Wait for direct peer latency to be measured or fix direct QUIC connectivity."
-            }
-            Self::StagePathRelayOnly => {
-                "Fix firewall/NAT/direct-path connectivity; relay-only stage paths are not admitted."
-            }
-            Self::StagePathTooSlow => "Use a lower-latency peer or network path for split serving.",
             Self::StageControlUnreachable => {
                 "Check stage-control connectivity and peer runtime logs before retrying split serving."
             }
@@ -418,16 +405,13 @@ fn split_participant_blocker(
 }
 
 pub(super) const fn split_participant_exclusion_reason_order()
--> [SplitParticipantExclusionReason; 12] {
+-> [SplitParticipantExclusionReason; 9] {
     [
         SplitParticipantExclusionReason::StageControlUnreachable,
         SplitParticipantExclusionReason::PackageManifestMismatch,
         SplitParticipantExclusionReason::ArtifactTransferUnavailable,
         SplitParticipantExclusionReason::StageInventoryEmpty,
         SplitParticipantExclusionReason::MissingModelSource,
-        SplitParticipantExclusionReason::MissingStagePath,
-        SplitParticipantExclusionReason::StagePathRelayOnly,
-        SplitParticipantExclusionReason::StagePathTooSlow,
         SplitParticipantExclusionReason::StageProtocolGeneration,
         SplitParticipantExclusionReason::MissingVram,
         SplitParticipantExclusionReason::MissingModelInterest,
@@ -455,15 +439,6 @@ pub(super) async fn collect_split_participant_membership(
     let mut excluded = Vec::new();
     for peer in node.peers().await {
         if let Some(reason) = split_peer_preflight_exclusion_reason(&peer, model_name, model_ref) {
-            excluded.push(SplitParticipantExclusion {
-                node_id: peer.id,
-                reason,
-            });
-            continue;
-        }
-        if let Some(reason) =
-            split_peer_stage_path_exclusion_reason(node.split_stage_path_snapshot(peer.id).await)
-        {
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
                 reason,
@@ -501,15 +476,6 @@ pub(super) async fn collect_split_participants(
     let mut excluded = Vec::new();
     for peer in node.peers().await {
         if let Some(reason) = split_peer_preflight_exclusion_reason(&peer, model_name, model_ref) {
-            excluded.push(SplitParticipantExclusion {
-                node_id: peer.id,
-                reason,
-            });
-            continue;
-        }
-        if let Some(reason) =
-            split_peer_stage_path_exclusion_reason(node.split_stage_path_snapshot(peer.id).await)
-        {
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
                 reason,
@@ -574,22 +540,6 @@ pub(super) fn split_peer_preflight_exclusion_reason(
         return Some(SplitParticipantExclusionReason::StageProtocolGeneration);
     }
     None
-}
-
-pub(super) fn split_peer_stage_path_exclusion_reason(
-    snapshot: mesh::SplitStagePathSnapshot,
-) -> Option<SplitParticipantExclusionReason> {
-    match snapshot.stage_path_rejection()? {
-        mesh::SplitStagePathRejection::MissingStagePath => {
-            Some(SplitParticipantExclusionReason::MissingStagePath)
-        }
-        mesh::SplitStagePathRejection::StagePathRelayOnly => {
-            Some(SplitParticipantExclusionReason::StagePathRelayOnly)
-        }
-        mesh::SplitStagePathRejection::StagePathTooSlow => {
-            Some(SplitParticipantExclusionReason::StagePathTooSlow)
-        }
-    }
 }
 
 pub(super) fn split_peer_stage_host_exclusion_reason(

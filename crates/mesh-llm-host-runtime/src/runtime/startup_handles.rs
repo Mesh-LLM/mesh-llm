@@ -1,3 +1,4 @@
+use super::model_lifecycle::runtime_model_audit_context;
 use super::startup_retry::is_retryable_split_start_failure;
 use super::status::current_time_unix_ms;
 use super::status::single_quote_shell_arg;
@@ -10,9 +11,10 @@ use super::{
     SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart, StartupPinnedGpuTarget,
     StartupRuntimePlan, add_runtime_local_target, local_process_payload,
     publish_runtime_llama_slots, publish_runtime_llama_unavailable,
-    record_runtime_operational_event, refresh_dashboard_context_usage, register_runtime_instance,
-    remove_dashboard_context_usage, remove_dashboard_process, remove_runtime_local_target,
-    reserve_runtime_capacity_for_model, runtime_model_planning_bytes, runtime_model_required_bytes,
+    record_runtime_operational_event, record_runtime_operational_event_with_context,
+    refresh_dashboard_context_usage, register_runtime_instance, remove_dashboard_context_usage,
+    remove_dashboard_process, remove_runtime_local_target, reserve_runtime_capacity_for_model,
+    runtime_model_planning_bytes, runtime_model_required_bytes,
     runtime_process_payload_with_status, start_runtime_local_model, start_runtime_split_model,
     startup_runtime_plan, stop_split_generation_cleanup, unregister_runtime_instance,
     update_pi_models_json, upsert_dashboard_process,
@@ -1208,21 +1210,64 @@ pub(super) async fn runtime_data_producer_for_console(
     }
 }
 
+fn record_startup_load_started(params: &StartupLocalModelTask) -> Instant {
+    let load_started = Instant::now();
+    record_runtime_operational_event_with_context(
+        RuntimeOperationalEvent::ModelLoadStarted,
+        runtime_model_audit_context(Some(&params.model_name), &params.instance_id)
+            .outcome("started"),
+    );
+    load_started
+}
+
+async fn run_startup_load_attempt<T, Start, Prepare, PrepareFuture, Failure, FailureFuture>(
+    start: Start,
+    prepare: Prepare,
+    failure: Failure,
+) -> Option<(T, Instant)>
+where
+    Start: FnOnce() -> Instant,
+    Prepare: FnOnce() -> PrepareFuture,
+    PrepareFuture: std::future::Future<Output = Option<T>>,
+    Failure: FnOnce(Instant) -> FailureFuture,
+    FailureFuture: std::future::Future<Output = ()>,
+{
+    let load_started = start();
+    match prepare().await {
+        Some(prepared) => Some((prepared, load_started)),
+        None => {
+            failure(load_started).await;
+            None
+        }
+    }
+}
+
 pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
     let runtime_data_producer =
         runtime_data_producer_for_console(params.console_state.as_ref()).await;
-    let Some(prepared) = prepare_startup_local_model_task(&params).await else {
-        record_startup_task_failure(&params, "model inspection failed").await;
+    let Some((prepared, mut load_started)) = run_startup_load_attempt(
+        || record_startup_load_started(&params),
+        || prepare_startup_local_model_task(&params),
+        |load_started| {
+            record_startup_task_failure(&params, "model inspection failed", load_started)
+        },
+    )
+    .await
+    else {
         return;
     };
     let mut stop_rx = params.stop_rx.clone();
+    let mut first_attempt = true;
     loop {
         reset_startup_lifecycle(&params.lifecycle).await;
-        record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadStarted);
+        if !first_attempt {
+            load_started = record_startup_load_started(&params);
+        }
+        first_attempt = false;
         let Some((launch_handles, launch_started)) =
             launch_startup_local_model_task(&params, &mut stop_rx, &prepared).await
         else {
-            record_startup_task_failure(&params, "model launch failed").await;
+            record_startup_task_failure(&params, "model launch failed", load_started).await;
             return;
         };
         let StartupLaunchHandles {
@@ -1258,7 +1303,14 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
             runtime_data_producer.as_ref(),
             prepared.launch_kind,
         );
-        publish_startup_local_model(&params, &ctx, &loaded_name, &handle).await;
+        publish_startup_local_model(
+            &params,
+            &ctx,
+            &loaded_name,
+            &handle,
+            launch_started.elapsed(),
+        )
+        .await;
 
         let mut state = StartupLoopState {
             loaded_name,
@@ -1413,8 +1465,16 @@ async fn publish_startup_local_model(
     ctx: &StartupLoopContext<'_>,
     loaded_name: &str,
     handle: &LocalRuntimeModelHandle,
+    load_duration: Duration,
 ) {
-    startup_publish_loaded_runtime(ctx, loaded_name, handle, &params.startup_ready_reporter).await;
+    startup_publish_loaded_runtime(
+        ctx,
+        loaded_name,
+        handle,
+        &params.startup_ready_reporter,
+        load_duration,
+    )
+    .await;
     let response = api::RuntimeLoadResponse {
         model_ref: params.model_ref.clone(),
         model: loaded_name.to_string(),
@@ -1440,7 +1500,11 @@ async fn publish_startup_local_model(
     );
 }
 
-async fn record_startup_task_failure(params: &StartupLocalModelTask, detail: &str) {
+async fn record_startup_task_failure(
+    params: &StartupLocalModelTask,
+    detail: &str,
+    load_started: Instant,
+) {
     record_startup_terminal_failure(
         &params.lifecycle,
         &params.startup_ready_reporter,
@@ -1449,7 +1513,9 @@ async fn record_startup_task_failure(params: &StartupLocalModelTask, detail: &st
         &params.model_ref,
         &params.profile,
         &params.model_name,
+        &params.instance_id,
         detail,
+        load_started,
     )
     .await;
 }
@@ -1466,7 +1532,9 @@ async fn record_startup_terminal_failure(
     model_ref: &str,
     profile: &str,
     model_name: &str,
+    instance_id: &str,
     detail: &str,
+    load_started: Instant,
 ) {
     let mut record = lifecycle.lock().await;
     let transitioned_to_failure = if !record.state().is_terminal() {
@@ -1479,7 +1547,12 @@ async fn record_startup_terminal_failure(
 
     if transitioned_to_failure {
         record_runtime_operational_event(RuntimeOperationalEvent::StartupFailed);
-        record_runtime_operational_event(RuntimeOperationalEvent::ModelLoadFailed);
+        record_runtime_operational_event_with_context(
+            RuntimeOperationalEvent::ModelLoadFailed,
+            runtime_model_audit_context(Some(model_name), instance_id)
+                .outcome("failed")
+                .duration_ms(u64::try_from(load_started.elapsed().as_millis()).unwrap_or(u64::MAX)),
+        );
     }
 
     let _ = runtime_event_tx.send(super::RuntimeEvent::StartupModelLoadFinished {
@@ -1532,6 +1605,7 @@ pub(super) async fn startup_publish_loaded_runtime(
     loaded_name: &str,
     handle: &LocalRuntimeModelHandle,
     startup_ready_reporter: &StartupReadyReporter,
+    load_duration: Duration,
 ) {
     let payload = startup_register_loaded_runtime(ctx, loaded_name, handle).await;
     ctx.node
@@ -1559,7 +1633,12 @@ pub(super) async fn startup_publish_loaded_runtime(
         message: format!("Startup-loaded model '{}' on :{}", loaded_name, handle.port),
         context: None,
     });
-    record_runtime_operational_event(RuntimeOperationalEvent::ModelReady);
+    record_runtime_operational_event_with_context(
+        RuntimeOperationalEvent::ModelReady,
+        runtime_model_audit_context(Some(loaded_name), ctx.instance_id)
+            .outcome("ready")
+            .duration_ms(u64::try_from(load_duration.as_millis()).unwrap_or(u64::MAX)),
+    );
 }
 
 pub(super) async fn startup_run_local_model_event_loop(
@@ -1584,6 +1663,12 @@ pub(super) async fn startup_run_local_model_event_loop(
             _ = &mut state.death_rx => {
                 state.survey_exited_unexpectedly = true;
                 ctx.survey_telemetry.record_unexpected_exit(&state.survey_loaded_model);
+                record_runtime_operational_event_with_context(
+                    RuntimeOperationalEvent::ModelExited,
+                    runtime_model_audit_context(Some(&state.loaded_name), ctx.instance_id)
+                        .reason_code("runtime_process_exited")
+                        .outcome("failed"),
+                );
                 let port = state.handle.as_ref().map(|handle| handle.port).unwrap_or_default();
                 let _ = emit_event(OutputEvent::Warning {
                     message: format!("Startup model '{}' exited unexpectedly", state.loaded_name),
@@ -1807,8 +1892,10 @@ pub(super) async fn record_first_joined_mesh_ts(node: &mesh::Node) {
 
 #[cfg(test)]
 mod startup_failure_policy_tests {
-    use super::StartupReadyReporter;
+    use super::{StartupReadyReporter, run_startup_load_attempt};
     use mesh_llm_config::StartupFailurePolicy;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
 
     fn reporter(policy: StartupFailurePolicy) -> StartupReadyReporter {
         StartupReadyReporter::new_with_failure_policy(
@@ -1838,5 +1925,31 @@ mod startup_failure_policy_tests {
         let summary = reporter.fail_fast_summary().expect("fail-fast summary");
         assert!(summary.starts_with("eager startup failed (2): model-a:"));
         assert!(summary.len() <= 1_024);
+    }
+
+    #[tokio::test]
+    async fn startup_preparation_failure_orders_start_before_failure() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let start_events = Arc::clone(&events);
+        let prepare_events = Arc::clone(&events);
+        let failure_events = Arc::clone(&events);
+
+        let result = run_startup_load_attempt(
+            move || {
+                start_events.lock().unwrap().push("started");
+                Instant::now()
+            },
+            move || async move {
+                prepare_events.lock().unwrap().push("prepared");
+                None::<()>
+            },
+            move |_load_started| async move {
+                failure_events.lock().unwrap().push("failed");
+            },
+        )
+        .await;
+
+        assert!(result.is_none());
+        assert_eq!(*events.lock().unwrap(), ["started", "prepared", "failed"]);
     }
 }
