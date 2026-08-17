@@ -87,6 +87,16 @@ impl StageOpenAiBackend {
             Some(prepared) => prepared,
             None => self.prepare_text_prompt(&prompt, max_tokens, &ids)?,
         };
+        let recurrent_cache_prefix_token_ids = prompt
+            .recurrent_cache_prefix_text
+            .as_deref()
+            .map(|prefix| self.tokenize(prefix))
+            .transpose()?
+            .filter(|prefix| {
+                !prefix.is_empty()
+                    && prefix.len() <= prompt_token_ids.len()
+                    && prompt_token_ids.starts_with(prefix)
+            });
         if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
             return Err(OpenAiError::backend("request cancelled"));
         }

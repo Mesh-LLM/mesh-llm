@@ -33,12 +33,13 @@ use crate::runtime_state::load_runtime;
 use crate::telemetry::{Telemetry, TelemetryLevel};
 
 // The real-model tests below are deliberately ignored by default. The
-// fixture contract is explicit: run them with both model-path variables set,
-// for example:
+// fixture contract is explicit: run them with both model-path variables set;
+// optionally set SKIPPY_RECURRENT_CACHE_TEST_MODEL_ID to override the model id.
+// For example:
 //
 // SKIPPY_RECURRENT_CACHE_TEST_MODEL=/path/model.gguf \
 // SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS=40 \
-// cargo test -p skippy-server recurrent_ --lib -- --ignored --nocapture
+// just with-lld cargo test -p skippy-server recurrent_ --lib -- --ignored --nocapture
 
 #[derive(Default)]
 struct RecordingReceiptSink {
@@ -78,6 +79,109 @@ fn wait_for_receipts(sink: &RecordingReceiptSink, expected: usize) {
         thread::sleep(Duration::from_millis(1));
     }
     panic!("timed out waiting for {expected} generation receipts");
+}
+
+fn recurrent_test_backend(
+    run_id: &str,
+    backend_model_id: &str,
+    ctx_size: usize,
+    batch_size: u32,
+    default_max_tokens: u32,
+    token_budget: usize,
+) -> Result<(StageOpenAiBackend, SpeculativeDecodeConfig)> {
+    let model_path = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL").ok_or_else(|| {
+        anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_MODEL is required for this ignored test")
+    })?;
+    let layer_count =
+        std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS").ok_or_else(|| {
+            anyhow::anyhow!(
+                "SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS is required for this ignored test"
+            )
+        })?;
+    let layer_count = layer_count
+        .to_string_lossy()
+        .parse::<u32>()
+        .map_err(|error| anyhow::anyhow!("invalid recurrent cache test layer count: {error}"))?;
+    let config = StageConfig {
+        run_id: run_id.to_string(),
+        topology_id: run_id.to_string(),
+        model_id: std::env::var("SKIPPY_RECURRENT_CACHE_TEST_MODEL_ID")
+            .unwrap_or_else(|_| "unsloth/Qwen3.5-0.8B-GGUF:Q6_K".to_string()),
+        package_ref: None,
+        manifest_sha256: None,
+        source_model_path: None,
+        source_model_sha256: None,
+        source_model_bytes: None,
+        materialized_path: None,
+        materialized_pinned: false,
+        model_path: Some(model_path.to_string_lossy().into_owned()),
+        projector_path: None,
+        stage_id: "stage-0".to_string(),
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: layer_count,
+        ctx_size: u32::try_from(ctx_size)
+            .map_err(|error| anyhow::anyhow!("invalid recurrent test context size: {error}"))?,
+        lane_count: 1,
+        n_batch: Some(batch_size),
+        n_ubatch: Some(batch_size),
+        n_gpu_layers: 0,
+        mmap: Some(true),
+        mlock: false,
+        cache_type_k: "f16".to_string(),
+        cache_type_v: "f16".to_string(),
+        flash_attn_type: Default::default(),
+        filter_tensors_on_load: false,
+        selected_device: None,
+        kv_cache: Some(StageKvCacheConfig {
+            mode: StageKvCacheMode::LookupRecord,
+            payload: StageKvCachePayload::KvRecurrent,
+            max_entries: 8,
+            max_bytes: 0,
+            min_tokens: 1,
+            shared_prefix_stride_tokens: 1,
+            shared_prefix_record_limit: 0,
+        }),
+        native_mtp_enabled: false,
+        load_mode: LoadMode::RuntimeSlice,
+        bind_addr: "127.0.0.1:0".to_string(),
+        upstream: None,
+        downstream: None,
+    };
+    let runtime = load_runtime(&config)?
+        .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
+    let kv = KvStageIntegration::from_config(&config)?
+        .map(Arc::new)
+        .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
+    let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
+    let speculative = SpeculativeDecodeConfig::default();
+    let backend = StageOpenAiBackend {
+        runtime: runtime.clone(),
+        config,
+        telemetry,
+        model_id: backend_model_id.to_string(),
+        default_max_tokens,
+        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        ctx_size,
+        mode: OpenAiBackendMode::LocalRuntime,
+        draft: None,
+        speculative_window: 0,
+        adaptive_speculative_window: false,
+        ngram_max: 0,
+        speculative: speculative.clone(),
+        generation_limit: Arc::new(Semaphore::new(1)),
+        generation_queue_depth: Arc::new(AtomicUsize::new(0)),
+        generation_queue_limit: 1,
+        generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(token_budget)),
+        hook_policy: None,
+        generation_receipt: None,
+        linear_proposal_ingress: None,
+        kv: Some(kv),
+        decode_batcher: DecodeBatcher::new(runtime.clone(), 1),
+        decode_frame_batcher: DecodeFrameBatcher::new(runtime, 1),
+    };
+    Ok((backend, speculative))
 }
 
 #[test]
@@ -130,97 +234,14 @@ fn recurrent_cache_gates_initial_linear_proposal_until_checkpoint() {
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
 fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
-    let model_path = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL").ok_or_else(|| {
-        anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_MODEL is required for this ignored test")
-    })?;
-    let layer_count =
-        std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS").ok_or_else(|| {
-            anyhow::anyhow!(
-                "SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS is required for this ignored test"
-            )
-        })?;
-    let layer_count = layer_count
-        .to_string_lossy()
-        .parse::<u32>()
-        .map_err(|error| anyhow::anyhow!("invalid recurrent cache test layer count: {error}"))?;
-    let config = StageConfig {
-        run_id: "recurrent-cache-test".to_string(),
-        topology_id: "recurrent-cache-test".to_string(),
-        model_id: std::env::var("SKIPPY_RECURRENT_CACHE_TEST_MODEL_ID")
-            .unwrap_or_else(|_| "unsloth/Qwen3.5-0.8B-GGUF:Q6_K".to_string()),
-        package_ref: None,
-        manifest_sha256: None,
-        source_model_path: None,
-        source_model_sha256: None,
-        source_model_bytes: None,
-        materialized_path: None,
-        materialized_pinned: false,
-        model_path: Some(model_path.to_string_lossy().into_owned()),
-        projector_path: None,
-        stage_id: "stage-0".to_string(),
-        stage_index: 0,
-        layer_start: 0,
-        layer_end: layer_count,
-        ctx_size: 128,
-        lane_count: 1,
-        n_batch: Some(32),
-        n_ubatch: Some(32),
-        n_gpu_layers: 0,
-        mmap: Some(true),
-        mlock: false,
-        cache_type_k: "f16".to_string(),
-        cache_type_v: "f16".to_string(),
-        flash_attn_type: Default::default(),
-        filter_tensors_on_load: false,
-        selected_device: None,
-        kv_cache: Some(StageKvCacheConfig {
-            mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::KvRecurrent,
-            max_entries: 8,
-            max_bytes: 0,
-            min_tokens: 1,
-            shared_prefix_stride_tokens: 1,
-            shared_prefix_record_limit: 0,
-        }),
-        native_mtp_enabled: false,
-        load_mode: LoadMode::RuntimeSlice,
-        bind_addr: "127.0.0.1:0".to_string(),
-        upstream: None,
-        downstream: None,
-    };
-    let runtime = load_runtime(&config)?
-        .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
-    let kv = KvStageIntegration::from_config(&config)?
-        .map(Arc::new)
-        .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
-    let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
-    let speculative = SpeculativeDecodeConfig::default();
-    let backend = StageOpenAiBackend {
-        runtime: runtime.clone(),
-        config,
-        telemetry,
-        model_id: "recurrent-cache-test".to_string(),
-        default_max_tokens: 2,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
-        ctx_size: 128,
-        mode: OpenAiBackendMode::LocalRuntime,
-        draft: None,
-        speculative_window: 0,
-        adaptive_speculative_window: false,
-        ngram_max: 0,
-        speculative: speculative.clone(),
-        generation_limit: Arc::new(Semaphore::new(1)),
-        generation_queue_depth: Arc::new(AtomicUsize::new(0)),
-        generation_queue_limit: 1,
-        generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
-        generation_token_budget: Arc::new(GenerationTokenBudget::new(128)),
-        hook_policy: None,
-        generation_receipt: None,
-        linear_proposal_ingress: None,
-        kv: Some(kv),
-        decode_batcher: DecodeBatcher::new(runtime.clone(), 1),
-        decode_frame_batcher: DecodeFrameBatcher::new(runtime, 1),
-    };
+    let (backend, speculative) = recurrent_test_backend(
+        "recurrent-cache-test",
+        "recurrent-cache-test",
+        128,
+        32,
+        2,
+        128,
+    )?;
     let sampling = SamplingConfig::default();
     let first_prompt = [1, 2, 3];
     let first_ids = OpenAiGenerationIds::new_with_trust(
@@ -291,99 +312,14 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
 fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
-    let model_path = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL").ok_or_else(|| {
-        anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_MODEL is required for this ignored test")
-    })?;
-    let layer_count =
-        std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS").ok_or_else(|| {
-            anyhow::anyhow!(
-                "SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS is required for this ignored test"
-            )
-        })?;
-    let layer_count = layer_count
-        .to_string_lossy()
-        .parse::<u32>()
-        .map_err(|error| anyhow::anyhow!("invalid recurrent chat test layer count: {error}"))?;
-    let config = StageConfig {
-        run_id: "recurrent-chat-cache-test".to_string(),
-        topology_id: "recurrent-chat-cache-test".to_string(),
-        model_id: std::env::var("SKIPPY_RECURRENT_CACHE_TEST_MODEL_ID")
-            .unwrap_or_else(|_| "unsloth/Qwen3.5-0.8B-GGUF:Q6_K".to_string()),
-        package_ref: None,
-        manifest_sha256: None,
-        source_model_path: None,
-        source_model_sha256: None,
-        source_model_bytes: None,
-        materialized_path: None,
-        materialized_pinned: false,
-        model_path: Some(model_path.to_string_lossy().into_owned()),
-        projector_path: None,
-        stage_id: "stage-0".to_string(),
-        stage_index: 0,
-        layer_start: 0,
-        layer_end: layer_count,
-        ctx_size: 512,
-        lane_count: 1,
-        n_batch: Some(64),
-        n_ubatch: Some(64),
-        n_gpu_layers: 0,
-        mmap: Some(true),
-        mlock: false,
-        cache_type_k: "f16".to_string(),
-        cache_type_v: "f16".to_string(),
-        flash_attn_type: Default::default(),
-        filter_tensors_on_load: false,
-        selected_device: None,
-        kv_cache: Some(StageKvCacheConfig {
-            mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::KvRecurrent,
-            max_entries: 8,
-            max_bytes: 0,
-            min_tokens: 1,
-            shared_prefix_stride_tokens: 1,
-            shared_prefix_record_limit: 0,
-        }),
-        native_mtp_enabled: false,
-        load_mode: LoadMode::RuntimeSlice,
-        bind_addr: "127.0.0.1:0".to_string(),
-        upstream: None,
-        downstream: None,
-    };
-    let runtime = load_runtime(&config)?
-        .ok_or_else(|| anyhow::anyhow!("recurrent chat cache test runtime was not loaded"))?;
-    let kv = KvStageIntegration::from_config(&config)?
-        .map(Arc::new)
-        .ok_or_else(|| {
-            anyhow::anyhow!("recurrent chat cache test did not enable KV integration")
-        })?;
-    let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
-    let speculative = SpeculativeDecodeConfig::default();
-    let backend = StageOpenAiBackend {
-        runtime: runtime.clone(),
-        config,
-        telemetry,
-        model_id: "recurrent-chat-cache-test".to_string(),
-        default_max_tokens: 8,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
-        ctx_size: 512,
-        mode: OpenAiBackendMode::LocalRuntime,
-        draft: None,
-        speculative_window: 0,
-        adaptive_speculative_window: false,
-        ngram_max: 0,
-        speculative: speculative.clone(),
-        generation_limit: Arc::new(Semaphore::new(1)),
-        generation_queue_depth: Arc::new(AtomicUsize::new(0)),
-        generation_queue_limit: 1,
-        generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
-        generation_token_budget: Arc::new(GenerationTokenBudget::new(512)),
-        hook_policy: None,
-        generation_receipt: None,
-        linear_proposal_ingress: None,
-        kv: Some(kv),
-        decode_batcher: DecodeBatcher::new(runtime.clone(), 1),
-        decode_frame_batcher: DecodeFrameBatcher::new(runtime, 1),
-    };
+    let (backend, _speculative) = recurrent_test_backend(
+        "recurrent-chat-cache-test",
+        "recurrent-chat-cache-test",
+        512,
+        64,
+        8,
+        512,
+    )?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

@@ -363,7 +363,30 @@ impl StageOpenAiBackend {
         let mut decoded_prefill_suffix = false;
         if restored_prefill_tokens < prefill_tokens.len() {
             decoded_prefill_suffix = true;
-            if let Some(kv) = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state()) {
+            if let Some(checkpoint_tokens) =
+                request
+                    .recurrent_cache_prefix_token_ids
+                    .filter(|checkpoint_tokens| {
+                        !checkpoint_tokens.is_empty()
+                            && checkpoint_tokens.len() <= prefill_tokens.len()
+                            && prefill_tokens.starts_with(checkpoint_tokens)
+                            && restored_prefill_tokens < checkpoint_tokens.len()
+                    })
+            {
+                runtime
+                    .prefill(session_id, &checkpoint_tokens[restored_prefill_tokens..])
+                    .map_err(openai_backend_error)?;
+                let _ = self.record_exact_state_at_tokens(
+                    &mut runtime,
+                    session_id,
+                    request.ids,
+                    checkpoint_tokens,
+                    "chat_prefix_checkpoint",
+                );
+                runtime
+                    .prefill(session_id, &prefill_tokens[checkpoint_tokens.len()..])
+                    .map_err(openai_backend_error)?;
+            } else if let Some(kv) = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state()) {
                 // Recurrent and full-state payloads cannot reconstruct a shorter
                 // shared prefix from the state at the end of the request. Stop
                 // at the near-tail grid boundary while prefilling and snapshot
@@ -916,7 +939,18 @@ impl StageOpenAiBackend {
             return false;
         };
         let lock_timer = PhaseTimer::start();
+        let mut attrs = self.openai_attrs(request.ids);
         let Ok(mut runtime) = self.runtime.lock() else {
+            attrs.insert(
+                "skippy.kv.decision".to_string(),
+                json!("post_decode_checkpoint_runtime_lock_poisoned"),
+            );
+            attrs.insert(
+                "llama_stage.runtime_lock_wait_ms".to_string(),
+                json!(lock_timer.elapsed_ms()),
+            );
+            self.telemetry
+                .emit("stage.openai_kv_record_decision", attrs);
             return false;
         };
         let runtime_lock_wait_ms = lock_timer.elapsed_ms();
@@ -927,19 +961,20 @@ impl StageOpenAiBackend {
             &checkpoint_tokens,
             "post_decode_checkpoint",
         );
-        if recorded {
-            let mut attrs = self.openai_attrs(request.ids);
-            attrs.insert(
-                "skippy.kv.decision".to_string(),
-                json!("post_decode_checkpoint_recorded"),
-            );
-            attrs.insert(
-                "llama_stage.runtime_lock_wait_ms".to_string(),
-                json!(runtime_lock_wait_ms),
-            );
-            self.telemetry
-                .emit("stage.openai_kv_record_decision", attrs);
-        }
+        attrs.insert(
+            "skippy.kv.decision".to_string(),
+            json!(if recorded {
+                "post_decode_checkpoint_recorded"
+            } else {
+                "post_decode_checkpoint_skipped"
+            }),
+        );
+        attrs.insert(
+            "llama_stage.runtime_lock_wait_ms".to_string(),
+            json!(runtime_lock_wait_ms),
+        );
+        self.telemetry
+            .emit("stage.openai_kv_record_decision", attrs);
         recorded
     }
 
@@ -1180,15 +1215,6 @@ impl StageOpenAiBackend {
             .as_ref()
             .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent);
         let mut first_post_decode_checkpoint_recorded = !recurrent_checkpoint_required;
-        if !first_post_decode_checkpoint_recorded && state.generated_token_ids.len() == 1 {
-            // Publish the first post-generation boundary separately from the
-            // final raw-token checkpoint. ChatCompletion histories are
-            // reconstructed from assistant text and may retokenize that text
-            // differently, but this boundary is still the exact full-prompt
-            // state that the runtime has consumed.
-            first_post_decode_checkpoint_recorded =
-                self.record_post_decode_exact_state(request, session_id, &state);
-        }
         while !state.stopped && state.decoded_tokens < request.max_tokens as usize {
             if request
                 .cancellation
@@ -1209,10 +1235,6 @@ impl StageOpenAiBackend {
                 // is published before that proposal advances the session.
                 LinearProposalProgress::NotUsed
             };
-            if !first_post_decode_checkpoint_recorded && state.generated_token_ids.len() == 1 {
-                first_post_decode_checkpoint_recorded =
-                    self.record_post_decode_exact_state(request, session_id, &state);
-            }
             match linear_progress {
                 LinearProposalProgress::Continue => continue,
                 LinearProposalProgress::Stop => break,

@@ -315,7 +315,6 @@ async fn chat_completions(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
     headers: HeaderMap,
-    Extension(request_id): Extension<RequestId>,
     payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
     let Json(mut request) = json_payload(payload)?;
@@ -323,13 +322,6 @@ async fn chat_completions(
     let trusted_agent_session = header_session.is_some();
     request.set_agent_session(header_session);
     request.validate()?;
-    log_request_started(
-        &request_id,
-        "chat_completion",
-        &request.model,
-        request.stream,
-    );
-    let mut observation = RequestObservation::new(request_id.0.clone(), "chat_completion");
     if request.stream {
         let include_usage = request.include_usage();
         let model = request.model.clone();
@@ -405,7 +397,6 @@ async fn responses(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
     headers: HeaderMap,
-    Extension(request_id): Extension<RequestId>,
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
     let Json(mut value) = json_payload(payload)?;
@@ -421,16 +412,6 @@ async fn responses(
         .transpose()?;
     request.set_agent_session(resolve_agent_session(header_session, responses_session)?);
     request.validate()?;
-    log_request_started(
-        &request_id,
-        "responses",
-        &request.model,
-        matches!(
-            normalization.response_adapter,
-            ResponseAdapterMode::OpenAiResponsesStream
-        ),
-    );
-    let mut observation = RequestObservation::new(request_id.0.clone(), "responses");
     match normalization.response_adapter {
         ResponseAdapterMode::OpenAiResponsesStream => {
             stream_responses(&state, &context, request, trusted_agent_session).await
@@ -704,7 +685,6 @@ async fn completions(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
     headers: HeaderMap,
-    Extension(request_id): Extension<RequestId>,
     payload: Result<Json<CompletionRequest>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
     let Json(mut request) = json_payload(payload)?;
@@ -712,8 +692,6 @@ async fn completions(
     let trusted_agent_session = header_session.is_some();
     request.set_agent_session(header_session);
     request.validate()?;
-    log_request_started(&request_id, "completion", &request.model, request.stream);
-    let mut observation = RequestObservation::new(request_id.0.clone(), "completion");
     if request.stream {
         let include_usage = request.include_usage();
         let backend_context = request_context(context.request_id, trusted_agent_session, true);
