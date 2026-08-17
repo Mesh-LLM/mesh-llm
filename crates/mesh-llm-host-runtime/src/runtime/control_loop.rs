@@ -4,10 +4,11 @@ use super::{
     DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL, IntentSource, MODEL_TARGET_RECONCILIATION_INTERVAL,
     ModelIntent, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
     RunAutoRuntimeLifecycleContext, RunAutoRuntimeLoopContext, RunAutoShutdownContext,
-    RunAutoStartupTasksContext, RuntimeEvent, ShutdownRuntimeLoadedModelsContext, UnloadTarget,
-    advertise_run_auto_models, apply_startup_model_load_finished, cleanup_run_auto_runtime_dir,
-    current_time_secs, dashboard_context_usage_source, emit_shutdown,
-    model_target_reconciliation_policy, publish_runtime_llama_slots,
+    RunAutoStartupTasksContext, RuntimeEvent, RuntimeOperationalEvent,
+    ShutdownRuntimeLoadedModelsContext, UnloadTarget, advertise_run_auto_models,
+    apply_startup_model_load_finished, cleanup_run_auto_runtime_dir, current_time_secs,
+    dashboard_context_usage_source, emit_shutdown, model_target_reconciliation_policy,
+    publish_runtime_llama_slots, record_runtime_operational_event_with_context,
     refresh_dashboard_context_usage_batch, resolve_eager_startup_models,
     resolve_runtime_unload_target, run_auto_handle_model_target_reconciliation_result,
     run_auto_handle_runtime_exit, run_auto_load_runtime_model, run_auto_model_identity,
@@ -21,6 +22,7 @@ use crate::api;
 use crate::inference::skippy;
 use anyhow::Result;
 use mesh_llm_events::{OutputEvent, emit_event, flush_output};
+use std::time::Instant;
 
 pub(super) async fn wait_shutdown_signal() -> &'static str {
     #[cfg(unix)]
@@ -297,6 +299,29 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
             .await;
     }
 
+    // This audit must precede the cleanup-worker stop and service drain below,
+    // so normal shutdown retains the same durable boundary as other lifecycle
+    // records without delaying teardown.
+    let shutdown_started = Instant::now();
+    record_runtime_operational_event_with_context(
+        RuntimeOperationalEvent::ShutdownStarted,
+        crate::logging::OperationalAuditContext::new()
+            .subject(crate::logging::OperationalAuditSubjectKind::Runtime, "host")
+            .outcome("started"),
+    );
+
+    // Stop scheduled cleanup before draining persistence so the scheduler
+    // cannot enqueue a late audit after the durable delivery boundary closes.
+    if let Some(logging_runtime) = crate::logging_runtime_state() {
+        logging_runtime.shutdown_cleanup_worker().await;
+    }
+
+    // Stop terminal webhook dispatch before closing the persistence hand-off.
+    // Its bounded scheduler leaves unfinished durable rows restart-reclaimable.
+    if let Some(logging_runtime) = crate::logging_runtime_state() {
+        logging_runtime.shutdown_webhook_delivery_worker().await;
+    }
+
     shutdown_run_auto_runtime(RunAutoShutdownContext {
         options,
         node,
@@ -318,6 +343,23 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         runtime,
     })
     .await;
+
+    // The Rust control loop now owns an authoritative completed boundary: all
+    // runtime services and model processes above have finished their shutdown
+    // work. Emit it before draining the logging worker so both start and
+    // completion survive normal process exit.
+    record_runtime_operational_event_with_context(
+        RuntimeOperationalEvent::ShutdownCompleted,
+        crate::logging::OperationalAuditContext::new()
+            .subject(crate::logging::OperationalAuditSubjectKind::Runtime, "host")
+            .outcome("completed")
+            .duration_ms(u64::try_from(shutdown_started.elapsed().as_millis()).unwrap_or(u64::MAX)),
+    );
+
+    // Drain and join only after the final authoritative runtime boundary.
+    if let Some(logging_service) = runtime_state.logging_service.take() {
+        let _ = logging_service.shutdown().await;
+    }
 }
 
 pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {

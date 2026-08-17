@@ -1,464 +1,391 @@
 ---
 name: manage-ci
-description: Use this skill as the mandatory starting point whenever inspecting, running, debugging, defining, editing, reviewing, or documenting MeshLLM CI/CD. It governs GitHub Actions workflows and local actions, triggers and routing, runner images and worker labels, dependencies, caches and artifacts, variables, secrets, tokens and permissions, concurrency, releases, deployments, and CI-related scripts.
+description: Use this skill as the mandatory starting point whenever inspecting, running, debugging, defining, editing, reviewing, or documenting MeshLLM CI/CD. It governs GitHub Actions workflows and local actions, triggers and routing, runners, caches, artifacts, permissions, releases, deployments, and CI infrastructure.
 ---
 
 # Manage CI
 
-Treat this skill as the canonical source of CI rules for MeshLLM. Read it before
-every CI edit. Treat `ci/ci.md` as the current topology explanation and
-`.github/AGENTS.md` as an entry-point pointer, not as competing rule sources.
+This is the normative CI rule source for MeshLLM. Read it completely before
+every CI task.
 
-Read [references/current-inventory.md](references/current-inventory.md) in full
-before changing a workflow, action, runner, image, variable, secret, permission,
-deployment, release, artifact, or cache contract. If the inventory or topology
-does not match the checked-in implementation, verify the implementation and
-update the skill resources in the same change.
+Read these companion documents before changing CI:
 
-## Required starting procedure
+1. `references/current-inventory.md` for the checked-in workflow, runner,
+   variable, secret-name, and environment inventory.
+2. `ci/ci.md` for the current topology and artifact flow.
+3. `.omo/specs/pr-ci-optimization.md` when changing PR/main composition,
+   routing, fan-out, or runner-provider policy.
 
-1. Inspect `git status`, the applicable `AGENTS.md` files, and the complete
-   current workflow/action being changed. Preserve unrelated worktree changes.
-2. Read `ci/ci.md` for routing and producer/consumer topology. Read the scripts,
-   manifests, reusable workflows, and local actions reached by the proposed
-   change; do not reason from one YAML fragment in isolation.
-3. Use the inventory commands to inspect current workflow runs, repository
-   variables, secret names, environments, and runners when the task depends on
-   live configuration. Never infer live values from documentation.
-4. Classify the change: PR quality, PR build/smoke, main CI, scheduled canary,
-   release/publish, deployment, maintenance, runner infrastructure, or
-   dependency image. Identify every producer, consumer, permission, and trust
-   boundary affected before editing.
-5. Make the smallest coherent change. Update this skill first when changing a
-   CI rule; update `references/current-inventory.md` and `ci/ci.md` when their
-   factual inventories or topology change.
+The specification records design, status and acceptance criteria. When
+implementation and documentation disagree, inspect the implementation, fix the
+owning source, and update the inventory and topology in the same change.
 
-## Authority and operational safety
+## Required procedure
 
-- Treat inspection, log reads, YAML validation, and dry-run planning as
-  read-only. Editing repository CI files is authorized by a request to change
-  CI; changing GitHub settings, variables, secrets, environments, runner scale,
-  or external deployments requires that state change to be in the user's scope.
-- Do not dispatch, rerun, cancel, approve, or delete workflow runs merely to
-  investigate. Obtain or infer authorization only when the requested outcome
-  requires the operation, and target exact run IDs.
-- Never run a release, publish, production deploy, cache reset, runner teardown,
-  or other destructive maintenance workflow without explicit authorization.
-  Prefer release canary/dry-run inputs before publishing.
-- Never print, retrieve, persist, or commit secret values. Report secret names,
-  scopes, and presence only. Redact tokens and credentials from logs and final
-  responses.
-- Do not weaken a required check, path gate, permission boundary, smoke test, or
-  branch/environment protection merely to make a failing run green. Diagnose
-  the cause and fix its owning source.
+1. Inspect `git status`, applicable `AGENTS.md` files, the complete workflows,
+   reusable workflows, local actions, scripts, and manifests in scope.
+2. Classify the change as entrypoint, planner/routing, reusable slice, runner
+   policy, cache, artifact producer/consumer, smoke, main, release, deployment,
+   maintenance, or infrastructure.
+3. Identify the event and trust context, every producer and consumer, required
+   permissions and secrets, runner class, cache authority, required check, and
+   cancellation behavior.
+4. Inspect live GitHub configuration only when the task depends on it. Treat
+   repository variables as strings and report inaccessible organization state
+   as unverified, never absent.
+5. Make the smallest coherent change. Update this skill first if a normative
+   rule changes; update the inventory and `ci/ci.md` when facts or topology
+   change.
+6. Validate the changed contracts and report repository changes separately
+   from external GitHub, Depot, runner, secret, or deployment state changes.
 
-## Workflow ownership and triggers
+## CI architecture contract
 
-- Keep pull-request workflows in `pr_*.yml`. Keep the early quality workflow
-  named `PR Quality Checks` in `pr_quality.yml` and the build workflow named
-  `PR Builds` in `pr_builds.yml`.
-- Keep `ci.yml`, `docker.yml`, and `release.yml` free of pull-request triggers.
-  They own main/dispatch, manual Docker validation, and tag/release behavior.
-- Use `pull_request`, not `pull_request_target`, for untrusted PR code.
-  `pull_request_target` workflows must never check out, build, execute, source,
-  or interpolate PR-controlled content. `pr_cleanup.yml` may only operate on
-  positively matched cache/artifact metadata; `pr_auto_assign.yml` may only
-  update PR metadata.
-- Give scheduled workflows a manual `workflow_dispatch` path when safe so an
-  operator can reproduce them. Type and describe every dispatch/reusable input,
-  validate free-form strings, and set explicit defaults where omission is safe.
-- Add `paths` filters only when a central routing signal cannot express the
-  ownership. Keep trigger filters, `.github/actions/compute-changes`, affected
-  crate logic, and the topology document synchronized.
-- Add a concurrency group for any workflow that publishes, deploys, mutates
-  caches, or would wastefully overlap. Cancel superseded PR validation; do not
-  cancel releases, deployments, cleanup, or cache warming unless rollback
-  semantics explicitly permit it.
+### Entrypoints and reusable slices
 
-## PR routing and job graph
+- Event entrypoints own triggers, concurrency, and top-level permissions.
+  Pull requests use separate Quality, Website, Linux, macOS, and Windows
+  workflows. Each entry computes the canonical plan, then calls only its
+  matching reusable lane so jobs remain attached to a small topic/platform
+  run. PR callers use the protected default-branch lane definition; main
+  callers use the same-commit local lane definition. Explicit manual-full
+  diagnostics alone may use the protected default-branch dispatch controller.
+  No path owns duplicated build implementations.
+- New PR and main behavior must be implemented in a typed reusable workflow or
+  local action consumed by both entrypoints. Do not copy a job between PR and
+  main and do not add a third implementation to release.
+- A PR-selected slice must run the same commands, build profile, artifact
+  contract, and verification as that row on main. PRs reduce work by selecting
+  fewer main-representative slices, not by changing what a selected slice
+  means.
+- Reusable workflow inputs must be typed, bounded, documented, and validated.
+  Accept semantic inputs such as platform, architecture, backend, profile, or
+  smoke kind. Never accept arbitrary shell, arbitrary workflow path, raw
+  `runs-on` JSON, a secret name, or an independent cache-permission flag.
+- Pass secrets by name only to the workflow and step that consumes them. Never
+  use `secrets: inherit` in CI slice calls.
+- Keep reusable-workflow nesting shallow and the slice catalog small. Separate
+  topic/platform graphs may be dispatched with native, bounded inputs from the
+  protected controller. Each lane owns a platform-local static superset of
+  typed calls gated by the checked plan; a platform lane must not call a
+  cross-platform reusable workflow with empty placeholder matrices. Do not
+  generate workflow YAML at run time.
+- Prefer local composite actions for repeated steps inside a job and reusable
+  workflows for repeated jobs or job graphs.
 
-- Route PR work from `.github/actions/compute-changes`. Do not add heavy jobs
-  that ignore applicable `docs_only`, `rust_changed`, `backend_changed`,
-  `inference_artifact_required`, `windows_*_build_required`,
-  `sdk_smoke_required`, `ui_changed`, or `website_changed` outputs.
-- Model Linux, macOS, and Windows executable products as independent
-  backend-neutral host and native-runtime producers followed by
-  composition-only product jobs. A platform/backend matrix belongs on the
-  runtime and product layers, never on a host producer. Do not add no-op macOS
-  CUDA, ROCm, or Vulkan rows for unsupported combinations.
-- Gate native backend lanes on backend inputs, not on every Rust change.
-  Workflow-only and docs-only changes must not fan out into build, GPU,
-  benchmark, or SDK smoke lanes without a matching product input.
-- Gate public/ARC runner-image contract jobs on runner workflow, cache
-  integration, or cache-version changes (plus manual dispatch). Do not make
-  ordinary source/docs PRs pay an infrastructure canary that validates no
-  changed contract.
-- Keep Clippy sharding driven by `scripts/plan-clippy-batches.sh`; do not add
-  hand-maintained static batches.
-- Keep crate-test sharding driven by `scripts/plan-test-batches.sh`. It derives
-  workspace membership from `cargo metadata`; do not add a workflow-owned test
-  crate allowlist. Pull requests test affected crates and reverse dependents;
-  main and manual dispatch test every workspace member exactly once.
-- When adding, removing, renaming, or splitting a workspace crate, update
-  `.github/actions/compute-changes`, `scripts/affected-crates.sh`,
-  `scripts/plan-clippy-batches.sh`, Docker copy lists,
-  `scripts/publish-crates.sh`, workflow crate lists, and xtask consistency
-  expectations together. Do not add new crates to `plan-test-batches.sh`; its
-  metadata-derived membership and default weight handle them automatically.
-- If a consumer downloads an artifact, its producer must be reachable in the
-  same workflow graph under every matching condition. Use `needs` with normal
-  dependency-success semantics, or an explicit result check when status-aware
-  continuation is intentional; do not rely on job ordering by file position.
-- Give each PR entry workflow one stable, non-matrix summary job suitable for
-  branch protection. Conditional top-level jobs and the summary must consume
-  the same checked-in required-job plan so route conditions cannot drift. The
-  summary must directly need every other top-level job, use
-  `if: ${{ !cancelled() }}` rather than `always()`, require unconditional
-  routing/planning jobs to succeed, and permit `skipped` only when that job is
-  absent from the plan. Reject required skips, failure, cancellation, unknown
-  results, duplicate plan entries, and required IDs outside the needs graph.
-- Set `strategy.fail-fast: false` when every platform/backend result is useful.
-  Use fail-fast only when later matrix results would be redundant or unsafe.
+### PR workflow visibility and split invariant
 
-## Workflow and action definition
+- PR validation has exactly five event entrypoints:
+  `pr_quality.yml`, `pr_website.yml`, `pr_linux.yml`, `pr_macos.yml`, and
+  `pr_windows.yml`. Keep this topic/platform split unless a maintainer
+  explicitly changes the architecture contract.
+- Each PR entrypoint may call only its matching protected default-branch lane.
+  It owns an independent concurrency group and stable `PR / <lane>` result.
+  Compose additional work inside that lane's typed reusable graph; do not add
+  cross-lane jobs to an entrypoint.
+- Native PR visibility is an operability requirement. Reviewers must be able
+  to open the PR checks view, select Quality, Website, Linux, macOS, or Windows,
+  and drill directly into that lane's jobs and logs. A custom `dispatched`
+  placeholder or a separate workflow-dispatch run does not satisfy this
+  requirement for PRs.
+- Never introduce a monolithic PR workflow or reusable PR composer that calls
+  all five lanes in one run. Do not replace the five entrypoints with one
+  matrix, one giant dependency graph, or one aggregate workflow whose only
+  visible PR result is a dispatch/controller job.
+- A reusable-only, no-op filename shim is temporarily allowed when the
+  protected pre-migration runner contract requires a deleted entrypoint to be
+  present while the migration PR is open. It must have no event trigger, call
+  no lane or producer, be documented as removable after merge, and must never
+  regain the behavior implied by its legacy filename.
+- Do not add `paths` filters to the five PR entrypoints. All five stable results
+  must be created for every relevant PR synchronization; the checked planner
+  makes an unselected lane skip its expensive work and lets its stable result
+  succeed. This prevents required checks from remaining absent or pending.
 
-- Start with least privilege. Declare workflow- or job-level `permissions`
-  explicitly; grant `contents: read` unless a job demonstrably needs more.
-  Scope `actions: write`, `contents: write`, `packages: write`, `pages: write`,
-  `pull-requests: write`, or `id-token: write` to the smallest job and event.
-- Set `persist-credentials: false` on checkout unless a narrowly scoped job must
-  push. Do not use a PAT when the job-scoped `GITHUB_TOKEN` can perform the
-  operation.
-- Pin newly introduced third-party actions to a full commit SHA and record the
-  human-readable release in a comment. Do not add `@main`, `@master`, or another
-  moving ref. Do not churn unrelated legacy action pins in a focused change,
-  but treat moving refs as migration debt when touching that step.
-- Prefer a local composite action or typed reusable workflow when logic is used
-  by more than one job. Keep reusable inputs typed, defaults explicit, outputs
-  documented, and secrets passed deliberately rather than inherited broadly.
-- Give jobs and steps stable descriptive names. Step IDs must be unique within
-  a job and change only when consumers are updated. Keep expressions out of
-  shell strings when untrusted data is possible; pass values through `env` and
-  quote them in the shell.
-- Use `set -euo pipefail` for nontrivial Bash orchestration. Select the shell
-  explicitly when container or platform defaults differ. Use PowerShell-native
-  error handling on Windows.
-- Add realistic `timeout-minutes` to network, integration, benchmark, and
-  deployment jobs. A timeout is a failure boundary, not a substitute for fixing
-  a hang.
-- Every CI invocation of `mesh-llm` must include `--log-format json` so a TUI is
-  never started on a noninteractive runner.
+### Main workflow visibility and split invariant
 
-## Runners, workers, and container images
+- Routine main validation has exactly five push entrypoints:
+  `main_quality.yml`, `main_website.yml`, `main_linux.yml`, `main_macos.yml`,
+  and `main_windows.yml`. Each calls only its matching same-commit reusable
+  lane and owns one stable `Main / <lane>` result.
+- Native main visibility is an operability requirement. A maintainer must be
+  able to open a main push run for one topic/platform and drill directly into
+  its jobs and logs. Do not route routine main pushes through a dispatch-only
+  controller, synthetic check graph, monolithic matrix, or all-lanes composer.
+- The five main workflows must not use path filters or cancel one another or
+  older main revisions. Main is exhaustive evidence; supersession cancellation
+  remains PR-only. Planner-owned skips and matrix fail-fast behavior must not
+  make the top-level main result disappear.
+- `ci-control.yml` is reserved for an explicit default-branch manual-full run.
+  It may dispatch the five lanes with correlated synthetic checks because the
+  operator deliberately chose the detached diagnostic surface. It must not be
+  triggered by `push`, `pull_request`, or `workflow_run`.
 
-- Use the exact hosted and self-hosted labels in the inventory. Keep runner
-  selection data as JSON when passed through `fromJson`; validate manual runner
-  input against an allowlist before execution.
-- Do not route fork-authored or otherwise untrusted code to a persistent
-  self-hosted runner. Use ephemeral ARC pods with restricted service accounts,
-  credentials, network access, and namespaces for untrusted workloads, or keep
-  the workload on GitHub-hosted runners.
-- Linux CI should converge on the multi-architecture images from
-  `Mesh-LLM/mesh-llm-runner-images`. Use the public variant as a job-level
-  container on GitHub-hosted runners. The ARC runner pod is already the
-  self-hosted variant; do not wrap it in another job container.
-- Pin production runner consumers by the multi-architecture OCI digest:
-  `ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:<digest>`. Treat timestamp,
-  source-revision, and `*-latest` tags as discovery/evaluation inputs only.
-  Resolve a selected tag to its digest before changing required CI or Flux.
-- Preserve architecture and hardware constraints. AMD64 NVIDIA work requires
-  the full GPU label set and appropriate device/runtime access. ARM64 work must
-  use an ARM64 image child and label. Verify both children in the manifest list
-  before rollout.
-- Treat worker-count variables as capacity and API-rate controls. Validate
-  integer ranges, cap fan-out, retain deterministic sharding, and consider
-  runner availability, GitHub API limits, cache pressure, and cost before
-  increasing parallelism.
-- Do not change runner labels, `USE_SELF_HOSTED`, image digests, scale-set
-  names, node selectors, resource requests, or worker counts in only one side
-  of the contract. Update workflow routing, runner/GitOps configuration,
-  inventory, and verification together.
-- Route trusted main/release Depot jobs through the repository-wide
-  `DEPOT_RUNNERS_ENABLED` exact-string gate, with a typed manual canary input
-  accepted only when `github.ref == 'refs/heads/main'` and a GitHub-hosted
-  fallback for tags and every other ref. Current
-  `pull_request` workflows must always select GitHub-hosted runners;
-  `DEPOT_PR_RUNNERS_ENABLED` is ignored.
-- A default-branch-pinned reusable workflow that directly allocates Depot must
-  not accept a caller-supplied runner label or Depot-cache permission. Derive
-  both inside the protected workflow from the exact repository, event, main
-  ref, `DEPOT_RUNNERS_ENABLED` gate or event-owned main-dispatch canary flag,
-  target architecture, and a validated bounded runner-size input. Pull
-  requests, tags, feature refs, external repositories, and unsupported targets
-  must never resolve to a Depot label; the cache permission must be the output
-  of the same decision.
-- Reusable smoke workflows that receive `HF_TOKEN` must remain fixed to
-  GitHub-hosted runners during the Depot rollout. They must not accept raw
-  `runs_on` JSON or any other caller-provided label that can resolve to Depot or
-  a dedicated runner group. Multi-platform smoke/producer APIs may expose only
-  bounded GitHub-hosted labels and must fail closed before running checked-out
-  source. Pull-request callers must not pass `HF_TOKEN`; use public fixtures and
-  merge-ref-scoped caches for untrusted PR validation.
-- Treat a checked-out repository-local selector as defense in depth, never as
-  the PR runner trust boundary: pull requests can modify both their workflow and
-  local action code. Before any PR uses Depot, automatic cache authority must be
-  disabled and isolated, then a default-branch-pinned, narrowly typed reusable
-  workflow must be restricted to its exact `@refs/heads/main` workflow ref with
-  `restricted_to_workflows=true`. Do not use `pull_request_target` to build or
-  execute PR content.
-- Confirm the Depot GitHub App, public-repository runner-group access,
-  selected-workflow restriction, and every selected runner label before
-  enabling Depot. Hardware-qualified GPU execution remains on a restricted
+### Planning and routing
+
+- Compute changed files and the CI plan once per entry graph. Each independent
+  PR topic/platform workflow projects only its own lane and calls that protected
+  default-branch lane natively, so every nested job and log stays visible from
+  the matching PR run without a monolithic matrix. Each main topic/platform
+  workflow computes the same exhaustive plan and calls its same-commit lane
+  natively. Only manual-full passes digest-bound lane projections through
+  native workflow-dispatch inputs. Do not use an artifact as dispatch state.
+  Fork PRs use the same
+  no-secret reusable path after fetching the immutable head SHA through the
+  base repository. All lane conditions and summaries consume the same plan or
+  its bounded projection.
+- Keep direct semantic ownership separate from Cargo reverse dependencies:
+  direct paths/crates select product, SDK, backend, platform, protocol, model,
+  UI, website, and infrastructure slices; affected crates select Rust compile,
+  Clippy, and tests.
+- Store path/domain ownership and slice dependencies in checked-in manifests.
+  The planner must emit a versioned machine-readable plan containing the
+  profile, source identity, direct domains, affected crates, required slice
+  IDs, bounded matrices, dependency reasons, and fan-out budgets.
+- Supported profiles are semantic and closed: draft PR, ready PR, exhaustive
+  main, and explicit full/manual validation. Do not add ad hoc boolean inputs
+  when a profile or ownership rule expresses the decision.
+- CI control-plane changes fail open to the affected slices and their
+  consumers, except paths that map only to documentation plus `ci-control`;
+  those retain limited documentation routing. Unknown paths, unknown plan
+  fields, duplicate slice IDs, invalid matrices, or an ownership/schema
+  mismatch fail planning.
+- Pull requests test affected crates plus reverse dependents. Main tests every
+  workspace member exactly once. Workspace discovery belongs to Cargo metadata,
+  not a workflow-maintained allowlist.
+- Use measured workload data to rebalance deterministic shards, but keep the
+  checked-in algorithm reproducible. Use one Cargo invocation per shard unless
+  a documented package-isolation check requires otherwise.
+
+### Dependencies, summaries, and cancellation
+
+- If a consumer downloads an artifact, its producer must be reachable under
+  the same plan and declared through `needs`. Consumers never rebuild missing
+  producer inputs.
+- Every lane has one unique, stable, non-matrix summary. Each PR/main entry has
+  one stable native result; the manual-only controller owns one stable
+  synthetic aggregate check.
+- Each lane summary directly needs every top-level slice call in that lane,
+  runs with `if: ${{ !cancelled() }}`, and validates results against its
+  digest-bound plan projection. The aggregate completes only after every
+  correlated lane check is terminal.
+  A skipped slice is valid only when absent from the plan. Reject required
+  skips, failures, cancellations, unknown results, duplicate plan entries, and
+  planned IDs outside the static needs graph.
+- Cancel superseded PR runs. Do not cancel releases, deployments, cache
+  warming, cleanup, or publishing unless their rollback semantics explicitly
+  permit it.
+- Treat each focused PR workflow as an independent failure domain. A Quality
+  or Website failure must not cancel platform compilation, tests, products, or
+  smoke jobs, and a platform failure must not cancel another focused PR
+  workflow.
+- Within a PR platform lane, compilation, functional-test, product, and smoke
+  matrices fail fast so a required row failure cancels their queued and
+  in-progress sibling rows. Keep this profile-derived: exhaustive main/manual
+  runs continue sibling rows to retain complete diagnostics, and Quality
+  matrices continue all rows because they are independent diagnostics rather
+  than producer/consumer gates.
+- Prefer declared `needs` edges to suppress impossible consumers after a
+  producer failure. Do not cancel an entire workflow run through the Actions
+  API on first failure: that prevents the stable lane summary from reporting a
+  terminal failure and discards unrelated failure-domain evidence.
+- Control fan-out in the graph. Use bounded matrices and `max-parallel` after
+  eliminating irrelevant work; do not use additional runner capacity as a
+  substitute for routing and composition.
+
+## Trust, runners, and providers
+
+- Use `pull_request`, never `pull_request_target`, to build or execute PR
+  content. Metadata-only and positively matched cleanup workflows may use
+  `pull_request_target` but must never execute PR-controlled content.
+- Treat GitHub and Depot as placement providers, not different build graphs.
+  Slices request a semantic runner role; a centralized, event-derived policy
+  maps that role to a provider label and cache mode.
+- A caller may not choose a privileged runner label or independently grant
+  remote-cache access. The workflow that owns `runs-on` must derive both from
+  repository, event, ref, trust profile, architecture, and a bounded size.
+- Ordinary PR jobs remain GitHub-hosted unless the bounded same-repository
+  Depot risk exception below is active; an explicitly approved ephemeral,
+  uncredentialed hardware runner may own a documented GPU smoke exception.
+  Eligible trusted main jobs may use
+  Depot only through the exact-string `DEPOT_RUNNERS_ENABLED` gate and retain a
+  GitHub-hosted fallback. Tags, feature refs, external callers, credentialed
+  smokes, macOS, Windows, and hardware-qualified GPU work stay on their
+  explicitly approved provider until separately migrated.
+- Never route untrusted code to a persistent self-hosted runner. Public-repo
+  self-hosted execution requires ephemeral runners, restricted credentials and
+  network access, and a runner group limited to the repository and exact
+  protected default-branch reusable-workflow refs.
+- A checked-out selector is defense in depth, not a PR trust boundary. PRs can
+  modify local workflows and actions. Any future PR-on-Depot path must use a
+  default-branch-pinned runner-owning workflow and a GitHub runner-group
+  selected-workflow restriction.
+- Provider changes must not alter source checkout, commands, profile,
+  artifacts, tests, required checks, or plan membership.
+
+### Bounded Depot PR cache-risk exception
+
+Depot Cache currently scopes entries by repository but not by branch and
+automatically connects GitHub-cache API consumers on Depot runners. Cache-key
+prefixes, job-local sccache, and a trusted caller do not prevent checked-out PR
+code from using injected cache authority directly.
+
+The provider-isolation requirements below remain the desired end state:
+
+1. Automatic Depot Cache connectivity is disabled for the PR runner context,
+   or Depot supplies a comparably strong per-PR namespace and read/write policy.
+2. A fork PR receives no Depot cache token, WebDAV credential, transparent
+   Actions-cache write authority, registry credential, or repository secret.
+3. A hostile PR can neither read a trusted sentinel cache entry nor publish an
+   entry later restored by trusted main/release jobs. Cache-key conventions are
+   not proof.
+4. The ephemeral Depot runner group is restricted to this repository and exact
+   protected default-branch runner-owning workflows.
+5. CI/workflow changes force the GitHub-hosted validation path so a PR cannot
+   replace the protected executor that grants Depot placement.
+6. GitHub-hosted rollback remains one checked provider-policy change and does
+   not change the plan or artifact graph.
+
+Until the provider supplies that end state, maintainers may deliberately accept
+the documented repository-wide cache risk for one exact same-repository PR
+head under all of these controls:
+
+- the exception has a checked-in UTC expiry and fails hosted after it;
+- `DEPOT_PR_RUNNERS_ENABLED` is exactly `true`;
+- `DEPOT_PR_APPROVED_REF` exactly matches `refs/pull/<number>/merge` and
+  `DEPOT_PR_APPROVED_SHA` exactly matches the current PR head SHA;
+- the head repository is exactly `Mesh-LLM/mesh-llm`; forks remain hosted;
+- CI-control, workflow, runner-policy and cache-policy changes force hosted;
+- the protected default-branch runner-owning workflows remain the executor;
+- PR jobs receive no repository secrets or registry credentials; and
+- rollback is deletion/false of the PR gate or either exact approval value.
+
+This is an explicit speed-versus-isolation decision, not evidence that Depot
+cache is isolated. While active, GitHub Actions cache API consumers on selected
+Depot PR and trusted-main jobs may share Depot's repository-wide namespace.
+Treat that namespace as attacker-controlled and keep release, publishing,
+deployment and credential-bearing jobs off it. Record the rationale, known
+failure modes, owner, start, expiry and rollback in
+`ci/DEPOT_PR_RISK_EXCEPTION.md`.
+
+GitHub's `all_external_contributors` workflow-approval policy does not cover a
+same-repository branch pushed by a collaborator. Do not describe that setting
+as the approval boundary for this exception. The exact maintainer-controlled
+ref and head-SHA variables are the checked-in per-PR approval boundary and must
+be refreshed after every PR synchronization.
+
+## Cache contract
+
+- Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
+  trusted read-write. Derive it from the same policy as runner placement.
+- GitHub-hosted PR writes remain isolated from trusted main: normal protected
+  same-repository and fork lanes explicitly force restore-only cache mode even
+  though their workflow ref is the default branch. The bounded Depot exception
+  is the documented cross-branch deviation. Trusted
+  main/release/warmers own shared publication. Do not save large shared
+  Rust/native caches from PRs.
+- GitHub scopes caches created by `pull_request` runs to that PR's merge ref.
+  Small exact caches may publish in that isolated scope when their key covers
+  every compatibility boundary and their contents are verified before use;
+  this is the approved mechanism for accelerating reruns of the same PR.
+  Never use a restore prefix for these PR-produced native caches.
+- Keep multi-gigabyte Cargo target caches restore-only on PRs. Per-PR copies
+  multiply by matrix row, consume repository cache quota, and can evict the
+  trusted main caches that every PR can restore. Prefer small exact native ABI
+  caches and package-manager download stores with lockfile-exact keys.
+- Assign one publisher for a shared package-manager key. Other focused PR
+  workflows may restore it but must not race to upload the same cache entry.
+- Keep PR sccache job-local unless a provider proves safe isolation. A cache
+  miss must remain a correctness-preserving miss, never a reason to rebuild a
+  producer secretly in a consumer.
+- Cache keys include every compatibility boundary: provider where necessary,
+  OS, architecture, backend/toolchain, profile, image/toolchain epoch,
+  lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
+  restore prefixes across trust or ABI boundaries.
+- Treat restored cache contents as untrusted. Verify native build stamps,
+  manifests, checksums, target/backend identity, and required link closure
+  before reuse. Never store credentials or private endpoints in a cache.
+- Artifacts move outputs within a run; caches accelerate regeneration across
+  runs. Do not use a cache as the producer/consumer correctness contract.
+- PR and smoke-only artifacts default to one-day retention. Release evidence
+  follows the release policy.
+
+## Product and artifact contract
+
+- Model every executable product as a backend-neutral host, one separately
+  packaged native runtime per OS/architecture/backend, and a composition-only
+  product. A backend matrix belongs to runtime/product rows, never host rows.
+- Build prepared UI assets once per selected platform lane and feed that
+  immutable artifact to every host producer in the lane. Host producers must
+  not rerun UI tests. Cross-workflow artifact sharing is an explicit timing
+  tradeoff, not a correctness dependency.
+- Host artifacts include the executable checksum and import-policy report.
+  Runtime artifacts include manifest, checksums, ABI/version, platform, and
+  backend identity. Product manifests record exact host and runtime digests.
+- Use the owning preparation and composition actions. A composer verifies and
+  copies exact producer bytes; it never compiles, links, re-stamps, or silently
+  substitutes an input.
+- No-driver `--version`, runtime discovery, and noninteractive client readiness
+  are mandatory for every composed alias. Hardware serving qualification is
+  additional coverage, not a replacement.
+- Restore smoke inputs through the shared restore action and reusable smoke
+  workflows. Every CI invocation of `mesh-llm` includes `--log-format json`.
+- Release and packaging wrap the same producers with signing, attestation,
+  publication, and retention. They do not fork the underlying build commands.
+
+## Workflow definition and dependencies
+
+- Declare least-privilege `permissions` explicitly. Default to
+  `contents: read`; grant write or OIDC permissions only to the owning job.
+- Set `persist-credentials: false` on checkout unless a narrowly scoped job
+  must push. Never expose secrets to fork PRs or interpolate untrusted values
+  into shell commands.
+- Pin new third-party actions to a full commit SHA with a release comment.
+- Use stable job/step IDs, explicit shells, `set -euo pipefail` for nontrivial
+  Bash, PowerShell-native error handling on Windows, and realistic timeouts.
+- Project dependencies belong in checked-in manifests/lockfiles. Shared Linux
+  tools belong in `mesh-llm-runner-images`. Do not add one-off `apt`, `pip`,
+  global npm, `cargo install`, downloaded binaries, or `curl | sh` to a job.
+- Use digest-pinned multi-architecture runner images. A backend image provides
+  a toolchain, not GPU hardware. GPU execution requires a restricted matching
   device runner.
-- Treat Depot Registry pull-through caching as an opt-in, trusted-build
-  optimization. Benchmark an upstream digest and its cached mirror on fresh
-  ephemeral runners, require identical manifest digests, and adopt a mirror
-  only when at least five samples show both 20% and 10 seconds of median pull
-  improvement. Never pass the pull token to PR code or use pull timing as
-  evidence for package installation, dependency resolution, compilation, or
-  Docker layer-export improvements.
 
-## Dependencies and runner setup
+## Operational safety
 
-- Treat MeshLLM manifests/lockfiles and the YAML profiles/installers in
-  `mesh-llm-runner-images` as the dependency sources of truth.
-- Never fix a Linux CI failure by adding a one-off `apt-get`, `pip`, global
-  `npm`, `cargo install`, downloaded binary, `curl | sh`, setup action, or host
-  bootstrap step to an individual workflow.
-- Put Rust, Node, Python, Go, test, and SDK dependencies in their checked-in
-  project manifests and lockfiles. Put shared Linux packages and CLIs in
-  `profiles/common.yml`, backend-specific SDK packages in
-  `profiles/backends/<backend>.yml`, environment-only capabilities in
-  `profiles/public.yml` or `profiles/self-hosted.yml`, and vendor toolchains in
-  the owning runner-image installer. Rebuild and verify every supported
-  backend/architecture pair, publish, then pin the new digest.
-- Locked project installation remains valid job work. The runner image warms
-  dependency caches but does not replace the manifests as the contract.
-- Centralized platform setup may remain on macOS or Windows where the Linux
-  image is not applicable. Keep it reusable and version-pinned; do not copy it
-  between jobs.
-- Treat existing Linux workflow-local host setup as migration debt. Remove it
-  when its lane adopts the runner image; never copy it to a new lane.
-- Permit an emergency workaround only when it is explicitly temporary and has
-  a reason, owner, and linked removal issue or expiry date.
-
-## Variables, secrets, tokens, and environments
-
-- Use a workflow input for a one-run operator choice, a repository variable for
-  nonsecret repository-wide configuration, an environment variable for
-  deployment-scoped nonsecret configuration, and a secret for credentials or
-  private values. Never store a secret in a variable, workflow default,
-  artifact, cache, summary, or committed file.
-- Treat GitHub variables as strings. Normalize booleans explicitly, use
-  `fromJson` only for validated JSON, validate numeric ranges, and provide safe
-  checked-in defaults when absence is allowed. Fail early with the missing name
-  when a value is required.
-- Pass secrets only to the step that consumes them, normally through `env`.
-  Do not interpolate secrets into command lines, cache keys, artifact names,
-  matrices, job outputs, or debug traces. Do not expose secrets to PRs from
-  forks or to untrusted reusable workflows/actions.
-- Use environment protection and scoped deployment credentials for production
-  publishing/deployments. Grant OIDC `id-token: write` only to the job that
-  exchanges the token.
-- Before adding or renaming a variable or secret, search every workflow,
-  action, script, and downstream repository consumer. Update the inventory and
-  document scope, owner, accepted format, default/failure behavior, and rotation
-  or removal plan. Never document a secret value.
-- Inspect live configuration with `gh variable list`, `gh secret list`, and the
-  environment commands in the inventory. An absent repository secret may be an
-  organization secret; lack of permission to list org configuration is not
-  evidence that it does not exist.
-- Creating, changing, or deleting a variable/secret is an external state
-  mutation. Confirm scope and exact target, use `gh secret set` interactively or
-  via stdin/file without echoing the value, and report only the name and scope.
-
-## Caches, artifacts, and smoke tests
-
-- Treat release production as a three-layer graph: one backend-neutral host per
-  OS/architecture, one native-runtime artifact per
-  OS/architecture/backend/backend-version, and product composition from those
-  two immutable inputs. A backend alias may select a runtime but must never
-  compile a distinct host.
-- Host artifacts must include and pass the dynamic-import policy report.
-  Runtime artifacts must include their manifest, file checksums, runtime ABI,
-  MeshLLM version, platform, and backend compatibility. Product artifacts must
-  record the exact host and runtime digests and preserve the
-  `mesh-bundle/native-runtimes/<runtime-id>` layout.
-- Use `.github/actions/prepare-host-input`,
-  `.github/actions/prepare-windows-host-input`,
-  `.github/actions/prepare-native-runtime-input`, and
-  `.github/actions/compose-product-input` for PR/main/release producers.
-  `prepare-host-input` owns Unix hosts and `prepare-windows-host-input` owns
-  Windows hosts. Add release-only signing/publishing around those actions; do
-  not fork their build/package/compose commands into workflow-local shell
-  blocks.
-- Keep host, runtime, and product matrices separate in release workflows.
-  Product jobs download producer artifacts and verify compatibility and digest
-  metadata before composition. Never satisfy a missing producer by rebuilding
-  either layer in a consumer job.
-- Host producers attest and import-check the host before upload. Consumers
-  verify that producer checksum and attestation, then copy the exact host bytes;
-  they must not re-stamp, relink, or otherwise mutate a host per backend alias.
-- Main CI executable lanes follow the same product contract: CPU artifact
-  producers upload a backend-neutral host together with its adjacent packaged
-  runtime. A backend product lane consumes the unchanged, verified host from
-  its OS/architecture producer and combines it with its selected runtime; it
-  must not independently produce a backend-specific host. Do not upload or
-  consume a raw host binary, rebuild a host after restoring a runtime cache, or
-  use a driver stub to make an executable test pass.
-- No-driver smoke is mandatory for every product alias, native package, and OCI
-  image. CUDA/ROCm/Vulkan device absence is not a skip condition for
-  `--version`, runtime discovery/listing, or client startup. Hardware-qualified
-  serving tests are additional coverage.
-- The hermetic readiness smoke starts its client as a noninteractive background
-  service. Use bounded SIGTERM shutdown on Unix and CTRL_BREAK_EVENT on Windows;
-  do not use Unix SIGINT for this service probe because asynchronous
-  noninteractive shell children may inherit it as ignored. Keep interactive
-  Ctrl-C behavior covered by runtime and console tests instead.
-- Namespace cache keys and include every compatibility boundary that can make
-  reuse unsafe: OS, architecture, backend/toolchain, relevant lockfiles,
-  `.github/cache-version.txt`, and build inputs. Do not broaden restore keys
-  across incompatible or untrusted contexts.
-- Windows native-runtime producers and the trusted warmer must use
-  `.github/actions/restore-windows-abi-cache`. Keep CPU, CUDA, ROCm, and Vulkan
-  architecture/toolchain identities exact; do not duplicate its key expression
-  in individual workflows or add broad restore prefixes.
-- GitHub-hosted PR jobs may share the normal key namespace with main because
-  GitHub scopes PR writes to the merge ref and trusted main does not restore
-  them. Do not assume that isolation applies to another cache provider.
-- Keep sccache disk-only for `pull_request` and `pull_request_target` events.
-  The pinned sccache treats a mixed `disk,gha` chain as wholly read-only when
-  the GHA tier is read-only, so every miss records a rejected cache write and
-  cannot populate L0. PR jobs therefore use a writable job-local disk tier plus
-  bulk Rust and exact native `actions/cache` restores. Only trusted main,
-  release, scheduled warmer, or explicitly authorized dispatch paths may
-  publish shared sccache entries. Apply the same event-derived policy to direct
-  `mozilla-actions/sccache-action` users through
-  `.github/actions/configure-sccache-gha`; do not let a reusable workflow
-  silently restore read-write PR publication.
-- Keep GitHub-hosted main `rust_crate_tests` shards on writable job-local
-  sccache. Their distinct bulk Cargo target caches own cross-run reuse; four
-  concurrent per-object GHA writers caused repository-wide write contention
-  without improving the two worst shards. Do not extend this opt-out to
-  producer or grouped-test jobs without measured evidence. The configure
-  action evaluates an explicitly authorized Depot WebDAV cache before the GHA
-  opt-out, so a future trusted Depot rollout may still use `disk,webdav`.
-- Depot's GitHub cache namespace is repository-scoped and has no branch
-  isolation. With automatic Depot Cache enabled, its authority is injected into
-  the whole runner job and cannot be contained by sccache disk-only mode or
-  cache-key conventions. Current PR workflows must not use Depot, including
-  through a trusted reusable caller, until automatic injection is disabled and
-  complete token/API isolation is proven.
-- Do not save large shared Rust caches from PR merge refs. Shared caches are
-  written from trusted main/release/cache-warming paths. PR cleanup may delete
-  positively matched PR caches/artifacts but must not delete workflow runs or
-  logs.
-- Use `retention-days: 1` for PR and smoke-only artifacts unless a documented
-  debugging or release requirement needs longer retention. Release evidence
-  follows the release policy, not the PR default. Sccache migration evidence is
-  retained for 14 days so cold/warm samples cover the configured Depot
-  cache-retention window.
-- Restore producer artifacts through `.github/actions/restore-smoke-inputs`.
-  Reuse `smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`, and
-  `hf-download-smoke.yml`; do not rebuild MeshLLM, native runtimes, or duplicate
-  model/artifact restore blocks in consumers. SDK smokes consume the runtime
-  adjacent to their staged producer binary and must fail rather than silently
-  compiling a replacement in CI.
-- Build Swift XCFramework inputs through the typed
-  `swift-sdk-artifact.yml` reusable producer. Pull-request validation uses its
-  `host-only` mode, while main and release use `full`; Swift smoke consumers
-  download and verify both the immutable XCFramework and generated
-  `mesh_ffi.swift` artifacts and must not invoke Cargo, llama.cpp builds,
-  native-SDK packaging, or either XCFramework build script. Producer and smoke
-  are fixed to `macos-15`; the native cache includes an explicit macOS/Xcode
-  epoch, Rust uses `RUSTC_WRAPPER=sccache`, and the producer retains
-  mode/run-attempt-unique sccache evidence. Main and tag producers must fail on
-  tracked-binding drift, while a dispatched release must copy the producer
-  binding into its tag commit.
-- Build native SDK runtime inputs through the typed
-  `native-sdk-artifact.yml` reusable producer. Pull-request, main, and release
-  callers select an explicit target, backend, and Cargo profile; Kotlin smoke
-  downloads and verifies that immutable producer artifact and must not invoke
-  Cargo, llama.cpp preparation/builds, or native-SDK packaging. Release callers
-  use the same producer with release-asset staging enabled so archive, checksum,
-  and native runtime crate names remain identical to the published contract.
-- Build Linux static llama ABI inputs through the typed
-  `static-abi-artifact.yml` reusable producer. Its artifact must carry an exact
-  target/backend manifest, pinned build-image/toolchain epoch, build-stamp
-  checksum, archive checksum, the full llama/common/mtmd/ggml static link
-  closure, and only the canonical minimal `build-stage-abi-static` link tree.
-  Cache and artifact payloads must contain the same path-normalized archive,
-  not CMake's producer-local build graph. Crate tests and native SDK producers
-  restore it with `restore-static-abi-input.sh`;
-  never extract it with raw `tar`, relabel it across architectures, or rebuild
-  the same CPU ABI in a downstream consumer. Native SDK reuse must call the
-  verification-only prebuilt path with build.rs auto-build disabled.
-- Never put credentials, local absolute paths, private endpoints, or secret
-  material into cache/artifact content or workflow summaries.
-
-## Running, diagnosing, and updating CI
-
-1. Resolve the exact workflow, ref/SHA, event, run ID, and trust context. Inspect
-   recent comparable runs and changed workflow history before acting.
-2. For a failure, read the failed job and step logs, then classify it as product
-   code, declared dependency, runner image, worker capacity, cache/artifact,
-   secret/variable, permission, external service, or workflow logic. Fix the
-   owning source; do not paper over it with retries or installers.
-3. Dispatch only the narrowest safe workflow on the intended branch/SHA. Record
-   the run URL and input values, excluding secrets. Use canary/dry-run inputs for
-   release/deploy workflows whenever available.
-4. Watch the run to a terminal conclusion and inspect failed logs. Rerun failed
-   jobs only for demonstrated transient infrastructure failures. Push a code or
-   configuration fix for deterministic failures.
-5. Do not report success while jobs are queued/in progress or because an
-   unrelated run passed. State expected skips explicitly and verify required
-   checks on the PR.
-
-Use these operational commands as appropriate:
-
-```bash
-gh workflow list --repo Mesh-LLM/mesh-llm
-gh workflow view WORKFLOW.yml --repo Mesh-LLM/mesh-llm --yaml
-gh workflow run WORKFLOW.yml --repo Mesh-LLM/mesh-llm --ref BRANCH -f key=value
-gh run list --repo Mesh-LLM/mesh-llm --workflow WORKFLOW.yml --limit 20
-gh run watch RUN_ID --repo Mesh-LLM/mesh-llm --exit-status
-gh run view RUN_ID --repo Mesh-LLM/mesh-llm --log-failed
-gh pr checks PR_NUMBER --repo Mesh-LLM/mesh-llm
-```
+- Inspection, log reads, syntax validation, and dry-run planning are read-only.
+  Dispatching, rerunning, cancelling, approving, deleting, changing variables
+  or secrets, editing runner groups, changing Depot settings, publishing,
+  deploying, or resetting caches are external mutations and require scope from
+  the user.
+- Never print or persist secret values. Report names, scope, and presence only.
+- Diagnose failures as product, dependency, runner image, capacity, cache,
+  artifact, permission, secret/variable, external service, or workflow logic.
+  Fix the owning source; do not weaken a gate or add retries to hide a
+  deterministic failure.
+- Validate with the narrowest safe workflow. A run is not successful until all
+  required jobs reach a terminal successful conclusion; state expected skips.
 
 ## Validation contract
 
-Run the smallest applicable set and do not claim a check passed until it exits
-with status 0.
-
-For every workflow/action edit:
+For every workflow or local-action edit:
 
 ```bash
-actionlint -config-file .github/actionlint.yaml
-git diff --check
+just ci-validate
 ```
 
-Also:
+Also run what applies:
 
-- Run `shellcheck` on changed shell scripts and substantial extracted Bash.
-- Run `cargo run -p xtask -- repo-consistency ci-crate-lists` for PR routing,
-  affected-crate, Clippy batch, workspace, or crate-list changes.
-  This also verifies that generated crate-test batches cover every workspace
-  member exactly once.
-- Run `cargo run -p xtask -- repo-consistency release-targets` for release
-  target, packaging, Docker, or release-workflow changes.
-- Run `cargo run -p xtask -- repo-consistency publish-crates` for crate
-  publishing changes.
-- Run the owning local action/script tests for action or routing logic. Exercise
-  both true and false/skip branches when changing a condition.
-- Validate significant changes in GitHub Actions using a PR or an authorized
-  `workflow_dispatch` on the branch. Prove docs-only skips, relevant product
-  execution, expected matrix rows, artifact producer/consumer reachability,
-  runner architecture, and secret/permission behavior as applicable.
-- Keep `ci/ci.md` synchronized with topology changes and
-  `references/current-inventory.md` synchronized with workflow, runner,
-  variable, secret-name, environment, or ownership changes.
+- `just ci-shellcheck <changed-script>...` for changed shell scripts or
+  substantial embedded Bash.
+- `just ci-crate-lists` for routing,
+  workspace, Clippy, or test-plan changes.
+- `just check-release` for release/product target changes.
+- `just publish-crates` for publishing.
+- Owning planner/action tests covering selected, skipped, invalid, PR, main,
+  GitHub, and Depot-denied branches as applicable.
+- A non-required dual-run or authorized dispatch before migrating required
+  checks or external runner policy.
 
-Finish by reporting changed files, operational state changes, validation run
-IDs/URLs and conclusions, expected skips, unresolved risks, and any live
-configuration the current GitHub permissions could not verify.
+Finish with changed files, validation results, expected skips, unresolved
+risks, external state changes, and live configuration that could not be
+verified.

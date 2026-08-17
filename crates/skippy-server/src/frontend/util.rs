@@ -161,20 +161,6 @@ pub(super) fn finish_reason_for_generation(exhausted_max_tokens: bool) -> Finish
     }
 }
 
-pub(super) fn ensure_context_capacity(
-    prompt_token_count: usize,
-    max_tokens: u32,
-    ctx_size: usize,
-) -> OpenAiResult<()> {
-    let requested_tokens = prompt_token_count.saturating_add(max_tokens as usize);
-    if requested_tokens > ctx_size {
-        return Err(OpenAiError::context_length_exceeded(format!(
-            "requested prompt plus completion tokens ({requested_tokens}) exceed context window ({ctx_size})"
-        )));
-    }
-    Ok(())
-}
-
 pub(super) fn context_budget_completion_tokens(
     prompt_token_count: usize,
     ctx_size: usize,

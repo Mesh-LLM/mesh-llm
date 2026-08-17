@@ -1,6 +1,13 @@
 use super::*;
 use serial_test::serial;
 
+fn temporary_auth_test_dir(label: &str) -> std::path::PathBuf {
+    let path =
+        std::env::temp_dir().join(format!("mesh-llm-auth-{label}-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
 #[test]
 fn defaults_to_keychain_for_new_keystore_when_available() {
     assert!(should_default_to_keychain(false, false, true));
@@ -134,4 +141,41 @@ fn init_defaults_to_keychain_then_load_round_trip() {
 
     mesh_llm_identity::keychain_delete(KEYCHAIN_SERVICE, &account).ok();
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn revoke_node_validates_all_inputs_before_persisting() {
+    let dir = temporary_auth_test_dir("revoke-validation");
+    let trust_store_path = dir.join("trust-store.json");
+    save_trust_store(&trust_store_path, &TrustStore::default()).unwrap();
+    let before = std::fs::read(&trust_store_path).unwrap();
+
+    let result = run_revoke_node(
+        Some("valid-cert".to_owned()),
+        Some("not-a-node-id".to_owned()),
+        Some("compromised".to_owned()),
+        Some(trust_store_path.clone()),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&trust_store_path).unwrap(), before);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn revoke_node_save_failure_leaves_blocking_file_unchanged() {
+    let dir = temporary_auth_test_dir("revoke-save-failure");
+    let blocking_file = dir.join("blocker");
+    std::fs::write(&blocking_file, b"not a directory").unwrap();
+
+    let result = run_revoke_node(
+        Some("valid-cert".to_owned()),
+        None,
+        Some("compromised".to_owned()),
+        Some(blocking_file.join("trust-store.json")),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&blocking_file).unwrap(), b"not a directory");
+    std::fs::remove_dir_all(dir).ok();
 }

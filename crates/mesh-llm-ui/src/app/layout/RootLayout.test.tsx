@@ -61,12 +61,14 @@ vi.mock('@/features/shell/hooks/useUiPreferences', () => ({
   })
 }))
 
+const featureFlagState = vi.hoisted(() => ({ logsPage: true }))
+
 vi.mock('@/lib/feature-flags', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/feature-flags')>()
 
   return {
     ...actual,
-    useBooleanFeatureFlag: () => true
+    useBooleanFeatureFlag: (path: string) => (path === 'global/logsPage' ? featureFlagState.logsPage : true)
   }
 })
 
@@ -107,7 +109,29 @@ describe('RootLayout', () => {
     expect(useStatusStreamSpy).toHaveBeenCalledWith({ enabled: true })
   })
 
-  it('passes live status-backed invite rows while keeping the configured API target', () => {
+  it('selects the Logs tab for the logs route', () => {
+    routerState.pathname = '/logs'
+    featureFlagState.logsPage = true
+
+    renderRootLayout('harness')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ tab: 'logs', tabHrefs: expect.objectContaining({ logs: '/logs' }) })
+    )
+  })
+
+  it('hides the Logs tab when the logs feature flag is disabled', () => {
+    routerState.pathname = '/logs'
+    featureFlagState.logsPage = false
+
+    renderRootLayout('harness')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ tab: null, enabledTabs: expect.objectContaining({ logs: false }) })
+    )
+  })
+
+  it('passes privacy-safe private-mesh invitation rows while keeping the configured API target', () => {
     useStatusQuerySpy.mockReturnValue({
       data: {
         node_id: 'node-1',
@@ -128,13 +152,17 @@ describe('RootLayout', () => {
     renderRootLayout('live')
 
     expect(topNavSpy).toHaveBeenCalled()
-    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+    const topNavProps = topNavSpy.mock.calls.at(-1)?.[0]
+    expect(topNavProps).toEqual(
       expect.objectContaining({
         apiUrl: 'http://127.0.0.1:3131/v1',
         apiTargetLiveness: 'live',
         version: '0.99.0',
         joinCommands: expect.arrayContaining([
-          expect.objectContaining({ label: 'Invite token', value: 'invite-token-123' }),
+          expect.objectContaining({
+            label: 'Invite token',
+            value: 'invite-token-123'
+          }),
           expect.objectContaining({
             label: 'Auto join and serve command',
             value: 'mesh-llm --auto --join invite-token-123'
@@ -146,6 +174,7 @@ describe('RootLayout', () => {
         ])
       })
     )
+    expect(JSON.stringify(topNavProps)).toContain('invite-token-123')
     expect(footerSpy.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ version: '0.99.0' }))
   })
 
@@ -176,7 +205,7 @@ describe('RootLayout', () => {
     )
   })
 
-  it('falls back to the placeholder invite token when live status has not reported one yet', () => {
+  it('keeps private-mesh invitation status safe when live status has no token', () => {
     useStatusQuerySpy.mockReturnValue({
       data: {
         node_id: 'node-1',
@@ -199,7 +228,11 @@ describe('RootLayout', () => {
         apiUrl: 'http://127.0.0.1:3131/v1',
         apiTargetLiveness: 'live',
         joinCommands: expect.arrayContaining([
-          expect.objectContaining({ label: 'Invite token', value: 'Invite token unavailable', disabled: true }),
+          expect.objectContaining({
+            label: 'Invite token',
+            value: 'Invite token unavailable',
+            disabled: true
+          }),
           expect.objectContaining({
             label: 'Auto join and serve command',
             value: 'Auto join command unavailable',

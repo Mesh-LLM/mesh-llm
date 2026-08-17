@@ -562,7 +562,10 @@ async fn maybe_lookup_prefill(
             let lookup_ms = started.elapsed().as_secs_f64() * 1000.0;
             attrs.insert("skippy.kv.lookup_ms".to_string(), json!(lookup_ms));
             attrs.insert("skippy.kv.decision".to_string(), json!("error"));
-            attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
+            attrs.insert(
+                "skippy.kv.error_class".to_string(),
+                json!(crate::kv_integration::telemetry_error_class(&error)),
+            );
             state.telemetry.emit("stage.kv_lookup_decision", attrs);
             return 0;
         }
@@ -572,8 +575,14 @@ async fn maybe_lookup_prefill(
         attrs.insert("skippy.kv.lookup_ms".to_string(), json!(lookup_ms));
         attrs.insert("skippy.kv.decision".to_string(), json!("error"));
         attrs.insert(
-            "skippy.kv.error".to_string(),
-            json!(lookup.errors.join("; ")),
+            "skippy.kv.error_class".to_string(),
+            json!(crate::kv_integration::telemetry_error_class_from_message(
+                lookup
+                    .errors
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            )),
         );
         state.telemetry.emit("stage.kv_lookup_decision", attrs);
         return 0;
@@ -657,7 +666,10 @@ async fn maybe_drop_kv_session(state: &AppState, session_id: &str) {
             state.telemetry.emit("stage.kv_drop_session", attrs);
         }
         Err(error) => {
-            attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
+            attrs.insert(
+                "skippy.kv.error_class".to_string(),
+                json!(crate::kv_integration::telemetry_error_class(&error)),
+            );
             state.telemetry.emit("stage.kv_drop_session_failed", attrs);
         }
     }

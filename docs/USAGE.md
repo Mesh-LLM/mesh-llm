@@ -148,6 +148,23 @@ Use the persisted TOML for future starts or reloads. It does not rewrite active
 sessions in place, and request payload values still win over any request
 defaults from the file.
 
+## Request logging
+
+The embedded console includes a local **Logs** tab for request history,
+details, and bounded maintenance operations. It is not a public mesh service:
+the log routes accept trusted-local management access only. The request ledger
+shows active requests and terminal outcomes, and uses a dedicated log event
+stream with an authoritative REST refresh and bounded polling recovery when
+needed. Ledger filters are applied through REST hydration; only supported
+request-ID filters are sent to the stream, and the last cursor is reused when
+the stream reopens. A host without the logs capability remains inert rather
+than retrying the old status stream.
+
+Logging retains metadata by default. Redacted artifact capture is an explicit
+configuration choice and never restores data that was not captured. For
+retention, exports, scoped cleanup, webhook retry, privacy, and recovery
+guidance, use [LOGGING.md](LOGGING.md).
+
 ## Runtime mode and daemon lifecycle
 
 The `[runtime]` section controls daemon-level behavior: operating mode, startup

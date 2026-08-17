@@ -28,17 +28,23 @@ fn sync_repo(definition: EvalDefinition, root: &Path, dry_run: bool) -> Result<(
         return Ok(());
     }
 
-    run_step(
-        &CommandSpec::new("git").args([
-            "clone",
-            "--recurse-submodules",
-            "--branch",
-            definition.repo_ref,
-            definition.repo_url,
-            &target.display().to_string(),
-        ]),
-        dry_run,
-    )
+    for step in new_repo_sync_steps(&target, definition.repo_url, definition.repo_ref) {
+        run_step(&step, dry_run)?;
+    }
+    Ok(())
+}
+
+pub(super) fn new_repo_sync_steps(
+    target: &Path,
+    repo_url: &str,
+    repo_ref: &str,
+) -> [CommandSpec; 3] {
+    let target = target.display().to_string();
+    [
+        CommandSpec::new("git").args(["clone", "--recurse-submodules", repo_url, &target]),
+        CommandSpec::new("git").args(["-C", &target, "fetch", "--prune", "origin", repo_ref]),
+        CommandSpec::new("git").args(["-C", &target, "checkout", "--detach", "FETCH_HEAD"]),
+    ]
 }
 
 pub(super) fn existing_repo_sync_steps(target: &Path, repo_ref: &str) -> [CommandSpec; 2] {
@@ -53,14 +59,8 @@ fn sync_steps(definition: EvalDefinition, root: &Path) -> Vec<CommandSpec> {
     let harness = harness_dir(root, definition);
     match definition.id {
         EvalId::SpeedBench => Vec::new(),
-        EvalId::TerminalBench => {
-            vec![CommandSpec::new("uv").args([
-                "tool",
-                "install",
-                "--python",
-                "3.12",
-                "terminal-bench",
-            ])]
+        EvalId::TerminalBench | EvalId::SweGym => {
+            vec![CommandSpec::new("uv").args(["sync"]).cwd(harness)]
         }
         EvalId::SweBenchPro => vec![
             CommandSpec::new("git")

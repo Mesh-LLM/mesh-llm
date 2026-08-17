@@ -14,6 +14,7 @@ use crate::{
     chat::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse},
     completions::{CompletionChunk, CompletionRequest, CompletionResponse},
     errors::OpenAiError,
+    lifecycle::RequestId,
     models::ModelObject,
 };
 
@@ -61,14 +62,56 @@ impl CancellationToken {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct OpenAiRequestContext {
     cancellation: CancellationToken,
+    request_id: Option<RequestId>,
+    stream_usage_observation: bool,
+    trusted_agent_session: bool,
 }
 
 impl OpenAiRequestContext {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a backend context correlated to a frontend request identifier.
+    pub fn with_request_id(request_id: RequestId) -> Self {
+        Self {
+            request_id: Some(request_id),
+            ..Self::default()
+        }
+    }
+
+    /// Enable internal usage observation for an HTTP streaming adapter.
+    ///
+    /// This is deliberately independent of the client's `include_usage` wire
+    /// option: a backend may provide usage to the frontend for lifecycle
+    /// accounting while the frontend still suppresses it on the client wire.
+    pub fn with_stream_usage_observation(mut self) -> Self {
+        self.stream_usage_observation = true;
+        self
+    }
+
+    /// Return whether an HTTP adapter requested internal stream usage.
+    pub fn observes_stream_usage(&self) -> bool {
+        self.stream_usage_observation
+    }
+
+    pub(crate) fn with_trusted_agent_session(mut self) -> Self {
+        self.trusted_agent_session = true;
+        self
+    }
+
+    /// Return whether the endpoint's configured trusted header supplied the
+    /// agent-session identity. Request body metadata cannot set this marker.
+    pub fn has_trusted_agent_session(&self) -> bool {
+        self.trusted_agent_session
+    }
+
+    /// Return the frontend request identifier when the caller supplied one.
+    pub fn request_id(&self) -> Option<RequestId> {
+        self.request_id
     }
 
     pub fn cancellation_token(&self) -> CancellationToken {
@@ -81,6 +124,17 @@ impl OpenAiRequestContext {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()
+    }
+}
+
+impl Default for OpenAiRequestContext {
+    fn default() -> Self {
+        Self {
+            cancellation: CancellationToken::new(),
+            request_id: None,
+            stream_usage_observation: false,
+            trusted_agent_session: false,
+        }
     }
 }
 

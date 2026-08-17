@@ -295,6 +295,19 @@
     }
   },
   {
+    "name": "Qwen3.8-27B-Q4_K_M",
+    "file": "Qwen3.8-27B-Q4_K_M.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_K_M.gguf",
+    "size": "17.1GB",
+    "description": "Qwen3.8 27B dense, vision + text, memory-efficient agentic tool calling and reasoning",
+    "draft": null,
+    "extra_files": [],
+    "mmproj": {
+      "file": "mmproj-BF16.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-BF16.gguf"
+    }
+  },
+  {
     "name": "Qwen3-Coder-Next-Q4_K_M",
     "file": "Qwen3-Coder-Next-Q4_K_M-00001-of-00004.gguf",
     "url": "https://huggingface.co/Qwen/Qwen3-Coder-Next-GGUF/resolve/main/Qwen3-Coder-Next-Q4_K_M/Qwen3-Coder-Next-Q4_K_M-00001-of-00004.gguf",

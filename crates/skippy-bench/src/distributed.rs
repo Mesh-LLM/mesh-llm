@@ -17,7 +17,7 @@ use skippy_protocol::binary::{
     write_stage_message,
 };
 use skippy_runtime::{
-    RuntimeConfig, RuntimeLoadMode, StageModel,
+    MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel,
     package::{PackageStageRequest, materialize_layer_package_details},
 };
 
@@ -799,6 +799,7 @@ impl DriverTokenizer {
                 projector_path: None,
                 include_embeddings: true,
                 include_output: plan.stages.len() == 1,
+                mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: args.stage_load_mode != "runtime-slice",
             },
         )

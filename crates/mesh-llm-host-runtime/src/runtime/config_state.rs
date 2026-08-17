@@ -1,5 +1,11 @@
 use anyhow::Result;
-use mesh_llm_config::{ConfigDiagnostic, ConfigDiagnosticSeverity, legacy_validation_error_text};
+use mesh_llm_config::{
+    ConfigDiagnostic, ConfigDiagnosticSeverity, ConfigPath, LoggingConfig,
+    built_in_config_schema_descriptor, legacy_validation_error_text,
+};
+
+// Disambiguate from the local proto-mirror ConfigApplyMode (Staged/Noop).
+use mesh_llm_config::ConfigApplyMode as SchemaApplyMode;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -9,12 +15,19 @@ use crate::plugin::{
 };
 use crate::protocol::convert::{canonical_config_hash, mesh_config_to_proto};
 
+use super::operational_logging::{
+    ConfigDiagnosticsOutcome, ConfigOperationalEvent, record_config_operational_event,
+};
+
 /// Mirrors the `ConfigApplyMode` proto enum; kept in the domain layer so
 /// `config_state` does not depend on the generated proto crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConfigApplyMode {
     /// Config written to disk and revision counter advanced.
     Staged,
+    /// Config written to disk and the installed runtime accepted the complete
+    /// dynamic change before this result was reported.
+    Live,
     /// No-op: the incoming config was identical to the current one.
     Noop,
 }
@@ -25,6 +38,11 @@ pub(crate) enum ApplyResult {
         revision: u64,
         hash: [u8; 32],
         apply_mode: ConfigApplyMode,
+        diagnostics: Vec<ConfigDiagnostic>,
+    },
+    AppliedWithRestartRequired {
+        revision: u64,
+        hash: [u8; 32],
         diagnostics: Vec<ConfigDiagnostic>,
     },
     RevisionConflict {
@@ -43,12 +61,90 @@ pub(crate) enum ApplyResult {
     PersistError(String),
 }
 
+#[derive(Debug)]
+pub(crate) enum ConfigApplyPreparation {
+    Immediate(ApplyResult),
+    Pending(Box<PendingConfigApply>),
+}
+
+#[derive(Debug)]
+pub(crate) enum ConfigPersistence {
+    Persisted,
+    RevisionTrackingError(String),
+    PersistError(String),
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingConfigApply {
+    config: MeshConfig,
+    config_path: PathBuf,
+    revision: u64,
+    hash: [u8; 32],
+    write_hash: [u8; 32],
+    diagnostics: Vec<ConfigDiagnostic>,
+    logging_requires_restart: bool,
+    dynamic_logging_only: bool,
+    old_logging: LoggingConfig,
+}
+
+impl PendingConfigApply {
+    pub(crate) fn persist(&self) -> ConfigPersistence {
+        if let Err(error) = ConfigStore::open(self.config_path.clone()).save(&self.config) {
+            return ConfigPersistence::PersistError(format!("failed to write config: {error}"));
+        }
+
+        let sidecar = revision_sidecar_path(&self.config_path);
+        match atomic_write(&sidecar, self.revision.to_string().as_bytes()) {
+            Ok(()) => ConfigPersistence::Persisted,
+            Err(error) => ConfigPersistence::RevisionTrackingError(format!(
+                "failed to write revision sidecar: {error}; config persisted and in-memory revision advanced, but on-disk revision tracking may be stale"
+            )),
+        }
+    }
+
+    pub(crate) fn apply_live_logging(&self) -> bool {
+        if !self.dynamic_logging_only {
+            return false;
+        }
+
+        if crate::apply_live_logging_limits(&self.config.logging).is_err() {
+            tracing::warn!(
+                "Logging runtime unavailable; retaining dynamic logging settings as staged configuration"
+            );
+            return false;
+        }
+        true
+    }
+
+    pub(crate) fn restore_live_logging(&self) {
+        let _ = crate::apply_live_logging_limits(&self.old_logging);
+    }
+
+    fn applied_result(&self, apply_mode: ConfigApplyMode) -> ApplyResult {
+        if self.logging_requires_restart {
+            ApplyResult::AppliedWithRestartRequired {
+                revision: self.revision,
+                hash: self.hash,
+                diagnostics: self.diagnostics.clone(),
+            }
+        } else {
+            ApplyResult::Applied {
+                revision: self.revision,
+                hash: self.hash,
+                apply_mode,
+                diagnostics: self.diagnostics.clone(),
+            }
+        }
+    }
+}
+
 pub(crate) struct ConfigState {
     revision: u64,
     config_hash: [u8; 32],
     config: MeshConfig,
     config_path: PathBuf,
     last_write_config_hash: [u8; 32],
+    apply_serialization_lock: std::sync::Arc<std::sync::Mutex<()>>,
 }
 
 fn revision_sidecar_path(config_path: &Path) -> PathBuf {
@@ -126,6 +222,93 @@ fn local_config_write_hash(config: &MeshConfig) -> [u8; 32] {
     out
 }
 
+fn field_requires_restart(field_name: &str) -> bool {
+    let rendered_path = format!("logging.{field_name}");
+    let descriptor = ConfigPath::parse_rendered(&rendered_path)
+        .ok()
+        .and_then(|path| built_in_config_schema_descriptor(&path));
+
+    // Unknown/unparseable paths cannot acquire a live-apply contract by
+    // accident; validation will reject them before a config is persisted.
+    descriptor.is_none_or(|schema| schema.apply_mode != SchemaApplyMode::DynamicApply)
+}
+
+fn logging_changes_require_restart(old: &LoggingConfig, new: &LoggingConfig) -> bool {
+    let changed = [
+        ("enabled", old.enabled != new.enabled),
+        (
+            "application_state_root",
+            old.application_state_root != new.application_state_root,
+        ),
+        (
+            "summary_line_limit",
+            old.summary_line_limit != new.summary_line_limit,
+        ),
+        (
+            "event_buffer_size",
+            old.event_buffer_size != new.event_buffer_size,
+        ),
+        (
+            "retention_ttl_secs",
+            old.retention_ttl_secs != new.retention_ttl_secs,
+        ),
+        (
+            "retention_max_rows",
+            old.retention_max_rows != new.retention_max_rows,
+        ),
+        (
+            "replay_capacity",
+            old.replay_capacity != new.replay_capacity,
+        ),
+        ("queue_capacity", old.queue_capacity != new.queue_capacity),
+        (
+            "artifact.capture_mode",
+            old.artifact.capture_mode != new.artifact.capture_mode,
+        ),
+        (
+            "artifact.byte_limit_bytes",
+            old.artifact.byte_limit_bytes != new.artifact.byte_limit_bytes,
+        ),
+        (
+            "artifact.aggregate_limit_bytes",
+            old.artifact.aggregate_limit_bytes != new.artifact.aggregate_limit_bytes,
+        ),
+        (
+            "export_limit_bytes",
+            old.export_limit_bytes != new.export_limit_bytes,
+        ),
+        (
+            "cleanup_cadence_secs",
+            old.cleanup_cadence_secs != new.cleanup_cadence_secs,
+        ),
+        (
+            "webhook.enabled",
+            old.webhook.enabled != new.webhook.enabled,
+        ),
+        ("webhook.url", old.webhook.url != new.webhook.url),
+        (
+            "webhook.max_attempts",
+            old.webhook.max_attempts != new.webhook.max_attempts,
+        ),
+        (
+            "webhook.timeout_secs",
+            old.webhook.timeout_secs != new.webhook.timeout_secs,
+        ),
+        (
+            "webhook.dead_letter_retention_secs",
+            old.webhook.dead_letter_retention_secs != new.webhook.dead_letter_retention_secs,
+        ),
+    ];
+
+    changed
+        .into_iter()
+        .any(|(field, differs)| differs && field_requires_restart(field))
+}
+
+fn logging_dynamic_limits_changed(old: &LoggingConfig, new: &LoggingConfig) -> bool {
+    old.retention_ttl_secs != new.retention_ttl_secs || old.replay_capacity != new.replay_capacity
+}
+
 impl Default for ConfigState {
     fn default() -> Self {
         let config = crate::plugin::MeshConfig::default();
@@ -137,6 +320,7 @@ impl Default for ConfigState {
             config,
             config_path: std::path::PathBuf::from("config.toml"),
             last_write_config_hash: [0xFF; 32],
+            apply_serialization_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
         }
     }
 }
@@ -158,6 +342,7 @@ impl ConfigState {
             config,
             config_path: path.to_path_buf(),
             last_write_config_hash,
+            apply_serialization_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
         })
     }
 
@@ -173,26 +358,50 @@ impl ConfigState {
         &self.config
     }
 
+    pub(crate) fn apply_serialization_lock(&self) -> std::sync::Arc<std::sync::Mutex<()>> {
+        std::sync::Arc::clone(&self.apply_serialization_lock)
+    }
+
     pub(crate) fn apply(&mut self, new_config: MeshConfig, expected_revision: u64) -> ApplyResult {
+        match self.prepare_apply(new_config, expected_revision) {
+            ConfigApplyPreparation::Immediate(result) => result,
+            ConfigApplyPreparation::Pending(pending) => {
+                let persistence = pending.persist();
+                self.finish_apply(*pending, persistence)
+            }
+        }
+    }
+
+    pub(crate) fn prepare_apply(
+        &self,
+        new_config: MeshConfig,
+        expected_revision: u64,
+    ) -> ConfigApplyPreparation {
+        record_config_operational_event(ConfigOperationalEvent::ApplyStarted);
         let raw_toml = config_to_toml(&new_config).ok();
         let diagnostics = validate_config_diagnostics_with_installed_plugin_schemas(
             &new_config,
             raw_toml.as_deref(),
         );
+        record_config_operational_event(ConfigOperationalEvent::Diagnostics(
+            ConfigDiagnosticsOutcome::from_diagnostics(&diagnostics),
+        ));
         if diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == ConfigDiagnosticSeverity::Error)
         {
-            return ApplyResult::ValidationError {
+            record_config_operational_event(ConfigOperationalEvent::ApplyRejected);
+            return ConfigApplyPreparation::Immediate(ApplyResult::ValidationError {
                 error: legacy_validation_error_text(&diagnostics),
                 diagnostics,
-            };
+            });
         }
 
         if expected_revision != self.revision {
-            return ApplyResult::RevisionConflict {
+            record_config_operational_event(ConfigOperationalEvent::ApplyRejected);
+            return ConfigApplyPreparation::Immediate(ApplyResult::RevisionConflict {
                 current_revision: self.revision,
-            };
+            });
         }
 
         let proto = mesh_config_to_proto(&new_config);
@@ -200,46 +409,140 @@ impl ConfigState {
         let new_write_hash = local_config_write_hash(&new_config);
 
         if new_write_hash == self.last_write_config_hash {
-            return ApplyResult::Applied {
+            record_config_operational_event(ConfigOperationalEvent::ApplyAccepted);
+            return ConfigApplyPreparation::Immediate(ApplyResult::Applied {
                 revision: self.revision,
                 hash: self.config_hash,
                 apply_mode: ConfigApplyMode::Noop,
                 diagnostics,
-            };
+            });
         }
 
-        if let Err(e) = ConfigStore::open(self.config_path.clone()).save(&new_config) {
-            return ApplyResult::PersistError(format!("failed to write config: {e}"));
-        }
+        let old_logging = self.config.logging.clone();
+        let logging_requires_restart =
+            logging_changes_require_restart(&old_logging, &new_config.logging);
+        let dynamic_logging_only =
+            logging_dynamic_limits_changed(&old_logging, &new_config.logging)
+                && !logging_requires_restart;
 
-        let new_revision = self.revision + 1;
-        let sidecar = revision_sidecar_path(&self.config_path);
-        if let Err(e) = atomic_write(&sidecar, new_revision.to_string().as_bytes()) {
-            self.config = new_config;
-            self.config_hash = new_hash;
-            self.last_write_config_hash = new_write_hash;
-            self.revision = new_revision;
-            return ApplyResult::PersistedWithRevisionTrackingError {
-                revision: self.revision,
-                hash: self.config_hash,
-                error: format!(
-                    "failed to write revision sidecar: {e}; config persisted and in-memory revision advanced, but on-disk revision tracking may be stale"
-                ),
-                diagnostics,
-            };
-        }
-
-        self.config = new_config;
-        self.config_hash = new_hash;
-        self.last_write_config_hash = new_write_hash;
-        self.revision = new_revision;
-
-        ApplyResult::Applied {
-            revision: self.revision,
-            hash: self.config_hash,
-            apply_mode: ConfigApplyMode::Staged,
+        ConfigApplyPreparation::Pending(Box::new(PendingConfigApply {
+            config: new_config,
+            config_path: self.config_path.clone(),
+            revision: self.revision + 1,
+            hash: new_hash,
+            write_hash: new_write_hash,
             diagnostics,
+            logging_requires_restart,
+            dynamic_logging_only,
+            old_logging,
+        }))
+    }
+
+    pub(crate) fn finish_apply(
+        &mut self,
+        pending: PendingConfigApply,
+        persistence: ConfigPersistence,
+    ) -> ApplyResult {
+        match persistence {
+            ConfigPersistence::PersistError(error) => {
+                record_config_operational_event(ConfigOperationalEvent::ApplyRejected);
+                ApplyResult::PersistError(error)
+            }
+            ConfigPersistence::Persisted | ConfigPersistence::RevisionTrackingError(_) => {
+                if self.revision.checked_add(1) != Some(pending.revision) {
+                    record_config_operational_event(ConfigOperationalEvent::ApplyRejected);
+                    return ApplyResult::RevisionConflict {
+                        current_revision: self.revision,
+                    };
+                }
+                self.config = pending.config.clone();
+                self.config_hash = pending.hash;
+                self.last_write_config_hash = pending.write_hash;
+                self.revision = pending.revision;
+
+                record_config_operational_event(ConfigOperationalEvent::ApplyAccepted);
+                match persistence {
+                    ConfigPersistence::Persisted => pending.applied_result(ConfigApplyMode::Staged),
+                    ConfigPersistence::RevisionTrackingError(error) => {
+                        ApplyResult::PersistedWithRevisionTrackingError {
+                            revision: self.revision,
+                            hash: self.config_hash,
+                            error,
+                            diagnostics: pending.diagnostics.clone(),
+                        }
+                    }
+                    ConfigPersistence::PersistError(_) => unreachable!("handled above"),
+                }
+            }
         }
+    }
+
+    /// Apply configuration and, only for a dynamic-only logging limits change,
+    /// update the installed local logging runtime before advertising `Live`.
+    ///
+    /// Static logging changes always flow through [`Self::apply`] untouched,
+    /// even when they are submitted with new dynamic values. An unavailable
+    /// runtime likewise leaves the valid configuration staged: this preserves
+    /// an operator's desired settings without claiming a live mutation.
+    #[cfg(test)]
+    pub(crate) fn apply_with_live_logging(
+        &mut self,
+        new_config: MeshConfig,
+        expected_revision: u64,
+    ) -> ApplyResult {
+        let preparation = self.prepare_apply(new_config, expected_revision);
+        apply_prepared_config_with_live_logging(
+            preparation,
+            PendingConfigApply::persist,
+            |pending, persistence| self.finish_apply(pending, persistence),
+        )
+    }
+}
+
+/// Persist a prepared configuration apply while keeping dynamic logging limits
+/// synchronized with the persisted state.
+pub(crate) fn apply_prepared_config_with_live_logging<Persist, Finish>(
+    preparation: ConfigApplyPreparation,
+    persist: Persist,
+    finish: Finish,
+) -> ApplyResult
+where
+    Persist: FnOnce(&PendingConfigApply) -> ConfigPersistence,
+    Finish: FnOnce(PendingConfigApply, ConfigPersistence) -> ApplyResult,
+{
+    let pending = match preparation {
+        ConfigApplyPreparation::Immediate(result) => return result,
+        ConfigApplyPreparation::Pending(pending) => *pending,
+    };
+    let live_logging_applied = pending.apply_live_logging();
+    let persistence = persist(&pending);
+    if live_logging_applied && matches!(&persistence, ConfigPersistence::PersistError(_)) {
+        // A persistence failure after a live apply is rare, but restore the
+        // prior runtime settings before exposing the failure so the
+        // configuration and service do not diverge.
+        pending.restore_live_logging();
+    }
+    let result = finish(pending, persistence);
+
+    match result {
+        ApplyResult::Applied {
+            revision,
+            hash,
+            diagnostics,
+            ..
+        } if live_logging_applied => ApplyResult::Applied {
+            revision,
+            hash,
+            apply_mode: ConfigApplyMode::Live,
+            diagnostics,
+        },
+        result @ ApplyResult::PersistedWithRevisionTrackingError { .. } => {
+            // The primary config write succeeded and `ConfigState` has
+            // already adopted the new revision. Keep the live pair in place;
+            // only revision-sidecar recovery needs attention.
+            result
+        }
+        result => result,
     }
 }
 
@@ -270,6 +573,9 @@ mod tests {
         severity: &'static str,
         code: &'static str,
     }
+
+    type LoggingConfigChange = (&'static str, fn(&mut LoggingConfig));
+    type MeshConfigChange = (&'static str, fn(&mut MeshConfig));
 
     impl DiagnosticSignature {
         fn new(
@@ -355,6 +661,7 @@ mod tests {
             runtime: Default::default(),
             models: vec![],
             plugins: vec![],
+            logging: Default::default(),
             extra: Default::default(),
         }
     }
@@ -750,6 +1057,77 @@ reasoning_format = "qwen"
     }
 
     #[test]
+    fn prepared_apply_keeps_config_and_hash_atomic_until_persistence_completes() {
+        let dir = test_dir();
+        let config_path = dir.join("config.toml");
+        let mut state = ConfigState::load(&config_path).expect("load");
+        let initial_hash = *state.config_hash();
+
+        let pending = match state.prepare_apply(minimal_valid_config(), 0) {
+            ConfigApplyPreparation::Pending(pending) => pending,
+            other => panic!("expected pending apply, got {other:?}"),
+        };
+
+        assert_eq!(state.revision(), 0);
+        assert_eq!(*state.config_hash(), initial_hash);
+        assert!(
+            !config_path.exists(),
+            "preparing an apply must not persist while state is locked"
+        );
+
+        let persistence = pending.persist();
+        assert!(
+            matches!(&persistence, ConfigPersistence::Persisted),
+            "persistence should succeed: {persistence:?}"
+        );
+        assert!(config_path.exists(), "persistence should write config.toml");
+        assert_eq!(state.revision(), 0);
+        assert_eq!(
+            *state.config_hash(),
+            initial_hash,
+            "in-memory config and hash remain unchanged until commit"
+        );
+
+        let result = state.finish_apply(*pending, persistence);
+        assert!(
+            matches!(result, ApplyResult::Applied { revision: 1, .. }),
+            "commit should publish the persisted config atomically: {result:?}"
+        );
+        assert_ne!(*state.config_hash(), initial_hash);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn finish_apply_rejects_a_pending_revision_after_another_apply_wins() {
+        let dir = test_dir();
+        let config_path = dir.join("config.toml");
+        let mut state = ConfigState::load(&config_path).expect("load");
+        let initial_hash = *state.config_hash();
+
+        let pending = match state.prepare_apply(minimal_valid_config(), 0) {
+            ConfigApplyPreparation::Pending(pending) => pending,
+            other => panic!("expected pending apply, got {other:?}"),
+        };
+        let persistence = pending.persist();
+
+        // Simulate a concurrent apply committing between preparation and this
+        // pending apply's commit.
+        state.revision = 1;
+
+        let result = state.finish_apply(*pending, persistence);
+        assert!(matches!(
+            result,
+            ApplyResult::RevisionConflict {
+                current_revision: 1
+            }
+        ));
+        assert_eq!(*state.config_hash(), initial_hash);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn config_sync_state_concurrent_applies() {
         let dir = test_dir();
         let config_path = dir.join("config.toml");
@@ -806,6 +1184,7 @@ reasoning_format = "qwen"
                 ..Default::default()
             }],
             plugins: vec![],
+            logging: Default::default(),
             extra: Default::default(),
         };
 
@@ -852,6 +1231,7 @@ reasoning_format = "qwen"
                 ..Default::default()
             }],
             plugins: vec![],
+            logging: Default::default(),
             extra: Default::default(),
         };
         state.apply(config_with_model, 0);
@@ -1229,6 +1609,7 @@ temperature = 0.2
                 ..Default::default()
             }],
             plugins: vec![],
+            logging: Default::default(),
             extra: Default::default(),
         };
 
@@ -1411,6 +1792,227 @@ temperature = 0.2
                 assert_ne!(first_hash, hash, "request-default change must update hash");
             }
             other => panic!("expected Applied, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn retention_and_replay_logging_changes_remain_staged_without_restart() {
+        let dir = test_dir();
+        let config_path = dir.join("config.toml");
+        let mut state = ConfigState::load(&config_path).expect("load");
+
+        // Apply baseline config first.
+        let base_config = minimal_valid_config();
+        match state.apply(base_config.clone(), 0) {
+            ApplyResult::Applied {
+                revision,
+                apply_mode,
+                ..
+            } => {
+                assert_eq!(revision, 1);
+                assert_eq!(apply_mode, ConfigApplyMode::Staged);
+            }
+            other => panic!("expected Applied for baseline, got {other:?}"),
+        }
+
+        // When: change only DynamicApply fields. This config state does not
+        // apply them to a running service; it stages the persisted revision.
+        let mut changed = base_config;
+        changed.logging.retention_ttl_secs = 72 * 3600;
+        changed.logging.replay_capacity = 256;
+
+        match state.apply(changed, 1) {
+            ApplyResult::Applied {
+                revision,
+                apply_mode,
+                ..
+            } => {
+                assert_eq!(revision, 2);
+                assert_eq!(apply_mode, ConfigApplyMode::Staged);
+            }
+            other => panic!("expected staged apply for dynamic change, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn logging_change_classifier_requires_restart_for_every_static_setting() {
+        let base = minimal_valid_config().logging;
+        let changes: [LoggingConfigChange; 16] = [
+            ("enabled", |config| config.enabled = !config.enabled),
+            ("application_state_root", |config| {
+                config.application_state_root = Some(PathBuf::from("logging-state"));
+            }),
+            ("summary_line_limit", |config| {
+                config.summary_line_limit += 1
+            }),
+            ("event_buffer_size", |config| config.event_buffer_size += 1),
+            ("retention_max_rows", |config| {
+                config.retention_max_rows += 1
+            }),
+            ("queue_capacity", |config| config.queue_capacity += 1),
+            ("artifact.capture_mode", |config| {
+                config.artifact.capture_mode = mesh_llm_config::CaptureMode::RedactedArtifacts;
+            }),
+            ("artifact.byte_limit_bytes", |config| {
+                config.artifact.byte_limit_bytes += 1;
+            }),
+            ("artifact.aggregate_limit_bytes", |config| {
+                config.artifact.aggregate_limit_bytes += 1;
+            }),
+            ("export_limit_bytes", |config| {
+                config.export_limit_bytes += 1
+            }),
+            ("cleanup_cadence_secs", |config| {
+                config.cleanup_cadence_secs += 1
+            }),
+            ("webhook.enabled", |config| {
+                config.webhook.enabled = !config.webhook.enabled
+            }),
+            ("webhook.url", |config| {
+                config.webhook.url = Some("https://example.test/logs".into());
+            }),
+            ("webhook.max_attempts", |config| {
+                config.webhook.max_attempts += 1
+            }),
+            ("webhook.timeout_secs", |config| {
+                config.webhook.timeout_secs += 1
+            }),
+            ("webhook.dead_letter_retention_secs", |config| {
+                config.webhook.dead_letter_retention_secs += 1;
+            }),
+        ];
+
+        for (name, change) in changes {
+            let mut changed = base.clone();
+            change(&mut changed);
+            assert!(
+                logging_changes_require_restart(&base, &changed),
+                "logging.{name} must be restart-required"
+            );
+        }
+
+        let dynamic_changes: [LoggingConfigChange; 2] = [
+            (
+                "retention_ttl_secs",
+                (|config: &mut LoggingConfig| config.retention_ttl_secs += 1)
+                    as fn(&mut LoggingConfig),
+            ),
+            (
+                "replay_capacity",
+                (|config: &mut LoggingConfig| config.replay_capacity += 1)
+                    as fn(&mut LoggingConfig),
+            ),
+        ];
+        for (name, change) in dynamic_changes {
+            let mut changed = base.clone();
+            change(&mut changed);
+            assert!(
+                !logging_changes_require_restart(&base, &changed),
+                "logging.{name} must remain dynamically applicable"
+            );
+        }
+
+        assert!(
+            field_requires_restart("unsupported_future_setting"),
+            "unknown logging settings must not accidentally receive live-apply semantics"
+        );
+    }
+
+    #[test]
+    fn dynamic_limit_change_combined_with_static_change_stays_restart_required() {
+        let old = minimal_valid_config().logging;
+        let mut new = old.clone();
+        new.retention_ttl_secs += 1;
+        new.replay_capacity += 1;
+        new.queue_capacity += 1;
+
+        assert!(
+            logging_changes_require_restart(&old, &new),
+            "a static logging change must not be hidden by an earlier dynamic change"
+        );
+    }
+
+    #[test]
+    fn dynamic_logging_change_does_not_mask_later_nested_static_change() {
+        let dir = test_dir();
+        let config_path = dir.join("config.toml");
+        let mut state = ConfigState::load(&config_path).expect("load");
+
+        let base_config = minimal_valid_config();
+        match state.apply(base_config.clone(), 0) {
+            ApplyResult::Applied { revision, .. } => assert_eq!(revision, 1),
+            other => panic!("expected Applied for baseline, got {other:?}"),
+        }
+
+        let mut changed = base_config;
+        changed.logging.retention_ttl_secs += 3600;
+        changed.logging.artifact.byte_limit_bytes += 1024;
+
+        match state.apply(changed, 1) {
+            ApplyResult::AppliedWithRestartRequired { revision, .. } => {
+                assert_eq!(revision, 2);
+            }
+            other => panic!(
+                "expected AppliedWithRestartRequired when dynamic and nested static fields change, got {other:?}"
+            ),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn static_logging_changes_return_restart_required_from_config_state() {
+        let dir = test_dir();
+        let config_path = dir.join("config.toml");
+        let mut state = ConfigState::load(&config_path).expect("load");
+
+        // Apply baseline config first.
+        let base_config = minimal_valid_config();
+        match state.apply(base_config.clone(), 0) {
+            ApplyResult::Applied {
+                revision,
+                apply_mode,
+                ..
+            } => {
+                assert_eq!(revision, 1);
+                assert_eq!(apply_mode, ConfigApplyMode::Staged);
+            }
+            other => panic!("expected Applied for baseline, got {other:?}"),
+        }
+
+        let changes: [MeshConfigChange; 5] = [
+            ("enabled", |config: &mut MeshConfig| {
+                config.logging.enabled = !config.logging.enabled;
+            }),
+            ("queue_capacity", |config: &mut MeshConfig| {
+                config.logging.queue_capacity += 1;
+            }),
+            ("cleanup_cadence_secs", |config: &mut MeshConfig| {
+                config.logging.cleanup_cadence_secs += 1;
+            }),
+            ("retention_max_rows", |config: &mut MeshConfig| {
+                config.logging.retention_max_rows += 1;
+            }),
+            ("artifact.capture_mode", |config: &mut MeshConfig| {
+                config.logging.artifact.capture_mode =
+                    mesh_llm_config::CaptureMode::RedactedArtifacts;
+            }),
+        ];
+        for (index, (change_name, change)) in changes.into_iter().enumerate() {
+            let mut changed = state.config().clone();
+            change(&mut changed);
+            match state.apply(changed, index as u64 + 1) {
+                ApplyResult::AppliedWithRestartRequired { revision, .. } => {
+                    assert_eq!(revision, index as u64 + 2, "{change_name}");
+                }
+                other => {
+                    panic!("expected AppliedWithRestartRequired for {change_name}, got {other:?}")
+                }
+            }
         }
 
         std::fs::remove_dir_all(&dir).ok();

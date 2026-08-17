@@ -1,0 +1,571 @@
+import '@testing-library/jest-dom/vitest'
+
+import { act, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LogRequestId } from '@/features/logs/api/ids'
+import type { LogAuditEntry, LogRequest } from '@/features/logs/api/schemas'
+import {
+  HARNESS_LOG_FIXTURES,
+  HARNESS_LOG_SCENARIO_IDS,
+  HARNESS_REFERENCE_TIME
+} from '@/features/logs/lib/log-fixtures'
+import { parseLogsLedgerSearch } from '@/features/logs/lib/log-search'
+
+const queryState = vi.hoisted(() => ({ current: {} }))
+const auditQueryState = vi.hoisted(() => ({ current: {} }))
+const liveState = vi.hoisted(() => {
+  const togglePolling = vi.fn()
+  return {
+    current: { state: 'connected', liveRequestIds: [], pollingEnabled: true, togglePolling },
+    togglePolling
+  }
+})
+const useLogsLiveRecoveryMock = vi.hoisted(() => vi.fn())
+const useLogsAuditQueryMock = vi.hoisted(() => vi.fn())
+const useLogsLedgerQueryMock = vi.hoisted(() => vi.fn())
+
+vi.mock('@/features/logs/api/use-logs-ledger-query', () => ({
+  useLogsLedgerQuery: useLogsLedgerQueryMock
+}))
+
+vi.mock('@/features/logs/api/use-logs-audit-query', () => ({
+  useLogsAuditQuery: useLogsAuditQueryMock
+}))
+
+vi.mock('@/features/logs/api/use-logs-live-recovery', () => ({
+  useLogsLiveRecovery: useLogsLiveRecoveryMock
+}))
+
+import { LogsLedger } from '@/features/logs/components/LogsLedger'
+
+const REQUEST_A = '00000000-0000-4000-8000-000000000001'
+
+function request(id: string, outcome: LogRequest['outcome'], source: LogRequest['source']): LogRequest {
+  return {
+    requestId: LogRequestId.parse(id),
+    outcome,
+    createdAt: '2026-08-04T12:00:00Z',
+    terminalAt: outcome === 'active' ? undefined : '2026-08-04T12:00:01Z',
+    route: 'reserve',
+    model: 'Qwen3',
+    provider: 'reserve-a',
+    engine: 'skippy',
+    statusCode: outcome === 'completed' ? 200 : undefined,
+    source
+  }
+}
+
+function audit(code: string, occurredAt: string, sequence: number): LogAuditEntry {
+  return {
+    entryId: `audit-${sequence}`,
+    occurredAt,
+    source: 'mesh',
+    code,
+    severity: 'info',
+    sequence
+  }
+}
+
+function supported<T>(rows: readonly T[], nextCursor?: string, incomplete = false) {
+  return {
+    isLoading: false,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+    data: {
+      state: 'supported',
+      value: {
+        items: rows,
+        nextCursor: nextCursor ? { toString: () => nextCursor } : undefined,
+        ...(incomplete ? { incomplete: true } : {})
+      }
+    }
+  }
+}
+
+describe('LogsLedger', () => {
+  beforeEach(() => {
+    useLogsLedgerQueryMock.mockReset()
+    useLogsLedgerQueryMock.mockImplementation(() => queryState.current)
+    useLogsLiveRecoveryMock.mockReset()
+    useLogsLiveRecoveryMock.mockImplementation(() => liveState.current)
+    liveState.togglePolling.mockReset()
+    liveState.current = {
+      state: 'connected',
+      liveRequestIds: [],
+      pollingEnabled: true,
+      togglePolling: liveState.togglePolling
+    }
+    queryState.current = supported(
+      [request(REQUEST_A, 'failed', 'durable'), request(REQUEST_A, 'active', 'active')],
+      'next-page'
+    )
+    auditQueryState.current = supported([])
+    useLogsAuditQueryMock.mockReset()
+    useLogsAuditQueryMock.mockImplementation(() => auditQueryState.current)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shares one rolling request scope across requests, audits, and maintenance while keeping explicit and inspector state stable', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-04T12:00:00Z'))
+    const relativeSearch = parseLogsLedgerSearch({ timeRange: '1h' })
+    const view = render(<LogsLedger search={relativeSearch} onSearchChange={vi.fn()} />)
+
+    expect(useLogsLedgerQueryMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ from: '2026-08-04T11:00:00.000Z', to: '2026-08-04T12:00:00.000Z' })
+    )
+    expect(useLogsAuditQueryMock).toHaveBeenLastCalledWith({
+      from: '2026-08-04T11:00:00.000Z',
+      to: '2026-08-04T12:00:00.000Z'
+    })
+
+    act(() => vi.advanceTimersByTime(60_000))
+
+    const rollingScope = {
+      from: '2026-08-04T11:01:00.000Z',
+      to: '2026-08-04T12:01:00.000Z'
+    }
+    expect(useLogsLedgerQueryMock).toHaveBeenLastCalledWith(expect.objectContaining(rollingScope))
+    expect(useLogsAuditQueryMock).toHaveBeenLastCalledWith(rollingScope)
+
+    const callsBeforeInspector = useLogsLedgerQueryMock.mock.calls.length
+    view.rerender(
+      <LogsLedger
+        search={parseLogsLedgerSearch({ ...relativeSearch, inspectType: 'audit', inspectId: 'audit-1' })}
+        onSearchChange={vi.fn()}
+      />
+    )
+    const inspectorScope = useLogsLedgerQueryMock.mock.calls.at(-1)?.[0]
+    expect(useLogsLedgerQueryMock.mock.calls).toHaveLength(callsBeforeInspector + 1)
+    expect(inspectorScope).toEqual(expect.objectContaining(rollingScope))
+
+    const explicitSearch = parseLogsLedgerSearch({ from: '2026-08-04T00:00:00Z', to: '2026-08-04T01:00:00Z' })
+    view.rerender(<LogsLedger search={explicitSearch} onSearchChange={vi.fn()} />)
+    act(() => vi.advanceTimersByTime(60_000))
+
+    expect(useLogsLedgerQueryMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ from: '2026-08-04T00:00:00Z', to: '2026-08-04T01:00:00Z' })
+    )
+  })
+
+  it('uses resolved preset bounds consistently when a legacy URL also contains explicit bounds', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-04T13:00:00Z'))
+    render(
+      <LogsLedger
+        search={parseLogsLedgerSearch({
+          timeRange: '1h',
+          from: '2020-01-01T00:00:00Z',
+          to: '2020-01-01T01:00:00Z'
+        })}
+        onSearchChange={vi.fn()}
+      />
+    )
+
+    const resolvedBounds = { from: '2026-08-04T12:00:00.000Z', to: '2026-08-04T13:00:00.000Z' }
+    expect(useLogsLedgerQueryMock).toHaveBeenLastCalledWith(expect.objectContaining(resolvedBounds))
+    expect(useLogsAuditQueryMock).toHaveBeenLastCalledWith(resolvedBounds)
+    expect(screen.getByLabelText('Chart time range')).toHaveValue('1h')
+    expect(screen.getByText('Total requests').closest('.panel-shell')).toHaveTextContent('2')
+  })
+
+  it('presents the seven-day ledger window truthfully in the chart selector', () => {
+    render(<LogsLedger search={parseLogsLedgerSearch({ timeRange: '7d' })} onSearchChange={vi.fn()} />)
+
+    const chartRange = screen.getByLabelText('Chart time range')
+    expect(chartRange).toHaveValue('7d')
+    expect(within(chartRange).getByRole('option', { name: 'Last week' })).toBeInTheDocument()
+  })
+
+  it('keeps an active row in place when it supersedes durable history and renders stable table pagination', async () => {
+    const user = userEvent.setup()
+    const onSearchChange = vi.fn()
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={onSearchChange} />)
+
+    expect(screen.getAllByText(REQUEST_A)).toHaveLength(1)
+    expect(screen.getAllByText('active')).toHaveLength(2)
+    const rowsPerPage = screen.getByRole('combobox', { name: 'Rows per page' })
+    expect(rowsPerPage).toBeInTheDocument()
+    expect(rowsPerPage).toHaveValue(String(20))
+    expect(screen.getByRole('button', { name: 'Go to previous page' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Go to next page' })).toBeDisabled()
+
+    await user.click(screen.getByRole('row', { name: `Inspect request ${REQUEST_A}` }))
+    expect(onSearchChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        focusRequestId: REQUEST_A,
+        inspectType: 'request',
+        inspectId: REQUEST_A,
+        tab: 'overview'
+      })
+    )
+  })
+
+  it('clears time and category filters with an accessible reset action', async () => {
+    const user = userEvent.setup()
+    const onSearchChange = vi.fn()
+    render(
+      <LogsLedger
+        search={parseLogsLedgerSearch({ from: '2026-08-01T00:00:00Z', model: 'Qwen3', provider: 'reserve-a' })}
+        onSearchChange={onSearchChange}
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Reset view' }))
+    expect(onSearchChange).toHaveBeenCalledWith({})
+  })
+
+  it('applies inclusive audit bounds by instant across offsets', () => {
+    // Given
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-04T12:00:00Z'))
+    queryState.current = supported([])
+    auditQueryState.current = supported([
+      audit('before_lower_bound', '2026-08-04T11:30:00+01:00', 1),
+      audit('at_lower_bound', '2026-08-04T12:00:00+01:00', 2),
+      audit('at_upper_bound', '2026-08-04T10:00:00-02:00', 3),
+      audit('after_upper_bound', '2026-08-04T11:30:00-01:00', 4)
+    ])
+
+    try {
+      // When
+      render(<LogsLedger search={parseLogsLedgerSearch({ timeRange: '1h' })} onSearchChange={vi.fn()} />)
+
+      // Then
+      expect(screen.getByRole('row', { name: 'Inspect operational event at_lower_bound' })).toBeInTheDocument()
+      expect(screen.getByRole('row', { name: 'Inspect operational event at_upper_bound' })).toBeInTheDocument()
+      expect(
+        screen.queryByRole('row', { name: 'Inspect operational event before_lower_bound' })
+      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('row', { name: 'Inspect operational event after_upper_bound' })).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('applies explicit historic from/to bounds to the bounded loaded audit window', () => {
+    queryState.current = supported([])
+    auditQueryState.current = supported([
+      audit('before_explicit_window', '2026-08-03T23:59:59Z', 1),
+      audit('at_explicit_start', '2026-08-04T01:00:00+01:00', 2),
+      audit('inside_explicit_window', '2026-08-04T00:30:00Z', 3),
+      audit('at_explicit_end', '2026-08-03T21:00:00-04:00', 4),
+      audit('after_explicit_window', '2026-08-04T01:00:01Z', 5)
+    ])
+
+    render(
+      <LogsLedger
+        search={parseLogsLedgerSearch({ from: '2026-08-04T00:00:00Z', to: '2026-08-04T01:00:00Z' })}
+        onSearchChange={vi.fn()}
+      />
+    )
+
+    expect(useLogsAuditQueryMock).toHaveBeenCalledWith({
+      from: '2026-08-04T00:00:00Z',
+      to: '2026-08-04T01:00:00Z'
+    })
+
+    for (const code of ['at_explicit_start', 'inside_explicit_window', 'at_explicit_end']) {
+      expect(screen.getByRole('row', { name: `Inspect operational event ${code}` })).toBeInTheDocument()
+    }
+    expect(
+      screen.queryByRole('row', { name: 'Inspect operational event before_explicit_window' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('row', { name: 'Inspect operational event after_explicit_window' })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(/events in this bounded loaded window/i)).toBeVisible()
+  })
+
+  it('discloses when audit server pagination reaches the operational safety cap', () => {
+    queryState.current = supported([])
+    auditQueryState.current = supported([audit('maintenance_operation', '2026-08-04T12:00:00Z', 1)], 'next', true)
+
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    expect(screen.getByText('Operational window is bounded').closest('[role="status"]')).toHaveTextContent(
+      'The unified table shows the first 1,000 only'
+    )
+  })
+
+  it('places mesh identity, live status, and cleanup in the banner while keeping export in ledger controls', () => {
+    render(<LogsLedger search={parseLogsLedgerSearch({ model: 'Qwen3' })} onSearchChange={vi.fn()} />)
+
+    const controls = screen.getByRole('region', { name: 'Event log controls' })
+    expect(within(controls).getByText(/events in this bounded loaded window/i)).toBeVisible()
+    expect(within(controls).getByLabelText('Search loaded event window')).toBeVisible()
+    expect(within(controls).queryByRole('heading')).not.toBeInTheDocument()
+    expect(within(controls).getByRole('button', { name: 'Export view' })).toBeVisible()
+    expect(within(controls).queryByRole('button', { name: 'Scoped cleanup' })).not.toBeInTheDocument()
+
+    const infoBanner = screen.getByRole('region', { name: 'System logs' })
+    expect(within(infoBanner).getByRole('heading', { level: 1, name: 'System logs' })).toHaveAttribute(
+      'id',
+      'logs-ledger-title'
+    )
+    expect(infoBanner).toHaveTextContent('Monitor request activity and operational events from this MeshLLM host.')
+    expect(infoBanner).toHaveTextContent('Live')
+    expect(infoBanner).toHaveTextContent('Local only')
+    expect(within(infoBanner).getByRole('button', { name: 'Scoped cleanup' })).toBeVisible()
+    expect(infoBanner).not.toContainElement(screen.getByRole('button', { name: 'Export view' }))
+    expect(screen.queryByRole('button', { name: 'Dead-letter retry' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.queryByRole('region', { name: 'Log operations' })).not.toBeInTheDocument()
+  })
+
+  it('keeps banner cleanup before chart controls and ledger export in the keyboard order', async () => {
+    const user = userEvent.setup()
+    // A filtered search keeps the Reset control enabled so it participates in the tab order.
+    render(<LogsLedger search={parseLogsLedgerSearch({ model: 'Qwen3' })} onSearchChange={vi.fn()} />)
+
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'Scoped cleanup' })).toHaveFocus()
+    await user.tab()
+    expect(screen.getByLabelText('Bucket interval')).toHaveFocus()
+    await user.tab()
+    expect(screen.getByLabelText('Chart time range')).toHaveFocus()
+    await user.tab()
+    expect(screen.getByLabelText('Search loaded event window')).toHaveFocus()
+    await user.tab()
+    expect(screen.getByLabelText('Filter logs by time range')).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'Reset view' })).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'Show management records' })).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: /^Filter event logs/ })).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'Columns' })).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'Export view' })).toHaveFocus()
+  })
+
+  it('filters the loaded page by request ID', async () => {
+    const user = userEvent.setup()
+    const REQUEST_B = '00000000-0000-4000-8000-000000000002'
+    queryState.current = supported([
+      request(REQUEST_A, 'completed', 'durable'),
+      request(REQUEST_B, 'failed', 'durable')
+    ])
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    expect(screen.getAllByRole('row', { name: /Inspect request/ })).toHaveLength(2)
+
+    await user.type(screen.getByLabelText('Search loaded event window'), REQUEST_A)
+
+    expect(screen.getByRole('row', { name: `Inspect request ${REQUEST_A}` })).toBeInTheDocument()
+    expect(screen.queryByRole('row', { name: `Inspect request ${REQUEST_B}` })).not.toBeInTheDocument()
+  })
+
+  it('excludes management self-observation from workload by default and reveals it explicitly', async () => {
+    const user = userEvent.setup()
+    const managementRequest = { ...request(REQUEST_A, 'completed', 'durable'), route: 'management_get_status' }
+    queryState.current = supported([managementRequest])
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    expect(screen.queryByRole('row', { name: `Inspect request ${REQUEST_A}` })).not.toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: 'Show management records' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(toggle)
+
+    expect(screen.getByRole('row', { name: `Inspect request ${REQUEST_A}` })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Hide management records' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('restores focus to the opened request after returning from the inspector', () => {
+    render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({ focusRequestId: REQUEST_A })} />)
+
+    expect(screen.getByRole('row', { name: `Inspect request ${REQUEST_A}` })).toHaveFocus()
+  })
+
+  it('does not steal focus while the operator filters with a retained focus request', async () => {
+    const user = userEvent.setup()
+    const requestB = '00000000-0000-4000-8000-000000000002'
+    queryState.current = supported([request(REQUEST_A, 'completed', 'durable'), request(requestB, 'failed', 'durable')])
+    render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({ focusRequestId: REQUEST_A })} />)
+    const input = screen.getByLabelText('Search loaded event window')
+
+    await user.click(input)
+    await user.type(input, REQUEST_A)
+
+    expect(input).toHaveFocus()
+    expect(input).toHaveValue(REQUEST_A)
+  })
+
+  it('renders active fallback polling as an accessible pressed toggle', async () => {
+    const user = userEvent.setup()
+    liveState.current = {
+      state: 'polling',
+      liveRequestIds: [],
+      pollingEnabled: true,
+      togglePolling: liveState.togglePolling
+    }
+    render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({})} />)
+
+    const pollingToggle = screen.getByRole('button', { name: 'Fallback log polling' })
+    expect(
+      within(screen.getByRole('region', { name: 'System logs' })).getByRole('button', {
+        name: 'Fallback log polling'
+      })
+    ).toBe(pollingToggle)
+    expect(pollingToggle).toHaveAttribute('aria-pressed', 'true')
+    expect(within(pollingToggle).getByText('Polling')).toBeVisible()
+
+    await user.click(pollingToggle)
+
+    expect(liveState.togglePolling).toHaveBeenCalledOnce()
+    expect(useLogsLiveRecoveryMock).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }))
+  })
+
+  it('presents paused fallback polling with muted pressed-state semantics', () => {
+    liveState.current = {
+      state: 'polling',
+      liveRequestIds: [],
+      pollingEnabled: false,
+      togglePolling: liveState.togglePolling
+    }
+    render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({})} />)
+
+    const pollingToggle = screen.getByRole('button', { name: 'Fallback log polling' })
+    expect(pollingToggle).toHaveAttribute('aria-pressed', 'false')
+    expect(within(pollingToggle).getByText('Polling paused')).toHaveStyle({ color: 'var(--color-fg-dim)' })
+    expect(screen.queryByText('Live data stale')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['connected', 'Live'],
+    ['reconnecting', 'Reconnecting'],
+    ['gap', 'Recovering gap'],
+    ['stale', 'Live data stale']
+  ])('keeps %s live status as a passive badge', (state, label) => {
+    liveState.current = {
+      state,
+      liveRequestIds: [],
+      pollingEnabled: false,
+      togglePolling: liveState.togglePolling
+    }
+    render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({})} />)
+
+    expect(screen.getByText(label, { exact: true })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Fallback log polling' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Polling paused')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['metadata_only', true, 'Payloads · Metadata only'],
+    ['redacted_artifacts', true, 'Payloads · Redacted · Ready'],
+    ['redacted_artifacts', false, 'Payloads · Redacted · Unavailable'],
+    ['unavailable', false, 'Payloads · Unavailable']
+  ] as const)('shows the active %s payload capture state', (captureMode, artifactCaptureReady, label) => {
+    render(
+      <LogsLedger
+        loggingStatus={{
+          metadata_available: true,
+          capture_mode: captureMode,
+          artifact_capture_available: captureMode === 'redacted_artifacts',
+          artifact_capture_ready: artifactCaptureReady
+        }}
+        onSearchChange={vi.fn()}
+        search={parseLogsLedgerSearch({})}
+      />
+    )
+
+    expect(screen.getByText(label, { exact: true })).toBeVisible()
+  })
+
+  it('keeps polling interactive while an in-flight hydration is shown as updating', () => {
+    queryState.current = { ...supported([request(REQUEST_A, 'active', 'active')]), isFetching: true }
+    liveState.current = {
+      state: 'polling',
+      liveRequestIds: [],
+      pollingEnabled: false,
+      togglePolling: liveState.togglePolling
+    }
+    render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({})} />)
+
+    const pollingToggle = screen.getByRole('button', { name: 'Fallback log polling' })
+    expect(pollingToggle).toHaveAttribute('aria-pressed', 'false')
+    expect(within(pollingToggle).getByText('Updating')).toBeVisible()
+  })
+
+  it('keeps live recovery disabled when the ledger API is unsupported', () => {
+    queryState.current = {
+      isLoading: false,
+      isError: false,
+      isFetching: false,
+      data: { state: 'unsupported' },
+      refetch: vi.fn()
+    }
+
+    render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({})} />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Request window unavailable')
+    expect(screen.getByRole('table', { name: 'MeshLLM event logs' })).toHaveTextContent(
+      'No request or operational events are loaded yet.'
+    )
+    expect(useLogsLiveRecoveryMock).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }))
+  })
+
+  it('renders an empty ledger as an announced state without an empty request table', () => {
+    queryState.current = supported([], undefined)
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    expect(screen.getByRole('table', { name: 'MeshLLM event logs' })).toHaveTextContent(
+      'No request or operational events are loaded yet.'
+    )
+    expect(screen.getByLabelText('Filter logs by time range')).toBeInTheDocument()
+    expect(screen.getByLabelText('Search loaded event window')).toBeInTheDocument()
+  })
+
+  it('offers a stable, labeled retry action when the logs API fails', async () => {
+    const user = userEvent.setup()
+    const refetch = vi.fn()
+    queryState.current = { isLoading: false, isError: true, isFetching: false, data: undefined, refetch }
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Request window could not be loaded')
+    const retry = screen.getByRole('button', { name: 'Retry requests' })
+    expect(retry).toBeEnabled()
+
+    await user.click(retry)
+
+    expect(refetch).toHaveBeenCalledOnce()
+  })
+
+  it('renders the populated harness ledger across outcomes, durability states, metadata fallbacks, KPIs, and pages', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(HARNESS_REFERENCE_TIME))
+    queryState.current = supported(HARNESS_LOG_FIXTURES)
+
+    try {
+      render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+      const table = screen.getByRole('table', { name: 'MeshLLM event logs' })
+      for (const outcome of ['active', 'completed', 'failed', 'rejected', 'cancelled', 'dropped']) {
+        expect(within(table).getAllByText(outcome).length).toBeGreaterThan(0)
+      }
+      expect(within(table).getAllByText('active').length).toBeGreaterThan(0)
+      expect(within(table).getAllByText('durable').length).toBeGreaterThan(1)
+      expect(within(table).getAllByText('—').length).toBeGreaterThan(0)
+      expect(
+        within(table).queryByRole('row', {
+          name: `Inspect request ${HARNESS_LOG_SCENARIO_IDS.droppedCapacity.toString()}`
+        })
+      ).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Show management records' })).toBeInTheDocument()
+      expect(screen.getByLabelText('Requests over time bar chart')).toBeInTheDocument()
+      expect(screen.queryByText('No requests during the selected time range.')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Go to next page' })).toBeEnabled()
+      const workloadFixtureCount = HARNESS_LOG_FIXTURES.filter((row) => !row.route?.startsWith('management_')).length
+      expect(screen.getAllByText(String(workloadFixtureCount)).length).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

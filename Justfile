@@ -16,6 +16,13 @@ model := models_dir / "GLM-4.7-Flash-Q4_K_M.gguf"
 # Build for the current platform.
 default: build
 
+# Build the local product, then exercise the embedded console against a real
+# isolated mesh-llm process. The harness owns and verifies its cleanup.
+[unix]
+qa-logging-console-e2e:
+    @just build
+    @scripts/qa-logging-console-e2e.sh --current-binary ./target/debug/mesh-llm
+
 [private]
 [unix]
 with-lld *COMMAND:
@@ -441,6 +448,27 @@ ui-test:
     cd "{{ ui_dir }}" && pnpm test
 
 # ── Full Validation Gate ───────────────────────────────────────
+
+# Validate CI definitions, planner fixtures, and repository consistency.
+ci-validate:
+    actionlint -config-file .github/actionlint.yaml
+    git diff --check
+    python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+    just ci-crate-lists
+    just check-release
+    just publish-crates
+
+# Run CI/workspace crate-list consistency checks.
+ci-crate-lists:
+    just with-lld cargo run -p xtask -- repo-consistency ci-crate-lists
+
+# Run crates.io publish-chain consistency checks.
+publish-crates:
+    just with-lld cargo run -p xtask -- repo-consistency publish-crates
+
+# Shellcheck the explicitly supplied changed shell scripts.
+ci-shellcheck *scripts:
+    shellcheck {{ scripts }}
 
 # Run all checks: repo consistency, Rust tests, author exemplars, fmt, clippy, UI/docs builds, and E2E smoke.
 test-all:

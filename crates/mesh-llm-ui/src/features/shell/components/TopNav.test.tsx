@@ -76,6 +76,17 @@ describe('TopNav', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
   })
 
+  it('includes Logs in primary navigation and marks its route selected', () => {
+    renderTopNav({ tab: 'logs', tabHrefs: { logs: '/logs?provider=reserve-a' } })
+
+    const logsLink = screen
+      .getAllByRole('link', { name: 'Logs' })
+      .find((link) => link.getAttribute('href') === '/logs?provider=reserve-a')
+    if (!logsLink) throw new Error('Logs link was not rendered')
+    expect(logsLink).toHaveAttribute('href', '/logs?provider=reserve-a')
+    expect(logsLink).toHaveAttribute('aria-current', 'page')
+  })
+
   it('opens API instructions and keeps copy state scoped to the clicked row', async () => {
     const user = userEvent.setup()
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
@@ -456,11 +467,12 @@ describe('TopNav', () => {
   })
 
   it('hides disabled primary tabs while keeping enabled tabs available', () => {
-    renderTopNav({ enabledTabs: { reserves: false, configuration: false } })
+    renderTopNav({ enabledTabs: { reserves: false, configuration: false, logs: false } })
 
     expect(screen.getByRole('link', { name: 'Network' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Chat' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Reserves' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Logs' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Configuration' })).not.toBeInTheDocument()
   })
 

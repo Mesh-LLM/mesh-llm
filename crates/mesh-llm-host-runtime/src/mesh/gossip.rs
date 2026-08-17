@@ -2,10 +2,11 @@
 //! and peer list management (add/remove/update).
 
 use super::{
-    DEAD_PEER_TTL, DisplayLatencySource, InviteTokenMaterial, ModelDemand, ModelRuntimeDescriptor,
-    Node, NodeRole, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS, PeerAnnouncement, PeerInfo,
-    ServedModelDescriptor, SignedNodeOwnership, connect_mesh, elapsed_ms_u64, emit_mesh_info,
-    infer_remote_served_descriptors, parse_invite_token,
+    DEAD_PEER_TTL, DisplayLatencySource, InviteTokenMaterial, MeshOperationalEvent, ModelDemand,
+    ModelRuntimeDescriptor, Node, NodeRole, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS,
+    PeerAnnouncement, PeerInfo, ServedModelDescriptor, SignedNodeOwnership, connect_mesh,
+    elapsed_ms_u64, emit_mesh_info, infer_remote_served_descriptors, parse_invite_token,
+    record_mesh_operational_event,
 };
 use crate::crypto::{OwnershipSummary, verify_node_ownership};
 use crate::mesh::peer_state::{PropagatedLatencyObservation, policy_accepts_peer};
@@ -863,7 +864,8 @@ impl Node {
 
         let mut state = self.state.lock().await;
         let last_status = state.policy_rejected_peers.get(&id).cloned();
-        if last_status.as_ref() != Some(&owner_summary.status) {
+        let newly_rejected = last_status.as_ref() != Some(&owner_summary.status);
+        if newly_rejected {
             tracing::warn!(
                 "Rejecting peer {} due to owner policy: {:?}",
                 id.fmt_short(),
@@ -880,6 +882,10 @@ impl Node {
                 .filter(|peer| peer.is_admitted())
                 .count();
             let _ = self.peer_change_tx.send(admitted_count);
+        }
+        drop(state);
+        if newly_rejected {
+            record_mesh_operational_event(MeshOperationalEvent::GossipPolicyRejected);
         }
         true
     }
@@ -965,6 +971,7 @@ impl Node {
             .count();
         drop(state);
         self.capture_peer_observation("peer_direct_add", &peer, "direct", None);
+        record_mesh_operational_event(MeshOperationalEvent::GossipDirectPeerPromoted);
         let _ = self.peer_change_tx.send(count);
         self.emit_plugin_mesh_event(
             crate::plugin::proto::mesh_event::Kind::PeerUp,
@@ -1433,6 +1440,7 @@ impl Node {
             // the dispatcher's `accept_*` calls error so it unwinds cleanly.
             self.state.lock().await.connections.remove(&peer_id);
             conn.close(0u32.into(), b"join announcement-apply failed");
+            record_mesh_operational_event(MeshOperationalEvent::AutoJoinFailed);
             return Err(error);
         }
 
@@ -1452,6 +1460,7 @@ impl Node {
             peer_id.fmt_short(),
             elapsed_ms_u64(elapsed)
         ));
+        record_mesh_operational_event(MeshOperationalEvent::AutoJoinSucceeded);
 
         Ok((candidate.token, candidate.mesh_name))
     }
@@ -1596,6 +1605,7 @@ impl Node {
                 had_connection: Some(had_connection),
                 bridge_id,
             });
+            record_mesh_operational_event(MeshOperationalEvent::GossipPeerRemoved);
             let _ = self.peer_change_tx.send(count);
             self.emit_plugin_mesh_event(
                 crate::plugin::proto::mesh_event::Kind::PeerDown,
@@ -1661,6 +1671,7 @@ impl Node {
                 id.fmt_short(),
                 ann.version
             );
+            record_mesh_operational_event(MeshOperationalEvent::GossipIncompatibleVersionRejected);
             self.remove_disallowed_peer(id).await;
             return false;
         }

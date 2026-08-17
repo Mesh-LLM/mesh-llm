@@ -30,6 +30,7 @@ export default [
       ["Runtime lifecycle", "/docs/pages/runtime-lifecycle/"],
       ["Choose a model", "/docs/pages/choose-a-model/"],
       ["Running large models", "/docs/pages/running-large-models/"],
+      ["KV disk cache", "/docs/pages/kv-disk-cache/"],
       ["Console chat", "/docs/pages/console-chat/"],
       ["Hardware support", "/docs/pages/hardware-support/"]
     ]
@@ -39,6 +40,7 @@ export default [
     description: "Use Mesh through OpenAI-compatible clients and model-serving features.",
     links: [
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
+      ["Automatic routing", "/docs/pages/automatic-routing/"],
       ["Streaming", "/docs/pages/openai-compatible-api/#streaming"],
       ["Tool calling", "/docs/pages/openai-compatible-api/#tool-calling"],
       ["Structured outputs", "/docs/pages/openai-compatible-api/#structured-outputs"]
@@ -108,6 +110,7 @@ export default [
     description: "API reference, CLI commands, testing, and technical reference documentation.",
     links: [
       ["API reference", "/docs/pages/api-reference/"],
+      ["Local logging API", "/docs/pages/logging-api/"],
       ["Crate API reference", "/crates/"],
       ["Skippy native API", "/docs/pages/skippy-api/"],
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],

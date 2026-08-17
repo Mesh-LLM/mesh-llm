@@ -1110,8 +1110,14 @@ async fn handle_runtime_llama(stream: &mut TcpStream, state: &MeshApi) -> anyhow
 }
 
 async fn handle_runtime_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
-    let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n";
+    let request_id = super::super::management_lifecycle::response_request_id_header()
+        .map(|request_id| format!("x-request-id: {request_id}\r\n"))
+        .unwrap_or_default();
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n{request_id}\r\n"
+    );
     stream.write_all(header.as_bytes()).await?;
+    super::super::management_lifecycle::record_response_status(200);
 
     let mut subscription = {
         state
@@ -1383,8 +1389,14 @@ async fn handle_unload_instance(
 }
 
 async fn handle_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
-    let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n";
+    let request_id = super::super::management_lifecycle::response_request_id_header()
+        .map(|request_id| format!("x-request-id: {request_id}\r\n"))
+        .unwrap_or_default();
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n{request_id}\r\n"
+    );
     stream.write_all(header.as_bytes()).await?;
+    super::super::management_lifecycle::record_response_status(200);
 
     let status = state.status().await;
     let mut last_sent_json = None;

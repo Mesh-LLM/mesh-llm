@@ -24,14 +24,25 @@ mesh-llm models <subcommand> --help
 most common serving and client-only options. Use `--help-advanced` when you need
 the complete runtime option surface.
 
+### Logging and local capture
+
+`mesh-llm --help-advanced` also documents the node-local logging store, capture
+modes, retention setting, and terminal-event navigation. `--log-format pretty`
+is the default operator view; `--log-format json` emits one stable operational
+event per stdout line. The local ledger remains the source of truth for request
+details and artifacts; CLI output is a bounded, privacy-safe process view.
+
+For the trusted-local ledger, retention, and capture guidance, see
+[Operator request logging](/docs/LOGGING/).
+
 ## Check the running version
 
 ```bash
 mesh-llm --version
 ```
 
-Release builds report the released package version, such as `mesh-llm 0.72.1`.
-Local source builds may include build metadata, such as `mesh-llm 0.72.1+gABCDEF.dirty`, so you can tell exactly which commit produced the binary. Compatibility checks, native-runtime cache paths, and release identity still use the plain release version.
+Release builds report the released package version, such as `mesh-llm 0.76.0-rc2`.
+Local source builds may include build metadata, such as `mesh-llm 0.76.0-rc2+gABCDEF.dirty`, so you can tell exactly which commit produced the binary. Compatibility checks, native-runtime cache paths, and release identity still use the plain release version.
 
 ## Start here (common tasks)
 

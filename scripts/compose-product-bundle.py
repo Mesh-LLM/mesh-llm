@@ -44,7 +44,8 @@ def file_sha256(path: Path) -> str:
 
 def tree_sha256(path: Path) -> str:
     digest = hashlib.sha256()
-    for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+    files = (candidate for candidate in path.rglob("*") if candidate.is_file())
+    for item in sorted(files, key=lambda candidate: candidate.relative_to(path).as_posix()):
         relative = item.relative_to(path).as_posix().encode()
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)

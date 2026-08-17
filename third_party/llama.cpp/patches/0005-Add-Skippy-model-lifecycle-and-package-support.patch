@@ -1445,10 +1445,10 @@ index 000000000..ee1e43035
 +} // extern "C"
 diff --git a/src/skippy/model_package.cpp b/src/skippy/model_package.cpp
 new file mode 100644
-index 000000000..3d199add8
+index 000000000..65d15b717
 --- /dev/null
 +++ b/src/skippy/model_package.cpp
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,727 @@
 +#include "skippy/model_package.h"
 +#include "skippy/errors.h"
 +
@@ -1812,8 +1812,30 @@ index 000000000..3d199add8
 +            break;
 +        }
 +
-+        const size_t source_data_offset = gguf_get_data_offset(item.source->ctx);
-+        if (std::fseek(input, static_cast<long>(source_data_offset + item.tensor->offset), SEEK_SET) != 0) {
++        // std::fseek takes a long, which is 32-bit on Win32 MSVC, so GGUF files
++        // over 4 GB wrap and tensor reads land at the wrong offset. Seek with a
++        // 64-bit API where available, and validate the absolute offset first so
++        // an out-of-range value fails loudly instead of wrapping.
++        static_assert(std::numeric_limits<size_t>::digits <= std::numeric_limits<uint64_t>::digits,
++                      "size_t wider than uint64_t is not supported here");
++        const uint64_t source_data_offset =
++            static_cast<uint64_t>(gguf_get_data_offset(item.source->ctx));
++        const uint64_t tensor_offset = static_cast<uint64_t>(item.tensor->offset);
++        bool seek_ok = false;
++        if (tensor_offset <= (std::numeric_limits<uint64_t>::max)() - source_data_offset) {
++            const uint64_t absolute_offset = source_data_offset + tensor_offset;
++#if defined(_MSC_VER)
++            seek_ok = absolute_offset <= static_cast<uint64_t>((std::numeric_limits<__int64>::max)()) &&
++                      _fseeki64(input, static_cast<__int64>(absolute_offset), SEEK_SET) == 0;
++#elif defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS == 64
++            seek_ok = absolute_offset <= static_cast<uint64_t>((std::numeric_limits<off_t>::max)()) &&
++                      fseeko(input, static_cast<off_t>(absolute_offset), SEEK_SET) == 0;
++#else
++            seek_ok = absolute_offset <= static_cast<uint64_t>((std::numeric_limits<long>::max)()) &&
++                      std::fseek(input, static_cast<long>(absolute_offset), SEEK_SET) == 0;
++#endif
++        }
++        if (!seek_ok) {
 +            std::fclose(input);
 +            ok = false;
 +            break;

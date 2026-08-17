@@ -1,9 +1,11 @@
 pub(crate) mod auto_route;
+pub(crate) mod automatic;
 mod forwarded_request;
 pub(crate) mod ingress;
 pub(crate) mod moa_gateway;
+mod parse_failure;
 mod request_normalize;
-mod request_parse;
+pub(crate) mod request_parse;
 mod response;
 pub(crate) mod response_adapter;
 mod response_quality;

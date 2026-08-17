@@ -201,6 +201,35 @@ pub struct ModelEntry {
     /// Index into the backends vec.  Multiple models can share a backend
     /// (e.g. all models behind the same proxy) or each have their own.
     pub backend_index: usize,
+    /// Verified size in billions of parameters, when the host knows it.
+    ///
+    /// This is the authoritative sizing signal for role assignment and reducer
+    /// selection. `None` means "unknown", and callers fall back to parsing a
+    /// size out of [`Self::name`] — a brittle last resort, because a quant tag
+    /// (`-4bit`, `-8bit`, `-4bpw`) parses as a size and makes a 70B model look
+    /// like a small one.
+    ///
+    /// Only a host can populate this: it comes from gossiped GGUF metadata,
+    /// which this crate cannot see.
+    pub parameter_count_b: Option<f64>,
+}
+
+impl ModelEntry {
+    /// A model of unknown size. Sizing falls back to name parsing.
+    pub fn new(name: impl Into<String>, backend_index: usize) -> Self {
+        Self {
+            name: name.into(),
+            backend_index,
+            parameter_count_b: None,
+        }
+    }
+
+    /// Attach a verified size in billions of parameters.
+    #[must_use]
+    pub fn with_parameter_count_b(mut self, parameter_count_b: Option<f64>) -> Self {
+        self.parameter_count_b = parameter_count_b;
+        self
+    }
 }
 
 // ─── Backend call + text extraction ──────────────────────────────────

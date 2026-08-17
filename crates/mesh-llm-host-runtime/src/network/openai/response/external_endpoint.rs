@@ -1,8 +1,13 @@
-use super::common::{ResponseRetryPolicy, RouteAttemptResult, retryable_route_result_from_error};
-use super::dispatch::relay_attempted_response;
+use super::common::{
+    ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
+    retryable_route_result_from_error,
+};
+use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::probe_http_response;
+use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use anyhow::{Context, Result};
+use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use url::Url;
@@ -18,9 +23,14 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
     base_url: &str,
     prefetched: &[u8],
     request_path: &str,
-    retry_policy: ResponseRetryPolicy,
-    response_adapter: ResponseAdapter,
+    logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
+    let RouteAttemptLoggingContext {
+        request_id,
+        retry_policy,
+        response_adapter,
+        route_observer,
+    } = logging;
     let target = match build_external_endpoint_target(base_url, request_path, prefetched) {
         Ok(target) => target,
         Err(()) => return RouteAttemptResult::RetryableUnavailable,
@@ -36,8 +46,10 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
         tcp_stream,
         &mut upstream,
         base_url,
+        request_id,
         retry_policy,
         response_adapter,
+        route_observer,
     )
     .await
 }
@@ -86,8 +98,10 @@ async fn route_http_endpoint_attempt_after_forward(
     tcp_stream: &mut TcpStream,
     upstream: &mut TcpStream,
     base_url: &str,
+    request_id: RequestId,
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteAttemptResult {
     match probe_http_response(upstream).await {
         Ok(probe) => {
@@ -95,10 +109,14 @@ async fn route_http_endpoint_attempt_after_forward(
                 tcp_stream,
                 upstream,
                 probe,
+                RelayAttemptContext {
+                    request_id,
+                    disconnect_message: "API proxy (external endpoint): downstream client disconnected during relay",
+                    commit_message: "API proxy (external endpoint) ended after commit",
+                    route_observer,
+                },
                 retry_policy,
                 response_adapter,
-                "API proxy (external endpoint): downstream client disconnected during relay",
-                "API proxy (external endpoint) ended after commit",
             )
             .await;
             if matches!(result, RouteAttemptResult::ClientDisconnected) {
@@ -266,13 +284,14 @@ mod tests {
 
     #[test]
     fn test_rewrite_http_request_target_updates_request_line_and_host() {
-        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost:9337\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
+        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost:9337\r\nx-request-id: 4c3ca94d-bc1f-4759-912d-f4f6d77d5515\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
         let rewritten =
             rewrite_http_request_target(raw, "/api/v1/chat/completions", "localhost", 8000)
                 .unwrap();
         let rewritten = String::from_utf8(rewritten).unwrap();
         assert!(rewritten.starts_with("POST /api/v1/chat/completions HTTP/1.1\r\n"));
         assert!(rewritten.contains("\r\nHost: localhost:8000\r\n"));
+        assert!(rewritten.contains("\r\nx-request-id: 4c3ca94d-bc1f-4759-912d-f4f6d77d5515\r\n"));
         assert!(rewritten.ends_with("\r\n\r\n{}"));
     }
 }

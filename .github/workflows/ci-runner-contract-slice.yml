@@ -1,0 +1,122 @@
+name: CI Runner Contract Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
+      plan_json:
+        description: Compact plan emitted by the trusted planner action.
+        required: true
+        type: string
+      profile:
+        description: Semantic profile represented by the plan.
+        required: true
+        type: string
+      total_max_workers:
+        description: Total worker ceiling recorded by the selected profile.
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  runner_contract:
+    name: Runner and cache contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - name: Validate plan ownership and cache boundary
+        env:
+          PLAN_JSON: ${{ inputs.plan_json }}
+          PROFILE: ${{ inputs.profile }}
+          TOTAL_MAX_WORKERS: ${{ inputs.total_max_workers }}
+        run: |
+          set -euo pipefail
+          jq -e --argjson total_max_workers "$TOTAL_MAX_WORKERS" \
+            '.budgets.total_max_workers == $total_max_workers' <<<"$PLAN_JSON" >/dev/null
+          jq -e --arg profile "$PROFILE" '.schema_version == 1 and .profile == $profile and (.required_slices | length > 0)' <<<"$PLAN_JSON" >/dev/null
+          if [[ "$PROFILE" == pr-* ]]; then
+            jq -e 'all(.cache_modes[]; . != "trusted-readwrite")' <<<"$PLAN_JSON" >/dev/null
+            if ! jq -e '
+              (.runner_roles | type == "object")
+              and ((.runner_roles | keys | sort) == (.required_slices | sort))
+              and all(.runner_roles | to_entries[];
+                (.key | type == "string" and length > 0)
+                and (.value | type == "string" and length > 0))
+            ' <<<"$PLAN_JSON" >/dev/null; then
+              echo "PR plan must not select a Depot runner role" >&2
+              exit 1
+            fi
+            if jq -e 'any(.runner_roles[]; test("depot"; "i"))' <<<"$PLAN_JSON" >/dev/null; then
+              echo "PR plan must not select a Depot runner role" >&2
+              exit 1
+            fi
+          fi
+      - name: Verify PR runner policy remains fail-closed
+        run: |
+          set -euo pipefail
+          grep -Fq 'pull_request|pull_request_target' .github/actions/select-ci-runners/action.yml
+          grep -Fq 'depot_enabled=false' .github/actions/select-ci-runners/action.yml
+          workflow_targets=(
+            .github/workflows/ci.yml
+            .github/workflows/main_*.yml
+            .github/workflows/pr_quality.yml
+            .github/workflows/pr_website.yml
+            .github/workflows/pr_linux.yml
+            .github/workflows/pr_macos.yml
+            .github/workflows/pr_windows.yml
+            .github/workflows/ci-control.yml
+            .github/workflows/ci-*-lane.yml
+            .github/workflows/ci-*-slice.yml
+          )
+          workflow_scan_targets=()
+          for workflow in "${workflow_targets[@]}"; do
+            [[ -f "$workflow" ]] || {
+              echo "Missing required CI workflow: $workflow" >&2
+              exit 1
+            }
+            if [[ "$workflow" != ".github/workflows/ci-runner-contract-slice.yml" ]]; then
+              workflow_scan_targets+=("$workflow")
+            fi
+          done
+          ! grep -nE '^[[:space:]]+pull_request_target:' "${workflow_scan_targets[@]}"
+
+  trusted_runner_image:
+    name: Trusted runner image (${{ matrix.architecture }})
+    if: ${{ inputs.profile == 'main' || inputs.profile == 'manual-full' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: mesh-llm-amd64
+            machine: x86_64
+          - architecture: arm64
+            runner: mesh-llm-arm64
+            machine: aarch64
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - name: Verify trusted runner image
+        env:
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "$EXPECTED_MACHINE"
+          verify-runner-image self-hosted
+          cargo check --locked -p mesh-llm-config

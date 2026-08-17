@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Copy } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import { copyStateLabel } from '@/lib/copyStateLabel'
 import { useClipboardCopy } from '@/lib/useClipboardCopy'
@@ -48,10 +49,10 @@ export function CopyInstructionRow({
           </div>
           {hint ? <div className="mt-1 text-[length:var(--density-type-caption)] text-fg-faint">{hint}</div> : null}
         </div>
-        <button
+        <Button
           aria-label={`Copy ${label}`}
           className={cn(
-            'ui-control inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius)] border px-2.5 py-1 text-[length:var(--density-type-caption)] font-medium',
+            'ui-control inline-flex h-13 min-h-11 shrink-0 items-center gap-1.5 rounded-[var(--radius)] border px-2.5 py-1 text-[length:var(--density-type-caption)] font-medium focus-visible:!outline-2 focus-visible:!outline-accent focus-visible:!outline-solid lg:h-8 lg:min-h-8',
             disabled ? 'cursor-not-allowed opacity-60' : ''
           )}
           disabled={disabled}
@@ -59,11 +60,13 @@ export function CopyInstructionRow({
             if (disabled) return
             void copyText(copyValue)
           }}
+          size="sm"
           type="button"
+          variant="outline"
         >
           <Copy className="size-[11px]" aria-hidden="true" />
           {disabled ? 'Unavailable' : copyStateLabel(copyState)}
-        </button>
+        </Button>
       </div>
     </div>
   )

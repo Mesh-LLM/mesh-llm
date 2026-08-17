@@ -1,6 +1,8 @@
 #![recursion_limit = "256"]
 
+use std::sync::Arc;
 use std::time::Duration;
+use std::{ffi::OsString, fmt, path::PathBuf};
 
 use clap::{CommandFactory, Parser};
 
@@ -12,6 +14,9 @@ pub async fn run_main() -> i32 {
     match run_cli_entrypoint().await {
         Ok(()) => 0,
         Err(err) => {
+            if let Some(exit) = err.downcast_ref::<CliParseExit>() {
+                return exit.0;
+            }
             let _ = mesh_llm_tui::emit_fatal_error(&err);
             tokio::time::sleep(Duration::from_millis(50)).await;
             1
@@ -20,10 +25,36 @@ pub async fn run_main() -> i32 {
 }
 
 async fn run_cli_entrypoint() -> anyhow::Result<()> {
-    maybe_print_binary_help_and_exit();
+    let raw_args: Vec<_> = std::env::args_os().collect();
+    if maybe_print_binary_help(&raw_args) {
+        emit_early_cli_process_event(
+            &raw_args,
+            mesh_llm_events::CliCommandFamily::Process,
+            mesh_llm_events::CliCommandOutcome::Completed,
+        )
+        .await;
+        return Ok(());
+    }
 
-    let normalized_args = mesh_llm_cli::normalize_runtime_surface_args(std::env::args_os());
-    let cli = mesh_llm_cli::Cli::parse_from(normalized_args.normalized.clone());
+    let normalized_args = mesh_llm_cli::normalize_runtime_surface_args(raw_args);
+    let cli = match mesh_llm_cli::Cli::try_parse_from(normalized_args.normalized.clone()) {
+        Ok(cli) => cli,
+        Err(error) => {
+            let outcome = parse_exit_outcome(&error);
+            let family = if error.kind() == clap::error::ErrorKind::DisplayVersion {
+                mesh_llm_events::CliCommandFamily::Process
+            } else {
+                parse_failure_family(
+                    &normalized_args.normalized,
+                    normalized_args.explicit_surface,
+                )
+            };
+            emit_early_cli_process_event(&normalized_args.normalized, family, outcome).await;
+            let exit_code = error.exit_code();
+            let _ = error.print();
+            return Err(anyhow::Error::new(CliParseExit(exit_code)));
+        }
+    };
     let warning = mesh_llm_cli::legacy_runtime_surface_warning(
         &cli,
         &normalized_args.original,
@@ -31,12 +62,39 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     );
     let explicit_surface = normalized_args.explicit_surface.map(map_runtime_surface);
 
-    if commands::dispatch(&cli).await? {
-        return Ok(());
+    if cli.command.is_some() {
+        // Install the durable audit bridge before command dispatch. This
+        // performs only config-backed logging setup; one-shot commands do not
+        // need a native runtime, a model, or serving infrastructure.
+        let logging_initialized =
+            mesh_llm_host_runtime::initialize_logging_for_cli(cli.config.as_deref())
+                .await
+                .is_ok();
+        if logging_initialized {
+            install_cli_operational_audit_bridge();
+        } else {
+            // Logging is fail-open for one-shot commands. A missing or invalid
+            // logging config must not turn an otherwise independent command
+            // such as `gpus` into a startup failure.
+            mesh_llm_commands::operational_logging::clear_cli_operational_audit_bridge();
+        }
+
+        // Drain whether the one-shot command succeeds or fails: the
+        // dispatcher has already emitted its static terminal audit outcome in
+        // either case.
+        let command_dispatch = commands::dispatch(&cli).await;
+        if logging_initialized {
+            let _ = mesh_llm_host_runtime::shutdown_logging_for_one_shot_cli().await;
+        }
+        mesh_llm_commands::operational_logging::clear_cli_operational_audit_bridge();
+        if command_dispatch? {
+            return Ok(());
+        }
     }
 
     let options = runtime_options_from_cli(cli);
     mesh_llm_host_runtime::initialize_host_runtime_for_options(&options).await?;
+    install_cli_operational_audit_bridge();
     mesh_llm_tui::output::OutputManager::init_global(
         options.log_format,
         mesh_llm_host_runtime::console_session_mode_for_runtime_surface(explicit_surface),
@@ -46,20 +104,185 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     mesh_llm_host_runtime::run_runtime_initialized(options, explicit_surface, warning).await
 }
 
-fn maybe_print_binary_help_and_exit() {
-    let args: Vec<_> = std::env::args_os().collect();
+async fn emit_early_cli_process_event(
+    args: &[OsString],
+    family: mesh_llm_events::CliCommandFamily,
+    outcome: mesh_llm_events::CliCommandOutcome,
+) {
+    let config_path = config_path_from_args(args);
+    let logging_initialized =
+        mesh_llm_host_runtime::initialize_logging_for_cli(config_path.as_deref())
+            .await
+            .is_ok();
+    if logging_initialized {
+        install_cli_operational_audit_bridge();
+    }
+    mesh_llm_commands::operational_logging::emit_cli_process_event(family, outcome);
+    if logging_initialized {
+        let _ = mesh_llm_host_runtime::shutdown_logging_for_one_shot_cli().await;
+    }
+    mesh_llm_commands::operational_logging::clear_cli_operational_audit_bridge();
+}
+
+fn parse_exit_outcome(error: &clap::Error) -> mesh_llm_events::CliCommandOutcome {
+    match error.kind() {
+        clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
+            mesh_llm_events::CliCommandOutcome::Completed
+        }
+        _ => mesh_llm_events::CliCommandOutcome::ParseFailed,
+    }
+}
+
+/// Bridge command boundary emissions to the installed logging runtime so the
+/// static command outcome codes become durable audit records. Callers install
+/// it after either logging-only one-shot initialization or normal host/client
+/// initialization, before any command/runtime surface can emit boundaries.
+fn install_cli_operational_audit_bridge() {
+    use mesh_llm_host_runtime::{
+        OperationalAuditContext, OperationalAuditRecord, OperationalAuditSeverity,
+        OperationalAuditSubjectKind,
+    };
+
+    let bridge: mesh_llm_commands::operational_logging::CliOperationalAuditBridge = Arc::new(
+        |family: mesh_llm_events::CliCommandFamily, outcome: mesh_llm_events::CliCommandOutcome| {
+            let Some(state) = mesh_llm_host_runtime::logging_runtime_state() else {
+                return;
+            };
+            let severity = match outcome {
+                mesh_llm_events::CliCommandOutcome::Started
+                | mesh_llm_events::CliCommandOutcome::Completed => OperationalAuditSeverity::Info,
+                mesh_llm_events::CliCommandOutcome::Failed
+                | mesh_llm_events::CliCommandOutcome::Rejected
+                | mesh_llm_events::CliCommandOutcome::ParseFailed => {
+                    OperationalAuditSeverity::Warning
+                }
+            };
+            let record = OperationalAuditRecord::builder("cli", outcome.code())
+                .severity(severity)
+                .build()
+                .with_context(
+                    OperationalAuditContext::new()
+                        .subject(OperationalAuditSubjectKind::CliCommand, family.as_str())
+                        .outcome(outcome.as_str()),
+                );
+            let _ = state.write_operational_audit(record);
+        },
+    );
+    mesh_llm_commands::operational_logging::install_cli_operational_audit_bridge(bridge);
+}
+
+#[derive(Debug)]
+struct CliParseExit(i32);
+
+impl fmt::Display for CliParseExit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("command-line parsing failed")
+    }
+}
+
+impl std::error::Error for CliParseExit {}
+
+fn config_path_from_args(args: &[OsString]) -> Option<PathBuf> {
+    for (index, argument) in args.iter().enumerate().skip(1) {
+        if argument == "--config" {
+            return args.get(index + 1).cloned().map(PathBuf::from);
+        }
+        if let Some(value) = argument
+            .to_str()
+            .and_then(|value| value.strip_prefix("--config="))
+            && !value.is_empty()
+        {
+            return Some(PathBuf::from(value));
+        }
+    }
+    None
+}
+
+fn parse_failure_family(
+    args: &[OsString],
+    explicit_surface: Option<mesh_llm_cli::RuntimeSurface>,
+) -> mesh_llm_events::CliCommandFamily {
+    use mesh_llm_events::CliCommandFamily;
+
+    if explicit_surface.is_some() {
+        return CliCommandFamily::Runtime;
+    }
+    let value_taking_options: Vec<String> = mesh_llm_cli::Cli::command()
+        .get_arguments()
+        .filter(|argument| {
+            matches!(
+                argument.get_action(),
+                clap::ArgAction::Set | clap::ArgAction::Append
+            )
+        })
+        .flat_map(|argument| {
+            argument
+                .get_long()
+                .map(|long| format!("--{long}"))
+                .into_iter()
+                .chain(argument.get_short().map(|short| format!("-{short}")))
+        })
+        .collect();
+    let is_value_taking_option =
+        |argument: &str| value_taking_options.iter().any(|option| option == argument);
+    let mut skip_next = false;
+    for argument in args.iter().skip(1).filter_map(|argument| argument.to_str()) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if let Some((option, _value)) = argument.split_once('=')
+            && is_value_taking_option(option)
+        {
+            continue;
+        }
+        if is_value_taking_option(argument) {
+            skip_next = true;
+            continue;
+        }
+        if argument.starts_with('-') {
+            continue;
+        }
+        let family = match argument {
+            "models" | "download" | "model-prepare" | "model-package" => {
+                Some(CliCommandFamily::Models)
+            }
+            "update" | "setup" | "uninstall" => Some(CliCommandFamily::Installation),
+            "gpus" | "gpu" => Some(CliCommandFamily::Hardware),
+            "runtime" | "load" | "unload" | "drop" | "status" | "stop" => {
+                Some(CliCommandFamily::Runtime)
+            }
+            "config" => Some(CliCommandFamily::Configuration),
+            "doctor" => Some(CliCommandFamily::Diagnostics),
+            "discover" => Some(CliCommandFamily::Discovery),
+            "rotate-key" | "auth" => Some(CliCommandFamily::Identity),
+            "goose" | "claude" | "pi" | "opencode" => Some(CliCommandFamily::Agent),
+            "plugins" | "plugin" => Some(CliCommandFamily::Plugin),
+            "skills" => Some(CliCommandFamily::Skills),
+            "benchmark" => Some(CliCommandFamily::Benchmark),
+            _ => None,
+        };
+        if let Some(family) = family {
+            return family;
+        }
+    }
+    CliCommandFamily::Unknown
+}
+
+fn maybe_print_binary_help(args: &[OsString]) -> bool {
     if binary_help_request(args.iter().cloned()) {
         mesh_llm_cli::Cli::command().print_help().ok();
-        std::process::exit(0);
+        return true;
     }
     if let Some(surface) = runtime_surface_help_request(args.iter().cloned()) {
         print!("{}", mesh_llm_cli::parser::runtime_surface_help(surface));
-        std::process::exit(0);
+        return true;
     }
     if args.iter().any(|arg| arg == "--help-advanced") {
         print_advanced_help();
-        std::process::exit(0);
+        return true;
     }
+    false
 }
 
 fn binary_help_request<I>(args: I) -> bool
@@ -104,6 +327,7 @@ fn print_advanced_help() {
         command = command.mut_subcommand(name, |subcommand| subcommand.hide(false));
     }
     command.print_help().ok();
+    print!("{}", mesh_llm_cli::parser::logging_help());
     eprintln!();
 }
 
@@ -162,6 +386,8 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         split_topology_lock: cli.split_topology_lock,
         ctx_size: cli.ctx_size,
         max_vram: cli.max_vram,
+        kv_cache_disk: cli.kv_cache_disk,
+        kv_cache_disk_dir: cli.kv_cache_disk_dir,
         no_enumerate_host: cli.no_enumerate_host,
         bin_dir: cli.bin_dir,
         llama_flavor: cli.llama_flavor.map(map_binary_flavor),
@@ -185,6 +411,11 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         trust_policy: cli.trust_policy.map(map_trust_policy),
         trust_owner: cli.trust_owner,
         nostr_discovery: cli.nostr_discovery,
+        audit_log_path: cli.audit_log_path,
+        audit_log_format: cli.audit_log_format,
+        audit_log_level: cli.audit_log_level,
+        audit_max_file_size: 100 * 1024 * 1024,
+        audit_max_files: 10,
     }
 }
 
@@ -353,6 +584,78 @@ mod cli_entrypoint_tests {
             OsString::from("help"),
             OsString::from("--help"),
         ]));
+    }
+
+    #[test]
+    fn parse_failure_family_uses_runtime_surface_and_unknown_fallback() {
+        use mesh_llm_events::CliCommandFamily;
+
+        assert_eq!(
+            super::parse_failure_family(
+                &[
+                    OsString::from("mesh-llm"),
+                    OsString::from("--port"),
+                    OsString::from("bad")
+                ],
+                Some(mesh_llm_cli::RuntimeSurface::Serve),
+            ),
+            CliCommandFamily::Runtime
+        );
+        assert_eq!(
+            super::parse_failure_family(
+                &[
+                    OsString::from("mesh-llm"),
+                    OsString::from("definitely-not-a-command")
+                ],
+                None,
+            ),
+            CliCommandFamily::Unknown
+        );
+        assert_eq!(
+            super::parse_failure_family(
+                &[
+                    OsString::from("mesh-llm"),
+                    OsString::from("--config"),
+                    OsString::from("runtime"),
+                    OsString::from("--bad-flag"),
+                ],
+                None,
+            ),
+            CliCommandFamily::Unknown
+        );
+    }
+
+    #[test]
+    fn clap_display_exits_are_completed_while_invalid_values_are_parse_failures() {
+        use mesh_llm_events::CliCommandOutcome;
+
+        let version = mesh_llm_cli::Cli::try_parse_from(["mesh-llm", "--version"])
+            .expect_err("version is represented as an early clap exit");
+        assert_eq!(
+            super::parse_exit_outcome(&version),
+            CliCommandOutcome::Completed
+        );
+
+        let invalid = mesh_llm_cli::Cli::try_parse_from(["mesh-llm", "--port", "invalid"])
+            .expect_err("invalid port must fail parsing");
+        assert_eq!(
+            super::parse_exit_outcome(&invalid),
+            CliCommandOutcome::ParseFailed
+        );
+    }
+
+    #[test]
+    fn parse_failure_config_path_is_used_without_retaining_other_arguments() {
+        assert_eq!(
+            super::config_path_from_args(&[
+                OsString::from("mesh-llm"),
+                OsString::from("--config"),
+                OsString::from("/tmp/logging-test.toml"),
+                OsString::from("--port"),
+                OsString::from("private-invalid-value"),
+            ]),
+            Some(std::path::PathBuf::from("/tmp/logging-test.toml"))
+        );
     }
 
     #[test]

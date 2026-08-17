@@ -163,6 +163,28 @@ LLAMA_WORKDIR="$tmp_root/llama.cpp" \
   scripts/build-llama.sh
 ```
 
+### Re-pinning upstream
+
+Advancing `third_party/llama.cpp/upstream.txt` can silently invalidate a patch
+that depends on upstream's *ordering*, not just its symbols. The queue still
+applies, everything compiles, and the behavior is broken. This happened with
+upstream `1269cb1`, which moved `check_tensor_dims` ahead of `buft_for_tensor`
+and left the stage tensor filter running too late; split serving was broken on
+main because no test opened a real mid-stage artifact.
+
+So on every re-pin, in addition to the checks above:
+
+- Read `git log <old-pin>..<new-pin> -- src/llama-model-loader.* src/llama-model.*`
+  for changes to load order, not just to signatures the patches touch.
+- Prove the staged load path with a real artifact whose first block is not
+  block 0. `cargo test -p skippy-model-package` covers this via
+  `mid_stage_artifact_opens_with_the_stage_filter_applied`.
+- Confirm that test actually ran rather than skipped. It is gated on
+  `SKIPPY_CORRECTNESS_MODEL`; without it the test prints
+  `skipping mid-stage: SKIPPY_CORRECTNESS_MODEL is not set` and passes. Grep the
+  CI log for `mid_stage_artifact_opens_with_the_stage_filter_applied ... ok`, or
+  set the variable locally. A skipped gate reads identically to a pass.
+
 Compile each new public header once as C11 and once as C++17 with warnings
 treated as errors. For implementation moves, run the tests owned by the moved
 capability in addition to the Rust fallout checks below.

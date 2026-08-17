@@ -1021,6 +1021,44 @@ mod tests {
     }
 
     #[test]
+    fn schema_export_classifies_only_logging_retention_and_replay_as_dynamic() {
+        let exported = export_runtime_config_schema_reference(std::iter::empty::<
+            EngineConfigSchemaDescriptor,
+        >())
+        .expect("built-in schema should export");
+
+        for path in ["logging.retention_ttl_secs", "logging.replay_capacity"] {
+            let setting = exported
+                .settings
+                .iter()
+                .find(|setting| setting.canonical_path == path)
+                .expect("logging setting should be exported");
+            assert_eq!(setting.apply_mode, ConfigApplyMode::DynamicApply, "{path}");
+            assert_eq!(setting.restart_scope, ConfigRestartScope::None, "{path}");
+        }
+
+        for path in [
+            "logging.retention_max_rows",
+            "logging.queue_capacity",
+            "logging.cleanup_cadence_secs",
+            "logging.artifact.capture_mode",
+            "logging.webhook.enabled",
+        ] {
+            let setting = exported
+                .settings
+                .iter()
+                .find(|setting| setting.canonical_path == path)
+                .expect("logging setting should be exported");
+            assert_eq!(setting.apply_mode, ConfigApplyMode::StaticOnLoad, "{path}");
+            assert_eq!(
+                setting.restart_scope,
+                ConfigRestartScope::ProcessRestart,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
     fn schema_export_exposes_runtime_and_template_control_metadata() {
         let exported = aggregate_config_schema_sources(
             Vec::<EngineConfigSchemaDescriptor>::new(),

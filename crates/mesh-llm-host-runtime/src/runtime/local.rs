@@ -24,6 +24,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::operational_logging::{
+    LocalServingOperationalEvent, record_local_serving_operational_event,
+};
+
 mod native_runtime_events;
 
 pub(super) use super::local_package::{
@@ -358,11 +362,17 @@ pub(super) fn add_runtime_local_target(
 ) {
     let mut targets = target_tx.borrow().clone();
     let entry = targets.targets.entry(model_name.to_string()).or_default();
+    let target_was_present = entry
+        .iter()
+        .any(|target| matches!(target, election::InferenceTarget::Local(local_port) if *local_port == port));
     entry.retain(
         |target| !matches!(target, election::InferenceTarget::Local(local_port) if *local_port == port),
     );
     entry.insert(0, election::InferenceTarget::Local(port));
     target_tx.send_replace(targets);
+    if !target_was_present {
+        record_local_serving_operational_event(LocalServingOperationalEvent::TargetAdded);
+    }
 }
 
 pub(super) fn remove_runtime_local_target(
@@ -372,16 +382,22 @@ pub(super) fn remove_runtime_local_target(
 ) {
     let mut targets = target_tx.borrow().clone();
     let mut should_remove_model = false;
+    let mut target_was_removed = false;
     if let Some(entry) = targets.targets.get_mut(model_name) {
+        let entry_len = entry.len();
         entry.retain(|target| {
             !matches!(target, election::InferenceTarget::Local(local_port) if *local_port == port)
         });
+        target_was_removed = entry.len() != entry_len;
         should_remove_model = entry.is_empty();
     }
     if should_remove_model {
         targets.targets.remove(model_name);
     }
     target_tx.send_replace(targets);
+    if target_was_removed {
+        record_local_serving_operational_event(LocalServingOperationalEvent::TargetRemoved);
+    }
 }
 
 pub(super) async fn advertise_model_ready(
@@ -407,6 +423,7 @@ pub(super) async fn advertise_model_ready(
     }
     node.set_hosted_models(hosted_models).await;
     node.regossip().await;
+    record_local_serving_operational_event(LocalServingOperationalEvent::Ready);
 }
 
 pub(super) async fn set_advertised_model_context(
@@ -433,6 +450,7 @@ pub(super) async fn withdraw_advertised_model(node: &mesh::Node, model_name: &st
     }
     node.set_hosted_models(hosted_models).await;
     node.regossip().await;
+    record_local_serving_operational_event(LocalServingOperationalEvent::Unavailable);
 }
 
 pub(super) async fn add_serving_assignment(

@@ -1,0 +1,433 @@
+From a8ddfab6b7f5aa4ad38ea2e4c2748507fdd276f1 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 13 Aug 2026 22:32:25 +1000
+Subject: [PATCH] skippy: support composite ISWA KV pages
+
+---
+ include/skippy/common.h |   2 +-
+ include/skippy/state.h  |  32 +++++-
+ src/llama-kv-cache.cpp  |   6 +-
+ src/llama-kv-cache.h    |   4 +-
+ src/skippy/state.cpp    | 244 ++++++++++++++++++++++++++++++++--------
+ 5 files changed, 237 insertions(+), 51 deletions(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 0911776cd..012aceb9a 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -34,7 +34,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 38
++#define SKIPPY_ABI_VERSION_PATCH 39
+ 
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index 446da8dad..890fa5ae5 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -16,6 +16,33 @@ enum skippy_kv_page_flag {
+     SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
+ };
+ 
++enum skippy_kv_page_codec {
++    SKIPPY_KV_PAGE_CODEC_SINGLE_V1         = 1,
++    SKIPPY_KV_PAGE_CODEC_ISWA_COMPOSITE_V1 = 2,
++};
++
++enum skippy_kv_page_component_role {
++    SKIPPY_KV_PAGE_COMPONENT_BASE = 1,
++    SKIPPY_KV_PAGE_COMPONENT_SWA  = 2,
++};
++
++/** @brief Describes one independently ranged cache in a composite KV page. */
++struct skippy_kv_page_component_desc {
++    uint32_t version;
++    uint32_t role;
++    uint64_t token_start;
++    uint64_t token_count;
++    uint32_t layer_count;
++    uint32_t k_type;
++    uint32_t v_type;
++    uint32_t k_row_bytes;
++    uint32_t v_row_bytes;
++    uint32_t v_element_bytes;
++    uint64_t payload_offset;
++    uint64_t payload_bytes;
++    uint64_t flags;
++};
++
+ /** @brief Describes the layout and ownership of an exported KV page payload. */
+ struct skippy_kv_page_desc {
+     uint32_t version;
+@@ -31,6 +58,9 @@ struct skippy_kv_page_desc {
+     uint32_t v_element_bytes;
+     uint64_t payload_bytes;
+     uint64_t flags;
++    uint32_t codec;
++    uint32_t component_count;
++    struct skippy_kv_page_component_desc components[2];
+ };
+ 
+ /** @brief Exports the selected layer-range state for staged transfer. */
+@@ -112,7 +142,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
+         size_t * out_bytes,
+         struct skippy_error ** out_error);
+ 
+-/** @brief Imports a described KV page into a session. */
++/** @brief Imports a described KV page. Composite pages require a fresh session and are cleared on failure. */
+ LLAMA_API enum skippy_status skippy_import_kv_page(
+         struct skippy_session * session,
+         const struct skippy_kv_page_desc * desc,
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 138a7c63b..190c6aff9 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1651,7 +1651,8 @@ bool llama_kv_cache::stage_import_kv_page(
+         const skippy_kv_page_desc & desc,
+         const void * input,
+         size_t input_bytes,
+-        std::string & error) {
++        std::string & error,
++        bool validate_only) {
+     if (input == nullptr) {
+         error = "input payload is required";
+         return false;
+@@ -1747,6 +1748,9 @@ bool llama_kv_cache::stage_import_kv_page(
+         error = "native KV page descriptor payload size is inconsistent";
+         return false;
+     }
++    if (validate_only) {
++        return true;
++    }
+ 
+     llama_ubatch ubatch = {};
+     auto udata = std::make_shared<llama_ubatch::data_t>();
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 274ef4492..98dbcb198 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -163,6 +163,7 @@ public:
+ 
+     uint32_t get_size()     const;
+     uint32_t get_n_stream() const;
++    uint32_t get_n_swa() const { return n_swa; }
+ 
+     bool get_has_shift() const;
+ 
+@@ -190,7 +191,8 @@ public:
+             const skippy_kv_page_desc & desc,
+             const void * input,
+             size_t input_bytes,
+-            std::string & error);
++            std::string & error,
++            bool validate_only = false);
+ 
+     //
+     // graph_build API
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index 2bfd88523..a70701844 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -397,27 +397,140 @@ static llama_kv_cache * skippy_get_kv_cache(
+     }
+ 
+     if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
+-        llama_kv_cache * kv = hybrid->get_mem_attn();
+-        if (kv == nullptr) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime has no attention KV cache");
+-        }
+-        return kv;
++        return hybrid->get_mem_attn();
+     }
+     if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
+         return kv;
+     }
+     if (auto * dsa = dynamic_cast<llama_kv_cache_dsa *>(memory)) {
+-        llama_kv_cache * kv = dsa->get_mla();
+-        if (kv == nullptr) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime has no GLM-DSA MLA KV cache");
+-        }
+-        return kv;
++        return dsa->get_mla();
+     }
++    return nullptr;
++}
+ 
+-    skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime memory type is not supported for native KV pages");
++static llama_kv_cache_iswa * skippy_get_iswa_cache(skippy_session * session) {
++    if (session == nullptr || session->ctx == nullptr) {
++        return nullptr;
++    }
++    llama_memory_t memory = session->ctx->get_memory();
++    if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
++        return iswa;
++    }
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
++        return hybrid->get_mem_attn();
++    }
+     return nullptr;
+ }
+ 
++static skippy_kv_page_component_desc skippy_component_from_page(
++        const skippy_kv_page_desc & page,
++        uint32_t role,
++        uint64_t payload_offset) {
++    skippy_kv_page_component_desc component = {};
++    component.version = page.version;
++    component.role = role;
++    component.token_start = page.token_start;
++    component.token_count = page.token_count;
++    component.layer_count = page.layer_count;
++    component.k_type = page.k_type;
++    component.v_type = page.v_type;
++    component.k_row_bytes = page.k_row_bytes;
++    component.v_row_bytes = page.v_row_bytes;
++    component.v_element_bytes = page.v_element_bytes;
++    component.payload_offset = payload_offset;
++    component.payload_bytes = page.payload_bytes;
++    component.flags = page.flags;
++    return component;
++}
++
++static skippy_kv_page_desc skippy_page_from_component(
++        const skippy_kv_page_desc & composite,
++        const skippy_kv_page_component_desc & component) {
++    skippy_kv_page_desc page = {};
++    page.version = component.version;
++    page.layer_start = composite.layer_start;
++    page.layer_end = composite.layer_end;
++    page.token_start = component.token_start;
++    page.token_count = component.token_count;
++    page.layer_count = component.layer_count;
++    page.k_type = component.k_type;
++    page.v_type = component.v_type;
++    page.k_row_bytes = component.k_row_bytes;
++    page.v_row_bytes = component.v_row_bytes;
++    page.v_element_bytes = component.v_element_bytes;
++    page.payload_bytes = component.payload_bytes;
++    page.flags = component.flags;
++    page.codec = SKIPPY_KV_PAGE_CODEC_SINGLE_V1;
++    return page;
++}
++
++static bool skippy_export_iswa_kv_page(
++        skippy_session * session,
++        llama_kv_cache_iswa * iswa,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        skippy_kv_page_desc * out_desc,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        std::string & error) {
++    if (out_desc == nullptr || out_bytes == nullptr) {
++        error = "out_desc and out_bytes are required";
++        return false;
++    }
++    if (token_start + token_count < token_start) {
++        error = "token range is too large";
++        return false;
++    }
++    const uint64_t n_swa = iswa->get_swa()->get_n_swa();
++    const uint64_t token_end = token_start + token_count;
++    const uint64_t swa_start = n_swa == 0 || token_count <= n_swa ? token_start : token_end - n_swa;
++    const uint64_t swa_count = token_end - swa_start;
++
++    skippy_kv_page_desc base = {};
++    skippy_kv_page_desc swa = {};
++    size_t base_bytes = 0;
++    size_t swa_bytes = 0;
++    const bool base_sized = iswa->get_base()->stage_export_kv_page(session->seq_id, layer_start, layer_end, token_start, token_count, &base, nullptr, 0, &base_bytes, error);
++    if (!base_sized && base_bytes == 0) {
++        return false;
++    }
++    error.clear();
++    const bool swa_sized = iswa->get_swa()->stage_export_kv_page(session->seq_id, layer_start, layer_end, swa_start, swa_count, &swa, nullptr, 0, &swa_bytes, error);
++    if (!swa_sized && swa_bytes == 0) {
++        return false;
++    }
++    if (base_bytes > std::numeric_limits<size_t>::max() - swa_bytes) {
++        error = "composite KV page payload is too large";
++        return false;
++    }
++    const size_t total = base_bytes + swa_bytes;
++    *out_desc = {};
++    out_desc->version = 2;
++    out_desc->layer_start = layer_start;
++    out_desc->layer_end = layer_end;
++    out_desc->token_start = token_start;
++    out_desc->token_count = token_count;
++    out_desc->payload_bytes = total;
++    out_desc->codec = SKIPPY_KV_PAGE_CODEC_ISWA_COMPOSITE_V1;
++    out_desc->component_count = 2;
++    out_desc->components[0] = skippy_component_from_page(base, SKIPPY_KV_PAGE_COMPONENT_BASE, 0);
++    out_desc->components[1] = skippy_component_from_page(swa, SKIPPY_KV_PAGE_COMPONENT_SWA, base_bytes);
++    *out_bytes = total;
++    if (output == nullptr) {
++        return true;
++    }
++    if (output_capacity < total) {
++        error = "output buffer is too small";
++        return false;
++    }
++    char * bytes = static_cast<char *>(output);
++    return iswa->get_base()->stage_export_kv_page(session->seq_id, layer_start, layer_end, token_start, token_count, &base, bytes, base_bytes, &base_bytes, error) &&
++           iswa->get_swa()->stage_export_kv_page(session->seq_id, layer_start, layer_end, swa_start, swa_count, &swa, bytes + base_bytes, swa_bytes, &swa_bytes, error);
++}
++
+ enum skippy_status skippy_export_kv_page(
+         struct skippy_session * session,
+         int32_t layer_start,
+@@ -429,24 +542,24 @@ enum skippy_status skippy_export_kv_page(
+         size_t output_capacity,
+         size_t * out_bytes,
+         struct skippy_error ** out_error) {
+-    llama_kv_cache * kv = skippy_get_kv_cache(session, out_error);
+-    if (kv == nullptr) {
+-        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
++    if (session == nullptr || session->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+     session->ctx->synchronize();
+-
+     std::string error;
+-    const bool ok = kv->stage_export_kv_page(
+-            session->seq_id,
+-            layer_start,
+-            layer_end,
+-            token_start,
+-            token_count,
+-            out_desc,
+-            output,
+-            output_capacity,
+-            out_bytes,
+-            error);
++    bool ok = false;
++    if (auto * iswa = skippy_get_iswa_cache(session)) {
++        ok = skippy_export_iswa_kv_page(session, iswa, layer_start, layer_end, token_start, token_count, out_desc, output, output_capacity, out_bytes, error);
++    } else if (auto * kv = skippy_get_kv_cache(session, out_error)) {
++        ok = kv->stage_export_kv_page(session->seq_id, layer_start, layer_end, token_start, token_count, out_desc, output, output_capacity, out_bytes, error);
++        if (ok && out_desc != nullptr) {
++            out_desc->codec = SKIPPY_KV_PAGE_CODEC_SINGLE_V1;
++        }
++    } else {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime memory type is not supported for native KV pages");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
+     if (!ok) {
+         const bool too_small = out_bytes != nullptr && *out_bytes > output_capacity;
+         const enum skippy_status status = too_small ? SKIPPY_STATUS_BUFFER_TOO_SMALL : SKIPPY_STATUS_RUNTIME_ERROR;
+@@ -457,46 +570,83 @@ enum skippy_status skippy_export_kv_page(
+         skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "native KV page output buffer is too small");
+         return SKIPPY_STATUS_BUFFER_TOO_SMALL;
+     }
+-
+     return skippy_success(out_error);
+ }
+ 
++static bool skippy_validate_composite_desc(const skippy_kv_page_desc & desc, size_t input_bytes, std::string & error) {
++    const uint64_t logical_end = desc.token_start + desc.token_count;
++    const uint64_t swa_end = desc.components[1].token_start + desc.components[1].token_count;
++    if (logical_end < desc.token_start || swa_end < desc.components[1].token_start ||
++            desc.version != 2 || desc.component_count != 2 || desc.payload_bytes != input_bytes ||
++            desc.components[0].version != 1 || desc.components[1].version != 1 ||
++            desc.components[0].role != SKIPPY_KV_PAGE_COMPONENT_BASE || desc.components[1].role != SKIPPY_KV_PAGE_COMPONENT_SWA ||
++            desc.components[0].payload_offset != 0 || desc.components[0].token_start != desc.token_start ||
++            desc.components[0].token_count != desc.token_count || desc.components[1].token_start < desc.token_start ||
++            swa_end != logical_end ||
++            desc.components[1].payload_offset != desc.components[0].payload_bytes ||
++            desc.components[1].payload_offset > desc.payload_bytes ||
++            desc.components[1].payload_bytes != desc.payload_bytes - desc.components[1].payload_offset) {
++        error = "invalid composite ISWA KV page descriptor";
++        return false;
++    }
++    return true;
++}
++
+ enum skippy_status skippy_import_kv_page(
+         struct skippy_session * session,
+         const struct skippy_kv_page_desc * desc,
+         const void * input,
+         size_t input_bytes,
+         struct skippy_error ** out_error) {
+-    if (desc == nullptr) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "native KV page descriptor is required");
++    if (session == nullptr || session->ctx == nullptr || desc == nullptr || input == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session, descriptor, and payload are required");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+-
+-    llama_kv_cache * kv = skippy_get_kv_cache(session, out_error);
+-    if (kv == nullptr) {
+-        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
+-    }
+-
+     std::string error;
+-    if (!kv->stage_import_kv_page(session->seq_id, *desc, input, input_bytes, error)) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, error.c_str());
+-        return SKIPPY_STATUS_RUNTIME_ERROR;
++    bool ok = false;
++    bool invalid_argument = false;
++    if (desc->codec == SKIPPY_KV_PAGE_CODEC_ISWA_COMPOSITE_V1) {
++        auto * iswa = skippy_get_iswa_cache(session);
++        if (!skippy_validate_composite_desc(*desc, input_bytes, error)) {
++            invalid_argument = true;
++        } else if (iswa == nullptr) {
++            error = "composite KV page requires ISWA memory";
++        } else if (session->n_past != 0) {
++            error = "composite ISWA KV page import requires a fresh session";
++        } else {
++            const auto base = skippy_page_from_component(*desc, desc->components[0]);
++            const auto swa = skippy_page_from_component(*desc, desc->components[1]);
++            const char * bytes = static_cast<const char *>(input);
++            if (iswa->get_base()->stage_import_kv_page(session->seq_id, base, bytes, base.payload_bytes, error, true) &&
++                    iswa->get_swa()->stage_import_kv_page(session->seq_id, swa, bytes + desc->components[1].payload_offset, swa.payload_bytes, error, true)) {
++                ok = iswa->get_base()->stage_import_kv_page(session->seq_id, base, bytes, base.payload_bytes, error) &&
++                     iswa->get_swa()->stage_import_kv_page(session->seq_id, swa, bytes + desc->components[1].payload_offset, swa.payload_bytes, error);
++            }
++        }
++        if (!ok && iswa != nullptr) {
++            iswa->get_base()->seq_rm(session->seq_id, -1, -1);
++            iswa->get_swa()->seq_rm(session->seq_id, -1, -1);
++        }
++    } else if (desc->codec == 0 || desc->codec == SKIPPY_KV_PAGE_CODEC_SINGLE_V1) {
++        if (auto * kv = skippy_get_kv_cache(session, out_error)) {
++            ok = kv->stage_import_kv_page(session->seq_id, *desc, input, input_bytes, error);
++        }
++    } else {
++        error = "unsupported native KV page codec";
++        invalid_argument = true;
++    }
++    if (!ok) {
++        const enum skippy_status status = invalid_argument ? SKIPPY_STATUS_INVALID_ARGUMENT : SKIPPY_STATUS_RUNTIME_ERROR;
++        skippy_set_error(out_error, status, error.c_str());
++        return status;
+     }
+-    // KV residency determines graph topology for paths such as GLM-DSA, where
+-    // the selected-index width is capped by the visible KV length. Do not reuse
+-    // a graph that was built before this page was imported.
+     if (llm_graph_result * graph = session->ctx->get_gf_res_prev()) {
+         graph->reset();
+     }
+-    session->n_past = std::max<int32_t>(
+-            session->n_past,
+-            static_cast<int32_t>(std::min<uint64_t>(
+-                    desc->token_start + desc->token_count,
+-                    static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))));
++    session->n_past = std::max<int32_t>(session->n_past, static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count, std::numeric_limits<int32_t>::max())));
+     skippy_mtp_clear_session_state(session);
+     session->verify_checkpoints.clear();
+     session->ctx->synchronize();
+-
+     return skippy_success(out_error);
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

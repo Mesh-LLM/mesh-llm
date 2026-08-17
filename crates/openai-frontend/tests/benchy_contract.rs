@@ -301,11 +301,14 @@ async fn guarded_benchy_stream_chat_bypasses_guardrails_and_preserves_sse_framin
             "stream": true,
             "stream_options": {"include_usage": true}
         }),
-        Some("guarded-benchy-stream"),
+        Some("e0325402-2d9b-49a0-a6a7-53de10a86561"),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["x-request-id"], "guarded-benchy-stream");
+    assert_eq!(
+        response.headers()["x-request-id"],
+        "e0325402-2d9b-49a0-a6a7-53de10a86561"
+    );
     assert_eq!(
         response.headers()["content-type"].to_str().unwrap(),
         "text/event-stream"

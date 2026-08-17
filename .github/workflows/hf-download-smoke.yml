@@ -3,6 +3,11 @@ name: Reusable HuggingFace Download Smoke Tests
 on:
   workflow_call:
     inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
       timeout_minutes:
         required: false
         default: 20
@@ -13,7 +18,7 @@ on:
 
 env:
   CACHE_NAMESPACE: mesh-llm
-  SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'READ_ONLY' || 'READ_WRITE' }}
+  SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'READ_ONLY' || 'READ_WRITE' }}
 
 permissions:
   contents: read
@@ -31,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -47,12 +53,14 @@ jobs:
           EOF
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_native_github_cache: "true"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         with:
           workspaces: . -> target
           cache-bin: "false"
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ hashFiles('.github/cache-version.txt') }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
       - name: Restore Hugging Face download test model cache
         id: hf_download_model_cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -66,7 +74,7 @@ jobs:
           MESH_HF_DOWNLOAD_TEST_CACHE_DIR: ${{ runner.temp }}/mesh-llm-hf-download-cache
         run: scripts/ci-hf-download-smoke.sh
       - name: Save Hugging Face download test model cache
-        if: ${{ github.ref == 'refs/heads/main' && steps.hf_download_model_cache.outputs.cache-hit != 'true' }}
+        if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' && steps.hf_download_model_cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}/mesh-llm-hf-download-cache

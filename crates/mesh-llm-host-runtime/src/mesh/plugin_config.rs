@@ -13,6 +13,13 @@ impl Node {
         let revision_tx = Arc::clone(&self.config_revision_tx);
         let plugin_name = plugin_name.to_string();
         let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let apply_serialization_lock = {
+                let state = config_state.blocking_lock();
+                state.apply_serialization_lock()
+            };
+            let _apply_serialization_guard = apply_serialization_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut state = config_state.blocking_lock();
             let expected_revision = state.revision();
             let mut config = state.config().clone();
@@ -44,6 +51,10 @@ impl Node {
                 if apply_mode == ConfigApplyMode::Staged {
                     let _ = revision_tx.send(revision);
                 }
+                Ok(())
+            }
+            (ApplyResult::AppliedWithRestartRequired { revision, .. }, _) => {
+                let _ = revision_tx.send(revision);
                 Ok(())
             }
             (
@@ -84,6 +95,13 @@ impl Node {
         let revision_tx = Arc::clone(&self.config_revision_tx);
         let plugin_name = plugin_name.to_string();
         let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let apply_serialization_lock = {
+                let state = config_state.blocking_lock();
+                state.apply_serialization_lock()
+            };
+            let _apply_serialization_guard = apply_serialization_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut state = config_state.blocking_lock();
             let expected_revision = state.revision();
             let mut config = state.config().clone();
@@ -123,6 +141,10 @@ impl Node {
                 if apply_mode == ConfigApplyMode::Staged {
                     let _ = revision_tx.send(revision);
                 }
+                Ok(settings)
+            }
+            (ApplyResult::AppliedWithRestartRequired { revision, .. }, _, settings) => {
+                let _ = revision_tx.send(revision);
                 Ok(settings)
             }
             (
