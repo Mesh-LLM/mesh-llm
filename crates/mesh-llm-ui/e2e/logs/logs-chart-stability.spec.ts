@@ -25,10 +25,10 @@
  * perturbation shape.
  */
 
-import { expect, test, type Page } from '../fixtures/base';
+import { expect, test, type Page } from '../fixtures/base'
 
-const PINNED_NOW = new Date('2026-08-15T12:34:56Z');
-const NOW_MS = PINNED_NOW.getTime();
+const PINNED_NOW = new Date('2026-08-15T12:34:56Z')
+const NOW_MS = PINNED_NOW.getTime()
 
 /**
  * The dev server (vite, which Playwright's webServer runs) defaults to harness
@@ -36,16 +36,16 @@ const NOW_MS = PINNED_NOW.getTime();
  * tracked e2e specs opt the page into live mode before registering routes;
  * without this the mocked datasets below never reach the ledger.
  */
-const DATA_MODE_STORAGE_KEY = 'mesh-llm-ui-preview:data-mode:v2';
+const DATA_MODE_STORAGE_KEY = 'mesh-llm-ui-preview:data-mode:v2'
 
-type RequestKind = 'completed' | 'failed' | 'active';
+type RequestKind = 'completed' | 'failed' | 'active'
 
 function logsPage(items: unknown[]): { items: unknown[]; nextCursor: null } {
-  return { items, nextCursor: null };
+  return { items, nextCursor: null }
 }
 
 function minutesAgoIso(minutes: number): string {
-  return new Date(NOW_MS - minutes * 60_000).toISOString();
+  return new Date(NOW_MS - minutes * 60_000).toISOString()
 }
 
 function requestRow(index: number, kind: RequestKind, createdMinutesAgo: number) {
@@ -59,8 +59,8 @@ function requestRow(index: number, kind: RequestKind, createdMinutesAgo: number)
     provider: 'mesh',
     engine: 'skippy',
     statusCode: kind === 'completed' ? 200 : kind === 'failed' ? 502 : null,
-    source: kind === 'active' ? 'active' : 'durable',
-  };
+    source: kind === 'active' ? 'active' : 'durable'
+  }
 }
 
 const REQUEST_ROWS = [
@@ -73,14 +73,14 @@ const REQUEST_ROWS = [
   requestRow(6, 'completed', 540),
   requestRow(7, 'failed', 640),
   requestRow(8, 'completed', 760),
-  requestRow(9, 'active', 4),
-];
+  requestRow(9, 'active', 4)
+]
 
 const AUDIT_CODES: Record<string, string> = {
   system: 'runtime_startup_started',
   quic: 'mesh_quic_inbound_accepted',
-  gossip: 'gossip_direct_peer_promoted',
-};
+  gossip: 'gossip_direct_peer_promoted'
+}
 
 function auditRow(category: keyof typeof AUDIT_CODES, index: number, createdMinutesAgo: number) {
   return {
@@ -89,8 +89,8 @@ function auditRow(category: keyof typeof AUDIT_CODES, index: number, createdMinu
     source: category === 'gossip' || category === 'quic' ? 'mesh' : 'runtime',
     code: AUDIT_CODES[category],
     severity: 'info',
-    sequence: index + 1,
-  };
+    sequence: index + 1
+  }
 }
 
 const AUDIT_ROWS = [
@@ -100,10 +100,10 @@ const AUDIT_ROWS = [
   auditRow('gossip', 1, 50),
   auditRow('quic', 2, 240),
   auditRow('system', 3, 460),
-  auditRow('gossip', 2, 490),
-];
+  auditRow('gossip', 2, 490)
+]
 
-type StreamMode = 'error' | 'burst';
+type StreamMode = 'error' | 'burst'
 
 /**
  * Mocks the /api/logs/* route family with the same response shapes as
@@ -114,85 +114,86 @@ type StreamMode = 'error' | 'burst';
 function mockLogsApi(
   page: Page,
   options: {
-    streamMode?: StreamMode;
-    eventsUrlCount?: number;
-    requests?: unknown[];
-    audit?: unknown[];
-  } = {},
+    streamMode?: StreamMode
+    eventsUrlCount?: number
+    requests?: unknown[]
+    audit?: unknown[]
+  } = {}
 ) {
-  const { streamMode = 'error', eventsUrlCount = 3 } = options;
-  const requests = options.requests ?? REQUEST_ROWS;
-  const audit = options.audit ?? AUDIT_ROWS;
-  let eventStreamCalls = 0;
-  const burstEntries = [1, 2, 3].map((n) => ({ ...auditRow('gossip', n + 10, n * 7), sequence: 100 + n }));
+  const { streamMode = 'error', eventsUrlCount = 3 } = options
+  const requests = options.requests ?? REQUEST_ROWS
+  const audit = options.audit ?? AUDIT_ROWS
+  let eventStreamCalls = 0
+  const burstEntries = [1, 2, 3].map((n) => ({ ...auditRow('gossip', n + 10, n * 7), sequence: 100 + n }))
 
   return page
-    .addInitScript(
-      (storageKey) => window.localStorage.setItem(storageKey, 'live'),
-      DATA_MODE_STORAGE_KEY,
-    )
+    .addInitScript((storageKey) => window.localStorage.setItem(storageKey, 'live'), DATA_MODE_STORAGE_KEY)
     .then(() =>
       page.context().route('**/api/logs/**', async (route) => {
-        const url = new URL(route.request().url());
-        const path = url.pathname;
+        const url = new URL(route.request().url())
+        const path = url.pathname
 
         if (path === '/api/logs/requests' && route.request().method() === 'GET') {
-          return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(logsPage(requests)) });
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(logsPage(requests))
+          })
         }
         if (path === '/api/logs/audit' && route.request().method() === 'GET') {
-          return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(logsPage(audit)) });
+          return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(logsPage(audit)) })
         }
         if (path === '/api/logs/events') {
-          eventStreamCalls += 1;
+          eventStreamCalls += 1
           if (streamMode === 'burst' && eventStreamCalls <= eventsUrlCount) {
             const body = burstEntries
               .map((entry) => `id: v1:${entry.sequence}.0.0\nevent: audit_entry\ndata: ${JSON.stringify(entry)}\n\n`)
-              .join('');
-            return route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+              .join('')
+            return route.fulfill({ status: 200, contentType: 'text/event-stream', body })
           }
           return route.fulfill({
             status: 200,
             contentType: 'text/event-stream',
-            body: 'id: v1:0.0.0\nevent: stream_error\ndata: {"code":"invalid_event"}\n\n',
-          });
+            body: 'id: v1:0.0.0\nevent: stream_error\ndata: {"code":"invalid_event"}\n\n'
+          })
         }
         return route.fulfill({
           status: 404,
           contentType: 'application/json',
-          body: JSON.stringify({ error: { code: 'unsupported' } }),
-        });
-      }),
-    );
+          body: JSON.stringify({ error: { code: 'unsupported' } })
+        })
+      })
+    )
 }
 
 /** Collects console errors/warnings and pageerrors so tests can fail on render loops. */
 function captureErrors(page: Page) {
-  const consoleIssues: string[] = [];
-  let reactCrash = '';
+  const consoleIssues: string[] = []
+  let reactCrash = ''
   page.on('console', (msg) => {
     if (msg.type() === 'error' || msg.type() === 'warning') {
-      consoleIssues.push(`[${msg.type()}] ${msg.text()}`);
+      consoleIssues.push(`[${msg.type()}] ${msg.text()}`)
     }
-  });
+  })
   page.on('pageerror', (error) => {
-    reactCrash = error.toString();
-  });
+    reactCrash = error.toString()
+  })
   return {
     consoleIssues,
     reactCrash: () => reactCrash,
     depthErrors: () =>
-      [...consoleIssues, reactCrash].filter((m) => /Maximum update depth exceeded|Too many re-renders/i.test(m)),
-  };
+      [...consoleIssues, reactCrash].filter((m) => /Maximum update depth exceeded|Too many re-renders/i.test(m))
+  }
 }
 
 /** Mounts the /logs page and waits for the chart to render real data. */
 async function mountChart(page: Page) {
-  const capture = captureErrors(page);
-  await page.goto('/logs');
-  await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole('img', { name: /Events over time/i }).first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator('path.recharts-rectangle').first()).toBeVisible({ timeout: 30_000 });
-  return capture;
+  const capture = captureErrors(page)
+  await page.goto('/logs')
+  await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('img', { name: /Events over time/i }).first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('path.recharts-rectangle').first()).toBeVisible({ timeout: 30_000 })
+  return capture
 }
 
 /** Fails the test if React hit the update-depth limit or the chart unmounted. */
@@ -201,44 +202,46 @@ async function assertChartAndNoLoop(page: Page, capture: ReturnType<typeof captu
     throw new Error(
       `render loop detected:\nreactCrash=${capture.reactCrash()}\nconsoleTail=\n${capture.consoleIssues
         .slice(-12)
-        .join('\n')}`,
-    );
+        .join('\n')}`
+    )
   }
-  await expect(page.getByRole('img', { name: /Events over time/i }).first(), 'chart subtree disappeared from the tree')
-    .toBeVisible({ timeout: 8_000 });
+  await expect(
+    page.getByRole('img', { name: /Events over time/i }).first(),
+    'chart subtree disappeared from the tree'
+  ).toBeVisible({ timeout: 8_000 })
 }
 
 test.describe('events over time chart stability', () => {
-  test.use({ viewport: { width: 1400, height: 950 } });
+  test.use({ viewport: { width: 1400, height: 950 } })
 
   test.describe('frozen time (setFixedTime)', () => {
     test.beforeEach(async ({ page }) => {
-      await mockLogsApi(page);
-      await page.clock.setFixedTime(PINNED_NOW);
-    });
+      await mockLogsApi(page)
+      await page.clock.setFixedTime(PINNED_NOW)
+    })
 
     test('renders real data without exceeding React update depth', async ({ page }) => {
-      const info = test.info();
-      const capture = captureErrors(page);
+      const info = test.info()
+      const capture = captureErrors(page)
 
-      await page.goto('/logs');
-      await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 });
-      await page.waitForTimeout(2500);
+      await page.goto('/logs')
+      await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 })
+      await page.waitForTimeout(2500)
       await info.attach('console-issues', {
         contentType: 'text/plain',
-        body: capture.consoleIssues.join('\n') || '(none)',
-      });
+        body: capture.consoleIssues.join('\n') || '(none)'
+      })
 
-      const chart = page.getByRole('img', { name: /Events over time/i }).first();
-      await expect(chart).toBeVisible({ timeout: 30_000 });
-      const barRects = page.locator('path.recharts-rectangle');
-      await expect(barRects.first()).toBeVisible({ timeout: 30_000 });
-      expect(await barRects.count()).toBeGreaterThan(0);
+      const chart = page.getByRole('img', { name: /Events over time/i }).first()
+      await expect(chart).toBeVisible({ timeout: 30_000 })
+      const barRects = page.locator('path.recharts-rectangle')
+      await expect(barRects.first()).toBeVisible({ timeout: 30_000 })
+      expect(await barRects.count()).toBeGreaterThan(0)
 
-      const maxDepthMessages = capture.depthErrors();
-      expect(capture.reactCrash()).toBe('');
-      expect(maxDepthMessages, `render loop detected:\n${maxDepthMessages.join('\n')}`).toEqual([]);
-    });
+      const maxDepthMessages = capture.depthErrors()
+      expect(capture.reactCrash()).toBe('')
+      expect(maxDepthMessages, `render loop detected:\n${maxDepthMessages.join('\n')}`).toEqual([])
+    })
 
     test('renders a high-volume dataset without exceeding React update depth', async ({ page }) => {
       // 370 requests spanning [now-370min, now-1min] under frozen time. The
@@ -248,92 +251,92 @@ test.describe('events over time chart stability', () => {
       // count itself stays small (64 rows at the default 5m interval), so the
       // fidelity gate is "bars render at all and no render loop fires".
       const manyRequests = Array.from({ length: 370 }, (_, i) =>
-        requestRow(i, i === 0 ? 'active' : i % 3 === 0 ? 'failed' : 'completed', 370 - i),
-      );
-      await mockLogsApi(page, { requests: manyRequests });
+        requestRow(i, i === 0 ? 'active' : i % 3 === 0 ? 'failed' : 'completed', 370 - i)
+      )
+      await mockLogsApi(page, { requests: manyRequests })
 
-      const capture = captureErrors(page);
-      await page.goto('/logs');
-      await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 });
-      await page.waitForTimeout(2500);
+      const capture = captureErrors(page)
+      await page.goto('/logs')
+      await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 })
+      await page.waitForTimeout(2500)
 
-      const legend = page.getByRole('list', { name: 'Visible event categories' });
-      await expect(legend).toContainText('Requests64');
-      const bars = await page.locator('path.recharts-rectangle').count();
-      expect(bars).toBeGreaterThan(0);
-      expect(capture.depthErrors(), `render loop detected:\n${capture.depthErrors().join('\n')}`).toEqual([]);
-    });
+      const legend = page.getByRole('list', { name: 'Visible event categories' })
+      await expect(legend).toContainText('Requests64')
+      const bars = await page.locator('path.recharts-rectangle').count()
+      expect(bars).toBeGreaterThan(0)
+      expect(capture.depthErrors(), `render loop detected:\n${capture.depthErrors().join('\n')}`).toEqual([])
+    })
 
     test('chart tracks viewport growth', async ({ page }) => {
       // Guards against a fixed-width "measure once" chart wrapper: the chart
       // must re-measure and grow when the viewport (and container) grows.
-      const capture = captureErrors(page);
-      await page.goto('/logs');
-      await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 });
-      await expect(page.getByRole('img', { name: /Events over time/i }).first()).toBeVisible({ timeout: 30_000 });
+      const capture = captureErrors(page)
+      await page.goto('/logs')
+      await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 })
+      await expect(page.getByRole('img', { name: /Events over time/i }).first()).toBeVisible({ timeout: 30_000 })
 
-      await page.setViewportSize({ width: 900, height: 600 });
-      await page.waitForTimeout(700);
-      const wSmall = (await page.locator('.recharts-surface').first().boundingBox())?.width ?? 0;
+      await page.setViewportSize({ width: 900, height: 600 })
+      await page.waitForTimeout(700)
+      const wSmall = (await page.locator('.recharts-surface').first().boundingBox())?.width ?? 0
 
-      await page.setViewportSize({ width: 1920, height: 1080 });
-      await page.waitForTimeout(1200);
-      const wLarge = (await page.locator('.recharts-surface').first().boundingBox())?.width ?? 0;
+      await page.setViewportSize({ width: 1920, height: 1080 })
+      await page.waitForTimeout(1200)
+      const wLarge = (await page.locator('.recharts-surface').first().boundingBox())?.width ?? 0
 
-      expect(wSmall).toBeGreaterThan(0);
-      expect(wLarge).toBeGreaterThan(wSmall * 1.15);
-      expect(capture.depthErrors(), `render loop detected:\n${capture.depthErrors().join('\n')}`).toEqual([]);
-    });
-  });
+      expect(wSmall).toBeGreaterThan(0)
+      expect(wLarge).toBeGreaterThan(wSmall * 1.15)
+      expect(capture.depthErrors(), `render loop detected:\n${capture.depthErrors().join('\n')}`).toEqual([])
+    })
+  })
 
   test.describe('real timers (no clock)', () => {
     test.beforeEach(async ({ page }) => {
-      await mockLogsApi(page);
-    });
+      await mockLogsApi(page)
+    })
 
     test('idle: static mount with no interaction stays stable', async ({ page }) => {
-      const capture = await mountChart(page);
-      await page.waitForTimeout(2500);
-      await assertChartAndNoLoop(page, capture);
-    });
+      const capture = await mountChart(page)
+      await page.waitForTimeout(2500)
+      await assertChartAndNoLoop(page, capture)
+    })
 
     test('resize-storm: repeated viewport resizes stay stable', async ({ page }) => {
-      const capture = await mountChart(page);
+      const capture = await mountChart(page)
       const sizes = [
         { width: 1200, height: 800 },
         { width: 375, height: 667 },
         { width: 900, height: 700 },
-        { width: 1400, height: 950 },
-      ];
+        { width: 1400, height: 950 }
+      ]
       for (let cycle = 0; cycle < 3; cycle += 1) {
         for (const size of sizes) {
-          await page.setViewportSize(size);
-          await page.waitForTimeout(160);
+          await page.setViewportSize(size)
+          await page.waitForTimeout(160)
         }
       }
-      await page.waitForTimeout(2500);
-      await assertChartAndNoLoop(page, capture);
-    });
+      await page.waitForTimeout(2500)
+      await assertChartAndNoLoop(page, capture)
+    })
 
     test('stream-burst: SSE audit events mutating chart data stay stable', async ({ page }) => {
       // Re-register the mock with burst mode so the first event stream
       // deliveries mutate the chart data while it is mounted.
-      await mockLogsApi(page, { streamMode: 'burst', eventsUrlCount: 3 });
-      const capture = await mountChart(page);
-      await page.waitForTimeout(4000);
-      await assertChartAndNoLoop(page, capture);
-    });
+      await mockLogsApi(page, { streamMode: 'burst', eventsUrlCount: 3 })
+      const capture = await mountChart(page)
+      await page.waitForTimeout(4000)
+      await assertChartAndNoLoop(page, capture)
+    })
 
     test('row-click: opening the request inspector stays stable', async ({ page }) => {
       // Reproduces the live crash on the unfixed tree: opening the inspector
       // shifts the layout while the chart is mounted.
-      const capture = await mountChart(page);
-      const row = page.getByRole('row', { name: 'Inspect request 10000000-0000-4000-8000-000000000001' });
-      await expect(row).toBeVisible({ timeout: 30_000 });
-      await row.click();
-      await expect(page.locator('main')).toBeVisible({ timeout: 30_000 });
-      await page.waitForTimeout(2500);
-      await assertChartAndNoLoop(page, capture);
-    });
-  });
-});
+      const capture = await mountChart(page)
+      const row = page.getByRole('row', { name: 'Inspect request 10000000-0000-4000-8000-000000000001' })
+      await expect(row).toBeVisible({ timeout: 30_000 })
+      await row.click()
+      await expect(page.locator('main')).toBeVisible({ timeout: 30_000 })
+      await page.waitForTimeout(2500)
+      await assertChartAndNoLoop(page, capture)
+    })
+  })
+})

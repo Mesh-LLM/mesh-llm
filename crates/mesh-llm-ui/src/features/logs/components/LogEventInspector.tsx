@@ -154,9 +154,7 @@ function AuditMetadata({ audit }: { readonly audit: LogAuditEntry }) {
     readonly value: string
   }> = [
     { kind: 'severity', label: 'Severity', value: audit.severity ?? 'Not provided' },
-    ...(audit.outcome
-      ? ([{ kind: 'outcome' as const, label: 'Outcome', value: audit.outcome }] as const)
-      : [])
+    ...(audit.outcome ? ([{ kind: 'outcome' as const, label: 'Outcome', value: audit.outcome }] as const) : [])
   ]
   const metadataFields: Array<readonly [string, string]> = [
     ['Entry ID', audit.entryId],
@@ -227,7 +225,7 @@ function AuditOutsideWindow() {
 
 function statusTone(kind: 'severity' | 'outcome', value: string): StatusBadgeTone {
   const normalized = value.trim().toLowerCase()
-  return kind === 'severity' ? SEVERITY_TONES[normalized] ?? 'muted' : OUTCOME_TONES[normalized] ?? 'muted'
+  return kind === 'severity' ? (SEVERITY_TONES[normalized] ?? 'muted') : (OUTCOME_TONES[normalized] ?? 'muted')
 }
 
 const SEVERITY_TONES: Readonly<Record<string, StatusBadgeTone>> = {

@@ -103,18 +103,12 @@ export function LogCleanupWindow({
     (category) => category !== 'iroh' || options.some((option) => option.value === 'iroh')
   )
   const selectedCategories = useMemo(() => new Set(categories), [categories])
-  const windowRows = useMemo(
-    () => rowsInCleanupWindow(rows, window, new Set(LOG_EVENT_CATEGORIES)),
-    [rows, window]
-  )
+  const windowRows = useMemo(() => rowsInCleanupWindow(rows, window, new Set(LOG_EVENT_CATEGORIES)), [rows, window])
   const selectedRows = useMemo(
     () => rowsInCleanupWindow(rows, window, selectedCategories),
     [rows, window, selectedCategories]
   )
-  const requestCount = useMemo(
-    () => selectedRows.filter((row) => row.category === 'requests').length,
-    [selectedRows]
-  )
+  const requestCount = useMemo(() => selectedRows.filter((row) => row.category === 'requests').length, [selectedRows])
   const buckets = useMemo(() => cleanupBuckets(rows, bounds), [rows, bounds])
   const maxBucketTotal = useMemo(() => Math.max(1, ...buckets.map((bucket) => bucket.total)), [buckets])
   const step = useMemo(() => Math.max(1, Math.round((bounds.end - bounds.start) / 240)), [bounds])

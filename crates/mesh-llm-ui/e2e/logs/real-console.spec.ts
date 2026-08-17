@@ -172,9 +172,8 @@ test.describe('real embedded logging console', () => {
     const current = await page.request.get('/api/logs/requests?limit=10')
     const currentPage = (await current.json()) as LogPage
     const deleteId = requireObservedRequest(
-      currentPage.items.find(
-        (item) => item.requestId !== persistedId && item.requestId !== lifecycleRequestId
-      )?.requestId
+      currentPage.items.find((item) => item.requestId !== persistedId && item.requestId !== lifecycleRequestId)
+        ?.requestId
     )
     expect(deleteId).toBeTruthy()
     await page.reload()

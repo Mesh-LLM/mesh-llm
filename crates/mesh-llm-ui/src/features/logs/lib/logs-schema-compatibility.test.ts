@@ -71,7 +71,9 @@ describe('resolveLogsSchemaCompatibility', () => {
   it('returns undefined for a LogsApiError missing either detail', () => {
     expect(resolveLogsSchemaCompatibility(undefined, schemaError(undefined, 2))).toBeUndefined()
     expect(resolveLogsSchemaCompatibility(undefined, schemaError(3, undefined))).toBeUndefined()
-    expect(resolveLogsSchemaCompatibility(undefined, new LogsApiError(409, 'logging_schema_incompatible'))).toBeUndefined()
+    expect(
+      resolveLogsSchemaCompatibility(undefined, new LogsApiError(409, 'logging_schema_incompatible'))
+    ).toBeUndefined()
   })
 
   it('returns undefined for errors that are not LogsApiError', () => {

@@ -165,10 +165,10 @@ export function LogOperations({
   const [open, setOpen] = useState(false)
   const [cleanupSnapshot, setCleanupSnapshot] = useState<CleanupSnapshot>()
   const triggerRef = useRef<HTMLButtonElement | null>(null)
-  const fallbackSnapshot = useMemo<CleanupSnapshot>(() => ({ generation: 0, rows, selectedCategories }), [
-    rows,
-    selectedCategories
-  ])
+  const fallbackSnapshot = useMemo<CleanupSnapshot>(
+    () => ({ generation: 0, rows, selectedCategories }),
+    [rows, selectedCategories]
+  )
 
   switch (operation) {
     case 'export':

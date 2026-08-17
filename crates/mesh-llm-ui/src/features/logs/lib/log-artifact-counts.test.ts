@@ -91,7 +91,10 @@ describe('deriveArtifactCounts', () => {
   })
 
   it('sums stored bytes across items', () => {
-    const items = [artifact({ contentState: 'available', bytes: 1_000 }), artifact({ contentState: 'available', bytes: 992 })]
+    const items = [
+      artifact({ contentState: 'available', bytes: 1_000 }),
+      artifact({ contentState: 'available', bytes: 992 })
+    ]
     expect(deriveArtifactCounts(items).bytes).toBe(1_992)
   })
 

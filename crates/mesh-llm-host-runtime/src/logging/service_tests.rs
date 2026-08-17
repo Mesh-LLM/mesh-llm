@@ -590,7 +590,8 @@ fn canonical_projection_uses_request_summary_context_for_probe_and_terminal_line
         .into_iter()
         .find_map(|event| match event {
             OutputEvent::CanonicalLog(envelope)
-                if matches!(envelope.event, LifecycleEvent::Admitted { .. }) =>
+                if envelope.request_id == request_id
+                    && matches!(envelope.event, LifecycleEvent::Admitted { .. }) =>
             {
                 Some(envelope)
             }
@@ -621,7 +622,8 @@ fn canonical_projection_uses_request_summary_context_for_probe_and_terminal_line
         .into_iter()
         .find_map(|event| match event {
             OutputEvent::CanonicalLog(envelope)
-                if matches!(envelope.event, LifecycleEvent::Completed { .. }) =>
+                if envelope.request_id == request_id
+                    && matches!(envelope.event, LifecycleEvent::Completed { .. }) =>
             {
                 Some(envelope)
             }
@@ -654,7 +656,8 @@ fn canonical_projection_classifies_management_polling_without_guessing_the_clien
         .into_iter()
         .find_map(|event| match event {
             OutputEvent::CanonicalLog(envelope)
-                if matches!(envelope.event, LifecycleEvent::Admitted { .. }) =>
+                if envelope.request_id == request_id
+                    && matches!(envelope.event, LifecycleEvent::Admitted { .. }) =>
             {
                 Some(envelope)
             }
@@ -672,7 +675,8 @@ fn canonical_projection_classifies_management_polling_without_guessing_the_clien
         .into_iter()
         .find_map(|event| match event {
             OutputEvent::CanonicalLog(envelope)
-                if matches!(envelope.event, LifecycleEvent::Completed { .. }) =>
+                if envelope.request_id == request_id
+                    && matches!(envelope.event, LifecycleEvent::Completed { .. }) =>
             {
                 Some(envelope)
             }

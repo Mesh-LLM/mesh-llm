@@ -138,9 +138,7 @@ describe('EventsOverTimeChart recharts render-loop regression', () => {
   it('stays within React update limits across repeated measurements and parent updates', () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     let rows = freshRows()
-    const { rerender } = render(
-      <EventsOverTimeChart rows={rows} selectedCategories={ALL_CATEGORIES} now={NOW} />
-    )
+    const { rerender } = render(<EventsOverTimeChart rows={rows} selectedCategories={ALL_CATEGORIES} now={NOW} />)
 
     // ChartContainer (chart.tsx) renders a div carrying the aria-label.
     const container = screen.getByLabelText(/^events over time$/i)
