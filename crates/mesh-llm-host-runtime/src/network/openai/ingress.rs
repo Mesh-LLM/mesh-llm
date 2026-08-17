@@ -3,6 +3,7 @@ use crate::logging::{OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
 use crate::network::affinity;
 use crate::network::openai::auto_route;
+use crate::network::openai::automatic;
 use crate::network::openai::transport as proxy;
 use crate::network::router;
 use mesh_llm_events::audit::{audit_events, emit_audit};
@@ -182,7 +183,14 @@ async fn resolve_auto_routed_model(
     required_tokens: Option<u32>,
     affinity: &affinity::AffinityRouter,
 ) -> AutoRouteResolution {
-    if request.model_name.is_some() && request.model_name.as_deref() != Some("auto") {
+    // An explicitly named model routes to itself. The automatic directive (in
+    // either spelling) resolves here, so `mesh` reaches the same
+    // media-capability filter and readiness/affinity selection as `auto` —
+    // without it, a `mesh` request with an image skipped the filter entirely
+    // and had its image silently dropped downstream.
+    if let Some(model) = request.model_name.as_deref()
+        && !automatic::is_directive(model)
+    {
         return AutoRouteResolution::Continue {
             effective_model: request.model_name.clone(),
             classification: None,
@@ -196,6 +204,32 @@ async fn resolve_auto_routed_model(
             classification: None,
         };
     };
+
+    automatic::warn_if_deprecated_alias(request.model_name.as_deref());
+
+    let mode = automatic::serving_mode(automatic::AutomaticRequest {
+        model: request.model_name.as_deref(),
+        // The forwarded path: `/v1/responses` has already been normalised onto
+        // chat completions by this point, so it stays committee-eligible.
+        path: &request.path,
+        body: body_json,
+    });
+    match mode {
+        // Committee mode keeps the directive as the effective model so the MoA
+        // gateway picks the request up.
+        automatic::ServingMode::Committee => {
+            return AutoRouteResolution::Continue {
+                effective_model: Some(automatic::DIRECTIVE.to_string()),
+                classification: None,
+            };
+        }
+        // Single-model mode falls through to the capability-, readiness- and
+        // affinity-aware selection below.
+        automatic::ServingMode::SingleModel(reason) => tracing::debug!(
+            reason = reason.as_str(),
+            "automatic routing: serving from a single model"
+        ),
+    }
 
     let classification = router::classify(body_json);
     let media = router::media_requirements(body_json);
@@ -315,15 +349,40 @@ async fn auto_route_model_has_ready_ingress_target(
     auto_route::model_is_locally_served(node, model).await
 }
 
+/// Commit an automatic routing decision to the request that will be forwarded.
+///
+/// The backend reads `model` out of `request.raw` and rejects anything that is
+/// not its own advertised identity (`ensure_requested_model`,
+/// `skippy-server/src/frontend/generation/parsing.rs:21-32`), so a selected
+/// model that is not written back 404s. This gate previously matched only
+/// `None` and `auto`, which left a single-model `mesh` request forwarding
+/// `"model":"mesh"` while routing to a concrete target.
+///
+/// The tokenize guard is load-bearing, not a precaution. Tokenize forces
+/// `model_name` to `expected_identity.model_id` (`request_parse.rs:319-330`),
+/// and that string could itself be `mesh` or `auto` — which the widened
+/// predicate below would match and then rewrite, diverging the wire identity
+/// from the authoritative expected identity. `transport.rs` carries the same
+/// guard for the same reason.
 fn maybe_enable_auto_route_hooks(
     request: &mut proxy::BufferedHttpRequest,
     effective_model: Option<&str>,
 ) {
-    if request.model_name.is_none() || request.model_name.as_deref() == Some("auto") {
-        proxy::inject_mesh_hooks_flag(&mut request.raw, true);
-        if let Some(model) = effective_model {
-            proxy::rewrite_model_field(request, model);
-        }
+    if request.is_tokenize_request() {
+        return;
+    }
+    let is_automatic = request
+        .model_name
+        .as_deref()
+        .is_none_or(automatic::is_directive);
+    if !is_automatic {
+        return;
+    }
+    proxy::inject_mesh_hooks_flag(&mut request.raw, true);
+    // The directive itself is not a model. Committee mode keeps it in the body
+    // for the MoA gateway; only a resolved concrete model gets written back.
+    if let Some(model) = effective_model.filter(|name| !automatic::is_directive(name)) {
+        proxy::rewrite_model_field(request, model);
     }
 }
 
@@ -1142,6 +1201,10 @@ pub(crate) fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
 #[cfg(test)]
 #[path = "ingress_tests/durable_artifacts.rs"]
 mod durable_artifacts;
+
+#[cfg(test)]
+#[path = "ingress_tests/automatic_routing.rs"]
+mod automatic_routing;
 
 #[cfg(test)]
 mod tests {

@@ -153,10 +153,7 @@ fn config(
     let mut backends: Vec<Arc<dyn moa::ModelBackend>> = Vec::new();
     let mut entries = Vec::new();
     for (name, backend) in models {
-        entries.push(moa::ModelEntry {
-            name: (*name).to_string(),
-            backend_index: backends.len(),
-        });
+        entries.push(moa::ModelEntry::new((*name).to_string(), backends.len()));
         backends.push(backend.clone());
     }
     moa::GatewayConfig {

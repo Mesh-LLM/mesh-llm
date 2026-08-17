@@ -45,6 +45,65 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             metadata,
         )
 
+    def test_release_source_version_is_synchronized_before_builds(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        metadata = job_block(workflow, "metadata", "build")
+        publish = job_block(
+            workflow,
+            "publish",
+            "dispatch_packaging_release",
+        )
+
+        source = metadata.index("name: Prepare canonical release source")
+        selector = metadata.index("uses: ./.github/actions/select-ci-runners")
+        self.assertLess(source, selector)
+        self.assertIn("source_sha: ${{ steps.source.outputs.sha }}", metadata)
+        self.assertIn(
+            "release_notes_base: "
+            "${{ steps.source.outputs.release_notes_base }}",
+            metadata,
+        )
+        self.assertIn('scripts/release-version.sh "$RELEASE_TAG"', metadata)
+        self.assertIn("Canary release: leaving main unchanged", metadata)
+        self.assertIn(
+            'git push "$release_remote" "$source_sha:refs/heads/main"',
+            metadata,
+        )
+        self.assertIn(
+            "does not contain its complete version update",
+            metadata,
+        )
+        self.assertIn(
+            "ref: ${{ needs.metadata.outputs.source_sha }}",
+            publish,
+        )
+        self.assertIn("generate_release_notes: true", publish)
+        self.assertIn(
+            "previous_tag: "
+            "${{ needs.metadata.outputs.release_notes_base }}",
+            publish,
+        )
+        self.assertIn(
+            'python3 scripts/select-release-notes-base.py "$RELEASE_TAG"',
+            metadata,
+        )
+        manual_version_update = metadata.index(
+            'else\n            scripts/release-version.sh "$RELEASE_TAG"',
+        )
+        format_check = metadata.index(
+            "cargo fmt --all -- --check",
+            manual_version_update,
+        )
+        whitespace_check = metadata.index("git diff --check", format_check)
+        stage_release_source = metadata.index("git add --update", whitespace_check)
+        push_release_source = metadata.index(
+            'git push "$release_remote" "$source_sha:refs/heads/main"',
+        )
+        self.assertLess(manual_version_update, format_check)
+        self.assertLess(format_check, whitespace_check)
+        self.assertLess(whitespace_check, stage_release_source)
+        self.assertLess(stage_release_source, push_release_source)
+
     def test_release_depot_policy_is_main_ref_only_and_selected_once(
         self,
     ) -> None:
@@ -296,6 +355,11 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
     def test_release_permissions_are_least_privilege(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         header = workflow[: workflow.index("\njobs:\n")]
+        metadata = job_block(
+            workflow,
+            "metadata",
+            "build",
+        )
         publish = job_block(
             workflow,
             "publish",
@@ -308,6 +372,11 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertNotIn("contents: write", header)
         self.assertNotIn("packages: write", header)
+        self.assertIn(
+            "    permissions:\n      contents: write",
+            metadata,
+        )
+        self.assertNotIn("packages: write", metadata)
         self.assertIn(
             "    permissions:\n      contents: write",
             publish,

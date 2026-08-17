@@ -1,5 +1,5 @@
-name: Audit Depot PR isolation
-description: Fail closed when a PR build receives Depot cache, registry, or compiler-cache authority.
+name: Audit Depot PR authority
+description: Enforce the selected PR cache-risk policy and reject unapproved Depot or registry authority.
 
 inputs:
   original_event_name:
@@ -47,11 +47,10 @@ runs:
           exit 1
         fi
 
-        if [[ "$depot_selected" == "true" &&
-              "$allow_native_github_cache" != "false" ]]; then
-          echo "Depot selection requires native GitHub cache disabled (allow_native_github_cache)" >&2
-          exit 1
-        fi
+        # allow_native_github_cache is derived by the protected runner policy.
+        # During the bounded risk exception it intentionally enables GitHub
+        # Actions cache API consumers on Depot's cross-branch proxy. Keep the
+        # separate direct Depot remote-cache path disabled.
         if [[ "$depot_selected" == "true" &&
               "$allow_depot_remote_cache" != "false" ]]; then
           echo "Depot selection requires remote cache disabled (allow_depot_remote_cache)" >&2
@@ -133,7 +132,12 @@ runs:
             continue
           fi
           endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
-          if [[ "$endpoint_lower" == *depot.dev* ]]; then
+          # A selected Depot PR with native cache enabled is the explicit,
+          # time-bounded exception: its Actions endpoints may be Depot's
+          # repository-wide proxy. All other PR contexts remain fail-closed.
+          if [[ "$endpoint_lower" == *depot.dev* &&
+                !( "$depot_selected" == "true" &&
+                   "$allow_native_github_cache" == "true" ) ]]; then
             echo "PR runner received a Depot Actions endpoint ($endpoint_name)" >&2
             exit 1
           fi
@@ -143,6 +147,13 @@ runs:
             exit 1
           fi
           if [[ "$depot_selected" != "true" ]]; then
+            continue
+          fi
+          if [[ "$allow_native_github_cache" == "true" ]]; then
+            if [[ ! "$endpoint_lower" =~ ^https?:// || -z "$authority" ]]; then
+              echo "PR runner received a malformed Actions endpoint ($endpoint_name)" >&2
+              exit 1
+            fi
             continue
           fi
           if ! is_github_endpoint "$endpoint" &&

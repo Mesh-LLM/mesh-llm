@@ -2,6 +2,26 @@ name: Depot Runner Canary
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Run the resource audit or one bounded cache-authority sentinel phase.
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - seed
+          - verify-pr-write
+      sentinel_id:
+        description: Lowercase 32-hex identifier used only in the fixed sentinel key grammar.
+        required: false
+        default: ''
+        type: string
+      pr_number:
+        description: Canonical positive pull-request number for the bounded poison key.
+        required: false
+        default: ''
+        type: string
 
 permissions: {}
 
@@ -15,7 +35,8 @@ jobs:
     if: >-
       github.repository == 'Mesh-LLM/mesh-llm' &&
       github.event_name == 'workflow_dispatch' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      github.event.inputs.mode == 'audit'
     strategy:
       fail-fast: false
       matrix:
@@ -127,6 +148,86 @@ jobs:
             (( port >= 1 && port <= 65535 ))
           }
 
+          endpoint_scheme() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            case "$endpoint_lower" in
+              https://*) printf 'https' ;;
+              http://*) printf 'http' ;;
+              *) printf 'other' ;;
+            esac
+          }
+
+          endpoint_authority_class() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            local authority
+            authority="$(endpoint_host "$endpoint_lower")"
+            if [[ "$authority" == *"@"* ]]; then
+              printf 'other'
+              return
+            fi
+            case "$authority" in
+              localhost|localhost:*) printf 'localhost'; return ;;
+              127.0.0.1|127.0.0.1:*) printf '127.0.0.1'; return ;;
+              "[::1]"|"[::1]:"*) printf 'ipv6-loopback'; return ;;
+            esac
+            if [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]; then
+              printf 'github'
+              return
+            fi
+            printf 'other'
+          }
+
+          endpoint_numeric_port() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            local authority
+            authority="$(endpoint_host "$endpoint_lower")"
+            if [[ "$authority" != *"@"* ]] && [[ "$authority" =~ :[0-9]+$ ]]; then
+              printf 'present'
+            else
+              printf 'absent'
+            fi
+          }
+
+          endpoint_explicit_path() {
+            local endpoint="$1"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            case "$endpoint_lower" in
+              *://*) ;;
+              *) printf 'absent'; return ;;
+            esac
+            local remainder="${endpoint_lower#*://}"
+            local authority="${remainder%%[/?#]*}"
+            local suffix="${remainder#"$authority"}"
+            if [[ "$suffix" == /* ]]; then
+              printf 'present'
+            else
+              printf 'absent'
+            fi
+          }
+
+          report_endpoint_rejection() {
+            local endpoint_name="$1"
+            local endpoint="$2"
+            local scheme_label
+            scheme_label="$(endpoint_scheme "$endpoint")"
+            local authority_label
+            authority_label="$(endpoint_authority_class "$endpoint")"
+            local numeric_port_label
+            numeric_port_label="$(endpoint_numeric_port "$endpoint")"
+            local explicit_path_label
+            explicit_path_label="$(endpoint_explicit_path "$endpoint")"
+            printf 'GitHub Actions endpoint rejected (variable=%s scheme=%s authority=%s numeric_port=%s explicit_path=%s)\n' \
+              "$endpoint_name" "$scheme_label" "$authority_label" \
+              "$numeric_port_label" "$explicit_path_label" >&2
+          }
+
           for endpoint_name in ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_RUNTIME_URL; do
             endpoint="${!endpoint_name:-}"
             if [[ -z "$endpoint" ]]; then
@@ -138,16 +239,16 @@ jobs:
             # lookalike host suffixes.
             authority="$(endpoint_host "$endpoint_lower")"
             if [[ "$endpoint_lower" == *depot.dev* ]]; then
-              echo "GitHub Actions cache was transparently redirected to Depot (endpoint)" >&2
+              report_endpoint_rejection "$endpoint_name" "$endpoint"
               exit 1
             fi
             if [[ "$authority" == *"@"* ]]; then
-              echo "GitHub Actions endpoint contains URL userinfo (endpoint)" >&2
+              report_endpoint_rejection "$endpoint_name" "$endpoint"
               exit 1
             fi
             if ! is_github_endpoint "$endpoint" &&
                ! is_loopback_endpoint "$endpoint"; then
-              echo "GitHub Actions endpoint is not GitHub-owned or loopback (endpoint)" >&2
+              report_endpoint_rejection "$endpoint_name" "$endpoint"
               exit 1
             fi
           done
@@ -179,3 +280,395 @@ jobs:
             echo "| Depot registry credentials/config injected | no |"
             echo "| GitHub cache transparently redirected to Depot | no |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  seed_authority_marker:
+    name: Seed trusted authority marker
+    if: >-
+      github.repository == 'Mesh-LLM/mesh-llm' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.inputs.mode == 'seed'
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Validate bounded sentinel identity
+        id: validate
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ github.event.inputs.sentinel_id }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          CONFIGURED_SENTINEL_ID: ${{ vars.DEPOT_PR_SENTINEL_ID }}
+          CONFIGURED_SENTINEL_REF: ${{ vars.DEPOT_PR_SENTINEL_REF }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SENTINEL_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "sentinel_id must be exactly 32 lowercase hexadecimal characters" >&2
+            exit 1
+          fi
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            echo "pr_number must be a canonical positive integer" >&2
+            exit 1
+          fi
+          if [[ ! "$CONFIGURED_SENTINEL_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "DEPOT_PR_SENTINEL_ID must be exactly 32 lowercase hexadecimal characters" >&2
+            exit 1
+          fi
+          if [[ "$SENTINEL_ID" != "$CONFIGURED_SENTINEL_ID" ]]; then
+            echo "sentinel_id does not match DEPOT_PR_SENTINEL_ID" >&2
+            exit 1
+          fi
+          expected_ref="refs/pull/${PR_NUMBER}/merge"
+          if [[ "$CONFIGURED_SENTINEL_REF" != "$expected_ref" ]]; then
+            echo "DEPOT_PR_SENTINEL_REF does not match the requested pull request" >&2
+            exit 1
+          fi
+          seed_key="mesh-llm-depot-authority-seed-v1-${SENTINEL_ID}"
+          poison_key="mesh-llm-depot-authority-pr-v1-${SENTINEL_ID}-pr-${PR_NUMBER}"
+          {
+            printf 'sentinel_id=%s\n' "$SENTINEL_ID"
+            printf 'seed_key=%s\n' "$seed_key"
+            printf 'poison_key=%s\n' "$poison_key"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest provider-injected cache backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep this parser identical in every no-checkout authority phase.
+          # A local composite action would require checkout here, weakening
+          # the pinned-cache/no-checkout boundary.
+          is_loopback_authority() {
+            local authority="$1"
+            [[ "$authority" =~ ^localhost(:[0-9]{1,5})?$ ]] && return 0
+            [[ "$authority" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(:[0-9]{1,5})?$ ]] && return 0
+            if [[ "$authority" != \[*\]* ]]; then
+              return 1
+            fi
+            if ! command -v python3 >/dev/null 2>&1; then
+              return 2
+            fi
+            local host="${authority#\[}"
+            host="${host%%\]*}"
+            local python_status
+            if printf '%s\n' "$host" | python3 -c '
+          import ipaddress
+          import sys
+
+          value = sys.stdin.read().strip()
+          if sys.version_info < (3, 8):
+              raise SystemExit(2)
+          try:
+              address = ipaddress.ip_address(value)
+          except ValueError:
+              raise SystemExit(2)
+          mapped = getattr(address, "ipv4_mapped", None)
+          raise SystemExit(0 if address.is_loopback or (mapped is not None and mapped.is_loopback) else 3)
+          ' >/dev/null 2>&1; then
+              return 0
+            else
+              python_status=$?
+            fi
+            if (( python_status == 3 )); then
+              return 1
+            fi
+            return 2
+          }
+
+          attest_cache_endpoint() {
+            local endpoint_name="$1"
+            local endpoint="${!endpoint_name:-}"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            local reason=""
+            if [[ -z "$endpoint" ]]; then
+              reason=missing
+            elif [[ "$endpoint" =~ [[:space:]] ]]; then
+              reason=whitespace
+            elif [[ "$endpoint_lower" != http://* ]]; then
+              reason=scheme
+            else
+              local remainder="${endpoint_lower#http://}"
+              local authority="${remainder%%[/?#]*}"
+              local suffix="${remainder#"$authority"}"
+              local port=""
+              if [[ -z "$authority" ]]; then
+                reason=authority
+              elif [[ "$authority" == *"@"* ]]; then
+                reason=userinfo
+              elif [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]; then
+                reason=github
+              elif is_loopback_authority "$authority"; then
+                reason=loopback
+              elif [[ "$?" -eq 2 ]]; then
+                reason=parser
+              elif [[ "$suffix" != /* ]]; then
+                reason=path
+              elif [[ "$authority" =~ ^\[[^]]+\]:([0-9]+)$ ]]; then
+                port="${BASH_REMATCH[1]}"
+              elif [[ "$authority" =~ ^[^:]+:([0-9]+)$ ]]; then
+                port="${BASH_REMATCH[1]}"
+              else
+                reason=port
+              fi
+              if [[ -z "$reason" ]] &&
+                 ! [[ "$port" =~ ^[0-9]{1,5}$ ]] ; then
+                reason=port
+              fi
+              if [[ -z "$reason" ]] &&
+                 ! (( 10#$port >= 1 && 10#$port <= 65535 )); then
+                reason=port
+              fi
+            fi
+            if [[ -n "$reason" ]]; then
+              printf 'cache backend attestation failed (variable=%s reason=%s)\n' \
+                "$endpoint_name" "$reason" >&2
+              return 1
+            fi
+          }
+          attest_cache_endpoint ACTIONS_CACHE_URL
+          attest_cache_endpoint ACTIONS_RESULTS_URL
+
+      - name: Prepare deterministic non-secret marker
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ steps.validate.outputs.sentinel_id }}
+        run: |
+          set -euo pipefail
+          marker_dir=".depot-authority-sentinel"
+          mkdir -p "$marker_dir"
+          printf 'mesh-llm-depot-authority-marker-v1\nsentinel_id=%s\n' \
+            "$SENTINEL_ID" > "$marker_dir/marker"
+
+      - name: Save trusted authority marker
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .depot-authority-sentinel
+          key: ${{ steps.validate.outputs.seed_key }}
+
+      - name: Clear local marker before trusted restore
+        shell: bash
+        run: rm -rf -- .depot-authority-sentinel
+
+      - name: Restore trusted authority marker
+        id: verify_marker
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .depot-authority-sentinel
+          key: ${{ steps.validate.outputs.seed_key }}
+          fail-on-cache-miss: true
+
+      - name: Require trusted marker hit
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.verify_marker.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          [[ "$CACHE_HIT" == "true" ]]
+
+      - name: Validate trusted marker content
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ steps.validate.outputs.sentinel_id }}
+        run: |
+          set -euo pipefail
+          expected_file="$(mktemp)"
+          trap 'rm -f "$expected_file"' EXIT
+          printf 'mesh-llm-depot-authority-marker-v1\nsentinel_id=%s\n' \
+            "$SENTINEL_ID" > "$expected_file"
+          if [[ ! -f .depot-authority-sentinel/marker ]] ||
+             ! cmp -s "$expected_file" .depot-authority-sentinel/marker; then
+            echo "trusted authority marker content mismatch" >&2
+            exit 1
+          fi
+
+  verify_pr_write:
+    name: Verify PR poison marker is isolated
+    if: >-
+      github.repository == 'Mesh-LLM/mesh-llm' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.inputs.mode == 'verify-pr-write'
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Validate bounded sentinel identity
+        id: validate
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ github.event.inputs.sentinel_id }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          CONFIGURED_SENTINEL_ID: ${{ vars.DEPOT_PR_SENTINEL_ID }}
+          CONFIGURED_SENTINEL_REF: ${{ vars.DEPOT_PR_SENTINEL_REF }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SENTINEL_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "sentinel_id must be exactly 32 lowercase hexadecimal characters" >&2
+            exit 1
+          fi
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            echo "pr_number must be a canonical positive integer" >&2
+            exit 1
+          fi
+          if [[ ! "$CONFIGURED_SENTINEL_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "DEPOT_PR_SENTINEL_ID must be exactly 32 lowercase hexadecimal characters" >&2
+            exit 1
+          fi
+          if [[ "$SENTINEL_ID" != "$CONFIGURED_SENTINEL_ID" ]]; then
+            echo "sentinel_id does not match DEPOT_PR_SENTINEL_ID" >&2
+            exit 1
+          fi
+          expected_ref="refs/pull/${PR_NUMBER}/merge"
+          if [[ "$CONFIGURED_SENTINEL_REF" != "$expected_ref" ]]; then
+            echo "DEPOT_PR_SENTINEL_REF does not match the requested pull request" >&2
+            exit 1
+          fi
+          poison_key="mesh-llm-depot-authority-pr-v1-${SENTINEL_ID}-pr-${PR_NUMBER}"
+          {
+            printf 'sentinel_id=%s\n' "$SENTINEL_ID"
+            printf 'pr_number=%s\n' "$PR_NUMBER"
+            printf 'poison_key=%s\n' "$poison_key"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest provider-injected cache backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep this parser identical in every no-checkout authority phase.
+          # A local composite action would require checkout here, weakening
+          # the pinned-cache/no-checkout boundary.
+          is_loopback_authority() {
+            local authority="$1"
+            [[ "$authority" =~ ^localhost(:[0-9]{1,5})?$ ]] && return 0
+            [[ "$authority" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(:[0-9]{1,5})?$ ]] && return 0
+            if [[ "$authority" != \[*\]* ]]; then
+              return 1
+            fi
+            if ! command -v python3 >/dev/null 2>&1; then
+              return 2
+            fi
+            local host="${authority#\[}"
+            host="${host%%\]*}"
+            local python_status
+            if printf '%s\n' "$host" | python3 -c '
+          import ipaddress
+          import sys
+
+          value = sys.stdin.read().strip()
+          if sys.version_info < (3, 8):
+              raise SystemExit(2)
+          try:
+              address = ipaddress.ip_address(value)
+          except ValueError:
+              raise SystemExit(2)
+          mapped = getattr(address, "ipv4_mapped", None)
+          raise SystemExit(0 if address.is_loopback or (mapped is not None and mapped.is_loopback) else 3)
+          ' >/dev/null 2>&1; then
+              return 0
+            else
+              python_status=$?
+            fi
+            if (( python_status == 3 )); then
+              return 1
+            fi
+            return 2
+          }
+
+          attest_cache_endpoint() {
+            local endpoint_name="$1"
+            local endpoint="${!endpoint_name:-}"
+            local endpoint_lower
+            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
+            local reason=""
+            if [[ -z "$endpoint" ]]; then
+              reason=missing
+            elif [[ "$endpoint" =~ [[:space:]] ]]; then
+              reason=whitespace
+            elif [[ "$endpoint_lower" != http://* ]]; then
+              reason=scheme
+            else
+              local remainder="${endpoint_lower#http://}"
+              local authority="${remainder%%[/?#]*}"
+              local suffix="${remainder#"$authority"}"
+              local port=""
+              if [[ -z "$authority" ]]; then
+                reason=authority
+              elif [[ "$authority" == *"@"* ]]; then
+                reason=userinfo
+              elif [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]; then
+                reason=github
+              elif is_loopback_authority "$authority"; then
+                reason=loopback
+              elif [[ "$?" -eq 2 ]]; then
+                reason=parser
+              elif [[ "$suffix" != /* ]]; then
+                reason=path
+              elif [[ "$authority" =~ ^\[[^]]+\]:([0-9]+)$ ]]; then
+                port="${BASH_REMATCH[1]}"
+              elif [[ "$authority" =~ ^[^:]+:([0-9]+)$ ]]; then
+                port="${BASH_REMATCH[1]}"
+              else
+                reason=port
+              fi
+              if [[ -z "$reason" ]] &&
+                 ! [[ "$port" =~ ^[0-9]{1,5}$ ]] ; then
+                reason=port
+              fi
+              if [[ -z "$reason" ]] &&
+                 ! (( 10#$port >= 1 && 10#$port <= 65535 )); then
+                reason=port
+              fi
+            fi
+            if [[ -n "$reason" ]]; then
+              printf 'cache backend attestation failed (variable=%s reason=%s)\n' \
+                "$endpoint_name" "$reason" >&2
+              return 1
+            fi
+          }
+          attest_cache_endpoint ACTIONS_CACHE_URL
+          attest_cache_endpoint ACTIONS_RESULTS_URL
+
+      - name: Clear local poison marker before trusted restore
+        shell: bash
+        run: rm -rf -- .depot-authority-sentinel
+
+      - name: Probe PR poison marker
+        id: probe
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .depot-authority-sentinel
+          key: ${{ steps.validate.outputs.poison_key }}
+          fail-on-cache-miss: false
+
+      - name: Validate PR poison marker content on hit
+        shell: bash
+        env:
+          SENTINEL_ID: ${{ steps.validate.outputs.sentinel_id }}
+          PR_NUMBER: ${{ steps.validate.outputs.pr_number }}
+          CACHE_HIT: ${{ steps.probe.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [[ "$CACHE_HIT" != "true" ]]; then
+            exit 0
+          fi
+          expected_file="$(mktemp)"
+          trap 'rm -f "$expected_file"' EXIT
+          printf 'mesh-llm-depot-authority-pr-marker-v1\nsentinel_id=%s\npr_number=%s\n' \
+            "$SENTINEL_ID" "$PR_NUMBER" > "$expected_file"
+          if [[ ! -f .depot-authority-sentinel/marker ]] ||
+             ! cmp -s "$expected_file" .depot-authority-sentinel/marker; then
+            echo "trusted main observed an unexpected poison marker content" >&2
+            exit 1
+          fi
+
+      - name: Require PR poison marker miss
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.probe.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [[ "$CACHE_HIT" == "true" ]]; then
+            echo "PR poison marker was visible to trusted main (cache isolation failure)" >&2
+            exit 1
+          fi

@@ -35,6 +35,7 @@ use skippy_protocol::{
     LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };
 use skippy_runtime::ModelInfo;
+use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, infer_family_capability};
 
 use super::{
     ExactStateExtra, KvStageIntegration, StageKvMode, StagePrefixCachePayload, disk_budget,
@@ -334,11 +335,25 @@ fn infer_cache_payload(config: &StageConfig) -> StagePrefixCachePayload {
     )
     .to_ascii_lowercase();
 
+    // Prefer the shared family capability table over substring guesses. It
+    // already knows which families are recurrent or hybrid, so a new release
+    // that reuses an existing llama.cpp architecture is classified correctly
+    // without adding another literal here.
+    if let Some(capability) = infer_family_capability(&identity, 0, 0)
+        && let Some(expectation) = STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS
+            .iter()
+            .find(|expectation| expectation.family_id == capability.family_id)
+    {
+        return if expectation.recurrent_or_hybrid {
+            StagePrefixCachePayload::KvRecurrent
+        } else {
+            StagePrefixCachePayload::ResidentKv
+        };
+    }
+
     if identity.contains("falcon-h1")
         || identity.contains("qwen3next")
         || identity.contains("qwen3-next")
-        || identity.contains("qwen3.6")
-        || identity.contains("qwen3_6")
         || identity.contains("kimi-linear")
         || identity.contains("kimi_linear")
     {
@@ -453,6 +468,47 @@ mod tests {
         assert!(!tensor_name_requires_recurrent_state(
             "blk.0.ffn_down.weight"
         ));
+    }
+
+    #[test]
+    fn qwen38_identities_infer_recurrent_cache_payload() {
+        // Qwen3.8 loads as the qwen35/qwen35moe recurrent pair. These must not
+        // fall through to ResidentKv, which is the wrong payload shape for a
+        // recurrent family.
+        for model_id in [
+            "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-Q1_0",
+            "meshllm/Qwen3.8-2.4T-A95B-UD-Q1_0-layers",
+            "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL",
+            "qwen38moe",
+            "qwen38",
+            // Architecture strings, which is what a stage sees when the model
+            // id is absent.
+            "qwen35moe",
+            "qwen35",
+        ] {
+            assert_eq!(
+                infer_cache_payload(&test_config(model_id)),
+                StagePrefixCachePayload::KvRecurrent,
+                "{model_id} must select KvRecurrent"
+            );
+        }
+    }
+
+    #[test]
+    fn qwen3_parameter_sized_identities_stay_resident_kv() {
+        // `Qwen3-8B` compacts to `qwen38b`: the digit is a parameter count, not
+        // a series number, so it must stay on the non-recurrent Qwen3 path.
+        for model_id in [
+            "Qwen/Qwen3-8B-GGUF:Q4_K_M",
+            "Qwen/Qwen3-5B-GGUF:Q4_K_M",
+            "qwen38b",
+        ] {
+            assert_eq!(
+                infer_cache_payload(&test_config(model_id)),
+                StagePrefixCachePayload::ResidentKv,
+                "{model_id} must stay on ResidentKv"
+            );
+        }
     }
 
     #[test]

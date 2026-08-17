@@ -1,6 +1,6 @@
 use crate::command::{
     DynResult, ensure_contains, ensure_contains_normalized, ensure_eq, ensure_nonempty_option,
-    workflow_job_section,
+    ensure_not_contains, workflow_job_section,
 };
 use crate::repo_consistency::{CargoDependency, CargoMetadata, CargoPackage, workspace_metadata};
 use std::collections::{BTreeMap, BTreeSet};
@@ -442,16 +442,23 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     ensure_contains(
         &release_script,
-        "git add --update",
-        "local release complete tracked release version staging",
+        "gh workflow run release.yml",
+        "local release canonical workflow dispatch",
     )?;
-    ensure_contains_normalized(
+    ensure_contains(
         &release_script,
-        "if ! git diff --quiet; then
-        git status --short >&2
-        die \"release preparation left unstaged tracked changes\"
-    fi",
-        "local release unstaged tracked release change guard",
+        "workflow_run_id_from_url",
+        "local release URL-derived workflow run ID",
+    )?;
+    ensure_contains(
+        &release_script,
+        "find_dispatched_release_run_id",
+        "local release SHA-correlated workflow run fallback",
+    )?;
+    ensure_not_contains(
+        &release_script,
+        "scripts/release-version.sh",
+        "local release must not maintain a second version mutation path",
     )?;
     ensure_contains_normalized(
         &release_workflow,

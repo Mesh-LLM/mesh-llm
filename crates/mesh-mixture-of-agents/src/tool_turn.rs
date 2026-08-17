@@ -16,8 +16,7 @@ use crate::worker::{self, WorkerRole};
 use crate::{
     ForcedToolChoice, GatewayConfig, MOA_ERR_ALL_REDUCERS_FAILED, ReferencePolicy, TurnKind,
     TurnResult, WorkerSummary, chat_response, enforce_tool_call_contract, error_response,
-    fallback_worker_response, selected_tool_names_for_turn, tool_call_response,
-    tool_proposal_response,
+    fallback_worker_response, tool_call_response, tool_names_for_turn, tool_proposal_response,
 };
 use serde_json::Value;
 use std::time::Instant;
@@ -51,7 +50,10 @@ pub(crate) async fn handle_tool_query(
         (Vec::new(), Vec::new())
     };
 
-    let selected = selected_tool_names_for_turn(session, allowed_tools);
+    let selected = forced_tool.map_or_else(
+        || tool_names_for_turn(session, allowed_tools),
+        |tool| vec![tool.name.clone()],
+    );
     let (messages, tools) = context::pack_for_actor(session, &references, true, &selected);
 
     let hedge = hedged_reducer_call(
@@ -120,7 +122,16 @@ fn should_gather_references(config: &GatewayConfig, actor: Option<&str>) -> bool
         ReferencePolicy::Never => false,
         ReferencePolicy::Always => true,
         // Unknown actor: fall back to advising, which is the prior behaviour.
-        ReferencePolicy::Auto => actor.is_none_or(worker::model_name_is_small_tier),
+        ReferencePolicy::Auto => match actor {
+            None => true,
+            Some(name) => config
+                .models
+                .iter()
+                .find(|m| m.name == name)
+                .map(worker::entry_is_small_tier)
+                // Actor not in the pool (shouldn't happen): advise, as before.
+                .unwrap_or(true),
+        },
     }
 }
 
@@ -153,6 +164,7 @@ async fn dispatch_and_gather_references(
         dispatched.push(DispatchedWorker {
             model: model_name.clone(),
             role,
+            small_tier: a.small_tier,
         });
 
         join_set.spawn(async move {
@@ -263,10 +275,7 @@ mod tests {
             backends: Vec::new(),
             models: models
                 .iter()
-                .map(|n| ModelEntry {
-                    name: (*n).to_string(),
-                    backend_index: 0,
-                })
+                .map(|n| ModelEntry::new((*n).to_string(), 0))
                 .collect(),
             worker_timeout: Duration::from_secs(60),
             hedge_delay: Duration::from_secs(5),

@@ -168,6 +168,10 @@ impl KvStageIntegration {
         self.mode
     }
 
+    pub(crate) fn payload_is_exact_state(&self) -> bool {
+        self.payload.is_exact_state()
+    }
+
     pub fn should_lookup(&self) -> bool {
         matches!(
             self.mode,

@@ -47,16 +47,22 @@ runs:
         else
           image_os="${ImageOS:-}"
           image_version="${ImageVersion:-}"
-          if [[ -z "$image_os" || -z "$image_version" ]]; then
-            echo "ImageOS and ImageVersion are required for a hosted native toolchain epoch" >&2
+          if [[ -n "$image_os" && -n "$image_version" ]]; then
+            epoch="github-${image_os}-${image_version}-${RUNNER_ARCH_VALUE}"
+          elif [[ "$INPUT_INCLUDE_TOOL_VERSIONS" == "true" ]]; then
+            # Depot macOS runners intentionally do not expose the GitHub-hosted
+            # ImageOS/ImageVersion variables. The exact OS/compiler/tool digest
+            # below is the cache-safe identity for those provider images.
+            epoch="runner-${RUNNER_OS_VALUE}-${RUNNER_ARCH_VALUE}"
+          else
+            echo "ImageOS and ImageVersion are required unless exact native tool versions are included" >&2
             exit 1
           fi
-          epoch="github-${image_os}-${image_version}-${RUNNER_ARCH_VALUE}"
 
           if [[ "$INPUT_INCLUDE_TOOL_VERSIONS" == "true" ]]; then
             case "$RUNNER_OS_VALUE" in
               macOS)
-                version_commands=(xcodebuild clang cmake ninja)
+                version_commands=(sw_vers xcodebuild clang cmake ninja)
                 ;;
               Linux)
                 version_commands=(cc c++ cmake ninja)
@@ -75,6 +81,7 @@ runs:
             if [[ "$RUNNER_OS_VALUE" == "macOS" ]]; then
               tool_digest="$(
                 {
+                  sw_vers -productVersion
                   xcodebuild -version
                   clang --version
                   cmake --version

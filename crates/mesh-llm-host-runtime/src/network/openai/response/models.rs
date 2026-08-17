@@ -82,16 +82,39 @@ fn models_list_json(
     if crate::network::openai::moa_gateway::context_selection::should_advertise_virtual_mesh(models)
         && seen.insert(mesh_mixture_of_agents::VIRTUAL_MODEL_NAME.to_string())
     {
+        // The directive's capabilities are the union of what the mesh can
+        // serve, not the committee's own limits. A media request routes to a
+        // modality-capable model rather than being aggregated, so advertising
+        // `unsupported` here would tell a vision client the mesh cannot take
+        // its request when it can.
+        let directive_capabilities =
+            crate::network::openai::moa_gateway::context_selection::virtual_mesh_capabilities(
+                models,
+                descriptors,
+            );
+        let mut caps = vec!["text"];
+        if directive_capabilities.supports_multimodal_runtime() {
+            caps.push("multimodal");
+        }
+        if directive_capabilities.supports_vision_runtime() {
+            caps.push("vision");
+        }
+        if directive_capabilities.supports_audio_runtime() {
+            caps.push("audio");
+        }
+        if directive_capabilities.reasoning_label().is_some() {
+            caps.push("reasoning");
+        }
         let mut model = serde_json::json!({
             "id": mesh_mixture_of_agents::VIRTUAL_MODEL_NAME,
             "display_name": "Mesh (MoA)",
             "object": "model",
             "owned_by": "mesh-llm",
-            "capabilities": ["text"],
-            "multimodal_status": "unsupported",
-            "vision_status": "unsupported",
-            "audio_status": "unsupported",
-            "reasoning_status": "unknown",
+            "capabilities": caps,
+            "multimodal_status": directive_capabilities.multimodal_status(),
+            "vision_status": directive_capabilities.vision_status(),
+            "audio_status": directive_capabilities.audio_status(),
+            "reasoning_status": directive_capabilities.reasoning_status(),
         });
         if let Some(context_length) =
             crate::network::openai::moa_gateway::context_selection::virtual_mesh_context_length(

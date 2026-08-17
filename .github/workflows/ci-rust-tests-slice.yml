@@ -74,11 +74,14 @@ jobs:
           original_event_name: ${{ inputs.original_event_name }}
           repository: ${{ github.repository }}
           head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
           ref: ${{ github.ref }}
           # Rust tests are not in the existing trusted-main Depot allowlist.
           depot_main_enabled: 'false'
           depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
           pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
           force_hosted: ${{ inputs.force_hosted }}
 
   rust_tests:
@@ -105,7 +108,7 @@ jobs:
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
     steps:
-      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@6daacb8a15a3e71f4bdfab1e88e417cb5c0017a3
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
           original_event_name: ${{ inputs.original_event_name }}
           depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}

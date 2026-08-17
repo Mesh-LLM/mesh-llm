@@ -103,6 +103,33 @@ impl KvStageIntegration {
             })
             .collect()
     }
+
+    /// Pick a recurrent/full-state checkpoint below the near-tail page.
+    ///
+    /// The near-tail grid page can still include a short request-specific tail.
+    /// One additional stride below it leaves room for that tail while keeping
+    /// suffix prefill bounded for a changed-tail request.
+    pub(crate) fn exact_shared_checkpoint_identity(
+        &self,
+        config: &StageConfig,
+        base: &MessageBase,
+        token_start: u64,
+        token_ids: &[i32],
+    ) -> Option<PrefillKvIdentity> {
+        self.candidate_policy
+            .candidate_token_counts(token_ids.len() as u64)
+            .into_iter()
+            .filter(|token_count| *token_count < token_ids.len() as u64)
+            .nth(1)
+            .map(|token_count| {
+                self.prefill_identity(
+                    config,
+                    base,
+                    token_start,
+                    &token_ids[..token_count as usize],
+                )
+            })
+    }
 }
 
 #[cfg(test)]
@@ -247,6 +274,15 @@ mod tests {
             .find(|identity| identity.identity.token_count == 2231)
             .expect("lookup identities should include exact second prompt");
 
+        let checkpoint = kv
+            .exact_shared_checkpoint_identity(&config, &base, 0, &recorded_tokens)
+            .expect("exact-state shared checkpoint");
+        assert_eq!(checkpoint.identity.token_count, 2048);
+        let lookup_checkpoint = lookup_identities
+            .iter()
+            .find(|identity| identity.identity.token_count == 2048)
+            .expect("lookup identities should probe checkpoint");
+        assert_eq!(checkpoint.page_id, lookup_checkpoint.page_id);
         assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
         assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
     }

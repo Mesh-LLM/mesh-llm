@@ -100,6 +100,155 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                     self.assertNotIn("macos-latest", workflow)
                     self.assertNotIn("windows-latest", workflow)
 
+    def test_all_eligible_pr_slices_bind_runner_and_cache_policy(self) -> None:
+        """Every ordinary PR producer must consume the same guarded policy.
+
+        The protected reusable lanes are deliberately split across several
+        workflows, so a future slice can otherwise accidentally omit the
+        exact-ref/SHA gate while still looking like it uses the central
+        selector.  Keep this census explicit: credential-bearing smoke
+        consumers and the GPU exception are intentionally outside it.
+        """
+
+        eligible = (
+            "ci-quality-slice.yml",
+            "ci-web-slice.yml",
+            "ci-ui-artifact-slice.yml",
+            "ci-rust-tests-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-linux-runtime-slice.yml",
+            "ci-linux-product-slice.yml",
+            "static-abi-artifact.yml",
+            "ci-macos-host-slice.yml",
+            "ci-macos-runtime-slice.yml",
+            "ci-macos-product-slice.yml",
+            "swift-sdk-artifact.yml",
+            "ci-platform-checks-slice.yml",
+            "ci-windows-host-slice.yml",
+            "ci-windows-runtime-slice.yml",
+            "ci-windows-product-slice.yml",
+            "native-sdk-artifact.yml",
+        )
+
+        selector = (
+            ROOT / ".github" / "actions" / "select-ci-runners" / "action.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("INPUT_PR_APPROVED_REF", selector)
+        self.assertIn("INPUT_PR_APPROVED_SHA", selector)
+        self.assertIn('depot_pr_exception_expires="2026-09-14"', selector)
+
+        for name in eligible:
+            workflow = self.workflow(name)
+            with self.subTest(workflow=name):
+                # A raw provider label would bypass the protected policy.
+                self.assertNotIn("runs-on: depot-", workflow)
+                self.assertNotIn("secrets: inherit", workflow)
+                self.assertIn("allow_depot_remote_cache:", workflow)
+                self.assertIn("allow_native_github_cache:", workflow)
+                self.assertIn(
+                    "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
+                    workflow,
+                )
+                self.assertIn(
+                    "head_sha: ${{ github.event.pull_request.head.sha || github.sha }}",
+                    workflow,
+                )
+                self.assertIn("ref: ${{ github.ref }}", workflow)
+                self.assertIn(
+                    "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+                    workflow,
+                )
+                self.assertIn(
+                    "pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}",
+                    workflow,
+                )
+                self.assertIn(
+                    "pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}",
+                    workflow,
+                )
+                self.assertIn("force_hosted: ${{ inputs.force_hosted }}", workflow)
+
+                # Validate every selector invocation, including Quality's
+                # separate no-checkout authority-sentinel selector.  The
+                # sentinel intentionally supplies empty approval values, but
+                # it must still receive the same bounded inputs and fail-closed
+                # policy implementation.
+                lines = workflow.splitlines()
+                selector_indices = [
+                    index
+                    for index, line in enumerate(lines)
+                    if "uses: ./.github/actions/select-ci-runners" in line
+                ]
+                self.assertGreaterEqual(len(selector_indices), 1)
+                for index in selector_indices:
+                    block_lines = []
+                    for line in lines[index + 1 :]:
+                        if line.startswith("      - "):
+                            break
+                        block_lines.append(line)
+                    block = "\n".join(block_lines)
+                    common_values = (
+                        "event_name: ${{ github.event_name }}",
+                        "original_event_name: ${{ inputs.original_event_name }}",
+                        "repository: ${{ github.repository }}",
+                        "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
+                        "head_sha: ${{ github.event.pull_request.head.sha || github.sha }}",
+                        "ref: ${{ github.ref }}",
+                        "force_hosted: ${{ inputs.force_hosted }}",
+                    )
+                    for value in common_values:
+                        self.assertIn(value, block, value)
+
+                    is_sentinel = any(
+                        "id: sentinel_policy" in line
+                        for line in lines[max(0, index - 2) : index]
+                    )
+                    if is_sentinel:
+                        bounded_values = (
+                            "depot_main_enabled: 'false'",
+                            "depot_pr_enabled: 'false'",
+                            "pr_canary_ref: ${{ vars.DEPOT_PR_SENTINEL_REF }}",
+                            "pr_approved_ref: ''",
+                            "pr_approved_sha: ''",
+                            "manual_use_depot: 'false'",
+                        )
+                    else:
+                        bounded_values = (
+                            "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+                            "pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}",
+                            "pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}",
+                            "pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}",
+                        )
+                        self.assertTrue(
+                            "depot_main_enabled: 'false'" in block
+                            or "depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}"
+                            in block,
+                            "depot_main_enabled must be a bounded constant or repository gate",
+                        )
+                        if "manual_use_depot:" in block:
+                            self.assertIn(
+                                "manual_use_depot: ${{ inputs.use_depot }}",
+                                block,
+                            )
+                    for value in bounded_values:
+                        self.assertIn(value, block, value)
+
+                # The runner-owning job must consume a selector output.  The
+                # platform-check slice maps two semantic OS outputs through a
+                # bounded JSON object; all other producers select one output
+                # directly (native SDK resolves its size in a policy helper).
+                if name == "ci-platform-checks-slice.yml":
+                    self.assertIn(
+                        "runner_by_platform: ${{ steps.platform_runners.outputs.runner_by_platform }}",
+                        workflow,
+                    )
+                    self.assertIn(
+                        "runs-on: ${{ fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform] }}",
+                        workflow,
+                    )
+                else:
+                    self.assertIn("runs-on: ${{ needs.runner_policy.outputs.", workflow)
+
     def test_main_runner_contract_preserves_image_checks(self) -> None:
         workflow = self.workflow("ci-runner-contract-slice.yml")
         self.assertIn("inputs.profile == 'main'", workflow)

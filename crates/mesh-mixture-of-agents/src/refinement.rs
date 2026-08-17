@@ -77,10 +77,7 @@ pub(crate) fn refinement_expected(config: &GatewayConfig) -> bool {
             // the round for any all-small pool and for diverse pools —
             // matching Hermes' cheaper single-synth cadence where refine buys
             // nothing. See `evals/moa-openrouter/RESULTS.md`.
-            let all_small = config
-                .models
-                .iter()
-                .all(|m| worker::model_name_is_small_tier(&m.name));
+            let all_small = config.models.iter().all(worker::entry_is_small_tier);
             !all_small && worker::pool_is_homogeneous(&config.models)
         }
     }
@@ -205,10 +202,7 @@ mod tests {
             backends: Vec::new(),
             models: models
                 .iter()
-                .map(|n| ModelEntry {
-                    name: (*n).to_string(),
-                    backend_index: 0,
-                })
+                .map(|n| ModelEntry::new((*n).to_string(), 0))
                 .collect(),
             worker_timeout: Duration::from_secs(60),
             hedge_delay: Duration::from_secs(5),

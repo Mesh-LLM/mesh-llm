@@ -8,11 +8,10 @@ usage: scripts/release.sh <version|vversion> [--skip-gpu-bundles] [--canary]
 
 Runs a synchronous release from main:
   1. verifies gh and the local git state
-  2. applies the release version bump
-  3. commits and pushes the release-prep source commit when needed
-  4. dispatches .github/workflows/release.yml
-  5. watches the GitHub Actions run until it succeeds or fails
-  6. generates GitHub release notes and attaches them to the release
+  2. dispatches .github/workflows/release.yml
+  3. lets the workflow commit and push the canonical version bump
+  4. watches the GitHub Actions run until it succeeds or fails
+  5. verifies the release and origin/main version
 
 The command requires the current branch to be main and up to date with
 origin/main before it starts.
@@ -50,7 +49,7 @@ read_workspace_version() {
     perl -0ne 'print "$1\n" if /\[workspace\.package\][^[]*?\nversion\s*=\s*"([^"]+)"/s' Cargo.toml
 }
 
-ensure_target_version_advances() {
+ensure_target_version_not_older() {
     local current="$1"
     local target="$2"
     local compare_status
@@ -108,7 +107,7 @@ for left, right in zip(current_version[:3], target_version[:3]):
     if right < left:
         raise SystemExit(1)
 
-raise SystemExit(0 if compare_prerelease(target_version[3], current_version[3]) > 0 else 1)
+raise SystemExit(0 if compare_prerelease(target_version[3], current_version[3]) >= 0 else 1)
 PY
     then
         compare_status=0
@@ -120,7 +119,7 @@ PY
         0)
             ;;
         1)
-            die "target version $target must be greater than current workspace version $current"
+            die "target version $target must not be older than current workspace version $current"
             ;;
         *)
             die "failed to compare current version $current and target version $target"
@@ -177,12 +176,11 @@ confirm_release() {
     cat <<EOF
 This will:
   - verify the current branch is clean, local main, and equal to origin/main
-  - update release source files from $current_version to $version
-  - commit the source changes as "$tag: prepare release source" if anything changed
-  - push the release-prep commit directly to origin/main
   - dispatch .github/workflows/release.yml for $tag
+  - for a non-canary release, let the workflow update source files from $current_version to $version
+  - for a non-canary release, let the workflow commit and push "$tag: prepare release source" to origin/main
   - watch the GitHub Actions release run until it succeeds or fails
-  - after a non-canary success, generate GitHub release notes and attach them to $tag
+  - publish $tag with GitHub-generated release notes after all release checks pass
 
 Options:
   - skip GPU bundles: $skip_gpu_bundles
@@ -200,41 +198,10 @@ EOF
     esac
 }
 
-push_release_source_commit() {
-    local tag="$1"
-    local version="$2"
-    local current_version
-    current_version="$(read_workspace_version)"
-
-    echo "Current workspace version: $current_version"
-    echo "Target release version: $version"
-
-    scripts/release-version.sh "$version"
-
-    git add --update
-    if ! git diff --quiet; then
-        git status --short >&2
-        die "release preparation left unstaged tracked changes"
-    fi
-
-    if git diff --cached --quiet; then
-        echo "Release source files already match $version; no commit needed."
-    else
-        git commit -m "$tag: prepare release source"
-    fi
-
-    git push origin HEAD:main
-}
-
 dispatch_release_workflow() {
     local tag="$1"
     local skip_gpu_bundles="$2"
     local canary="$3"
-    local release_sha="$4"
-    local before
-    local run_id
-
-    before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     echo "Dispatching Release workflow for $tag..." >&2
     gh workflow run release.yml \
@@ -242,6 +209,20 @@ dispatch_release_workflow() {
         --raw-field "version=$tag" \
         --raw-field "skip_gpu_bundles=$skip_gpu_bundles" \
         --raw-field "canary=$canary"
+}
+
+workflow_run_id_from_url() {
+    local run_url="$1"
+
+    if [[ "$run_url" =~ /actions/runs/([0-9]+)([/?#]|$) ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+    fi
+}
+
+find_dispatched_release_run_id() {
+    local release_sha="$1"
+    local created_after="$2"
+    local run_id
 
     echo "Waiting for GitHub to create the workflow run..." >&2
     for _ in {1..30}; do
@@ -251,7 +232,7 @@ dispatch_release_workflow() {
                 --branch main \
                 --commit "$release_sha" \
                 --event workflow_dispatch \
-                --created ">=$before" \
+                --created ">=$created_after" \
                 --json databaseId,headSha,createdAt \
                 --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty'
         )"
@@ -276,33 +257,6 @@ wait_for_release() {
     done
 
     die "release $tag was not visible after the workflow completed"
-}
-
-attach_generated_release_notes() {
-    local tag="$1"
-    local version="$2"
-    local target_sha="$3"
-    local prerelease="$4"
-    local notes_file
-
-    notes_file="$(mktemp)"
-    trap 'rm -f "$notes_file"' RETURN
-
-    echo "Generating release notes for $tag..."
-    gh api "repos/{owner}/{repo}/releases/generate-notes" \
-        --method POST \
-        --field "tag_name=$tag" \
-        --field "target_commitish=$target_sha" \
-        --jq '.body' >"$notes_file"
-
-    echo "Attaching generated release notes to $tag..."
-    if [[ "$prerelease" == "true" ]]; then
-        gh release edit "$tag" --title "$tag" --notes-file "$notes_file" --prerelease
-    else
-        gh release edit "$tag" --title "$tag" --notes-file "$notes_file"
-    fi
-
-    echo "Release notes updated for $tag."
 }
 
 main() {
@@ -349,13 +303,8 @@ main() {
 
     local version
     local tag
-    local prerelease
     version="$(semver_from_arg "$raw_version")"
     tag="v$version"
-    prerelease="false"
-    if [[ "$version" == *-* ]]; then
-        prerelease="true"
-    fi
 
     ensure_clean_worktree
     ensure_main_is_current
@@ -364,17 +313,22 @@ main() {
     current_version="$(read_workspace_version)"
     [[ -n "$current_version" ]] || die "could not read workspace version from Cargo.toml"
     ensure_version_format "$current_version" "current workspace"
-    ensure_target_version_advances "$current_version" "$version"
+    ensure_target_version_not_older "$current_version" "$version"
     ensure_github_release_preflight "$tag"
 
     confirm_release "$tag" "$version" "$current_version" "$skip_gpu_bundles" "$canary"
 
-    push_release_source_commit "$tag" "$version"
-
-    local release_sha
+    local dispatch_sha
+    local dispatch_started_at
+    local run_url
     local run_id
-    release_sha="$(git rev-parse HEAD)"
-    run_id="$(dispatch_release_workflow "$tag" "$skip_gpu_bundles" "$canary" "$release_sha")"
+    dispatch_sha="$(git rev-parse origin/main)"
+    dispatch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    run_url="$(dispatch_release_workflow "$tag" "$skip_gpu_bundles" "$canary")"
+    run_id="$(workflow_run_id_from_url "$run_url")"
+    if [[ -z "$run_id" ]]; then
+        run_id="$(find_dispatched_release_run_id "$dispatch_sha" "$dispatch_started_at")"
+    fi
 
     echo "Watching Release workflow run $run_id..."
     gh run watch "$run_id" --compact --exit-status
@@ -385,9 +339,16 @@ main() {
     fi
 
     wait_for_release "$tag"
-    attach_generated_release_notes "$tag" "$version" "$release_sha" "$prerelease"
+    git fetch origin main
 
-    echo "Release complete: $tag ($release_sha)"
+    local remote_version
+    remote_version="$(git show origin/main:Cargo.toml | perl -0ne 'print "$1\n" if /\[workspace\.package\][^[]*?\nversion\s*=\s*"([^"]+)"/s')"
+    [[ "$remote_version" == "$version" ]] || die "release succeeded, but origin/main reports version ${remote_version:-unknown} instead of $version"
+
+    echo "Release complete: $tag; origin/main is version $remote_version"
+    echo "Local main can now be fast-forwarded with: git pull --ff-only"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
