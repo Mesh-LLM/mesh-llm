@@ -4,6 +4,11 @@ use crate::network::router;
 
 pub(super) const REQUEST_TOKEN_MARGIN: u32 = 256;
 
+/// Decode headroom Skippy admission reserves, as a `u32` for token arithmetic.
+fn decode_headroom_tokens() -> u32 {
+    saturating_u32(skippy_server::DECODE_BATCH_HEADROOM_TOKENS)
+}
+
 fn saturating_u32(value: usize) -> u32 {
     value.try_into().unwrap_or(u32::MAX)
 }
@@ -27,6 +32,14 @@ fn request_budget_tokens(body: &serde_json::Value) -> Option<u32> {
     request_budget_tokens_from_parts(serialized.len(), completion_tokens)
 }
 
+/// Context a request needs from a target, in tokens.
+///
+/// The completion term is deliberately *not* the client's `max_tokens`. That
+/// value is an upper bound, and clients commonly send an enormous one to mean
+/// "no limit" (Buzz Agent Desktop defaults to 65,536). Skippy admission only
+/// ever reserves `min(max_tokens, DECODE_BATCH_HEADROOM_TOKENS)`, so counting
+/// the full ceiling here made routing refuse requests the server would have
+/// served — issue #1350. Both layers now apply the same bound.
 pub(crate) fn request_budget_tokens_from_parts(
     body_len_bytes: usize,
     completion_tokens: Option<u32>,
@@ -35,7 +48,7 @@ pub(crate) fn request_budget_tokens_from_parts(
         return None;
     }
     let prompt_tokens = ceil_div_u32(saturating_u32(body_len_bytes), 4);
-    let completion_tokens = completion_tokens.unwrap_or(0);
+    let completion_tokens = completion_tokens.unwrap_or(0).min(decode_headroom_tokens());
     let requested_tokens = prompt_tokens.saturating_add(completion_tokens);
     Some(
         prompt_tokens
@@ -406,6 +419,76 @@ mod tests {
 
         assert_eq!(budget, 2_500 + 512 + REQUEST_TOKEN_MARGIN);
     }
+    #[test]
+    fn test_request_budget_tokens_bounds_generous_client_ceiling() {
+        // Regression for #1350: Buzz Agent Desktop defaults max_completion_tokens
+        // to 65,536, which meant a ~35.6 KB request "needed" 74,703 tokens and was
+        // refused by every 65,536-context target, even though Skippy admission
+        // would only have reserved prompt + 512.
+        let prompt_tokens = ceil_div_u32(35_644, 4);
+        let budget = request_budget_tokens_from_parts(35_644, Some(65_536)).unwrap();
+
+        assert_eq!(
+            budget,
+            prompt_tokens + 512 + request_token_margin(prompt_tokens + 512)
+        );
+        assert!(
+            budget <= 65_536,
+            "generous client ceiling should still fit a 65,536-token target: {budget}"
+        );
+    }
+
+    #[test]
+    fn test_request_budget_tokens_matches_skippy_decode_headroom() {
+        // Routing and Skippy admission must apply the same completion bound or
+        // routing can refuse requests the backend would serve (#1350).
+        let huge = request_budget_tokens_from_parts(4_096, Some(u32::MAX)).unwrap();
+        let headroom = request_budget_tokens_from_parts(
+            4_096,
+            Some(skippy_server::DECODE_BATCH_HEADROOM_TOKENS as u32),
+        )
+        .unwrap();
+
+        assert_eq!(huge, headroom);
+    }
+
+    #[test]
+    fn test_request_budget_tokens_still_counts_full_prompt() {
+        // Only the completion term is bounded. An oversized prompt must still be
+        // excluded from an undersized target.
+        let budget = request_budget_tokens_from_parts(400_000, None).unwrap();
+
+        assert!(budget > 65_536, "oversized prompt must not be bounded away");
+    }
+
+    #[test]
+    fn test_request_budget_tokens_bounds_all_completion_limit_aliases() {
+        let expected = request_budget_tokens_from_parts(1_024, Some(512)).unwrap();
+        for key in [
+            "max_completion_tokens",
+            "max_tokens",
+            "max_output_tokens",
+            "n_predict",
+        ] {
+            let body = serde_json::json!({ key: 65_536u64 });
+            let padded_len = 1_024;
+            let completion = body.get(key).and_then(|v| v.as_u64()).map(|v| v as u32);
+            assert_eq!(
+                request_budget_tokens_from_parts(padded_len, completion).unwrap(),
+                expected,
+                "{key} should be bounded like every other completion alias"
+            );
+        }
+    }
+
+    #[test]
+    fn test_request_budget_tokens_absent_completion_limit_reserves_nothing() {
+        let prompt_tokens = ceil_div_u32(1_024, 4);
+        let budget = request_budget_tokens_from_parts(1_024, None).unwrap();
+
+        assert_eq!(budget, prompt_tokens + request_token_margin(prompt_tokens));
+    }
+
     #[test]
     fn test_reorder_candidates_by_context_prefers_known_fit_then_unknown() {
         let ordered = reorder_candidates_by_context_and_throughput(

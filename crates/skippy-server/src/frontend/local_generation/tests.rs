@@ -156,6 +156,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         generation_limit: Arc::new(Semaphore::new(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
+        generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         generation_token_budget: Arc::new(GenerationTokenBudget::new(128)),
         hook_policy: None,
         generation_receipt: Some(GenerationReceiptConfig::new(sink.clone())),
@@ -169,7 +170,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     // above one token so the test exercises a fresh runtime session before
     // its batch size is queried.
     let prompt_token_ids = [1, 2];
-    let ids = OpenAiGenerationIds::new(OpenAiCacheHints::default(), None);
+    let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);
     let mut emitted = Vec::new();
     backend.generate_local_tokens(
         LocalGeneration {
@@ -214,7 +215,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     );
 
     sink.fail.store(true, Ordering::Relaxed);
-    let failing_ids = OpenAiGenerationIds::new(OpenAiCacheHints::default(), None);
+    let failing_ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);
     backend.generate_local_tokens(
         LocalGeneration {
             prompt_token_ids: &prompt_token_ids,

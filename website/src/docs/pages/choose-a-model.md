@@ -43,3 +43,14 @@ Add another machine when:
 - you want an API-only laptop to route to a workstation
 
 For multi-machine large-model serving, use catalog entries with layer packages. Layer packages let Mesh place parts of a supported model across available machines while requests still go through `http://localhost:9337/v1`.
+
+## Letting Mesh choose
+
+If you would rather not pick per request, send `"model": "mesh"` and Mesh serves
+the request with whatever the mesh has — a Mixture-of-Agents committee when that
+helps, a single suitable model otherwise. See
+[Automatic routing](/docs/pages/automatic-routing/).
+
+To choose by size or cost yourself, read `/v1/models`: each entry carries
+`parameter_count_b`, `parameter_size`, `quant`, `context_length`, and current
+load, so a client can sort and send that model's name.

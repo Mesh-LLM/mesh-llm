@@ -41,6 +41,11 @@ use std::sync::atomic::AtomicUsize;
 use std::time::Instant;
 use tokio::sync::Semaphore;
 
+pub(in crate::frontend) struct GenerationSessionLockEntry {
+    pub(in crate::frontend) semaphore: Arc<Semaphore>,
+    pub(in crate::frontend) users: AtomicUsize,
+}
+
 #[derive(Clone)]
 pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) runtime: Arc<Mutex<RuntimeState>>,
@@ -59,6 +64,8 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) generation_limit: Arc<Semaphore>,
     pub(in crate::frontend) generation_queue_depth: Arc<AtomicUsize>,
     pub(in crate::frontend) generation_queue_limit: usize,
+    pub(in crate::frontend) generation_session_locks:
+        Arc<Mutex<BTreeMap<String, Arc<GenerationSessionLockEntry>>>>,
     pub(in crate::frontend) generation_token_budget: Arc<GenerationTokenBudget>,
     pub(in crate::frontend) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
     pub(in crate::frontend) generation_receipt: Option<GenerationReceiptConfig>,
@@ -124,6 +131,11 @@ pub(in crate::frontend) struct GenerationMetrics {
     pub(in crate::frontend) detokenize_ms: f64,
     pub(in crate::frontend) text_emit_ms: f64,
     pub(in crate::frontend) eog_check_ms: f64,
+}
+
+pub(in crate::frontend) struct PreparedTextPrompt {
+    pub(in crate::frontend) token_ids: Vec<i32>,
+    pub(in crate::frontend) max_tokens: u32,
 }
 
 pub(in crate::frontend) struct LocalGeneration<'a> {

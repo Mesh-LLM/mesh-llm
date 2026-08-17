@@ -22,7 +22,7 @@ mod types;
 pub use activation::DecodeFrameBatchRequest;
 pub use config::{
     FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
-    LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, RuntimeConfig,
+    LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, MtpSource, RuntimeConfig,
     SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, parse_cache_type,
 };
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};

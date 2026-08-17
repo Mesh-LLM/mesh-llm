@@ -71,8 +71,12 @@ runs:
 
         if ($env:INPUT_SKIP_UI -eq "true") {
           $env:MESH_LLM_SKIP_UI = "1"
-          New-Item -ItemType Directory -Force -Path crates/mesh-llm-ui/dist | Out-Null
-          "<html></html>" | Set-Content -Path crates/mesh-llm-ui/dist/index.html -Encoding utf8
+          $uiDist = "crates/mesh-llm-ui/dist"
+          New-Item -ItemType Directory -Force -Path $uiDist | Out-Null
+          $uiEntryPoint = Join-Path $uiDist "index.html"
+          if (-not (Test-Path -LiteralPath $uiEntryPoint -PathType Leaf)) {
+            "<html></html>" | Set-Content -Path $uiEntryPoint -Encoding utf8
+          }
         } else {
           Remove-Item Env:MESH_LLM_SKIP_UI -ErrorAction SilentlyContinue
         }

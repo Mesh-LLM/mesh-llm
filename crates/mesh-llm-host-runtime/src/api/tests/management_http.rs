@@ -52,6 +52,174 @@ async fn test_management_request_parser_handles_fragmented_post_body() {
 }
 
 #[tokio::test]
+#[serial]
+async fn management_mutation_propagates_request_id_and_records_one_terminal_lifecycle() {
+    let temporary_directory = tempfile::tempdir().unwrap();
+    crate::initialize_logging_foundation(&mesh_llm_config::LoggingConfig {
+        application_state_root: Some(temporary_directory.path().join("logging")),
+        replay_capacity: 16,
+        ..Default::default()
+    })
+    .await;
+    let request_id = "00000000-0000-4000-8000-000000000011";
+    let state = build_test_mesh_api().await;
+    let (address, server) = spawn_management_test_server(state).await;
+
+    let body = r#"{"toml":"version = 1\n","path":"x"}"#;
+    let response = send_management_request(
+        address,
+        format!(
+            "POST /api/runtime/config/validate HTTP/1.1\r\nHost: localhost\r\nx-request-id: {request_id}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+    .await;
+    server.await.unwrap().unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains(&format!("x-request-id: {request_id}")));
+    let records = crate::logging_runtime_state()
+        .and_then(|state| state.replay_bus())
+        .expect("enabled logging replay bus")
+        .replay_window()
+        .records;
+    let lifecycle_records = records
+        .iter()
+        .filter(|record| record.entry.payload.contains(request_id))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle_records
+            .iter()
+            .filter(|record| record.entry.payload.contains("admitted"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        lifecycle_records
+            .iter()
+            .filter(|record| record.entry.payload.contains("completed"))
+            .count(),
+        1
+    );
+    assert!(lifecycle_records.iter().any(|record| {
+        record.entry.payload.contains("management_api")
+            && record.entry.payload.contains("management_post")
+    }));
+
+    crate::initialize_logging_foundation(&mesh_llm_config::LoggingConfig {
+        enabled: false,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn management_4xx_records_rejected_terminal_lifecycle() {
+    let temporary_directory = tempfile::tempdir().unwrap();
+    crate::initialize_logging_foundation(&mesh_llm_config::LoggingConfig {
+        application_state_root: Some(temporary_directory.path().join("logging")),
+        replay_capacity: 16,
+        ..Default::default()
+    })
+    .await;
+    let request_id = "00000000-0000-4000-8000-000000000031";
+    let state = build_test_mesh_api().await;
+    let (address, server) = spawn_management_test_server(state).await;
+
+    let response = send_management_request(
+        address,
+        format!(
+            "POST /api/runtime/config/validate HTTP/1.1\r\nHost: localhost\r\nx-request-id: {request_id}\r\nContent-Length: 0\r\n\r\n"
+        ),
+    )
+    .await;
+    server.await.unwrap().unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    let records = crate::logging_runtime_state()
+        .and_then(|state| state.replay_bus())
+        .expect("enabled logging replay bus")
+        .replay_window()
+        .records;
+    let lifecycle_records = records
+        .iter()
+        .filter(|record| record.entry.payload.contains(request_id))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle_records
+            .iter()
+            .filter(|record| record.entry.payload.contains("rejected"))
+            .count(),
+        1
+    );
+    assert!(
+        lifecycle_records
+            .iter()
+            .any(|record| record.entry.payload.contains("management_http_rejected"))
+    );
+
+    crate::initialize_logging_foundation(&mesh_llm_config::LoggingConfig {
+        enabled: false,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn management_5xx_records_failed_terminal_lifecycle() {
+    let temporary_directory = tempfile::tempdir().unwrap();
+    crate::initialize_logging_foundation(&mesh_llm_config::LoggingConfig {
+        application_state_root: Some(temporary_directory.path().join("logging")),
+        replay_capacity: 16,
+        ..Default::default()
+    })
+    .await;
+    let request_id = "00000000-0000-4000-8000-000000000032";
+    let state = build_test_mesh_api().await;
+    let (address, server) = spawn_management_test_server(state).await;
+
+    let response = send_management_request(
+        address,
+        format!(
+            "POST /api/runtime/mesh-guardrails HTTP/1.1\r\nHost: localhost\r\nx-request-id: {request_id}\r\nContent-Length: 0\r\n\r\n"
+        ),
+    )
+    .await;
+    server.await.unwrap().unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
+    let records = crate::logging_runtime_state()
+        .and_then(|state| state.replay_bus())
+        .expect("enabled logging replay bus")
+        .replay_window()
+        .records;
+    let lifecycle_records = records
+        .iter()
+        .filter(|record| record.entry.payload.contains(request_id))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle_records
+            .iter()
+            .filter(|record| record.entry.payload.contains("failed"))
+            .count(),
+        1
+    );
+    assert!(
+        lifecycle_records
+            .iter()
+            .any(|record| record.entry.payload.contains("management_http_failed"))
+    );
+
+    crate::initialize_logging_foundation(&mesh_llm_config::LoggingConfig {
+        enabled: false,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn test_api_events_sends_initial_payload_and_updates() {
     let state = build_test_mesh_api().await;
     let (addr, handle) = spawn_management_test_server(state.clone()).await;

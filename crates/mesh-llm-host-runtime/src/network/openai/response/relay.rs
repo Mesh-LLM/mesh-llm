@@ -1,13 +1,23 @@
 use super::common::{
-    ResponseRetryPolicy, RouteAttemptResult, parse_completion_tokens_from_json_body,
+    ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body,
     retryable_quality_result,
 };
-use super::probe::{ParsedResponseHeaders, ResponseProbe, read_response_chunk};
+use super::probe::{
+    ParsedResponseHeaders, ResponseProbe, read_response_chunk, try_parse_response_headers,
+};
+use crate::logging::{ArtifactUnavailableReason, OpenAiRouteObserver};
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 const MAX_ERROR_RESPONSE_BYTES: usize = 256 * 1024;
+
+fn http_body(response: &[u8]) -> &[u8] {
+    response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or(&[][..], |header_end| &response[header_end + 4..])
+}
 
 fn reason_phrase(status_code: u16) -> &'static str {
     match status_code {
@@ -69,6 +79,7 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
     tcp_stream: &mut TcpStream,
     reader: &mut R,
     probe: ResponseProbe,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     let status_code = probe.status_code;
     let header_end = probe.header_end;
@@ -88,10 +99,15 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
         remap_error_http_response(status_code, header_end, &buffered).unwrap_or(buffered)
     };
     tcp_stream.write_all(&outgoing).await?;
+    let media_kind = try_parse_response_headers(&outgoing)
+        .ok()
+        .flatten()
+        .and_then(|headers| headers.content_type);
+    route_observer.capture_response_body(http_body(&outgoing), media_kind.as_deref());
     let _ = tcp_stream.shutdown().await;
     Ok(RouteAttemptResult::Delivered {
         status_code,
-        completion_tokens: None,
+        usage: None,
     })
 }
 
@@ -101,44 +117,85 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     probe: ResponseProbe,
     parsed: ParsedResponseHeaders,
     retry_policy: ResponseRetryPolicy,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     if let Some(content_length) = parsed.content_length {
         const MAX_SUCCESS_METRICS_BODY_BYTES: usize = 1024 * 1024;
         if content_length <= MAX_SUCCESS_METRICS_BODY_BYTES {
             let mut buffered = probe.buffered;
-            while buffered.len() < parsed.header_end + content_length {
+            let body_end = parsed
+                .header_end
+                .checked_add(content_length)
+                .ok_or_else(|| anyhow::anyhow!("upstream Content-Length overflow"))?;
+            while buffered.len() < body_end {
                 read_response_chunk(reader, &mut buffered).await?;
             }
-            if let Some(result) =
-                retryable_quality_result(&buffered[parsed.header_end..], retry_policy)
-            {
+            let body = &buffered[parsed.header_end..body_end];
+            if let Some(result) = retryable_quality_result(body, retry_policy) {
                 return Ok(result);
             }
-            let completion_tokens =
-                parse_completion_tokens_from_json_body(&buffered[parsed.header_end..]);
-            tcp_stream.write_all(&buffered).await?;
+            let usage = parse_token_usage_from_json_body(body);
+            // Reads may include bytes beyond the declared HTTP body. Only the
+            // declared response is client-visible and capturable.
+            tcp_stream.write_all(&buffered[..body_end]).await?;
+            route_observer.capture_response_body(body, parsed.content_type.as_deref());
             let _ = tcp_stream.shutdown().await;
             return Ok(RouteAttemptResult::Delivered {
                 status_code: probe.status_code,
-                completion_tokens,
+                usage,
             });
         }
     }
 
     tcp_stream.write_all(&probe.buffered).await?;
+    route_observer.capture_response_unavailable(ArtifactUnavailableReason::ResponseBodyNotBounded);
     if let Err(err) = tokio::io::copy(reader, &mut *tcp_stream).await {
         tracing::debug!("response relay ended after headers were committed: {err}");
     }
     let _ = tcp_stream.shutdown().await;
     Ok(RouteAttemptResult::Delivered {
         status_code: probe.status_code,
-        completion_tokens: None,
+        usage: None,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logging::{OpenAiArtifactCapture, OpenAiRouteObserver};
+    use mesh_llm_events::logging::identifiers::RequestId;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    type CaptureRecord = (String, Vec<u8>, Option<String>);
+
+    #[derive(Default)]
+    struct Captures(Mutex<Vec<CaptureRecord>>);
+
+    impl OpenAiArtifactCapture for Captures {
+        fn capture_body(
+            &self,
+            _request_id: RequestId,
+            kind: &'static str,
+            content: &[u8],
+            media_kind: Option<&str>,
+        ) {
+            self.0.lock().unwrap().push((
+                kind.to_string(),
+                content.to_vec(),
+                media_kind.map(str::to_owned),
+            ));
+        }
+
+        fn capture_unavailable(
+            &self,
+            _request_id: RequestId,
+            _kind: &'static str,
+            _reason: ArtifactUnavailableReason,
+        ) {
+        }
+    }
 
     #[test]
     fn test_remap_error_http_response_rewrites_llama_error_body() {
@@ -168,5 +225,113 @@ mod tests {
             .map(|idx| idx + 4)
             .unwrap();
         assert!(remap_error_http_response(400, header_end, upstream).is_none());
+    }
+
+    #[tokio::test]
+    async fn relay_success_captures_client_visible_non_stream_body() {
+        let body = br#"{"id":"chatcmpl-safe","usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}"#;
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let captured = Arc::new(Captures::default());
+        let captures: Arc<dyn OpenAiArtifactCapture> = captured.clone();
+        let task = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+            let observer = OpenAiRouteObserver::capture_test_observer(RequestId::new(), &captures);
+            relay_success_response(
+                &mut client,
+                &mut upstream_reader,
+                ResponseProbe {
+                    buffered: header.clone().into_bytes(),
+                    header_end: header.len(),
+                    status_code: 200,
+                    retryable_context_overflow: false,
+                },
+                ParsedResponseHeaders {
+                    header_end: header.len(),
+                    status_code: 200,
+                    content_length: Some(body.len()),
+                    content_type: Some("application/json".to_owned()),
+                },
+                ResponseRetryPolicy::next_target_available(false),
+                observer,
+            )
+            .await
+            .unwrap();
+        });
+        upstream_writer.write_all(body).await.unwrap();
+        drop(upstream_writer);
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut client_response = Vec::new();
+        socket.read_to_end(&mut client_response).await.unwrap();
+        task.await.unwrap();
+
+        let captures = captured.0.lock().unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].0, "response");
+        assert_eq!(captures[0].1, body);
+        assert_eq!(captures[0].2.as_deref(), Some("application/json"));
+        assert!(client_response.ends_with(body));
+    }
+
+    #[tokio::test]
+    async fn relay_success_excludes_bytes_read_past_declared_content_length() {
+        let body = br#"{"id":"chatcmpl-safe"}"#;
+        let overread = b"NEXT-RESPONSE-MUST-NOT-BE-CAPTURED";
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut buffered = header.clone().into_bytes();
+        buffered.extend_from_slice(body);
+        buffered.extend_from_slice(overread);
+        let captured = Arc::new(Captures::default());
+        let captures: Arc<dyn OpenAiArtifactCapture> = captured.clone();
+        let task_header = header.clone();
+        let task = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+            let observer = OpenAiRouteObserver::capture_test_observer(RequestId::new(), &captures);
+            let mut empty_reader = tokio::io::empty();
+            relay_success_response(
+                &mut client,
+                &mut empty_reader,
+                ResponseProbe {
+                    buffered,
+                    header_end: task_header.len(),
+                    status_code: 200,
+                    retryable_context_overflow: false,
+                },
+                ParsedResponseHeaders {
+                    header_end: task_header.len(),
+                    status_code: 200,
+                    content_length: Some(body.len()),
+                    content_type: Some("application/json; charset=utf-8".to_owned()),
+                },
+                ResponseRetryPolicy::next_target_available(false),
+                observer,
+            )
+            .await
+            .unwrap();
+        });
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut client_response = Vec::new();
+        socket.read_to_end(&mut client_response).await.unwrap();
+        task.await.unwrap();
+
+        assert_eq!(client_response, [header.as_bytes(), body].concat());
+        let captures = captured.0.lock().unwrap();
+        assert_eq!(captures[0].1, body);
+        assert!(
+            !captures[0]
+                .1
+                .windows(overread.len())
+                .any(|part| part == overread)
+        );
     }
 }

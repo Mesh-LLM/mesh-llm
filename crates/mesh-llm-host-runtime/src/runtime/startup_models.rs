@@ -495,6 +495,7 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "--require-release-attestation" => options.require_release_attestation = true,
             "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
             "--model" => options.model.push(next_test_arg(&mut iter, arg).into()),
+            "--gguf" => options.gguf.push(next_test_arg(&mut iter, arg).into()),
             "--ctx-size" => {
                 options.ctx_size = Some(
                     next_test_arg(&mut iter, arg)
@@ -583,6 +584,34 @@ pub(super) fn resolve_model_parallel_slots(
     resolve_model_parallel_override(model_parallel, gpu_config).unwrap_or(default_slots)
 }
 
+/// Detect the `--gguf <path> --model <alias>` naming form.
+///
+/// Returns the alias when the user supplied exactly one local GGUF and exactly
+/// one `--model` value that is a plain name rather than another model spec.
+/// Anything that could itself resolve — an existing path, a Hugging Face ref,
+/// or a URL — keeps the previous behaviour of being served as its own model.
+fn gguf_alias_from_cli(options: &RuntimeOptions) -> Option<String> {
+    if options.gguf.len() != 1 || options.model.len() != 1 {
+        return None;
+    }
+    let candidate = options.model[0].to_str()?;
+    if candidate.is_empty() || !is_plain_model_alias(candidate) {
+        return None;
+    }
+    if options.model[0].exists() {
+        return None;
+    }
+    Some(candidate.to_string())
+}
+
+/// A plain alias carries no path, ref, or URL syntax.
+fn is_plain_model_alias(candidate: &str) -> bool {
+    !candidate.contains('/')
+        && !candidate.contains('\\')
+        && !candidate.contains(':')
+        && !candidate.contains('@')
+}
+
 pub(super) fn build_startup_model_specs(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -593,6 +622,32 @@ pub(super) fn build_startup_model_specs(
 
     let mut specs = Vec::new();
     if cli_has_explicit_models(options) {
+        // `--gguf <path> --model <alias>` names the local file rather than
+        // requesting a second model: bind the alias to the GGUF so we never
+        // try to resolve it against the Hugging Face hub or the catalog.
+        if let Some(alias) = gguf_alias_from_cli(options) {
+            let path = &options.gguf[0];
+            if !path.exists() {
+                anyhow::bail!("GGUF file not found: {}", path.display());
+            }
+            specs.push(StartupModelSpec {
+                model_ref: path.clone(),
+                declared_ref: Some(alias),
+                mmproj_ref: options.mmproj.clone(),
+                ctx_size: options.ctx_size,
+                gpu_id: None,
+                config_owned: false,
+                parallel: None,
+                cache_type_k: None,
+                cache_type_v: None,
+                n_batch: None,
+                n_ubatch: None,
+                flash_attention: FlashAttentionType::Auto,
+                profile: String::new(),
+            });
+            return Ok(specs);
+        }
+
         for path in &options.gguf {
             if !path.exists() {
                 anyhow::bail!("GGUF file not found: {}", path.display());

@@ -32,6 +32,32 @@ pub(crate) fn forwarded_stage_message_timed(
     wire_dtype: WireActivationDType,
     activation_width: i32,
 ) -> Result<ForwardedStageMessage> {
+    // A non-first stage must always compute the *full* incoming token range.
+    // Suffix-only execution after a partial cache hit is permitted only on the
+    // stage that owns layer 0 (see `executable_token_ids` in
+    // `binary_messaging/connection.rs`), because the forwarded header keeps
+    // `incoming.token_count` and downstream stages attend over the whole
+    // range. If a later stage ever emitted a short frame, the next stage would
+    // attend over a prefix it never received and produce plausible-looking but
+    // wrong tokens.
+    //
+    // Today the payload-size check inside the encoder happens to catch this,
+    // but it fails for the wrong reason and only for some dtypes. Assert the
+    // invariant directly so a future change to the restore path fails loudly
+    // and specifically instead of silently corrupting output.
+    if config.layer_start != 0
+        && i64::from(output.desc.token_count) != i64::from(incoming.token_count)
+    {
+        bail!(
+            "stage {} (layers {}..{}) produced {} activation tokens for {} incoming tokens; \
+             non-first stages must execute the full range",
+            config.stage_index,
+            config.layer_start,
+            config.layer_end,
+            output.desc.token_count,
+            incoming.token_count,
+        );
+    }
     let mut state = incoming.state;
     state.source_stage_index = config.stage_index as i32;
     state.reserved = wire_dtype as i32;
@@ -319,5 +345,57 @@ mod tests {
         };
 
         assert!(format!("{error:#}").contains("F16 activation payload size mismatch"));
+    }
+
+    /// A non-first stage must execute the full incoming token range.
+    ///
+    /// Suffix-only execution after a partial cache hit is legal only on the
+    /// stage owning layer 0. If a later stage emitted a short frame, the next
+    /// stage would attend over a prefix it never received -- plausible-looking
+    /// but wrong output. This must fail loudly and by name.
+    #[test]
+    fn non_first_stage_must_not_emit_a_short_activation_frame() {
+        let config = stage_config();
+        assert_ne!(config.layer_start, 0, "fixture must be a non-first stage");
+        let mut incoming = incoming_message();
+        incoming.token_count = 4;
+        // Frame covers only 1 of the 4 incoming tokens, as a suffix-only
+        // execution after a 3-token restore would produce.
+        let output = f32_frame(0, 1, &[1.0, 2.0, 3.0, 4.0]);
+
+        let error =
+            forwarded_stage_message_timed(&config, &incoming, &output, WireActivationDType::F32, 4)
+                .err()
+                .expect("short frame from a non-first stage must be rejected");
+
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("must execute the full range"),
+            "expected the named invariant, got: {text}"
+        );
+    }
+
+    /// The first stage is explicitly allowed to emit a short frame: that is
+    /// how suffix-only prefill after a cache hit works.
+    #[test]
+    fn first_stage_may_emit_a_short_activation_frame() {
+        let mut config = stage_config();
+        config.stage_index = 0;
+        config.layer_start = 0;
+        let mut incoming = incoming_message();
+        incoming.token_count = 4;
+
+        // Keep the encoded payload valid for the four-token wire header while
+        // the frame descriptor exercises the first-stage short-frame branch.
+        assert!(
+            forwarded_stage_message_timed(
+                &config,
+                &incoming,
+                &f32_frame(0, 1, &[1.0; 16]),
+                WireActivationDType::F32,
+                4,
+            )
+            .is_ok()
+        );
     }
 }

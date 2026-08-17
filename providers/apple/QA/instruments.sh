@@ -59,6 +59,24 @@ xcrun xctrace export \
     --xpath '/trace-toc/run[@number="1"]/data/table[@schema="ane-hw-intervals"]' \
     --output "$OUTPUT_DIR/core-ai-ane.xml"
 
+python3 - "$OUTPUT_DIR/core-ai-toc.xml" "$OUTPUT_DIR/core-ai-ane.xml" <<'PY'
+import pathlib
+import sys
+import xml.etree.ElementTree as ET
+
+toc_path, ane_path = map(pathlib.Path, sys.argv[1:])
+try:
+    toc = ET.parse(toc_path).getroot()
+    ane = ET.parse(ane_path).getroot()
+except (ET.ParseError, OSError) as exc:
+    raise SystemExit(f"ANE export failed: invalid xctrace output: {exc}")
+
+run = toc.find("./run[@number='1']")
+schema = run.find("./data/table[@schema='ane-hw-intervals']") if run is not None else None
+if run is None or schema is None or not list(ane.iter()):
+    raise SystemExit("ANE export failed: run 1 has no ane-hw-intervals data")
+PY
+
 python3 - "$OUTPUT_DIR" <<'PY'
 import json
 import pathlib

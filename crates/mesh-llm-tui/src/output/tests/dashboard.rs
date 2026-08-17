@@ -786,6 +786,29 @@ pub(super) fn fatal_events_do_not_consume_startup_history_slots() {
 }
 
 #[test]
+fn startup_history_sanitizes_complete_event_summaries() {
+    let mut formatter = InteractiveDashboardFormatter::default();
+    formatter
+        .handle_output_event(&OutputEvent::Warning {
+            message: "startup failed opening /Users/operator/.mesh-llm/config.toml with Bearer private-token"
+                .to_string(),
+            context: None,
+        })
+        .expect("warning should reduce cleanly");
+
+    let summary = formatter
+        .state
+        .startup_history
+        .back()
+        .expect("warning should appear in startup history")
+        .summary
+        .as_str();
+    assert!(summary.contains("startup failed"));
+    assert!(!summary.contains("/Users/operator"));
+    assert!(!summary.contains("private-token"));
+}
+
+#[test]
 pub(super) fn startup_failures_surface_in_tui_events_and_status() {
     let mut formatter = InteractiveDashboardFormatter::default();
     for event in [

@@ -46,8 +46,8 @@ function formatValue(value) {
 function extractDetails(obj) {
   const details = [];
 
-  if (obj.event === "invite_token" && obj.token) {
-    details.push(`token=${obj.token}`);
+  if (obj.event === "invite_token") {
+    details.push(obj.token ? `token=${obj.token}` : "invitation=ready");
     if (obj.mesh_id) details.push(`mesh=${obj.mesh_id}`);
   }
 

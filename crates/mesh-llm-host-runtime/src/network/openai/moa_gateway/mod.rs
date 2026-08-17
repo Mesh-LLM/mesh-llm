@@ -13,12 +13,29 @@
 use self::streaming::write_moa_response;
 use self::workers::effective_enable_thinking_for_moa;
 use crate::inference::election;
+use crate::logging::OpenAiRouteObserver;
 use crate::mesh;
+use crate::network::openai::automatic;
 use crate::network::openai::transport as proxy;
+use mesh_llm_events::logging::events::TokenUsage;
 use mesh_mixture_of_agents as moa;
 use tokio::net::TcpStream;
 
 pub use self::workers::build_moa_config;
+
+pub(crate) enum MoaDispatchResult {
+    Passthrough(TcpStream),
+    Responded(u16),
+    RespondedWithUsage {
+        status_code: u16,
+        usage: TokenUsage,
+    },
+    FailedWithStatus {
+        status_code: u16,
+        reason: &'static str,
+    },
+    Dropped(&'static str),
+}
 
 /// Fall back to serving a single real model when MoA cannot form a committee.
 ///
@@ -31,7 +48,8 @@ async fn degrade_to_single_model(
     targets: Option<&election::ModelTargets>,
     tcp_stream: TcpStream,
     request: &mut proxy::BufferedHttpRequest,
-) -> Option<TcpStream> {
+    route_observer: OpenAiRouteObserver<'_>,
+) -> MoaDispatchResult {
     // Prefer the same source `/v1/models` and routing use — the local
     // targets table (`callable_models`) — since `models_being_served()` can be
     // empty at request time on a fresh serve node. Fall back to the gossiped
@@ -53,8 +71,16 @@ async fn degrade_to_single_model(
         .into_iter()
         .find(|m| m != moa::VIRTUAL_MODEL_NAME)
     else {
-        let _ = proxy::send_503(tcp_stream, "no models available in the mesh").await;
-        return None;
+        return match proxy::send_503_observed(
+            tcp_stream,
+            "no models available in the mesh",
+            route_observer,
+        )
+        .await
+        {
+            Ok(()) => MoaDispatchResult::Responded(503),
+            Err(_) => MoaDispatchResult::Dropped("moa_response_write_failed"),
+        };
     };
 
     tracing::info!("MoA: <2 workers, degrading model=mesh to single model {target}");
@@ -68,7 +94,58 @@ async fn degrade_to_single_model(
     request.model_name = Some(target);
 
     // Hand the stream back: the caller falls through to normal routing.
-    Some(tcp_stream)
+    MoaDispatchResult::Passthrough(tcp_stream)
+}
+
+/// Whether a request that named the automatic directive may be served by a
+/// committee.
+enum CommitteeAdmission {
+    /// Convene a committee.
+    Admitted,
+    /// Automatic routing applies, but a committee cannot honour this request.
+    ServeFromSingleModel(automatic::SingleModelReason),
+    /// The request is chat-shaped but malformed; reject it with this message.
+    Reject(&'static str),
+}
+
+/// Decide whether to convene a committee for an automatic chat request.
+///
+/// The three checks are ordered deliberately, and the order is the behaviour:
+///
+/// 1. **Envelope** — could a committee ever fan this out? A committee builds
+///    chat completions from a `messages` array, so a `/v1/completions` request
+///    has nothing to fan out and must not be held to the chat contract below.
+/// 2. **Chat contract** — `messages` must be a present, non-empty array.
+///    Without this a request like `{"model":"mesh"}` or a string `messages`
+///    field reached the workers, which fabricated a 200 answer from nothing
+///    (homelab API-1 defect). This must run *before* the content check so a
+///    malformed chat body gets this precise error rather than being diverted
+///    into single-model routing and failing downstream with a vaguer one.
+/// 3. **Content** — what did the client declare? Media has no aggregation
+///    semantics for a committee, and a committee cannot stream for real.
+fn committee_admission(
+    effective_model: Option<&str>,
+    forwarded_path: &str,
+    body: &serde_json::Value,
+) -> CommitteeAdmission {
+    let request = automatic::AutomaticRequest {
+        model: effective_model,
+        // The forwarded path: `/v1/responses` is normalised onto chat
+        // completions before routing, so it stays committee-eligible.
+        path: forwarded_path,
+        body,
+    };
+    if let automatic::ServingMode::SingleModel(reason) = automatic::envelope_mode(request) {
+        return CommitteeAdmission::ServeFromSingleModel(reason);
+    }
+    match body.get("messages") {
+        Some(serde_json::Value::Array(messages)) if !messages.is_empty() => {}
+        _ => return CommitteeAdmission::Reject("MoA requires a non-empty `messages` array"),
+    }
+    if let automatic::ServingMode::SingleModel(reason) = automatic::content_mode(body) {
+        return CommitteeAdmission::ServeFromSingleModel(reason);
+    }
+    CommitteeAdmission::Admitted
 }
 
 /// Detect `model: "mesh"`, build a mesh-wide MoA config, run the turn,
@@ -92,26 +169,47 @@ pub async fn try_handle_moa(
     effective_model: Option<&str>,
     targets: Option<&election::ModelTargets>,
     required_tokens: Option<u32>,
-) -> Option<TcpStream> {
-    if effective_model != Some(moa::VIRTUAL_MODEL_NAME) {
-        return Some(tcp_stream);
+    route_observer: OpenAiRouteObserver<'_>,
+) -> MoaDispatchResult {
+    if !effective_model.is_some_and(automatic::is_directive) {
+        return MoaDispatchResult::Passthrough(tcp_stream);
     }
 
     request.ensure_body_json();
     let Some(body_json) = request.body_json.clone() else {
-        let _ = proxy::send_400(tcp_stream, "MoA requires a JSON body").await;
-        return None;
+        return match proxy::send_400_observed(
+            tcp_stream,
+            "MoA requires a JSON body",
+            route_observer,
+        )
+        .await
+        {
+            Ok(()) => MoaDispatchResult::Responded(400),
+            Err(_) => MoaDispatchResult::Dropped("moa_response_write_failed"),
+        };
     };
 
-    // Contract check: `messages` must be a present, non-empty array. Without
-    // this a request like `{"model":"mesh"}` or a string `messages` field fell
-    // through to the workers, which fabricated a 200 answer from nothing
-    // (homelab API-1 defect). Reject before any model call.
-    match body_json.get("messages") {
-        Some(serde_json::Value::Array(msgs)) if !msgs.is_empty() => {}
-        _ => {
-            let _ = proxy::send_400(tcp_stream, "MoA requires a non-empty `messages` array").await;
-            return None;
+    match committee_admission(effective_model, &request.path, &body_json) {
+        CommitteeAdmission::Admitted => {}
+        CommitteeAdmission::ServeFromSingleModel(reason) => {
+            tracing::info!(
+                reason = reason.as_str(),
+                "MoA: serving {} from a single model",
+                automatic::DIRECTIVE
+            );
+            // The directive stays in the request *unrewritten*. The caller
+            // recognises it as automatic and runs the full selector (media
+            // capability filter, readiness, affinity, context fit). Rewriting
+            // to a concrete model here would make the request look explicitly
+            // addressed and skip exactly the media filter a media request
+            // needs.
+            return MoaDispatchResult::Passthrough(tcp_stream);
+        }
+        CommitteeAdmission::Reject(message) => {
+            return match proxy::send_400_observed(tcp_stream, message, route_observer).await {
+                Ok(()) => MoaDispatchResult::Responded(400),
+                Err(_) => MoaDispatchResult::Dropped("moa_response_write_failed"),
+            };
         }
     }
 
@@ -124,12 +222,18 @@ pub async fn try_handle_moa(
         // model and fall through to normal single-model routing by handing the
         // stream back. `mesh` thus works everywhere: passthrough on one node,
         // committee once a second worker joins.
-        return degrade_to_single_model(node, targets, tcp_stream, request).await;
+        return degrade_to_single_model(node, targets, tcp_stream, request, route_observer).await;
     };
     config.enable_thinking = enable_thinking;
 
-    run_moa_turn(tcp_stream, body_json, &config, request.response_adapter).await;
-    None
+    run_moa_turn(
+        tcp_stream,
+        body_json,
+        &config,
+        request.response_adapter,
+        route_observer,
+    )
+    .await
 }
 
 pub(in crate::network::openai) mod context_selection;
@@ -152,7 +256,8 @@ async fn run_moa_turn(
     body_json: serde_json::Value,
     config: &moa::GatewayConfig,
     response_adapter: proxy::ResponseAdapter,
-) {
+    route_observer: OpenAiRouteObserver<'_>,
+) -> MoaDispatchResult {
     let was_streaming = body_json
         .get("stream")
         .and_then(|v| v.as_bool())
@@ -176,20 +281,49 @@ async fn run_moa_turn(
                 | proxy::ResponseAdapter::OpenAiResponsesStream
         )
     {
-        progress::run_moa_turn_with_progress(tcp_stream, moa_body, config, response_adapter).await;
-        return;
+        return progress::run_moa_turn_with_progress(
+            tcp_stream,
+            moa_body,
+            config,
+            response_adapter,
+        )
+        .await;
     }
 
     let moa_result = moa::handle_turn(config, &moa_body).await;
+    let usage = moa_token_usage(&moa_result);
     let extra_headers = build_moa_headers(&moa_result);
-    write_moa_response(
+    match write_moa_response(
         tcp_stream,
         &moa_result,
         &extra_headers,
         was_streaming,
         response_adapter,
+        route_observer,
     )
-    .await;
+    .await
+    {
+        Ok(status) => completed_moa_response(status, usage),
+        Err(_) => MoaDispatchResult::Dropped("moa_response_write_failed"),
+    }
+}
+
+fn completed_moa_response(status_code: u16, usage: Option<TokenUsage>) -> MoaDispatchResult {
+    match status_code {
+        200..=299 => usage.map_or(MoaDispatchResult::Responded(status_code), |usage| {
+            MoaDispatchResult::RespondedWithUsage { status_code, usage }
+        }),
+        _ => MoaDispatchResult::FailedWithStatus {
+            status_code,
+            reason: "moa_turn_failed",
+        },
+    }
+}
+
+fn moa_token_usage(result: &moa::TurnResult) -> Option<TokenUsage> {
+    crate::network::openai::response::parse_token_usage_from_json_body(
+        result.response_body.to_string().as_bytes(),
+    )
 }
 
 /// Build the `x-moa-*` observability headers from a finished turn and log
@@ -222,4 +356,42 @@ fn build_moa_headers(result: &moa::TurnResult) -> Vec<(&'static str, String)> {
             result.reducer_attempts.to_string(),
         ),
     ]
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+
+    #[test]
+    fn moa_usage_is_authoritative_and_complete() {
+        let body = serde_json::json!({
+            "usage": {"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19}
+        });
+        assert_eq!(
+            crate::network::openai::response::parse_token_usage_from_json_body(
+                body.to_string().as_bytes()
+            ),
+            Some(TokenUsage {
+                prompt_tokens: Some(12),
+                completion_tokens: Some(7),
+                total_tokens: Some(19),
+            })
+        );
+    }
+
+    #[test]
+    fn moa_failure_status_discards_usage_and_remains_exact() {
+        let usage = Some(TokenUsage {
+            prompt_tokens: Some(12),
+            completion_tokens: Some(7),
+            total_tokens: Some(19),
+        });
+        assert!(matches!(
+            completed_moa_response(502, usage),
+            MoaDispatchResult::FailedWithStatus {
+                status_code: 502,
+                reason: "moa_turn_failed",
+            }
+        ));
+    }
 }

@@ -3,10 +3,14 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 use crate::network::openai::request_parse::pipeline_request_supported;
+use crate::network::openai::response::common::parse_token_usage_from_json_body;
+use mesh_llm_events::logging::events::TokenUsage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineProxyResult {
-    Handled,
+    Responded(u16),
+    RespondedWithUsage { status_code: u16, usage: TokenUsage },
+    Dropped,
     FallbackToDirect,
 }
 
@@ -102,6 +106,22 @@ async fn pipeline_proxy_streaming(
     }
 }
 
+fn completed_pipeline_response(
+    status: reqwest::StatusCode,
+    usage: Option<TokenUsage>,
+) -> PipelineProxyResult {
+    if status.is_success() {
+        usage.map_or(PipelineProxyResult::Responded(status.as_u16()), |usage| {
+            PipelineProxyResult::RespondedWithUsage {
+                status_code: status.as_u16(),
+                usage,
+            }
+        })
+    } else {
+        PipelineProxyResult::Responded(status.as_u16())
+    }
+}
+
 async fn relay_pipeline_streaming_response(
     client_stream: &mut TcpStream,
     resp: reqwest::Response,
@@ -117,24 +137,62 @@ async fn relay_pipeline_streaming_response(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n\r\n",
     );
     if client_stream.write_all(header.as_bytes()).await.is_err() {
-        return PipelineProxyResult::Handled;
+        return PipelineProxyResult::Dropped;
     }
 
     use tokio_stream::StreamExt;
     let mut stream = resp.bytes_stream();
+    let mut usage_parser = SseUsageParser::default();
     while let Some(chunk) = stream.next().await {
         match chunk {
-            Ok(bytes) if write_pipeline_chunk(client_stream, &bytes).await.is_err() => break,
-            Ok(_) => {}
+            Ok(bytes) if write_pipeline_chunk(client_stream, &bytes).await.is_err() => {
+                return PipelineProxyResult::Dropped;
+            }
+            Ok(bytes) => usage_parser.push(&bytes),
             Err(err) => {
                 tracing::debug!("pipeline: stream error: {err}");
-                break;
+                return PipelineProxyResult::Dropped;
             }
         }
     }
-    let _ = client_stream.write_all(b"0\r\n\r\n").await;
-    let _ = client_stream.shutdown().await;
-    PipelineProxyResult::Handled
+    if client_stream.write_all(b"0\r\n\r\n").await.is_err()
+        || client_stream.shutdown().await.is_err()
+    {
+        return PipelineProxyResult::Dropped;
+    }
+    completed_pipeline_response(status, usage_parser.usage)
+}
+
+#[derive(Default)]
+struct SseUsageParser {
+    carry: Vec<u8>,
+    usage: Option<TokenUsage>,
+}
+
+impl SseUsageParser {
+    fn push(&mut self, bytes: &[u8]) {
+        self.carry.extend_from_slice(bytes);
+        while let Some(end) = self
+            .carry
+            .windows(2)
+            .position(|window| matches!(window, b"\n\n" | b"\r\n"))
+        {
+            let frame = self.carry.drain(..end + 2).collect::<Vec<_>>();
+            for line in frame.split(|byte| *byte == b'\n') {
+                let line = line.strip_suffix(b"\r").unwrap_or(line);
+                let Some(data) = line.strip_prefix(b"data:") else {
+                    continue;
+                };
+                let data = data.strip_prefix(b" ").unwrap_or(data);
+                if let Some(usage) = parse_token_usage_from_json_body(data) {
+                    self.usage = Some(usage);
+                }
+            }
+        }
+        if self.carry.len() > 64 * 1024 {
+            self.carry.clear();
+        }
+    }
 }
 
 async fn write_pipeline_chunk(client_stream: &mut TcpStream, bytes: &[u8]) -> std::io::Result<()> {
@@ -168,18 +226,75 @@ async fn relay_pipeline_non_streaming_response(
     let status = resp.status();
     match resp.bytes().await {
         Ok(resp_bytes) => {
+            let usage = parse_token_usage_from_json_body(&resp_bytes);
             let header = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
                 resp_bytes.len()
             );
-            let _ = client_stream.write_all(header.as_bytes()).await;
-            let _ = client_stream.write_all(&resp_bytes).await;
-            let _ = client_stream.shutdown().await;
-            PipelineProxyResult::Handled
+            if client_stream.write_all(header.as_bytes()).await.is_err()
+                || client_stream.write_all(&resp_bytes).await.is_err()
+                || client_stream.shutdown().await.is_err()
+            {
+                PipelineProxyResult::Dropped
+            } else {
+                completed_pipeline_response(status, usage)
+            }
         }
         Err(err) => {
             tracing::warn!("pipeline: response read failed: {err}, falling back to direct proxy");
             PipelineProxyResult::FallbackToDirect
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pipeline_sse_usage_parser_keeps_last_valid_full_usage() {
+        let mut parser = SseUsageParser::default();
+        parser.push(b"data: {\"usage\":{\"prompt_tokens\":2,");
+        parser.push(b"\"completion_tokens\":3,\"total_tokens\":5}}\n\n");
+        parser.push(
+            b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":5,\"total_tokens\":8}}\n\n",
+        );
+        parser.push(
+            b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10}}\n\n",
+        );
+
+        assert_eq!(
+            parser.usage,
+            Some(TokenUsage {
+                prompt_tokens: Some(4),
+                completion_tokens: Some(6),
+                total_tokens: Some(10),
+            })
+        );
+    }
+
+    #[test]
+    fn pipeline_sse_usage_parser_does_not_estimate_partial_usage() {
+        let mut parser = SseUsageParser::default();
+        parser.push(b"data: {\"usage\":{\"completion_tokens\":3}}\n\n");
+        assert_eq!(parser.usage, None);
+    }
+
+    #[test]
+    fn pipeline_error_statuses_discard_usage_from_error_bodies() {
+        let usage = Some(TokenUsage {
+            prompt_tokens: Some(2),
+            completion_tokens: Some(3),
+            total_tokens: Some(5),
+        });
+
+        assert_eq!(
+            completed_pipeline_response(reqwest::StatusCode::BAD_REQUEST, usage),
+            PipelineProxyResult::Responded(400)
+        );
+        assert_eq!(
+            completed_pipeline_response(reqwest::StatusCode::BAD_GATEWAY, usage),
+            PipelineProxyResult::Responded(502)
+        );
     }
 }

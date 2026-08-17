@@ -11,8 +11,8 @@ use model_ref::split_gguf_shard_info;
 use serde::Deserialize;
 use serde_json::Value;
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, RuntimeConfig, RuntimeKvPage, RuntimeLoadMode, StageModel,
-    StageSession,
+    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPage, RuntimeLoadMode,
+    StageModel, StageSession,
     package::{PackageStageRequest, inspect_layer_package, materialize_layer_package_details},
     redirect_native_logs_to_file,
 };
@@ -1106,6 +1106,7 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             projector_path: None,
             include_embeddings: shape.include_embeddings,
             include_output: shape.include_output,
+            mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: path.filter_tensors_on_load,
         },
     )

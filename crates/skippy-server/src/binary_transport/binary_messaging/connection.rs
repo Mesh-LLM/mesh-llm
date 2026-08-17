@@ -22,7 +22,7 @@ use super::telemetry::{
 use crate::binary_transport::BinaryStageExecutionOptions;
 use crate::binary_transport::DecodeFrameBatcher;
 use crate::binary_transport::WireCondition;
-use crate::binary_transport::binary_kv::accumulate_prefill_tokens;
+use crate::binary_transport::binary_kv::accumulate_shared_prefill_tokens;
 use crate::binary_transport::binary_kv::add_binary_record_stats;
 use crate::binary_transport::binary_kv::emit_binary_proactive_eviction;
 use crate::binary_transport::binary_kv::maybe_lookup_binary_prefill;
@@ -144,7 +144,6 @@ fn handle_binary_connection_messages(
     let mut pending_prefill_replies = 0usize;
     let mut pending_reply_stats = StageReplyStats::default();
     let mut request_summary = BinaryRequestSummary::default();
-    let mut accumulated_prefill_tokens: BTreeMap<String, Vec<i32>> = BTreeMap::new();
     let mut prediction_return_streams: BTreeMap<(u64, u64), TcpStream> = BTreeMap::new();
     let mut next_message = Some(first_message);
     let mut async_forwarder = if async_prefill_forward || max_inflight > 1 {
@@ -205,7 +204,6 @@ fn handle_binary_connection_messages(
                 pending_prefill_replies,
                 &mut pending_reply_stats,
                 &mut request_summary,
-                &mut accumulated_prefill_tokens,
                 async_forwarder.as_mut(),
                 session_tracker,
                 &mut prediction_return_streams,
@@ -328,9 +326,11 @@ fn handle_binary_connection_messages(
         let session_auto_align_count = auto_align.count;
         let session_auto_align_ms = auto_align.elapsed_ms;
         let session_auto_align_trimmed_tokens = auto_align.trimmed_tokens;
-        if message.kind.is_prefill() {
-            accumulate_prefill_tokens(
-                &mut accumulated_prefill_tokens,
+        if message.kind.is_prefill()
+            && let Some(cache) = kv
+        {
+            accumulate_shared_prefill_tokens(
+                &cache.split_prefill_tokens,
                 &session_key,
                 message.pos_start.max(0) as usize,
                 &token_ids,
@@ -543,6 +543,14 @@ fn handle_binary_connection_messages(
             emit_binary_proactive_eviction(telemetry, &eviction);
         }
 
+        let accumulated_prefill_tokens = kv.and_then(|cache| {
+            cache
+                .split_prefill_tokens
+                .lock()
+                .expect("split prefill token lock poisoned")
+                .get(&session_key)
+                .cloned()
+        });
         if message.kind.is_prefill() && !restored_prefill {
             let record = super::prefill_recording::record_completed_prefill(
                 config,
@@ -551,9 +559,7 @@ fn handle_binary_connection_messages(
                 telemetry,
                 &session_key,
                 &message,
-                accumulated_prefill_tokens
-                    .get(&session_key)
-                    .map(Vec::as_slice),
+                accumulated_prefill_tokens.as_deref(),
                 &token_ids,
                 lookup_result.restored_tokens as u64,
                 activation_width,
@@ -570,7 +576,14 @@ fn handle_binary_connection_messages(
             }
         }
 
-        if let Some(full_prompt_tokens) = decode_record_tokens_sideband(&message) {
+        let completed_prompt_tokens = decode_record_tokens_sideband(&message).or_else(|| {
+            message
+                .kind
+                .requires_predicted_reply()
+                .then_some(accumulated_prefill_tokens.as_deref())
+                .flatten()
+        });
+        if let Some(full_prompt_tokens) = completed_prompt_tokens {
             let mut runtime = runtime.lock().expect("runtime lock poisoned");
             let record = maybe_record_binary_full_prefill(
                 config,

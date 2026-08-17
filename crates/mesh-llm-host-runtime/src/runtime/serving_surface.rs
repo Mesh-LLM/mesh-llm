@@ -1218,7 +1218,6 @@ pub(super) async fn setup_run_auto_serving_surface(
         ctx.api_port,
         api_listener,
         ctx.target_rx,
-        ctx.control_tx,
         ctx.affinity_router,
     );
     let console_server_handle = spawn_run_auto_console_server(
@@ -1325,14 +1324,12 @@ pub(super) fn spawn_run_auto_api_proxy(
     api_port: u16,
     api_listener: tokio::net::TcpListener,
     target_rx: &tokio::sync::watch::Receiver<election::ModelTargets>,
-    control_tx: &tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
     affinity_router: &affinity::AffinityRouter,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(Box::pin(api_proxy(
         node.clone(),
         api_port,
         target_rx.clone(),
-        control_tx.clone(),
         Some(api_listener),
         options.listen_all,
         affinity_router.clone(),

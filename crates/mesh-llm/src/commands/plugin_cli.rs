@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use mesh_llm_cli::Cli;
+use mesh_llm_events::CliCommandFamily;
 use mesh_llm_host_runtime::command_support::plugin;
 
 const CLI_RUN_OPERATION: &str = "cli.run";
@@ -34,6 +35,20 @@ pub(crate) async fn run_external_plugin_command(cli: &Cli, raw_args: &[OsString]
     let command = request.command.clone();
     let spec = resolve_required_cli_plugin(cli, &command)?;
     run_plugin_cli_request(cli, spec, request).await
+}
+
+/// Resolve only the bounded audit family for an external subcommand. Failures
+/// other than a confirmed missing command stay in the plugin family; no raw
+/// command name or arguments leave this module.
+pub(crate) fn external_cli_command_family(cli: &Cli, raw_args: &[OsString]) -> CliCommandFamily {
+    let Some(command) = raw_args.first().and_then(|value| value.to_str()) else {
+        return CliCommandFamily::Unknown;
+    };
+    match resolve_configured_cli_plugin(cli, command) {
+        Ok(Some(_)) => CliCommandFamily::Plugin,
+        Ok(None) => CliCommandFamily::Unknown,
+        Err(_) => CliCommandFamily::Plugin,
+    }
 }
 
 async fn run_plugin_cli_request(
@@ -239,6 +254,18 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn missing_external_command_is_classified_as_unknown() {
+        let cli = Cli::parse_from(["mesh-llm", "gpus"]);
+        let family = external_cli_command_family(
+            &cli,
+            &[OsString::from(
+                "definitely-not-an-installed-mesh-plugin-9f4a",
+            )],
+        );
+        assert_eq!(family, CliCommandFamily::Unknown);
+    }
 
     struct EnvGuard {
         key: &'static str,

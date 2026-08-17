@@ -24,6 +24,10 @@ http://localhost:9337/v1
 See [OpenAI-Compatible API](/docs/pages/openai-compatible-api/) for model
 listing and inference behavior.
 
+For privacy-safe local request history, live replay, export, cleanup, and
+terminal webhook delivery, see the
+[Local Logging API](/docs/pages/logging-api/).
+
 ## Runtime lifecycle
 
 ### Load a local model

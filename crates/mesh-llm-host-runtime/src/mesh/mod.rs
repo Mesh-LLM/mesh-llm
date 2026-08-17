@@ -5,13 +5,10 @@
 //! mixed-version compatibility. Skippy activation transport remains on the
 //! latency-sensitive `skippy-stage/2` ALPN.
 
-#[cfg(test)]
-pub(crate) use mesh_llm_types::mesh::MAX_SPLIT_RTT_MS;
 pub use mesh_llm_types::mesh::{
     ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, ServedModelDescriptor,
     ServedModelIdentity, ServedModelMetadata, infer_available_model_descriptors,
-    infer_local_served_model_descriptor, infer_served_model_descriptors, max_split_rtt_ms,
-    split_allow_relay_paths,
+    infer_local_served_model_descriptor, infer_served_model_descriptors,
 };
 
 use anyhow::{Context, Result};
@@ -85,12 +82,14 @@ mod connections;
 mod direct_path;
 mod gossip;
 mod heartbeat;
+mod host_role_claims;
 mod identity_persistence;
 mod lan_bootstrap;
 mod model_identity;
 mod node;
 mod node_identity;
 mod node_requirements;
+mod operational_logging;
 mod owner_control;
 mod owner_control_response;
 mod owner_lifecycle_cache;
@@ -107,8 +106,10 @@ mod stun;
 
 use connection_reservation::*;
 use connections::*;
+pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use model_identity::*;
 use node_identity::*;
+use operational_logging::{MeshOperationalEvent, record_mesh_operational_event};
 use owner_control::*;
 use owner_lifecycle_cache::*;
 use peer_state::*;
@@ -161,7 +162,7 @@ pub(crate) use stage_transport::{
     unused_imports,
     reason = "public compatibility re-export for existing split-stage routing callers"
 )]
-pub use stage_transport::{InflightRequestGuard, SplitStagePathRejection, SplitStagePathSnapshot};
+pub use stage_transport::{InflightRequestGuard, SplitStagePathSnapshot};
 pub use stage_transport::{
     StageAssignment, StageEndpoint, StageRuntimeStatus, StageTopologyInstance, TunnelChannels,
 };

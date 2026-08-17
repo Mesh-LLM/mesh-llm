@@ -1,16 +1,21 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
+  Archive,
   BrainCircuit,
+  Clock,
   Cog,
   Cpu,
+  Database,
   Filter,
   Gauge,
   Image,
+  Layers,
   MemoryStick,
   Network,
   RotateCcw,
   Server,
   ShieldCheck,
+  Webhook,
   type LucideIcon
 } from 'lucide-react'
 import { configurationNavigationIconClassName } from '@/features/configuration/components/configuration-navigation-class-names'
@@ -24,6 +29,7 @@ import {
 import { ConfigurationDefaultsControl } from '@/features/configuration/components/settings/ConfigurationDefaultsControl'
 import { SettingInfoTrigger } from '@/features/configuration/components/settings/DisabledControlFrame'
 import { SettingResetButton } from '@/features/configuration/components/settings/SettingResetButton'
+import { MetaPill } from '@/features/configuration/components/MetaPill'
 import { validateConfigurationSettingValue } from '@/features/configuration/components/settings/schema-field-validation'
 import { configurationControlDetailBuckets } from '@/features/configuration/components/settings/ConfigurationDefaultsControl'
 import { useDefaultsSettingsState } from '@/features/configuration/hooks/useDefaultsSettingsState'
@@ -46,6 +52,7 @@ import type {
   ConfigurationDefaultsValues,
   ConfigurationTomlSectionId
 } from '@/features/app-tabs/types'
+import { DEFAULT_SETTING_ORDER } from '@/features/configuration/api/schema-setting-order'
 import { env } from '@/lib/env'
 import { cn } from '@/lib/cn'
 
@@ -62,12 +69,24 @@ const categoryIcons: Partial<Record<ConfigurationDefaultsCategoryId, LucideIcon>
   'request-defaults': Filter,
   'skippy-transport': Network,
   multimodal: Image,
-  'advanced-server': Server
+  'advanced-server': Server,
+  'logs-general': Layers,
+  'logs-retention': Clock,
+  'logs-buffers': Database,
+  'logs-artifacts': Archive,
+  'logs-webhooks': Webhook,
+  'logs-audit': ShieldCheck
 }
 
 const defaultsCategoryOrder: readonly ConfigurationDefaultsCategoryId[] = [
   'meshllm',
   'telemetry',
+  'logs-general',
+  'logs-retention',
+  'logs-buffers',
+  'logs-artifacts',
+  'logs-webhooks',
+  'logs-audit',
   'runtime-policy',
   'network',
   'attestation',
@@ -88,6 +107,7 @@ const defaultsSectionOrder: readonly ConfigurationTomlSectionId[] = [
   'runtime',
   'owner_control',
   'mesh_requirements',
+  'logging',
   'defaults',
   'defaults.model_fit',
   'defaults.hardware',
@@ -199,16 +219,34 @@ function settingDescription(setting: ConfigurationDefaultsSetting) {
   return setting.description
 }
 
+function applyModeLabel(setting: ConfigurationDefaultsSetting) {
+  if (setting.applyMode === 'dynamic_apply' && setting.restartScope === 'none') return 'Applies live'
+  const restartLabel =
+    setting.restartScope === 'model_reload'
+      ? 'Reload required'
+      : setting.restartScope === 'mesh_restart'
+        ? 'Mesh restart required'
+        : setting.restartScope === 'process_restart' || setting.mutability === 'restart-required'
+          ? 'Restart required'
+          : undefined
+  if (setting.applyMode === 'dynamic_validation_only') {
+    return restartLabel ? `Validated on save · ${restartLabel}` : 'Validated on save'
+  }
+  return restartLabel
+}
+
 function settingLabelAccessory(
   setting: ConfigurationDefaultsSetting,
   visibleDetails: readonly string[],
   disabledDetails: readonly string[],
   resetAction?: ReactNode
 ) {
-  if (visibleDetails.length === 0 && disabledDetails.length === 0 && !resetAction) return undefined
+  const applyLabel = applyModeLabel(setting)
+  if (visibleDetails.length === 0 && disabledDetails.length === 0 && !resetAction && !applyLabel) return undefined
 
   return (
     <div className="flex items-center gap-1.5">
+      {applyLabel ? <MetaPill size="annotation">{applyLabel}</MetaPill> : null}
       {visibleDetails.length > 0 ? (
         <SettingInfoTrigger
           details={visibleDetails}
@@ -252,6 +290,7 @@ function writeShowAdvancedSettings(showAdvanced: boolean) {
 function sectionSubtitle(category: ConfigurationDefaultsCategory) {
   if (category.id === 'meshllm') return 'Local process settings'
   if (category.id === 'telemetry') return 'Opt-in metrics export and queue settings'
+  if (category.id === 'logging') return 'Event history, retention, and redaction settings'
   if (category.id === 'runtime-policy') return 'Runtime reconciliation behavior'
   if (category.id === 'network') return 'Owner-control listener settings'
   if (category.id === 'attestation') return 'Certified-build admission requirements'
@@ -381,6 +420,15 @@ export function DefaultsTab({
       const group = grouped.get(setting.categoryId) ?? []
       group.push(setting)
       grouped.set(setting.categoryId, group)
+    }
+
+    for (const [categoryId, group] of grouped) {
+      grouped.set(
+        categoryId,
+        [...group].sort(
+          (left, right) => (left.settingOrder ?? DEFAULT_SETTING_ORDER) - (right.settingOrder ?? DEFAULT_SETTING_ORDER)
+        )
+      )
     }
 
     return grouped

@@ -19,7 +19,21 @@ run_probe() {
     local name="$1"
     shift
     echo "==> $name"
-    "$BINARY" "$@" | tee "$OUTPUT_DIR/$name.jsonl"
+    "$BINARY" "$@" >"$OUTPUT_DIR/$name.jsonl" 2>&1 &
+    local probe_pid=$!
+    (
+        sleep "${MESH_APPLE_QA_PROBE_TIMEOUT:-120}"
+        kill -TERM "$probe_pid" 2>/dev/null || true
+    ) &
+    local killer_pid=$!
+    local probe_status=0
+    wait "$probe_pid" || probe_status=$?
+    kill "$killer_pid" 2>/dev/null || true
+    cat "$OUTPUT_DIR/$name.jsonl"
+    if [[ "$probe_status" -ne 0 ]]; then
+        echo "Apple runtime probe '$name' failed with status $probe_status" >&2
+        return "$probe_status"
+    fi
 }
 
 run_probe status status

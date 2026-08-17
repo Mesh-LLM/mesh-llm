@@ -15,6 +15,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | Contribute or publish layer package repositories | [LAYER_PACKAGE_REPOS.md](LAYER_PACKAGE_REPOS.md) |
 | Goose, Claude Code, OpenCode, Pi, curl, blackboard | [AGENTS.md](AGENTS.md) |
 | Command-by-command CLI reference | [CLI.md](CLI.md) |
+| Local request ledger, retention, artifacts, and maintenance | [LOGGING.md](LOGGING.md) |
 | Exo comparison | [EXO_COMPARISON.md](EXO_COMPARISON.md) |
 
 ## Skippy and model-package docs

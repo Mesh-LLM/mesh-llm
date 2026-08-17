@@ -48,7 +48,7 @@ export function useMeshChat({
     [currentModel, currentSystemPrompt, onResponseMetadata]
   )
   const hydratedMessages = useMemo(() => threadMessagesToUIMessages(initialMessages), [initialMessages])
-  const chat = useChat({ id: conversationId, connection, initialMessages: hydratedMessages })
+  const chat = useChat({ threadId: conversationId, connection, initialMessages: hydratedMessages })
 
   useEffect(() => {
     const conversationChanged = previousConversationIdRef.current !== conversationId

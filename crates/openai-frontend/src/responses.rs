@@ -1562,12 +1562,15 @@ mod tests {
                     }
                 }
             }),
-            Some("guarded-responses-req"),
+            Some("2ca6dfee-5382-4b7f-81dd-6bc859c58665"),
         )
         .await;
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers()["x-request-id"], "guarded-responses-req");
+        assert_eq!(
+            response.headers()["x-request-id"],
+            "2ca6dfee-5382-4b7f-81dd-6bc859c58665"
+        );
         let body = response_body_json(response).await;
         assert_eq!(body["object"], "response");
         assert_eq!(body["output_text"], "{\"answer\":42}");

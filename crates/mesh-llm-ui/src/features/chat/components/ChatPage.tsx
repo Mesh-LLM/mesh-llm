@@ -81,29 +81,15 @@ function reasoningBadge(model?: MeshModel | null) {
 }
 
 function InviteFriendEmptyState({
-  inviteToken,
+  invitationReady,
   selectedModel,
   isPublicMesh
 }: {
-  inviteToken: string
+  invitationReady: boolean
   selectedModel: string
   isPublicMesh: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const [inviteWithModelCopied, setInviteWithModelCopied] = useState(false)
-  const inviteWithModelCommand =
-    inviteToken && selectedModel ? `mesh-llm --join ${inviteToken} --model ${selectedModel}` : ''
-
-  async function copyInviteWithModelCommand() {
-    if (!inviteWithModelCommand) return
-    try {
-      await navigator.clipboard.writeText(inviteWithModelCommand)
-      setInviteWithModelCopied(true)
-      window.setTimeout(() => setInviteWithModelCopied(false), 1500)
-    } catch {
-      setInviteWithModelCopied(false)
-    }
-  }
 
   if (isPublicMesh) {
     return (
@@ -200,24 +186,24 @@ function InviteFriendEmptyState({
           Learn more →
         </a>
       </p>
-      {inviteWithModelCommand ? (
-        <div className="space-y-2 rounded-md border border-dashed p-3 text-left">
-          <div className="text-xs text-muted-foreground">Invite another machine preconfigured for this model.</div>
-          <div className="rounded-md border bg-muted/40 px-2 py-1.5">
-            <code className="block overflow-x-auto whitespace-nowrap text-xs">{inviteWithModelCommand}</code>
-          </div>
-          <Button type="button" variant="outline" size="sm" onClick={() => void copyInviteWithModelCommand()}>
-            {inviteWithModelCopied ? 'Copied' : 'Copy invite command'}
-          </Button>
+      <div className="space-y-2 rounded-md border border-dashed p-3 text-left">
+        <div className="text-xs font-medium">
+          {invitationReady ? 'Private mesh invitation ready' : 'Private mesh connection'}
         </div>
-      ) : null}
+        <div className="text-xs text-muted-foreground">
+          {selectedModel ? `Selected model: ${selectedModel}` : 'Model selection will be chosen automatically.'}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Use the mesh connection controls to securely add another machine.
+        </div>
+      </div>
     </div>
   )
 }
 
 export function ChatPage(props: {
   status: StatusPayload | null
-  inviteToken: string
+  invitationReady: boolean
   isPublicMesh: boolean
   isFlyHosted: boolean
   inflightRequests: number
@@ -258,7 +244,7 @@ export function ChatPage(props: {
   onSubmit: () => void
 }) {
   const {
-    inviteToken,
+    invitationReady,
     warmModels,
     meshModelByName,
     modelStatsByName,
@@ -880,7 +866,7 @@ export function ChatPage(props: {
               {messages.length === 0 ? (
                 <div className="flex min-h-full items-center justify-center">
                   <InviteFriendEmptyState
-                    inviteToken={inviteToken}
+                    invitationReady={invitationReady}
                     selectedModel={selectedModel || warmModels[0] || ''}
                     isPublicMesh={props.isPublicMesh}
                   />

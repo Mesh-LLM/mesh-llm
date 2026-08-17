@@ -29,8 +29,12 @@ mkdir -p "$OUTPUT_DIR"
 "$BINARY" serve --port 0 --parent-pid "$$" >"$SERVER_LOG" 2>"$SERVER_ERR" &
 SERVER_PID=$!
 
+READY=0
 for _ in $(seq 1 200); do
-    grep -q '"type":"ready"' "$SERVER_LOG" 2>/dev/null && break
+    if grep -q '"type":"ready"' "$SERVER_LOG" 2>/dev/null; then
+        READY=1
+        break
+    fi
     kill -0 "$SERVER_PID" 2>/dev/null || {
         echo "Apple runtime exited before REST became ready" >&2
         cat "$SERVER_ERR" >&2
@@ -38,6 +42,11 @@ for _ in $(seq 1 200); do
     }
     sleep 0.05
 done
+[[ "$READY" == "1" ]] || {
+    echo "Apple runtime REST did not become ready within 10s" >&2
+    cat "$SERVER_ERR" >&2
+    exit 1
+}
 
 PORT="$(python3 - "$SERVER_LOG" <<'PY'
 import json
@@ -62,6 +71,11 @@ grep -q "127.0.0.1:$PORT" "$OUTPUT_DIR/listeners.txt" || {
     cat "$OUTPUT_DIR/listeners.txt" >&2
     exit 1
 }
+if awk 'NR > 1 {print}' "$OUTPUT_DIR/listeners.txt" | grep -v "127\.0\.0\.1:$PORT" | grep -q 'LISTEN'; then
+    echo "Apple runtime REST exposes a non-loopback listener" >&2
+    cat "$OUTPUT_DIR/listeners.txt" >&2
+    exit 1
+fi
 
 curl --fail --silent --show-error "$BASE_URL/v1/models" >"$OUTPUT_DIR/models.json"
 
@@ -89,6 +103,11 @@ CANCEL_STATUS=$?
 set -e
 [[ "$CANCEL_STATUS" -ne 0 ]] || {
     echo "REST cancellation probe completed before the client disconnected" >&2
+    exit 1
+}
+grep -q 'chat.completion.chunk' "$OUTPUT_DIR/cancelled-stream.txt" || {
+    echo "REST cancellation probe disconnected before streaming began" >&2
+    cat "$OUTPUT_DIR/cancelled-stream.stderr" >&2 || true
     exit 1
 }
 

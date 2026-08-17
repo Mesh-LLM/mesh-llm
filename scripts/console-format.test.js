@@ -4,7 +4,7 @@ const { spawn } = require("node:child_process");
 
 const { extractDetails, format } = require("./console-format.js");
 
-test("extractDetails keeps invite token details", () => {
+test("extractDetails renders the invite token for operators", () => {
   const details = extractDetails({
     event: "invite_token",
     level: "info",

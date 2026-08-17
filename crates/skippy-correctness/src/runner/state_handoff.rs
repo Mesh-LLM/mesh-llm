@@ -9,7 +9,8 @@ use skippy_protocol::binary::{
     write_stage_message,
 };
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, RuntimeConfig, RuntimeKvPageDesc, StageModel, StageSession,
+    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPageDesc, StageModel,
+    StageSession,
 };
 
 use crate::{
@@ -681,6 +682,7 @@ fn run_local_state_handoff(
         projector_path: None,
         include_embeddings,
         include_output,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: should_filter_state_handoff_tensors(args),
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,
@@ -1190,7 +1192,7 @@ fn export_local_state_payload(
             )?;
             let recurrent = session.export_recurrent_state()?;
             Ok(LocalStatePayload::KvRecurrent {
-                kv_desc: page.as_ref().map(|page| page.desc),
+                kv_desc: page.as_ref().map(|page| page.desc.clone()),
                 kv: page.map(|page| page.payload).unwrap_or_default(),
                 recurrent,
             })
@@ -1424,6 +1426,7 @@ fn build_state_handoff_inputs(
         projector_path: None,
         include_embeddings: true,
         include_output: false,
+        mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,

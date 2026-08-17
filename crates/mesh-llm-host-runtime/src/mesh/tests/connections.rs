@@ -99,144 +99,6 @@ fn quic_bind_addr_keeps_endpoint_default_on_non_windows() {
 }
 
 #[test]
-fn split_stage_path_allows_fast_direct_path() {
-    assert_eq!(
-        SplitStagePathSnapshot::direct(Some(MAX_SPLIT_RTT_MS)).stage_path_rejection(),
-        None
-    );
-}
-
-#[test]
-fn split_stage_path_rejects_missing_rtt() {
-    assert_eq!(
-        SplitStagePathSnapshot::direct(None).stage_path_rejection(),
-        Some(SplitStagePathRejection::MissingStagePath)
-    );
-}
-
-#[test]
-fn split_stage_path_accepts_direct_path_with_peer_rtt_fallback() {
-    assert_eq!(
-        SplitStagePathSnapshot::direct(None)
-            .with_direct_rtt_fallback(Some(MAX_SPLIT_RTT_MS))
-            .stage_path_rejection(),
-        None
-    );
-}
-
-#[test]
-fn split_stage_path_keeps_relay_rejection_with_peer_rtt_fallback() {
-    assert_eq!(
-        SplitStagePathSnapshot::relay(None)
-            .with_direct_rtt_fallback(Some(1))
-            .stage_path_rejection(),
-        Some(SplitStagePathRejection::StagePathRelayOnly)
-    );
-}
-
-#[test]
-fn split_stage_path_rejects_slow_peer_rtt_fallback() {
-    assert_eq!(
-        SplitStagePathSnapshot::direct(None)
-            .with_direct_rtt_fallback(Some(MAX_SPLIT_RTT_MS + 1))
-            .stage_path_rejection(),
-        Some(SplitStagePathRejection::StagePathTooSlow)
-    );
-}
-
-#[test]
-fn split_stage_path_rejects_relay_path() {
-    assert_eq!(
-        SplitStagePathSnapshot::relay(Some(1)).stage_path_rejection(),
-        Some(SplitStagePathRejection::StagePathRelayOnly)
-    );
-}
-
-#[test]
-fn split_stage_path_rejects_slow_direct_path() {
-    assert_eq!(
-        SplitStagePathSnapshot::direct(Some(MAX_SPLIT_RTT_MS + 1)).stage_path_rejection(),
-        Some(SplitStagePathRejection::StagePathTooSlow)
-    );
-}
-
-#[test]
-fn split_stage_path_rejects_unknown_path() {
-    assert_eq!(
-        SplitStagePathSnapshot::unknown().stage_path_rejection(),
-        Some(SplitStagePathRejection::MissingStagePath)
-    );
-}
-
-#[test]
-fn split_stage_path_uses_direct_peer_path_fallback_for_unknown_stage_path() {
-    let fallback = SelectedPathObservation {
-        path_type: "direct",
-        rtt_ms: Some(MAX_SPLIT_RTT_MS),
-        observed_direct_remote_addr: None,
-    };
-
-    assert_eq!(
-        SplitStagePathSnapshot::unknown()
-            .with_peer_path_fallback(Some(fallback))
-            .stage_path_rejection(),
-        None
-    );
-}
-
-#[test]
-fn split_stage_path_keeps_relay_peer_path_fallback_rejected() {
-    let fallback = SelectedPathObservation {
-        path_type: "relay",
-        rtt_ms: Some(1),
-        observed_direct_remote_addr: None,
-    };
-
-    assert_eq!(
-        SplitStagePathSnapshot::unknown()
-            .with_peer_path_fallback(Some(fallback))
-            .stage_path_rejection(),
-        Some(SplitStagePathRejection::StagePathRelayOnly)
-    );
-}
-
-#[test]
-fn split_stage_path_peer_fallback_does_not_convert_relay_rtt_to_direct() {
-    let mut peer = make_test_peer_info(make_test_endpoint_id(0x4a));
-    peer.rtt_ms = Some(1);
-    peer.selected_path = Some(SelectedPathObservation {
-        path_type: "relay",
-        rtt_ms: Some(1),
-        observed_direct_remote_addr: None,
-    });
-
-    assert_eq!(
-        SplitStagePathSnapshot::unknown()
-            .with_peer_path_fallback(peer.split_stage_path_fallback())
-            .stage_path_rejection(),
-        Some(SplitStagePathRejection::StagePathRelayOnly)
-    );
-}
-
-#[test]
-fn split_stage_path_peer_fallback_uses_best_direct_rtt() {
-    let mut peer = make_test_peer_info(make_test_endpoint_id(0x4b));
-    peer.rtt_ms = Some(MAX_SPLIT_RTT_MS);
-    peer.selected_path = Some(SelectedPathObservation {
-        path_type: "direct",
-        rtt_ms: None,
-        observed_direct_remote_addr: None,
-    });
-
-    assert_eq!(
-        SplitStagePathSnapshot::unknown()
-            .with_peer_path_fallback(peer.split_stage_path_fallback())
-            .stage_path_rejection(),
-        None
-    );
-}
-
-#[test]
 fn endpoint_addr_filter_for_bind_ip_keeps_selected_ip_relay_and_public_candidates() {
     let mut addr = EndpointAddr {
         id: make_test_endpoint_id(0x42),
@@ -418,6 +280,7 @@ async fn make_test_node_with_requirements(
             recent_mesh_rejections: VecDeque::new(),
         })),
         role: Arc::new(Mutex::new(role)),
+        host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
         models: Arc::new(Mutex::new(Vec::new())),
         model_source: Arc::new(Mutex::new(None)),
         serving_models: Arc::new(Mutex::new(Vec::new())),
@@ -487,10 +350,10 @@ async fn make_test_node_with_requirements(
         },
         activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
             &mesh_llm_config::RuntimeActivityConfig::default(),
-            ),
-            public_mesh: false,
-            drain_timeout_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS,
-            drain_timeout_max_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
+        ),
+        public_mesh: false,
+        drain_timeout_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS,
+        drain_timeout_max_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
         runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
         runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
         owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
@@ -503,6 +366,65 @@ async fn make_test_node_with_requirements(
     });
 
     Ok(node)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_role_claim_transitions_regossip_to_connected_peer() -> Result<()> {
+    let host = make_test_node(super::NodeRole::Worker).await?;
+    let peer = make_test_node(super::NodeRole::Worker).await?;
+    host.set_mesh_id("host-role-claim-regossip-test".to_string())
+        .await;
+    peer.set_mesh_id("host-role-claim-regossip-test".to_string())
+        .await;
+    host.start_accepting();
+    peer.start_accepting();
+
+    let host_id = host.id();
+    peer.join(&host.invite_token().await).await?;
+    wait_for_peer(&peer, host_id).await;
+    wait_for_peer(&host, peer.id()).await;
+
+    host.claim_host_role(super::HostRoleClaim::PluginInference, 9337)
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if peer
+                .peers()
+                .await
+                .into_iter()
+                .find(|candidate| candidate.id == host_id)
+                .is_some_and(|candidate| {
+                    candidate.role == super::NodeRole::Host { http_port: 9337 }
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("connected peer should receive host promotion gossip");
+
+    host.release_host_role(super::HostRoleClaim::PluginInference)
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if peer
+                .peers()
+                .await
+                .into_iter()
+                .find(|candidate| candidate.id == host_id)
+                .is_some_and(|candidate| candidate.role == super::NodeRole::Worker)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("connected peer should receive host demotion gossip");
+
+    Ok(())
 }
 
 #[tokio::test]

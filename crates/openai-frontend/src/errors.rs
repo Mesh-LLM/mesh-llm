@@ -28,6 +28,7 @@ pub enum OpenAiErrorKind {
     ServiceUnavailable,
     ContextLengthExceeded,
     UnsupportedFeature,
+    Cancelled,
 }
 
 impl OpenAiError {
@@ -129,6 +130,14 @@ impl OpenAiError {
         )
     }
 
+    pub fn cancelled(message: impl Into<String>) -> Self {
+        Self::from_kind(
+            crate::lifecycle::client_closed_request_status(),
+            OpenAiErrorKind::Cancelled,
+            message,
+        )
+    }
+
     pub fn status(&self) -> StatusCode {
         self.status
     }
@@ -202,6 +211,7 @@ fn kind_to_openai_fields(kind: OpenAiErrorKind) -> (&'static str, &'static str) 
         OpenAiErrorKind::UnsupportedFeature => {
             ("invalid_request_error", "unsupported_model_feature")
         }
+        OpenAiErrorKind::Cancelled => ("invalid_request_error", "request_cancelled"),
     }
 }
 

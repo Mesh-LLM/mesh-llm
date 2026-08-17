@@ -5,9 +5,19 @@
 Releases are normally cut by running the **Release** workflow
 (`.github/workflows/release.yml`) from the GitHub Actions UI via
 `workflow_dispatch` with the version input (for example `v0.31.0`). The
-dispatched workflow bumps versions, generates and patches the SwiftPM
-manifest, packages SDK console assets, creates and pushes the release tag,
-builds all platform bundles, and publishes the GitHub release. After a complete
+dispatched workflow uses `scripts/release-version.sh` as the single version
+authority, commits the complete tracked version update to `main`, and only then
+starts the release build. It later generates and patches the SwiftPM manifest,
+packages SDK console assets, creates and pushes the release tag, builds all
+platform bundles, publishes the GitHub release, and asks GitHub to generate the
+release notes against the highest stable SemVer tag below the target. RC tags
+are never selected as the comparison base, so every RC includes all changes
+since the previous stable release, and the final release repeats that complete
+range plus any post-RC changes. The `just release <version>` recipe performs
+local preflight and
+dispatches this same workflow; it does not maintain a second version-bump path.
+Canary dispatches build the requested version without changing `main` or
+publishing. After a complete
 stable, non-canary release with the full GPU matrix succeeds, it dispatches
 `Mesh-LLM/mesh-packaging` to package the verified release archives, publish the
 native package release assets, publish the supported GHCR image matrix, and
@@ -16,6 +26,11 @@ GitHub Release inputs without invoking downstream publication. Dispatch inputs
 include `skip_gpu_bundles` and `canary` (dry-run: build and smoke everything
 without publishing). Releases that intentionally skip GPU bundles do not
 dispatch the full packaging matrix.
+
+Do not use GitHub's bare **Draft a new release** form as an alternate release
+path. It bypasses the verified artifact graph. The Release workflow is the only
+supported GitHub release publisher; the Actions UI, `just release`, and a
+pre-versioned tag all enter that workflow.
 
 The sections below document the underlying steps. They matter when releasing
 manually via a tag push, debugging the workflow, or validating bundles
@@ -215,8 +230,23 @@ Verify:
 
 ## Publish
 
-Push a `v*` tag to run `.github/workflows/release.yml`. The upstream release
-workflow owns release archive production, but it does not publish OCI images.
+Push a `v*` tag to run `.github/workflows/release.yml`. This lower-level path is
+accepted only when the tag points to `main` history and already contains the
+complete matching version update. Prepare and commit it before creating the
+tag:
+
+```bash
+scripts/release-version.sh v0.X.Y
+git add --update
+git commit -m "v0.X.Y: prepare release source"
+git push origin main
+git tag v0.X.Y
+git push origin v0.X.Y
+```
+
+The workflow rejects version-drifted tags instead of publishing binaries whose
+source version disagrees with the release. The upstream release workflow owns
+release archive production, but it does not publish OCI images.
 `Mesh-LLM/mesh-packaging` is the canonical package, GHCR, and npm producer. It
 starts only after a stable GitHub release and its complete CPU/GPU archive set
 have published successfully. Prereleases never dispatch it. The upstream

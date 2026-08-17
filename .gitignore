@@ -12,7 +12,10 @@ mesh-bundle.tar.gz
 crates/mesh-llm-ui/dist/
 evals/results/
 .sisyphus/
-.omo/
+.omo/*
+!.omo/specs/
+.omo/specs/*
+!.omo/specs/pr-ci-optimization.md
 .playwright-mcp/
 .envrc
 .moe-cache/
@@ -24,6 +27,7 @@ dist/MeshLLMFFI.xcframework.zip
 dist/native-sdk/
 dist/native-sdk-static/
 dist/llama-stage-static/
+dist/native-runtimes/
 sdk/kotlin/src/main/kotlin/uniffi/
 sdk/kotlin/example/example-jvm/src/main/kotlin/uniffi/
 sdk/node/native/

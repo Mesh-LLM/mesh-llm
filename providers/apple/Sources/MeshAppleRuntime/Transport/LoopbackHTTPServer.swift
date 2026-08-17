@@ -30,10 +30,10 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         let state = ListenerContinuation(continuation)
-        listener.stateUpdateHandler = { [readyHandler] newState in
+        listener.stateUpdateHandler = { [weak self, readyHandler] newState in
           switch newState {
           case .ready:
-            readyHandler(self.listener.port?.rawValue ?? 0)
+            readyHandler(self?.listener.port?.rawValue ?? 0)
           case .failed(let error):
             state.resume(throwing: error)
           case .cancelled:
@@ -53,13 +53,21 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
   }
 
   private func accept(_ connection: NWConnection) {
-    let reader = HTTPRequestReader(connection: connection) { [weak self] request in
-      guard let self else { return }
-      let requestTask = Task {
-        await self.handle(request, connection: connection)
+    let reader = HTTPRequestReader(
+      connection: connection,
+      completion: { [weak self] request in
+        guard let self else { return }
+        let requestTask = Task {
+          await self.handle(request, connection: connection)
+        }
+        self.monitorDisconnect(connection, task: requestTask)
+      },
+      failure: { [weak self] error in
+        let failure = (error as? HTTPFailure)
+          ?? HTTPFailure(status: 400, code: "invalid_request", message: String(describing: error))
+        self?.sendError(failure, over: connection)
       }
-      self.monitorDisconnect(connection, task: requestTask)
-    }
+    )
     connection.stateUpdateHandler = { state in
       if case .failed = state {
         connection.cancel()
@@ -223,25 +231,37 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
       over: connection
     )
     let completionID = "chatcmpl-\(UUID().uuidString)"
-    _ = try await runtime.generate(request: request) { event in
-      guard event.type == "delta", let delta = event.delta else { return }
+    do {
+      _ = try await runtime.generate(request: request) { event in
+        guard event.type == "delta", let delta = event.delta else { return }
+        let payload: [String: Any] = [
+          "id": completionID,
+          "object": "chat.completion.chunk",
+          "created": Int(Date().timeIntervalSince1970),
+          "model": request.modelID,
+          "choices": [
+            [
+              "index": 0,
+              "delta": ["content": delta],
+              "finish_reason": NSNull(),
+            ]
+          ],
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+          let json = String(data: data, encoding: .utf8)
+        else { return }
+        connection.send(content: Data("data: \(json)\n\n".utf8), completion: .idempotent)
+      }
+    } catch {
+      let failure = (error as? AppleRuntimeFailure)
+        ?? AppleRuntimeFailure(code: "internal_error", message: String(describing: error), retryable: false)
       let payload: [String: Any] = [
-        "id": completionID,
-        "object": "chat.completion.chunk",
-        "created": Int(Date().timeIntervalSince1970),
-        "model": request.modelID,
-        "choices": [
-          [
-            "index": 0,
-            "delta": ["content": delta],
-            "finish_reason": NSNull(),
-          ]
-        ],
+        "error": ["code": failure.code, "message": failure.message, "retryable": failure.retryable]
       ]
-      guard let data = try? JSONSerialization.data(withJSONObject: payload),
-        let json = String(data: data, encoding: .utf8)
-      else { return }
-      connection.send(content: Data("data: \(json)\n\n".utf8), completion: .idempotent)
+      if let data = try? JSONSerialization.data(withJSONObject: payload),
+        let json = String(data: data, encoding: .utf8) {
+        connection.send(content: Data("data: \(json)\n\n".utf8), completion: .idempotent)
+      }
     }
     let finalPayload: [String: Any] = [
       "id": completionID,
@@ -257,7 +277,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
       ],
     ]
     let finalData = try JSONSerialization.data(withJSONObject: finalPayload)
-    let finalJSON = String(decoding: finalData, as: UTF8.self)
+    guard let finalJSON = String(data: finalData, encoding: .utf8) else { return }
     let trailer = Data("data: \(finalJSON)\n\ndata: [DONE]\n\n".utf8)
     connection.send(
       content: trailer, contentContext: .finalMessage, isComplete: true, completion: .idempotent)
@@ -381,11 +401,17 @@ private final class ListenerContinuation: @unchecked Sendable {
 private final class HTTPRequestReader: @unchecked Sendable {
   private let connection: NWConnection
   private let completion: @Sendable (HTTPRequest) -> Void
+  private let failure: @Sendable (any Error) -> Void
   private var buffer = Data()
 
-  init(connection: NWConnection, completion: @escaping @Sendable (HTTPRequest) -> Void) {
+  init(
+    connection: NWConnection,
+    completion: @escaping @Sendable (HTTPRequest) -> Void,
+    failure: @escaping @Sendable (any Error) -> Void
+  ) {
     self.connection = connection
     self.completion = completion
+    self.failure = failure
   }
 
   func receive() {
@@ -394,8 +420,13 @@ private final class HTTPRequestReader: @unchecked Sendable {
       if let data {
         self.buffer.append(data)
       }
-      if let request = try? HTTPRequest.parse(self.buffer) {
-        self.completion(request)
+      do {
+        if let request = try HTTPRequest.parse(self.buffer) {
+          self.completion(request)
+          return
+        }
+      } catch {
+        self.failure(error)
         return
       }
       if isComplete || error != nil {
@@ -408,6 +439,7 @@ private final class HTTPRequestReader: @unchecked Sendable {
 }
 
 private struct HTTPRequest: Sendable {
+  private static let maximumRequestBodyBytes = 8 * 1_048_576
   let method: String
   let path: String
   let body: Data
@@ -432,6 +464,13 @@ private struct HTTPRequest: Sendable {
         else { return nil }
         return Int(parts[1].trimmingCharacters(in: .whitespaces))
       }.first ?? 0
+    guard contentLength >= 0, contentLength <= Self.maximumRequestBodyBytes else {
+      throw HTTPFailure(
+        status: 400,
+        code: "invalid_content_length",
+        message: "Content-Length is invalid or too large"
+      )
+    }
     let bodyStart = headerRange.upperBound
     guard data.count >= bodyStart + contentLength else { return nil }
     return HTTPRequest(
