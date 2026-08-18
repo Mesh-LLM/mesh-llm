@@ -13,7 +13,7 @@
 //!   GET  /api/runtime   — local model state (JSON)
 //!   GET  /api/runtime/llama — local llama.cpp runtime metrics + slots snapshots (JSON)
 //!   GET  /api/runtime/events — SSE stream of llama.cpp runtime metrics + slots snapshots
-//!   GET  /api/runtime/endpoints — registered plugin endpoint state (JSON)
+//!   GET  /api/runtime/endpoints — registered plugin endpoint state (JSON, trusted-local only)
 //!   GET  /api/runtime/processes — local inference process state (JSON)
 //!   GET  /api/runtime/stages — backend-neutral staged-serving state (JSON)
 //!   GET  /api/runtime/config-schema — merged built-in and installed-plugin config schema (JSON)

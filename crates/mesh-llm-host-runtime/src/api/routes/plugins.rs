@@ -195,7 +195,13 @@ async fn handle_list(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<
 
 async fn handle_endpoints(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     match state.runtime_endpoints().await {
-        Ok(endpoints) => respond_json(stream, 200, &endpoints).await?,
+        Ok(endpoints) => {
+            let endpoints = endpoints
+                .into_iter()
+                .map(|endpoint| endpoint.redacted_for_network())
+                .collect::<Vec<_>>();
+            respond_json(stream, 200, &endpoints).await?
+        }
         Err(err) => respond_error(stream, 500, &err.to_string()).await?,
     }
     Ok(())
