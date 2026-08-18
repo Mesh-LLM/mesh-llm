@@ -661,9 +661,20 @@ fn reject_unsupported_speculative_runtime_fields(
     Ok(())
 }
 
+/// Default native-MTP proposal window when the operator sets no bound.
+///
+/// Depth 1 is the only depth measured to be a win. On Qwen3.8-27B-UD-Q4_K_XL
+/// (RTX 5090, CUDA 13, 8192 ctx) depth 1 reached 42.751 tok/s against a
+/// 37.503 tok/s speculation-disabled control (+14.0%), while depth 3 reached
+/// 37.938 tok/s (+1.16% over control, 11.3% *slower* than depth 1): the extra
+/// proposal compute is paid without a correspondingly longer verified window.
+/// Raise this only when the verify-window sizing (`n_rs_seq`) makes deeper
+/// drafts reachable and a re-measurement shows depth > 1 beating depth 1.
+const NATIVE_MTP_DEFAULT_DRAFT_MAX_TOKENS: u32 = 1;
+
 fn resolved_draft_max_tokens(native_mtp_enabled: bool, draft_max_tokens: u32) -> u32 {
     if native_mtp_enabled && draft_max_tokens == 0 {
-        return 3;
+        return NATIVE_MTP_DEFAULT_DRAFT_MAX_TOKENS;
     }
     draft_max_tokens
 }

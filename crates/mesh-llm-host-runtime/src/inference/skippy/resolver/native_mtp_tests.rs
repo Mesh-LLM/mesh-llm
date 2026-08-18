@@ -432,7 +432,8 @@ fn speculative_strategy_auto_uses_package_native_mtp_default() {
         .to_embedded_openai_args(4096, true)
         .expect("openai args should build");
     assert!(openai.native_mtp_enabled);
-    assert_eq!(openai.native_mtp_max_tokens, 3);
+    // Native MTP defaults to a single draft token: depth 1 is the only measured win.
+    assert_eq!(openai.native_mtp_max_tokens, 1);
     assert_eq!(openai.native_mtp_min_tokens, 0);
 }
 
