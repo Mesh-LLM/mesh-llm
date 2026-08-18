@@ -1167,7 +1167,7 @@ impl TargetKey {
     /// URL credentials and pass through verbatim.
     fn redacted_label(&self) -> String {
         if matches!(self.kind, TargetKind::Endpoint)
-            && (self.label.starts_with("http://") || self.label.starts_with("https://"))
+            && crate::logging::policy::is_http_url(&self.label)
         {
             crate::logging::policy::redact_url_query(&self.label)
         } else {
@@ -1352,6 +1352,36 @@ mod tests {
         assert!(
             target.target.contains("endpoint.example"),
             "endpoint host lost from metrics: {}",
+            target.target
+        );
+    }
+
+    #[test]
+    fn uppercase_scheme_endpoint_label_is_still_redacted_in_snapshot() {
+        // URL schemes are case-insensitive (RFC 3986); an uppercase scheme
+        // must not bypass credential redaction of the metrics label.
+        let metrics = RoutingMetrics::with_config(Duration::from_secs(3600), 8, 8);
+        metrics.record_attempt(
+            Some("gamma"),
+            AttemptTarget::Endpoint(
+                "HTTPS://alice:s3cret@endpoint.example/v1?api_key=abc123".into(),
+            ),
+            Duration::from_millis(4),
+            Duration::from_millis(20),
+            AttemptOutcome::Success,
+            Some(5),
+        );
+
+        let snapshot = &metrics.model_snapshots()["gamma"];
+        let target = &snapshot.targets[0];
+        assert!(
+            !target.target.contains("alice:s3cret"),
+            "endpoint userinfo leaked for uppercase scheme: {}",
+            target.target
+        );
+        assert!(
+            !target.target.contains("abc123"),
+            "endpoint api_key leaked for uppercase scheme: {}",
             target.target
         );
     }

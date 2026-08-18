@@ -1,6 +1,7 @@
 use super::proto;
 use super::startup::PluginStartupSummary;
 use super::{PluginWebUiManifestOverview, PluginWebUiState};
+use crate::logging::policy::is_http_url;
 use serde::Serialize;
 use std::future::Future;
 use std::pin::Pin;
@@ -155,10 +156,6 @@ impl PluginEndpointSummary {
     }
 }
 
-fn is_http_url(value: &str) -> bool {
-    value.starts_with("http://") || value.starts_with("https://")
-}
-
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginCapabilityProvider {
     pub capability: String,
@@ -227,6 +224,26 @@ mod tests {
         assert!(
             !detail.contains("bob:pw"),
             "detail userinfo leaked: {detail}"
+        );
+    }
+
+    #[test]
+    fn uppercase_scheme_address_is_still_redacted_for_network() {
+        // URL schemes are case-insensitive (RFC 3986); an uppercase scheme
+        // must not bypass credential redaction.
+        let redacted = summary_with(
+            Some("HTTPS://alice:s3cret@host:8000/v1?api_key=abc123"),
+            None,
+        )
+        .redacted_for_network();
+        let address = redacted.address.expect("address present");
+        assert!(
+            !address.contains("alice:s3cret"),
+            "userinfo leaked for uppercase scheme: {address}"
+        );
+        assert!(
+            !address.contains("abc123"),
+            "api_key leaked for uppercase scheme: {address}"
         );
     }
 
