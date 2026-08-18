@@ -4186,7 +4186,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-provider-runtime"
-version = "0.72.1"
+version = "0.76.0-rc2"
 dependencies = [
  "anyhow",
  "dirs",
