@@ -55,6 +55,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::OwnedSemaphorePermit;
@@ -65,6 +66,67 @@ use tokio::task;
 
 fn request_cancelled_error() -> OpenAiError {
     OpenAiError::cancelled("request cancelled")
+}
+
+/// How long a full SSE event channel is treated as merely backed up before
+/// the generation worker gives up on it. Reuses the window other requests
+/// already wait for an execution lane, so a stalled consumer can never pin a
+/// lane longer than everyone else already times out for.
+const STREAM_SEND_STALL_TIMEOUT: Duration = GENERATION_ADMISSION_TIMEOUT;
+
+/// Poll interval while `send_generation_event` waits for buffer space.
+const STREAM_SEND_RETRY_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Forward one generation event to the SSE channel.
+///
+/// `mpsc::Sender::blocking_send` waits indefinitely for buffer space. A
+/// consumer that stops draining without the channel ever being dropped --
+/// a client gone before the server's own disconnect detection notices, e.g.
+/// behind a proxy that doesn't propagate the close -- can then pin the
+/// generation worker, and the execution lane it holds, forever even after
+/// the request is cancelled. This polls instead: it keeps retrying while the
+/// request is live and the buffer is merely full, but gives up -- cancelling
+/// the request if it hasn't been already -- once the caller is cancelled,
+/// the receiver is gone, or the buffer has stayed full past
+/// `STREAM_SEND_STALL_TIMEOUT`.
+fn send_generation_event(
+    tx: &mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
+    event: OpenAiResult<GenerationStreamEvent>,
+    context: &OpenAiRequestContext,
+) -> Result<(), OpenAiError> {
+    send_generation_event_with_stall_timeout(tx, event, context, STREAM_SEND_STALL_TIMEOUT)
+}
+
+/// `send_generation_event` with the stall timeout as a parameter, so tests
+/// can exercise the self-cancelling path without waiting out the real
+/// `STREAM_SEND_STALL_TIMEOUT`.
+fn send_generation_event_with_stall_timeout(
+    tx: &mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
+    mut event: OpenAiResult<GenerationStreamEvent>,
+    context: &OpenAiRequestContext,
+    stall_timeout: Duration,
+) -> Result<(), OpenAiError> {
+    let stalled_since = Instant::now();
+    loop {
+        if context.is_cancelled() {
+            return Err(request_cancelled_error());
+        }
+        event = match tx.try_send(event) {
+            Ok(()) => return Ok(()),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                context.cancel();
+                return Err(OpenAiError::backend("stream receiver dropped"));
+            }
+            Err(mpsc::error::TrySendError::Full(rejected)) => rejected,
+        };
+        if stalled_since.elapsed() >= stall_timeout {
+            context.cancel();
+            return Err(OpenAiError::backend(
+                "stream receiver stalled past the admission timeout",
+            ));
+        }
+        thread::sleep(STREAM_SEND_RETRY_INTERVAL);
+    }
 }
 
 fn should_emit_stream_usage(request_include_usage: bool, context: &OpenAiRequestContext) -> bool {
@@ -849,16 +911,13 @@ impl StageOpenAiBackend {
                         vec![GenerationStreamEvent::Delta(chunk.to_string())]
                     };
                     for event in events {
-                        tx.blocking_send(Ok(event)).map_err(|_| {
-                            context.cancel();
-                            OpenAiError::backend("stream receiver dropped")
-                        })?;
+                        send_generation_event(&tx, Ok(event), &context)?;
                     }
                     Ok(())
                 },
             );
             if context.is_cancelled() {
-                let _ = tx.blocking_send(Err(request_cancelled_error()));
+                let _ = send_generation_event(&tx, Err(request_cancelled_error()), &context);
                 return;
             }
             match result {
@@ -867,15 +926,14 @@ impl StageOpenAiBackend {
                         match parser.finish(&output.text) {
                             Ok(events) => {
                                 for event in events {
-                                    if tx.blocking_send(Ok(event)).is_err() {
-                                        context.cancel();
+                                    if send_generation_event(&tx, Ok(event), &context).is_err() {
                                         return;
                                     }
                                 }
                                 parser.finish_reason(output.finish_reason)
                             }
                             Err(error) => {
-                                let _ = tx.blocking_send(Err(error));
+                                let _ = send_generation_event(&tx, Err(error), &context);
                                 return;
                             }
                         }
@@ -883,17 +941,23 @@ impl StageOpenAiBackend {
                         output.finish_reason
                     };
                     if should_emit_stream_usage(include_usage, &context)
-                        && tx
-                            .blocking_send(Ok(GenerationStreamEvent::Usage(output.usage())))
-                            .is_err()
+                        && send_generation_event(
+                            &tx,
+                            Ok(GenerationStreamEvent::Usage(output.usage())),
+                            &context,
+                        )
+                        .is_err()
                     {
-                        context.cancel();
                         return;
                     }
-                    let _ = tx.blocking_send(Ok(GenerationStreamEvent::Done(finish_reason)));
+                    let _ = send_generation_event(
+                        &tx,
+                        Ok(GenerationStreamEvent::Done(finish_reason)),
+                        &context,
+                    );
                 }
                 Err(error) => {
-                    let _ = tx.blocking_send(Err(error));
+                    let _ = send_generation_event(&tx, Err(error), &context);
                 }
             }
         });

@@ -521,3 +521,79 @@ fn internal_stream_usage_observation_preserves_client_wire_preference() {
     let observed = OpenAiRequestContext::new().with_stream_usage_observation();
     assert!(should_emit_stream_usage(false, &observed));
 }
+
+/// Reproduces the orphaned-generation report: a client can vanish (dropped
+/// connection, or one that hasn't been noticed yet -- e.g. behind a proxy
+/// that doesn't propagate the close) leaving the SSE receiver alive but
+/// permanently undrained. `send_generation_event` must not let that pin the
+/// generation worker, and the execution lane it holds, forever: once the
+/// request is cancelled it must give up promptly even though the channel
+/// stays full and the receiver is never dropped.
+///
+/// This runs the send on its own thread and waits for a result over a
+/// bounded `recv_timeout` rather than joining directly, so a regression back
+/// to an unconditional blocking send fails this test instead of hanging the
+/// suite.
+#[test]
+fn stalled_receiver_does_not_pin_the_generation_worker_forever() {
+    let (tx, rx) = mpsc::channel(1);
+    tx.try_send(Ok(GenerationStreamEvent::Delta("first".to_owned())))
+        .expect("channel has room for the first event");
+    let context = OpenAiRequestContext::new();
+
+    let sender_context = context.clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = send_generation_event(
+            &tx,
+            Ok(GenerationStreamEvent::Delta("second".to_owned())),
+            &sender_context,
+        );
+        // Keep `rx` alive without draining it until after the send settles,
+        // so a fix that works only because the channel closed doesn't pass.
+        drop(rx);
+        let _ = done_tx.send(result.is_err());
+    });
+
+    // Give the sender thread a chance to observe the full channel before
+    // cancelling -- simulating cancellation arriving (e.g. from a
+    // connection-drop observer) after the worker is already stuck sending.
+    std::thread::sleep(Duration::from_millis(50));
+    context.cancel();
+
+    let cancelled = done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a stalled send must be interrupted by cancellation, not block forever");
+    assert!(cancelled, "cancelled send must return an error");
+}
+
+/// Covers the case the report actually flagged as unproven: nothing ever
+/// calls `cancel()` -- the connection-drop observer (`CancelOnDropSseStream`)
+/// simply never fires, e.g. because the client vanished behind a proxy that
+/// kept the socket to mesh-llm open. A stalled, never-dropped, never-drained
+/// receiver must still cause the send to give up and self-cancel once it has
+/// been full for the stall timeout, so the lane isn't held indefinitely.
+#[test]
+fn stalled_receiver_self_cancels_after_the_stall_timeout_with_no_external_cancel() {
+    let (tx, rx) = mpsc::channel(1);
+    tx.try_send(Ok(GenerationStreamEvent::Delta("first".to_owned())))
+        .expect("channel has room for the first event");
+    let context = OpenAiRequestContext::new();
+
+    let result = send_generation_event_with_stall_timeout(
+        &tx,
+        Ok(GenerationStreamEvent::Delta("second".to_owned())),
+        &context,
+        Duration::from_millis(50),
+    );
+
+    assert!(
+        result.is_err(),
+        "a send stalled past the timeout must fail rather than hang"
+    );
+    assert!(
+        context.is_cancelled(),
+        "a self-detected stall must cancel the request so the lane is freed"
+    );
+    drop(rx);
+}
