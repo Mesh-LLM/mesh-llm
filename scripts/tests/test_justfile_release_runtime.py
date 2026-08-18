@@ -31,7 +31,11 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
 
         for recipe_name in ("release-build-cuda", "release-build-aarch64-cuda"):
             recipe = self.recipe(recipe_name)
-            self.assertIn('cuda_version="${MESH_CUDA_VERSION:-12}"', recipe)
+            self.assertIn(
+                'cuda_version="${MESH_CUDA_VERSION:-'
+                '$(scripts/detect-cuda-toolkit-version.sh)}"',
+                recipe,
+            )
             self.assertIn(
                 'MESH_LLM_CUDA_TOOLKIT_MAJOR="'
                 '${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}"',

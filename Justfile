@@ -186,9 +186,11 @@ release-build-aarch64: release-host-build
     @scripts/package-native-runtime.sh --build --backend cpu --target aarch64-unknown-linux-gnu
 
 # Build a Linux aarch64 CUDA release artifact (Jetson/Orin).
-# SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
+# SM arches selected by MESH_CUDA_VERSION env (set by CI matrix); a bare
+# `just` invocation with the var unset detects the installed toolkit instead
+# of assuming one (see scripts/detect-cuda-toolkit-version.sh).
 release-build-aarch64-cuda: release-host-build
-    @cuda_version="${MESH_CUDA_VERSION:-12}"; \
+    @cuda_version="${MESH_CUDA_VERSION:-$(scripts/detect-cuda-toolkit-version.sh)}"; \
       MESH_LLM_CUDA_TOOLKIT_MAJOR="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}" \
       LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "$cuda_version" == 13.* ]]; then echo '75;80;86;87;89;90;110'; else echo '61;75;80;86;87;89;90'; fi)" \
       scripts/package-native-runtime.sh --build --backend cuda --target aarch64-unknown-linux-gnu
@@ -212,9 +214,11 @@ release-host-build-windows:
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile release -HostOnly
 
 # Build a Linux CUDA release artifact.
-# SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
+# SM arches selected by MESH_CUDA_VERSION env (set by CI matrix); a bare
+# `just` invocation with the var unset detects the installed toolkit instead
+# of assuming one (see scripts/detect-cuda-toolkit-version.sh).
 release-build-cuda: release-host-build
-    @cuda_version="${MESH_CUDA_VERSION:-12}"; \
+    @cuda_version="${MESH_CUDA_VERSION:-$(scripts/detect-cuda-toolkit-version.sh)}"; \
       MESH_LLM_CUDA_TOOLKIT_MAJOR="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}" \
       LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "$cuda_version" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '61;75;80;86;87;89;90'; fi)" \
       scripts/package-native-runtime.sh --build --backend cuda --target x86_64-unknown-linux-gnu
