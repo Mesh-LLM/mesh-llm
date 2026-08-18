@@ -762,6 +762,52 @@ async fn attempt_records_are_delivered_under_the_parent_request() {
     );
 }
 
+/// A freshly-registered request has no truthful metadata yet: `register_request`
+/// stores `RequestSummaryMetadata::default()` in the active registry, and the
+/// admitted event's own registry-entry fallback must not treat that empty
+/// placeholder as real metadata. Doing so previously fabricated a presentation
+/// context whose absent route/model/method still stamped `kind=unknown` onto
+/// every message for the request, exactly like the two other empty-metadata
+/// fallbacks already guard against.
+///
+/// `CanonicalEnvelope::presentation_context` is deliberately skipped by serde
+/// (durable/replay truth is the canonical event plus summary metadata), so
+/// this reads the live replay-bus entry's rendered `presentation_summary`
+/// text directly rather than round-tripping the envelope through JSON, which
+/// would silently strip the very field this test guards.
+#[tokio::test]
+async fn newly_registered_request_with_no_metadata_omits_presentation_context() {
+    let svc = LoggingService::new(
+        ServiceConfig::default(),
+        Arc::new(TestSink::new()),
+        Box::new(TestClock::new()),
+    );
+    let request_id = RequestId::new();
+    let (_guard, admitted_event_id) = svc.register_request(request_id);
+
+    let window = svc.bus_ref().replay_window();
+    let live_payload: serde_json::Value = window
+        .records
+        .iter()
+        .find_map(|record| {
+            let payload: serde_json::Value =
+                serde_json::from_str(&record.entry.payload).expect("parse live bus payload");
+            (payload.get("event_id").and_then(serde_json::Value::as_str)
+                == Some(&admitted_event_id.as_uuid().to_string()))
+            .then_some(payload)
+        })
+        .expect("admitted event reached the replay bus");
+
+    let presentation_summary = live_payload
+        .get("presentation_summary")
+        .and_then(serde_json::Value::as_str)
+        .expect("canonical events carry a rendered presentation summary");
+    assert!(
+        !presentation_summary.contains("kind=unknown"),
+        "empty registry metadata must not stamp kind=unknown onto every message for the request: {presentation_summary}"
+    );
+}
+
 fn proxy_record(request_id: RequestId, attempt_id: AttemptId) -> ProxyRecord {
     ProxyRecord {
         attempt_id,

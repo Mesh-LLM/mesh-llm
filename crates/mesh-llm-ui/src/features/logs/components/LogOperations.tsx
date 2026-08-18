@@ -32,6 +32,8 @@ type CleanupSnapshot = {
   readonly generation: number
   readonly rows: readonly LogEventLedgerRow[]
   readonly selectedCategories: ReadonlySet<LogEventCategory>
+  readonly from: string | undefined
+  readonly to: string | undefined
 }
 
 const DEFAULT_CLEANUP_CATEGORIES = new Set<LogEventCategory>(['requests', 'system', 'quic', 'gossip'])
@@ -166,8 +168,8 @@ export function LogOperations({
   const [cleanupSnapshot, setCleanupSnapshot] = useState<CleanupSnapshot>()
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const fallbackSnapshot = useMemo<CleanupSnapshot>(
-    () => ({ generation: 0, rows, selectedCategories }),
-    [rows, selectedCategories]
+    () => ({ generation: 0, rows, selectedCategories, from: query.from, to: query.to }),
+    [rows, selectedCategories, query.from, query.to]
   )
 
   switch (operation) {
@@ -194,6 +196,7 @@ export function LogOperations({
       )
     case 'cleanup': {
       const snapshot = cleanupSnapshot ?? fallbackSnapshot
+      const cleanupQuery = { ...query, from: snapshot.from, to: snapshot.to }
       return (
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -204,7 +207,9 @@ export function LogOperations({
               setCleanupSnapshot({
                 generation: Date.now(),
                 rows: [...rows],
-                selectedCategories: new Set(selectedCategories)
+                selectedCategories: new Set(selectedCategories),
+                from: query.from,
+                to: query.to
               })
               setOpen(true)
             }}
@@ -221,14 +226,14 @@ export function LogOperations({
             </span>
           ) : null}
           <LogCleanupDialog
-            key={`${query.from ?? ''}:${query.to ?? ''}:${[...snapshot.selectedCategories].join(',')}:${snapshot.generation}`}
+            key={`${snapshot.from ?? ''}:${snapshot.to ?? ''}:${[...snapshot.selectedCategories].join(',')}:${snapshot.generation}`}
             open={open}
             onMaintenanceMutationSucceeded={onMaintenanceMutationSucceeded}
             onOpenChange={(nextOpen) => {
               setOpen(nextOpen)
               if (!nextOpen) setCleanupSnapshot(undefined)
             }}
-            query={query}
+            query={cleanupQuery}
             returnFocusRef={triggerRef}
             rows={snapshot.rows}
             initialCategories={snapshot.selectedCategories}

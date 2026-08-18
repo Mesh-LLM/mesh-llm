@@ -210,6 +210,30 @@ describe('LogOperations', () => {
     await waitFor(() => expect(reviewHeading).toHaveFocus())
   })
 
+  it('keeps a prepared preview visible when the live query window advances while the dialog is open', async () => {
+    const user = userEvent.setup()
+    api.previewCleanup.mockResolvedValue(cleanupReceipt('previewed'))
+    const view = render(
+      <LogOperations operation="cleanup" query={{ from: '2026-08-01T00:00:00Z', to: '2026-08-01T01:00:00Z' }} />
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Clean up logs' }))
+    await user.type(screen.getByPlaceholderText('Why are these logs being removed?'), 'retention cleanup')
+    await user.click(screen.getByRole('button', { name: 'Review deletion' }))
+    await waitFor(() => expect(api.previewCleanup).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('heading', { name: 'Review log cleanup' })).toBeInTheDocument()
+
+    // A relative timeRange (e.g. driven by an advancing clock) moves query.from/to
+    // while the dialog stays open. That must not remount the dialog and discard
+    // the prepared operation and preview receipt.
+    view.rerender(
+      <LogOperations operation="cleanup" query={{ from: '2026-08-01T00:05:00Z', to: '2026-08-01T01:05:00Z' }} />
+    )
+
+    expect(screen.getByRole('heading', { name: 'Review log cleanup' })).toBeInTheDocument()
+    expect(api.previewCleanup).toHaveBeenCalledTimes(1)
+  })
+
   it('uses the latest loaded window when records arrive before the dialog opens', async () => {
     const user = userEvent.setup()
     api.previewCleanup.mockResolvedValue(cleanupReceipt('previewed'))

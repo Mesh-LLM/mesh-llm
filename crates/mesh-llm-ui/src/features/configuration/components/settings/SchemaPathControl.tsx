@@ -52,10 +52,10 @@ export function SchemaPathControl({
           className={cn(
             TEXT_FIELD_BASE_CLASS,
             'w-full min-w-0',
-            disabled && 'cursor-not-allowed opacity-60',
+            (disabled || pickerPending) && 'cursor-not-allowed opacity-60',
             invalid && 'border-bad shadow-[var(--shadow-surface-error-inset)]'
           )}
-          disabled={disabled}
+          disabled={disabled || pickerPending}
           name={'name' in setting.control ? setting.control.name : setting.id}
           onChange={(event) => onChange(event.currentTarget.value)}
           placeholder={'placeholder' in setting.control ? setting.control.placeholder : './path/to/file'}

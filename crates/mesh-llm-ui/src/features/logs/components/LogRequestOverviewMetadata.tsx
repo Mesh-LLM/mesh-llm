@@ -30,21 +30,27 @@ function MetadataGrid({
 }) {
   return (
     <dl className={cn('grid gap-px bg-border-soft sm:grid-cols-2', wideColumns === 3 && 'lg:grid-cols-3')}>
-      {fields.map((field, fieldIndex) => (
-        <div
-          className={cn(
-            'min-w-0 bg-panel px-[var(--panel-x)] py-[var(--panel-y)]',
-            trailingRowSpanClass(fields.length, fieldIndex, 2, 'sm'),
-            wideColumns === 3 && trailingRowSpanClass(fields.length, fieldIndex, 3, 'lg')
-          )}
-          key={field.label}
-        >
-          <dt className="type-label text-fg-faint">{field.label}</dt>
-          <dd className="mt-1 break-words font-mono tabular-nums text-[length:var(--density-type-caption-lg)] text-foreground">
-            {field.value}
-          </dd>
-        </div>
-      ))}
+      {fields.map((field, fieldIndex) => {
+        const smSpan = trailingRowSpanClass(fields.length, fieldIndex, 2, 'sm')
+        const lgSpan = wideColumns === 3 ? trailingRowSpanClass(fields.length, fieldIndex, 3, 'lg') : undefined
+        return (
+          <div
+            className={cn(
+              'min-w-0 bg-panel px-[var(--panel-x)] py-[var(--panel-y)]',
+              smSpan,
+              // The sm span above stays active at lg unless overridden; reset it
+              // when the 3-column layout doesn't need a span of its own here.
+              wideColumns === 3 && (lgSpan ?? (smSpan ? 'lg:col-span-1' : undefined))
+            )}
+            key={field.label}
+          >
+            <dt className="type-label text-fg-faint">{field.label}</dt>
+            <dd className="mt-1 break-words font-mono tabular-nums text-[length:var(--density-type-caption-lg)] text-foreground">
+              {field.value}
+            </dd>
+          </div>
+        )
+      })}
     </dl>
   )
 }
