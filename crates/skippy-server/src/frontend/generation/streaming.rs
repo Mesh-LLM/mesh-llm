@@ -1,8 +1,11 @@
 use crate::frontend::generation::GeneratedText;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::GenerationMetrics;
+use crate::frontend::generation::ParsedChatMessage;
 use crate::frontend::generation::PreparedGenerationPrompt;
 use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::generation::incremental_text::suffix_delta;
+use crate::frontend::generation::tool_call_stream::ToolCallStreamState;
 use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::generation::tool_calls_stream_delta;
 use crate::frontend::tool_emulation;
@@ -36,15 +39,73 @@ pub(in crate::frontend) enum GenerationStreamEvent {
     Done(FinishReason),
 }
 
+/// Tracks what has already been sent for one streaming chat completion, and
+/// reduces each successive full parse of the message to the events not yet sent.
+///
+/// Held separately from the parser so the streaming contract is exercisable
+/// without a loaded runtime.
+#[derive(Default)]
+pub(in crate::frontend) struct ChatStreamDeltas {
+    emit_reasoning: bool,
+    emitted_content: String,
+    emitted_reasoning_content: String,
+    tool_calls: ToolCallStreamState,
+}
+
+impl ChatStreamDeltas {
+    pub(in crate::frontend) fn new(emit_reasoning: bool) -> Self {
+        Self {
+            emit_reasoning,
+            ..Self::default()
+        }
+    }
+
+    /// Reduce one parse of the message to the events not yet sent.
+    ///
+    /// `is_partial` mirrors the parser argument: `false` marks the authoritative
+    /// terminal parse.
+    pub(in crate::frontend) fn events_for_parse(
+        &mut self,
+        parsed: &ParsedChatMessage,
+        is_partial: bool,
+    ) -> Vec<GenerationStreamEvent> {
+        let mut events = Vec::new();
+        if self.emit_reasoning
+            && let Some(delta) = suffix_delta(
+                parsed.reasoning_content.as_deref(),
+                &mut self.emitted_reasoning_content,
+            )
+        {
+            events.push(GenerationStreamEvent::ReasoningDelta(delta));
+        }
+        if let Some(delta) = suffix_delta(parsed.content.as_deref(), &mut self.emitted_content) {
+            events.push(GenerationStreamEvent::Delta(delta));
+        }
+        if let Some(tool_calls) = parsed.tool_calls.as_ref().and_then(Value::as_array)
+            && let Some(delta) = self.tool_calls.record(tool_calls, is_partial)
+        {
+            events.push(GenerationStreamEvent::ToolCalls(delta));
+        }
+        events
+    }
+
+    /// `FinishReason::ToolCalls` only when the terminal parse produced tool calls
+    /// the client can reconstruct from the deltas it received.
+    pub(in crate::frontend) fn finish_reason(&self, fallback: FinishReason) -> FinishReason {
+        if self.tool_calls.completed() {
+            FinishReason::ToolCalls
+        } else {
+            fallback
+        }
+    }
+}
+
 pub(in crate::frontend) struct ChatOutputStreamParser {
     pub(in crate::frontend) backend: StageOpenAiBackend,
     pub(in crate::frontend) request: ChatCompletionRequest,
     pub(in crate::frontend) metadata: String,
-    pub(in crate::frontend) emit_reasoning: bool,
     pub(in crate::frontend) text: String,
-    pub(in crate::frontend) emitted_content: String,
-    pub(in crate::frontend) emitted_reasoning_content: String,
-    pub(in crate::frontend) emitted_tool_calls: bool,
+    deltas: ChatStreamDeltas,
 }
 
 impl ChatOutputStreamParser {
@@ -58,11 +119,8 @@ impl ChatOutputStreamParser {
             backend,
             request,
             metadata,
-            emit_reasoning,
             text: String::new(),
-            emitted_content: String::new(),
-            emitted_reasoning_content: String::new(),
-            emitted_tool_calls: false,
+            deltas: ChatStreamDeltas::new(emit_reasoning),
         }
     }
 
@@ -97,47 +155,12 @@ impl ChatOutputStreamParser {
         else {
             return Ok(Vec::new());
         };
-        let mut events = Vec::new();
-        if self.emit_reasoning
-            && let Some(delta) = suffix_delta(
-                parsed.reasoning_content.as_deref(),
-                &mut self.emitted_reasoning_content,
-            )
-        {
-            events.push(GenerationStreamEvent::ReasoningDelta(delta));
-        }
-        if let Some(delta) = suffix_delta(parsed.content.as_deref(), &mut self.emitted_content) {
-            events.push(GenerationStreamEvent::Delta(delta));
-        }
-        if let (true, Some(tool_calls)) =
-            (!is_partial && !self.emitted_tool_calls, parsed.tool_calls)
-        {
-            self.emitted_tool_calls = true;
-            events.push(GenerationStreamEvent::ToolCalls(tool_calls));
-        }
-        Ok(events)
+        Ok(self.deltas.events_for_parse(&parsed, is_partial))
     }
 
     pub(in crate::frontend) fn finish_reason(&self, fallback: FinishReason) -> FinishReason {
-        if self.emitted_tool_calls {
-            FinishReason::ToolCalls
-        } else {
-            fallback
-        }
+        self.deltas.finish_reason(fallback)
     }
-}
-
-pub(in crate::frontend) fn suffix_delta(
-    current: Option<&str>,
-    emitted: &mut String,
-) -> Option<String> {
-    let current = current?;
-    let delta = current.strip_prefix(emitted.as_str())?;
-    if delta.is_empty() {
-        return None;
-    }
-    emitted.push_str(delta);
-    Some(delta.to_string())
 }
 
 pub(in crate::frontend) fn generation_event_to_chat_chunk(

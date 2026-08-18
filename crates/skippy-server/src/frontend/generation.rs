@@ -1,11 +1,13 @@
 mod cache_hints;
 mod draft_runner;
+mod incremental_text;
 mod parsing;
 mod persistent_lanes;
 mod queue;
 mod server;
 mod streaming;
 mod timeouts;
+mod tool_call_stream;
 mod types;
 
 pub use cache_hints::{CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS};

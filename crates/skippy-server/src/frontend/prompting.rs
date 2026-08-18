@@ -338,7 +338,13 @@ impl StageOpenAiBackend {
 /// [`ParsedChatMessage`]. During streaming (`is_partial`) the trailing
 /// incomplete line is held back and tool calls are withheld, so a half-formed
 /// `TOOL_CALL` marker is never streamed as content and calls are emitted once,
-/// on finalization — matching native tool-call streaming semantics.
+/// on finalization.
+///
+/// Unlike the native path, emulated tool calls are therefore *not* streamed
+/// incrementally. The emulated parser only recognises a call once its JSON
+/// object closes (`tool_emulation::parse_emulated_tool_calls`), so it has no
+/// representation of a partially generated argument object to stream from;
+/// streaming it needs a partial-JSON scanner, not a change to this gate.
 pub(super) fn parse_emulated_chat_output(
     text: &str,
     request: &ChatCompletionRequest,
