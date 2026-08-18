@@ -1,9 +1,28 @@
 /**
  * Events-over-time chart stability regression guards.
  *
- * The /logs page crashed with React's "Maximum update depth exceeded" after the
- * recharts ^3.10.1 dependency bump: a ResizeObserver-driven render loop inside
- * the chart. See chart-bug.md at the repo root for the full investigation.
+ * The /logs page crashed with React's "Maximum update depth exceeded" (minified
+ * React error #185) in both the dev server and the production console bundle.
+ *
+ * Root cause was NOT in the chart, and not ResizeObserver-driven. The chart was
+ * the victim: `useLogsLiveRecovery` returned a fresh `[]` literal for
+ * `auditEntries` when audit streaming was disabled, while every sibling
+ * collection was memoized. That new identity per render invalidated the ledger
+ * memo chain (auditEntries -> filteredAuditEntries -> mergedRows ->
+ * categoryRows), handing `<BarChart>` a new `data` array on every render.
+ * recharts' ChartDataContextProvider then re-dispatched `setChartData`, and
+ * react-redux v9's synchronous `defaultNoopBatch` notified subscribers inline,
+ * re-rendering the tree that minted the next `[]` — self-sustaining until
+ * React's 50-nested-update ceiling tripped the route error boundary.
+ *
+ * The fix is a shared module-level empty array in that hook. Prop-hygiene
+ * fixes inside the chart (memoizing tick/margin/cursor, bypassing
+ * ResponsiveContainer) were measured and do NOT close the loop, because they
+ * sit downstream of the identity churn — do not re-attempt them.
+ *
+ * The mechanism is guarded at the unit level by the referential-stability tests
+ * in use-logs-live-recovery.test.tsx; these e2e specs guard the integrated
+ * perturbation shapes.
  *
  * These tests mount the chart with the same mocked /api/logs/* backend shape
  * used by log-workflows.spec.ts and exercise the perturbation shapes that
@@ -18,11 +37,10 @@
  * - viewport-growth tracking (the chart must re-measure when the container
  *   grows, guarding against a fixed-width "measure once" wrapper).
  *
- * Status on the current (unfixed) tree: every variant reproduces the crash
- * ("Maximum update depth exceeded" via recharts' synchronous redux-store
- * notify -> forceStoreRerender chain). The suite is intentionally red until
- * the render-loop fix lands and then guards against regressions in each
- * perturbation shape.
+ * With the fix in place these variants are expected to pass; they guard against
+ * regressions in each perturbation shape. Reverting the hook one-liner turns
+ * them red again (a variable subset per run, since the loop trips
+ * probabilistically once the 50-update ceiling is in reach).
  */
 
 import { expect, test, type Page } from '../fixtures/base'
@@ -244,12 +262,17 @@ test.describe('events over time chart stability', () => {
     })
 
     test('renders a high-volume dataset without exceeding React update depth', async ({ page }) => {
-      // 370 requests spanning [now-370min, now-1min] under frozen time. The
-      // ledger window caps at 64 rows (LOG_EVENT_WINDOW_LIMIT), so the legend
-      // must report Requests64: that proves the full mock dataset reached the
-      // ledger and was windowed, rather than being silently dropped. The bar
-      // count itself stays small (64 rows at the default 5m interval), so the
-      // fidelity gate is "bars render at all and no render loop fires".
+      // 370 requests spanning [now-370min, now-1min] under frozen time.
+      //
+      // mergeLogEventWindow caps the MERGED request+audit list at 64 rows
+      // (LOG_EVENT_WINDOW_LIMIT), newest first — the cap is not per-category.
+      // AUDIT_ROWS contributes 3 entries inside the newest 64 (system@20min,
+      // quic@30min, gossip@50min); the 4th (gossip@490min) falls outside the
+      // window. So the legend reports Requests61 + System1 + QUIC1 + Gossip1,
+      // summing to exactly 64. Asserting the total proves the full mock dataset
+      // reached the ledger and was windowed rather than silently dropped.
+      // The bar count itself stays small, so the fidelity gate is "bars render
+      // at all and no render loop fires".
       const manyRequests = Array.from({ length: 370 }, (_, i) =>
         requestRow(i, i === 0 ? 'active' : i % 3 === 0 ? 'failed' : 'completed', 370 - i)
       )
@@ -261,7 +284,10 @@ test.describe('events over time chart stability', () => {
       await page.waitForTimeout(2500)
 
       const legend = page.getByRole('list', { name: 'Visible event categories' })
-      await expect(legend).toContainText('Requests64')
+      await expect(legend).toContainText('Requests61')
+      await expect(legend).toContainText('System1')
+      await expect(legend).toContainText('QUIC1')
+      await expect(legend).toContainText('Gossip1')
       const bars = await page.locator('path.recharts-rectangle').count()
       expect(bars).toBeGreaterThan(0)
       expect(capture.depthErrors(), `render loop detected:\n${capture.depthErrors().join('\n')}`).toEqual([])
@@ -330,11 +356,31 @@ test.describe('events over time chart stability', () => {
     test('row-click: opening the request inspector stays stable', async ({ page }) => {
       // Reproduces the live crash on the unfixed tree: opening the inspector
       // shifts the layout while the chart is mounted.
+      //
+      // Note the inspector is a modal dialog: while it is open the ledger (and
+      // therefore the chart) is correctly removed from the accessibility tree,
+      // so the chart must NOT be asserted visible in that state. The render-loop
+      // check still applies throughout, and the chart must come back on close.
       const capture = await mountChart(page)
       const row = page.getByRole('row', { name: 'Inspect request 10000000-0000-4000-8000-000000000001' })
       await expect(row).toBeVisible({ timeout: 30_000 })
       await row.click()
-      await expect(page.locator('main')).toBeVisible({ timeout: 30_000 })
+
+      const inspector = page.getByRole('dialog')
+      await expect(inspector).toBeVisible({ timeout: 30_000 })
+      await page.waitForTimeout(2500)
+      if (capture.depthErrors().length > 0 || capture.reactCrash()) {
+        throw new Error(
+          `render loop detected while the inspector was open:\nreactCrash=${capture.reactCrash()}\nconsoleTail=\n${capture.consoleIssues
+            .slice(-12)
+            .join('\n')}`
+        )
+      }
+
+      // Closing the inspector must restore the ledger and remount the chart
+      // without tripping the loop.
+      await page.keyboard.press('Escape')
+      await expect(inspector).toBeHidden({ timeout: 30_000 })
       await page.waitForTimeout(2500)
       await assertChartAndNoLoop(page, capture)
     })

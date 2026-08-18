@@ -9,6 +9,14 @@ import { resolveRelativeTime, type LogsLedgerSearch } from '@/features/logs/lib/
 const POLL_INTERVAL_MS = 5_000
 const FALLBACK_DELAY_MS = 1_000
 const DEFAULT_CHANNELS: readonly LogReplayChannel[] = ['requests', 'operations']
+/**
+ * Returned when audit streaming is disabled. Must be a shared module-level
+ * value, not a fresh `[]` literal: a new identity per render invalidates the
+ * ledger memo chain, which hands the events chart a new `data` array on every
+ * render and drives recharts into a synchronous re-dispatch loop until React's
+ * nested-update ceiling trips the `/logs` error boundary.
+ */
+const EMPTY_AUDIT_ENTRIES: readonly LogAuditEntry[] = []
 
 export type LogsLiveConnectionState = 'connected' | 'reconnecting' | 'polling' | 'gap' | 'stale'
 
@@ -629,7 +637,7 @@ export function useLogsLiveRecovery({
     liveRequestIds,
     requestUpdates,
     excludedRequestIds,
-    auditEntries: auditEnabled ? liveAuditEntries : [],
+    auditEntries: auditEnabled ? liveAuditEntries : EMPTY_AUDIT_ENTRIES,
     pollingEnabled,
     togglePolling
   }

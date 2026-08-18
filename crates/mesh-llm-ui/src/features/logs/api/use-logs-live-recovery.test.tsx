@@ -765,4 +765,56 @@ describe('useLogsLiveRecovery', () => {
     expect(result.current.liveRequestIds).toEqual([REQUEST_A])
     expect(hydrate).toHaveBeenCalledTimes(2)
   })
+
+  /**
+   * Regression guard for the `/logs` render loop (React error #185).
+   *
+   * Every collection this hook returns must keep a stable reference across a
+   * render that changed nothing. `auditEntries` returned a fresh `[]` literal
+   * when audit was disabled, which invalidated the whole ledger memo chain
+   * (auditEntries -> filteredAuditEntries -> mergedRows -> categoryRows) on
+   * every render. That handed `<BarChart>` a new `data` array each render, so
+   * recharts' ChartDataContextProvider re-dispatched `setChartData`, and
+   * react-redux v9's synchronous `defaultNoopBatch` notified subscribers
+   * inline — re-rendering the tree that minted the next `[]`. Self-sustaining
+   * until React's 50-nested-update ceiling tripped the error boundary.
+   *
+   * This asserts the mechanism (referential stability), not the symptom, so it
+   * fails on the fresh-literal pattern regardless of which consumer breaks.
+   */
+  it('returns referentially stable collections across renders when audit is disabled', async () => {
+    const { rerender, result } = renderLive({ auditEnabled: false })
+    await flush()
+
+    const first = {
+      auditEntries: result.current.auditEntries,
+      liveRequestIds: result.current.liveRequestIds,
+      requestUpdates: result.current.requestUpdates,
+      excludedRequestIds: result.current.excludedRequestIds
+    }
+
+    // A no-op re-render with identical inputs must not mint new collections.
+    rerender({ search: { model: 'Qwen3', provider: 'reserve-a' } })
+    await flush()
+
+    expect(result.current.auditEntries).toBe(first.auditEntries)
+    expect(result.current.liveRequestIds).toBe(first.liveRequestIds)
+    expect(result.current.requestUpdates).toBe(first.requestUpdates)
+    expect(result.current.excludedRequestIds).toBe(first.excludedRequestIds)
+  })
+
+  it('keeps auditEntries referentially stable while live request events arrive', async () => {
+    const { result, sources } = renderLive({ auditEnabled: false })
+    await flush()
+    const initialAuditEntries = result.current.auditEntries
+
+    // Request traffic must not invalidate the (disabled) audit collection.
+    act(() =>
+      sources[0]?.emit('log_event', eventData(REQUEST_A, '00000000-0000-4000-8000-000000000003', 1), 'v1:1.0.0')
+    )
+    await flush()
+
+    expect(result.current.auditEntries).toBe(initialAuditEntries)
+    expect(result.current.auditEntries).toEqual([])
+  })
 })

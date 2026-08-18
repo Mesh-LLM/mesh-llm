@@ -644,9 +644,15 @@ fn enqueue_event_with_delivery(
             })
         })
         .or_else(|| {
+            // Match the two fallbacks above and skip empty metadata: an empty
+            // `RequestSummaryMetadata` carries no route/source/kind, so building
+            // a presentation context from it stamps `kind=unknown` onto every
+            // message for the request. Leaving it `None` keeps the envelope
+            // free of a misleading context instead.
             registry_entry
                 .as_ref()
                 .map(RequestSummaryEntry::metadata)
+                .filter(|metadata| !metadata.is_empty())
                 .cloned()
         });
     let canonical_envelope = serde_json::from_str::<LifecycleEvent>(&payload_json)
