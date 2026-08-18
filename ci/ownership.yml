@@ -217,7 +217,8 @@
       "patterns": [
         "scripts/build-mac.sh",
         "scripts/ci-swift-sdk-smoke.sh",
-        ".github/workflows/swift-sdk-artifact.yml"
+        ".github/workflows/swift-sdk-artifact.yml",
+        "providers/apple/**"
       ]
     },
     {
