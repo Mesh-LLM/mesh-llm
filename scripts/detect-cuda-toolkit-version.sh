@@ -19,13 +19,21 @@
 set -uo pipefail
 
 # ── Strategy 1: nvcc (the compiler that will actually run) ────────────────
-if command -v nvcc &>/dev/null; then
-    VER="$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+')"
-    if [[ -n "$VER" ]]; then
-        echo "$VER"
-        exit 0
+# build-llama.sh honors CUDACXX/CMAKE_CUDA_COMPILER to pick a specific nvcc
+# on hosts with multiple toolkits installed side by side (a carrack host has
+# 12.x and 13.x toolkits at once); check the same override here so the
+# detected version always matches the compiler that will actually run,
+# falling back to whatever `nvcc` resolves to on PATH.
+for NVCC in "${CUDACXX:-}" "${NVCC:-}" nvcc; do
+    [[ -n "$NVCC" ]] || continue
+    if command -v "$NVCC" &>/dev/null; then
+        VER="$("$NVCC" --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+')"
+        if [[ -n "$VER" ]]; then
+            echo "$VER"
+            exit 0
+        fi
     fi
-fi
+done
 
 # ── Strategy 2: CUDA toolkit install metadata ──────────────────────────────
 for CANDIDATE in /usr/local/cuda /opt/cuda; do
