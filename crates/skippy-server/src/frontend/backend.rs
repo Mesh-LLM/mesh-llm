@@ -53,9 +53,9 @@ use skippy_runtime::SamplingConfig;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::OwnedSemaphorePermit;
@@ -69,63 +69,142 @@ fn request_cancelled_error() -> OpenAiError {
 }
 
 /// How long a full SSE event channel is treated as merely backed up before
-/// the generation worker gives up on it. Reuses the window other requests
-/// already wait for an execution lane, so a stalled consumer can never pin a
-/// lane longer than everyone else already times out for.
-const STREAM_SEND_STALL_TIMEOUT: Duration = GENERATION_ADMISSION_TIMEOUT;
+/// the generation worker gives up on it and frees its execution lane.
+///
+/// Deliberately its own value rather than an alias of
+/// `GENERATION_ADMISSION_TIMEOUT`: admission queueing and stream-stall
+/// tolerance are unrelated policies, and retuning one must not silently
+/// retune the other. It bounds a single send, not a whole generation.
+const STREAM_SEND_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Poll interval while `send_generation_event` waits for buffer space.
-const STREAM_SEND_RETRY_INTERVAL: Duration = Duration::from_millis(20);
-
-/// Forward one generation event to the SSE channel.
+/// Forwards generation events to the SSE channel without letting a consumer
+/// that has stopped draining pin the generation worker, and the execution
+/// lane it holds, forever.
 ///
 /// `mpsc::Sender::blocking_send` waits indefinitely for buffer space. A
 /// consumer that stops draining without the channel ever being dropped --
 /// a client gone before the server's own disconnect detection notices, e.g.
 /// behind a proxy that doesn't propagate the close -- can then pin the
 /// generation worker, and the execution lane it holds, forever even after
-/// the request is cancelled. This polls instead: it keeps retrying while the
-/// request is live and the buffer is merely full, but gives up -- cancelling
-/// the request if it hasn't been already -- once the caller is cancelled,
-/// the receiver is gone, or the buffer has stayed full past
-/// `STREAM_SEND_STALL_TIMEOUT`.
-fn send_generation_event(
-    tx: &mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
-    event: OpenAiResult<GenerationStreamEvent>,
-    context: &OpenAiRequestContext,
-) -> Result<(), OpenAiError> {
-    send_generation_event_with_stall_timeout(tx, event, context, STREAM_SEND_STALL_TIMEOUT)
+/// the request is cancelled. This races each send against cancellation and
+/// against `stall_timeout` via `tokio::select!` instead of polling, so a
+/// consumer draining normally is woken the instant space appears rather than
+/// after up to a 20 ms poll tick.
+struct StreamEventSender {
+    tx: mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
+    runtime: tokio::runtime::Handle,
+    stall_timeout: Duration,
+    /// Set once the receiver is gone or has stayed full past the stall
+    /// timeout. Nothing further can reach the client, so later frames are
+    /// dropped rather than waited on again.
+    receiver_unreachable: AtomicBool,
 }
 
-/// `send_generation_event` with the stall timeout as a parameter, so tests
-/// can exercise the self-cancelling path without waiting out the real
-/// `STREAM_SEND_STALL_TIMEOUT`.
-fn send_generation_event_with_stall_timeout(
-    tx: &mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
-    mut event: OpenAiResult<GenerationStreamEvent>,
-    context: &OpenAiRequestContext,
-    stall_timeout: Duration,
-) -> Result<(), OpenAiError> {
-    let stalled_since = Instant::now();
-    loop {
-        if context.is_cancelled() {
-            return Err(request_cancelled_error());
+impl StreamEventSender {
+    fn new(
+        tx: mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
+        runtime: tokio::runtime::Handle,
+        stall_timeout: Duration,
+    ) -> Self {
+        Self {
+            tx,
+            runtime,
+            stall_timeout,
+            receiver_unreachable: AtomicBool::new(false),
         }
-        event = match tx.try_send(event) {
-            Ok(()) => return Ok(()),
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                context.cancel();
-                return Err(OpenAiError::backend("stream receiver dropped"));
+    }
+
+    /// Mark the receiver unreachable and free the request's execution lane.
+    /// Called once nothing further sent on this channel could possibly reach
+    /// the client: the receiver dropped, or it stayed full past
+    /// `stall_timeout`.
+    fn mark_receiver_unreachable(&self, context: &OpenAiRequestContext) {
+        self.receiver_unreachable.store(true, Ordering::Release);
+        context.cancel();
+    }
+
+    /// Send one in-flight event (from the `on_text_chunk` callback). Checks
+    /// cancellation first so an already-cancelled request returns
+    /// immediately and deterministically, matching the pre-existing
+    /// early-return semantics.
+    fn send(
+        &self,
+        event: OpenAiResult<GenerationStreamEvent>,
+        context: &OpenAiRequestContext,
+    ) -> Result<(), OpenAiError> {
+        if self.receiver_unreachable.load(Ordering::Acquire) {
+            return Err(OpenAiError::backend("stream receiver unreachable"));
+        }
+        let cancellation = context.cancellation_token();
+        // `tokio::time::sleep` needs an entered runtime the instant it is
+        // called, not just when polled, so it must be constructed inside the
+        // `block_on`-driven future rather than before it.
+        self.runtime.block_on(async {
+            let send = self.tx.send(event);
+            let sleep = tokio::time::sleep(self.stall_timeout);
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => Err(request_cancelled_error()),
+                result = send => match result {
+                    Ok(()) => Ok(()),
+                    Err(_) => {
+                        self.mark_receiver_unreachable(context);
+                        Err(OpenAiError::backend("stream receiver dropped"))
+                    }
+                },
+                () = sleep => {
+                    self.mark_receiver_unreachable(context);
+                    Err(OpenAiError::backend(
+                        "stream receiver stalled without draining",
+                    ))
+                }
             }
-            Err(mpsc::error::TrySendError::Full(rejected)) => rejected,
-        };
-        if stalled_since.elapsed() >= stall_timeout {
-            context.cancel();
-            return Err(OpenAiError::backend(
-                "stream receiver stalled past the admission timeout",
-            ));
+        })
+    }
+
+    /// Send one terminal frame -- everything emitted after generation
+    /// finishes: the cancellation error, a parser-finish error, the backend
+    /// error, usage, and `Done`.
+    ///
+    /// Deliberately does **not** consult cancellation. These are exactly the
+    /// frames the frontend lifecycle needs when the request *was* cancelled:
+    /// on `main`, `blocking_send` delivered them unconditionally. Skipping
+    /// them for a cancelled-but-still-live receiver would flip
+    /// `stream_lifecycle`'s terminal classification -- an `Err` frame drives
+    /// `lifecycle.failed(error)`, which marks `backend_error` and yields
+    /// `StreamDropOutcome::BackendError`/`StreamTerminal`; without it,
+    /// `drop_outcome()` falls through to `StreamDropOutcome::Cancelled`
+    /// instead.
+    ///
+    /// It does still refuse to wait on a receiver already proven
+    /// unreachable: the in-flight send that got us here may already have
+    /// waited out `stall_timeout` once, and waiting again would double the
+    /// execution lane's hold to `2 * stall_timeout`.
+    fn send_terminal(&self, event: OpenAiResult<GenerationStreamEvent>) -> Result<(), OpenAiError> {
+        if self.receiver_unreachable.load(Ordering::Acquire) {
+            return Err(OpenAiError::backend("stream receiver unreachable"));
         }
-        thread::sleep(STREAM_SEND_RETRY_INTERVAL);
+        // See the matching comment in `send`: the sleep future must be
+        // constructed inside the entered runtime `block_on` provides.
+        self.runtime.block_on(async {
+            let send = self.tx.send(event);
+            let sleep = tokio::time::sleep(self.stall_timeout);
+            tokio::select! {
+                result = send => match result {
+                    Ok(()) => Ok(()),
+                    Err(_) => {
+                        self.receiver_unreachable.store(true, Ordering::Release);
+                        Err(OpenAiError::backend("stream receiver dropped"))
+                    }
+                },
+                () = sleep => {
+                    self.receiver_unreachable.store(true, Ordering::Release);
+                    Err(OpenAiError::backend(
+                        "stream receiver stalled without draining",
+                    ))
+                }
+            }
+        })
     }
 }
 
@@ -876,6 +955,11 @@ impl StageOpenAiBackend {
         let chat_parse_metadata = prompt.chat_parse_metadata.clone();
         let (tx, rx) = mpsc::channel(16);
         let hook_runtime = Some(tokio::runtime::Handle::current());
+        let sender = StreamEventSender::new(
+            tx,
+            tokio::runtime::Handle::current(),
+            STREAM_SEND_STALL_TIMEOUT,
+        );
         let mut chat_stream_parser = if let (true, Some(request), Some(metadata)) =
             (parse_chat_output, hook_request.clone(), chat_parse_metadata)
         {
@@ -911,13 +995,13 @@ impl StageOpenAiBackend {
                         vec![GenerationStreamEvent::Delta(chunk.to_string())]
                     };
                     for event in events {
-                        send_generation_event(&tx, Ok(event), &context)?;
+                        sender.send(Ok(event), &context)?;
                     }
                     Ok(())
                 },
             );
             if context.is_cancelled() {
-                let _ = send_generation_event(&tx, Err(request_cancelled_error()), &context);
+                let _ = sender.send_terminal(Err(request_cancelled_error()));
                 return;
             }
             match result {
@@ -926,14 +1010,14 @@ impl StageOpenAiBackend {
                         match parser.finish(&output.text) {
                             Ok(events) => {
                                 for event in events {
-                                    if send_generation_event(&tx, Ok(event), &context).is_err() {
+                                    if sender.send_terminal(Ok(event)).is_err() {
                                         return;
                                     }
                                 }
                                 parser.finish_reason(output.finish_reason)
                             }
                             Err(error) => {
-                                let _ = send_generation_event(&tx, Err(error), &context);
+                                let _ = sender.send_terminal(Err(error));
                                 return;
                             }
                         }
@@ -941,23 +1025,16 @@ impl StageOpenAiBackend {
                         output.finish_reason
                     };
                     if should_emit_stream_usage(include_usage, &context)
-                        && send_generation_event(
-                            &tx,
-                            Ok(GenerationStreamEvent::Usage(output.usage())),
-                            &context,
-                        )
-                        .is_err()
+                        && sender
+                            .send_terminal(Ok(GenerationStreamEvent::Usage(output.usage())))
+                            .is_err()
                     {
                         return;
                     }
-                    let _ = send_generation_event(
-                        &tx,
-                        Ok(GenerationStreamEvent::Done(finish_reason)),
-                        &context,
-                    );
+                    let _ = sender.send_terminal(Ok(GenerationStreamEvent::Done(finish_reason)));
                 }
                 Err(error) => {
-                    let _ = send_generation_event(&tx, Err(error), &context);
+                    let _ = sender.send_terminal(Err(error));
                 }
             }
         });
