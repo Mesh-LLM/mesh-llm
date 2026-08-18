@@ -248,9 +248,14 @@ fn truncate_presentation_message(message: String, limit: usize) -> String {
     if message.chars().count() <= limit {
         return message;
     }
-    let keep = limit.saturating_sub(ELLIPSIS.len());
+    // The ellipsis marker itself must fit inside `limit`; below that, it is
+    // truncated too so the returned string never exceeds the documented
+    // character budget.
+    let ellipsis_len = ELLIPSIS.chars().count().min(limit);
+    let keep = limit - ellipsis_len;
     let truncated: String = message.chars().take(keep).collect();
-    format!("{truncated}{ELLIPSIS}")
+    let ellipsis: String = ELLIPSIS.chars().take(ellipsis_len).collect();
+    format!("{truncated}{ellipsis}")
 }
 
 fn append_status(mut message: String, status_code: Option<u16>) -> String {
@@ -470,13 +475,24 @@ mod tests {
         let envelope = completed_envelope();
         let summary = envelope.presentation_local_summary_with_limit(1);
 
-        assert!(summary.starts_with("..."));
+        let message_portion = summary.split(" request_id=").next().unwrap();
+        assert_eq!(message_portion, ".");
         assert!(summary.contains("request_id="));
         assert!(summary.contains("event_id="));
         assert!(summary.contains("channel=requests"));
         assert!(summary.contains("sequence=7"));
         assert!(!summary.contains("request completed"));
         assert!(!summary.contains(" route="));
+    }
+
+    #[test]
+    fn local_summary_at_limit_zero_has_no_message_portion() {
+        let envelope = completed_envelope();
+        let summary = envelope.presentation_local_summary_with_limit(0);
+
+        let message_portion = summary.split(" request_id=").next().unwrap();
+        assert_eq!(message_portion, "");
+        assert!(summary.contains("request_id="));
     }
 
     #[test]

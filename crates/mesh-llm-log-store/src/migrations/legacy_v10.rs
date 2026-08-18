@@ -149,13 +149,17 @@ SELECT
     END,
     action,
     json_patch(
-        CASE WHEN json_valid(detail_json) THEN detail_json ELSE '{}' END,
-        json_object(
-            'outcome', result,
-            'source', source,
-            'reason_code', reason,
-            'operation_id', operation_id
-        )
+        json_patch(
+            json_patch(
+                json_patch(
+                    CASE WHEN json_valid(detail_json) THEN detail_json ELSE '{}' END,
+                    CASE WHEN result IS NOT NULL THEN json_object('outcome', result) ELSE '{}' END
+                ),
+                CASE WHEN source IS NOT NULL THEN json_object('source', source) ELSE '{}' END
+            ),
+            CASE WHEN reason IS NOT NULL THEN json_object('reason_code', reason) ELSE '{}' END
+        ),
+        CASE WHEN operation_id IS NOT NULL THEN json_object('operation_id', operation_id) ELSE '{}' END
     )
 FROM legacy_v10_audit_entries;
 
@@ -264,6 +268,21 @@ mod tests {
         assert_eq!(explicit_detail["source"], "mesh");
         assert_eq!(explicit_detail["reason_code"], "model_load_failed");
         assert_eq!(explicit_detail["operation_id"], "op-42");
+        let partial_null_detail: String = connection
+            .query_row(
+                "SELECT detail_json FROM audit_entries WHERE entry_id = 'legacy-audit-partial-null'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated partial-null audit detail");
+        let partial_null_detail: serde_json::Value = serde_json::from_str(&partial_null_detail)
+            .expect("migrated partial-null detail is valid JSON");
+        // `reason` and `operation_id` are NULL on the legacy row; the merge
+        // must not clobber the pre-existing detail_json keys with nulls.
+        assert_eq!(partial_null_detail["outcome"], "succeeded");
+        assert_eq!(partial_null_detail["source"], "mesh");
+        assert_eq!(partial_null_detail["reason_code"], "pre-existing-reason");
+        assert_eq!(partial_null_detail["operation_id"], "pre-existing-op");
         let obsolete_tables: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_v10_%'",
@@ -333,6 +352,12 @@ mod tests {
         'legacy-audit-explicit', '2026-08-03T03:50:28Z', 'runtime', 'model_start',
         'mesh', 'model_load_failed', 'failed', 'op-42',
         '{"custom":"kept"}'
+    );
+    INSERT INTO audit_entries (entry_id, occurred_at, actor, action, source, reason, result, operation_id, detail_json)
+    VALUES (
+        'legacy-audit-partial-null', '2026-08-03T03:50:29Z', 'runtime', 'model_start',
+        'mesh', NULL, 'succeeded', NULL,
+        '{"reason_code":"pre-existing-reason","operation_id":"pre-existing-op"}'
     );
     PRAGMA user_version = 10;
     "#;
