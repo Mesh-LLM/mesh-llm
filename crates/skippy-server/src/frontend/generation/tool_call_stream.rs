@@ -13,12 +13,17 @@ use serde_json::json;
 
 /// Streaming state for a single tool call, keyed by its wire `index`.
 ///
-/// The `id` is deliberately captured on the first delta and never re-read.
-/// `ensure_tool_call_ids` (`parsing.rs:311`) mints a fresh UUID on every parse
-/// for any call the model did not id itself, so the id attached to a given index
-/// differs between consecutive partial parses. Emitting it once per index is
-/// what keeps a single stable id on the wire.
+/// The `id` is not stored here at all: `deltas` emits it once, on the parse
+/// where an index is not yet present in `streamed`, reading it directly off
+/// that call. Once the index is pushed here, later parses take the
+/// argument-delta branch below and never touch `id` again — which is what
+/// keeps a single stable id on the wire even though `ensure_tool_call_ids`
+/// mints a fresh UUID on every parse for any call the model did not id
+/// itself. `emitted_name` and `emitted_arguments` are what a client has
+/// actually received for this index, so `streamed_matches` can confirm the
+/// terminal parse reconstructs both.
 struct StreamedToolCall {
+    emitted_name: String,
     emitted_arguments: String,
 }
 
@@ -71,7 +76,8 @@ impl ToolCallStreamState {
             .iter()
             .zip(&self.streamed)
             .all(|(call, streamed)| {
-                tool_call_arguments(call).unwrap_or_default() == streamed.emitted_arguments
+                tool_call_name(call) == Some(streamed.emitted_name.as_str())
+                    && tool_call_arguments(call).unwrap_or_default() == streamed.emitted_arguments
             })
     }
 
@@ -113,7 +119,10 @@ impl ToolCallStreamState {
                 "type": "function",
                 "function": Value::Object(function),
             }));
-            self.streamed.push(StreamedToolCall { emitted_arguments });
+            self.streamed.push(StreamedToolCall {
+                emitted_name: name.to_string(),
+                emitted_arguments,
+            });
         }
         (!deltas.is_empty()).then_some(Value::Array(deltas))
     }
@@ -147,6 +156,7 @@ fn minted_tool_call_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::generation::incremental_text::{RecordedFixture, recorded_fixture};
 
     /// One partial parse snapshot: `(name, arguments)` for a single call.
     fn call(name: &str, arguments: &str) -> Value {
@@ -178,40 +188,10 @@ mod tests {
     /// parsed `tool_calls` array changed, plus the terminal parse.
     const RECORDED: &str = include_str!("../../../tests/fixtures/qwen35_partial_tool_calls.txt");
 
-    struct Recorded {
-        snapshots: Vec<Vec<Value>>,
-        final_call: Vec<Value>,
-    }
-
-    fn recorded(fixture: &str) -> Recorded {
-        let mut snapshots = Vec::new();
-        let mut final_call = None;
-        for line in RECORDED.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let mut parts = line.splitn(3, ' ');
-            let (name, marker, payload) = (
-                parts.next().expect("fixture name"),
-                parts.next().expect("prefix marker"),
-                parts.next().expect("tool_calls json"),
-            );
-            if name != fixture {
-                continue;
-            }
-            let calls = serde_json::from_str::<Vec<Value>>(payload).expect("fixture json");
-            if marker == "final" {
-                final_call = Some(calls);
-            } else {
-                snapshots.push(calls);
-            }
-        }
-        assert!(!snapshots.is_empty(), "no snapshots for fixture {fixture}");
-        Recorded {
-            snapshots,
-            final_call: final_call.expect("fixture final parse"),
-        }
+    /// Fetch the recorded snapshots for `fixture` via the reader shared with
+    /// `chat_stream_deltas` (`incremental_text::recorded_fixture`).
+    fn recorded(fixture: &str) -> RecordedFixture {
+        recorded_fixture(RECORDED, fixture)
     }
 
     fn final_arguments(calls: &[Value], index: usize) -> String {
@@ -431,6 +411,29 @@ mod tests {
         assert!(
             !state.completed(),
             "finish_reason must not claim tool_calls for a call the client cannot reconstruct"
+        );
+    }
+
+    #[test]
+    fn a_call_whose_name_diverged_from_the_header_is_not_reported_as_complete() {
+        // The header already went out with `read_file`; if the terminal parse
+        // revised the name, the client still believes it received `read_file`
+        // and a matching `finish_reason: "tool_calls"` would tell it to execute
+        // a call under the wrong name.
+        let mut state = ToolCallStreamState::default();
+        state
+            .record(&[call("read_file", "{\"path\":\"a\"}")], true)
+            .expect("header");
+
+        assert!(
+            state
+                .record(&[call("list_dir", "{\"path\":\"a\"}")], false)
+                .is_none(),
+            "arguments alone matching must not be enough to repair a renamed call"
+        );
+        assert!(
+            !state.completed(),
+            "finish_reason must not claim tool_calls when the emitted name diverged"
         );
     }
 

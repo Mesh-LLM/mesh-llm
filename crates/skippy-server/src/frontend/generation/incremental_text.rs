@@ -23,6 +23,51 @@ pub(in crate::frontend) fn suffix_delta(
     Some(delta.to_string())
 }
 
+/// One named fixture's partial-parse snapshots and terminal parse, read from a
+/// `RECORDED` fixture file (see `tests/fixtures/README.md`).
+///
+/// Kept next to `suffix_delta` so `tool_call_stream` and `chat_stream_deltas`
+/// read the fixture's line format exactly once; a format change (comment/
+/// blank-line skipping, the `splitn` layout, the `final` marker) only needs
+/// updating here.
+#[cfg(test)]
+pub(in crate::frontend) struct RecordedFixture {
+    pub(in crate::frontend) snapshots: Vec<Vec<serde_json::Value>>,
+    pub(in crate::frontend) final_call: Vec<serde_json::Value>,
+}
+
+#[cfg(test)]
+pub(in crate::frontend) fn recorded_fixture(recorded: &str, fixture: &str) -> RecordedFixture {
+    let mut snapshots = Vec::new();
+    let mut final_call = None;
+    for line in recorded.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.splitn(3, ' ');
+        let (name, marker, payload) = (
+            parts.next().expect("fixture name"),
+            parts.next().expect("prefix marker"),
+            parts.next().expect("tool_calls json"),
+        );
+        if name != fixture {
+            continue;
+        }
+        let calls = serde_json::from_str::<Vec<serde_json::Value>>(payload).expect("fixture json");
+        if marker == "final" {
+            final_call = Some(calls);
+        } else {
+            snapshots.push(calls);
+        }
+    }
+    assert!(!snapshots.is_empty(), "no snapshots for fixture {fixture}");
+    RecordedFixture {
+        snapshots,
+        final_call: final_call.expect("fixture final parse"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,30 +11,11 @@ use super::*;
 const RECORDED: &str = include_str!("../../../tests/fixtures/qwen35_partial_tool_calls.txt");
 
 fn recorded_single_call() -> (Vec<Value>, Value) {
-    let mut snapshots = Vec::new();
-    let mut final_call = None;
-    for line in RECORDED.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut parts = line.splitn(3, ' ');
-        let (name, marker, payload) = (
-            parts.next().expect("fixture name"),
-            parts.next().expect("marker"),
-            parts.next().expect("payload"),
-        );
-        if name != "single_call" {
-            continue;
-        }
-        let calls = serde_json::from_str::<Value>(payload).expect("fixture json");
-        if marker == "final" {
-            final_call = Some(calls);
-        } else {
-            snapshots.push(calls);
-        }
-    }
-    (snapshots, final_call.expect("fixture final parse"))
+    let fixture = recorded_fixture(RECORDED, "single_call");
+    (
+        fixture.snapshots.into_iter().map(Value::Array).collect(),
+        Value::Array(fixture.final_call),
+    )
 }
 
 fn parsed(tool_calls: Option<Value>, content: Option<&str>) -> ParsedChatMessage {

@@ -37,6 +37,8 @@ c++ -std=c++17 -O1 -I common -I include -I ggml/include -I vendor -I src \
 
 The generator emits the fixture file's exact line format, so a regenerated file
 should differ only where parser behaviour changed. A `THROW` marker in place of a
-`tool_calls` array records a prefix the parser rejected; the tests treat those
-lines as unparseable input, so a new one appearing is a behaviour change worth
-reading before committing.
+`tool_calls` array records a prefix the parser rejected. The readers in
+`tool_call_stream.rs` and `chat_stream_deltas.rs` do not special-case it: they
+deserialize the payload as JSON directly and fail on a `THROW` line rather than
+skipping it, so a new one appearing turns into a failing test — a behaviour
+change worth reading before committing.

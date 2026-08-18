@@ -19,6 +19,10 @@ using json = nlohmann::ordered_json;
 
 static std::string read_file(const std::string & path) {
     std::ifstream f(path);
+    if (!f) {
+        fprintf(stderr, "cannot open %s\n", path.c_str());
+        exit(1);
+    }
     return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
