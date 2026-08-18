@@ -5,10 +5,10 @@ use super::status::mesh_guardrail_mode_to_openai;
 use super::{
     AutoRuntimeNodeSetup, BootstrapProxyStopTx, DashboardContextUsage, ManagedModelController,
     ModelTargetReconciliationPolicy, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
-    PreparedRuntimeStartup, ProviderSupervisorContext, RunAutoAdditionalModelsContext,
-    RunAutoConsoleStateContext,
-    RunAutoRuntimeLifecycleContext, RunAutoServingSurface, RunAutoServingSurfaceContext,
-    RuntimeCapacityLedger, RuntimeDashboardSnapshotProvider, RuntimeEvent, RuntimeInstanceRegistry,
+    PreparedRuntimeStartup, ProviderSupervisorContext, ProviderSupervisorHandle,
+    RunAutoAdditionalModelsContext, RunAutoConsoleStateContext, RunAutoRuntimeLifecycleContext,
+    RunAutoServingSurface, RunAutoServingSurfaceContext, RuntimeCapacityLedger,
+    RuntimeDashboardSnapshotProvider, RuntimeEvent, RuntimeInstanceRegistry,
     RuntimeModelHandleEntry, RuntimeOperationalEvent, RuntimeOptions,
     RuntimeResourcePlanningProfile, RuntimeSurface, SkippyNativeLogForwardingGuard,
     StartupLocalModelTask, StartupMeshCreationState, StartupModelPlan, StartupModelSpec,
@@ -1505,16 +1505,13 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     .await?;
 
     let primary_model_name = requested_model_names.first().cloned().unwrap_or_default();
-    let provider_supervisor = if is_client {
-        None
-    } else {
-        start_apple_provider_supervisor(ProviderSupervisorContext {
-            target_tx: target_tx.clone(),
-            dashboard_processes: runtime_state.dashboard_processes.clone(),
-            console_state: console_state.clone(),
-        })
-        .await
-    };
+    let provider_supervisor = start_run_auto_provider_supervisor(
+        is_client,
+        target_tx.clone(),
+        runtime_state.dashboard_processes.clone(),
+        console_state.clone(),
+    )
+    .await;
     let startup_ready_reporter = StartupReadyReporter::new_with_failure_policy(
         &requested_model_names,
         primary_model_name.clone(),
@@ -1579,6 +1576,23 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         anyhow::bail!("{summary}");
     }
     Ok(())
+}
+
+async fn start_run_auto_provider_supervisor(
+    is_client: bool,
+    target_tx: Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
+    dashboard_processes: Arc<tokio::sync::Mutex<Vec<api::RuntimeProcessPayload>>>,
+    console_state: Option<api::MeshApi>,
+) -> Option<ProviderSupervisorHandle> {
+    if is_client {
+        return None;
+    }
+    start_apple_provider_supervisor(ProviderSupervisorContext {
+        target_tx,
+        dashboard_processes,
+        console_state,
+    })
+    .await
 }
 
 #[cfg(test)]
