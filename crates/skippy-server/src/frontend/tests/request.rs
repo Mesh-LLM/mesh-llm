@@ -327,11 +327,11 @@ fn canonical_reasoning_overrides_chat_template_thinking() {
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, Some(false));
-    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
 }
 
 #[test]
-fn chat_template_options_default_to_hidden_reasoning_parser() {
+fn chat_template_options_default_to_auto_reasoning_parser() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}]
@@ -342,7 +342,8 @@ fn chat_template_options_default_to_hidden_reasoning_parser() {
         .expect("template options");
 
     assert_eq!(options.enable_thinking, None);
-    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
+    assert!(template_exposes_reasoning(&options));
 }
 
 #[test]
@@ -445,7 +446,7 @@ fn reasoning_effort_overrides_chat_template_thinking() {
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, Some(false));
-    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
 }
 
 #[test]
@@ -460,7 +461,7 @@ fn top_level_reasoning_effort_overrides_chat_template_thinking() {
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, Some(false));
-    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
 }
 
 #[test]
@@ -513,7 +514,7 @@ fn provider_enable_thinking_overrides_chat_template_thinking() {
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, Some(true));
-    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
 }
 
 #[test]
@@ -528,7 +529,7 @@ fn chat_template_kwargs_enable_thinking_overrides_template() {
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, Some(false));
-    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
 }
 
 #[test]
