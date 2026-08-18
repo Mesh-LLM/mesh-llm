@@ -322,7 +322,7 @@ fn default_reasoning_budget_enabled(value: Option<EmbeddedReasoningBudget>) -> O
 }
 
 fn chat_reasoning_format(value: Option<EmbeddedReasoningFormat>) -> ChatReasoningFormat {
-    match value.unwrap_or(EmbeddedReasoningFormat::Hidden) {
+    match value.unwrap_or(EmbeddedReasoningFormat::Auto) {
         EmbeddedReasoningFormat::Auto => ChatReasoningFormat::Auto,
         EmbeddedReasoningFormat::None => ChatReasoningFormat::None,
         EmbeddedReasoningFormat::Deepseek => ChatReasoningFormat::Deepseek,
