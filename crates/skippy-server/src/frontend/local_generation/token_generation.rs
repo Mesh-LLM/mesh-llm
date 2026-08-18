@@ -1,3 +1,4 @@
+use super::native_mtp_decode::NativeMtpSpanProgress;
 use crate::frontend::NativeMtpDecodeOptions;
 use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpVerifier;
@@ -90,6 +91,9 @@ pub(super) struct DecodeState {
     pub(super) emit_token_debug: bool,
     pub(super) native_mtp_options: NativeMtpDecodeOptions,
     pub(super) native_mtp: NativeMtpVerifier,
+    /// Whether batched native-MTP spans may commit for this request. Token
+    /// equality is only a valid acceptance test under greedy sampling.
+    pub(super) native_mtp_span_admitted: bool,
     pub(super) post_prefill_hook_checked: bool,
     pub(super) last_mid_generation_hook_at: Option<usize>,
 }
@@ -1222,6 +1226,12 @@ impl StageOpenAiBackend {
             emit_token_debug: self.telemetry.is_debug_enabled(),
             native_mtp_options: NativeMtpDecodeOptions::from_config(request.speculative),
             native_mtp: NativeMtpVerifier::default(),
+            native_mtp_span_admitted: request.native_mtp_enabled
+                && !generation_hooks_active
+                && greedy_linear_proposal_admitted(
+                    request.sampling,
+                    request.chat_sampling_metadata,
+                ),
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
         })
@@ -1274,6 +1284,22 @@ impl StageOpenAiBackend {
                 LinearProposalProgress::Continue => continue,
                 LinearProposalProgress::Stop => break,
                 LinearProposalProgress::NotUsed => {}
+            }
+            // A batched MTP span commits multiple tokens from one forward. It
+            // shares the recurrent-checkpoint gate with linear proposals for
+            // the same reason: it can advance the session past the prompt
+            // boundary before that boundary has been published.
+            if linear_proposal_allowed(
+                recurrent_checkpoint_required,
+                first_post_decode_checkpoint_attempted,
+            ) {
+                match self
+                    .try_execute_native_mtp_span(request, session_id, &mut state, emit_token)?
+                {
+                    NativeMtpSpanProgress::Continue => continue,
+                    NativeMtpSpanProgress::Stop => break,
+                    NativeMtpSpanProgress::NotUsed => {}
+                }
             }
             let control = self.decode_one_token(request, session_id, &mut state, emit_token)?;
             if !first_post_decode_checkpoint_attempted && state.generated_token_ids.len() == 1 {
