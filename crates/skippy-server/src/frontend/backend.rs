@@ -94,6 +94,11 @@ struct StreamEventSender {
     tx: mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
     runtime: tokio::runtime::Handle,
     stall_timeout: Duration,
+    /// Request identifier carried for diagnostics so a stalled or dropped
+    /// consumer can be attributed to the exact request that held (and then
+    /// freed) an execution lane. `send_terminal` has no request context of
+    /// its own, so the id is captured once at construction.
+    request_id: String,
     /// Set once the receiver is gone or has stayed full past the stall
     /// timeout. Nothing further can reach the client, so later frames are
     /// dropped rather than waited on again.
@@ -105,11 +110,13 @@ impl StreamEventSender {
         tx: mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
         runtime: tokio::runtime::Handle,
         stall_timeout: Duration,
+        request_id: String,
     ) -> Self {
         Self {
             tx,
             runtime,
             stall_timeout,
+            request_id,
             receiver_unreachable: AtomicBool::new(false),
         }
     }
@@ -148,11 +155,19 @@ impl StreamEventSender {
                 result = send => match result {
                     Ok(()) => Ok(()),
                     Err(_) => {
+                        eprintln!(
+                            "skippy: stream receiver dropped for request {}; freeing the execution lane",
+                            self.request_id
+                        );
                         self.mark_receiver_unreachable(context);
                         Err(OpenAiError::backend("stream receiver dropped"))
                     }
                 },
                 () = sleep => {
+                    eprintln!(
+                        "skippy: stream receiver stalled without draining for request {} after {:?}; freeing the execution lane",
+                        self.request_id, self.stall_timeout
+                    );
                     self.mark_receiver_unreachable(context);
                     Err(OpenAiError::backend(
                         "stream receiver stalled without draining",
@@ -193,11 +208,19 @@ impl StreamEventSender {
                 result = send => match result {
                     Ok(()) => Ok(()),
                     Err(_) => {
+                        eprintln!(
+                            "skippy: stream receiver dropped for request {} while delivering a terminal frame",
+                            self.request_id
+                        );
                         self.receiver_unreachable.store(true, Ordering::Release);
                         Err(OpenAiError::backend("stream receiver dropped"))
                     }
                 },
                 () = sleep => {
+                    eprintln!(
+                        "skippy: stream receiver stalled without draining for request {} after {:?} while delivering a terminal frame",
+                        self.request_id, self.stall_timeout
+                    );
                     self.receiver_unreachable.store(true, Ordering::Release);
                     Err(OpenAiError::backend(
                         "stream receiver stalled without draining",
@@ -959,6 +982,7 @@ impl StageOpenAiBackend {
             tx,
             tokio::runtime::Handle::current(),
             STREAM_SEND_STALL_TIMEOUT,
+            ids.request_id_string(),
         );
         let mut chat_stream_parser = if let (true, Some(request), Some(metadata)) =
             (parse_chat_output, hook_request.clone(), chat_parse_metadata)

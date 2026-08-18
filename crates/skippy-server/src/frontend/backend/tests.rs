@@ -544,7 +544,12 @@ fn stalled_receiver_does_not_pin_the_generation_worker_forever() {
         .expect("channel has room for the first event");
     let context = OpenAiRequestContext::new();
     let rt = Runtime::new().expect("tokio runtime for stall test");
-    let sender = StreamEventSender::new(tx, rt.handle().clone(), STREAM_SEND_STALL_TIMEOUT);
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        STREAM_SEND_STALL_TIMEOUT,
+        "test-request".to_owned(),
+    );
 
     let sender_context = context.clone();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
@@ -585,7 +590,12 @@ fn stalled_receiver_self_cancels_after_the_stall_timeout_with_no_external_cancel
         .expect("channel has room for the first event");
     let context = OpenAiRequestContext::new();
     let rt = Runtime::new().expect("tokio runtime for stall test");
-    let sender = StreamEventSender::new(tx, rt.handle().clone(), Duration::from_millis(50));
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        Duration::from_millis(50),
+        "test-request".to_owned(),
+    );
 
     let result = sender.send(
         Ok(GenerationStreamEvent::Delta("second".to_owned())),
@@ -621,7 +631,12 @@ fn terminal_frames_are_delivered_after_the_request_is_cancelled() {
     let context = OpenAiRequestContext::new();
     context.cancel();
     let rt = Runtime::new().expect("tokio runtime for terminal-delivery test");
-    let sender = StreamEventSender::new(tx, rt.handle().clone(), STREAM_SEND_STALL_TIMEOUT);
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        STREAM_SEND_STALL_TIMEOUT,
+        "test-request".to_owned(),
+    );
 
     sender
         .send_terminal(Ok(GenerationStreamEvent::Done(FinishReason::Stop)))
@@ -657,7 +672,18 @@ fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
         .expect("channel has room for the first event");
     let context = OpenAiRequestContext::new();
     let rt = Runtime::new().expect("tokio runtime for double-wait test");
-    let sender = StreamEventSender::new(tx, rt.handle().clone(), Duration::from_millis(50));
+    // Inject a generous stall timeout so the short-circuit assertion has a wide
+    // margin on a loaded CI runner: a terminal send that (wrongly) waited out
+    // the stall again would take at least `stall_timeout`, while the correct
+    // short-circuit is one atomic load. Deriving the bound from the timeout
+    // instead of a fixed wall-clock number keeps the two coupled.
+    let stall_timeout = Duration::from_millis(500);
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        stall_timeout,
+        "test-request".to_owned(),
+    );
 
     let stalled = sender.send(
         Ok(GenerationStreamEvent::Delta("second".to_owned())),
@@ -676,9 +702,11 @@ fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
         terminal.is_err(),
         "a proven-unreachable receiver must not be handed a terminal frame either"
     );
+    // The short-circuit must complete in a small fraction of the injected
+    // stall timeout; a second wait would consume at least the whole timeout.
     assert!(
-        elapsed < Duration::from_millis(25),
-        "terminal send must short-circuit instead of waiting out the stall timeout again, took {elapsed:?}"
+        elapsed < stall_timeout / 5,
+        "terminal send must short-circuit instead of waiting out the stall timeout again, took {elapsed:?} (timeout {stall_timeout:?})"
     );
     drop(rx);
 }
