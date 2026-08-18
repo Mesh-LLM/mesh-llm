@@ -24,15 +24,15 @@ base64 = "0.22"
 blake3.workspace = true
 clap.workspace = true
 futures-util = "0.3"
-skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc2"  }
-skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.0-rc2" }
-model-artifact = { path = "../model-artifact", version = "0.76.0-rc2" }
-mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.76.0-rc2" }
-skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc2"  }
-skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc2"  }
-skippy-metrics = { path = "../skippy-metrics", version = "0.76.0-rc2"  }
-skippy-topology = { path = "../skippy-topology", version = "0.76.0-rc2" }
-openai-frontend = { path = "../openai-frontend", version = "0.76.0-rc2"  }
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc3"  }
+skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.0-rc3" }
+model-artifact = { path = "../model-artifact", version = "0.76.0-rc3" }
+mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.76.0-rc3" }
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc3"  }
+skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc3"  }
+skippy-metrics = { path = "../skippy-metrics", version = "0.76.0-rc3"  }
+skippy-topology = { path = "../skippy-topology", version = "0.76.0-rc3" }
+openai-frontend = { path = "../openai-frontend", version = "0.76.0-rc3"  }
 opentelemetry-proto = "0.31.0"
 serde.workspace = true
 serde_json.workspace = true

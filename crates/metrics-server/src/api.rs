@@ -3,7 +3,7 @@ use axum::{
     Json,
     body::Bytes,
     extract::{Path, State},
-    http::header,
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
 use opentelemetry_proto::tonic::collector::{
@@ -71,10 +71,49 @@ pub(crate) async fn artifacts(Path(run_id): Path<String>) -> Json<ArtifactsRespo
     })
 }
 
+/// OTLP/HTTP requires protobuf export bodies to be sent as
+/// `application/x-protobuf` (OTLP spec, "OTLP/HTTP" section).
+const OTLP_PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
+
+/// Reject OTLP/HTTP export requests that do not declare the protobuf content
+/// type.
+///
+/// The listener binds loopback, but loopback is not an authentication boundary
+/// for browsers: a hostile web page can issue a "simple" cross-origin `POST`
+/// with a CORS-safelisted `Content-Type` (`text/plain`, `application/
+/// x-www-form-urlencoded`, `multipart/form-data`) and no preflight, and the
+/// browser will still deliver the body even though script cannot read the
+/// response. Because these handlers accept a raw `Bytes` body and protobuf-
+/// decode it directly, such a drive-by request could inject or poison spans,
+/// metrics, and runs in the local store.
+///
+/// Requiring `application/x-protobuf` — which every conforming OTLP/HTTP
+/// exporter already sends — takes the request out of the CORS-safelisted set,
+/// so a cross-origin browser request must first pass a preflight the attacker
+/// page cannot satisfy. Legitimate exporters are unaffected.
+fn require_otlp_protobuf(headers: &HeaderMap) -> Result<(), AppError> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    // The header may carry parameters, e.g. `application/x-protobuf; charset=…`.
+    let media_type = content_type.split(';').next().unwrap_or_default().trim();
+    if media_type.eq_ignore_ascii_case(OTLP_PROTOBUF_CONTENT_TYPE) {
+        Ok(())
+    } else {
+        Err(AppError::status(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            format!("OTLP/HTTP requires Content-Type: {OTLP_PROTOBUF_CONTENT_TYPE}"),
+        ))
+    }
+}
+
 pub(crate) async fn otlp_http_traces(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
+    require_otlp_protobuf(&headers)?;
     let request = ExportTraceServiceRequest::decode(body.as_ref())
         .context("decode OTLP/HTTP trace export request")?;
     state.store.ingest_traces(request)?;
@@ -85,8 +124,10 @@ pub(crate) async fn otlp_http_traces(
 
 pub(crate) async fn otlp_http_metrics(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
+    require_otlp_protobuf(&headers)?;
     let request = ExportMetricsServiceRequest::decode(body.as_ref())
         .context("decode OTLP/HTTP metric export request")?;
     state.store.ingest_metrics(request)?;
@@ -97,8 +138,10 @@ pub(crate) async fn otlp_http_metrics(
 
 pub(crate) async fn otlp_http_logs(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
+    require_otlp_protobuf(&headers)?;
     let request = ExportLogsServiceRequest::decode(body.as_ref())
         .context("decode OTLP/HTTP log export request")?;
     state.store.ingest_logs(request)?;

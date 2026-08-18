@@ -1,7 +1,7 @@
 {
   "name": "mesh-llm-ui",
   "private": true,
-  "version": "0.76.0-rc2",
+  "version": "0.76.0-rc3",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

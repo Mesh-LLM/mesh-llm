@@ -11,7 +11,7 @@ Add to your app's `Package.swift` using a tagged release:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.76.0-rc2"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.76.0-rc3"),
 ],
 targets: [
     .target(

@@ -10,8 +10,8 @@ readme = "README.md"
 
 [dependencies]
 anyhow.workspace = true
-model-ref = { path = "../model-ref", version = "0.76.0-rc2"  }
-model-artifact = { path = "../model-artifact", version = "0.76.0-rc2"  }
+model-ref = { path = "../model-ref", version = "0.76.0-rc3"  }
+model-artifact = { path = "../model-artifact", version = "0.76.0-rc3"  }
 serde.workspace = true
 serde_json.workspace = true
 

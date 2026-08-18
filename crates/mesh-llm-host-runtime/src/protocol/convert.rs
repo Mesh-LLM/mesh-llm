@@ -715,6 +715,36 @@ pub(crate) fn build_gossip_frame(
     }
 }
 
+/// Upper bound on the number of model-name entries accepted from a single
+/// remote peer announcement.
+///
+/// Peer gossip carries `serving_models` / `hosted_models` (and the other
+/// model-name lists) straight through `/api/status` into the console, where
+/// they are sorted and rendered one DOM element per entry. The wire frame is
+/// only bounded by the generic 8 MiB control-frame ceiling, which still allows
+/// hundreds of thousands of short names. Capping the list length at the trust
+/// boundary stops a hostile peer from freezing another operator's dashboard
+/// with an oversized (or rapidly re-advertised) model list (#860). A real node
+/// serves at most a handful of models, so this ceiling is far above any
+/// legitimate value.
+const MAX_REMOTE_MODEL_LIST_LEN: usize = 256;
+
+/// Upper bound on the byte length of a single remotely-advertised model name.
+/// Legitimate model references (including HuggingFace repo + revision) are well
+/// under this; anything larger is dropped rather than rendered.
+const MAX_REMOTE_MODEL_NAME_BYTES: usize = 512;
+
+/// Sanitize a remotely-supplied list of model names: drop entries that exceed
+/// the per-name byte cap and keep at most `MAX_REMOTE_MODEL_LIST_LEN` of them.
+fn cap_remote_model_names(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| name.len() <= MAX_REMOTE_MODEL_NAME_BYTES)
+        .take(MAX_REMOTE_MODEL_LIST_LEN)
+        .cloned()
+        .collect()
+}
+
 pub(crate) fn proto_ann_to_local(
     pa: &crate::proto::node::PeerAnnouncement,
 ) -> Option<(EndpointAddr, PeerAnnouncement)> {
@@ -749,7 +779,7 @@ pub(crate) fn proto_ann_to_local(
     let hosted_models = pa
         .hosted_models_known
         .unwrap_or(!pa.hosted_models.is_empty())
-        .then(|| pa.hosted_models.clone());
+        .then(|| cap_remote_model_names(&pa.hosted_models));
     let hardware = pa.hardware.as_ref();
     let legacy_gpu_fields = proto_gpu_info_to_legacy_fields(
         hardware
@@ -760,14 +790,14 @@ pub(crate) fn proto_ann_to_local(
         addr: addr.clone(),
         role,
         first_joined_mesh_ts: pa.first_joined_mesh_ts,
-        models: pa.catalog_models.clone(),
+        models: cap_remote_model_names(&pa.catalog_models),
         vram_bytes: pa.vram_bytes,
         model_source: pa.model_source.clone(),
-        serving_models: pa.serving_models.clone(),
+        serving_models: cap_remote_model_names(&pa.serving_models),
         hosted_models,
         available_models: Vec::new(),
-        requested_models: pa.requested_models.clone(),
-        explicit_model_interests: pa.explicit_model_interests.clone(),
+        requested_models: cap_remote_model_names(&pa.requested_models),
+        explicit_model_interests: cap_remote_model_names(&pa.explicit_model_interests),
         version: pa.version.clone(),
         model_demand,
         mesh_id: pa.mesh_id.clone(),
@@ -1176,5 +1206,50 @@ mod tests {
             peer_release_attestation_status(ann.release_attestation.as_ref()),
             crate::PeerReleaseAttestationStatus::Unsigned
         );
+    }
+
+    #[test]
+    fn proto_ann_to_local_caps_oversized_remote_model_lists() {
+        let flood: Vec<String> = (0..10_000).map(|i| format!("model-{i}")).collect();
+        let proto = crate::proto::node::PeerAnnouncement {
+            endpoint_id: vec![1; 32],
+            role: crate::proto::node::NodeRole::Worker as i32,
+            serving_models: flood.clone(),
+            catalog_models: flood.clone(),
+            requested_models: flood.clone(),
+            explicit_model_interests: flood.clone(),
+            hosted_models: flood.clone(),
+            hosted_models_known: Some(true),
+            ..Default::default()
+        };
+
+        let (_addr, ann) = proto_ann_to_local(&proto).expect("announcement should decode");
+
+        assert_eq!(ann.serving_models.len(), MAX_REMOTE_MODEL_LIST_LEN);
+        assert_eq!(ann.models.len(), MAX_REMOTE_MODEL_LIST_LEN);
+        assert_eq!(ann.requested_models.len(), MAX_REMOTE_MODEL_LIST_LEN);
+        assert_eq!(
+            ann.explicit_model_interests.len(),
+            MAX_REMOTE_MODEL_LIST_LEN
+        );
+        assert_eq!(
+            ann.hosted_models.as_ref().map(Vec::len),
+            Some(MAX_REMOTE_MODEL_LIST_LEN)
+        );
+    }
+
+    #[test]
+    fn proto_ann_to_local_drops_oversized_remote_model_names() {
+        let huge_name = "x".repeat(MAX_REMOTE_MODEL_NAME_BYTES + 1);
+        let proto = crate::proto::node::PeerAnnouncement {
+            endpoint_id: vec![1; 32],
+            role: crate::proto::node::NodeRole::Worker as i32,
+            serving_models: vec!["ok-model".to_string(), huge_name],
+            ..Default::default()
+        };
+
+        let (_addr, ann) = proto_ann_to_local(&proto).expect("announcement should decode");
+
+        assert_eq!(ann.serving_models, vec!["ok-model".to_string()]);
     }
 }
