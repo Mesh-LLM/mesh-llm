@@ -48,7 +48,9 @@ pub struct UpdateCommandOptions<'a> {
 
 enum NoticeGuidance {
     RunUpdateCommand,
+    #[cfg(not(windows))]
     ReinstallScript,
+    #[cfg(windows)]
     DownloadReleases,
 }
 
@@ -64,10 +66,12 @@ fn notice_message(current_version: &str, latest_version: &str, guidance: NoticeG
         NoticeGuidance::RunUpdateCommand => format!(
             "✨ New version: v{current_version} -> v{latest_version}. Run 'mesh-llm update'."
         ),
+        #[cfg(not(windows))]
         NoticeGuidance::ReinstallScript => format!(
             "✨ New version: v{current_version} -> v{latest_version}. Reinstall with: curl -fsSL {} | bash",
             release_fetch::INSTALL_SCRIPT_URL
         ),
+        #[cfg(windows)]
         NoticeGuidance::DownloadReleases => format!(
             "✨ New version: v{current_version} -> v{latest_version}. Download from {RELEASES_URL}"
         ),
@@ -84,9 +88,7 @@ pub async fn check_for_update(current_version: &str) -> Option<UpdateNotice> {
     if !platform_has_release_assets() {
         return None;
     }
-    let Some(release) = latest_release_info().await else {
-        return None;
-    };
+    let release = latest_release_info().await?;
     if !version_newer(&release.version, current_version) {
         return None;
     }
@@ -462,6 +464,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn test_notice_message_reinstall_script() {
         let install_script_url = release_fetch::INSTALL_SCRIPT_URL;
@@ -473,6 +476,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn test_notice_message_download_releases() {
         assert_eq!(
