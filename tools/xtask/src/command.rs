@@ -3,7 +3,10 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) type DynError = Box<dyn Error>;
 pub(crate) type DynResult<T> = Result<T, DynError>;
@@ -76,7 +79,11 @@ pub(crate) fn unique_temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    std::env::temp_dir().join(format!(".tmp-{prefix}-{}-{nanos}", std::process::id()))
+    let sequence = TEMP_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        ".tmp-{prefix}-{}-{sequence}-{nanos}",
+        std::process::id()
+    ))
 }
 
 pub(crate) fn ensure_eq(expected: &str, actual: &str, context: &str) -> DynResult<()> {

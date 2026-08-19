@@ -482,9 +482,11 @@ ci-crate-lists:
 publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
 
-# Fail on new println!/eprintln!/write! outside xtask tests (see the baseline file).
+# Ratchet on println!/eprintln!/print!/eprint! in Rust files under crates/
+# (including crate test targets; build.rs is skipped): every occurrence must be
+# explicitly listed in tools/xtask/data/console_print_allowlist.json.
 no-console-print:
-    just with-lld cargo run -p xtask -- repo-consistency no-console-print
+    cargo run -p xtask -- repo-consistency no-console-print
 
 # Shellcheck the explicitly supplied changed shell scripts.
 ci-shellcheck *scripts:

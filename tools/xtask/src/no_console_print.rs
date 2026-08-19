@@ -22,23 +22,40 @@ pub(crate) struct ConsolePrintHit {
     pub macro_name: &'static str,
 }
 
+/// One ratchet-approved console print occurrence. The ratchet approves exact
+/// occurrences rather than per-file counts so that retiring one legacy print
+/// can never free up allowance for a new one elsewhere in the file.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct AllowedOccurrence {
+    line: usize,
+    macro_name: String,
+}
+
 /// Finds every forbidden console print macro occurrence in a source file.
-/// Comment lines are skipped; string literal mentions are intentionally
-/// counted so the regenerated baseline stays stable and conservative.
+/// Whole-line comments are skipped; string literal mentions are intentionally
+/// counted so the regenerated baseline stays stable and conservative. An
+/// invocation counts even when whitespace or comments separate the macro name
+/// from `!`, including across line breaks, because such spellings compile too.
 pub(crate) fn find_console_prints(source: &str) -> Vec<ConsolePrintHit> {
+    let lines: Vec<&str> = source.lines().collect();
     let mut hits = Vec::new();
-    for (index, raw_line) in source.lines().enumerate() {
-        if raw_line.trim_start().starts_with("//") {
+    for (index, raw_line) in lines.iter().enumerate() {
+        if is_comment_only_line(raw_line) {
             continue;
         }
         for macro_name in FORBIDDEN_CONSOLE_MACROS {
-            for (byte_offset, _match_text) in raw_line.match_indices(macro_name) {
-                if is_macro_boundary(raw_line, byte_offset) {
-                    hits.push(ConsolePrintHit {
-                        line: index + 1,
-                        macro_name,
-                    });
+            let bare_name = &macro_name[..macro_name.len() - 1];
+            for (byte_offset, _matched_name) in raw_line.match_indices(bare_name) {
+                let end = byte_offset + bare_name.len();
+                if !is_macro_boundary(raw_line, byte_offset)
+                    || !resolves_to_invocation(&lines, index, end)
+                {
+                    continue;
                 }
+                hits.push(ConsolePrintHit {
+                    line: index + 1,
+                    macro_name,
+                });
             }
         }
     }
@@ -50,15 +67,95 @@ pub(crate) fn find_console_prints(source: &str) -> Vec<ConsolePrintHit> {
     hits
 }
 
+/// Whole-line comments carry no code, so every line whose first token is `//`
+/// (including doc and inner-doc lines) is skipped wholesale.
+fn is_comment_only_line(raw_line: &str) -> bool {
+    raw_line.trim_start().starts_with("//")
+}
+
 /// A macro match is real only when nothing identifier-like precedes it. This
-/// rejects `println!` inside `eprintln!` and identifiers such as
-/// `my_println!`. The byte offset comes from `match_indices`, so the slice
+/// rejects the `println` inside `eprintln!` and identifiers such as
+/// `my_println`. The byte offset comes from `match_indices`, so the slice
 /// always starts on a character boundary.
 fn is_macro_boundary(raw_line: &str, byte_offset: usize) -> bool {
     match raw_line[..byte_offset].chars().next_back() {
         None => true,
         Some(previous) => !previous.is_alphanumeric() && previous != '_',
     }
+}
+
+/// Decides whether a boundary-checked macro name ending at byte offset `end`
+/// in `lines[start_line]` is an invocation whose `!` may be separated from the
+/// name by whitespace or comments. Trivia follows the Rust parser's treatment:
+/// newlines and line comments are skipped, block comments (which nest) may span
+/// lines. Any other token first — a digit or identifier character extending
+/// the name (as in `println2`), the `=` of `!=`, anything else — means there
+/// is no invocation. Hits belong to the line carrying the macro name.
+fn resolves_to_invocation(lines: &[&str], start_line: usize, end: usize) -> bool {
+    let mut line_index = start_line;
+    let mut rest = &lines[start_line][end..];
+    let mut comment_depth = 0u32;
+
+    loop {
+        if comment_depth > 0 {
+            if let Some(closed_at) = scan_block_comment_payload(rest, comment_depth) {
+                rest = &rest[closed_at..];
+                comment_depth = 0;
+                continue;
+            }
+            // The block comment continues on the next line.
+        } else {
+            let leading_ws = rest.len() - rest.trim_start().len();
+            if leading_ws > 0 {
+                rest = &rest[leading_ws..];
+                continue;
+            }
+            match rest.as_bytes().first().copied() {
+                None => {}                                 // Blank line: trivia.
+                Some(b'/') if rest.starts_with("//") => {} // Line comment runs to end of line.
+                Some(b'/') if rest.starts_with("/*") => {
+                    comment_depth = 1;
+                    rest = &rest[2..];
+                    continue;
+                }
+                Some(b'!') => return !rest.starts_with("!="), // Bare `!`, not `!=`.
+                Some(_) => return false,
+            }
+        }
+        if !advance_to_next_line(lines, &mut line_index) {
+            return false; // EOF with no bare `!` in sight.
+        }
+        rest = lines[line_index];
+    }
+}
+
+/// Scans block-comment payload starting at nesting level `depth`. Returns the
+/// byte offset just past the closing `*/` that closes the outermost level, or
+/// None when more input is needed. Rust block comments nest; `/*` and `*/` are
+/// ASCII, so stepping character by character stays safe on any UTF-8 payload.
+fn scan_block_comment_payload(rest: &str, mut depth: u32) -> Option<usize> {
+    let mut previous: Option<char> = None;
+    for (offset, ch) in rest.char_indices() {
+        match (previous, ch) {
+            (Some('/'), '*') => depth += 1,
+            (Some('*'), '/') => depth -= 1,
+            _ => {}
+        }
+        previous = Some(ch);
+        if depth == 0 {
+            return Some(offset + ch.len_utf8());
+        }
+    }
+    None
+}
+
+/// Moves `line_index` to the next physical line; false when there is none.
+fn advance_to_next_line(lines: &[&str], line_index: &mut usize) -> bool {
+    if *line_index + 1 >= lines.len() {
+        return false;
+    }
+    *line_index += 1;
+    true
 }
 
 /// Collects relative paths (slash separated, deterministic order) of every
@@ -94,9 +191,12 @@ fn collect_rs_files_recursive(
     Ok(())
 }
 
-/// Gates CI: every candidate file must stay within its ratchet allowance, new
-/// files with print macros fail, and allowlist entries that no longer match a
-/// real file are reported as stale debt to drop via `--regen`.
+/// Gates CI: every console print occurrence in a scanned file must have an
+/// exact ratchet approval (same file, line, and macro). Prints at unapproved
+/// locations fail, as do approvals whose occurrence moved or disappeared — so
+/// retiring one legacy print can never hide a new one. New files with prints
+/// fail outright, and allowlist entries for deleted files are reported as
+/// stale debt to drop via `--regen`.
 pub(crate) fn check_no_console_prints(repo_root: &Path) -> DynResult<()> {
     let allowlist_path = repo_root.join(ALLOWLIST_RELATIVE_PATH);
     let raw_allowlist = fs::read_to_string(&allowlist_path).map_err(|error| {
@@ -105,12 +205,13 @@ pub(crate) fn check_no_console_prints(repo_root: &Path) -> DynResult<()> {
             allowlist_path.display()
         )
     })?;
-    let allowed: BTreeMap<String, u32> = serde_json::from_str(&raw_allowlist).map_err(|error| {
-        format!(
-            "invalid console print ratchet at {}: {error}",
-            allowlist_path.display()
-        )
-    })?;
+    let allowed: BTreeMap<String, Vec<AllowedOccurrence>> = serde_json::from_str(&raw_allowlist)
+        .map_err(|error| {
+            format!(
+                "invalid console print ratchet at {}: {error}",
+                allowlist_path.display()
+            )
+        })?;
 
     let crates_dir = repo_root.join("crates");
     let files = collect_rs_files(&crates_dir).map_err(|error| {
@@ -120,38 +221,99 @@ pub(crate) fn check_no_console_prints(repo_root: &Path) -> DynResult<()> {
         )
     })?;
     let mut seen = BTreeSet::new();
-    let mut violations = Vec::new();
+    let mut new_violations: Vec<String> = Vec::new();
+    let mut drift_violations: Vec<String> = Vec::new();
 
     for file in &files {
         seen.insert(file.as_str());
-        let path = repo_root.join(file);
-        let source = fs::read_to_string(&path)
-            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        let source = read_source(repo_root, file)?;
         let hits = find_console_prints(&source);
-        let allowance = allowed.get(file.as_str()).copied().unwrap_or(0);
-        if (hits.len() as u32) > allowance {
-            for hit in &hits {
-                violations.push(format!("{file}:{} {}", hit.line, hit.macro_name));
+        if hits.is_empty() && !allowed.contains_key(file.as_str()) {
+            continue;
+        }
+        match allowed.get(file.as_str()) {
+            None => {
+                for hit in &hits {
+                    new_violations.push(format!("{file}:{} {}", hit.line, hit.macro_name));
+                }
             }
+            Some(approved) => claim_approved_occurrences(
+                file,
+                &hits,
+                approved,
+                &mut new_violations,
+                &mut drift_violations,
+            ),
         }
     }
 
     for stale_path in allowed.keys().filter(|path| !seen.contains(path.as_str())) {
-        violations.push(format!(
+        drift_violations.push(format!(
             "{stale_path}: stale allowlist entry (no console prints remain); remove it with `--regen`"
         ));
     }
 
-    if violations.is_empty() {
+    if new_violations.is_empty() && drift_violations.is_empty() {
         return Ok(());
     }
+    let mut sections = Vec::new();
+    if !new_violations.is_empty() {
+        sections.push(format!(
+            "forbidden console print macros found in product code:\n{}",
+            new_violations.join("\n")
+        ));
+    }
+    if !drift_violations.is_empty() {
+        sections.push(format!(
+            "console print ratchet is out of sync with the tree:\n{}",
+            drift_violations.join("\n")
+        ));
+    }
     Err(format!(
-        "forbidden console print macros found in product code:\n{}\n\nRoute output through \
-mesh_llm_events::emit_event instead; retire legacy debt line by line and regenerate the ratchet \
-with `{REGEN_COMMAND}`.",
-        violations.join("\n")
+        "{}\n\nRoute output through mesh_llm_events::emit_event instead; retire legacy debt line by \
+line and regenerate the ratchet with `{REGEN_COMMAND}`.",
+        sections.join("\n\n")
     )
     .into())
+}
+
+/// Reads one scanned source file, mapping I/O failures to ratchet errors.
+fn read_source(repo_root: &Path, file: &str) -> DynResult<String> {
+    let path = repo_root.join(file);
+    Ok(fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?)
+}
+
+/// Multiset-matches the observed hits against the file's approved occurrences.
+/// Each hit must claim a distinct approval with the same line and macro; an
+/// unclaimed hit is a new print, an unspent approval is drift.
+fn claim_approved_occurrences(
+    file: &str,
+    hits: &[ConsolePrintHit],
+    approved: &[AllowedOccurrence],
+    new_violations: &mut Vec<String>,
+    drift_violations: &mut Vec<String>,
+) {
+    let mut approved_used = vec![false; approved.len()];
+    for hit in hits {
+        let claimed = (0..approved.len()).find(|index| {
+            !approved_used[*index]
+                && approved[*index].line == hit.line
+                && approved[*index].macro_name == hit.macro_name
+        });
+        match claimed {
+            Some(index) => approved_used[index] = true,
+            None => new_violations.push(format!("{file}:{} {}", hit.line, hit.macro_name)),
+        }
+    }
+    for (index, occurrence) in approved.iter().enumerate() {
+        if !approved_used[index] {
+            drift_violations.push(format!(
+                "{file}:{} {}: approved occurrence is missing or was replaced",
+                occurrence.line, occurrence.macro_name
+            ));
+        }
+    }
 }
 
 /// Entry point for `xtask repo-consistency no-console-print [--regen]`. The
@@ -176,22 +338,30 @@ fn regenerate_allowlist(repo_root: &Path) -> DynResult<()> {
             crates_dir.display()
         )
     })?;
-    let mut counts = BTreeMap::new();
+    let mut allowed: BTreeMap<String, Vec<AllowedOccurrence>> = BTreeMap::new();
     for file in &files {
         let source = fs::read_to_string(repo_root.join(file))
             .map_err(|error| format!("failed to read {file}: {error}"))?;
         let hits = find_console_prints(&source);
         if !hits.is_empty() {
-            counts.insert(file.clone(), hits.len() as u32);
+            allowed.insert(
+                file.clone(),
+                hits.iter()
+                    .map(|hit| AllowedOccurrence {
+                        line: hit.line,
+                        macro_name: hit.macro_name.to_string(),
+                    })
+                    .collect(),
+            );
         }
     }
     let allowlist_path = repo_root.join(ALLOWLIST_RELATIVE_PATH);
-    write_json_file(&allowlist_path, &counts)?;
-    let total: u32 = counts.values().sum();
+    write_json_file(&allowlist_path, &allowed)?;
+    let total: usize = allowed.values().map(Vec::len).sum();
     println!(
         "console print ratchet regenerated at {}: {} file(s), {} legacy hit(s)",
         allowlist_path.display(),
-        counts.len(),
+        allowed.len(),
         total
     );
     Ok(())
@@ -256,26 +426,75 @@ fn f() { eprintln!("{HINT}"); }"#;
     }
 
     #[test]
-    fn ratchet_fails_when_a_file_exceeds_its_allowed_count() {
+    fn finds_macros_when_trivia_separates_name_from_bang() {
+        let source = r#"fn f(a, b, c, d) {
+    println !(a);
+    eprintln /* why */ !(b);
+    print   !(c);
+    eprint // note stays on the name's line
+    !(d);
+}"#;
+        assert_eq!(
+            find_console_prints(source),
+            vec![
+                ConsolePrintHit {
+                    line: 2,
+                    macro_name: "println!"
+                },
+                ConsolePrintHit {
+                    line: 3,
+                    macro_name: "eprintln!"
+                },
+                ConsolePrintHit {
+                    line: 4,
+                    macro_name: "print!"
+                },
+                ConsolePrintHit {
+                    line: 5,
+                    macro_name: "eprint!"
+                },
+            ]
+        );
+
+        let block_comment_across_lines = r#"fn g(x) {
+    println /* spans
+lines */ !(x);
+}"#;
+        assert_eq!(
+            find_console_prints(block_comment_across_lines),
+            vec![ConsolePrintHit {
+                line: 2,
+                macro_name: "println!"
+            }]
+        );
+    }
+
+    #[test]
+    fn ignores_non_invocation_spellings_of_forbidden_names() {
+        let source = r#"fn f(x) -> bool {
+    let extended = println2 !(x);
+    let ok = print != other;
+    x"#;
+        assert_eq!(find_console_prints(source), Vec::<ConsolePrintHit>::new());
+    }
+
+    #[test]
+    fn ratchet_fails_for_unapproved_print_locations() {
         let repo_root = temp_repo_with_files(&[(
             "crates/demo/src/lib.rs",
             "fn main() {\n    println!(\"one\");\n    eprintln!(\"two\");\n}\n",
         )]);
-        fs::create_dir_all(repo_root.join("tools/xtask/data")).unwrap();
-        fs::write(
-            repo_root.join("tools/xtask/data/console_print_allowlist.json"),
-            r#"{"crates/demo/src/lib.rs": 1}"#,
-        )
-        .unwrap();
+        write_allowlist(
+            &repo_root,
+            r#"{"crates/demo/src/lib.rs": [{"line": 2, "macro_name": "println!"}]}"#,
+        );
         let error = check_no_console_prints(&repo_root).unwrap_err().to_string();
         assert!(
             error.contains("forbidden console print macros found"),
             "{error}"
         );
-        assert!(
-            error.contains("crates/demo/src/lib.rs:2 println!"),
-            "{error}"
-        );
+        // The approved occurrence is not reported; only the new one is.
+        assert!(!error.contains(":2 println!"), "{error}");
         assert!(
             error.contains("crates/demo/src/lib.rs:3 eprintln!"),
             "{error}"
@@ -283,18 +502,79 @@ fn f() { eprintln!("{HINT}"); }"#;
     }
 
     #[test]
-    fn ratchet_passes_within_allowed_counts() {
+    fn retiring_an_approved_print_cannot_hide_a_new_one() {
+        let repo_root = temp_repo_with_files(&[(
+            "crates/demo/src/lib.rs",
+            "fn main() {\n    eprintln!(\"swapped\");\n}\n",
+        )]);
+        write_allowlist(
+            &repo_root,
+            r#"{"crates/demo/src/lib.rs": [{"line": 2, "macro_name": "println!"}]}"#,
+        );
+        let error = check_no_console_prints(&repo_root).unwrap_err().to_string();
+        // Old count-based ratchets pass this (1 print <= allowance of 1); the
+        // occurrence ratchet must flag both sides of the swap.
+        assert!(
+            error.contains("crates/demo/src/lib.rs:2 eprintln!"),
+            "{error}"
+        );
+        assert!(
+            error.contains(
+                "crates/demo/src/lib.rs:2 println!: approved occurrence is missing or was replaced"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn ratchet_fails_when_an_approved_occurrence_is_removed() {
         let repo_root = temp_repo_with_files(&[(
             "crates/demo/src/lib.rs",
             "fn main() {\n    println!(\"one\");\n}\n",
         )]);
-        fs::create_dir_all(repo_root.join("tools/xtask/data")).unwrap();
-        fs::write(
-            repo_root.join("tools/xtask/data/console_print_allowlist.json"),
-            r#"{"crates/demo/src/lib.rs": 1}"#,
-        )
-        .unwrap();
-        check_no_console_prints(&repo_root).expect("within-allowlist tree must pass");
+        write_allowlist(
+            &repo_root,
+            r#"{"crates/demo/src/lib.rs": [{"line": 2, "macro_name": "println!"}, {"line": 3, "macro_name": "eprintln!"}]}"#,
+        );
+        let error = check_no_console_prints(&repo_root).unwrap_err().to_string();
+        assert!(
+            error.contains("console print ratchet is out of sync with the tree"),
+            "{error}"
+        );
+        assert!(
+            !error.contains("forbidden console print macros found"),
+            "{error}"
+        );
+        assert!(
+            error.contains(
+                "crates/demo/src/lib.rs:3 eprintln!: approved occurrence is missing or was replaced"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn ratchet_passes_when_occurrences_match_exactly() {
+        let repo_root = temp_repo_with_files(&[(
+            "crates/demo/src/lib.rs",
+            "fn main() {\n    println!(\"one\");\n}\n",
+        )]);
+        write_allowlist(
+            &repo_root,
+            r#"{"crates/demo/src/lib.rs": [{"line": 2, "macro_name": "println!"}]}"#,
+        );
+        check_no_console_prints(&repo_root).expect("matching occurrences must pass");
+
+        let duplicates = temp_repo_with_files(&[(
+            "crates/twin/src/lib.rs",
+            "fn main() {\n    println!(\"a\"); println!(\"b\");\n}\n",
+        )]);
+        write_allowlist(
+            &duplicates,
+            r#"{"crates/twin/src/lib.rs": [{"line": 2, "macro_name": "println!"}, {"line": 2, "macro_name": "println!"}]}"#,
+        );
+        check_no_console_prints(&duplicates)
+            .expect("duplicate approvals for same-line prints must pass");
     }
 
     #[test]
@@ -309,13 +589,14 @@ fn f() { eprintln!("{HINT}"); }"#;
                 "fn g() { eprintln!(\"new\"); }\n",
             ),
         ]);
-        fs::create_dir_all(repo_root.join("tools/xtask/data")).unwrap();
-        fs::write(
-            repo_root.join("tools/xtask/data/console_print_allowlist.json"),
-            r#"{"crates/legacy/src/lib.rs": 1, "crates/gone/src/lib.rs": 4}"#,
-        )
-        .unwrap();
+        write_allowlist(
+            &repo_root,
+            r#"{"crates/legacy/src/lib.rs": [{"line": 1, "macro_name": "println!"}], "crates/gone/src/lib.rs": [{"line": 5, "macro_name": "print!"}]}"#,
+        );
         let error = check_no_console_prints(&repo_root).unwrap_err().to_string();
+        // The approved legacy occurrence passes; only the fresh file and the
+        // entry for a deleted file are reported.
+        assert!(!error.contains("crates/legacy/src/lib.rs:1"), "{error}");
         assert!(
             error.contains("crates/fresh/src/lib.rs:1 eprintln!"),
             "{error}"
@@ -331,5 +612,10 @@ fn f() { eprintln!("{HINT}"); }"#;
             fs::write(&path, contents).unwrap();
         }
         dir
+    }
+
+    fn write_allowlist(repo_root: &Path, raw_json: &str) {
+        fs::create_dir_all(repo_root.join("tools/xtask/data")).unwrap();
+        fs::write(repo_root.join(ALLOWLIST_RELATIVE_PATH), raw_json).unwrap();
     }
 }

@@ -146,8 +146,9 @@ jobs:
             exit 1
           fi
 
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Check console print drift
-        run: cargo run -p xtask -- repo-consistency no-console-print
+        run: just no-console-print
 
   rust_fmt:
     name: Rust format
