@@ -60,7 +60,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows host/runtime/product/platform graph with one platform-local UI producer |
 | `ci-quality-slice.yml` | Contracts, format, Clippy and CLI/docs guard; additive protected authority sentinel |
-| `ci-web-slice.yml` | Console quality and public website build |
+| `ci-web-slice.yml` | Console quality, console Playwright E2E, and public website build |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch |

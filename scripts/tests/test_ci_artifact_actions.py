@@ -2584,7 +2584,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "ci-quality-slice.yml": {
                 "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync", "authority_sentinel",
             },
-            "ci-web-slice.yml": {"runner_policy", "ui_quality", "website"},
+            "ci-web-slice.yml": {"runner_policy", "ui_quality", "ui_e2e", "website"},
             "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},
             "ci-linux-host-slice.yml": {"runner_policy", "linux_host"},
             "ci-linux-runtime-slice.yml": {"runner_policy", "linux_runtime"},

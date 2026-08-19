@@ -118,6 +118,75 @@ jobs:
       - name: Test UI
         run: pnpm test
 
+  ui_e2e:
+    name: Console UI E2E (Playwright)
+    needs: runner_policy
+    if: ${{ inputs.ui_changed }}
+    runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: crates/mesh-llm-ui
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Configure isolated pnpm store
+        run: pnpm config set store-dir ~/.pnpm-store
+      - name: Restore pnpm store
+        # ui_quality is this cache entry's one publisher (see its own Save pnpm
+        # store step). This job only restores it; restore-keys falls back to
+        # the closest prior entry on a miss instead of racing a second upload.
+        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.pnpm-store
+          key: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
+          restore-keys: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-
+      - name: Install UI dependencies
+        run: pnpm i --frozen-lockfile
+      - name: Restore Playwright browser cache
+        id: playwright_cache
+        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          # Keyed on the resolved @playwright/test version via the lockfile hash
+          # (not a hardcoded version literal) so an upgrade busts the cache.
+          key: ${{ env.CACHE_NAMESPACE }}-playwright-chromium-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
+      - name: Install Playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Save Playwright browser cache
+        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && steps.playwright_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
+      - name: Run console E2E
+        run: pnpm run test:e2e
+      - name: Upload E2E failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ui-e2e-test-results
+          path: crates/mesh-llm-ui/test-results/
+          if-no-files-found: warn
+          retention-days: 1
+
   website:
     name: Public website build
     needs: runner_policy
