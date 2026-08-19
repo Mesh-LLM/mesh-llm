@@ -119,7 +119,7 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - name: Verify prebuilt test environment
-        run: verify-runner-image public
+        run: verify-runner-image public cpu
       - name: Resolve static ABI toolchain epoch
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
