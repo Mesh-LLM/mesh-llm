@@ -77,6 +77,7 @@ if awk 'NR > 1 {print}' "$OUTPUT_DIR/listeners.txt" | grep -v "127\.0\.0\.1:$POR
     exit 1
 fi
 
+curl --fail --silent --show-error "$BASE_URL/health" >"$OUTPUT_DIR/health.json"
 curl --fail --silent --show-error "$BASE_URL/v1/models" >"$OUTPUT_DIR/models.json"
 
 curl --fail --silent --show-error \

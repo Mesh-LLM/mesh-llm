@@ -262,6 +262,11 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
         let json = String(data: data, encoding: .utf8) {
         connection.send(content: Data("data: \(json)\n\n".utf8), completion: .idempotent)
       }
+      connection.send(
+        content: Data("data: [DONE]\n\n".utf8),
+        contentContext: .finalMessage, isComplete: true,
+        completion: .contentProcessed { _ in connection.cancel() })
+      return
     }
     let finalPayload: [String: Any] = [
       "id": completionID,
@@ -280,7 +285,8 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     guard let finalJSON = String(data: finalData, encoding: .utf8) else { return }
     let trailer = Data("data: \(finalJSON)\n\ndata: [DONE]\n\n".utf8)
     connection.send(
-      content: trailer, contentContext: .finalMessage, isComplete: true, completion: .idempotent)
+      content: trailer, contentContext: .finalMessage, isComplete: true,
+      completion: .contentProcessed { _ in connection.cancel() })
   }
 
   private func chatResponse(_ result: AppleGenerationResult) -> [String: Any] {
@@ -324,7 +330,8 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
       over: connection
     )
     connection.send(
-      content: body, contentContext: .finalMessage, isComplete: true, completion: .idempotent)
+      content: body, contentContext: .finalMessage, isComplete: true,
+      completion: .contentProcessed { _ in connection.cancel() })
   }
 
   private func sendError(_ failure: HTTPFailure, over connection: NWConnection) {
@@ -346,7 +353,8 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
       over: connection
     )
     connection.send(
-      content: body, contentContext: .finalMessage, isComplete: true, completion: .idempotent)
+      content: body, contentContext: .finalMessage, isComplete: true,
+      completion: .contentProcessed { _ in connection.cancel() })
   }
 
   private func sendHeaders(
@@ -433,12 +441,19 @@ private final class HTTPRequestReader: @unchecked Sendable {
         self.connection.cancel()
         return
       }
+      if self.buffer.count > HTTPRequest.maximumHeaderBytes {
+        self.failure(
+          HTTPFailure(status: 400, code: "headers_too_large", message: "Request headers exceed limit")
+        )
+        return
+      }
       self.receive()
     }
   }
 }
 
 private struct HTTPRequest: Sendable {
+  fileprivate static let maximumHeaderBytes = 65_536
   private static let maximumRequestBodyBytes = 8 * 1_048_576
   let method: String
   let path: String
