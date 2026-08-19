@@ -1,0 +1,3 @@
+e.displayName=`diff`,e.aliases=[];function e(e){(function(e){e.languages.diff={coord:[/^(?:\*{3}|-{3}|\+{3}).*$/m,/^@@.*@@$/m,/^\d.*$/m]};var t={"deleted-sign":`-`,"deleted-arrow":`<`,"inserted-sign":`+`,"inserted-arrow":`>`,unchanged:` `,diff:`!`};Object.keys(t).forEach(function(n){var r=t[n],i=[];/^\w+$/.test(n)||i.push(/\w+/.exec(n)[0]),n===`diff`&&i.push(`bold`),e.languages.diff[n]={pattern:RegExp(`^(?:[`+r+`].*(?:\r
+?|
+|(?![\\s\\S])))+`,`m`),alias:i,inside:{line:{pattern:/(.)(?=[\s\S]).*(?:\r\n?|\n)?/,lookbehind:!0},prefix:{pattern:/[\s\S]/,alias:/\w+/.exec(n)[0]}}}}),Object.defineProperty(e.languages.diff,"PREFIXES",{value:t})})(e)}export{e as default};
