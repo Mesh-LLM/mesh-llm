@@ -120,7 +120,7 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - name: Verify prebuilt host environment
-        run: verify-runner-image public
+        run: verify-runner-image public cpu
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
