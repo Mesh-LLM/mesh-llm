@@ -7,6 +7,14 @@ const themes = ['light', 'dark'] as const
 test('request logs keeps text, controls, and live status badges AA-compliant across themes and accents', async ({
   page
 }) => {
+  // Install (not pause) before navigation: per Playwright's clock docs,
+  // pausing before goto lets the page get stuck (React's own mount work
+  // depends on real timers while the route loads). Install here, keep
+  // ticking through navigation and mount, and only pause once the route has
+  // rendered and the SSE connection below is deliberately held open — see
+  // the `releaseEventsStream` route below for how FALLBACK_DELAY_MS (1s) is
+  // kept from racing the `Reconnecting` assertion.
+  await page.clock.install({ time: new Date('2026-08-04T12:00:00Z') })
   await page.addInitScript(
     (storageKey) => window.localStorage.setItem(storageKey, 'live'),
     'mesh-llm-ui-preview:data-mode:v2'
@@ -85,17 +93,34 @@ test('request logs keeps text, controls, and live status badges AA-compliant acr
       }
     })
   )
-  await page.route('**/api/logs/events*', (route) =>
-    route.fulfill({
+  // Hold the SSE connection open instead of erroring it immediately: closing
+  // it (below) is what drives the browser's EventSource `onerror`, which is
+  // what starts the `reconnecting` -> `polling` clock. Releasing it only
+  // once the route has mounted and the clock is paused keeps that transition
+  // from racing real (dev-server compile/module-fetch) time.
+  let releaseEventsStream: (() => void) | undefined
+  await page.route('**/api/logs/events*', async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseEventsStream = resolve
+    })
+    await route.fulfill({
       contentType: 'text/event-stream',
       body: 'retry: 600000\nid: v1:0.0.0\nevent: stream_error\ndata: {"code":"invalid_event"}\n\n'
     })
-  )
+  })
   await page.goto('/logs')
   const infoBanner = page.getByRole('region', { name: 'System logs' })
   await expect(infoBanner.getByRole('heading', { level: 1, name: 'System logs' })).toBeVisible()
+  await expect.poll(() => releaseEventsStream).toBeDefined()
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 50)))
+  releaseEventsStream?.()
   await expect(infoBanner).toContainText('Monitor request activity and operational events from this MeshLLM host.')
   await expect(infoBanner.getByText('Reconnecting', { exact: true })).toBeVisible()
+  // The rest of this test doesn't depend on the live-recovery clock — resume
+  // it so axe's own internal scheduling (which yields via real timers) can
+  // run. A frozen clock through the whole theme/accent loop below hangs
+  // AxeBuilder#analyze() until the test-level timeout.
+  await page.clock.resume()
   await expect(infoBanner.getByRole('button', { name: 'Clean up logs' })).toBeVisible()
   await expect(
     page.getByRole('region', { name: 'Event log controls' }).getByRole('button', { name: 'Export view' })
@@ -143,6 +168,8 @@ test('request logs keeps text, controls, and live status badges AA-compliant acr
 })
 
 test('fallback log polling toggle remains AA-compliant while paused', async ({ page }) => {
+  // Install (not pause) before navigation, and hold the SSE connection open
+  // until the clock is paused — see the comment on the previous test.
   await page.clock.install({ time: new Date('2026-08-04T13:00:00Z') })
   await page.addInitScript(
     (storageKey) => window.localStorage.setItem(storageKey, 'live'),
@@ -150,16 +177,27 @@ test('fallback log polling toggle remains AA-compliant while paused', async ({ p
   )
   await page.route('**/api/logs/requests*', (route) => route.fulfill({ json: { items: [], nextCursor: null } }))
   await page.route('**/api/logs/audit*', (route) => route.fulfill({ json: { items: [], nextCursor: null } }))
-  await page.route('**/api/logs/events*', (route) =>
-    route.fulfill({
+  // Hold the SSE connection open — see the comment on the previous test.
+  let releaseEventsStream: (() => void) | undefined
+  await page.route('**/api/logs/events*', async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseEventsStream = resolve
+    })
+    await route.fulfill({
       contentType: 'text/event-stream',
       body: 'retry: 600000\nid: v1:0.0.0\nevent: stream_error\ndata: {"code":"invalid_event"}\n\n'
     })
-  )
+  })
 
   await page.goto('/logs')
+  await expect(page.getByRole('heading', { level: 1, name: 'System logs' })).toBeVisible()
+  await expect.poll(() => releaseEventsStream).toBeDefined()
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 50)))
+  releaseEventsStream?.()
   await expect(page.getByText('Reconnecting', { exact: true })).toBeVisible()
-  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 2_000)))
+  // Step deliberately past FALLBACK_DELAY_MS (1s) into the `polling` state,
+  // where the toggle under test renders.
+  await page.clock.runFor(1_000)
   const pollingToggle = page.getByRole('button', { name: 'Fallback log polling' })
   await expect(pollingToggle).toHaveAttribute('aria-pressed', 'true')
 

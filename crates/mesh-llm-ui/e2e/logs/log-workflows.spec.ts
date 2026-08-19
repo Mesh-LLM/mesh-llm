@@ -352,7 +352,9 @@ test('logs ledger follows a lifecycle event into immediate details and safe arti
   expect(backend.streamUrls[0]).not.toContain('filter=source%3A')
   expect(backend.streamUrls[0]).not.toContain('filter=from%3A')
   expect(backend.streamUrls[0]).not.toContain('filter=to%3A')
-  expect(backend.auditStreamUrls[0]).toBe('?audit=1')
+  // The app resumes the audit stream from the last-seen sequence in the
+  // initial audit list fixture (sequence: 1 -> cursor a1:1), not a cold start.
+  expect(backend.auditStreamUrls[0]).toBe('?audit=1&cursor=a1%3A1')
   const auditListCallsBeforeEvent = backend.auditListCalls
   backend.releaseAuditStream?.()
   await expect.poll(() => backend.auditListCalls).toBeGreaterThan(auditListCallsBeforeEvent)
@@ -484,6 +486,10 @@ test('partial cleanup retries retained artifact work and refetches the active le
   await browserPage.goto('/logs')
   await expect(browserPage.getByRole('heading', { level: 1, name: 'System logs' })).toBeVisible()
   await expect.poll(() => backend.releaseStream).toBeDefined()
+  // The SSE route is held open until released; without releasing it here the
+  // connection never closes, `onerror` never fires, and `listCalls` can never
+  // reach 2 (the assertion below hung indefinitely before this line existed).
+  backend.releaseStream?.()
   await expect.poll(() => backend.listCalls).toBeGreaterThanOrEqual(2)
   const listCallsBeforeCleanup = backend.listCalls
 
@@ -517,6 +523,9 @@ test('failed cleanup mutation does not refetch the active ledger', async ({ page
   await browserPage.goto('/logs')
   await expect(browserPage.getByRole('heading', { level: 1, name: 'System logs' })).toBeVisible()
   await expect.poll(() => backend.releaseStream).toBeDefined()
+  // See the comment in the preceding test — the stream must be released for
+  // `listCalls` to ever reach 2.
+  backend.releaseStream?.()
   await expect.poll(() => backend.listCalls).toBeGreaterThanOrEqual(2)
   const listCallsBeforeFailure = backend.listCalls
 
@@ -581,22 +590,30 @@ test('opening a request row keeps ledger content mounted while the inspector app
   await browserPage.setViewportSize({ width: 1200, height: 1200 })
   await browserPage.goto('/logs')
   await expect.poll(() => backend.releaseStream).toBeDefined()
+  // See the comment in the "partial cleanup" test above — releasing the
+  // stream delivers a `log_event` frame with no projected `request`, which
+  // triggers the second (delayed) list refetch this test is set up to hold.
+  backend.releaseStream?.()
   await expect.poll(() => backend.listCalls).toBe(2)
 
   const eventsOverTime = browserPage.getByRole('heading', { level: 2, name: 'Events Over Time' })
-  const requestSummary = browserPage.getByRole('region', { name: 'Request summary' })
+  // Renamed from "Request summary" (the loading-ghost's label,
+  // LogsLedgerLoadingGhost.tsx) to "Request records" (LogsLedger.tsx) in
+  // #1339; this locator was never updated because this suite never ran in CI
+  // (#1372).
+  const requestRecords = browserPage.getByRole('region', { name: 'Request records' })
   const eventControls = browserPage.getByRole('region', { name: 'Event log controls' })
   const row = requestRow(browserPage, REQUEST_ID)
   await expect(eventsOverTime).toBeVisible()
-  await expect(requestSummary).toBeVisible()
+  await expect(requestRecords).toBeVisible()
   await expect(eventControls).toBeVisible()
   await expect(row).toBeVisible()
-  const [eventsOverTimeElement, requestSummaryElement, eventControlsElement] = await Promise.all([
+  const [eventsOverTimeElement, requestRecordsElement, eventControlsElement] = await Promise.all([
     eventsOverTime.evaluateHandle((element) => element),
-    requestSummary.evaluateHandle((element) => element),
+    requestRecords.evaluateHandle((element) => element),
     eventControls.evaluateHandle((element) => element)
   ])
-  const mountedElements = [eventsOverTimeElement, requestSummaryElement, eventControlsElement] as const
+  const mountedElements = [eventsOverTimeElement, requestRecordsElement, eventControlsElement] as const
   const eventControlsTop = await eventControls.evaluate((element) => element.getBoundingClientRect().top)
 
   try {
@@ -795,7 +812,11 @@ test('logs pages stay accessible and unclipped across supported visual modes', a
         results.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))
       ).toEqual([])
 
-      await tabTo(browserPage, browserPage.getByLabel('Filter logs by time range'))
+      // 'Filter logs by time range' was removed in #1339; the chart's own
+      // time-range selector is now the sole page-wide time-range control
+      // (see LogsLedger.test.tsx "uses the chart selector as the only
+      // page-wide time-range control").
+      await tabTo(browserPage, browserPage.getByLabel('Chart time range'))
     }
   }
 })
