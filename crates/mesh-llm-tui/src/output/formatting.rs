@@ -786,8 +786,13 @@ impl InteractiveDashboardFormatter {
         let terminal = self.terminal.as_mut().ok_or_else(|| {
             io::Error::other("pretty TUI terminal missing while terminal mode is active")
         })?;
-        if std::mem::take(&mut self.state.pending_full_repaint) {
+        if self.state.pending_full_repaint {
+            // Cleared only once the repair actually happened: if the erase
+            // fails, the next draw would be an ordinary diff against a screen
+            // ratatui still believes is intact, and the damage would survive
+            // the key press the operator already made.
             repair_tui_terminal(terminal)?;
+            self.state.pending_full_repaint = false;
         }
         draw_tui_dashboard_with_terminal(terminal, &self.state)?;
         self.dirty = false;

@@ -1757,6 +1757,20 @@ pub(super) fn tui_refresh_key_requests_a_full_repaint() {
 }
 
 #[test]
+pub(super) fn tui_refresh_key_accepts_the_uppercase_it_advertises() {
+    // The status bar reads `R Refresh`, and Shift+R arrives as `Char('R')`.
+    let mut state = DashboardState::default();
+
+    let control = state.apply_tui_event(TuiEvent::Key(TuiKeyEvent::Char('R')));
+
+    assert!(matches!(control, TuiControlFlow::Continue));
+    assert!(
+        state.pending_full_repaint,
+        "the key the status bar prints must be the key that works"
+    );
+}
+
+#[test]
 pub(super) fn tui_refresh_key_types_into_the_filter_instead_of_repainting() {
     let mut state = DashboardState::default();
     state.reduce(DashboardAction::StartEventsFilterEdit);

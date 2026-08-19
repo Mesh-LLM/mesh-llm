@@ -1647,7 +1647,7 @@ impl DashboardState {
             // shipped without anything behind it. This is the repair path for
             // corruption that capture cannot intercept — anything written to
             // the tty by a process that did not inherit our descriptors.
-            TuiEvent::Key(TuiKeyEvent::Char('r')) if !self.events_filter.editing => {
+            TuiEvent::Key(TuiKeyEvent::Char('r' | 'R')) if !self.events_filter.editing => {
                 self.reduce(DashboardAction::RequestFullRepaint);
                 Some(TuiControlFlow::Continue)
             }
