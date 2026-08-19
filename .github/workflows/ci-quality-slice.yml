@@ -146,6 +146,9 @@ jobs:
             exit 1
           fi
 
+      - name: Check console print drift
+        run: cargo run -p xtask -- repo-consistency no-console-print
+
   rust_fmt:
     name: Rust format
     needs: runner_policy

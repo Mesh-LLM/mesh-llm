@@ -471,6 +471,7 @@ ci-validate:
     python3 -m unittest discover -s scripts/tests -p 'test_*.py'
     just ci-crate-lists
     just check-release
+    just no-console-print
     just publish-crates
 
 # Run CI/workspace crate-list consistency checks.
@@ -480,6 +481,10 @@ ci-crate-lists:
 # Run crates.io publish-chain consistency checks.
 publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
+
+# Fail on new println!/eprintln!/write! outside xtask tests (see the baseline file).
+no-console-print:
+    just with-lld cargo run -p xtask -- repo-consistency no-console-print
 
 # Shellcheck the explicitly supplied changed shell scripts.
 ci-shellcheck *scripts:
