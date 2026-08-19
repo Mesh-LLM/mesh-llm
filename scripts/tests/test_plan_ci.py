@@ -279,6 +279,11 @@ class PlanCiTests(unittest.TestCase):
                     row["id"] for row in plan["matrices"]["sdk"]
                 }
                 rust_tests_planned = bool(plan["matrices"]["rust_tests"])
+                # This fixture always plans kotlin via force_all_rows, so
+                # assert the concrete case directly rather than relying on
+                # readers to trace that through -- the conditional below
+                # keeps the invariant general for any future payload.
+                self.assertIn("static-abi", plan["required_slices"])
                 if kotlin_planned or rust_tests_planned:
                     self.assertIn("static-abi", plan["required_slices"])
 
