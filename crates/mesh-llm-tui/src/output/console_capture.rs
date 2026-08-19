@@ -27,13 +27,18 @@ pub(in crate::output) use fallback::ConsoleCapture;
 #[cfg(unix)]
 mod unix {
     use mesh_llm_events::{OutputEvent, emit_event};
+    use rustix::event::{PollFd, PollFlags, poll};
     use rustix::io::fcntl_dupfd_cloexec;
     use rustix::stdio::{dup2_stderr, dup2_stdout, stderr, stdout};
     use std::fs::File;
-    use std::io::{self, BufRead, BufReader, PipeReader, Write};
+    use std::io::{self, PipeReader, Read, Write};
     use std::os::fd::OwnedFd;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    /// How long a partial line may sit unflushed before it is shown anyway.
+    const IDLE_FLUSH: Duration = Duration::from_millis(150);
 
     /// Lines longer than this are split rather than buffered without bound, so
     /// a child spewing bytes with no newline cannot grow the reader's buffer
@@ -102,35 +107,101 @@ mod unix {
     /// that inherited the write end keeps the pipe open past restore, so a join
     /// could block shutdown indefinitely; the thread instead exits on EOF
     /// whenever that arrives, and dies with the process at worst.
-    fn spawn_reader(read_fd: PipeReader, original_stderr: OwnedFd, active: Arc<AtomicBool>) {
+    fn spawn_reader(mut read_fd: PipeReader, original_stderr: OwnedFd, active: Arc<AtomicBool>) {
         let _ = std::thread::Builder::new()
             .name("mesh-console-capture".to_string())
             .spawn(move || {
                 let mut passthrough = File::from(original_stderr);
-                let mut reader = BufReader::new(read_fd);
-                let mut line = Vec::new();
-                loop {
-                    line.clear();
-                    match read_bounded_line(&mut reader, &mut line) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
-                    let text = String::from_utf8_lossy(&line)
-                        .trim_end_matches(['\r', '\n'])
-                        .to_string();
-                    if text.trim().is_empty() {
+                let mut pending = Vec::new();
+                let mut buffer = [0u8; 4096];
+                // Wait for data, but not forever: a writer that emitted a
+                // partial line and then went quiet (`print!`, a `\r` progress
+                // counter) must still be shown rather than sit in this buffer
+                // until the next newline arrives.
+                while let Ok(readable) = wait_for_input(&read_fd, IDLE_FLUSH) {
+                    if !readable {
+                        for line in take_pending_lines(&mut pending, true) {
+                            deliver(line, &active, &mut passthrough);
+                        }
                         continue;
                     }
-                    if active.load(Ordering::Acquire) {
-                        // Failure here means the dashboard sink is gone; fall
-                        // back to the real terminal rather than dropping it.
-                        if emit_event(dashboard_event(text.clone())).is_ok() {
-                            continue;
-                        }
+                    match read_fd.read(&mut buffer) {
+                        Ok(0) | Err(_) => break,
+                        Ok(count) => pending.extend_from_slice(&buffer[..count]),
                     }
-                    let _ = writeln!(passthrough, "{text}");
+                    // A writer with no line breaks at all must not grow this
+                    // buffer without bound.
+                    let force = pending.len() >= MAX_CAPTURED_LINE_BYTES;
+                    for line in take_pending_lines(&mut pending, force) {
+                        deliver(line, &active, &mut passthrough);
+                    }
+                }
+                for line in take_pending_lines(&mut pending, true) {
+                    deliver(line, &active, &mut passthrough);
                 }
             });
+    }
+
+    fn deliver(text: String, active: &AtomicBool, passthrough: &mut File) {
+        if text.trim().is_empty() {
+            return;
+        }
+        if active.load(Ordering::Acquire) {
+            // Failure here means the dashboard sink is gone; fall back to the
+            // real terminal rather than dropping the line.
+            if emit_event(dashboard_event(text.clone())).is_ok() {
+                return;
+            }
+        }
+        let _ = writeln!(passthrough, "{text}");
+    }
+
+    /// Split `pending` into displayable lines.
+    ///
+    /// `\r` terminates a line as well as `\n` so carriage-return progress
+    /// counters surface instead of accumulating. When `flush_remainder` is set
+    /// the trailing partial line is taken too.
+    pub(super) fn take_pending_lines(pending: &mut Vec<u8>, flush_remainder: bool) -> Vec<String> {
+        let mut lines = Vec::new();
+        while let Some(index) = pending
+            .iter()
+            .position(|byte| *byte == b'\n' || *byte == b'\r')
+        {
+            let mut line: Vec<u8> = pending.drain(..=index).collect();
+            line.pop();
+            lines.push(decode(&line));
+        }
+        if flush_remainder && !pending.is_empty() {
+            let remainder = std::mem::take(pending);
+            lines.push(decode(&remainder));
+        }
+        lines
+    }
+
+    fn decode(line: &[u8]) -> String {
+        // Captured bytes are arbitrary. A raw escape sequence rendered into a
+        // dashboard cell would move the cursor and corrupt the very frame this
+        // exists to protect, so control characters are stripped here.
+        String::from_utf8_lossy(line)
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// Block until the pipe has data or `timeout` elapses. `Ok(false)` is a
+    /// timeout, `Err` means the descriptor is unusable and the reader stops.
+    fn wait_for_input(read_fd: &PipeReader, timeout: Duration) -> io::Result<bool> {
+        let mut fds = [PollFd::new(read_fd, PollFlags::IN)];
+        loop {
+            match poll(&mut fds, Some(&timeout.try_into().unwrap_or_default())) {
+                Ok(0) => return Ok(false),
+                Ok(_) => return Ok(true),
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(err) => return Err(err.into()),
+            }
+        }
     }
 
     /// Captured output has no level of its own. Anything that looks like a
@@ -147,41 +218,6 @@ mod unix {
             OutputEvent::Warning { message, context }
         } else {
             OutputEvent::Info { message, context }
-        }
-    }
-
-    /// Like `read_until(b'\n')`, but refuses to grow past
-    /// `MAX_CAPTURED_LINE_BYTES` so unterminated output cannot exhaust memory.
-    pub(super) fn read_bounded_line<R: BufRead>(
-        reader: &mut R,
-        line: &mut Vec<u8>,
-    ) -> io::Result<usize> {
-        let mut total = 0usize;
-        loop {
-            let (consumed, done) = {
-                let available = match reader.fill_buf() {
-                    Ok(buffer) => buffer,
-                    Err(ref err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(err) => return Err(err),
-                };
-                if available.is_empty() {
-                    return Ok(total);
-                }
-                let (chunk, done) = match available.iter().position(|byte| *byte == b'\n') {
-                    Some(index) => (&available[..=index], true),
-                    None => (available, false),
-                };
-                let take = chunk
-                    .len()
-                    .min(MAX_CAPTURED_LINE_BYTES.saturating_sub(total));
-                line.extend_from_slice(&chunk[..take]);
-                total += take;
-                (chunk.len(), done)
-            };
-            reader.consume(consumed);
-            if done || total >= MAX_CAPTURED_LINE_BYTES {
-                return Ok(total.max(1));
-            }
         }
     }
 }
@@ -211,54 +247,49 @@ mod fallback {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::unix::{dashboard_event, read_bounded_line};
+    use super::unix::{dashboard_event, take_pending_lines};
     use mesh_llm_events::OutputEvent;
-    use std::io::BufReader;
 
-    fn read_all_lines(input: &[u8]) -> Vec<String> {
-        let mut reader = BufReader::new(input);
-        let mut lines = Vec::new();
-        loop {
-            let mut line = Vec::new();
-            match read_bounded_line(&mut reader, &mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => lines.push(String::from_utf8_lossy(&line).into_owned()),
-            }
-        }
-        lines
+    fn split(input: &[u8], flush_remainder: bool) -> Vec<String> {
+        let mut pending = input.to_vec();
+        take_pending_lines(&mut pending, flush_remainder)
     }
 
     #[test]
     fn captured_output_splits_on_newlines() {
         assert_eq!(
-            read_all_lines(b"first\nsecond\nthird\n"),
-            vec!["first\n", "second\n", "third\n"]
+            split(b"first\nsecond\nthird\n", false),
+            vec!["first", "second", "third"]
         );
     }
 
     #[test]
-    fn captured_output_keeps_a_trailing_unterminated_line() {
+    fn captured_output_holds_a_partial_line_until_it_is_flushed() {
+        // Mid-write: the rest of the line may still be coming.
+        assert_eq!(split(b"done\npartial", false), vec!["done"]);
+        // The writer went quiet, so show it rather than wait forever. This is
+        // the `print!`-with-no-newline case, which otherwise never surfaces.
+        assert_eq!(split(b"done\npartial", true), vec!["done", "partial"]);
+    }
+
+    #[test]
+    fn captured_output_treats_carriage_returns_as_line_ends() {
+        // llama.cpp-style progress counters overwrite one line with `\r`.
         assert_eq!(
-            read_all_lines(b"done\nno trailing newline"),
-            vec!["done\n", "no trailing newline"]
+            split(b"loading 10%\rloading 20%\r", false),
+            vec!["loading 10%", "loading 20%"]
         );
     }
 
     #[test]
-    fn captured_output_without_newlines_cannot_grow_without_bound() {
-        // A child spewing bytes with no newline must not be buffered forever.
-        let flood = vec![b'x'; 64 * 1024];
-
-        let lines = read_all_lines(&flood);
-
-        assert!(
-            lines.iter().all(|line| line.len() <= 8 * 1024),
-            "an unterminated flood must be split, not accumulated"
-        );
+    fn captured_output_strips_control_characters() {
+        // The whole point is to keep stray bytes off the frame. An escape
+        // sequence rendered into a dashboard cell would move the cursor and
+        // corrupt the frame this exists to protect.
         assert_eq!(
-            lines.iter().map(String::len).sum::<usize>(),
-            flood.len(),
-            "splitting must not drop bytes"
+            split(b"\x1b[10;5HXXXX\n", false),
+            vec!["[10;5HXXXX"],
+            "escape bytes must not survive into a rendered cell"
         );
     }
 
