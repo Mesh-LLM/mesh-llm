@@ -2,12 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LogsApiClient } from '@/features/logs/api/client'
 import { LogAuditCursor, LogReplayCursor, type LogReplayChannel } from '@/features/logs/api/ids'
 import { parseLogsSseFrame, type LogsSseFilter } from '@/features/logs/api/sse'
+import type { LogAuditEntry, LogRequest } from '@/features/logs/api/schemas'
 import { sortByOccurredAt } from '@/features/logs/lib/log-instant'
-import type { LogsLedgerSearch } from '@/features/logs/lib/log-search'
+import { resolveRelativeTime, type LogsLedgerSearch } from '@/features/logs/lib/log-search'
 
 const POLL_INTERVAL_MS = 5_000
 const FALLBACK_DELAY_MS = 1_000
 const DEFAULT_CHANNELS: readonly LogReplayChannel[] = ['requests', 'operations']
+/**
+ * Returned when audit streaming is disabled. Must be a shared module-level
+ * value, not a fresh `[]` literal: a new identity per render invalidates the
+ * ledger memo chain, which hands the events chart a new `data` array on every
+ * render and drives recharts into a synchronous re-dispatch loop until React's
+ * nested-update ceiling trips the `/logs` error boundary.
+ */
+const EMPTY_AUDIT_ENTRIES: readonly LogAuditEntry[] = []
 
 export type LogsLiveConnectionState = 'connected' | 'reconnecting' | 'polling' | 'gap' | 'stale'
 
@@ -24,8 +33,10 @@ export type LogsLiveRecoveryOptions = {
   readonly enabled: boolean
   readonly search: LogsLedgerSearch
   readonly hydrate: () => Promise<unknown>
+  readonly authoritativeSnapshot?: unknown
   readonly auditEnabled?: boolean
   readonly hydrateAudit?: () => Promise<unknown>
+  readonly auditCursor?: LogAuditCursor
   readonly channels?: readonly LogReplayChannel[]
   readonly eventSourceFactory?: LogsEventSourceFactory
 }
@@ -33,6 +44,9 @@ export type LogsLiveRecoveryOptions = {
 export type LogsLiveRecovery = {
   readonly state: LogsLiveConnectionState
   readonly liveRequestIds: readonly string[]
+  readonly requestUpdates: readonly LogRequest[]
+  readonly excludedRequestIds: readonly string[]
+  readonly auditEntries: readonly LogAuditEntry[]
   readonly pollingEnabled: boolean
   readonly togglePolling: () => void
 }
@@ -40,6 +54,9 @@ export type LogsLiveRecovery = {
 type LiveRequest = {
   readonly requestId: string
   readonly occurredAt: string
+  readonly request?: LogRequest
+  readonly included: boolean
+  readonly revision: number
 }
 
 type LiveRequestState = {
@@ -115,8 +132,27 @@ function subscriptionKey(
 }
 
 function mergeLiveRequests(current: readonly LiveRequest[], next: LiveRequest): LiveRequest[] {
-  if (current.some((entry) => entry.requestId === next.requestId)) return [...current]
-  return sortByOccurredAt([...current, next]).slice(-32)
+  return sortByOccurredAt([...current.filter((entry) => entry.requestId !== next.requestId), next]).slice(-32)
+}
+
+function mergeAuditEntries(current: readonly LogAuditEntry[], next: LogAuditEntry): LogAuditEntry[] {
+  return sortByOccurredAt([...current.filter((entry) => entry.entryId !== next.entryId), next]).slice(-64)
+}
+
+function requestMatchesSearch(request: LogRequest, search: LogsLedgerSearch) {
+  const bounds = search.timeRange ? resolveRelativeTime(search.timeRange) : { from: search.from, to: search.to }
+  const createdAt = Date.parse(request.createdAt)
+  const from = bounds?.from ? Date.parse(bounds.from) : undefined
+  const to = bounds?.to ? Date.parse(bounds.to) : undefined
+  if (from !== undefined && createdAt < from) return false
+  if (to !== undefined && createdAt > to) return false
+  if (search.model && request.model !== search.model) return false
+  if (search.provider && request.provider !== search.provider) return false
+  if (search.engine && request.engine !== search.engine) return false
+  if (search.route && request.route !== search.route) return false
+  if (search.source && request.source !== search.source) return false
+  if (search.outcome && request.outcome !== search.outcome) return false
+  return true
 }
 
 function combinedConnectionState(
@@ -140,19 +176,23 @@ export function useLogsLiveRecovery({
   enabled,
   search,
   hydrate,
+  authoritativeSnapshot,
   auditEnabled = false,
   hydrateAudit = hydrate,
+  auditCursor,
   channels = DEFAULT_CHANNELS,
   eventSourceFactory: createEventSource = eventSourceFactory
 }: LogsLiveRecoveryOptions): LogsLiveRecovery {
   const [lifecycleState, setLifecycleState] = useState<LogsLiveConnectionState>('reconnecting')
   const [auditState, setAuditState] = useState<LogsLiveConnectionState>('reconnecting')
   const [liveRequests, setLiveRequests] = useState<LiveRequestState>({ subscriptionKey: '', entries: [] })
+  const [liveAuditEntries, setLiveAuditEntries] = useState<readonly LogAuditEntry[]>([])
   const [pollingEnabled, setPollingEnabled] = useState(true)
   const pollingEnabledRef = useRef(true)
   const sequenceByChannelRef = useRef(new Map<LogReplayChannel, number>())
   const eventIdsRef = useRef(new Set<string>())
   const requestIdsRef = useRef(new Set<string>())
+  const liveRevisionRef = useRef(0)
   const hydrateInFlightRef = useRef(false)
   const hydratePendingRef = useRef(false)
   const hydratePendingClearGapRef = useRef(false)
@@ -163,11 +203,38 @@ export function useLogsLiveRecovery({
   const auditHydratePendingRef = useRef(false)
   const auditHydratePendingClearGapRef = useRef(false)
   const hydrateAuditRef = useRef(hydrateAudit)
+  const searchRef = useRef(search)
   const restoredCursorValueRef = useRef<string | undefined>(undefined)
+  const previousAuthoritativeSnapshotRef = useRef(authoritativeSnapshot)
 
   useEffect(() => {
     hydrateAuditRef.current = hydrateAudit
   }, [hydrateAudit])
+
+  useEffect(() => {
+    searchRef.current = search
+  }, [search])
+
+  useEffect(() => {
+    const previous = previousAuthoritativeSnapshotRef.current
+    previousAuthoritativeSnapshotRef.current = authoritativeSnapshot
+    if (previous === authoritativeSnapshot) return
+    const authoritativeRevision = liveRevisionRef.current
+    setLiveRequests((current) => ({
+      subscriptionKey: current.subscriptionKey,
+      entries: current.entries.filter((entry) => entry.request === undefined || entry.revision > authoritativeRevision)
+    }))
+  }, [authoritativeSnapshot])
+
+  useEffect(() => {
+    if (
+      auditCursor &&
+      (!latestAuditCursorRef.current || auditCursor.sequence() > latestAuditCursorRef.current.sequence())
+    ) {
+      latestAuditCursorRef.current = auditCursor
+      auditSequenceRef.current = auditCursor.sequence()
+    }
+  }, [auditCursor])
 
   const togglePolling = useCallback(() => {
     setPollingEnabled((current) => {
@@ -242,6 +309,7 @@ export function useLogsLiveRecovery({
     sequenceByChannelRef.current = new Map()
     eventIdsRef.current = new Set()
     requestIdsRef.current = new Set()
+    liveRevisionRef.current = 0
     if (restoredCursorValueRef.current !== search.replayCursor) {
       restoredCursorValueRef.current = search.replayCursor
       latestCursorRef.current = parseReplayCursor(search.replayCursor)
@@ -274,9 +342,18 @@ export function useLogsLiveRecovery({
         hydratePendingClearGapRef.current ||= clearGap
         return
       }
+      const authoritativeRevision = liveRevisionRef.current
       hydrateInFlightRef.current = true
       void Promise.resolve(hydrate())
         .then(() => {
+          if (!disposed) {
+            setLiveRequests((current) => ({
+              subscriptionKey: current.subscriptionKey,
+              entries: current.entries.filter(
+                (entry) => entry.request === undefined || entry.revision > authoritativeRevision
+              )
+            }))
+          }
           if (!disposed && clearGap) setLifecycleState(source ? 'connected' : 'polling')
         })
         .catch(() => {
@@ -320,8 +397,14 @@ export function useLogsLiveRecovery({
           hydrateAuthoritatively(true)
           return
         }
+        if (frame.type === 'stream_error') {
+          setLifecycleState('stale')
+          hydrateAuthoritatively(true)
+          return
+        }
         if (frame.type !== 'log_event') {
-          queuePollingFallback()
+          setLifecycleState('stale')
+          hydrateAuthoritatively(true)
           return
         }
 
@@ -334,19 +417,37 @@ export function useLogsLiveRecovery({
         eventIdsRef.current.add(eventId)
 
         const requestId = frame.event.requestId.toString()
-        if (!requestIdsRef.current.has(requestId)) {
-          requestIdsRef.current.add(requestId)
+        requestIdsRef.current.add(requestId)
+        const revision = ++liveRevisionRef.current
+        const projectedRequest = frame.event.request
+        if (projectedRequest) {
           setLiveRequests((current) => ({
             subscriptionKey: key,
             entries: mergeLiveRequests(current.subscriptionKey === key ? current.entries : [], {
               requestId,
-              occurredAt: frame.event.occurredAt
+              occurredAt: frame.event.occurredAt,
+              request: projectedRequest,
+              included: requestMatchesSearch(projectedRequest, searchRef.current),
+              revision
             })
           }))
+        } else {
+          // Compatibility with older daemons whose additive SSE projection is
+          // absent. Current servers never take this full-ledger recovery path.
+          setLiveRequests((current) => ({
+            subscriptionKey: key,
+            entries: mergeLiveRequests(current.subscriptionKey === key ? current.entries : [], {
+              requestId,
+              occurredAt: frame.event.occurredAt,
+              included: true,
+              revision
+            })
+          }))
+          hydrateAuthoritatively(false)
         }
-        hydrateAuthoritatively(false)
       } catch {
-        queuePollingFallback()
+        setLifecycleState('stale')
+        hydrateAuthoritatively(true)
       }
     }
 
@@ -355,8 +456,6 @@ export function useLogsLiveRecovery({
       filters: subscriptionFilters,
       cursor: latestCursorRef.current instanceof LogReplayCursor ? latestCursorRef.current : undefined
     })
-    hydrateAuthoritatively(false)
-
     try {
       const connectedSource = createEventSource(url)
       source = connectedSource
@@ -457,7 +556,8 @@ export function useLogsLiveRecovery({
       try {
         const frame = parseLogsSseFrame({ event: event.type, lastEventId: event.lastEventId, data: event.data })
         if (!(frame.cursor instanceof LogAuditCursor)) {
-          queuePollingFallback()
+          setAuditState('stale')
+          hydrateAuditAuthoritatively(true)
           return
         }
         latestAuditCursorRef.current = frame.cursor
@@ -466,16 +566,23 @@ export function useLogsLiveRecovery({
           hydrateAuditAuthoritatively(true)
           return
         }
+        if (frame.type === 'stream_error') {
+          setAuditState('stale')
+          hydrateAuditAuthoritatively(true)
+          return
+        }
         if (frame.type !== 'audit_entry') {
-          queuePollingFallback()
+          setAuditState('stale')
+          hydrateAuditAuthoritatively(true)
           return
         }
         const sequence = BigInt(frame.entry.sequence)
         if (sequence <= auditSequenceRef.current) return
         auditSequenceRef.current = sequence
-        hydrateAuditAuthoritatively(false)
+        setLiveAuditEntries((current) => mergeAuditEntries(current, frame.entry))
       } catch {
-        queuePollingFallback()
+        setAuditState('stale')
+        hydrateAuditAuthoritatively(true)
       }
     }
 
@@ -483,17 +590,13 @@ export function useLogsLiveRecovery({
       channels: [],
       audit: { cursor: latestAuditCursorRef.current }
     })
-    hydrateAuditAuthoritatively(false)
-    // A healthy SSE stream only observes this daemon's in-memory bus. Keep a
-    // bounded authoritative reconciliation active so rows committed by a
-    // separate one-shot CLI process appear without a manual reload.
-    startReconciliation()
     try {
       const connectedSource = createEventSource(url)
       source = connectedSource
       connectedSource.onopen = () => {
         if (disposed) return
         clearFallback()
+        clearReconciliation()
         setAuditState('connected')
       }
       connectedSource.onerror = () => {
@@ -515,12 +618,26 @@ export function useLogsLiveRecovery({
   }, [auditEnabled, createEventSource])
 
   const state = combinedConnectionState(lifecycleState, auditState, enabled, auditEnabled)
+  const activeLiveRequests = useMemo(
+    () => (enabled && liveRequests.subscriptionKey === key ? liveRequests.entries : []),
+    [enabled, key, liveRequests]
+  )
+  const liveRequestIds = useMemo(() => activeLiveRequests.map((entry) => entry.requestId), [activeLiveRequests])
+  const requestUpdates = useMemo(
+    () => activeLiveRequests.flatMap((entry) => (entry.included && entry.request ? [entry.request] : [])),
+    [activeLiveRequests]
+  )
+  const excludedRequestIds = useMemo(
+    () => activeLiveRequests.flatMap((entry) => (entry.included ? [] : [entry.requestId])),
+    [activeLiveRequests]
+  )
 
   return {
     state,
-    liveRequestIds: (enabled && liveRequests.subscriptionKey === key ? liveRequests.entries : []).map(
-      (entry) => entry.requestId
-    ),
+    liveRequestIds,
+    requestUpdates,
+    excludedRequestIds,
+    auditEntries: auditEnabled ? liveAuditEntries : EMPTY_AUDIT_ENTRIES,
     pollingEnabled,
     togglePolling
   }

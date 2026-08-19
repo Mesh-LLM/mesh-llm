@@ -1,6 +1,6 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { Download, Trash2 } from 'lucide-react'
-import { useRef, useState, type RefObject } from 'react'
+import { useMemo, useRef, useState, type RefObject } from 'react'
 import {
   SharedModal,
   SharedModalActionStrip,
@@ -16,6 +16,7 @@ import { LogsApiClient, type LogsRequestQuery } from '@/features/logs/api/client
 import type { LogExport } from '@/features/logs/api/schemas'
 import { LogCleanupDialog } from '@/features/logs/components/LogCleanupDialog'
 import { supportsCleanup } from '@/features/logs/components/LogCleanupScope'
+import type { LogEventCategory, LogEventLedgerRow } from '@/features/logs/lib/log-event-ledger'
 
 type ActionState = { readonly message: string; readonly tone: 'success' | 'error' } | undefined
 
@@ -23,7 +24,19 @@ type LogOperationsProps = {
   readonly operation: 'cleanup' | 'export'
   readonly query: LogsRequestQuery
   readonly onMaintenanceMutationSucceeded?: () => void
+  readonly rows?: readonly LogEventLedgerRow[]
+  readonly selectedCategories?: ReadonlySet<LogEventCategory>
 }
+
+type CleanupSnapshot = {
+  readonly generation: number
+  readonly rows: readonly LogEventLedgerRow[]
+  readonly selectedCategories: ReadonlySet<LogEventCategory>
+  readonly from: string | undefined
+  readonly to: string | undefined
+}
+
+const DEFAULT_CLEANUP_CATEGORIES = new Set<LogEventCategory>(['requests', 'system', 'quic', 'gossip'])
 
 function isReasonValid(reason: string) {
   return reason.trim().length > 0
@@ -144,9 +157,20 @@ function ExportDialog({
   )
 }
 
-export function LogOperations({ operation, query, onMaintenanceMutationSucceeded }: LogOperationsProps) {
+export function LogOperations({
+  operation,
+  query,
+  onMaintenanceMutationSucceeded,
+  rows = [],
+  selectedCategories = DEFAULT_CLEANUP_CATEGORIES
+}: LogOperationsProps) {
   const [open, setOpen] = useState(false)
+  const [cleanupSnapshot, setCleanupSnapshot] = useState<CleanupSnapshot>()
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const fallbackSnapshot = useMemo<CleanupSnapshot>(
+    () => ({ generation: 0, rows, selectedCategories, from: query.from, to: query.to }),
+    [rows, selectedCategories, query.from, query.to]
+  )
 
   switch (operation) {
     case 'export':
@@ -170,34 +194,52 @@ export function LogOperations({ operation, query, onMaintenanceMutationSucceeded
           <ExportDialog open={open} onOpenChange={setOpen} query={query} returnFocusRef={triggerRef} />
         </div>
       )
-    case 'cleanup':
+    case 'cleanup': {
+      const snapshot = cleanupSnapshot ?? fallbackSnapshot
+      const cleanupQuery = { ...query, from: snapshot.from, to: snapshot.to }
       return (
         <div className="flex flex-wrap items-center gap-2">
           <Button
             ref={triggerRef}
             className="ui-control-destructive h-8 gap-1.5 rounded-[var(--radius)] px-2.5 text-[length:var(--density-type-caption)]"
             disabled={!supportsCleanup(query)}
-            onClick={() => setOpen(true)}
+            onClick={() => {
+              setCleanupSnapshot({
+                generation: Date.now(),
+                rows: [...rows],
+                selectedCategories: new Set(selectedCategories),
+                from: query.from,
+                to: query.to
+              })
+              setOpen(true)
+            }}
             size="sm"
             type="button"
             variant="outline"
           >
             <Trash2 className="size-3.5" aria-hidden="true" />
-            Scoped cleanup
+            Clean up logs
           </Button>
           {!supportsCleanup(query) ? (
             <span className="type-caption text-fg-dim">
-              Clear active source or outcome selection before cleaning durable records.
+              Clear active-source or non-terminal outcome filters before removing durable logs.
             </span>
           ) : null}
           <LogCleanupDialog
+            key={`${snapshot.from ?? ''}:${snapshot.to ?? ''}:${[...snapshot.selectedCategories].join(',')}:${snapshot.generation}`}
             open={open}
             onMaintenanceMutationSucceeded={onMaintenanceMutationSucceeded}
-            onOpenChange={setOpen}
-            query={query}
+            onOpenChange={(nextOpen) => {
+              setOpen(nextOpen)
+              if (!nextOpen) setCleanupSnapshot(undefined)
+            }}
+            query={cleanupQuery}
             returnFocusRef={triggerRef}
+            rows={snapshot.rows}
+            initialCategories={snapshot.selectedCategories}
           />
         </div>
       )
+    }
   }
 }

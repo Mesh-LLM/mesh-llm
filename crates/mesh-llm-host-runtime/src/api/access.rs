@@ -33,6 +33,7 @@ pub(crate) fn requires_trusted_local_access(method: &str, path: &str) -> bool {
             | ("POST", "/api/runtime/control/ensure-model")
             | ("POST", "/api/runtime/control/drain-model")
             | ("POST", "/api/runtime/config/validate")
+            | ("POST", "/api/runtime/pick-directory")
             | ("POST", "/api/runtime/mesh-guardrails")
             | ("POST", "/api/runtime/models")
             | ("POST", "/api/model-interests")

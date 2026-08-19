@@ -1153,9 +1153,7 @@ describe('DefaultsTab', () => {
     expect(screen.queryByText('Accepted: auto, pinned')).not.toBeInTheDocument()
 
     expect(screen.getByRole('textbox', { name: 'Projector path' })).toBeInTheDocument()
-    expect(
-      screen.queryByText('Path hint: enter a local filesystem path. No file picker is available here.')
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Paths are resolved on the machine running this MeshLLM node.')).not.toBeInTheDocument()
 
     expect(screen.getByRole('textbox', { name: 'Projector URL' })).toBeInTheDocument()
     expect(screen.queryByText('URL hint: enter a full URL including protocol.')).not.toBeInTheDocument()
@@ -1229,7 +1227,7 @@ describe('DefaultsTab', () => {
     const projectorPathRow = settingsRow('Projector path')
     await user.hover(settingInfoTrigger(projectorPathRow))
     expect(
-      await screen.findByText('Path hint: enter a local filesystem path. No file picker is available here.', {
+      await screen.findByText('Paths are resolved on the machine running this MeshLLM node.', {
         selector: 'div'
       })
     ).toBeInTheDocument()

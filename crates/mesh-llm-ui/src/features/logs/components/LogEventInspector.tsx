@@ -9,6 +9,7 @@ import {
   SharedModalHeader,
   SharedModalTitle
 } from '@/components/ui/SharedModal'
+import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { LogRequestId } from '@/features/logs/api/ids'
 import type { LogAuditEntry } from '@/features/logs/api/schemas'
@@ -25,8 +26,10 @@ type LogEventInspectorProps = {
   readonly onMaintenanceMutationSucceeded?: () => void
 }
 
-const INSPECTOR_FRAME_CLASS =
-  'flex h-dvh w-full flex-col overflow-hidden rounded-none border-0 sm:h-[min(calc(100dvh-4rem),50rem)] sm:w-[calc(100vw-2rem)] sm:max-w-[720px] sm:rounded-[var(--radius-lg)] sm:border'
+const INSPECTOR_FRAME_BASE_CLASS =
+  'flex h-dvh w-full flex-col overflow-hidden rounded-none border-0 sm:w-[calc(100vw-2rem)] sm:rounded-[var(--radius-lg)] sm:border'
+const REQUEST_INSPECTOR_FRAME_CLASS = `${INSPECTOR_FRAME_BASE_CLASS} sm:h-[min(calc(100dvh-3rem),54rem)] sm:max-w-[1120px]`
+const AUDIT_INSPECTOR_FRAME_CLASS = `${INSPECTOR_FRAME_BASE_CLASS} sm:h-auto sm:max-h-[min(calc(100dvh-4rem),50rem)] sm:max-w-[720px]`
 
 export function LogEventInspector({
   inspector,
@@ -47,7 +50,7 @@ export function LogEventInspector({
     >
       {inspector ? (
         <SharedModalContent
-          className={`${INSPECTOR_FRAME_CLASS} data-[state=closed]:zoom-out-100 data-[state=open]:zoom-in-100`}
+          className={`${inspector.type === 'audit' ? AUDIT_INSPECTOR_FRAME_CLASS : REQUEST_INSPECTOR_FRAME_CLASS} data-[state=closed]:zoom-out-100 data-[state=open]:zoom-in-100`}
           data-request-inspector-shell={inspector.type === 'request' ? 'fixed' : undefined}
           onCloseAutoFocus={(event) => {
             if (!returnFocusRef.current) return
@@ -72,11 +75,15 @@ export function LogEventInspector({
   )
 }
 
-function AuditInspectorHeader({ title }: { readonly title: string }) {
+function AuditInspectorHeader({ code }: { readonly code: string }) {
   return (
     <SharedModalHeader className="relative min-w-0 shrink-0 pr-16 lg:pr-14">
-      <SharedModalTitle className="min-w-0 break-words">{title}</SharedModalTitle>
-      <SharedModalDescription>Privacy-safe operational metadata from the bounded loaded window.</SharedModalDescription>
+      <SharedModalTitle aria-label={`Operational event ${code}`} className="min-w-0 break-words">
+        {code}
+      </SharedModalTitle>
+      <SharedModalDescription>
+        Recorded state, timing, source, and related identifiers for this event.
+      </SharedModalDescription>
       <DialogPrimitive.Close asChild>
         <Button
           aria-label="Close inspector"
@@ -121,13 +128,13 @@ function InspectorContent({
     }
     case 'audit': {
       const audit = auditEntries.find((entry) => entry.entryId === inspector.id)
-      const title = `Operational event ${audit?.code ?? inspector.id}`
+      const code = audit?.code ?? inspector.id
       return (
         <>
-          <AuditInspectorHeader title={title} />
+          <AuditInspectorHeader code={code} />
           <SharedModalBody
             aria-label="Operational event metadata"
-            className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5"
+            className="min-h-0 flex-1 overflow-y-auto p-0"
             role="region"
           >
             {audit ? <AuditMetadata audit={audit} /> : <AuditOutsideWindow />}
@@ -141,44 +148,113 @@ function InspectorContent({
 }
 
 function AuditMetadata({ audit }: { readonly audit: LogAuditEntry }) {
-  const fields: Array<readonly [string, string]> = [
+  const statusFields: Array<{
+    readonly kind: 'severity' | 'outcome'
+    readonly label: string
+    readonly value: string
+  }> = [
+    { kind: 'severity', label: 'Severity', value: audit.severity ?? 'Not provided' },
+    ...(audit.outcome ? ([{ kind: 'outcome' as const, label: 'Outcome', value: audit.outcome }] as const) : [])
+  ]
+  const metadataFields: Array<readonly [string, string]> = [
     ['Entry ID', audit.entryId],
-    ['Occurred', audit.occurredAt],
     ['Source', audit.source],
-    ['Code', audit.code],
-    ['Severity', audit.severity ?? 'Not provided'],
+    ['Occurred', audit.occurredAt],
     ['Sequence', String(audit.sequence)],
     ...(audit.subjectKind ? ([['Subject kind', audit.subjectKind]] as const) : []),
     ...(audit.subjectId ? ([['Subject ID', audit.subjectId]] as const) : []),
     ...(audit.operationId ? ([['Operation ID', audit.operationId]] as const) : []),
     ...(audit.requestId ? ([['Request ID', audit.requestId]] as const) : []),
     ...(audit.reasonCode ? ([['Reason', audit.reasonCode]] as const) : []),
-    ...(audit.outcome ? ([['Outcome', audit.outcome]] as const) : []),
     ...(audit.durationMs !== undefined ? ([['Duration', `${audit.durationMs} ms`]] as const) : []),
     ...Object.entries(audit.numericSummaries ?? {}).map(([key, value]) => [`Summary · ${key}`, String(value)] as const)
   ]
 
   return (
-    <dl className="grid gap-x-[var(--shell-normal)] gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-      {fields.map(([label, value]) => (
-        <div className="min-w-0" key={label}>
-          <dt className="type-label text-fg-faint">{label}</dt>
-          <dd className="mt-1 break-words font-mono text-[length:var(--density-type-caption-lg)] text-foreground">
-            {value}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <div className="flex min-w-0 flex-col">
+      <section
+        aria-labelledby="audit-state-heading"
+        className="border-b border-border-soft bg-panel-strong px-4 py-4 sm:px-5"
+      >
+        <h2 className="type-panel-title text-foreground" id="audit-state-heading">
+          Event state
+        </h2>
+        <dl className="mt-3 flex min-w-0 flex-wrap gap-x-8 gap-y-3">
+          {statusFields.map(({ kind, label, value }) => (
+            <div className="min-w-[8rem]" key={label}>
+              <dt className="type-label text-fg-faint">{label}</dt>
+              <dd className="mt-1">
+                <StatusBadge dot size="caption" tone={statusTone(kind, value)}>
+                  {value}
+                </StatusBadge>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+      <section aria-labelledby="audit-metadata-heading" className="min-w-0 px-4 py-4 sm:px-5">
+        <h2 className="type-panel-title text-foreground" id="audit-metadata-heading">
+          Event metadata
+        </h2>
+        <dl className="mt-2 grid min-w-0 gap-x-6 sm:grid-cols-2">
+          {metadataFields.map(([label, value]) => (
+            <div
+              className="min-w-0 border-t border-border-soft py-2.5 sm:grid sm:grid-cols-[minmax(5.75rem,max-content)_minmax(0,1fr)] sm:items-baseline sm:gap-3"
+              key={label}
+            >
+              <dt className="type-label text-fg-faint">{label}</dt>
+              <dd className="mt-1 min-w-0 font-mono text-[length:var(--density-type-caption-lg)] text-foreground sm:mt-0 [overflow-wrap:anywhere]">
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+    </div>
   )
 }
 
 function AuditOutsideWindow() {
   return (
-    <div role="status">
+    <div className="px-4 py-5 sm:px-5" role="status">
       <div className="type-panel-title text-foreground">Operational event is outside the loaded window</div>
       <p className="type-body mt-1 text-fg-dim">Return to the ledger and load a window containing this entry.</p>
     </div>
   )
+}
+
+function statusTone(kind: 'severity' | 'outcome', value: string): StatusBadgeTone {
+  const normalized = value.trim().toLowerCase()
+  return kind === 'severity' ? (SEVERITY_TONES[normalized] ?? 'muted') : (OUTCOME_TONES[normalized] ?? 'muted')
+}
+
+const SEVERITY_TONES: Readonly<Record<string, StatusBadgeTone>> = {
+  info: 'muted',
+  warning: 'warn',
+  error: 'bad'
+}
+
+const OUTCOME_TONES: Readonly<Record<string, StatusBadgeTone>> = {
+  active: 'accent',
+  running: 'accent',
+  started: 'warn',
+  pending: 'warn',
+  loading: 'warn',
+  cancelled: 'warn',
+  canceled: 'warn',
+  completed: 'good',
+  accepted: 'good',
+  ready: 'good',
+  success: 'good',
+  succeeded: 'good',
+  healthy: 'good',
+  available: 'good',
+  failed: 'bad',
+  error: 'bad',
+  rejected: 'bad',
+  denied: 'bad',
+  blocked: 'bad',
+  dropped: 'bad'
 }
 
 function assertNever(value: never): never {

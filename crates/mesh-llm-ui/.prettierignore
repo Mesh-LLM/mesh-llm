@@ -6,3 +6,4 @@ playwright-report
 test-results
 coverage
 AGENTS.md
+.sisyphus

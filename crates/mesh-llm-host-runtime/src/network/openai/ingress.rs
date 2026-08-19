@@ -931,7 +931,9 @@ async fn handle_buffered_api_request(
     // Claim the parent at host OpenAI ingress. All downstream dispatch sees
     // only a metadata observer; this scope remains the sole terminal owner.
     let request_metadata =
-        crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path);
+        crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path)
+            .with_source(Some("direct_http"))
+            .with_method(Some(&request.method));
     let mut lifecycle = crate::logging_runtime_state()
         .map(|state| state.openai_ingress_attachment(request.request_id, request_metadata))
         .unwrap_or_else(OpenAiLifecycleAttachment::unowned);

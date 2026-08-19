@@ -18,6 +18,7 @@
 //!   GET  /api/runtime/stages — backend-neutral staged-serving state (JSON)
 //!   GET  /api/runtime/config-schema — merged built-in and installed-plugin config schema (JSON)
 //!   GET  /api/runtime/config-control-state — local-only runtime config availability/options overlay (JSON)
+//!   POST /api/runtime/pick-directory — open the trusted-local host directory picker
 //!   GET  /api/runtime/control-bootstrap — local-only owner-control bootstrap policy (JSON)
 //!   POST /api/runtime/control/get-config — run local owner-control get-config against an explicit endpoint
 //!   POST /api/runtime/control/refresh-inventory — run local owner-control refresh-inventory against an explicit endpoint

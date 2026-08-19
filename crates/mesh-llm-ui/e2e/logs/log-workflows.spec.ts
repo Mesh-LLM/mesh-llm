@@ -150,13 +150,13 @@ async function tabTo(page: Page, locator: ReturnType<Page['getByLabel']>, maxTab
 }
 
 async function previewScopedCleanup(page: Page, reason = 'retention review') {
-  await page.getByRole('button', { name: 'Scoped cleanup' }).click()
-  const cleanupDialog = page.getByRole('dialog', { name: 'Preview scoped cleanup' })
-  await cleanupDialog.getByLabel('Delete terminal logs before').fill(TERMINAL_AT)
-  await cleanupDialog.getByLabel('Request scope').fill('1')
-  await cleanupDialog.getByLabel('Required audit reason').fill(reason)
-  await cleanupDialog.getByRole('button', { name: 'Preview cleanup' }).click()
-  return page.getByRole('dialog', { name: 'Confirm scoped cleanup' })
+  await page.getByRole('button', { name: 'Clean up logs' }).click()
+  const cleanupDialog = page.getByRole('dialog', { name: 'Review log cleanup' })
+  await cleanupDialog.getByLabel('Reason for removal').fill(reason)
+  await cleanupDialog.getByRole('button', { name: 'Review deletion' }).click()
+  const reviewDialog = page.getByRole('dialog', { name: 'Review log cleanup' })
+  await expect(reviewDialog.getByRole('heading', { name: 'Review log cleanup' })).toBeVisible()
+  return reviewDialog
 }
 
 function requestRow(page: Page, requestId: string) {
@@ -414,7 +414,7 @@ test('logs recovery uses the dedicated stream gap and bounded polling fallback',
 
   await pollingToggle.focus()
   await browserPage.keyboard.press('Tab')
-  await expect(browserPage.getByRole('button', { name: 'Scoped cleanup' })).toBeFocused()
+  await expect(browserPage.getByRole('button', { name: 'Clean up logs' })).toBeFocused()
   await browserPage.keyboard.press('Shift+Tab')
   await expect(pollingToggle).toBeFocused()
   await expect.poll(() => pollingToggle.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('solid')
@@ -432,10 +432,10 @@ test('metadata-only export and previewed cleanup stay separated without dead-let
   await browserPage.goto('/logs')
   const infoBanner = browserPage.getByRole('region', { name: 'System logs' })
   const ledgerControls = browserPage.getByRole('region', { name: 'Event log controls' })
-  await expect(infoBanner.getByRole('button', { name: 'Scoped cleanup' })).toBeVisible()
+  await expect(infoBanner.getByRole('button', { name: 'Clean up logs' })).toBeVisible()
   await expect(infoBanner.getByRole('button', { name: 'Export view' })).toHaveCount(0)
   await expect(ledgerControls.getByRole('button', { name: 'Export view' })).toBeVisible()
-  await expect(ledgerControls.getByRole('button', { name: 'Scoped cleanup' })).toHaveCount(0)
+  await expect(ledgerControls.getByRole('button', { name: 'Clean up logs' })).toHaveCount(0)
   await expect(browserPage.getByRole('button', { name: 'Dead-letter retry' })).toHaveCount(0)
 
   await ledgerControls.getByRole('button', { name: 'Export view' }).click()
@@ -446,17 +446,30 @@ test('metadata-only export and previewed cleanup stay separated without dead-let
   expect(backend.operationBodies[0]).toContain('"includeArtifacts":false')
   await exportDialog.getByRole('button', { name: 'Cancel' }).click()
 
-  await infoBanner.getByRole('button', { name: 'Scoped cleanup' }).click()
-  const cleanupDialog = browserPage.getByRole('dialog', { name: 'Preview scoped cleanup' })
-  await cleanupDialog.getByLabel('Delete terminal logs before').fill(TERMINAL_AT)
-  await cleanupDialog.getByLabel('Request scope').fill('1')
-  await cleanupDialog.getByLabel('Required audit reason').fill('retention review')
-  await cleanupDialog.getByRole('button', { name: 'Preview cleanup' }).click()
-  const confirmDialog = browserPage.getByRole('dialog', { name: 'Confirm scoped cleanup' })
-  await expect(confirmDialog.getByRole('heading', { name: 'Confirm scoped cleanup' })).toBeVisible()
-  await confirmDialog.getByRole('button', { name: 'Confirm cleanup' }).click()
-  await expect(browserPage.getByText('Cleanup completed.')).toBeVisible()
-  await confirmDialog.getByRole('button', { name: 'Cancel' }).click()
+  await infoBanner.getByRole('button', { name: 'Clean up logs' }).click()
+  const cleanupDialog = browserPage.getByRole('dialog', { name: 'Review log cleanup' })
+  await expect(cleanupDialog.getByRole('slider', { name: 'Window start' })).toBeVisible()
+  await expect(cleanupDialog.getByRole('slider', { name: 'Window end' })).toBeVisible()
+  await expect(
+    cleanupDialog.getByRole('button', { name: /Requests chart layer.*selected for cleanup preview/ })
+  ).toHaveAttribute('data-state', 'on')
+  await expect(
+    cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ })
+  ).toHaveAttribute('data-state', 'on')
+  await cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ }).click()
+  await expect(
+    cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ })
+  ).toHaveAttribute('data-state', 'off')
+  await cleanupDialog.getByLabel('Reason for removal').fill('retention review')
+  await cleanupDialog.getByRole('button', { name: 'Review deletion' }).click()
+  expect(JSON.parse(backend.operationBodies[1] ?? '')).toMatchObject({ requestLimit: 100 })
+  const confirmDialog = browserPage.getByRole('dialog', { name: 'Review log cleanup' })
+  await expect(confirmDialog.getByRole('heading', { name: 'Review log cleanup' })).toBeVisible()
+  await expect(confirmDialog.getByText('Operational events stay retained.')).toBeVisible()
+  await confirmDialog.getByRole('button', { name: 'Delete this batch' }).click()
+  await expect(browserPage.getByText('Log cleanup completed.')).toBeVisible()
+  await expect(confirmDialog.getByRole('heading', { name: 'Cleanup complete' })).toBeVisible()
+  await confirmDialog.getByRole('button', { name: 'Close' }).click()
   expect(backend.operationBodies).toHaveLength(3)
 })
 
@@ -475,18 +488,20 @@ test('partial cleanup retries retained artifact work and refetches the active le
   const listCallsBeforeCleanup = backend.listCalls
 
   const confirmDialog = await previewScopedCleanup(browserPage)
-  await expect(confirmDialog.getByRole('heading', { name: 'Confirm scoped cleanup' })).toBeVisible()
+  await expect(confirmDialog.getByRole('heading', { name: 'Review log cleanup' })).toBeVisible()
   expect(backend.listCalls).toBe(listCallsBeforeCleanup)
 
-  await confirmDialog.getByRole('button', { name: 'Confirm cleanup' }).click()
-  await expect(confirmDialog.getByText('Cleanup completed with diagnostics.')).toBeVisible()
-  await expect(confirmDialog.getByRole('button', { name: 'Retry cleanup' })).toBeVisible()
+  await confirmDialog.getByRole('button', { name: 'Delete this batch' }).click()
+  await expect(
+    confirmDialog.getByText('Cleanup removed 1 request group; 1 linked file still needs attention.')
+  ).toBeVisible()
+  await expect(confirmDialog.getByRole('button', { name: 'Retry file removal' })).toBeVisible()
   await expect.poll(() => backend.listCalls).toBeGreaterThan(listCallsBeforeCleanup)
   const listCallsAfterPartialCleanup = backend.listCalls
 
-  await confirmDialog.getByRole('button', { name: 'Retry cleanup' }).click()
-  await expect(confirmDialog.getByText('Cleanup completed.')).toBeVisible()
-  await expect(confirmDialog.getByRole('button', { name: 'Retry cleanup' })).toHaveCount(0)
+  await confirmDialog.getByRole('button', { name: 'Retry file removal' }).click()
+  await expect(confirmDialog.getByText('Log cleanup completed.')).toBeVisible()
+  await expect(confirmDialog.getByRole('button', { name: 'Retry file removal' })).toHaveCount(0)
   await expect.poll(() => backend.listCalls).toBeGreaterThan(listCallsAfterPartialCleanup)
 
   expect(backend.cleanupRunBodies).toHaveLength(2)
@@ -506,7 +521,7 @@ test('failed cleanup mutation does not refetch the active ledger', async ({ page
   const listCallsBeforeFailure = backend.listCalls
 
   const confirmDialog = await previewScopedCleanup(browserPage, 'failed cleanup should not refresh')
-  await confirmDialog.getByRole('button', { name: 'Confirm cleanup' }).click()
+  await confirmDialog.getByRole('button', { name: 'Delete this batch' }).click()
   await expect(confirmDialog.getByText('Logs API request failed with HTTP 500')).toBeVisible()
   expect(backend.cleanupRunBodies).toHaveLength(1)
   expect(backend.listCalls).toBe(listCallsBeforeFailure)
@@ -568,20 +583,20 @@ test('opening a request row keeps ledger content mounted while the inspector app
   await expect.poll(() => backend.releaseStream).toBeDefined()
   await expect.poll(() => backend.listCalls).toBe(2)
 
-  const requestsOverTime = browserPage.getByRole('heading', { level: 2, name: 'Requests Over Time' })
+  const eventsOverTime = browserPage.getByRole('heading', { level: 2, name: 'Events Over Time' })
   const requestSummary = browserPage.getByRole('region', { name: 'Request summary' })
   const eventControls = browserPage.getByRole('region', { name: 'Event log controls' })
   const row = requestRow(browserPage, REQUEST_ID)
-  await expect(requestsOverTime).toBeVisible()
+  await expect(eventsOverTime).toBeVisible()
   await expect(requestSummary).toBeVisible()
   await expect(eventControls).toBeVisible()
   await expect(row).toBeVisible()
-  const [requestsOverTimeElement, requestSummaryElement, eventControlsElement] = await Promise.all([
-    requestsOverTime.evaluateHandle((element) => element),
+  const [eventsOverTimeElement, requestSummaryElement, eventControlsElement] = await Promise.all([
+    eventsOverTime.evaluateHandle((element) => element),
     requestSummary.evaluateHandle((element) => element),
     eventControls.evaluateHandle((element) => element)
   ])
-  const mountedElements = [requestsOverTimeElement, requestSummaryElement, eventControlsElement] as const
+  const mountedElements = [eventsOverTimeElement, requestSummaryElement, eventControlsElement] as const
   const eventControlsTop = await eventControls.evaluate((element) => element.getBoundingClientRect().top)
 
   try {
@@ -631,12 +646,18 @@ test('unified event rows preserve filter state and restore focus after inspectin
   await expect(auditInspector).toHaveCount(0)
   await expect(auditRow).toBeFocused()
 
+  const chartLegend = browserPage.getByRole('list', { name: 'Visible event categories' })
+  await expect(chartLegend).toContainText('Requests')
+  await expect(chartLegend).toContainText('System')
+
   await browserPage.getByRole('button', { name: /Filter event logs/ }).click()
   const filterDialog = browserPage.getByRole('dialog', { name: 'Event log filters' })
   await filterDialog.getByRole('checkbox', { name: /Requests/i }).uncheck()
   await expect(browserPage).toHaveURL(/categories=/)
   await expect(requestRow(browserPage, REQUEST_ID)).toHaveCount(0)
   await expect(auditRow).toBeVisible()
+  await expect(chartLegend).not.toContainText('Requests')
+  await expect(chartLegend).toContainText('System')
 })
 
 test('legacy request deep links open the canonical request inspector tab', async ({ page: browserPage }) => {

@@ -96,7 +96,7 @@ test('request logs keeps text, controls, and live status badges AA-compliant acr
   await expect(infoBanner.getByRole('heading', { level: 1, name: 'System logs' })).toBeVisible()
   await expect(infoBanner).toContainText('Monitor request activity and operational events from this MeshLLM host.')
   await expect(infoBanner.getByText('Reconnecting', { exact: true })).toBeVisible()
-  await expect(infoBanner.getByRole('button', { name: 'Scoped cleanup' })).toBeVisible()
+  await expect(infoBanner.getByRole('button', { name: 'Clean up logs' })).toBeVisible()
   await expect(
     page.getByRole('region', { name: 'Event log controls' }).getByRole('button', { name: 'Export view' })
   ).toBeVisible()

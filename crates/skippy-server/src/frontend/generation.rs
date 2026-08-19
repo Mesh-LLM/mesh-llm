@@ -1,11 +1,13 @@
 mod cache_hints;
 mod draft_runner;
+mod incremental_text;
 mod parsing;
 mod persistent_lanes;
 mod queue;
 mod server;
 mod streaming;
 mod timeouts;
+mod tool_call_stream;
 mod types;
 
 pub use cache_hints::{CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS};
@@ -23,6 +25,8 @@ pub(in crate::frontend) use cache_hints::{
     GenerationCacheStats, MAX_EXACT_REPLAY_TOKENS, OpenAiCacheHints, OpenAiGenerationIds,
 };
 pub(in crate::frontend) use draft_runner::*;
+#[cfg(test)]
+pub(in crate::frontend) use incremental_text::recorded_fixture;
 pub(in crate::frontend) use parsing::*;
 pub(in crate::frontend) use persistent_lanes::*;
 pub(in crate::frontend) use queue::*;

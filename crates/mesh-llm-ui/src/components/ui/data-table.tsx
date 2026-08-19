@@ -36,6 +36,7 @@ export type DataTableProps<TData extends RowData> = {
   readonly getRowAriaLabel?: (row: TData) => string
   readonly onRowActivate?: (row: TData) => void
   readonly tableClassName?: string
+  readonly tableWrapperClassName?: string
 }
 
 export function DataTable<TData extends RowData>({
@@ -53,7 +54,8 @@ export function DataTable<TData extends RowData>({
   getRowId,
   getRowAriaLabel,
   onRowActivate,
-  tableClassName
+  tableClassName,
+  tableWrapperClassName
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
@@ -99,7 +101,7 @@ export function DataTable<TData extends RowData>({
           />
         </div>
       ) : null}
-      <Table aria-label={ariaLabel} className={tableClassName}>
+      <Table aria-label={ariaLabel} className={tableClassName} wrapperClassName={tableWrapperClassName}>
         <TableHeader className="bg-panel-strong">
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow className="border-border-soft hover:bg-panel-strong" key={headerGroup.id}>

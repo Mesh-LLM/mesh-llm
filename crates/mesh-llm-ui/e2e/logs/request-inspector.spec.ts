@@ -32,6 +32,7 @@ test('keeps fixed geometry across all four canonical tabs for a completed reques
 
   const baseline = geometry[0]
   if (baseline === undefined) throw new Error('Request Inspector geometry was not captured')
+  expect(baseline.width).toBeGreaterThan(720)
   for (const bounds of geometry.slice(1)) {
     expect(Math.abs(bounds.width - baseline.width)).toBeLessThanOrEqual(1)
     expect(Math.abs(bounds.height - baseline.height)).toBeLessThanOrEqual(1)

@@ -255,6 +255,46 @@ mod tests {
     }
 
     #[test]
+    fn chat_stream_normalizer_carries_one_id_across_incrementally_streamed_tool_calls() {
+        // The in-process serving path streams a tool call as a header delta
+        // (`id` + `function.name`) followed by `function.arguments` fragments.
+        // The front door must leave the producer's id alone and repeat it on the
+        // fragments, so a client sees one call with the concatenated arguments.
+        let mut state = ChatStreamNormalizationState {
+            synthetic_seed: Some(11),
+            ..Default::default()
+        };
+        let chunks = [
+            r#"{"id":"chatcmpl-a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_skippy_abc","type":"function","function":{"name":"read_file","arguments":"{"}}]},"finish_reason":null}]}"#,
+            r#"{"id":"chatcmpl-a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"path\":\"a.md\""}}]},"finish_reason":null}]}"#,
+            r#"{"id":"chatcmpl-a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"finish_reason":null}]}"#,
+        ];
+
+        let normalized = chunks
+            .iter()
+            .map(|chunk| {
+                serde_json::from_str::<serde_json::Value>(&state.normalize_data(chunk)).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        for chunk in &normalized {
+            assert_eq!(
+                chunk["choices"][0]["delta"]["tool_calls"][0]["id"], "call_skippy_abc",
+                "every fragment must carry the producer's id: {chunk}"
+            );
+        }
+        let arguments = normalized
+            .iter()
+            .map(|chunk| {
+                chunk["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+                    .as_str()
+                    .unwrap_or_default()
+            })
+            .collect::<String>();
+        assert_eq!(arguments, r#"{"path":"a.md"}"#);
+    }
+
+    #[test]
     fn chat_stream_normalizer_keeps_completion_and_tool_ids_stable() {
         let mut state = ChatStreamNormalizationState {
             synthetic_seed: Some(7),

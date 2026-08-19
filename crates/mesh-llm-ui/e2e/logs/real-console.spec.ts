@@ -19,6 +19,11 @@ function requireHarnessValue(value: string | undefined, name: string) {
   return value
 }
 
+function requireObservedRequest(value: string | undefined): string {
+  if (!value) throw new Error('real console harness did not observe a durable request id')
+  return value
+}
+
 test.describe('real embedded logging console', () => {
   test.skip(!enabled, 'runs only under scripts/qa-logging-console-e2e.sh')
   test.describe.configure({ mode: 'serial' })
@@ -31,11 +36,13 @@ test.describe('real embedded logging console', () => {
     const persistedId = requireHarnessValue(persistedRequestId, 'MESH_LOGS_E2E_PERSISTED_REQUEST_ID')
     const observedRequests: string[] = []
     let ledgerGets = 0
+    let auditGets = 0
     let streamReconnectUrl = ''
 
     page.on('request', (request) => {
       const url = new URL(request.url())
       if (url.pathname === '/api/logs/requests' && request.method() === 'GET') ledgerGets += 1
+      if (url.pathname === '/api/logs/audit' && request.method() === 'GET') auditGets += 1
       if (url.pathname === '/api/logs/events' && url.searchParams.has('cursor')) streamReconnectUrl = url.toString()
     })
 
@@ -43,8 +50,17 @@ test.describe('real embedded logging console', () => {
     await page.goto(`/logs?replayCursor=${encodeURIComponent('v1:0.0.0')}`)
     await expect(page.getByRole('heading', { level: 1, name: 'System logs' })).toBeVisible()
     await expect(requestRow(page, persistedId)).toBeVisible()
-    await expect.poll(() => ledgerGets).toBeGreaterThanOrEqual(2)
     await expect.poll(() => streamReconnectUrl).not.toBe('')
+    // This harness deliberately supplies an evicted cursor, so the initial GET
+    // is followed by one authoritative replay-gap recovery before the stream
+    // becomes the sole source of current request projections.
+    await expect.poll(() => ledgerGets).toBeGreaterThanOrEqual(2)
+    await page.waitForTimeout(500)
+    const connectedLedgerGets = ledgerGets
+    const connectedAuditGets = auditGets
+    await page.waitForTimeout(5_500)
+    expect(ledgerGets).toBe(connectedLedgerGets)
+    expect(auditGets).toBe(connectedAuditGets)
 
     await requestRow(page, persistedId).click()
     const persistedInspector = page.getByRole('dialog', { name: 'Request Inspector' })
@@ -67,10 +83,10 @@ test.describe('real embedded logging console', () => {
         return match?.requestId
       })
       .toBeTruthy()
-    const lifecycleRequestId = observedRequests.at(-1)
-    expect(lifecycleRequestId).toBeTruthy()
-    await expect(requestRow(page, lifecycleRequestId ?? '')).toBeVisible()
-    await requestRow(page, lifecycleRequestId ?? '').click()
+    const lifecycleRequestId = requireObservedRequest(observedRequests.at(-1))
+    await expect(requestRow(page, lifecycleRequestId)).toBeVisible()
+    expect(ledgerGets).toBe(connectedLedgerGets)
+    await requestRow(page, lifecycleRequestId).click()
     await expect(page.getByRole('dialog', { name: 'Request Inspector' })).toBeVisible()
     await page.getByRole('tab', { name: 'Diagnostics' }).click()
     await expect(page.getByText('rejected', { exact: true }).first()).toBeVisible()
@@ -101,18 +117,44 @@ test.describe('real embedded logging console', () => {
     )
     await exportDialog.getByRole('button', { name: 'Cancel' }).click()
 
-    await page.getByRole('button', { name: 'Scoped cleanup' }).click()
-    const cleanupDialog = page.getByRole('dialog', { name: 'Preview scoped cleanup' })
-    await cleanupDialog.getByLabel('Delete terminal logs before').fill(new Date(Date.now() + 60_000).toISOString())
-    await cleanupDialog.getByLabel('Request scope').fill('1')
-    await cleanupDialog.getByLabel('Required audit reason').fill('real scoped cleanup certification')
-    await cleanupDialog.getByRole('button', { name: 'Preview cleanup' }).click()
-    const confirmDialog = page.getByRole('dialog', { name: 'Confirm scoped cleanup' })
+    await page.getByRole('button', { name: 'Clean up logs' }).click()
+    const cleanupDialog = page.getByRole('dialog', { name: 'Review log cleanup' })
+    await cleanupDialog.getByLabel('Reason for removal').fill('real scoped cleanup certification')
+    const previewResponse = page.waitForResponse(
+      (response) => response.url().endsWith('/api/logs/cleanup/preview') && response.request().method() === 'POST'
+    )
+    await cleanupDialog.getByRole('button', { name: 'Review deletion' }).click()
+    const previewReceipt = await (await previewResponse).json()
+    await testInfo.attach('real-log-cleanup-preview.json', {
+      body: JSON.stringify(previewReceipt, null, 2),
+      contentType: 'application/json'
+    })
+    const confirmDialog = page.getByRole('dialog', { name: 'Review log cleanup' })
+    await expect(confirmDialog.getByRole('heading', { name: 'Review log cleanup' })).toBeVisible()
+    await confirmDialog.getByText('Audit details').click()
     await expect(confirmDialog.getByText('Operation ID', { exact: true })).toBeVisible()
     await expect(confirmDialog.getByText('Audit ID', { exact: true })).toBeVisible()
-    await confirmDialog.getByRole('button', { name: 'Confirm cleanup' }).click()
-    await expect(confirmDialog.getByRole('status').last()).toContainText(/Cleanup completed(\.| with diagnostics\.)/)
-    await confirmDialog.getByRole('button', { name: 'Cancel' }).click()
+    const cleanupResponse = page.waitForResponse(
+      (response) => response.url().endsWith('/api/logs/cleanup/run') && response.request().method() === 'POST'
+    )
+    await confirmDialog.getByRole('button', { name: 'Delete this batch' }).click()
+    const cleanupReceipt = await (await cleanupResponse).json()
+    await testInfo.attach('real-log-cleanup-run.json', {
+      body: JSON.stringify(cleanupReceipt, null, 2),
+      contentType: 'application/json'
+    })
+    await expect(confirmDialog.getByRole('status').last()).toContainText(
+      /Log cleanup completed(\.| with diagnostics\.)/
+    )
+    await confirmDialog.getByRole('button', { name: 'Close' }).click()
+    await expect(requestRow(page, lifecycleRequestId)).toHaveCount(0)
+    await expect
+      .poll(async () => {
+        const response = await page.request.get('/api/logs/requests?limit=100')
+        const body = (await response.json()) as LogPage
+        return body.items.some((item) => item.requestId === lifecycleRequestId)
+      })
+      .toBe(false)
 
     const secondResponse = await page.request.post(openAiEndpoint, {
       data: { model: 'qa-no-model', messages: [{ role: 'user', content: 'real delete receipt lifecycle' }] }
@@ -129,12 +171,13 @@ test.describe('real embedded logging console', () => {
 
     const current = await page.request.get('/api/logs/requests?limit=10')
     const currentPage = (await current.json()) as LogPage
-    const deleteId = currentPage.items.find(
-      (item) => item.requestId !== persistedId && item.requestId !== lifecycleRequestId
-    )?.requestId
+    const deleteId = requireObservedRequest(
+      currentPage.items.find((item) => item.requestId !== persistedId && item.requestId !== lifecycleRequestId)
+        ?.requestId
+    )
     expect(deleteId).toBeTruthy()
     await page.reload()
-    await requestRow(page, deleteId ?? '').click()
+    await requestRow(page, deleteId).click()
     await page.getByRole('button', { name: 'Delete terminal request' }).click()
     const deleteDialog = page.getByRole('dialog', { name: 'Delete terminal request?' })
     await deleteDialog.getByLabel('Required audit reason').fill('real delete receipt certification')
@@ -163,7 +206,11 @@ test.describe('real embedded logging console', () => {
     expect(axe.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
     await page.screenshot({ path: testInfo.outputPath('real-console-logs.png'), fullPage: true })
     await testInfo.attach('real-console-summary.json', {
-      body: JSON.stringify({ persistedId, lifecycleRequestId, deleteId, ledgerGets, streamReconnectUrl }, null, 2),
+      body: JSON.stringify(
+        { persistedId, lifecycleRequestId, deleteId, ledgerGets, auditGets, streamReconnectUrl },
+        null,
+        2
+      ),
       contentType: 'application/json'
     })
   })

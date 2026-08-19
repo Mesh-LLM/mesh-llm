@@ -6,7 +6,8 @@ use mesh_llm_events::logging::replay::ReplayChannel;
 use tokio::sync::mpsc;
 
 use super::protocol::{
-    GapData, audit_entry_frame, audit_gap_frame, error_frame, event_frame, gap_frame,
+    GapData, audit_entry_frame, audit_gap_frame, durable_audit_entry_frame, error_frame,
+    event_frame, gap_frame,
 };
 use super::query::{AuditCursor, AuditSelection, Cursor, Subscription};
 use crate::logging::{
@@ -101,6 +102,41 @@ impl ReplaySession {
             cursor,
             audit_cursor,
         }
+    }
+
+    pub(super) fn is_audit(&self) -> bool {
+        self.subscription.audit.is_some()
+    }
+
+    pub(super) fn durable_audit_query(
+        &self,
+    ) -> Option<(u64, mesh_llm_log_store::AuditEntryFilters)> {
+        let selection = self.subscription.audit.as_ref()?;
+        let filters = selection.durable_filters().ok()?;
+        Some((self.audit_cursor.sequence(), filters))
+    }
+
+    pub(super) fn durable_audit_frames(
+        &mut self,
+        records: Vec<mesh_llm_log_store::AuditEntryRow>,
+    ) -> Vec<String> {
+        let mut frames = Vec::with_capacity(records.len());
+        for record in records {
+            let Ok(sequence) = u64::try_from(record.sequence) else {
+                continue;
+            };
+            if sequence <= self.audit_cursor.sequence() {
+                continue;
+            }
+            match durable_audit_entry_frame(record) {
+                Ok(frame) => frames.push(frame),
+                Err(()) => frames.push(format!(
+                    "event: stream_error\nid: a1:{sequence}\ndata: {{\"code\":\"invalid_event\"}}\n\n"
+                )),
+            }
+            self.audit_cursor.advance(sequence);
+        }
+        frames
     }
 
     pub(super) fn next_frames(

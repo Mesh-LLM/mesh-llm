@@ -11,6 +11,7 @@ import {
   describeControlCondition,
   hasSchemaKind,
   numericMetadataForSetting,
+  TEXT_FIELD_BASE_CLASS,
   textFormatForSetting,
   type NumericControlMetadata,
   type SchemaSettingControlProps,
@@ -62,7 +63,8 @@ function openStringControl({
       aria-invalid={invalid ? 'true' : undefined}
       aria-label={setting.label}
       className={cn(
-        'ui-control h-[32px] w-full min-w-[280px] rounded-[var(--radius)] border bg-surface px-2.5 font-mono text-[length:var(--density-type-control)] text-foreground outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent',
+        TEXT_FIELD_BASE_CLASS,
+        'w-full min-w-[280px]',
         disabled && 'cursor-not-allowed opacity-60',
         invalid && 'border-bad shadow-[var(--shadow-surface-error-inset)]'
       )}
@@ -93,7 +95,7 @@ export function configurationControlDetailBuckets(
 
   const textFormat = textFormatForSetting(setting)
   if (textFormat === 'path') {
-    pushUnique(visibleDetails, 'Path hint: enter a local filesystem path. No file picker is available here.')
+    pushUnique(visibleDetails, 'Paths are resolved on the machine running this MeshLLM node.')
   }
   if (textFormat === 'url') pushUnique(visibleDetails, 'URL hint: enter a full URL including protocol.')
   if (hasSchemaKind(setting.valueSchema, 'array')) {

@@ -429,6 +429,11 @@ pub(crate) struct StatusPayload {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct LoggingStatusPayload {
     pub(crate) metadata_available: bool,
+    pub(crate) metadata_state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) schema_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) supported_schema_version: Option<u32>,
     pub(crate) capture_mode: &'static str,
     /// Artifact storage availability only; see `artifact_capture_ready` for
     /// whether production request paths are actually wired to capture.
@@ -463,6 +468,9 @@ impl From<crate::logging::LoggingRuntimeStatus> for LoggingStatusPayload {
     fn from(status: crate::logging::LoggingRuntimeStatus) -> Self {
         Self {
             metadata_available: status.metadata_available,
+            metadata_state: status.metadata_state,
+            schema_version: status.schema_version,
+            supported_schema_version: status.supported_schema_version,
             capture_mode: status.capture_mode,
             artifact_capture_available: status.artifact_capture_available,
             artifact_capture_ready: status.artifact_capture_ready,
@@ -1577,6 +1585,9 @@ mod tests {
                 "healthy",
                 LoggingStatusPayload {
                     metadata_available: true,
+                    metadata_state: "ready",
+                    schema_version: None,
+                    supported_schema_version: None,
                     capture_mode: "redacted_artifacts",
                     artifact_capture_available: true,
                     artifact_capture_ready: true,
@@ -1600,6 +1611,35 @@ mod tests {
                 "disabled",
                 LoggingStatusPayload {
                     metadata_available: false,
+                    metadata_state: "disabled",
+                    schema_version: None,
+                    supported_schema_version: None,
+                    capture_mode: "unavailable",
+                    artifact_capture_available: false,
+                    artifact_capture_ready: false,
+                    artifact_capture_degradation: None,
+                    persistence: LoggingPersistenceStatusPayload {
+                        state: "unavailable",
+                        queue_drops: 0,
+                        failures: 0,
+                        shutdown_losses: 0,
+                        outstanding: 0,
+                    },
+                    cleanup: LoggingCleanupStatusPayload {
+                        state: "not_started",
+                        shutdown_timeouts: 0,
+                        last_outcome: None,
+                        last_deleted_count: None,
+                    },
+                },
+            ),
+            (
+                "schema_incompatible",
+                LoggingStatusPayload {
+                    metadata_available: false,
+                    metadata_state: "schema_incompatible",
+                    schema_version: Some(14),
+                    supported_schema_version: Some(11),
                     capture_mode: "unavailable",
                     artifact_capture_available: false,
                     artifact_capture_ready: false,
@@ -1623,6 +1663,9 @@ mod tests {
                 "artifact_degraded",
                 LoggingStatusPayload {
                     metadata_available: true,
+                    metadata_state: "ready",
+                    schema_version: None,
+                    supported_schema_version: None,
                     capture_mode: "redacted_artifacts",
                     artifact_capture_available: false,
                     artifact_capture_ready: false,
@@ -1648,6 +1691,9 @@ mod tests {
                 "shutdown",
                 LoggingStatusPayload {
                     metadata_available: true,
+                    metadata_state: "ready",
+                    schema_version: None,
+                    supported_schema_version: None,
                     capture_mode: "redacted_artifacts",
                     artifact_capture_available: true,
                     artifact_capture_ready: true,
@@ -1696,6 +1742,9 @@ mod tests {
     fn logging_status_maps_runtime_snapshot_without_backend_details() {
         let payload = LoggingStatusPayload::from(crate::logging::LoggingRuntimeStatus {
             metadata_available: true,
+            metadata_state: "ready",
+            schema_version: None,
+            supported_schema_version: None,
             capture_mode: "redacted_artifacts",
             artifact_capture_available: false,
             artifact_capture_ready: false,

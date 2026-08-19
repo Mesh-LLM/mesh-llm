@@ -880,9 +880,8 @@ function ConfigurationEditorPage({
                 screenLabel="Configuration · logs"
                 summaryDescription={
                   <>
-                    Logs settings control security event recording and request-log retention. Configure log path,
-                    format, level, rotation policy, artifact capture, and replay capacity. Written to config.toml under
-                    the [audit] and [logging] sections.
+                    Configure request history, payload capture, delivery, and optional security audit output for this
+                    node. Changes are saved to the local MeshLLM configuration file.
                   </>
                 }
                 summaryTitle="Logs"

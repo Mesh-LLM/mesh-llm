@@ -33,6 +33,61 @@ fn preview_snapshots_bounded_targets_and_rejects_invalid_typed_input() {
 }
 
 #[test]
+fn cleanup_targets_visible_requests_instead_of_hidden_management_traffic() {
+    let (_root, artifacts) = fixture();
+    let store = artifacts.store_ref();
+    seed_terminal_with_metadata(
+        store,
+        "visible-request",
+        "2025-01-01T00:00:00.000740000Z",
+        "chat_completions",
+        "model-a",
+        "mesh",
+        "skippy",
+        "completed",
+    );
+    seed_terminal_with_metadata(
+        store,
+        "hidden-management-request",
+        "2025-01-01T00:00:00.000500000Z",
+        "management_get_status",
+        "model-a",
+        "management_api",
+        "management_get_status",
+        "completed",
+    );
+    let request = request_with_limit(31, "2025-01-01T00:00:00.001Z", 10);
+
+    let preview = store
+        .preview_cleanup(&request, &NeverCancelled)
+        .expect("preview visible cleanup");
+    assert_eq!(preview.planned.requests, 1);
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT request_id FROM maintenance_operation_targets WHERE operation_id = ?1",
+                [request.operation_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("visible cleanup target"),
+        "visible-request"
+    );
+
+    let completed = artifacts
+        .execute_cleanup(request.operation_id, &request.reason, &NeverCancelled)
+        .expect("execute visible cleanup");
+    assert_eq!(completed.executed.requests, 1);
+    assert!(store.query_request("visible-request").unwrap().is_none());
+    assert!(
+        store
+            .query_request("hidden-management-request")
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn stale_preview_only_cleanup_receipt_is_ttl_eligible() {
     let (_root, artifacts) = fixture();
     let store = artifacts.store_ref();

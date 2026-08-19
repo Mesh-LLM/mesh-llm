@@ -57,12 +57,26 @@ describe('LogRequestOverview', () => {
       expect(within(metrics).getByText(label)).toBeInTheDocument()
     }
     expect(metrics).toHaveTextContent('Completed')
+    expect(within(metrics).getByTestId('request-outcome')).toHaveTextContent('Completed')
+    expect(within(metrics).getByTestId('request-http-status')).toHaveTextContent('HTTP 200')
     expect(metrics).toHaveTextContent('57.0 s')
     expect(metrics).toHaveTextContent('openai_frontend')
     expect(metrics).toHaveTextContent('Qwen3-30B-A3B-Q4_K_M.gguf')
     expect(metrics).toHaveTextContent('1 attempt / 0 retries')
     expect(metrics).toHaveTextContent('3 stream events / 612 completion tokens')
     expect(metrics).not.toHaveTextContent('1,352 tokens')
+
+    const streamLabel = within(metrics).getByText('Stream / completion tokens')
+    expect(streamLabel).toHaveClass('break-words')
+    expect(streamLabel.closest('dt')).toHaveClass('items-start')
+    expect(within(metrics).getByText('Status').closest('dt')).toHaveClass('items-start')
+    expect(within(metrics).getByTestId('metric-icon-Status')).toHaveAttribute('data-metric-icon-tone', 'good')
+    expect(within(metrics).getByTestId('metric-icon-Status')).not.toHaveClass('border')
+    expect(within(metrics).getByTestId('metric-icon-Model')).toHaveAttribute('data-metric-icon-tone', 'contrast')
+    expect(within(metrics).getByTestId('metric-icon-Stream / completion tokens')).toHaveAttribute(
+      'data-metric-icon-tone',
+      'accent'
+    )
 
     const metadata = screen.getByRole('region', { name: 'Request metadata' })
     for (const value of [requestId, 'chat_completions', 'chat_completion_stream', '200', 'durable']) {
@@ -81,8 +95,7 @@ describe('LogRequestOverview', () => {
     expect(artifactSummary).toHaveTextContent('durable')
     expect(artifactSummary).not.toHaveTextContent(/expiry|ttl|body loaded/i)
     expect(within(artifactSummary).getByText('Request source', { exact: true }).parentElement).toHaveClass(
-      'sm:col-span-2',
-      'xl:col-span-3'
+      'sm:col-span-2'
     )
     expect(within(artifactSummary).getByText('3 available · 1 unavailable', { exact: true })).toHaveClass('break-words')
     expect(within(artifactSummary).getByText('3 available · 1 unavailable', { exact: true })).not.toHaveClass(
@@ -128,5 +141,22 @@ describe('LogRequestOverview', () => {
     expect(screen.getByText('No routing attempts were retained for this request.')).toBeInTheDocument()
     expect(screen.getByLabelText('Request metrics')).toHaveTextContent('0 attempts / 0 retries')
     expect(screen.getByLabelText('Request metrics')).toHaveTextContent('Not recorded')
+  })
+
+  it('keeps an error HTTP status secondary to the failed outcome', () => {
+    const requestId = HARNESS_LOG_SCENARIO_IDS.failedRetry.toString()
+    render(
+      <LogRequestOverview
+        artifacts={retained([])}
+        attempts={retained([])}
+        events={retained([])}
+        request={requestFixture(requestId)}
+      />
+    )
+
+    const metrics = screen.getByLabelText('Request metrics')
+    expect(within(metrics).getByTestId('request-outcome')).toHaveTextContent('Failed')
+    expect(within(metrics).getByTestId('request-http-status')).toHaveTextContent('HTTP 502')
+    expect(within(metrics).getByTestId('request-http-status')).toHaveClass('text-bad')
   })
 })

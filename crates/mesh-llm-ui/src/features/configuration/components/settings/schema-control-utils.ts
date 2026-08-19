@@ -37,6 +37,9 @@ export type NumericControlMetadata = {
   readonly unit?: string
 }
 
+export const TEXT_FIELD_BASE_CLASS =
+  'ui-control h-[32px] rounded-[var(--radius)] border bg-surface px-2.5 font-mono text-[length:var(--density-type-control)] text-foreground outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent'
+
 function normalizedChoiceValue(value: string) {
   if (value === 'true') return 'on'
   if (value === 'false') return 'off'

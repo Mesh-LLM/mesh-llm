@@ -31,6 +31,12 @@ pub struct RequestSummaryEntry {
     pub(crate) metadata: RequestSummaryMetadata,
 }
 
+impl RequestSummaryEntry {
+    pub(crate) fn metadata(&self) -> &RequestSummaryMetadata {
+        &self.metadata
+    }
+}
+
 /// Bounded ledger state attached only to an internal replay-bus entry.
 ///
 /// The SSE protocol projects the canonical lifecycle envelope separately, so
@@ -41,6 +47,7 @@ pub struct RequestSummaryEntry {
 pub(crate) struct RequestSummarySnapshot {
     created_at: String,
     state: String,
+    terminal_at: Option<String>,
     metadata: RequestSummaryMetadata,
 }
 
@@ -52,6 +59,7 @@ impl RequestSummarySnapshot {
         Self {
             created_at,
             state: entry.state.clone(),
+            terminal_at: entry.terminal_at.clone(),
             metadata: entry.metadata.clone(),
         }
     }
@@ -62,6 +70,10 @@ impl RequestSummarySnapshot {
 
     pub(crate) fn state(&self) -> &str {
         &self.state
+    }
+
+    pub(crate) fn terminal_at(&self) -> Option<&str> {
+        self.terminal_at.as_deref()
     }
 
     pub(crate) fn metadata(&self) -> &RequestSummaryMetadata {
@@ -100,6 +112,10 @@ impl RequestSummaryEventSnapshots {
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &RequestSummarySnapshot> {
         self.before.iter().chain(self.after.iter())
+    }
+
+    pub(crate) fn after(&self) -> Option<&RequestSummarySnapshot> {
+        self.after.as_ref()
     }
 }
 

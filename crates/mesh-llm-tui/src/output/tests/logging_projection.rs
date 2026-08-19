@@ -1,6 +1,6 @@
 use super::*;
 use mesh_llm_events::logging::{
-    envelope::CanonicalEnvelope,
+    envelope::{CanonicalEnvelope, CanonicalPresentationContext},
     events::{LifecycleEvent, TokenUsage},
     identifiers::{EventId, RequestId},
     replay::ReplayChannel,
@@ -95,6 +95,8 @@ fn canonical_jsonl_is_one_stable_safe_record_per_line() {
     assert_eq!(value["level"], "info");
     assert_eq!(value["event"], "request_completed");
     assert_eq!(value["channel"], "requests");
+    assert_eq!(value["request_kind"], "unknown");
+    assert_eq!(value["source"], "unknown");
     assert_eq!(value["sequence"], 7);
     assert_eq!(value["outcome"], "completed");
     assert_eq!(value["status_code"], 200);
@@ -106,6 +108,56 @@ fn canonical_jsonl_is_one_stable_safe_record_per_line() {
     assert!(value["event_id"].as_str().is_some());
     assert!(value.get("tokens").is_none());
     assert!(rendered.contains(&request_id.as_uuid().to_string()));
+}
+
+#[test]
+fn canonical_projection_exposes_truthful_request_context_in_pretty_and_jsonl() {
+    let request_id = RequestId::new();
+    let event = OutputEvent::CanonicalLog(Box::new(
+        CanonicalEnvelope::new(
+            EventId::new(),
+            request_id,
+            ReplayChannel::Requests,
+            12,
+            "2026-08-04T12:34:56.789Z".to_string(),
+            LifecycleEvent::Completed {
+                status_code: Some(200),
+                duration_ms: Some(18),
+                usage: None,
+            },
+        )
+        .with_presentation_context(CanonicalPresentationContext::from_parts(
+            Some("chat_completions"),
+            Some("mesh_forwarded"),
+            Some("safe-model"),
+            Some("mesh-provider"),
+            Some("raw-engine"),
+            Some("POST"),
+        )),
+    ));
+
+    let json_line = JsonFormatter.format(&event).expect("canonical JSONL");
+    let record: Value = serde_json::from_str(json_line.trim_end()).expect("JSONL record");
+    assert_eq!(record["request_kind"], "inference");
+    assert_eq!(record["route"], "chat_completions");
+    assert_eq!(record["source"], "mesh_forwarded");
+    assert_eq!(record["model"], "safe-model");
+    assert_eq!(record["provider"], "mesh-provider");
+    assert_eq!(record["engine"], "raw-engine");
+    assert_eq!(record["method"], "POST");
+    assert_eq!(record["status_code"], 200);
+    assert_eq!(record["duration_ms"], 18);
+
+    let pretty = PrettyFormatter.format(&event).expect("canonical pretty");
+    assert!(
+        pretty.contains("inference request completed route=chat_completions source=mesh_forwarded")
+    );
+    assert!(
+        pretty.contains("model=safe-model provider=mesh-provider engine=raw-engine method=POST"),
+        "pretty={pretty:?}"
+    );
+    assert!(pretty.contains("status=200 duration=18ms"));
+    assert!(pretty.contains(&request_id.as_uuid().to_string()));
 }
 
 #[test]

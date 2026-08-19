@@ -136,6 +136,9 @@ export interface RuntimeInfo {
 
 export interface LoggingStatus {
   metadata_available: boolean
+  metadata_state?: 'ready' | 'disabled' | 'storage_unavailable' | 'schema_incompatible'
+  schema_version?: number
+  supported_schema_version?: number
   capture_mode: 'metadata_only' | 'redacted_artifacts' | 'unavailable'
   artifact_capture_available: boolean
   artifact_capture_ready: boolean

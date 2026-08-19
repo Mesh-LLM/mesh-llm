@@ -22,6 +22,11 @@
   --color-good: oklch(0.58 0.13 150);
   --color-warn: oklch(0.62 0.14 55);
   --color-bad: oklch(0.62 0.16 28);
+  --color-log-requests: oklch(0.56 0.15 193);
+  --color-log-system: oklch(0.54 0.14 78);
+  --color-log-quic: oklch(0.57 0.15 294);
+  --color-log-gossip: oklch(0.53 0.13 150);
+  --color-log-iroh: oklch(0.58 0.15 32);
   --color-destructive: var(--color-bad);
   --color-destructive-foreground: oklch(0.985 0.003 80);
   --color-fg-dim: oklch(0.45 0.015 250);
@@ -173,6 +178,11 @@
   --color-warn-text: var(--color-warn);
   --color-bad: oklch(0.7 0.18 25);
   --color-bad-text: var(--color-bad);
+  --color-log-requests: oklch(0.8 0.15 193);
+  --color-log-system: oklch(0.84 0.16 78);
+  --color-log-quic: oklch(0.8 0.15 294);
+  --color-log-gossip: oklch(0.78 0.14 150);
+  --color-log-iroh: oklch(0.8 0.16 32);
   --color-destructive: var(--color-bad);
   --color-destructive-text: var(--color-destructive);
   --color-destructive-foreground: var(--color-background);
@@ -213,6 +223,11 @@
   --color-warn-text: color-mix(in oklab, var(--color-warn) 36%, var(--color-foreground));
   --color-bad: oklch(0.62 0.16 28);
   --color-bad-text: color-mix(in oklab, var(--color-bad) 36%, var(--color-foreground));
+  --color-log-requests: oklch(0.56 0.15 193);
+  --color-log-system: oklch(0.54 0.14 78);
+  --color-log-quic: oklch(0.57 0.15 294);
+  --color-log-gossip: oklch(0.53 0.13 150);
+  --color-log-iroh: oklch(0.58 0.15 32);
   --color-destructive: var(--color-bad);
   --color-destructive-text: color-mix(in oklab, var(--color-destructive) 36%, var(--color-foreground));
   --color-destructive-foreground: var(--color-foreground);
@@ -253,6 +268,11 @@
   --color-warn-text: var(--color-warn);
   --color-bad: oklch(0.7 0.18 25);
   --color-bad-text: var(--color-bad);
+  --color-log-requests: oklch(0.8 0.15 193);
+  --color-log-system: oklch(0.84 0.16 78);
+  --color-log-quic: oklch(0.8 0.15 294);
+  --color-log-gossip: oklch(0.78 0.14 150);
+  --color-log-iroh: oklch(0.8 0.16 32);
   --color-destructive: var(--color-bad);
   --color-destructive-text: var(--color-destructive);
   --color-destructive-foreground: var(--color-background);

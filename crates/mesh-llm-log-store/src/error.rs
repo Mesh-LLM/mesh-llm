@@ -13,6 +13,10 @@ pub enum LogStoreError {
     /// Schema migration failed to apply cleanly.
     MigrationFailed(String),
 
+    /// The database belongs to a schema lineage this runtime cannot safely
+    /// read or migrate. The store is left untouched.
+    SchemaIncompatible { found: u32, supported: u32 },
+
     /// Cursor decode/encode error.
     CursorMalformed(String),
 
@@ -87,6 +91,10 @@ impl fmt::Display for LogStoreError {
             Self::Sqlite(e) => write!(f, "sqlite error: {}", e),
             Self::ConnectionPoisoned => write!(f, "log store connection lock was poisoned"),
             Self::MigrationFailed(msg) => write!(f, "migration failed: {}", msg),
+            Self::SchemaIncompatible { found, supported } => write!(
+                f,
+                "log schema version {found} is incompatible with supported version {supported}"
+            ),
             Self::CursorMalformed(msg) => write!(f, "cursor malformed: {}", msg),
             Self::CursorInvalid => write!(f, "cursor is invalid or expired"),
             Self::InvalidQuery(msg) => write!(f, "invalid log query: {}", msg),

@@ -425,7 +425,8 @@ const replayEventSchema = v.object({
   occurredAt: timestampSchema,
   channel: channelSchema,
   sequence: v.pipe(nonNegativeIntegerSchema, v.minValue(1)),
-  kind: eventKindSchema
+  kind: eventKindSchema,
+  request: v.optional(requestSchema)
 })
 
 const replayGapSchema = v.object({
@@ -777,6 +778,7 @@ export type ParsedReplayEvent = {
   readonly channel: LogReplayChannel
   readonly sequence: number
   readonly kind: LogEventKind
+  readonly request?: LogRequest
 }
 
 export type ParsedReplayGap = {
@@ -787,7 +789,8 @@ export type ParsedReplayGap = {
 }
 
 export function parseReplayEvent(input: unknown): ParsedReplayEvent {
-  return parseReplayEventWire(input)
+  const event = parseReplayEventWire(input)
+  return { ...event, request: event.request ? toLogRequest(event.request) : undefined }
 }
 
 export function parseReplayGap(input: unknown): ParsedReplayGap {
