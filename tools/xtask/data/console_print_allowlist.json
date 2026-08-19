@@ -1937,47 +1937,47 @@
   ],
   "crates/mesh-llm-system/src/autoupdate.rs": [
     {
-      "line": 148,
+      "line": 150,
       "macro_name": "eprintln!"
     },
     {
-      "line": 173,
+      "line": 175,
       "macro_name": "eprintln!"
     },
     {
-      "line": 195,
+      "line": 197,
       "macro_name": "eprintln!"
     },
     {
-      "line": 199,
+      "line": 201,
       "macro_name": "eprintln!"
     },
     {
-      "line": 206,
+      "line": 208,
       "macro_name": "eprintln!"
     },
     {
-      "line": 295,
+      "line": 297,
       "macro_name": "eprintln!"
     },
     {
-      "line": 302,
+      "line": 304,
       "macro_name": "eprintln!"
     },
     {
-      "line": 318,
+      "line": 320,
       "macro_name": "eprintln!"
     },
     {
-      "line": 324,
+      "line": 326,
       "macro_name": "eprintln!"
     },
     {
-      "line": 327,
+      "line": 329,
       "macro_name": "eprintln!"
     },
     {
-      "line": 331,
+      "line": 333,
       "macro_name": "eprintln!"
     }
   ],
