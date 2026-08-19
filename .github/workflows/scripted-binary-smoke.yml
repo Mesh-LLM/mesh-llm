@@ -71,8 +71,18 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
-      - name: Install smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y curl jq lsof
+      - name: Verify smoke runtime utilities
+        run: |
+          set -euo pipefail
+          for utility in \
+            curl \
+            jq \
+            lsof; do
+            command -v "$utility" >/dev/null || {
+              echo "missing smoke runtime utility: $utility" >&2
+              exit 1
+            }
+          done
 
       - uses: ./.github/actions/restore-smoke-inputs
         with:
