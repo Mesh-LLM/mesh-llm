@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 pub(crate) enum HostRoleClaim {
     LocalModel,
     PluginInference,
+    ProviderInference,
 }
 
 #[derive(Default)]

@@ -548,6 +548,7 @@ async fn monitor_provider_process(
                 if changed.is_err() || *shutdown_rx.borrow() {
                     withdraw_provider_routes(&mut state.routed_model_ids, port, context);
                     withdraw_provider_advertisement(&mut state.advertised_model_ids, context).await;
+                    release_provider_host_role(context, &mut state).await;
                     remove_provider_process(context, &runtime.model_ids).await;
                     let _ = terminate_provider_process(child).await;
                     return ProviderRunOutcome::Shutdown;
@@ -556,6 +557,7 @@ async fn monitor_provider_process(
             status = child.wait() => {
                 withdraw_provider_routes(&mut state.routed_model_ids, port, context);
                 withdraw_provider_advertisement(&mut state.advertised_model_ids, context).await;
+                release_provider_host_role(context, &mut state).await;
                 remove_provider_process(context, &runtime.model_ids).await;
                 return ProviderRunOutcome::Restart(match status {
                     Ok(status) => format!("provider process exited with {status}"),
@@ -578,6 +580,7 @@ async fn monitor_provider_process(
 #[derive(Default)]
 struct ProviderRoutingState {
     failures: u8,
+    host_role_claimed: bool,
     routed_model_ids: Vec<String>,
     advertised_model_ids: Vec<String>,
 }
@@ -605,10 +608,19 @@ async fn observe_provider_health(
                 // but the sidecar exposes a direct HTTP inference endpoint.
                 // Promote it to Host so public gateways and Nostr listings
                 // treat the Apple runtime as directly routable.
+                if !state.host_role_claimed {
+                    context
+                        .node
+                        .claim_host_role(mesh::HostRoleClaim::ProviderInference, port)
+                        .await;
+                    state.host_role_claimed = true;
+                }
+            } else if state.host_role_claimed {
                 context
                     .node
-                    .set_role(mesh::NodeRole::Host { http_port: port })
+                    .release_host_role(mesh::HostRoleClaim::ProviderInference)
                     .await;
+                state.host_role_claimed = false;
             }
             publish_provider_state(runtime, context, pid, port, &primary.1).await;
             let was_unrouted = state.routed_model_ids.is_empty();
@@ -630,6 +642,7 @@ async fn observe_provider_health(
             withdraw_provider_routes(&mut state.routed_model_ids, port, context);
             withdraw_provider_advertisement(&mut state.advertised_model_ids, context).await;
             if state.failures >= PROVIDER_MAX_HEALTH_FAILURES {
+                release_provider_host_role(context, state).await;
                 let _ = terminate_provider_process(child).await;
                 Some(ProviderRunOutcome::Restart(format!(
                     "provider failed {} consecutive health checks: {error:#}",
@@ -640,6 +653,20 @@ async fn observe_provider_health(
             }
         }
     }
+}
+
+async fn release_provider_host_role(
+    context: &ProviderSupervisorContext,
+    state: &mut ProviderRoutingState,
+) {
+    if !state.host_role_claimed {
+        return;
+    }
+    context
+        .node
+        .release_host_role(mesh::HostRoleClaim::ProviderInference)
+        .await;
+    state.host_role_claimed = false;
 }
 
 async fn probe_provider(
