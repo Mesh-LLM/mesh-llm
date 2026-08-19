@@ -676,12 +676,14 @@ async fn route_request(
                 &provider_targets,
                 model_name,
                 request,
-                required_tokens,
-                ctx.affinity,
+                proxy::RouteModelRequestContext {
+                    required_tokens,
+                    affinity: ctx.affinity,
+                    route_observer,
+                },
             )
             .await;
-            debug_assert!(routed);
-            return;
+            return routed;
         }
 
         // Model explicitly requested. Check local candidates first.

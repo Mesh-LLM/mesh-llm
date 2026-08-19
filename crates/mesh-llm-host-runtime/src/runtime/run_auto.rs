@@ -359,6 +359,45 @@ pub(super) async fn run_runtime_cli(
     .await
 }
 
+fn initialize_early_topology_audit_logging(options: &mut RuntimeOptions) -> Result<()> {
+    let config_path = options.config.clone();
+    initialize_early_topology_audit_logging_with(
+        options,
+        || plugin::load_config(config_path.as_deref()),
+        initialize_audit_logging_for_options,
+    )
+}
+
+pub(super) fn initialize_early_topology_audit_logging_with(
+    options: &mut RuntimeOptions,
+    load_config: impl FnOnce() -> Result<plugin::MeshConfig>,
+    initialize_audit_logging: impl FnOnce(&RuntimeOptions) -> Result<()>,
+) -> Result<()> {
+    match load_config() {
+        Ok(config) => apply_runtime_config_options(options, &config),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "failed to load config for early topology audit logging; continuing without config-derived audit settings"
+            );
+        }
+    }
+    initialize_audit_logging(options)
+}
+
+fn initialize_audit_logging_for_options(options: &RuntimeOptions) -> Result<()> {
+    if options.audit_log_path.is_some() {
+        init_audit_logging(
+            options.audit_log_path.clone(),
+            options.audit_log_format,
+            options.audit_log_level,
+            options.audit_max_file_size,
+            options.audit_max_files,
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn apply_runtime_config_options(
     options: &mut RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -1536,23 +1575,6 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     })
     .await?;
 
-<<<<<<< HEAD
-=======
-    let provider_supervisor = start_provider_for_openai_surface(
-        is_client,
-        ProviderSupervisorContext {
-            target_tx: target_tx.clone(),
-            dashboard_processes: runtime_state.dashboard_processes.clone(),
-            console_state: console_state.clone(),
-            node: node.clone(),
-        },
-        provider_runtime_discovery.as_ref(),
-        &tunnel_mgr,
-        api_port,
-    )
-    .await;
-
->>>>>>> c667591c (Route Apple system models across private meshes)
     let primary_model_name = requested_model_names.first().cloned().unwrap_or_default();
     let provider_supervisor = start_run_auto_provider_supervisor(
         is_client,

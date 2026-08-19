@@ -153,6 +153,7 @@ async fn remote_tokenizer_plan_routes_identity_model_without_context_rejection()
         identity_hash: None,
         context_length: Some(32_768),
         ready: true,
+        ..Default::default()
     }];
     node.insert_test_peer(peer).await;
     let affinity = AffinityRouter::new();

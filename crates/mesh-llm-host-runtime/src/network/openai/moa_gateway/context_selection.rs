@@ -54,7 +54,9 @@ pub(in crate::network::openai) fn virtual_mesh_capabilities(
         ..Default::default()
     };
     for model in models {
-        if model == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME {
+        if model == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME
+            || crate::network::openai::provider_policy::is_explicit_only_model(model)
+        {
             continue;
         }
         let (base_model, _) = crate::network::openai::ingress::parse_model_with_profile(model);
@@ -101,12 +103,10 @@ pub(in crate::network::openai) fn should_advertise_virtual_mesh(models: &[String
     // can", which a single-model node does by serving that model — so hiding
     // the name would remove the one name clients are told to send, and break
     // any client that validates against `/v1/models`.
-    models
-        .iter()
-        .any(|model| {
-            model.as_str() != mesh_mixture_of_agents::VIRTUAL_MODEL_NAME
-                && !crate::network::openai::provider_policy::is_explicit_only_model(model)
-        })
+    models.iter().any(|model| {
+        model.as_str() != mesh_mixture_of_agents::VIRTUAL_MODEL_NAME
+            && !crate::network::openai::provider_policy::is_explicit_only_model(model)
+    })
 }
 
 #[cfg(test)]

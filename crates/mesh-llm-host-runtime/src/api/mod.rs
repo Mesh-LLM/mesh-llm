@@ -71,8 +71,7 @@ use self::status::{
     OpenAiGuardrailsPayload, RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload,
     RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
     build_runtime_stage_payloads, build_runtime_status_payload, derive_daemon_state,
-    enrich_provider_runtime_models,
-    runtime_stage_state_label, runtime_stage_wire_dtype_label,
+    enrich_provider_runtime_models, runtime_stage_state_label, runtime_stage_wire_dtype_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
