@@ -19,6 +19,7 @@
   --color-accent-contrast: oklch(0.62 0.14 322);
   --color-accent-ink: oklch(0.98 0.01 220);
   --color-accent-soft: oklch(0.92 0.05 198);
+  --color-accent-text: var(--color-accent);
   --color-good: oklch(0.58 0.13 150);
   --color-good-text: var(--color-good);
   --color-warn: oklch(0.62 0.14 55);
