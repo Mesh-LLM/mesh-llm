@@ -1689,3 +1689,153 @@ pub(super) fn planned_rows_transition_from_not_ready_to_ready_events() {
     );
     assert_eq!(state.loaded_model_rows[0].status, RuntimeStatus::Ready);
 }
+
+/// A writer that keeps the bytes a `CrosstermBackend` emits so a test can
+/// assert on the escape sequences that actually reach the terminal.
+#[derive(Clone, Default)]
+struct RecordingWriter {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for RecordingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.bytes
+            .lock()
+            .expect("recording writer lock should not be poisoned")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn recording_terminal() -> (
+    Terminal<CrosstermBackend<RecordingWriter>>,
+    Arc<Mutex<Vec<u8>>>,
+) {
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let backend = CrosstermBackend::new(RecordingWriter {
+        bytes: Arc::clone(&bytes),
+    });
+    // A fixed viewport keeps the backend from querying a terminal that does not
+    // exist under the test harness.
+    let terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Fixed(Rect::new(0, 0, 100, 32)),
+        },
+    )
+    .expect("recording backend should initialize");
+    (terminal, bytes)
+}
+
+fn recorded_contains_full_screen_clear(bytes: &Arc<Mutex<Vec<u8>>>) -> bool {
+    bytes
+        .lock()
+        .expect("recording writer lock should not be poisoned")
+        .windows(b"\x1b[2J".len())
+        .any(|window| window == b"\x1b[2J")
+}
+
+#[test]
+pub(super) fn tui_refresh_key_requests_a_full_repaint() {
+    let mut state = DashboardState::default();
+    assert!(
+        !state.pending_full_repaint,
+        "a fresh dashboard should not be asking for a repair"
+    );
+
+    let control = state.apply_tui_event(TuiEvent::Key(TuiKeyEvent::Char('r')));
+
+    assert!(matches!(control, TuiControlFlow::Continue));
+    assert!(
+        state.pending_full_repaint,
+        "R is advertised in the status bar and must request a physical repair"
+    );
+}
+
+#[test]
+pub(super) fn tui_refresh_key_types_into_the_filter_instead_of_repainting() {
+    let mut state = DashboardState::default();
+    state.reduce(DashboardAction::StartEventsFilterEdit);
+
+    state.apply_tui_event(TuiEvent::Key(TuiKeyEvent::Char('r')));
+
+    assert!(
+        !state.pending_full_repaint,
+        "R while editing the filter is filter text, not a repair request"
+    );
+    assert_eq!(state.events_filter.query, "r");
+}
+
+#[test]
+pub(super) fn tui_repair_redraws_cells_an_out_of_band_write_corrupted() {
+    let state = DashboardState::default();
+    let mut terminal =
+        Terminal::new(TestBackend::new(100, 32)).expect("test backend should initialize");
+    draw_tui_dashboard_with_backend(&mut terminal, &state)
+        .expect("initial dashboard draw should succeed");
+
+    let area = terminal.backend().buffer().area;
+    let (x, y) = (0..area.width)
+        .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+        .find(|&(x, y)| terminal.backend().buffer()[(x, y)].symbol() != " ")
+        .expect("dashboard should paint at least one cell");
+    let expected_symbol = terminal.backend().buffer()[(x, y)].symbol().to_string();
+
+    // Exactly what a stray write to the terminal does: the physical screen
+    // changes while ratatui's idea of it does not.
+    let stale_cell = ratatui::buffer::Cell::new("X");
+    terminal
+        .backend_mut()
+        .draw(std::iter::once((x, y, &stale_cell)))
+        .expect("out-of-band physical write should succeed");
+
+    // An ordinary redraw cannot heal it: the cell already matches the buffer
+    // ratatui believes is on screen, so it is diffed away.
+    draw_tui_dashboard_with_backend(&mut terminal, &state).expect("redraw should succeed");
+    assert_eq!(
+        terminal.backend().buffer()[(x, y)].symbol(),
+        "X",
+        "a plain redraw is expected to leave out-of-band damage in place"
+    );
+
+    repair_tui_terminal(&mut terminal).expect("repair should succeed");
+    draw_tui_dashboard_with_backend(&mut terminal, &state)
+        .expect("redraw after repair should succeed");
+
+    assert_eq!(
+        terminal.backend().buffer()[(x, y)].symbol(),
+        expected_symbol,
+        "repair must invalidate ratatui's diff so the next draw repaints every cell"
+    );
+}
+
+#[test]
+pub(super) fn tui_steady_state_draws_emit_no_full_screen_clear() {
+    let (mut terminal, bytes) = recording_terminal();
+    let state = DashboardState::default();
+
+    for _ in 0..8 {
+        draw_tui_dashboard_with_backend(&mut terminal, &state).expect("draw should succeed");
+    }
+
+    assert!(
+        !recorded_contains_full_screen_clear(&bytes),
+        "clearing the screen on every frame repaints from blank and reads as a black blink"
+    );
+}
+
+#[test]
+pub(super) fn tui_repair_emits_a_physical_full_screen_clear() {
+    let (mut terminal, bytes) = recording_terminal();
+
+    repair_tui_terminal(&mut terminal).expect("repair should succeed");
+
+    assert!(
+        recorded_contains_full_screen_clear(&bytes),
+        "a logical ratatui Clear widget cannot fix backend desync; the repair must erase the real screen"
+    );
+}

@@ -301,6 +301,11 @@ pub(super) fn runtime_tracing_subscriber()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("mesh_inference=info".parse()?)
+                // Without this, `EnvFilter::from_default_env()` defaults to
+                // ERROR and every `skippy_server` warning is dropped before it
+                // reaches the writer — the diagnostics would be silently gone
+                // rather than routed to the dashboard.
+                .add_directive("skippy_server=warn".parse()?)
                 .add_directive("nostr_relay_pool=off".parse()?)
                 .add_directive("nostr_sdk=warn".parse()?)
                 .add_directive("noq_proto::connection=warn".parse()?),
@@ -318,8 +323,11 @@ pub(super) fn init_runtime_tracing() -> Result<()> {
 pub(super) fn init_embedded_runtime_tracing() -> Result<()> {
     let subscriber = runtime_tracing_subscriber()?;
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
-        eprintln!(
-            "mesh-llm embedded runtime using existing tracing subscriber; could not install mesh-llm subscriber: {err}"
+        // The host already had a subscriber, so this warning has somewhere to
+        // go. Writing it raw would put it straight onto the dashboard frame.
+        tracing::warn!(
+            error = %err,
+            "mesh-llm embedded runtime using existing tracing subscriber"
         );
     }
     Ok(())

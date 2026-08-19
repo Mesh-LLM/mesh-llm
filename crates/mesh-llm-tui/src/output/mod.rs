@@ -15,12 +15,14 @@ use tokio::time::Duration;
 mod fatal;
 pub use fatal::{emit_fatal_error, emit_fatal_panic};
 
+mod console_capture;
 mod dashboard;
 mod formatting;
 mod logging_projection;
 mod merging;
 pub(in crate::output) mod rendering;
 mod state;
+mod terminal_out;
 #[cfg(test)]
 mod tests;
 

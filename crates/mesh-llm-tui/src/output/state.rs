@@ -627,6 +627,9 @@ pub struct DashboardState {
     pub(super) startup_milestones: BTreeSet<String>,
     pub(super) startup_lifecycle: StartupLifecycleState,
     pub(super) shutdown_in_progress: bool,
+    /// Set by the `R` key. Consumed by the next render, which repairs the
+    /// physical screen before drawing. Costs nothing until it is pressed.
+    pub(super) pending_full_repaint: bool,
 }
 
 impl Default for DashboardState {
@@ -670,6 +673,7 @@ impl Default for DashboardState {
             startup_milestones: BTreeSet::new(),
             startup_lifecycle: StartupLifecycleState::default(),
             shutdown_in_progress: false,
+            pending_full_repaint: false,
         };
         state.apply_layout(panel_layout);
         state

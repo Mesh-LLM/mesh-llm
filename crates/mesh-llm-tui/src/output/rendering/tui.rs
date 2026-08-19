@@ -5,20 +5,62 @@ use super::{
     render_model_progress_loader, render_models_panel, render_process_table,
     render_processes_panel, render_requests_panel, render_tui_logo, tui_layout, tui_theme,
 };
-use std::io;
+use ratatui::backend::Backend;
+use std::{fmt::Display, io};
 
 pub(in crate::output) fn draw_tui_dashboard_with_terminal(
     terminal: &mut TuiTerminal,
     state: &DashboardState,
 ) -> io::Result<()> {
-    terminal.hide_cursor().map_err(io::Error::other)?;
+    draw_tui_dashboard_with_backend(terminal, state)
+}
+
+pub(in crate::output) fn draw_tui_dashboard_with_backend<B>(
+    terminal: &mut ratatui::Terminal<B>,
+    state: &DashboardState,
+) -> io::Result<()>
+where
+    B: Backend,
+    B::Error: Display,
+{
+    terminal
+        .hide_cursor()
+        .map_err(|error| io::Error::other(error.to_string()))?;
     terminal
         .set_cursor_position((0, 0))
-        .map_err(io::Error::other)?;
+        .map_err(|error| io::Error::other(error.to_string()))?;
     terminal
         .draw(|frame| render_tui_frame(frame, state))
         .map(|_| ())
-        .map_err(io::Error::other)
+        .map_err(|error| io::Error::other(error.to_string()))
+}
+
+/// Repair a physically desynchronized screen.
+///
+/// Ratatui diffs against its own idea of the screen, so once something else has
+/// written to the terminal the damaged cells are never redrawn — they match the
+/// buffer ratatui believes is displayed. Erasing the real screen and discarding
+/// both internal buffers forces the next draw to emit every cell.
+///
+/// This runs only when the operator asks for it with `R`. Doing it on every
+/// frame also works, but repaints the whole screen from blank ~2.6 times a
+/// second on an idle dashboard, which reads as a black blink.
+pub(in crate::output) fn repair_tui_terminal<B>(
+    terminal: &mut ratatui::Terminal<B>,
+) -> io::Result<()>
+where
+    B: Backend,
+    B::Error: Display,
+{
+    terminal
+        .backend_mut()
+        .clear()
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    // `swap_buffers` resets the inactive buffer before toggling, so two swaps
+    // reset both buffers and leave the original active index in place.
+    terminal.swap_buffers();
+    terminal.swap_buffers();
+    Ok(())
 }
 
 pub(in crate::output) fn render_tui_frame(frame: &mut Frame, state: &DashboardState) {
