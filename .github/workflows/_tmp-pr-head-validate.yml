@@ -11,7 +11,7 @@ name: TMP · PR head validation
 # validate pre-merge instead of merging chunks blind (option 2, not option 1).
 #
 # This mirrors pr_quality.yml / pr_linux.yml / pr_website.yml, with the lane
-# `uses:` unpinned (`./...` instead of `...@main`) so it resolves from this
+# call unpinned (`./...` instead of `...@main`) so it resolves from this
 # branch's tip instead of main.
 #
 # Triggered on push-to-branch, not pull_request: scripts/tests/
