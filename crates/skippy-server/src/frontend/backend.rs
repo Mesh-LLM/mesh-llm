@@ -28,6 +28,7 @@ use crate::frontend::request::{
     ensure_completion_runtime_features_supported,
 };
 use crate::runtime_state::RuntimeSessionStats;
+use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
 use async_trait::async_trait;
@@ -103,6 +104,11 @@ struct StreamEventSender {
     /// timeout. Nothing further can reach the client, so later frames are
     /// dropped rather than waited on again.
     receiver_unreachable: AtomicBool,
+    /// Structured telemetry sink for the stall/drop diagnostics. `skippy-server`
+    /// routes operator-facing signal through `Telemetry`, not a logging facade,
+    /// so a freed execution lane is correlated by `request_id` and observable
+    /// without scraping stderr.
+    telemetry: Telemetry,
 }
 
 impl StreamEventSender {
@@ -111,6 +117,7 @@ impl StreamEventSender {
         runtime: tokio::runtime::Handle,
         stall_timeout: Duration,
         request_id: String,
+        telemetry: Telemetry,
     ) -> Self {
         Self {
             tx,
@@ -118,7 +125,25 @@ impl StreamEventSender {
             stall_timeout,
             request_id,
             receiver_unreachable: AtomicBool::new(false),
+            telemetry,
         }
+    }
+
+    /// Emit a structured "execution lane freed" event when a consumer is found
+    /// gone or stalled. `outcome` names the failure (dropped vs stalled) and
+    /// `frame_kind` names which send path hit it (an in-flight event vs a
+    /// terminal frame), so an operator can tell a client cancellation apart
+    /// from a stalled consumer pinning a lane without log scraping.
+    fn emit_lane_freed(&self, outcome: &str, frame_kind: &str) {
+        let mut attrs = BTreeMap::new();
+        attrs.insert(attr_key::REQUEST_ID.to_string(), json!(self.request_id));
+        attrs.insert("skippy.stream.outcome".to_string(), json!(outcome));
+        attrs.insert("skippy.stream.frame_kind".to_string(), json!(frame_kind));
+        attrs.insert(
+            "skippy.stream.stall_timeout_ms".to_string(),
+            json!(self.stall_timeout.as_millis() as u64),
+        );
+        self.telemetry.emit("stage.openai_stream_lane_freed", attrs);
     }
 
     /// Mark the receiver unreachable and free the request's execution lane.
@@ -155,19 +180,13 @@ impl StreamEventSender {
                 result = send => match result {
                     Ok(()) => Ok(()),
                     Err(_) => {
-                        eprintln!(
-                            "skippy: stream receiver dropped for request {}; freeing the execution lane",
-                            self.request_id
-                        );
+                        self.emit_lane_freed("receiver_dropped", "in_flight");
                         self.mark_receiver_unreachable(context);
                         Err(OpenAiError::backend("stream receiver dropped"))
                     }
                 },
                 () = sleep => {
-                    eprintln!(
-                        "skippy: stream receiver stalled without draining for request {} after {:?}; freeing the execution lane",
-                        self.request_id, self.stall_timeout
-                    );
+                    self.emit_lane_freed("receiver_stalled", "in_flight");
                     self.mark_receiver_unreachable(context);
                     Err(OpenAiError::backend(
                         "stream receiver stalled without draining",
@@ -208,19 +227,13 @@ impl StreamEventSender {
                 result = send => match result {
                     Ok(()) => Ok(()),
                     Err(_) => {
-                        eprintln!(
-                            "skippy: stream receiver dropped for request {} while delivering a terminal frame",
-                            self.request_id
-                        );
+                        self.emit_lane_freed("receiver_dropped", "terminal");
                         self.receiver_unreachable.store(true, Ordering::Release);
                         Err(OpenAiError::backend("stream receiver dropped"))
                     }
                 },
                 () = sleep => {
-                    eprintln!(
-                        "skippy: stream receiver stalled without draining for request {} after {:?} while delivering a terminal frame",
-                        self.request_id, self.stall_timeout
-                    );
+                    self.emit_lane_freed("receiver_stalled", "terminal");
                     self.receiver_unreachable.store(true, Ordering::Release);
                     Err(OpenAiError::backend(
                         "stream receiver stalled without draining",
@@ -983,6 +996,7 @@ impl StageOpenAiBackend {
             tokio::runtime::Handle::current(),
             STREAM_SEND_STALL_TIMEOUT,
             ids.request_id_string(),
+            self.telemetry.clone(),
         );
         let mut chat_stream_parser = if let (true, Some(request), Some(metadata)) =
             (parse_chat_output, hook_request.clone(), chat_parse_metadata)

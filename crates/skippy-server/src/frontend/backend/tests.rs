@@ -4,6 +4,27 @@ use openai_frontend::FinishReason;
 use serde_json::json;
 use tokio::runtime::Runtime;
 
+/// A disabled telemetry sink for `StreamEventSender` construction in tests.
+///
+/// `TelemetryLevel::Off` makes `emit` a no-op, so these tests exercise the
+/// stall/drop control flow without needing a collector; the sink only has to
+/// be a valid handle.
+fn test_telemetry() -> crate::telemetry::Telemetry {
+    let config: skippy_protocol::StageConfig = serde_json::from_value(json!({
+        "run_id": "run",
+        "topology_id": "topology",
+        "model_id": "org/model:Q4_K_M",
+        "stage_id": "stage-0",
+        "stage_index": 0,
+        "layer_start": 0,
+        "layer_end": 4,
+        "load_mode": "runtime-slice",
+        "bind_addr": "127.0.0.1:0",
+    }))
+    .expect("minimal stage config for telemetry");
+    crate::telemetry::Telemetry::new(None, 1, config, crate::telemetry::TelemetryLevel::Off)
+}
+
 fn trusted_ids(session_id: &str) -> OpenAiGenerationIds {
     OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), Some(session_id), true)
 }
@@ -549,6 +570,7 @@ fn stalled_receiver_does_not_pin_the_generation_worker_forever() {
         rt.handle().clone(),
         STREAM_SEND_STALL_TIMEOUT,
         "test-request".to_owned(),
+        test_telemetry(),
     );
 
     let sender_context = context.clone();
@@ -595,6 +617,7 @@ fn stalled_receiver_self_cancels_after_the_stall_timeout_with_no_external_cancel
         rt.handle().clone(),
         Duration::from_millis(50),
         "test-request".to_owned(),
+        test_telemetry(),
     );
 
     let result = sender.send(
@@ -636,6 +659,7 @@ fn terminal_frames_are_delivered_after_the_request_is_cancelled() {
         rt.handle().clone(),
         STREAM_SEND_STALL_TIMEOUT,
         "test-request".to_owned(),
+        test_telemetry(),
     );
 
     sender
@@ -683,6 +707,7 @@ fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
         rt.handle().clone(),
         stall_timeout,
         "test-request".to_owned(),
+        test_telemetry(),
     );
 
     let stalled = sender.send(
