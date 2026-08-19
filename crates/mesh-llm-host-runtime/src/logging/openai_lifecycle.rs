@@ -409,6 +409,7 @@ struct ActiveRequest {
     /// embedded frontend still emits the legacy custody projection, but must
     /// not register or terminalize a second canonical request.
     guard: Option<LifecycleGuard>,
+    legacy: Arc<LegacyCustody>,
     started_at: Instant,
     operation: OpenAiBackendOperation,
     agent_session_id: Option<String>,
@@ -416,14 +417,128 @@ struct ActiveRequest {
     backend_operation: Option<OpenAiBackendOperation>,
     backend_attempt: Option<(OpenAiBackendOperation, AttemptId)>,
     backend_stream_first_item: bool,
-    legacy_started: bool,
     usage: Option<OpenAiUsage>,
+}
+
+type LegacyAction = Box<dyn FnOnce() + Send + 'static>;
+
+#[derive(Default)]
+struct LegacyCustody {
+    state: Mutex<LegacyCustodyState>,
+}
+
+#[derive(Default)]
+struct LegacyCustodyState {
+    actions: VecDeque<LegacyAction>,
+    draining: bool,
+    started: bool,
+    terminalized: bool,
+}
+
+impl LegacyCustody {
+    /// Queue the two events that establish legacy custody as one atomic
+    /// per-request action sequence. The caller may hold the adapter's map
+    /// mutex while this method queues; logging itself is always drained after
+    /// that lock is released.
+    fn start(
+        &self,
+        request_id: RequestId,
+        operation: OpenAiBackendOperation,
+        agent_session_id: Option<String>,
+        agent_session_source: Option<String>,
+    ) -> bool {
+        let backend_session_id = agent_session_id.clone();
+        let backend_session_source = agent_session_source.clone();
+        self.start_with(
+            Box::new(move || {
+                log_legacy_request_started(
+                    request_id,
+                    operation,
+                    agent_session_id.as_deref(),
+                    agent_session_source.as_deref(),
+                );
+            }),
+            Box::new(move || {
+                log_legacy_backend_started(
+                    request_id,
+                    operation,
+                    backend_session_id.as_deref(),
+                    backend_session_source.as_deref(),
+                );
+            }),
+        )
+    }
+
+    fn start_with(&self, request_started: LegacyAction, backend_started: LegacyAction) -> bool {
+        let mut state = lock_recover(&self.state);
+        if state.started || state.terminalized {
+            return false;
+        }
+        state.started = true;
+        state.actions.push_back(request_started);
+        state.actions.push_back(backend_started);
+        Self::begin_draining(&mut state)
+    }
+
+    fn enqueue<F>(&self, action: F) -> bool
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let mut state = lock_recover(&self.state);
+        if state.terminalized {
+            return false;
+        }
+        state.actions.push_back(Box::new(action));
+        Self::begin_draining(&mut state)
+    }
+
+    fn finish<F>(&self, action: F) -> bool
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let mut state = lock_recover(&self.state);
+        if state.terminalized {
+            return false;
+        }
+        state.terminalized = true;
+        if !state.started {
+            return false;
+        }
+        state.actions.push_back(Box::new(action));
+        Self::begin_draining(&mut state)
+    }
+
+    fn begin_draining(state: &mut LegacyCustodyState) -> bool {
+        if state.draining {
+            false
+        } else {
+            state.draining = true;
+            true
+        }
+    }
+
+    fn drain(&self) {
+        loop {
+            let action = {
+                let mut state = lock_recover(&self.state);
+                match state.actions.pop_front() {
+                    Some(action) => action,
+                    None => {
+                        state.draining = false;
+                        return;
+                    }
+                }
+            };
+            action();
+        }
+    }
 }
 
 impl ActiveRequest {
     fn new(guard: Option<LifecycleGuard>, context: &OpenAiLifecycleContext) -> Self {
         Self {
             guard,
+            legacy: Arc::new(LegacyCustody::default()),
             started_at: Instant::now(),
             operation: route_operation(context.route),
             agent_session_id: context.agent_session_id.clone(),
@@ -431,7 +546,6 @@ impl ActiveRequest {
             backend_operation: None,
             backend_attempt: None,
             backend_stream_first_item: false,
-            legacy_started: false,
             usage: None,
         }
     }
@@ -524,7 +638,7 @@ impl OpenAiLifecycleLoggingAdapter {
             self.service.start_attempt(request_id, guard)
         });
 
-        let legacy_start = {
+        let legacy_drain = {
             let mut tracked = lock_recover(&self.tracked);
             let Some(TrackedRequest::Active(active)) = tracked.requests.get_mut(&request_id) else {
                 return;
@@ -535,40 +649,18 @@ impl OpenAiLifecycleLoggingAdapter {
             active.operation = operation;
             active.backend_operation = Some(operation);
             active.backend_attempt = attempt_id.map(|attempt_id| (operation, attempt_id));
-            if active.legacy_started {
-                None
-            } else {
-                active.legacy_started = true;
-                Some((
-                    active.agent_session_id.clone(),
-                    active.agent_session_source.clone(),
-                ))
-            }
-        };
-        if let Some((agent_session_id, agent_session_source)) = legacy_start {
-            log_legacy_request_started(
+            let legacy = Arc::clone(&active.legacy);
+            let should_drain = legacy.start(
                 request_id,
                 operation,
-                agent_session_id.as_deref(),
-                agent_session_source.as_deref(),
-            );
-        }
-        let session = {
-            let tracked = lock_recover(&self.tracked);
-            let Some(TrackedRequest::Active(active)) = tracked.requests.get(&request_id) else {
-                return;
-            };
-            (
                 active.agent_session_id.clone(),
                 active.agent_session_source.clone(),
-            )
+            );
+            (legacy, should_drain)
         };
-        log_legacy_backend_started(
-            request_id,
-            operation,
-            session.0.as_deref(),
-            session.1.as_deref(),
-        );
+        if legacy_drain.1 {
+            legacy_drain.0.drain();
+        }
     }
 
     fn backend_terminal(
@@ -585,17 +677,56 @@ impl OpenAiLifecycleLoggingAdapter {
             if active.backend_operation == Some(operation) {
                 active.backend_operation = None;
                 let backend_attempt = active.backend_attempt.take();
+                let elapsed = active.started_at.elapsed();
+                let agent_session_id = active.agent_session_id.clone();
+                let agent_session_source = active.agent_session_source.clone();
+                let legacy = Arc::clone(&active.legacy);
+                let should_drain = match result {
+                    OpenAiTerminalResult::Completed { .. }
+                    | OpenAiTerminalResult::CompletedWithUsage { .. } => {
+                        legacy.enqueue(move || {
+                            log_legacy_backend_returned(
+                                request_id,
+                                operation,
+                                elapsed,
+                                agent_session_id.as_deref(),
+                                agent_session_source.as_deref(),
+                            );
+                        })
+                    }
+                    OpenAiTerminalResult::Failed { failure, .. }
+                        if failure == OpenAiFailure::Timeout =>
+                    {
+                        legacy.enqueue(move || {
+                            log_legacy_backend_timeout(
+                                request_id,
+                                operation,
+                                elapsed,
+                                agent_session_id.as_deref(),
+                                agent_session_source.as_deref(),
+                            );
+                        })
+                    }
+                    OpenAiTerminalResult::Failed { .. } => legacy.enqueue(move || {
+                        log_legacy_backend_error(
+                            request_id,
+                            operation,
+                            elapsed,
+                            agent_session_id.as_deref(),
+                            agent_session_source.as_deref(),
+                        );
+                    }),
+                };
                 Some((
                     backend_attempt.map(|(_, attempt_id)| attempt_id),
-                    active.started_at.elapsed(),
-                    active.agent_session_id.clone(),
-                    active.agent_session_source.clone(),
+                    legacy,
+                    should_drain,
                 ))
             } else {
                 None
             }
         };
-        let Some((attempt_id, elapsed, agent_session_id, agent_session_source)) = attempt else {
+        let Some((attempt_id, legacy, should_drain)) = attempt else {
             return;
         };
         match result {
@@ -605,13 +736,6 @@ impl OpenAiLifecycleLoggingAdapter {
                     self.service
                         .complete_attempt(request_id, attempt_id, Some(status_code));
                 }
-                log_legacy_backend_returned(
-                    request_id,
-                    operation,
-                    elapsed,
-                    agent_session_id.as_deref(),
-                    agent_session_source.as_deref(),
-                );
             }
             OpenAiTerminalResult::Failed { failure, .. } => {
                 if let Some(attempt_id) = attempt_id {
@@ -621,24 +745,10 @@ impl OpenAiLifecycleLoggingAdapter {
                         failure_label(failure).to_owned(),
                     );
                 }
-                if failure == OpenAiFailure::Timeout {
-                    log_legacy_backend_timeout(
-                        request_id,
-                        operation,
-                        elapsed,
-                        agent_session_id.as_deref(),
-                        agent_session_source.as_deref(),
-                    );
-                } else {
-                    log_legacy_backend_error(
-                        request_id,
-                        operation,
-                        elapsed,
-                        agent_session_id.as_deref(),
-                        agent_session_source.as_deref(),
-                    );
-                }
             }
+        }
+        if should_drain {
+            legacy.drain();
         }
     }
 
@@ -652,25 +762,29 @@ impl OpenAiLifecycleLoggingAdapter {
                 None
             } else {
                 active.backend_stream_first_item = true;
-                Some((
-                    active.guard.is_some(),
-                    active.started_at.elapsed(),
-                    active.agent_session_id.clone(),
-                    active.agent_session_source.clone(),
-                ))
+                let elapsed = active.started_at.elapsed();
+                let agent_session_id = active.agent_session_id.clone();
+                let agent_session_source = active.agent_session_source.clone();
+                let legacy = Arc::clone(&active.legacy);
+                let should_drain = legacy.enqueue(move || {
+                    log_legacy_stream_first_item(
+                        request_id,
+                        operation,
+                        elapsed,
+                        agent_session_id.as_deref(),
+                        agent_session_source.as_deref(),
+                    );
+                });
+                Some((active.guard.is_some(), legacy, should_drain))
             }
         };
-        if let Some((canonical, elapsed, agent_session_id, agent_session_source)) = first_item {
+        if let Some((canonical, legacy, should_drain)) = first_item {
             if canonical {
                 self.enqueue_operation_event(request_id, LifecycleEvent::BackendStreamFirstItem);
             }
-            log_legacy_stream_first_item(
-                request_id,
-                operation,
-                elapsed,
-                agent_session_id.as_deref(),
-                agent_session_source.as_deref(),
-            );
+            if should_drain {
+                legacy.drain();
+            }
         }
     }
 
@@ -684,22 +798,25 @@ impl OpenAiLifecycleLoggingAdapter {
                 None
             } else {
                 active.usage = Some(usage);
-                Some((
-                    active.started_at.elapsed(),
-                    active.operation,
-                    active.agent_session_id.clone(),
-                    active.agent_session_source.clone(),
-                ))
+                let elapsed = active.started_at.elapsed();
+                let operation = active.operation;
+                let agent_session_id = active.agent_session_id.clone();
+                let agent_session_source = active.agent_session_source.clone();
+                let legacy = Arc::clone(&active.legacy);
+                let should_drain = legacy.enqueue(move || {
+                    log_legacy_response_completed(
+                        request_id,
+                        operation,
+                        elapsed,
+                        usage,
+                        agent_session_id.as_deref(),
+                        agent_session_source.as_deref(),
+                    );
+                });
+                Some((active.guard.is_some(), legacy, should_drain))
             }
         };
-        if let Some((elapsed, operation, agent_session_id, agent_session_source)) = metadata {
-            let canonical = {
-                let tracked = lock_recover(&self.tracked);
-                matches!(
-                    tracked.requests.get(&request_id),
-                    Some(TrackedRequest::Active(active)) if active.guard.is_some()
-                )
-            };
+        if let Some((canonical, legacy, should_drain)) = metadata {
             if canonical {
                 self.enqueue_operation_event(
                     request_id,
@@ -711,31 +828,41 @@ impl OpenAiLifecycleLoggingAdapter {
                     },
                 );
             }
-            log_legacy_response_completed(
-                request_id,
-                operation,
-                elapsed,
-                usage,
-                agent_session_id.as_deref(),
-                agent_session_source.as_deref(),
-            );
+            if should_drain {
+                legacy.drain();
+            }
         }
     }
 
     fn stream_terminal(&self, request_id: RequestId, result: OpenAiTerminalResult) {
-        let (usage, canonical, operation, elapsed, agent_session_id, agent_session_source) = {
+        let (usage, canonical, legacy, should_drain) = {
             let tracked = lock_recover(&self.tracked);
             let Some(TrackedRequest::Active(active)) = tracked.requests.get(&request_id) else {
                 return;
             };
-            (
-                active.usage,
-                active.guard.is_some(),
-                active.operation,
-                active.started_at.elapsed(),
-                active.agent_session_id.clone(),
-                active.agent_session_source.clone(),
-            )
+            let usage = active.usage;
+            let canonical = active.guard.is_some();
+            let legacy = Arc::clone(&active.legacy);
+            let should_drain = match result {
+                OpenAiTerminalResult::Failed { .. } => {
+                    let elapsed = active.started_at.elapsed();
+                    let operation = active.operation;
+                    let agent_session_id = active.agent_session_id.clone();
+                    let agent_session_source = active.agent_session_source.clone();
+                    legacy.enqueue(move || {
+                        log_legacy_stream_item_error(
+                            request_id,
+                            operation,
+                            elapsed,
+                            agent_session_id.as_deref(),
+                            agent_session_source.as_deref(),
+                        );
+                    })
+                }
+                OpenAiTerminalResult::Completed { .. }
+                | OpenAiTerminalResult::CompletedWithUsage { .. } => false,
+            };
+            (usage, canonical, legacy, should_drain)
         };
         match result {
             OpenAiTerminalResult::Completed { .. } => {
@@ -776,14 +903,10 @@ impl OpenAiLifecycleLoggingAdapter {
                         },
                     );
                 }
-                log_legacy_stream_item_error(
-                    request_id,
-                    operation,
-                    elapsed,
-                    agent_session_id.as_deref(),
-                    agent_session_source.as_deref(),
-                );
             }
+        }
+        if should_drain {
+            legacy.drain();
         }
     }
 
@@ -793,13 +916,21 @@ impl OpenAiLifecycleLoggingAdapter {
             let Some(TrackedRequest::Active(active)) = tracked.requests.get(&request_id) else {
                 return;
             };
-            (
-                active.guard.is_some(),
-                active.operation,
-                active.started_at.elapsed(),
-                active.agent_session_id.clone(),
-                active.agent_session_source.clone(),
-            )
+            let legacy = Arc::clone(&active.legacy);
+            let operation = active.operation;
+            let elapsed = active.started_at.elapsed();
+            let agent_session_id = active.agent_session_id.clone();
+            let agent_session_source = active.agent_session_source.clone();
+            let should_drain = legacy.enqueue(move || {
+                log_legacy_stream_item_error(
+                    request_id,
+                    operation,
+                    elapsed,
+                    agent_session_id.as_deref(),
+                    agent_session_source.as_deref(),
+                );
+            });
+            (active.guard.is_some(), legacy, should_drain)
         };
         if metadata.0 {
             self.enqueue_operation_event(
@@ -809,13 +940,9 @@ impl OpenAiLifecycleLoggingAdapter {
                 },
             );
         }
-        log_legacy_stream_item_error(
-            request_id,
-            metadata.1,
-            metadata.2,
-            metadata.3.as_deref(),
-            metadata.4.as_deref(),
-        );
+        if metadata.2 {
+            metadata.1.drain();
+        }
     }
 
     fn enqueue_operation_event(&self, request_id: RequestId, event: LifecycleEvent) {
@@ -827,7 +954,7 @@ impl OpenAiLifecycleLoggingAdapter {
     }
 
     fn terminal(&self, request_id: RequestId, outcome: TerminalOutcome) {
-        let (guard, elapsed, operation, legacy_started, agent_session_id, agent_session_source) = {
+        let (guard, legacy, should_drain) = {
             let mut tracked = lock_recover(&self.tracked);
             let Some(entry) = tracked.requests.get_mut(&request_id) else {
                 return;
@@ -836,28 +963,28 @@ impl OpenAiLifecycleLoggingAdapter {
                 return;
             };
             let guard = active.guard.clone();
-            let metadata = (
-                active.started_at.elapsed(),
-                active.operation,
-                active.legacy_started,
-                active.agent_session_id.clone(),
-                active.agent_session_source.clone(),
-            );
+            let elapsed = active.started_at.elapsed();
+            let operation = active.operation;
+            let agent_session_id = active.agent_session_id.clone();
+            let agent_session_source = active.agent_session_source.clone();
+            let legacy = Arc::clone(&active.legacy);
+            let outcome_label = legacy_outcome(&outcome);
+            let should_drain = legacy.finish(move || {
+                log_legacy_request_finished(
+                    request_id,
+                    operation,
+                    elapsed,
+                    outcome_label,
+                    agent_session_id.as_deref(),
+                    agent_session_source.as_deref(),
+                );
+            });
             *entry = TrackedRequest::Terminal;
-            (
-                guard, metadata.0, metadata.1, metadata.2, metadata.3, metadata.4,
-            )
+            (guard, legacy, should_drain)
         };
 
-        if legacy_started {
-            log_legacy_request_finished(
-                request_id,
-                operation,
-                elapsed,
-                legacy_outcome(&outcome),
-                agent_session_id.as_deref(),
-                agent_session_source.as_deref(),
-            );
+        if should_drain {
+            legacy.drain();
         }
 
         // A stale or externally-terminalized guard is harmless: request
@@ -1483,6 +1610,81 @@ mod tests {
             Arc::new(RawMeshLifecycleOwners::default()),
         );
         (service, adapter)
+    }
+
+    #[test]
+    fn legacy_custody_serializes_dispatch_and_terminal_race() {
+        use std::thread;
+
+        let custody = Arc::new(LegacyCustody::default());
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let first_gate = Arc::clone(&gate);
+        let first_order = Arc::clone(&order);
+        assert!(custody.start_with(
+            Box::new(move || {
+                first_order.lock().unwrap().push("request_started");
+                first_gate.wait();
+            }),
+            Box::new({
+                let order = Arc::clone(&order);
+                move || order.lock().unwrap().push("backend_started")
+            }),
+        ));
+
+        let drain_custody = Arc::clone(&custody);
+        let drain_thread = thread::spawn(move || drain_custody.drain());
+        gate.wait();
+
+        let finish_order = Arc::clone(&order);
+        assert!(!custody.finish(move || { finish_order.lock().unwrap().push("request_finished") }));
+        drain_thread.join().unwrap();
+        assert_eq!(
+            *order.lock().unwrap(),
+            vec!["request_started", "backend_started", "request_finished"]
+        );
+    }
+
+    #[test]
+    fn legacy_custody_serializes_response_and_terminal_race() {
+        use std::thread;
+
+        let custody = Arc::new(LegacyCustody::default());
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let first_gate = Arc::clone(&gate);
+        let first_order = Arc::clone(&order);
+        assert!(custody.start_with(
+            Box::new(move || {
+                first_order.lock().unwrap().push("request_started");
+                first_gate.wait();
+            }),
+            Box::new({
+                let order = Arc::clone(&order);
+                move || order.lock().unwrap().push("backend_started")
+            }),
+        ));
+
+        let drain_custody = Arc::clone(&custody);
+        let drain_thread = thread::spawn(move || drain_custody.drain());
+        gate.wait();
+
+        let response_order = Arc::clone(&order);
+        assert!(
+            !custody.enqueue(move || { response_order.lock().unwrap().push("response_completed") })
+        );
+        let finish_order = Arc::clone(&order);
+        assert!(!custody.finish(move || { finish_order.lock().unwrap().push("request_finished") }));
+        drain_thread.join().unwrap();
+        assert_eq!(
+            *order.lock().unwrap(),
+            vec![
+                "request_started",
+                "backend_started",
+                "response_completed",
+                "request_finished"
+            ]
+        );
     }
 
     #[test]
