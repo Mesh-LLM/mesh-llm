@@ -856,6 +856,12 @@ async fn frontend_lifecycle_middleware(
     let uri = request.uri().clone();
     let context =
         OpenAiLifecycleContext::new(request_id, lifecycle_method(&method), lifecycle_route(&uri));
+    let context = match agent_session_from_header(&state.config, request.headers()) {
+        Ok(Some(identity)) => {
+            context.with_agent_session(Some(identity.id()), Some(identity.source().label()))
+        }
+        _ => context,
+    };
     request.extensions_mut().insert(request_id);
     request.extensions_mut().insert(context.clone());
     let mut lifecycle =

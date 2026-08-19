@@ -21,6 +21,11 @@ pub struct OpenAiLifecycleContext {
     pub request_id: RequestId,
     pub method: OpenAiRequestMethod,
     pub route: OpenAiFrontendRoute,
+    /// Stable session metadata supplied by the configured trusted ingress
+    /// header. This is retained only as bounded lifecycle metadata; request
+    /// and response payloads never cross this boundary.
+    pub agent_session_id: Option<String>,
+    pub agent_session_source: Option<String>,
 }
 
 impl OpenAiLifecycleContext {
@@ -33,7 +38,24 @@ impl OpenAiLifecycleContext {
             request_id,
             method,
             route,
+            agent_session_id: None,
+            agent_session_source: None,
         }
+    }
+
+    /// Attach a validated session identity to lifecycle metadata.
+    pub(crate) fn with_agent_session(
+        mut self,
+        agent_session_id: Option<&str>,
+        agent_session_source: Option<&str>,
+    ) -> Self {
+        self.agent_session_id = agent_session_id.map(ToOwned::to_owned);
+        self.agent_session_source = self
+            .agent_session_id
+            .as_ref()
+            .and(agent_session_source)
+            .map(ToOwned::to_owned);
+        self
     }
 }
 
