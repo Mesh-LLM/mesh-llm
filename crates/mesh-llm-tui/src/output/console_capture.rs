@@ -75,7 +75,14 @@ mod unix {
             drop(write_fd);
 
             let active = Arc::new(AtomicBool::new(true));
-            spawn_reader(read_fd, reader_stderr, Arc::clone(&active));
+            if let Err(error) = spawn_reader(read_fd, reader_stderr, Arc::clone(&active)) {
+                // With no reader, nothing drains the pipe: the process would
+                // block forever on the write that fills the pipe buffer. Put
+                // the real descriptors back before giving up.
+                let _ = dup2_stdout(&saved_stdout);
+                let _ = dup2_stderr(&saved_stderr);
+                return Err(error);
+            }
 
             Ok(Self {
                 saved_stdout,
@@ -107,8 +114,12 @@ mod unix {
     /// that inherited the write end keeps the pipe open past restore, so a join
     /// could block shutdown indefinitely; the thread instead exits on EOF
     /// whenever that arrives, and dies with the process at worst.
-    fn spawn_reader(mut read_fd: PipeReader, original_stderr: OwnedFd, active: Arc<AtomicBool>) {
-        let _ = std::thread::Builder::new()
+    fn spawn_reader(
+        mut read_fd: PipeReader,
+        original_stderr: OwnedFd,
+        active: Arc<AtomicBool>,
+    ) -> io::Result<()> {
+        std::thread::Builder::new()
             .name("mesh-console-capture".to_string())
             .spawn(move || {
                 let mut passthrough = File::from(original_stderr);
@@ -139,7 +150,8 @@ mod unix {
                 for line in take_pending_lines(&mut pending, true) {
                     deliver(line, &active, &mut passthrough);
                 }
-            });
+            })
+            .map(|_| ())
     }
 
     fn deliver(text: String, active: &AtomicBool, passthrough: &mut File) {
@@ -184,7 +196,14 @@ mod unix {
         // exists to protect, so control characters are stripped here.
         String::from_utf8_lossy(line)
             .chars()
-            .filter(|character| !character.is_control())
+            .filter_map(|character| match character {
+                // A tab is alignment, not damage — llama.cpp's loader lines are
+                // full of them. Dropping it would run two columns together, so
+                // it degrades to a space instead.
+                '\t' => Some(' '),
+                character if character.is_control() => None,
+                character => Some(character),
+            })
             .collect::<String>()
             .trim_end()
             .to_string()
@@ -290,6 +309,16 @@ mod tests {
             split(b"\x1b[10;5HXXXX\n", false),
             vec!["[10;5HXXXX"],
             "escape bytes must not survive into a rendered cell"
+        );
+    }
+
+    #[test]
+    fn captured_output_keeps_tabs_as_spaces() {
+        // llama.cpp separates its loader columns with tabs. Stripping them as
+        // control characters would run the columns together.
+        assert_eq!(
+            split(b"llm_load_print_meta: n_ctx\t= 4096\n", false),
+            vec!["llm_load_print_meta: n_ctx = 4096"]
         );
     }
 
