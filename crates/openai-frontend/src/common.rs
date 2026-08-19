@@ -66,7 +66,10 @@ impl AgentSessionSource {
     #[must_use]
     pub(crate) fn label(&self) -> &str {
         match self {
-            Self::TrustedHeader(header) => header,
+            // The custody contract identifies the trust mechanism, not the
+            // operator-selected header name. The latter is configuration
+            // detail and must not become part of the durable provenance ABI.
+            Self::TrustedHeader(_) => "trusted_header",
             Self::ResponsesConversation => "responses.conversation",
         }
     }

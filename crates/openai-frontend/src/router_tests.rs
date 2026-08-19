@@ -720,10 +720,7 @@ async fn configured_trusted_header_reaches_backend_as_agent_session_identity() {
     assert_eq!(response.status(), StatusCode::OK);
     let requests = backend.requests.lock().unwrap();
     assert_eq!(requests[0].agent_session(), Some("agent-thread-42"));
-    assert_eq!(
-        requests[0].agent_session_source(),
-        Some("x-litellm-session-id")
-    );
+    assert_eq!(requests[0].agent_session_source(), Some("trusted_header"));
 }
 
 #[tokio::test]
