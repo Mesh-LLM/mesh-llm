@@ -604,6 +604,9 @@ describe('useLogsLiveRecovery', () => {
     const source = sources[0]
     act(() => source?.error())
     act(() => vi.advanceTimersByTime(1_000))
+    await flush()
+    // Entering polling hydrates once immediately, before any interval tick.
+    expect(hydrate).toHaveBeenCalledTimes(1)
     const timerCount = vi.getTimerCount()
     const togglePolling = result.current.togglePolling
 
@@ -615,7 +618,7 @@ describe('useLogsLiveRecovery', () => {
     expect(vi.getTimerCount()).toBe(timerCount)
     act(() => vi.advanceTimersByTime(15_000))
     await flush()
-    expect(hydrate).not.toHaveBeenCalled()
+    expect(hydrate).toHaveBeenCalledTimes(1)
     expect(sources).toHaveLength(1)
     expect(source?.closed).toBe(false)
   })

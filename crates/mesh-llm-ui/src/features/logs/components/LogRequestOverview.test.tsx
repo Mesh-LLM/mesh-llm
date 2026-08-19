@@ -157,6 +157,6 @@ describe('LogRequestOverview', () => {
     const metrics = screen.getByLabelText('Request metrics')
     expect(within(metrics).getByTestId('request-outcome')).toHaveTextContent('Failed')
     expect(within(metrics).getByTestId('request-http-status')).toHaveTextContent('HTTP 502')
-    expect(within(metrics).getByTestId('request-http-status')).toHaveClass('text-bad')
+    expect(within(metrics).getByTestId('request-http-status')).toHaveClass('text-bad-text')
   })
 })

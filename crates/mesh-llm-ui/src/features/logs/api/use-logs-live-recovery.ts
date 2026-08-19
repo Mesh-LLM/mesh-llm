@@ -373,6 +373,7 @@ export function useLogsLiveRecovery({
     const startPolling = () => {
       if (pollingTimer !== undefined) return
       setLifecycleState('polling')
+      if (pollingEnabledRef.current) hydrateAuthoritatively(false)
       pollingTimer = window.setInterval(() => {
         if (pollingEnabledRef.current) hydrateAuthoritatively(false)
       }, POLL_INTERVAL_MS)
@@ -541,6 +542,7 @@ export function useLogsLiveRecovery({
     }
     const startPolling = () => {
       setAuditState('polling')
+      if (pollingEnabledRef.current) hydrateAuditAuthoritatively(false)
       startReconciliation()
     }
     const queuePollingFallback = () => {

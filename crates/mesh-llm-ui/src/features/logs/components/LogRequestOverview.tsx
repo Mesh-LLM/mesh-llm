@@ -69,9 +69,9 @@ const metricIconToneClass: Record<MetricIconTone, string> = {
 const toneTextClass: Record<StatusBadgeTone, string> = {
   muted: 'text-fg-dim',
   accent: 'text-accent',
-  good: 'text-good',
-  warn: 'text-warn',
-  bad: 'text-bad'
+  good: 'text-good-text',
+  warn: 'text-warn-text',
+  bad: 'text-bad-text'
 }
 
 const outcomePresentation: Record<LogOutcome, OutcomePresentation> = {
