@@ -126,7 +126,7 @@ async fn transport_attempt_records_reuse_lifecycle_ids_and_keep_one_parent_termi
     let service = Arc::new(LoggingService::new(
         Default::default(),
         Arc::clone(&sink) as Arc<dyn PersistSink>,
-        Box::new(crate::logging::SystemClock),
+        Box::new(DeterministicClock::default()),
     ));
     let parent = RawMeshRequestLifecycle::register(
         Arc::clone(&service),

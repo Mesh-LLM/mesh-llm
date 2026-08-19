@@ -1,6 +1,6 @@
 use super::*;
 use crate::logging::{
-    LoggingService, OpenAiLifecycleAttachment, PersistSink, RawMeshLifecycleOwners,
+    Clock, LoggingService, OpenAiLifecycleAttachment, PersistSink, RawMeshLifecycleOwners,
     RawMeshRequestLifecycle, RequestSummaryEntry,
 };
 use crate::network::target_health::TargetHealthOutcome;
@@ -8,7 +8,25 @@ use anyhow::Result;
 use mesh_llm_events::logging::proxy::ProxyRecord;
 use mesh_llm_events::logging::replay::ReplayChannel;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
+
+/// Deterministic counter clock for tests that assert on serialized record
+/// contents. `SystemClock` stamps nanosecond-precision wall-clock time, and a
+/// redaction assertion checking for bare digit substrings (e.g. a port
+/// fixture) can collide with those random nanosecond digits; this clock keeps
+/// timestamps fixed-format and predictable so such assertions can't flake.
+#[derive(Default)]
+struct DeterministicClock {
+    counter: AtomicU64,
+}
+
+impl Clock for DeterministicClock {
+    fn now(&self) -> String {
+        let n = self.counter.fetch_add(1, AtomicOrdering::Relaxed);
+        format!("2025-01-01T00:00:00.{n:09}Z")
+    }
+}
 
 #[derive(Default)]
 struct TransportProxySink {
