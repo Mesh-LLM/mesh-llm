@@ -89,7 +89,7 @@ pub(crate) use self::operational_logging::{
     record_runtime_operational_event, record_runtime_operational_event_with_context,
 };
 pub(crate) use self::provider_supervisor::ProviderRuntimeDiscoveryOptions;
-use self::provider_supervisor::{
+pub(crate) use self::provider_supervisor::{
     ProviderSupervisorContext, ProviderSupervisorHandle, start_apple_provider_supervisor,
 };
 use self::publication::*;

@@ -254,7 +254,7 @@ pub(super) async fn run_runtime_cli(
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
-    provider_runtime_discovery: Option<ProviderRuntimeDiscoveryOptions>,
+    provider_runtimes: Option<ProviderRuntimeDiscoveryOptions>,
 ) -> Result<()> {
     options.validate_discovery_mode_args()?;
 
@@ -354,7 +354,7 @@ pub(super) async fn run_runtime_cli(
         runtime,
         auto_join_candidates,
         embedded_control_rx,
-        provider_runtime_discovery,
+        provider_runtimes,
     })
     .await
 }
@@ -1333,7 +1333,7 @@ pub(super) struct RunAutoContext {
     pub(super) auto_join_candidates: Vec<(String, Option<String>)>,
     pub(super) embedded_control_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
-    pub(super) provider_runtime_discovery: Option<ProviderRuntimeDiscoveryOptions>,
+    pub(super) provider_runtimes: Option<ProviderRuntimeDiscoveryOptions>,
 }
 
 #[expect(
@@ -1351,7 +1351,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         runtime,
         auto_join_candidates,
         mut embedded_control_rx,
-        provider_runtime_discovery,
+        provider_runtimes,
     } = ctx;
     let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
@@ -1523,6 +1523,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         target_tx.clone(),
         runtime_state.dashboard_processes.clone(),
         console_state.clone(),
+        provider_runtimes.as_ref(),
     )
     .await;
     let startup_ready_reporter = StartupReadyReporter::new_with_failure_policy(
@@ -1596,15 +1597,19 @@ async fn start_run_auto_provider_supervisor(
     target_tx: Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     dashboard_processes: Arc<tokio::sync::Mutex<Vec<api::RuntimeProcessPayload>>>,
     console_state: Option<api::MeshApi>,
+    discovery_options: Option<&ProviderRuntimeDiscoveryOptions>,
 ) -> Option<ProviderSupervisorHandle> {
     if is_client {
         return None;
     }
-    start_apple_provider_supervisor(ProviderSupervisorContext {
-        target_tx,
-        dashboard_processes,
-        console_state,
-    })
+    start_apple_provider_supervisor(
+        ProviderSupervisorContext {
+            target_tx,
+            dashboard_processes,
+            console_state,
+        },
+        discovery_options,
+    )
     .await
 }
 

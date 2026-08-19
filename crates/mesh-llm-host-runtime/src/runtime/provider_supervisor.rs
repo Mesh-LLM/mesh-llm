@@ -34,7 +34,7 @@ const PROVIDER_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 const PROVIDER_MAX_HEALTH_FAILURES: u8 = 3;
 const PROVIDER_MAX_RESTART_BACKOFF_SECS: u64 = 30;
 
-pub(super) struct ProviderSupervisorContext {
+pub(crate) struct ProviderSupervisorContext {
     pub(super) target_tx: Arc<watch::Sender<election::ModelTargets>>,
     pub(super) dashboard_processes: Arc<tokio::sync::Mutex<Vec<api::RuntimeProcessPayload>>>,
     pub(super) console_state: Option<api::MeshApi>,
@@ -49,7 +49,7 @@ pub(crate) struct ProviderRuntimeDiscoveryOptions {
     pub(crate) inherit_environment: bool,
 }
 
-pub(super) struct ProviderSupervisorHandle {
+pub(crate) struct ProviderSupervisorHandle {
     shutdown_tx: watch::Sender<bool>,
     task: JoinHandle<()>,
 }
@@ -105,7 +105,7 @@ impl ProviderSupervisorHandle {
     }
 }
 
-pub(super) async fn start_apple_provider_supervisor(
+pub(crate) async fn start_apple_provider_supervisor(
     context: ProviderSupervisorContext,
     discovery_options: Option<&ProviderRuntimeDiscoveryOptions>,
 ) -> Option<ProviderSupervisorHandle> {
