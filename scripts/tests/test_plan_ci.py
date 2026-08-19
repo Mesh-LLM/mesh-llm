@@ -248,6 +248,40 @@ class PlanCiTests(unittest.TestCase):
             plan["reasons"]["runner-contract"],
         )
 
+    def test_control_plane_changes_select_static_abi_for_its_matrix_gated_consumers(
+        self,
+    ) -> None:
+        # static_abi is the only lane job gated on required_slices while its
+        # consumers (rust_tests, kotlin_sdk_input) are gated on the matrices
+        # force_all_rows populates. If either matrix comes back non-empty,
+        # static-abi must be selected too, or the consumer can never run.
+        cases = (
+            ("pr-draft", "pull_request", "runtime.json"),
+            ("pr-ready", "pull_request", "runtime.json"),
+            ("main", "push", "main.json"),
+            ("manual-full", "workflow_dispatch", "main.json"),
+        )
+        for profile, event_name, fixture_name in cases:
+            with self.subTest(profile=profile):
+                payload = fixture(fixture_name)
+                payload.update(
+                    {
+                        "profile": profile,
+                        "event_name": event_name,
+                        "changed_files": [".github/workflows/pr_linux.yml"],
+                        "affected_crates": [],
+                    }
+                )
+
+                plan = PLANNER.build_plan(payload, root=ROOT)
+
+                kotlin_planned = "kotlin" in {
+                    row["id"] for row in plan["matrices"]["sdk"]
+                }
+                rust_tests_planned = bool(plan["matrices"]["rust_tests"])
+                if kotlin_planned or rust_tests_planned:
+                    self.assertIn("static-abi", plan["required_slices"])
+
     def test_macos_consumer_rows_reject_multiple_architectures(self) -> None:
         slices = json.loads((ROOT / "ci" / "slices.yml").read_text())
         extra = copy.deepcopy(

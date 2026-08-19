@@ -3,7 +3,7 @@
   "profiles": {
     "pr-draft": {
       "base_slices": ["quality"],
-      "control_slices": ["quality", "runner-contract"],
+      "control_slices": ["quality", "runner-contract", "static-abi"],
       "all_rows": false,
       "budgets": {
         "linux_max_parallel": 7,
