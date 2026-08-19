@@ -1839,3 +1839,67 @@ pub(super) fn tui_repair_emits_a_physical_full_screen_clear() {
         "a logical ratatui Clear widget cannot fix backend desync; the repair must erase the real screen"
     );
 }
+
+#[test]
+pub(super) fn process_columns_keep_every_column_when_there_is_room() {
+    let [text, pid, port, status] = process_column_widths(80, 8, 5, 8);
+
+    assert!(text >= 8, "the identifying column must never be crushed");
+    assert_eq!((pid, port, status), (5, 5, 8));
+}
+
+#[test]
+pub(super) fn process_columns_drop_state_before_crushing_the_model_name() {
+    // The width at which all four columns stop fitting.
+    let [text, _pid, port, status] = process_column_widths(26, 8, 5, 8);
+
+    assert_eq!(status, 0, "STATE is the first column to be surrendered");
+    assert_eq!(port, 5, "PORT still fits once STATE is gone");
+    assert!(
+        text >= 8,
+        "the model name keeps its minimum instead of collapsing: got {text}"
+    );
+}
+
+#[test]
+pub(super) fn process_columns_drop_port_next_and_still_keep_the_name() {
+    let [text, pid, port, status] = process_column_widths(18, 8, 5, 8);
+
+    assert_eq!((port, status), (0, 0));
+    assert_eq!(pid, 5, "PID is the last column to go");
+    assert!(text >= 8, "the model name keeps its minimum: got {text}");
+}
+
+#[test]
+pub(super) fn process_table_renders_only_the_columns_that_fit() {
+    let widths = [9usize, 5, 0, 0];
+
+    assert_eq!(process_table_constraints(widths).len(), 2);
+    assert_eq!(
+        present_columns(widths, ["MODEL", "PID", "PORT", "STATE"]),
+        vec!["MODEL", "PID"]
+    );
+}
+
+#[test]
+pub(super) fn tui_narrow_dashboard_keeps_the_model_name_readable() {
+    let mut state = DashboardState::default();
+    state.reduce(DashboardAction::Resize(dashboard_layout_for_terminal_size(
+        100, 32,
+    )));
+    state.reduce(DashboardAction::SnapshotUpdated(snapshot_fixture(2, 30)));
+
+    let rendered = render_tui_frame_snapshot(&state, 100, 32);
+
+    // Regression: the MODEL column used to be laid out with `Fill(1)`, which
+    // ignored the floor the cell text was truncated to and collapsed to a
+    // single character at this width.
+    assert!(
+        rendered.contains("MODEL"),
+        "the model header must not be truncated away:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("llama-ser"),
+        "the model name must stay recognizable at 100 columns:\n{rendered}"
+    );
+}
