@@ -541,8 +541,8 @@ export function useLogsLiveRecovery({
       }, POLL_INTERVAL_MS)
     }
     const startPolling = () => {
-      if (reconciliationTimer !== undefined) return
       setAuditState('polling')
+      if (reconciliationTimer !== undefined) return
       if (pollingEnabledRef.current) hydrateAuditAuthoritatively(false)
       startReconciliation()
     }

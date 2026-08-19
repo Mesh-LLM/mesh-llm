@@ -382,7 +382,15 @@ describe('useLogsLiveRecovery', () => {
     act(() => source?.error())
     act(() => vi.advanceTimersByTime(1_000))
     await flush()
+    expect(result.current.state).toBe('polling')
     expect(hydrateAudit).toHaveBeenCalledTimes(1)
+
+    // The reconciliation interval from the first entry must still be the one
+    // driving refreshes — the second failure should not have restarted or
+    // dropped it.
+    act(() => vi.advanceTimersByTime(5_000))
+    await flush()
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
   })
 
   it('serializes route and reconnects while source remains unsupported', async () => {
