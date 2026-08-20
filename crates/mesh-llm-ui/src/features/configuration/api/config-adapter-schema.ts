@@ -3,12 +3,9 @@ import type {
   ConfigurationDefaultsControl,
   ConfigurationDefaultsHarnessData,
   ConfigurationDefaultsSetting,
-  ConfigurationDefaultsValues,
   ConfigurationIntegrationsHarnessData,
-  ConfigurationModelPlacementOptions,
-  ConfigurationModelPlacementPaths,
   ConfigurationRuntimeControlStateEntry,
-  ConfigurationSettingsHarnessData,
+  ConfigurationSettingsHarnessData
 } from '@/features/app-tabs/types'
 import { CONFIGURATION_HARNESS } from '@/features/app-tabs/data'
 import { createSchemaControl } from '@/features/configuration/api/schema-control-factory'
@@ -22,11 +19,23 @@ import {
 } from './schema-setting-order'
 import type {
   RuntimeConfigControlStatePayload,
-  ConfigurationDefaultsSchemaPathEntry,
   RuntimeConfigPluginInstance,
   RuntimeConfigSchemaEntry,
   RuntimeConfigSchemaReference
 } from './config-adapter-types'
+import { combineSettingsHarnessData } from './config-adapter-schema-values'
+import { rendererIdForEntry } from './config-adapter-schema-placement'
+
+export {
+  DEFAULT_MODEL_PLACEMENT_PATHS,
+  modelPlacementOptionsFromSchema,
+  modelPlacementPathsFromSchema
+} from './config-adapter-schema-placement'
+export {
+  combineSettingsHarnessData,
+  configurationDefaultsSchemaPathEntries,
+  overlayDefaultsValues
+} from './config-adapter-schema-values'
 
 const CATEGORY_ICON_BY_ID: Record<string, ConfigurationDefaultsSetting['icon']> = {
   meshllm: 'cpu',
@@ -206,12 +215,6 @@ const DEFAULTS_CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory>
   }
 }
 
-const PATH_RENDERER_FALLBACKS: Record<string, string> = {
-  'defaults.throughput.parallel': 'slot-meter',
-  'defaults.model_fit.kv_cache_policy': 'kv-cache-policy',
-  'defaults.model_fit.ctx_size': 'context-slider'
-}
-
 type ChoicePresentation = Extract<ConfigurationDefaultsControl, { kind: 'choice' }>['presentation']
 
 function settingIdFromPath(canonicalPath: string) {
@@ -278,10 +281,6 @@ function categoryForDefaultsPath(canonicalPath: string) {
 
 function controlNameForPath(canonicalPath: string) {
   return lastPathSegment(canonicalPath)
-}
-
-function rendererIdForEntry(entry: RuntimeConfigSchemaEntry): string | undefined {
-  return entry.presentation?.renderer_id ?? PATH_RENDERER_FALLBACKS[entry.canonical_path]
 }
 
 function segmentedControl(
@@ -705,58 +704,6 @@ function settingWithPluginBaseline(
   }
 }
 
-export const DEFAULT_MODEL_PLACEMENT_PATHS: ConfigurationModelPlacementPaths = {
-  model: 'models.<model-ref>.model',
-  ctxSize: 'models.<model-ref>.model_fit.ctx_size',
-  device: 'models.<model-ref>.hardware.device',
-  gpuLayers: 'models.<model-ref>.hardware.gpu_layers',
-  cacheTypeK: 'models.<model-ref>.model_fit.cache_type_k',
-  cacheTypeV: 'models.<model-ref>.model_fit.cache_type_v',
-  kvCachePolicy: 'models.<model-ref>.model_fit.kv_cache_policy',
-  flashAttention: 'models.<model-ref>.model_fit.flash_attention',
-  mmproj: 'models.<model-ref>.multimodal.mmproj'
-}
-
-export function modelPlacementPathsFromSchema(
-  schema: RuntimeConfigSchemaReference | undefined
-): ConfigurationModelPlacementPaths {
-  if (!schema) return DEFAULT_MODEL_PLACEMENT_PATHS
-
-  const pathByRenderer = new Map(
-    schema.settings
-      .filter((entry) => entry.canonical_path.startsWith('models.<model-ref>.'))
-      .map((entry) => [rendererIdForEntry(entry), entry.canonical_path] as const)
-      .filter((entry): entry is readonly [string, string] => Boolean(entry[0]))
-  )
-
-  return {
-    model: pathByRenderer.get('model-placement-model') ?? DEFAULT_MODEL_PLACEMENT_PATHS.model,
-    ctxSize: pathByRenderer.get('model-placement-context') ?? DEFAULT_MODEL_PLACEMENT_PATHS.ctxSize,
-    device: pathByRenderer.get('model-placement-device') ?? DEFAULT_MODEL_PLACEMENT_PATHS.device,
-    gpuLayers: pathByRenderer.get('model-placement-gpu-layers') ?? DEFAULT_MODEL_PLACEMENT_PATHS.gpuLayers,
-    cacheTypeK: DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeK,
-    cacheTypeV: DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeV,
-    kvCachePolicy: DEFAULT_MODEL_PLACEMENT_PATHS.kvCachePolicy,
-    flashAttention: DEFAULT_MODEL_PLACEMENT_PATHS.flashAttention,
-    mmproj: DEFAULT_MODEL_PLACEMENT_PATHS.mmproj
-  }
-}
-
-function schemaEnumValuesForPath(schema: RuntimeConfigSchemaReference | undefined, canonicalPath: string): string[] {
-  const setting = schema?.settings.find((entry) => entry.canonical_path === canonicalPath)
-  if (setting?.value_schema.kind === 'enum') return [...setting.value_schema.values]
-  return []
-}
-
-export function modelPlacementOptionsFromSchema(
-  schema: RuntimeConfigSchemaReference | undefined
-): ConfigurationModelPlacementOptions {
-  return {
-    cacheTypeK: schemaEnumValuesForPath(schema, DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeK!),
-    cacheTypeV: schemaEnumValuesForPath(schema, DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeV!)
-  }
-}
-
 export function createConfigurationIntegrationsFromSchema(
   schema: RuntimeConfigSchemaReference | undefined,
   controlState?: RuntimeConfigControlStatePayload
@@ -813,48 +760,4 @@ export function createConfigurationIntegrationsFromSchema(
   }
 
   return { categories, settings: sortSettings(settings), preview: [] }
-}
-
-export function configurationDefaultsSchemaPathEntries(): ConfigurationDefaultsSchemaPathEntry[] {
-  return []
-}
-
-function cloneControlValue(
-  control: ConfigurationDefaultsSetting['control'],
-  value: string
-): ConfigurationDefaultsSetting['control'] {
-  return { ...control, value }
-}
-
-export function overlayDefaultsValues(
-  harnessDefaults: ConfigurationDefaultsHarnessData,
-  defaultsValues: ConfigurationDefaultsValues
-): ConfigurationDefaultsHarnessData {
-  return {
-    ...harnessDefaults,
-    settings: harnessDefaults.settings.map((setting) => ({
-      ...setting,
-      baselineValue: setting.baselineValue ?? setting.control.value,
-      control: cloneControlValue(setting.control, defaultsValues[setting.id] ?? setting.control.value)
-    }))
-  }
-}
-
-export function combineSettingsHarnessData(
-  ...groups: readonly (ConfigurationSettingsHarnessData | undefined)[]
-): ConfigurationSettingsHarnessData {
-  const categoryById = new Map<string, ConfigurationDefaultsCategory>()
-  const settingById = new Map<string, ConfigurationDefaultsSetting>()
-  const preview = groups.flatMap((group) => group?.preview ?? [])
-
-  for (const group of groups) {
-    for (const category of group?.categories ?? []) categoryById.set(String(category.id), category)
-    for (const setting of group?.settings ?? []) settingById.set(setting.id, setting)
-  }
-
-  return {
-    categories: sortCategories(Array.from(categoryById.values())),
-    settings: sortSettings(Array.from(settingById.values())),
-    preview
-  }
 }
