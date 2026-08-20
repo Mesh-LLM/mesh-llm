@@ -141,6 +141,36 @@ class ManageBuildCacheTests(unittest.TestCase):
                     with CACHE.cache_lock(target, exclusive=True, nonblocking=True):
                         self.fail("exclusive prune lock unexpectedly acquired")
 
+    def test_status_holds_nonblocking_shared_cache_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            with mock.patch.object(CACHE, "cache_lock") as cache_lock:
+                cache_lock.return_value.__enter__.return_value = None
+                cache_lock.return_value.__exit__.return_value = None
+                with mock.patch.object(CACHE, "render_status"):
+                    with mock.patch.object(
+                        sys, "argv", [str(SCRIPT), "status", "--workspace", str(workspace)],
+                    ):
+                        self.assertEqual(CACHE.main(), 0)
+            cache_lock.assert_called_once_with(
+                workspace.resolve() / "target", exclusive=False, nonblocking=True,
+            )
+
+    def test_dry_run_holds_nonblocking_shared_cache_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            with mock.patch.object(CACHE, "cache_lock") as cache_lock:
+                cache_lock.return_value.__enter__.return_value = None
+                cache_lock.return_value.__exit__.return_value = None
+                with mock.patch.object(CACHE, "run_prune", return_value=0):
+                    with mock.patch.object(
+                        sys, "argv", [str(SCRIPT), "prune", "--workspace", str(workspace)],
+                    ):
+                        self.assertEqual(CACHE.main(), 0)
+            cache_lock.assert_called_once_with(
+                workspace.resolve() / "target", exclusive=False, nonblocking=True,
+            )
+
     def test_execute_refuses_when_a_compiler_is_active(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)

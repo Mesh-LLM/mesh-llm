@@ -279,15 +279,17 @@ def main() -> int:
     if arguments.max_age < 0:
         raise CacheError("max age must be non-negative")
     if arguments.command == "status":
-        before = snapshot(workspace, target, arguments.max_size, arguments.max_age)
-        print(json.dumps(before, indent=2, sort_keys=True)) if arguments.json else render_status(before)
-        return 0
+        with cache_lock(target, exclusive=False, nonblocking=True):
+            before = snapshot(workspace, target, arguments.max_size, arguments.max_age)
+            print(json.dumps(before, indent=2, sort_keys=True)) if arguments.json else render_status(before)
+            return 0
     if arguments.execute:
         with cache_lock(target, exclusive=True, nonblocking=True):
             if active_compilers():
                 raise CacheError("active Cargo/Rust compiler processes detected; refusing cleanup")
             return run_prune(arguments, workspace, target)
-    return run_prune(arguments, workspace, target)
+    with cache_lock(target, exclusive=False, nonblocking=True):
+        return run_prune(arguments, workspace, target)
 
 
 def run_prune(arguments: argparse.Namespace, workspace: Path, target: Path) -> int:
