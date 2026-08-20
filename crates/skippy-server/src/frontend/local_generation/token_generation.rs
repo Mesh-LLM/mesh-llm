@@ -600,6 +600,18 @@ impl StageOpenAiBackend {
                     "skippy.exact_cache.reconstruct_blocks".to_string(),
                     json!(restored.reconstruct_blocks),
                 );
+                attrs.insert(
+                    "skippy.exact_cache.lookup_ms".to_string(),
+                    json!(restored.lookup_ms),
+                );
+                attrs.insert(
+                    "skippy.exact_cache.kv_import_ms".to_string(),
+                    json!(restored.kv_import_ms),
+                );
+                attrs.insert(
+                    "skippy.exact_cache.recurrent_import_ms".to_string(),
+                    json!(restored.recurrent_import_ms),
+                );
                 self.telemetry
                     .emit("stage.openai_kv_lookup_decision", attrs);
             }
@@ -1088,13 +1100,10 @@ impl StageOpenAiBackend {
                     "skippy.exact_cache.recorded_tokens".to_string(),
                     json!(record.token_count),
                 );
-                attrs.insert(
-                    "skippy.exact_cache.stored".to_string(),
-                    json!(record.stored),
-                );
+                attrs.insert("skippy.exact_cache.queued".to_string(), json!(true));
                 self.telemetry
                     .emit("stage.openai_kv_record_decision", attrs);
-                record.stored
+                true
             }
             Ok(None) => false,
             Err(error) => {

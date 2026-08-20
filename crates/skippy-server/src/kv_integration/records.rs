@@ -103,6 +103,9 @@ pub struct ExactStateRestore {
     pub reconstruct_ms: f64,
     pub reconstruct_bytes: u64,
     pub reconstruct_blocks: usize,
+    pub lookup_ms: f64,
+    pub kv_import_ms: f64,
+    pub recurrent_import_ms: f64,
 }
 
 #[derive(Debug, Clone)]
