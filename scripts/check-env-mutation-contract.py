@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the audited Rust process-environment mutation contract.
+"""Check the Rust process-environment mutation contract and census.
 
 `std::env::set_var` and `remove_var` are unsafe on Rust 2024 platforms where a
 concurrent environment reader can race the mutation.  The audited call sites
@@ -12,8 +12,9 @@ fall into two deliberately separate contracts:
 
 The source tree contains several independent crates (and two build scripts),
 so a shared Rust test helper would introduce an unnecessary dev-dependency
-coupling.  This repository-level check keeps the contract visible across those
-crate boundaries instead.
+coupling. This repository-level check discovers every Rust mutation site,
+strictly verifies the original TODO audit surface, and freezes the count in
+pre-existing mutation files that have not yet joined that stricter contract.
 """
 
 from __future__ import annotations
@@ -27,8 +28,8 @@ import sys
 TODO = "// TODO: Audit that the environment access only happens in single-threaded code."
 
 # This is the complete census of the 128 TODO comments that this check was
-# introduced to audit.  Keep the list explicit so a new environment mutation
-# cannot silently join the audit surface without review.
+# introduced to audit. These files receive the strict serial-test/deferred-site
+# checks below.
 AUDITED_FILES = (
     "crates/skippy-protocol/build.rs",
     "crates/mesh-llm-plugin/build.rs",
@@ -48,6 +49,31 @@ AUDITED_FILES = (
     "crates/skippy-runtime/src/logging.rs",
     "crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",
 )
+
+# Other process-environment mutations predate the 128-TODO audit. They are
+# frozen by exact file/count so this checker cannot overstate their safety, and
+# so a new call (or a new mutation-bearing file) requires explicit review.
+KNOWN_UNAUDITED_MUTATION_COUNTS = {
+    "crates/mesh-llm-hardware-profile/src/lib.rs": 3,
+    "crates/mesh-llm-host-runtime/src/api/routes/plugins.rs": 3,
+    "crates/mesh-llm-host-runtime/src/api/tests/apply_config_diagnostics.rs": 3,
+    "crates/mesh-llm-host-runtime/src/api/tests/mod.rs": 3,
+    "crates/mesh-llm-host-runtime/src/api/tests/runtime_config_validation_authority.rs": 3,
+    "crates/mesh-llm-host-runtime/src/mesh/tests/admission/requirements.rs": 3,
+    "crates/mesh-llm-host-runtime/src/mesh/tests/owner_control.rs": 5,
+    "crates/mesh-llm-host-runtime/src/models/inventory.rs": 13,
+    "crates/mesh-llm-host-runtime/src/models/resolve/tests.rs": 4,
+    "crates/mesh-llm-host-runtime/src/network/nostr/auto.rs": 3,
+    "crates/mesh-llm-host-runtime/src/network/nostr/keys.rs": 3,
+    "crates/mesh-llm-host-runtime/src/runtime/config_state_tests/support.rs": 3,
+    "crates/mesh-llm-host-runtime/src/runtime/tests/auto_join.rs": 1,
+    "crates/mesh-llm-host-runtime/src/runtime/tests/mod.rs": 2,
+    "crates/mesh-llm-host-runtime/src/runtime/tests/startup_models.rs": 2,
+    "crates/mesh-llm-runtime-install/src/lib.rs": 8,
+    "crates/mesh-llm/src/commands/plugin_cli.rs": 3,
+    "crates/model-hf/src/cache_paths.rs": 2,
+    "crates/skippy-server/src/frontend/tool_emulation.rs": 4,
+}
 
 # These are the only intentionally unresolved sites.  They execute on runtime
 # startup / native-runtime setup paths that may already have Tokio worker
@@ -171,14 +197,49 @@ def check_file(root: Path, relative_path: str) -> list[str]:
     return errors
 
 
-def run(root: Path, files: tuple[str, ...]) -> int:
+def discover_mutation_files(root: Path) -> dict[str, int]:
+    discovered: dict[str, int] = {}
+    for path in root.rglob("*.rs"):
+        if any(part in {".git", "target"} for part in path.relative_to(root).parts):
+            continue
+        count = len(mutation_lines(path.read_text(encoding="utf-8").splitlines()))
+        if count:
+            discovered[path.relative_to(root).as_posix()] = count
+    return discovered
+
+
+def run(root: Path, files: tuple[str, ...] | None = None) -> int:
     errors: list[str] = []
-    mutation_count = 0
-    for relative_path in files:
-        path = root / relative_path
-        if path.is_file():
-            mutation_count += len(mutation_lines(path.read_text(encoding="utf-8").splitlines()))
-        errors.extend(check_file(root, relative_path))
+    if files is not None:
+        mutation_count = 0
+        for relative_path in files:
+            path = root / relative_path
+            if path.is_file():
+                mutation_count += len(mutation_lines(path.read_text(encoding="utf-8").splitlines()))
+            errors.extend(check_file(root, relative_path))
+        checked_file_count = len(files)
+        audited_file_count = len(files)
+    else:
+        discovered = discover_mutation_files(root)
+        registered = set(AUDITED_FILES) | set(KNOWN_UNAUDITED_MUTATION_COUNTS)
+        for relative_path in sorted(set(discovered) - registered):
+            errors.append(
+                f"{relative_path}: unregistered process-environment mutation file "
+                f"({discovered[relative_path]} sites)"
+            )
+        for relative_path, expected_count in KNOWN_UNAUDITED_MUTATION_COUNTS.items():
+            actual_count = discovered.get(relative_path)
+            if actual_count is not None and actual_count != expected_count:
+                errors.append(
+                    f"{relative_path}: unaudited mutation census changed "
+                    f"from {expected_count} to {actual_count} sites"
+                )
+        for relative_path in AUDITED_FILES:
+            if relative_path in discovered or (root / relative_path).is_file():
+                errors.extend(check_file(root, relative_path))
+        mutation_count = sum(discovered.values())
+        checked_file_count = len(discovered)
+        audited_file_count = sum(relative_path in discovered for relative_path in AUDITED_FILES)
 
     if errors:
         print("environment mutation contract violations:", file=sys.stderr)
@@ -187,8 +248,9 @@ def run(root: Path, files: tuple[str, ...]) -> int:
         return 1
 
     print(
-        f"environment mutation contract: checked {len(files)} audited files and "
-        f"{mutation_count} mutation sites; unresolved runtime sites remain explicit"
+        f"environment mutation contract: discovered {checked_file_count} Rust files and "
+        f"{mutation_count} mutation sites; {audited_file_count} contract-audited files; "
+        "unresolved runtime sites remain explicit"
     )
     return 0
 
@@ -205,12 +267,12 @@ def parse_args() -> argparse.Namespace:
         "--file",
         dest="files",
         action="append",
-        help="audit one relative source file (repeatable; defaults to the full census)",
+        help="strictly audit one relative source file (repeatable; defaults to repository discovery)",
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    selected = tuple(args.files) if args.files else AUDITED_FILES
+    selected = tuple(args.files) if args.files else None
     raise SystemExit(run(args.root.resolve(), selected))
