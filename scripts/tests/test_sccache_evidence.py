@@ -33,6 +33,19 @@ HF_WORKFLOW = ROOT / ".github" / "workflows" / "hf-download-smoke.yml"
 NATIVE_SDK_WORKFLOW = (
     ROOT / ".github" / "workflows" / "native-sdk-artifact.yml"
 )
+SEED_WARMER = ROOT / ".github" / "workflows" / "cache-warm-sccache.yml"
+SEED_KEY_PREFIX = (
+    "mesh-llm-sccache-seed-linux-x86_64-"
+    "img-8d93de6b-epoch-8d93de6b-v2-"
+)
+SEED_IMAGE = (
+    "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:"
+    "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
+)
+SEED_EPOCH = (
+    "mesh-llm-cuda-runner-sha256-"
+    "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
+)
 
 
 def valid_payload(*, compile_requests: int = 12) -> dict[str, object]:
@@ -433,6 +446,30 @@ class SccacheEvidenceTests(unittest.TestCase):
             "&& github.ref == 'refs/heads/main' }}",
             swift,
         )
+
+    def test_linux_seed_producer_and_consumers_share_compatible_key(self) -> None:
+        seeded = (
+            SEED_WARMER,
+            WORKFLOWS["quality"],
+            WORKFLOWS["rust-tests"],
+            WORKFLOWS["host"],
+            WORKFLOWS["runtime"],
+        )
+        for path in seeded:
+            with self.subTest(workflow=path.name):
+                workflow = path.read_text(encoding="utf-8")
+                self.assertEqual(workflow.count(SEED_KEY_PREFIX), 1)
+        warmer = SEED_WARMER.read_text(encoding="utf-8")
+        self.assertIn("run: just ci-sccache-seed-build", warmer)
+        self.assertNotIn(
+            "run: cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
+            warmer,
+        )
+
+    def test_runtime_seed_restore_requires_matching_image_and_epoch(self) -> None:
+        runtime = WORKFLOWS["runtime"].read_text(encoding="utf-8")
+        self.assertIn(f"matrix.runtime.container_image == '{SEED_IMAGE}'", runtime)
+        self.assertIn(f"matrix.runtime.toolchain_epoch == '{SEED_EPOCH}'", runtime)
 
     def test_instrumented_workflows_use_unique_evidence_artifacts(self) -> None:
         for workflow_name in INSTRUMENTED:

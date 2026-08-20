@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          key="mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-v1-${{ hashFiles('Cargo.lock', '.github/cache-version.txt') }}"
+          key="mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt') }}"
           echo "key=$key" >> "$GITHUB_OUTPUT"
       - name: Check for an existing exact seed
         id: restore
@@ -61,7 +61,7 @@ jobs:
         run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
       - name: Compile the dominant host dependency graph
         if: ${{ steps.restore.outputs.cache-hit != 'true' }}
-        run: cargo clippy --locked -p mesh-llm --all-targets -- -D warnings
+        run: just ci-sccache-seed-build
       - name: Capture intentionally cold warmer evidence
         if: ${{ steps.restore.outputs.cache-hit != 'true' && !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats

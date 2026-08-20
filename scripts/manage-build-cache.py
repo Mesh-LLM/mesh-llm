@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import fcntl
 import json
 import os
@@ -13,7 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any, Iterable
+from typing import Any, BinaryIO, Iterable, Iterator
 
 
 DEFAULT_MAX_BYTES = 80 * 1024**3
@@ -96,11 +97,16 @@ def cargo_packages(workspace: Path) -> list[str]:
     return sorted({package["name"] for package in json.loads(result.stdout)["packages"]})
 
 
+def artifact_roots(target: Path, leaf: str) -> list[Path]:
+    """Return host and cross-target Cargo profile artifact roots."""
+    roots = [*target.glob(f"*/{leaf}"), *target.glob(f"*/*/{leaf}")]
+    return sorted(path for path in roots if path.is_dir() and not path.is_symlink())
+
+
 def package_metrics(target: Path, packages: Iterable[str]) -> list[dict[str, Any]]:
     normalized = {package: package.replace("-", "_") for package in packages}
     totals = {package: [0, 0.0] for package in normalized}
-    roots = [path for path in target.glob("*/deps") if path.is_dir()]
-    roots.extend(path for path in target.glob("*/build") if path.is_dir())
+    roots = [*artifact_roots(target, "deps"), *artifact_roots(target, "build")]
     for root in roots:
         for child in root.iterdir():
             for package, stem in normalized.items():
@@ -130,23 +136,50 @@ def active_compilers() -> list[str]:
     return active
 
 
+@contextmanager
+def cache_lock(target: Path, *, exclusive: bool, nonblocking: bool) -> Iterator[BinaryIO]:
+    target.mkdir(parents=True, exist_ok=True)
+    lock_file = (target / ".mesh-llm-cache-prune.lock").open("a+b")
+    operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    if nonblocking:
+        operation |= fcntl.LOCK_NB
+    try:
+        fcntl.flock(lock_file, operation)
+    except BlockingIOError as error:
+        lock_file.close()
+        raise CacheError("build-cache cleanup or a local build is already running") from error
+    try:
+        yield lock_file
+    finally:
+        lock_file.close()
+
+
 def remove_tree(path: Path, target: Path) -> None:
-    resolved, target_resolved = path.resolve(), target.resolve()
-    if resolved == target_resolved or target_resolved not in resolved.parents:
+    candidate = Path(os.path.abspath(path))
+    target_absolute = Path(os.path.abspath(target))
+    target_resolved = target.resolve()
+    if candidate == target_absolute or target_absolute not in candidate.parents:
         raise CacheError(f"refusing to remove path outside target: {path}")
-    shutil.rmtree(resolved)
+    if path.is_symlink():
+        path.unlink()
+        return
+    parent_resolved = path.parent.resolve()
+    if parent_resolved != target_resolved and target_resolved not in parent_resolved.parents:
+        raise CacheError(f"refusing to remove path through a parent outside target: {path}")
+    if not path.is_dir():
+        raise CacheError(f"refusing to remove non-directory path: {path}")
+    shutil.rmtree(path)
 
 
 def prune_incremental(
     target: Path, cutoff: float, current_bytes: int, max_bytes: int, execute: bool,
 ) -> tuple[int, list[dict[str, Any]]]:
     candidates = []
-    for root in target.glob("*/incremental"):
-        if root.is_dir():
-            for child in root.iterdir():
-                size, newest = tree_metrics(child)
-                if newest < cutoff or current_bytes > max_bytes:
-                    candidates.append((newest, child, size))
+    for root in artifact_roots(target, "incremental"):
+        for child in root.iterdir():
+            size, newest = tree_metrics(child)
+            if newest < cutoff or current_bytes > max_bytes:
+                candidates.append((newest, child, size))
     actions = []
     for newest, path, size in sorted(candidates):
         if newest >= cutoff and current_bytes <= max_bytes:
@@ -212,13 +245,20 @@ def render_status(report: dict[str, Any]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("status", "prune"))
-    parser.add_argument("--workspace", type=Path, default=Path.cwd())
-    parser.add_argument("--target-dir", type=Path)
-    parser.add_argument("--max-size", type=parse_size, default=DEFAULT_MAX_BYTES)
-    parser.add_argument("--max-age", type=parse_age, default=DEFAULT_MAX_AGE_DAYS)
-    parser.add_argument("--execute", action="store_true")
-    parser.add_argument("--json", action="store_true")
+    commands = parser.add_subparsers(dest="command", required=True)
+    for command in ("status", "prune"):
+        subparser = commands.add_parser(command)
+        subparser.add_argument("--workspace", type=Path, default=Path.cwd())
+        subparser.add_argument("--target-dir", type=Path)
+        subparser.add_argument("--max-size", type=parse_size, default=DEFAULT_MAX_BYTES)
+        subparser.add_argument("--max-age", type=parse_age, default=DEFAULT_MAX_AGE_DAYS)
+        subparser.add_argument("--json", action="store_true")
+        if command == "prune":
+            subparser.add_argument("--execute", action="store_true")
+    build = commands.add_parser("build")
+    build.add_argument("--workspace", type=Path, default=Path.cwd())
+    build.add_argument("--target-dir", type=Path)
+    build.add_argument("build_command", nargs=argparse.REMAINDER)
     return parser.parse_args()
 
 
@@ -226,24 +266,32 @@ def main() -> int:
     arguments = parse_args()
     workspace = arguments.workspace.resolve()
     target = (arguments.target_dir or workspace / "target").resolve()
-    if arguments.max_age < 0:
-        raise CacheError("max age must be non-negative")
     if target == workspace or workspace not in target.parents:
         raise CacheError("target directory must be a child of the workspace")
-    before = snapshot(workspace, target, arguments.max_size, arguments.max_age)
+    if arguments.command == "build":
+        build_command = arguments.build_command
+        if build_command[:1] == ["--"]:
+            build_command = build_command[1:]
+        if not build_command:
+            raise CacheError("build command is required")
+        with cache_lock(target, exclusive=False, nonblocking=False):
+            return subprocess.run(build_command, cwd=workspace, check=False).returncode
+    if arguments.max_age < 0:
+        raise CacheError("max age must be non-negative")
     if arguments.command == "status":
+        before = snapshot(workspace, target, arguments.max_size, arguments.max_age)
         print(json.dumps(before, indent=2, sort_keys=True)) if arguments.json else render_status(before)
         return 0
-    lock_file = None
     if arguments.execute:
-        if active_compilers():
-            raise CacheError("active Cargo/Rust compiler processes detected; refusing cleanup")
-        target.mkdir(parents=True, exist_ok=True)
-        lock_file = (target / ".mesh-llm-cache-prune.lock").open("w", encoding="utf-8")
-        try:
-            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise CacheError("another cache prune is already running") from error
+        with cache_lock(target, exclusive=True, nonblocking=True):
+            if active_compilers():
+                raise CacheError("active Cargo/Rust compiler processes detected; refusing cleanup")
+            return run_prune(arguments, workspace, target)
+    return run_prune(arguments, workspace, target)
+
+
+def run_prune(arguments: argparse.Namespace, workspace: Path, target: Path) -> int:
+    before = snapshot(workspace, target, arguments.max_size, arguments.max_age)
     cutoff = time.time() - arguments.max_age * 86400
     current, incremental = prune_incremental(
         target, cutoff, before["target_bytes"], arguments.max_size, arguments.execute,
@@ -271,8 +319,6 @@ def main() -> int:
             identity = action.get("package", action.get("path"))
             size = action.get("estimated_bytes", action.get("bytes", 0))
             print(f"  {action['kind']}: {identity} ({human_size(size)})")
-    if lock_file is not None:
-        lock_file.close()
     return 0
 
 

@@ -131,7 +131,8 @@ from that same catalog.
   retain native GitHub cache behavior.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup.
 - `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
-  central runner policy permits it only for GitHub-hosted selections.
+  central runner policy permits it only for GitHub-hosted selections, and
+  runtime rows must match the seed's container image and toolchain epoch.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
 `scripts/collect-ci-metrics.py` is the read-only timing evidence collector. Its
@@ -151,8 +152,10 @@ namespace under `ci/DEPOT_PR_RISK_EXCEPTION.md`. That namespace is treated as
 untrusted input, not an authority or correctness boundary. Linux Clippy,
 Rust-test, host, and runtime jobs restore one bounded trusted sccache seed
 instead of per-row Cargo target archives. Depot selections cannot restore that
-seed through their cross-trust cache proxy, and these four high-fanout families
-disable per-object GHA publication on every provider. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
+seed through their cross-trust cache proxy. Its exact key fingerprints the
+warmer image and toolchain epoch, so mismatched native-runtime rows are cold and
+do not restore it. These four high-fanout families disable per-object GHA
+publication on every provider. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
 and Windows native ABI caches may publish into GitHub's isolated PR merge-ref
 scope for same-PR reruns. The Website slice is the sole publisher for the
 shared pnpm key and owns the website npm cache; platform UI producers restore
