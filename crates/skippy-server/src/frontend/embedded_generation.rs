@@ -717,28 +717,29 @@ impl StageOpenAiBackend {
             let mut native_mtp_suppress_cooldown_drafts_remaining = 0usize;
             let mut ngram_sidecar_controller =
                 NgramSidecarController::new(native_mtp_options.ngram_max_proposal_tokens);
-            let fused_reached_stop = fused_decode::apply_fused_first_decode(
-                self,
-                &request,
-                &mut fused_first_decode,
-                &mut native_mtp,
-                &mut current,
-                &mut decoded_tokens,
-                &mut exact_replay_tokens,
-                &mut context_tokens,
-                &mut decode_stage0_compute_ms,
-                &mut decode_runtime_lock_wait_ms,
-                &mut decode_runtime_lock_wait_max_ms,
-                &mut decode_runtime_lock_hold_ms,
-                &mut decode_runtime_lock_hold_max_ms,
-                &mut decode_runtime_lock_acquires,
-                &mut decode_forward_activation_encode_ms,
-                &mut decode_output_activation_bytes,
-                &mut decode_forward_activation_bytes,
-                &mut decode_forward_write_ms,
-                &mut decode_downstream_wait_ms,
-                &mut on_token,
-            )?;
+            let fused_reached_stop =
+                fused_decode::apply_fused_first_decode(fused_decode::FusedFirstDecodeContext {
+                    backend: self,
+                    request: &request,
+                    fused_first_decode: &mut fused_first_decode,
+                    native_mtp: &mut native_mtp,
+                    current: &mut current,
+                    decoded_tokens: &mut decoded_tokens,
+                    exact_replay_tokens: &mut exact_replay_tokens,
+                    context_tokens: &mut context_tokens,
+                    decode_stage0_compute_ms: &mut decode_stage0_compute_ms,
+                    decode_runtime_lock_wait_ms: &mut decode_runtime_lock_wait_ms,
+                    decode_runtime_lock_wait_max_ms: &mut decode_runtime_lock_wait_max_ms,
+                    decode_runtime_lock_hold_ms: &mut decode_runtime_lock_hold_ms,
+                    decode_runtime_lock_hold_max_ms: &mut decode_runtime_lock_hold_max_ms,
+                    decode_runtime_lock_acquires: &mut decode_runtime_lock_acquires,
+                    decode_forward_activation_encode_ms: &mut decode_forward_activation_encode_ms,
+                    decode_output_activation_bytes: &mut decode_output_activation_bytes,
+                    decode_forward_activation_bytes: &mut decode_forward_activation_bytes,
+                    decode_forward_write_ms: &mut decode_forward_write_ms,
+                    decode_downstream_wait_ms: &mut decode_downstream_wait_ms,
+                    on_token: &mut on_token,
+                })?;
             let mut cached_ngram_proposer =
                 HistoryNgramProposer::from_config(effective_speculative)?;
             let max_speculative_window = request.speculative_window.max(1);

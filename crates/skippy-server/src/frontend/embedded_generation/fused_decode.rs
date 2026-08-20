@@ -1,27 +1,56 @@
 use super::*;
 
-pub(super) fn apply_fused_first_decode(
-    backend: &StageOpenAiBackend,
-    request: &EmbeddedStageZeroGeneration<'_>,
-    fused_first_decode: &mut Option<EmbeddedFusedFirstDecode>,
-    native_mtp: &mut NativeMtpVerifier,
-    current: &mut i32,
-    decoded_tokens: &mut usize,
-    exact_replay_tokens: &mut Vec<i32>,
-    context_tokens: &mut Vec<i32>,
-    decode_stage0_compute_ms: &mut f64,
-    decode_runtime_lock_wait_ms: &mut f64,
-    decode_runtime_lock_wait_max_ms: &mut f64,
-    decode_runtime_lock_hold_ms: &mut f64,
-    decode_runtime_lock_hold_max_ms: &mut f64,
-    decode_runtime_lock_acquires: &mut usize,
-    decode_forward_activation_encode_ms: &mut f64,
-    decode_output_activation_bytes: &mut usize,
-    decode_forward_activation_bytes: &mut usize,
-    decode_forward_write_ms: &mut f64,
-    decode_downstream_wait_ms: &mut f64,
-    on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-) -> OpenAiResult<bool> {
+pub(super) struct FusedFirstDecodeContext<'a, 'request, F> {
+    pub(super) backend: &'a StageOpenAiBackend,
+    pub(super) request: &'a EmbeddedStageZeroGeneration<'request>,
+    pub(super) fused_first_decode: &'a mut Option<EmbeddedFusedFirstDecode>,
+    pub(super) native_mtp: &'a mut NativeMtpVerifier,
+    pub(super) current: &'a mut i32,
+    pub(super) decoded_tokens: &'a mut usize,
+    pub(super) exact_replay_tokens: &'a mut Vec<i32>,
+    pub(super) context_tokens: &'a mut Vec<i32>,
+    pub(super) decode_stage0_compute_ms: &'a mut f64,
+    pub(super) decode_runtime_lock_wait_ms: &'a mut f64,
+    pub(super) decode_runtime_lock_wait_max_ms: &'a mut f64,
+    pub(super) decode_runtime_lock_hold_ms: &'a mut f64,
+    pub(super) decode_runtime_lock_hold_max_ms: &'a mut f64,
+    pub(super) decode_runtime_lock_acquires: &'a mut usize,
+    pub(super) decode_forward_activation_encode_ms: &'a mut f64,
+    pub(super) decode_output_activation_bytes: &'a mut usize,
+    pub(super) decode_forward_activation_bytes: &'a mut usize,
+    pub(super) decode_forward_write_ms: &'a mut f64,
+    pub(super) decode_downstream_wait_ms: &'a mut f64,
+    pub(super) on_token: &'a mut F,
+}
+
+pub(super) fn apply_fused_first_decode<F>(
+    context: FusedFirstDecodeContext<'_, '_, F>,
+) -> OpenAiResult<bool>
+where
+    F: FnMut(i32) -> OpenAiResult<TokenControl>,
+{
+    let FusedFirstDecodeContext {
+        backend,
+        request,
+        fused_first_decode,
+        native_mtp,
+        current,
+        decoded_tokens,
+        exact_replay_tokens,
+        context_tokens,
+        decode_stage0_compute_ms,
+        decode_runtime_lock_wait_ms,
+        decode_runtime_lock_wait_max_ms,
+        decode_runtime_lock_hold_ms,
+        decode_runtime_lock_hold_max_ms,
+        decode_runtime_lock_acquires,
+        decode_forward_activation_encode_ms,
+        decode_output_activation_bytes,
+        decode_forward_activation_bytes,
+        decode_forward_write_ms,
+        decode_downstream_wait_ms,
+        on_token,
+    } = context;
     let mut fused_reached_stop = false;
     if let Some(mut fused) = fused_first_decode.take() {
         *current = fused.predicted;
