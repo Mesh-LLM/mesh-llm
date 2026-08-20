@@ -284,7 +284,6 @@ impl KvStageIntegration {
         })
     }
 
-    #[allow(dead_code)]
     pub async fn record_page(
         &self,
         page_id: String,

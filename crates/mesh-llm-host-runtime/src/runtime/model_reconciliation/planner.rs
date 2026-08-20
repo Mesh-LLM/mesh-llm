@@ -160,7 +160,6 @@ fn loaded_target(
     })
 }
 
-#[allow(dead_code)]
 fn model_target_matches_loaded(
     target: &ModelTargetReconciliationCandidate,
     loaded_model_ref: &str,

@@ -3,7 +3,6 @@ use tokio::net::TcpStream;
 
 use crate::api::http::respond_json;
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LogsError {
     Forbidden,

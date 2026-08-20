@@ -191,7 +191,6 @@ impl RuntimeState {
         Ok((predicted, frame))
     }
 
-    #[allow(dead_code)]
     pub fn decode_frame(
         &mut self,
         session_id: &str,

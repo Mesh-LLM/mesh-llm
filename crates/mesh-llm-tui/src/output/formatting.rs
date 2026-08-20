@@ -1389,7 +1389,6 @@ impl OutputManager {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn dashboard_snapshot(&self) -> Option<DashboardSnapshot> {
         let dashboard_snapshot_provider = match self.state.read() {
             Ok(state) if matches!(state.mode, LogFormat::Pretty) => {

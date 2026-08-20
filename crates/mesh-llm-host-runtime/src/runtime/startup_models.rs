@@ -71,7 +71,6 @@ pub(super) struct StartupModelPlan {
     pub(super) n_batch: Option<u32>,
     pub(super) n_ubatch: Option<u32>,
     pub(super) flash_attention: FlashAttentionType,
-    #[allow(dead_code)]
     pub(super) profile: String,
 }
 
