@@ -288,8 +288,9 @@ enters progress and polls the five validation runs associated with the same PR
 number, exact head SHA, and two-minute event epoch. When it observes the first
 definitive failed, timed-out, startup-failed, stale, or action-required job, it
 preserves that workflow as the root diagnostic and cancels the other queued or
-in-progress lane runs. A newer PR synchronization has a different SHA and
-supersedes the old monitor through its PR-number concurrency group.
+in-progress lane runs. Each triggering Quality run owns a distinct monitor, so
+a newer synchronization cannot prevent an older exact-revision monitor from
+finishing its bounded cleanup.
 
 The monitor executes only the default-branch implementation, checks out only
 the default branch, and owns the narrowly scoped `actions: write` token.

@@ -52,6 +52,10 @@ const action = require(process.argv[1]);
         self.assertIn("workflow_run:", workflow)
         self.assertIn("workflows: [PR · Quality]", workflow)
         self.assertIn("types: [in_progress]", workflow)
+        self.assertIn(
+            "group: pr-sibling-cancel-${{ github.event.workflow_run.id }}",
+            workflow,
+        )
         self.assertNotIn("pull_request_target:", workflow)
         self.assertNotIn("\n  pull_request:\n", workflow)
         self.assertIn("github.event.workflow_run.event == 'pull_request'", workflow)
@@ -176,6 +180,42 @@ return await action.githubApi("token", "owner", "repo").cancelRun(123);
         )
         self.assertTrue(result)
 
+    def test_api_paginates_workflow_runs_and_jobs(self) -> None:
+        result = self.run_node_async(
+            """
+const pages = [];
+global.fetch = async (rawUrl, options) => {
+  const url = new URL(rawUrl);
+  const page = Number(url.searchParams.get("page"));
+  const field = url.pathname.endsWith("/jobs") ? "jobs" : "workflow_runs";
+  pages.push([field, page, options.signal instanceof AbortSignal]);
+  const count = page === 1 ? 100 : 1;
+  return {
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({
+      [field]: Array.from({length: count}, (_, index) => ({id: (page - 1) * 100 + index + 1})),
+    }),
+  };
+};
+const api = action.githubApi("token", "owner", "repo");
+const runs = await api.listRuns("e".repeat(40));
+const jobs = await api.listJobs(123);
+return {pages, runCount: runs.length, jobCount: jobs.length};
+"""
+        )
+        self.assertEqual(101, result["runCount"])
+        self.assertEqual(101, result["jobCount"])
+        self.assertEqual(
+            [
+                ["workflow_runs", 1, True],
+                ["workflow_runs", 2, True],
+                ["jobs", 1, True],
+                ["jobs", 2, True],
+            ],
+            result["pages"],
+        )
+
     def test_monitor_cancels_siblings_created_after_early_failure(self) -> None:
         result = self.run_node_async(
             """
@@ -224,6 +264,49 @@ return {cancelled, failedRun: outcome.failure.runId, polls};
         self.assertEqual(401, result["failedRun"])
         self.assertEqual(2, result["polls"])
         self.assertEqual([402, 403, 404, 405], result["cancelled"])
+
+    def test_late_sibling_window_uses_elapsed_time(self) -> None:
+        result = self.run_node_async(
+            """
+const sha = "f".repeat(40);
+const trigger = {
+  createdAt: Date.parse("2026-08-20T12:00:00Z"),
+  headSha: sha,
+  pullNumber: 42,
+  triggerRunId: 601,
+};
+const quality = {
+  id: 601,
+  name: "PR · Quality",
+  event: "pull_request",
+  head_sha: sha,
+  created_at: "2026-08-20T12:00:05Z",
+  pull_requests: [{number: 42}],
+  status: "in_progress",
+};
+let polls = 0;
+let clock = 0;
+const outcome = await action.monitor({
+  api: {
+    listRuns: async () => { polls += 1; return [quality]; },
+    listJobs: async () => [{
+      id: 701,
+      name: "Plan",
+      conclusion: "failure",
+      completed_at: "2026-08-20T12:00:06Z",
+    }],
+    cancelRun: async () => true,
+  },
+  trigger,
+  pollSeconds: 0,
+  maxMinutes: 1,
+  log: () => {},
+  now: () => { const value = clock; clock += 60_000; return value; },
+});
+return {failedRun: outcome.failure.runId, polls};
+"""
+        )
+        self.assertEqual({"failedRun": 601, "polls": 2}, result)
 
 
 if __name__ == "__main__":

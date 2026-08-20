@@ -24,6 +24,9 @@ const CANCELLABLE_STATUSES = new Set([
   "requested",
   "waiting",
 ]);
+const REQUEST_TIMEOUT_MS = 30_000;
+const LATE_SIBLING_WINDOW_MS = 120_000;
+const PAGE_SIZE = 100;
 
 function fail(message) {
   throw new Error(`PR sibling cancellation: ${message}`);
@@ -160,6 +163,7 @@ function githubApi(token, owner, repo) {
   async function request(path, options = {}) {
     const response = await fetch(`${base}${path}`, {
       method: options.method || "GET",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
@@ -178,19 +182,36 @@ function githubApi(token, owner, repo) {
     return body ? JSON.parse(body) : null;
   }
 
+  async function listAll(pathForPage, field) {
+    const values = [];
+    for (let page = 1; ; page += 1) {
+      const result = await request(pathForPage(page));
+      const batch = result?.[field];
+      if (!Array.isArray(batch)) {
+        fail(`GitHub API response is missing ${field}`);
+      }
+      values.push(...batch);
+      if (batch.length < PAGE_SIZE) return values;
+    }
+  }
+
   return {
     async listRuns(headSha) {
-      const query = new URLSearchParams({
-        event: "pull_request",
-        head_sha: headSha,
-        per_page: "100",
-      });
-      const result = await request(`/actions/runs?${query}`);
-      return result.workflow_runs || [];
+      return listAll((page) => {
+        const query = new URLSearchParams({
+          event: "pull_request",
+          head_sha: headSha,
+          page: String(page),
+          per_page: String(PAGE_SIZE),
+        });
+        return `/actions/runs?${query}`;
+      }, "workflow_runs");
     },
     async listJobs(runId) {
-      const result = await request(`/actions/runs/${runId}/jobs?filter=latest&per_page=100`);
-      return result.jobs || [];
+      return listAll(
+        (page) => `/actions/runs/${runId}/jobs?filter=latest&per_page=${PAGE_SIZE}&page=${page}`,
+        "jobs",
+      );
     },
     async cancelRun(runId) {
       try {
@@ -205,11 +226,11 @@ function githubApi(token, owner, repo) {
   };
 }
 
-async function monitor({ api, trigger, pollSeconds, maxMinutes, log = console.log }) {
+async function monitor({ api, trigger, pollSeconds, maxMinutes, log = console.log, now = Date.now }) {
   const maxPolls = Math.ceil((maxMinutes * 60) / pollSeconds);
   let consecutiveErrors = 0;
   let failure = null;
-  let failurePolls = 0;
+  let failureDeadline = null;
   for (let poll = 1; poll <= maxPolls; poll += 1) {
     try {
       const runs = selectTargetRuns(await api.listRuns(trigger.headSha), trigger);
@@ -223,8 +244,8 @@ async function monitor({ api, trigger, pollSeconds, maxMinutes, log = console.lo
         failure = findEarliestFailure(runJobs);
       }
       if (failure) {
-        failurePolls += 1;
-        if (failurePolls === 1) {
+        if (failureDeadline === null) {
+          failureDeadline = now() + LATE_SIBLING_WINDOW_MS;
           log(`::notice::Preserving failed ${failure.workflowName} run ${failure.runId}; cancelling sibling PR lanes for the same revision.`);
         }
         for (const sibling of cancellableSiblingRuns(runs, failure.runId)) {
@@ -234,7 +255,7 @@ async function monitor({ api, trigger, pollSeconds, maxMinutes, log = console.lo
         // Workflow records normally appear together, but a planning failure
         // can be nearly immediate. Poll for up to two additional minutes so a
         // late-created sibling from the same event epoch is still cancelled.
-        if (runs.length === TARGET_WORKFLOWS.length || failurePolls >= 4) {
+        if (runs.length === TARGET_WORKFLOWS.length || now() >= failureDeadline) {
           return { failure, runs };
         }
       }
