@@ -214,13 +214,29 @@ granted at *every* hop, and
 `contents: read` between granted parents and requesting children.
 `scripts/tests/test_ci_workflow_permission_contract.py` walks every local
 `uses: ./.github/workflows/X.yml` edge and asserts the caller's effective
-permissions (job-level, else workflow-level) are a superset of what `X.yml`
-requests. A callee's requested set is the workflow-level block **unioned with
-every explicit job-level block** -- five reusable workflows here
-(`native-sdk-artifact.yml`, `node-sdk-addon-artifact.yml`, `sdk-smoke.yml`,
-`static-abi-artifact.yml`, `swift-sdk-artifact.yml`) declare permissions only
-at job level, so reading the workflow-level block alone would skip their
-caller edges entirely -- exactly the hop the test exists to cover.
+permissions (job-level, else workflow-level) cover what `X.yml` requests.
+
+Two properties make that assertion real rather than decorative, and both were
+absent when the test was first written:
+
+1. **The callee's requested set is the workflow-level block merged with every
+   explicit job-level block.** Five reusable workflows here
+   (`native-sdk-artifact.yml`, `node-sdk-addon-artifact.yml`, `sdk-smoke.yml`,
+   `static-abi-artifact.yml`, `swift-sdk-artifact.yml`) declare permissions
+   only at job level, so reading the workflow-level block alone returns `None`
+   for them and skips their caller edges entirely -- including the
+   `packages: read` edges this test exists to cover.
+2. **Scope levels are compared, not scope names.** `contents: read` does not
+   satisfy a callee's `contents: write`; GitHub rejects that downgrade at run
+   creation exactly like a missing scope. The comparison ranks
+   `none < read < write`, and where a scope is declared in more than one block
+   the strictest level wins. A name-only set comparison silently passes the
+   downgrade.
+
+Both gaps were coverage failures rather than breakages -- the repo satisfies
+the contract at every edge under the strict check -- which is the point: a
+permission test that under-reads its inputs reports green for edges it never
+examined.
 
 ### `verify-runner-image` preflight
 

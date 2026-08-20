@@ -10,9 +10,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 
-# GitHub Actions permission levels that count as "granted". Anything absent
-# from a permissions: block (or explicitly "none") does not propagate.
-_GRANTED_LEVELS = {"read", "write"}
+# GitHub Actions permission levels, ranked. A caller satisfies a callee only if
+# it grants at least the level the callee asks for -- `contents: read` does NOT
+# satisfy `contents: write`, and GitHub rejects that downgrade at run creation
+# exactly like a missing scope. Comparing scope *names* alone accepts it
+# silently, so the level has to survive into the comparison.
+_LEVEL_RANK = {"none": 0, "read": 1, "write": 2}
+_GRANTED_LEVELS = ("read", "write")
 
 _LOCAL_USES_RE = re.compile(r"^\./\.github/workflows/([^@\s]+\.ya?ml)$")
 
@@ -21,26 +25,37 @@ def _load_workflow(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def _granted_scopes(permissions) -> set[str] | None:
-    """Return the set of scopes granted by a permissions: value, or None if
-    no explicit block is present (meaning the check does not apply — GitHub
-    falls back to the repo/org default token, which this test cannot see)."""
+def _rank(level: str | None) -> int:
+    return _LEVEL_RANK.get(level or "none", 0)
+
+
+def _format(scopes: dict[str, str]) -> str:
+    return "{" + ", ".join(f"{s}: {l}" for s, l in sorted(scopes.items())) + "}"
+
+
+def _scope_levels(permissions) -> dict[str, str] | None:
+    """Map each scope in a permissions: value to the level it is set to, or
+    None if no explicit block is present (meaning the check does not apply --
+    GitHub falls back to the repo/org default token, which this test cannot
+    see). Scopes set to `none` are dropped: they neither grant nor request."""
     if permissions is None:
         return None
     if isinstance(permissions, str):
-        # permissions: read-all / write-all / {}
-        return None if permissions in ("read-all", "write-all") else set()
-    return {scope for scope, level in permissions.items() if level in _GRANTED_LEVELS}
+        # permissions: read-all / write-all
+        return None if permissions in ("read-all", "write-all") else {}
+    return {scope: level for scope, level in permissions.items() if level in _GRANTED_LEVELS}
 
 
-def _requested_scopes(doc: dict) -> set[str] | None:
-    """Every scope a reusable workflow can request: the workflow-level
-    permissions block unioned with every explicit job-level block. GitHub
-    evaluates permissions at both levels, so a callee that declares
-    `packages: read` on one job alone still needs its caller to grant it --
-    reading only the workflow-level block returns None there and silently
-    skips the caller edge, which is exactly the hop this test exists to
-    cover. Returns None when nothing explicit is declared anywhere, or when
+def _requested_scopes(doc: dict) -> dict[str, str] | None:
+    """Every scope a reusable workflow can request, at the highest level it
+    asks for anywhere: the workflow-level permissions block merged with every
+    explicit job-level block. GitHub evaluates permissions at both levels, so a
+    callee that declares `packages: read` on one job alone still needs its
+    caller to grant it -- reading only the workflow-level block returns None
+    there and silently skips the caller edge, which is exactly the hop this
+    test exists to cover. Where a scope appears in more than one block the
+    highest level wins, because the caller has to satisfy the strictest
+    request. Returns None when nothing explicit is declared anywhere, or when
     any level uses read-all/write-all (unenumerable -- do not assert)."""
     blocks = [doc.get("permissions")]
     jobs = doc.get("jobs") or {}
@@ -49,15 +64,29 @@ def _requested_scopes(doc: dict) -> set[str] | None:
             if isinstance(job, dict):
                 blocks.append(job.get("permissions"))
 
-    requested: set[str] | None = None
+    requested: dict[str, str] | None = None
     for block in blocks:
         if block is None:
             continue
-        scopes = _granted_scopes(block)
-        if scopes is None:
+        levels = _scope_levels(block)
+        if levels is None:
             return None
-        requested = scopes if requested is None else requested | scopes
+        if requested is None:
+            requested = {}
+        for scope, level in levels.items():
+            if _rank(level) > _rank(requested.get(scope)):
+                requested[scope] = level
     return requested
+
+
+def _unsatisfied(requested: dict[str, str], granted: dict[str, str]) -> list[str]:
+    """Scopes the caller fails to cover, either because it omits them or
+    because it grants a weaker level than the callee requests."""
+    return [
+        f"{scope}: needs {level}, has {granted.get(scope, 'none')}"
+        for scope, level in sorted(requested.items())
+        if _rank(level) > _rank(granted.get(scope))
+    ]
 
 
 class CiWorkflowPermissionContractTests(unittest.TestCase):
@@ -67,8 +96,8 @@ class CiWorkflowPermissionContractTests(unittest.TestCase):
     the caller's own PR run never requests the scope the callee needs until
     that specific callee executes). This walks every local
     `uses: ./.github/workflows/X.yml` edge in the repo and asserts the
-    caller's effective permissions (job-level, else workflow-level) are a
-    superset of what X.yml itself requests.
+    caller's effective permissions (job-level, else workflow-level) cover
+    every scope X.yml requests, at no less than the level it requests.
     """
 
     @classmethod
@@ -76,7 +105,7 @@ class CiWorkflowPermissionContractTests(unittest.TestCase):
         cls.workflows: dict[str, dict] = {
             path.name: _load_workflow(path) for path in sorted(WORKFLOWS_DIR.glob("*.yml"))
         }
-        cls.requested: dict[str, set[str] | None] = {
+        cls.requested: dict[str, dict[str, str] | None] = {
             name: _requested_scopes(doc)
             for name, doc in cls.workflows.items()
             if isinstance(doc.get(True, doc.get("on")), dict)
@@ -101,28 +130,71 @@ class CiWorkflowPermissionContractTests(unittest.TestCase):
 
                 job_permissions = job.get("permissions")
                 if job_permissions is not None:
-                    granted = _granted_scopes(job_permissions)
+                    granted = _scope_levels(job_permissions)
                 else:
-                    granted = _granted_scopes(doc.get("permissions"))
+                    granted = _scope_levels(doc.get("permissions"))
 
                 if granted is None:
                     continue  # no explicit block at the effective level — can't assert, GitHub uses the default token
 
-                missing = requested - granted
-                if missing:
+                unsatisfied = _unsatisfied(requested, granted)
+                if unsatisfied:
                     violations.append(
                         f"{caller_name}:{job_name} -> {callee_name} requests "
-                        f"{sorted(requested)} but only grants {sorted(granted)} "
-                        f"(missing {sorted(missing)})"
+                        f"{_format(requested)} but grants {_format(granted)} "
+                        f"({'; '.join(unsatisfied)})"
                     )
 
         self.assertEqual(
             [],
             violations,
             "Reusable workflow call sites must grant every permission scope their "
-            "callee requests, at every hop — GitHub does not let a called workflow "
-            "reach past what its immediate caller job declares:\n" + "\n".join(violations),
+            "callee requests, at every hop and at no less than the requested level — "
+            "GitHub does not let a called workflow reach past what its immediate "
+            "caller job declares:\n" + "\n".join(violations),
         )
+
+    def test_a_read_grant_does_not_satisfy_a_write_request(self) -> None:
+        """Regression: the contract compares levels, not just scope names. A
+        caller granting `contents: read` to a callee that needs
+        `contents: write` is the same run-creation failure as omitting the
+        scope, so it must be reported, not passed over."""
+        requested = _requested_scopes({"permissions": {"contents": "write"}})
+        self.assertEqual({"contents": "write"}, requested)
+
+        self.assertEqual(
+            ["contents: needs write, has read"],
+            _unsatisfied(requested, {"contents": "read"}),
+            "a read grant must not satisfy a write request",
+        )
+        self.assertEqual(
+            [],
+            _unsatisfied(requested, {"contents": "write"}),
+            "an equal grant must satisfy the request",
+        )
+        self.assertEqual(
+            [],
+            _unsatisfied(_requested_scopes({"permissions": {"contents": "read"}}), {"contents": "write"}),
+            "a stronger grant must satisfy a weaker request",
+        )
+        self.assertEqual(
+            ["contents: needs read, has none"],
+            _unsatisfied(_requested_scopes({"permissions": {"contents": "read"}}), {"packages": "read"}),
+            "an omitted scope must still be reported",
+        )
+
+    def test_the_strictest_level_wins_when_a_scope_is_declared_twice(self) -> None:
+        """A callee asking `contents: read` at the workflow level and
+        `contents: write` on one job needs write from its caller. Merging by
+        scope name alone would keep whichever block was seen last."""
+        doc = {
+            "permissions": {"contents": "read"},
+            "jobs": {
+                "a": {"permissions": {"contents": "write"}},
+                "b": {"permissions": {"packages": "read", "contents": "none"}},
+            },
+        }
+        self.assertEqual({"contents": "write", "packages": "read"}, _requested_scopes(doc))
 
 
 if __name__ == "__main__":
