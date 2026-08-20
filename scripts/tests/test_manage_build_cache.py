@@ -67,6 +67,34 @@ class ManageBuildCacheTests(unittest.TestCase):
         self.assertEqual(metrics[0]["package"], "mesh-llm")
         self.assertEqual(metrics[0]["bytes"], 384)
 
+    def test_package_metrics_count_hyphenated_build_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "target"
+            artifact = target / "debug" / "build" / "mesh-llm-abc" / "output"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"x" * 512)
+            metrics = CACHE.package_metrics(target, ["mesh-llm"])
+        self.assertEqual(metrics[0]["package"], "mesh-llm")
+        self.assertEqual(metrics[0]["bytes"], 512)
+
+    def test_separate_cargo_build_directory_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+            metadata = {
+                "target_directory": str(workspace / "target"),
+                "build_directory": str(workspace / "build-artifacts"),
+            }
+            with mock.patch.object(CACHE, "cargo_metadata", return_value=metadata):
+                with self.assertRaisesRegex(CACHE.CacheError, "build.build-dir"):
+                    CACHE.reject_separate_build_directory(workspace)
+
+    def test_cargo_build_directory_environment_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.dict(os.environ, {"CARGO_BUILD_BUILD_DIR": "elsewhere"}):
+                with self.assertRaisesRegex(CACHE.CacheError, "CARGO_BUILD_BUILD_DIR"):
+                    CACHE.reject_separate_build_directory(Path(temporary))
+
     def test_incremental_pruning_is_oldest_first_and_target_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "target"
