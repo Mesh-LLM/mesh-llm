@@ -17,7 +17,6 @@ mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc6" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["time"] }
-tokio-stream = "0.1"
 tracing = "0.1"
 uuid = "1"
 
