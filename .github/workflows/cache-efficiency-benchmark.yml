@@ -82,7 +82,7 @@ jobs:
           key: mesh-llm-sccache-benchmark-${{ github.sha }}
 
   warm:
-    name: Warm Clippy (${{ matrix.batch.id }})
+    name: Warm Clippy (batch-${{ matrix.batch.idx }})
     needs: [plan, seed]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -133,6 +133,6 @@ jobs:
         if: ${{ !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats
         with:
-          artifact_name: benchmark-warm-${{ matrix.batch.id }}-${{ github.run_attempt }}
+          artifact_name: benchmark-warm-batch-${{ matrix.batch.idx }}-${{ github.run_attempt }}
           cache_expectation: warm
           minimum_hit_rate: "0.20"
