@@ -4,14 +4,110 @@ use async_trait::async_trait;
 use axum::{
     Router,
     body::Body,
-    http::{Request, StatusCode},
+    http::{HeaderValue, Request, StatusCode},
 };
 use futures_util::stream;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
+use uuid::Uuid;
 
 use super::*;
+
+#[test]
+fn client_nonce_middleware_mints_and_marks_when_absent() {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .body(Body::empty())
+        .unwrap();
+
+    apply_client_nonce_headers(&mut request);
+
+    let nonce = request
+        .headers()
+        .get(&CLIENT_NONCE_HEADER)
+        .expect("a nonce is minted when the request carried none");
+    assert!(Uuid::parse_str(nonce.to_str().unwrap()).is_ok());
+    assert_eq!(
+        request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER),
+        Some(&HeaderValue::from_static("local_ingress"))
+    );
+}
+
+#[test]
+fn client_nonce_middleware_forwards_present_header_unchanged() {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CLIENT_NONCE_HEADER.clone(), "harness-supplied-nonce")
+        .body(Body::empty())
+        .unwrap();
+
+    apply_client_nonce_headers(&mut request);
+
+    assert_eq!(
+        request.headers().get(&CLIENT_NONCE_HEADER),
+        Some(&HeaderValue::from_static("harness-supplied-nonce"))
+    );
+    assert!(
+        request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER).is_none(),
+        "forwarding a harness-supplied nonce must not stamp an origin marker"
+    );
+}
+
+#[tokio::test]
+async fn full_router_mints_and_marks_client_nonce_when_absent() {
+    let app = router_for(Arc::new(FakeBackend));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let nonce = response
+        .headers()
+        .get(&CLIENT_NONCE_HEADER)
+        .expect("the frontend middleware mints a nonce for every request");
+    assert!(Uuid::parse_str(nonce.to_str().unwrap()).is_ok());
+    assert_eq!(
+        response.headers().get(&CLIENT_NONCE_ORIGIN_HEADER),
+        Some(&HeaderValue::from_static("local_ingress"))
+    );
+}
+
+#[tokio::test]
+async fn full_router_forwards_present_client_nonce_unchanged() {
+    let app = router_for(Arc::new(FakeBackend));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header(CLIENT_NONCE_HEADER.clone(), "harness-supplied-nonce")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(&CLIENT_NONCE_HEADER),
+        Some(&HeaderValue::from_static("harness-supplied-nonce"))
+    );
+    assert!(
+        response
+            .headers()
+            .get(&CLIENT_NONCE_ORIGIN_HEADER)
+            .is_none(),
+        "forwarding a harness-supplied nonce must not stamp an origin marker"
+    );
+}
 
 #[test]
 fn trusted_agent_session_header_parser_accepts_valid_names() {

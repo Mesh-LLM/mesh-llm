@@ -15,6 +15,22 @@ use crate::{common::Usage, errors::OpenAiError};
 /// The canonical request correlation header used by the OpenAI frontend.
 pub static REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
+/// A caller-supplied fresh, unpredictable per-request value. Presence alone
+/// buys equivocation resistance (a downstream recorder can no longer fabricate
+/// or replay the freshness value) — it does not establish who sent it.
+pub static CLIENT_NONCE_HEADER: HeaderName = HeaderName::from_static("x-capsule-client-nonce");
+
+/// Set only when this ingress minted the nonce itself, never when forwarding
+/// a value the inbound request already carried. Without this marker, "the
+/// harness sent a nonce" and "the ingress minted one on the harness's behalf"
+/// are indistinguishable once the header is present downstream.
+pub static CLIENT_NONCE_ORIGIN_HEADER: HeaderName =
+    HeaderName::from_static("x-capsule-nonce-origin");
+
+/// The [`CLIENT_NONCE_ORIGIN_HEADER`] value stamped when this ingress minted
+/// the nonce rather than forwarding one the client already supplied.
+pub const CLIENT_NONCE_ORIGIN_LOCAL_INGRESS: &str = "local_ingress";
+
 /// Metadata that identifies a frontend request without retaining its payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpenAiLifecycleContext {
@@ -244,6 +260,25 @@ pub fn request_id_response_header(request_id: &RequestId) -> (HeaderName, Header
     (REQUEST_ID_HEADER.clone(), value)
 }
 
+/// Forward an inbound client nonce unchanged, or mint a fresh CSPRNG UUIDv4
+/// when the header is absent — never reused across requests, never derived
+/// from a counter, timestamp, or session. Returns the value to forward and,
+/// only when this call minted it, the origin-marker value to attach alongside
+/// it so a downstream reader can tell the two cases apart.
+pub fn client_nonce_from_headers_or_generate(
+    headers: &HeaderMap,
+) -> (HeaderValue, Option<HeaderValue>) {
+    match headers.get(&CLIENT_NONCE_HEADER) {
+        Some(value) => (value.clone(), None),
+        None => {
+            let minted = HeaderValue::from_str(&Uuid::new_v4().to_string())
+                .expect("a UUID is always a valid header value");
+            let origin = HeaderValue::from_static(CLIENT_NONCE_ORIGIN_LOCAL_INGRESS);
+            (minted, Some(origin))
+        }
+    }
+}
+
 pub(crate) const CLIENT_CLOSED_REQUEST_STATUS: u16 = 499;
 
 pub(crate) fn client_closed_request_status() -> StatusCode {
@@ -328,6 +363,40 @@ mod tests {
                 expected.then(|| parse_request_id(valid).unwrap())
             );
         }
+    }
+
+    #[test]
+    fn client_nonce_already_present_is_forwarded_unchanged() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CLIENT_NONCE_HEADER.clone(),
+            HeaderValue::from_static("harness-supplied-nonce"),
+        );
+
+        let (value, origin) = client_nonce_from_headers_or_generate(&headers);
+        assert_eq!(value, HeaderValue::from_static("harness-supplied-nonce"));
+        assert!(
+            origin.is_none(),
+            "forwarding a caller-supplied nonce must not add an origin marker"
+        );
+    }
+
+    #[test]
+    fn client_nonce_absent_is_minted_and_marked_local_ingress() {
+        let (value, origin) = client_nonce_from_headers_or_generate(&HeaderMap::new());
+
+        assert!(Uuid::parse_str(value.to_str().expect("minted nonce is ASCII")).is_ok());
+        assert_eq!(
+            origin,
+            Some(HeaderValue::from_static(CLIENT_NONCE_ORIGIN_LOCAL_INGRESS))
+        );
+    }
+
+    #[test]
+    fn client_nonce_minting_is_fresh_every_call() {
+        let (first, _) = client_nonce_from_headers_or_generate(&HeaderMap::new());
+        let (second, _) = client_nonce_from_headers_or_generate(&HeaderMap::new());
+        assert_ne!(first, second, "a nonce reused across requests buys nothing");
     }
 
     #[test]
