@@ -27,7 +27,6 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
-| `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
@@ -130,9 +129,6 @@ from that same catalog.
   cache remains disabled. Hosted PR, release, and cache-warmer selections
   retain native GitHub cache behavior.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup.
-- `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
-  central runner policy permits it only for GitHub-hosted selections, and
-  runtime rows must match the seed's container image and toolchain epoch.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
 `scripts/collect-ci-metrics.py` is the read-only timing evidence collector. Its
@@ -149,13 +145,8 @@ PR artifacts generally retain for one day. Fork lanes cannot publish shared
 trusted-main caches. Same-repository PRs normally use GitHub's ref-scoped cache;
 an exact approved revision may temporarily use Depot's shared cross-branch
 namespace under `ci/DEPOT_PR_RISK_EXCEPTION.md`. That namespace is treated as
-untrusted input, not an authority or correctness boundary. Linux Clippy,
-Rust-test, host, and runtime jobs restore one bounded trusted sccache seed
-instead of per-row Cargo target archives. Depot selections cannot restore that
-seed through their cross-trust cache proxy. Its exact key fingerprints the
-warmer image and toolchain epoch, so mismatched native-runtime rows are cold and
-do not restore it. These four high-fanout families disable per-object GHA
-publication on every provider. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
+untrusted input, not an authority or correctness boundary. Large Cargo target caches restore trusted-main entries but remain
+restore-only on PRs. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
 and Windows native ABI caches may publish into GitHub's isolated PR merge-ref
 scope for same-PR reruns. The Website slice is the sole publisher for the
 shared pnpm key and owns the website npm cache; platform UI producers restore

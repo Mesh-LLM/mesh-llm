@@ -60,9 +60,6 @@ outputs:
   allow_native_github_cache:
     description: Whether this provider/trust selection may use GitHub Actions cache APIs, including Depot's transparent proxy on Depot runners.
     value: ${{ steps.select.outputs.allow_native_github_cache }}
-  allow_trusted_sccache_seed:
-    description: Whether this GitHub-hosted selection may restore the trusted, main-published compiler seed.
-    value: ${{ steps.select.outputs.allow_trusted_sccache_seed }}
   runner:
     description: Default two-vCPU Linux runner label.
     value: ${{ steps.select.outputs.runner }}
@@ -170,7 +167,6 @@ runs:
         depot_enabled=false
         allow_depot_remote_cache=false
         allow_native_github_cache=true
-        allow_trusted_sccache_seed=true
         is_direct_pull_request=false
         risk_exception_selected=false
         is_dispatched_pull_request=false
@@ -253,7 +249,6 @@ runs:
         if [[ "$depot_enabled" == "true" ]]; then
           allow_depot_remote_cache=false
           allow_native_github_cache=false
-          allow_trusted_sccache_seed=false
           if [[ "$depot_pr_exception_active" == "true" &&
             ( "$risk_exception_selected" == "true" ||
               ( "$INPUT_EVENT_NAME" == "push" &&
@@ -293,7 +288,6 @@ runs:
           echo "depot_enabled=$depot_enabled"
           echo "allow_depot_remote_cache=$allow_depot_remote_cache"
           echo "allow_native_github_cache=$allow_native_github_cache"
-          echo "allow_trusted_sccache_seed=$allow_trusted_sccache_seed"
           echo "runner=$runner"
           echo "runner_4=$runner_4"
           echo "runner_8=$runner_8"

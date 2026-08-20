@@ -179,11 +179,9 @@ python3 scripts/summarize-sccache-stats.py \
   /tmp/sccache-evidence
 ```
 
-The threshold is an acceptance gate only for comparable warm cohorts. CI's
-capture action labels each observation `cold`, `opportunistic`, `warm-pass`,
-or `warm-failure`; only an exact seed restore is held to its configured warm
-threshold. A cache hit is not correctness evidence; native artifacts must
-still pass their build stamp, manifest and checksum verification.
+The threshold is an acceptance gate only for comparable warm cohorts. A cache
+hit is not correctness evidence; native artifacts must still pass their build
+stamp, manifest and checksum verification.
 
 ## Composition migration targets
 

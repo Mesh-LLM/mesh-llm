@@ -164,7 +164,7 @@ runs:
         if [[ "${{ inputs.event_name }}" == "workflow_dispatch" ]]; then
           RUNNER_CONTRACT_REQUIRED="true"
         elif [[ -n "$CHANGED_FILES" ]]; then
-          RUNNER_CONTRACT_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^\.github/cache-version\.txt$|^\.github/actionlint\.yaml$|^\.github/actions/(capture-sccache-stats|configure-sccache-gha|restore-sccache-seed|resolve-native-toolchain-epoch|select-ci-runners)/|^\.github/workflows/(cache-warm-sccache|ci|ci-control|ci-.*-(lane|slice)|depot-canary|main_[a-z]+|native-sdk-artifact|pr_[a-z]+|release|sdk-smoke|static-abi-artifact|swift-sdk-artifact)\.yml$)' || true)
+          RUNNER_CONTRACT_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^\.github/cache-version\.txt$|^\.github/actionlint\.yaml$|^\.github/actions/(capture-sccache-stats|configure-sccache-gha|resolve-native-toolchain-epoch|select-ci-runners)/|^\.github/workflows/(ci|ci-control|ci-.*-(lane|slice)|depot-canary|main_[a-z]+|native-sdk-artifact|pr_[a-z]+|release|sdk-smoke|static-abi-artifact|swift-sdk-artifact)\.yml$)' || true)
           if [[ -n "$RUNNER_CONTRACT_INPUTS" ]]; then
             RUNNER_CONTRACT_REQUIRED="true"
           fi

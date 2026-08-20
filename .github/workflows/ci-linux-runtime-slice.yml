@@ -44,7 +44,7 @@ permissions:
 env:
   CACHE_NAMESPACE: mesh-llm
   CARGO_INCREMENTAL: "0"
-  SCCACHE_GHA_ENABLED: "false"
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   runner_policy:
@@ -57,7 +57,6 @@ jobs:
       runner_16: ${{ steps.policy.outputs.runner_16 }}
       allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
       allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
-      allow_trusted_sccache_seed: ${{ steps.policy.outputs.allow_trusted_sccache_seed }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -129,15 +128,19 @@ jobs:
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
           pinned_epoch: ${{ matrix.runtime.toolchain_epoch }}
-      - id: sccache_seed
-        uses: ./.github/actions/restore-sccache-seed
-        with:
-          allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed == 'true' && matrix.runtime.architecture == 'x86_64' && matrix.runtime.container_image == 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d' && matrix.runtime.toolchain_epoch == 'mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d' && 'true' || 'false' }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
           allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: ci-runtime-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
       - name: Prepare immutable Linux native runtime
         uses: ./.github/actions/prepare-native-runtime-input
         with:
@@ -158,5 +161,3 @@ jobs:
         uses: ./.github/actions/capture-sccache-stats
         with:
           artifact_name: sccache-ci-runtime-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}-${{ github.run_attempt }}
-          cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}
-          minimum_hit_rate: "0.01"

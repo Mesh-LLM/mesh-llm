@@ -46,9 +46,7 @@
         ".github/actions/select-ci-runners/**",
         ".github/actions/configure-sccache-gha/**",
         ".github/actions/capture-sccache-stats/**",
-        ".github/actions/restore-sccache-seed/**",
         ".github/actions/resolve-native-toolchain-epoch/**",
-        ".github/workflows/cache-warm-sccache.yml",
         "runner-images/**"
       ]
     },

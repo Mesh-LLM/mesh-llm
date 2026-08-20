@@ -268,9 +268,8 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("key: ${{ steps.llama_cache.outputs.cache-primary-key }}", platform)
 
         rust_tests = self.workflow("ci-rust-tests-slice.yml")
-        self.assertNotIn("Swatinem/rust-cache@", rust_tests)
-        self.assertIn("uses: ./.github/actions/restore-sccache-seed", rust_tests)
-        self.assertIn("allow_trusted_sccache_seed", rust_tests)
+        self.assertIn("github.ref == 'refs/heads/main'", rust_tests)
+        self.assertIn("original_event_name != 'pull_request'", rust_tests)
 
 
 if __name__ == "__main__":

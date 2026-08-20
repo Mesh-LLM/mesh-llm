@@ -468,8 +468,8 @@ The implemented policy uses that isolation selectively:
 
 | Cache class | PR publication | Effective rerun behavior |
 | --- | --- | --- |
-| Linux sccache compiler objects | Exact trusted 2 GiB seed plus job-local writes on GitHub-hosted jobs | Main Quality completion owns publication; PRs mutate only their ephemeral copy |
-| Linux Cargo `target` directories | Disabled for Clippy, Rust tests, host, and runtime | Avoids sharded multi-GiB generations and their restore/upload latency |
+| sccache compiler objects | Job-local disk only | Helps repeated compilation inside one job; no reuse by another job or rerun |
+| Cargo `target` directories | Restore trusted main, never save from PR | A rerun reuses the latest compatible main cache, but not objects compiled by the earlier PR run |
 | Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged |
 | macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
 | Console pnpm store | Website is the sole publisher; platform UI jobs restore only | Avoids four platform workflows racing to upload the same entry; later same-PR runs reuse a lockfile-keyed store |
@@ -495,16 +495,10 @@ sentinel evidence and rollback procedure, is documented in
 `ci/DEPOT_PR_RISK_EXCEPTION.md`; the exact-SHA canary, metrics, and hosted
 rollback evidence are recorded in `.omo/specs/depot-pr-rollout-evidence.md`.
 
-This is intentionally not a universal PR write-through policy. One protected
-GitHub-hosted warmer publishes an exact-key compiler seed capped at 2 GiB after
-successful Main Quality. Central runner policy denies that seed to every Depot
-selection because Depot's Actions-cache proxy crosses trust scopes. Seeded
-jobs enforce measured hit-rate floors only after an exact warm restore; a
-missing seed is explicitly cold and does not fail. The seed key fingerprints
-the warmer container image and toolchain epoch; runtime rows whose image or
-epoch differs from the warmer are explicitly cold and skip seed restoration.
-These four high-fanout job families also disable the per-object GHA backend on
-every provider. Small exact native
+This is intentionally not a universal PR write-through policy. Cargo target
+caches are commonly hundreds of megabytes to several gigabytes per row; making
+every PR matrix row publish one would multiply storage, increase upload time,
+and evict the trusted main caches available to every PR. Small exact native
 caches have substantially better reuse-to-storage value. Cache hits are always
 an optimization: native stamps/manifests/checksums are verified, and every job
 must still regenerate successfully after a miss.

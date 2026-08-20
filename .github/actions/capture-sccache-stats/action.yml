@@ -5,14 +5,6 @@ inputs:
   artifact_name:
     description: Unique artifact name for this workflow job and matrix row.
     required: true
-  cache_expectation:
-    description: "Expected cache state: cold, warm, or opportunistic."
-    required: false
-    default: opportunistic
-  minimum_hit_rate:
-    description: Minimum hit ratio required when cache_expectation is warm.
-    required: false
-    default: "0"
 
 outputs:
   stats_file:
@@ -39,15 +31,6 @@ outputs:
   cache_write_errors:
     description: Number of cache write errors observed since sccache was configured.
     value: ${{ steps.capture.outputs.cache_write_errors }}
-  hit_rate:
-    description: Cache hits divided by cache hits plus misses.
-    value: ${{ steps.capture.outputs.hit_rate }}
-  cache_classification:
-    description: Machine-readable cold, warm-pass, warm-failure, or opportunistic classification.
-    value: ${{ steps.capture.outputs.cache_classification }}
-  cache_passed:
-    description: Whether the configured cache expectation passed.
-    value: ${{ steps.capture.outputs.cache_passed }}
 
 runs:
   using: composite
@@ -58,14 +41,10 @@ runs:
       env:
         SCCACHE_STATS_ARTIFACT_NAME: ${{ inputs.artifact_name }}
         SCCACHE_STATS_OUTPUT_DIR: ${{ runner.temp }}/mesh-llm-sccache-evidence
-        SCCACHE_CACHE_EXPECTATION: ${{ inputs.cache_expectation }}
-        SCCACHE_MINIMUM_HIT_RATE: ${{ inputs.minimum_hit_rate }}
       run: |
         set -euo pipefail
         python3 "$GITHUB_ACTION_PATH/capture.py" \
           --artifact-name "$SCCACHE_STATS_ARTIFACT_NAME" \
-          --cache-expectation "$SCCACHE_CACHE_EXPECTATION" \
-          --minimum-hit-rate "$SCCACHE_MINIMUM_HIT_RATE" \
           --output "$SCCACHE_STATS_OUTPUT_DIR/$SCCACHE_STATS_ARTIFACT_NAME/sccache-stats.json" \
           --github-output "$GITHUB_OUTPUT"
 
@@ -76,9 +55,3 @@ runs:
         path: ${{ steps.capture.outputs.stats_file }}
         if-no-files-found: error
         retention-days: 14
-    - name: Enforce warm-cache regression threshold
-      if: ${{ steps.capture.outputs.cache_passed != 'true' }}
-      shell: bash
-      run: |
-        echo "Warm sccache hit rate did not meet the configured minimum." >&2
-        exit 1

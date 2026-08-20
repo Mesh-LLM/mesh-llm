@@ -228,17 +228,6 @@ owning source, and update the inventory and topology in the same change.
   selected-workflow restriction.
 - Provider changes must not alter source checkout, commands, profile,
   artifacts, tests, required checks, or plan membership.
-- Shared Linux Clippy/test/host/runtime compiler-cache publication has one
-  trusted GitHub-hosted warmer. It
-  publishes one bounded, exact-key sccache seed after successful main Quality;
-  GitHub-hosted PR jobs may restore it and write only to their job-local copy.
-  Depot selections must never restore this seed through Depot's repository-
-  scoped Actions-cache proxy. Do not restore per-shard Cargo target archives
-  or enable per-object GHA publication for Linux Clippy, Rust tests, host, or
-  runtime jobs.
-- Every seeded compiler job records whether the exact seed was warm or cold.
-  Enforce a measured minimum hit rate only for an exact warm restore; an
-  intentional cache miss is classified cold and must not fail the build.
 
 ### Bounded Depot PR cache-risk exception
 

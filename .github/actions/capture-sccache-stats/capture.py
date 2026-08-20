@@ -15,7 +15,7 @@ from typing import Any
 
 ARTIFACT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 EVIDENCE_SCHEMA = "mesh-llm.sccache-stats"
-EVIDENCE_SCHEMA_VERSION = 2
+EVIDENCE_SCHEMA_VERSION = 1
 REQUIRED_COUNTERS = (
     "compile_requests",
     "requests_executed",
@@ -36,40 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifact-name", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--github-output", type=Path)
-    parser.add_argument(
-        "--cache-expectation",
-        choices=("cold", "warm", "opportunistic"),
-        default="opportunistic",
-    )
-    parser.add_argument("--minimum-hit-rate", type=float, default=0.0)
     return parser.parse_args()
-
-
-def assess_cache(
-    expectation: str,
-    minimum_hit_rate: float,
-    counters: dict[str, int],
-) -> dict[str, Any]:
-    if not 0 <= minimum_hit_rate <= 1:
-        raise EvidenceError("minimum hit rate must be between 0 and 1")
-    requests = counters["cache_hits"] + counters["cache_misses"]
-    rate = counters["cache_hits"] / requests if requests else None
-    if expectation == "cold":
-        classification, passed = "cold", True
-    elif expectation == "opportunistic":
-        classification, passed = "opportunistic", True
-    elif rate is not None and rate >= minimum_hit_rate:
-        classification, passed = "warm-pass", True
-    else:
-        classification, passed = "warm-failure", False
-    return {
-        "expectation": expectation,
-        "classification": classification,
-        "minimum_hit_rate": minimum_hit_rate,
-        "hit_rate": rate,
-        "cache_requests": requests,
-        "passed": passed,
-    }
 
 
 def require_counter(stats: dict[str, Any], name: str) -> int:
@@ -156,7 +123,6 @@ def write_github_outputs(
     destination: Path | None,
     stats_file: Path,
     counters: dict[str, int],
-    assessment: dict[str, Any],
 ) -> None:
     if destination is None:
         return
@@ -172,9 +138,6 @@ def write_github_outputs(
             "cache_write_errors",
         ):
             output.write(f"{name}={counters[name]}\n")
-        output.write(f"hit_rate={assessment['hit_rate'] if assessment['hit_rate'] is not None else ''}\n")
-        output.write(f"cache_classification={assessment['classification']}\n")
-        output.write(f"cache_passed={str(assessment['passed']).lower()}\n")
 
 
 def main() -> int:
@@ -196,12 +159,6 @@ def main() -> int:
         except json.JSONDecodeError as error:
             raise EvidenceError(f"sccache returned invalid JSON: {error}") from error
         evidence, counters = sanitize_stats(payload)
-        assessment = assess_cache(
-            arguments.cache_expectation,
-            arguments.minimum_hit_rate,
-            counters,
-        )
-        evidence["assessment"] = assessment
 
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
         arguments.output.write_text(
@@ -209,7 +166,7 @@ def main() -> int:
             encoding="utf-8",
         )
         stats_file = arguments.output.resolve()
-        write_github_outputs(arguments.github_output, stats_file, counters, assessment)
+        write_github_outputs(arguments.github_output, stats_file, counters)
 
         print(
             "sccache evidence: "
@@ -218,12 +175,6 @@ def main() -> int:
             f"hits={counters['cache_hits']} "
             f"misses={counters['cache_misses']} "
             f"writes={counters['cache_writes']}",
-        )
-        print(
-            "sccache assessment: "
-            f"expectation={assessment['expectation']} "
-            f"classification={assessment['classification']} "
-            f"hit_rate={assessment['hit_rate']}",
         )
         if counters["compile_requests"] == 0:
             print(

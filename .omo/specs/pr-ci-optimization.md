@@ -207,11 +207,8 @@ exact-SHA, same-epoch runs. Main/manual and unrelated workflows are never
 targets. The monitor is the only owner of Actions-write permission; checked-out
 PR code cannot invoke the cancellation API.
 
-PR caching is selective. Linux Clippy, Rust tests, host, and runtime restore one
-bounded trusted sccache seed on GitHub-hosted runners and no longer restore
-per-row Cargo target archives. PR writes stay job-local; only the protected
-post-Main-Quality warmer publishes the exact 2 GiB seed, and Depot selections
-cannot restore it. Exact verified static,
+PR caching is selective. Large Cargo target caches restore trusted main and do
+not publish per-PR copies; sccache remains job-local. Exact verified static,
 Swift, Metal-unit and Windows ABI caches may publish into the PR merge-ref
 scope for same-PR reruns. Website owns the single pnpm publisher and its npm
 store cache, while platform UI producers are restore-only for the shared pnpm
