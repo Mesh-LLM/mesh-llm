@@ -134,6 +134,20 @@ just compat-smoke ~/.cache/huggingface/hub/<model>.gguf   # optional 2-node + 1-
 just --list           # list all recipes
 ```
 
+On macOS and Linux, local Cargo artifacts are bounded independently from the 10 GiB sccache
+compiler-object cache. Inspect and prune them with:
+
+```bash
+just cache-status
+just cache-prune-dry-run max_size=80GiB max_age=14
+just cache-prune max_size=80GiB max_age=14
+```
+
+Pruning evicts the oldest incremental sessions first, then uses
+`cargo clean -p` for old or size-dominant workspace packages. It is scoped to
+this worktree's `target/`, reports before/after bytes, and refuses to run while
+Cargo or a Rust compiler is active.
+
 On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks. Run it on macOS or Linux when you need full shell parity coverage.
 
 ## CI / GitHub Actions
