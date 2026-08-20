@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTION = ROOT / ".github" / "actions" / "cancel-pr-sibling-runs" / "index.js"
@@ -12,6 +14,25 @@ WORKFLOW = ROOT / ".github" / "workflows" / "pr-cancel-sibling-runs.yml"
 
 
 class PrSiblingCancellationTests(unittest.TestCase):
+    def assert_actions_permission_denied(
+        self,
+        permissions: object,
+        scope: str,
+    ) -> None:
+        self.assertNotEqual("write-all", permissions, f"{scope} grants write-all")
+        if permissions is None:
+            return
+        self.assertIsInstance(
+            permissions,
+            dict,
+            f"{scope} permissions must be a mapping or omitted",
+        )
+        self.assertIn(
+            permissions.get("actions"),
+            (None, "none"),
+            f"{scope} must not grant Actions API access",
+        )
+
     def run_node(self, expression: str) -> object:
         script = f"""
 const action = require(process.argv[1]);
@@ -70,10 +91,19 @@ const action = require(process.argv[1]);
         self.assertNotIn("secrets:", workflow)
 
         for lane in ("quality", "website", "linux", "macos", "windows"):
-            pr_workflow = (
-                ROOT / ".github" / "workflows" / f"pr_{lane}.yml"
-            ).read_text(encoding="utf-8")
-            self.assertNotIn("actions: write", pr_workflow)
+            path = ROOT / ".github" / "workflows" / f"pr_{lane}.yml"
+            document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            with self.subTest(lane=lane, scope="workflow"):
+                self.assert_actions_permission_denied(
+                    document.get("permissions"),
+                    f"{path.name} workflow",
+                )
+            for job_name, job in (document.get("jobs") or {}).items():
+                with self.subTest(lane=lane, scope=f"job:{job_name}"):
+                    self.assert_actions_permission_denied(
+                        job.get("permissions"),
+                        f"{path.name} job {job_name}",
+                    )
 
     def test_trigger_requires_exact_quality_pr_identity(self) -> None:
         result = self.run_node(
