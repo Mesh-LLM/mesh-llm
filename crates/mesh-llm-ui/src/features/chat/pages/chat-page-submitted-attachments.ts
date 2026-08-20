@@ -26,10 +26,7 @@ export type ChatPageSubmittedAttachmentsState = {
 
 type ChatPageSubmittedAttachmentsInput = Pick<
   ChatPageSubmittedAttachmentsState,
-  | 'submittedAttachmentsByMessageId'
-  | 'setSubmittedAttachmentsByMessageId'
-  | 'setSelectedAttachmentPreview'
-  | 'submittedAttachmentUrlsRef'
+  'setSubmittedAttachmentsByMessageId' | 'setSelectedAttachmentPreview' | 'submittedAttachmentUrlsRef'
 >
 
 type ChatPageSubmittedAttachmentsActions = Pick<
@@ -40,17 +37,19 @@ type ChatPageSubmittedAttachmentsActions = Pick<
 >
 
 export function useChatPageSubmittedAttachments({
-  submittedAttachmentsByMessageId,
   setSubmittedAttachmentsByMessageId,
   setSelectedAttachmentPreview,
   submittedAttachmentUrlsRef
 }: ChatPageSubmittedAttachmentsInput): ChatPageSubmittedAttachmentsActions {
-  const revokeSubmittedAttachmentPreviews = useCallback((previews: SubmittedAttachmentPreview[]) => {
-    for (const preview of previews) {
-      revokeObjectUrl(preview.objectUrl)
-      submittedAttachmentUrlsRef.current.delete(preview.objectUrl)
-    }
-  }, [])
+  const revokeSubmittedAttachmentPreviews = useCallback(
+    (previews: SubmittedAttachmentPreview[]) => {
+      for (const preview of previews) {
+        revokeObjectUrl(preview.objectUrl)
+        submittedAttachmentUrlsRef.current.delete(preview.objectUrl)
+      }
+    },
+    [submittedAttachmentUrlsRef]
+  )
 
   const createSubmittedAttachmentPreviews = useCallback(
     (attachments: File[], conversationId: string, messageId: string): SubmittedAttachmentPreview[] => {
@@ -74,7 +73,7 @@ export function useChatPageSubmittedAttachments({
         }
       })
     },
-    []
+    [submittedAttachmentUrlsRef]
   )
 
   const removeSubmittedAttachmentPreviewsForConversation = useCallback(

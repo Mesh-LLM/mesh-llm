@@ -22,6 +22,7 @@ import {
   type AttachmentProcessingStatus,
   ATTACHMENT_PROCESSING_ORDER,
   revokeObjectUrl,
+  type SubmittedAttachmentPreview,
   usesBrowserAnalyzerForAttachment
 } from '@/features/chat/pages/chat-page-attachments'
 import { ChatPageLayout } from '@/features/chat/pages/ChatPageLayout'
@@ -85,11 +86,9 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const [queuedSubmissions, setQueuedSubmissions] = useState<QueuedSubmission[]>([])
   const [attachmentProcessingStatus, setAttachmentProcessingStatus] = useState<AttachmentProcessingStatus | null>(null)
   const [submittedAttachmentsByMessageId, setSubmittedAttachmentsByMessageId] = useState<
-    Record<string, import('@/features/chat/pages/chat-page-attachments').SubmittedAttachmentPreview[]>
+    Record<string, SubmittedAttachmentPreview[]>
   >({})
-  const [selectedAttachmentPreview, setSelectedAttachmentPreview] = useState<
-    import('@/features/chat/pages/chat-page-attachments').SubmittedAttachmentPreview | null
-  >(null)
+  const [selectedAttachmentPreview, setSelectedAttachmentPreview] = useState<SubmittedAttachmentPreview | null>(null)
   const [failedSubmission, setFailedSubmission] = useState<FailedSubmission | null>(null)
   const [latestTurnToken, setLatestTurnToken] = useState(0)
   const queuedSubmissionsRef = useRef<QueuedSubmission[]>([])
@@ -147,7 +146,6 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     removeSubmittedAttachmentPreviewsForConversation,
     removeSubmittedAttachmentPreviewsForMessage
   } = useChatPageSubmittedAttachments({
-    submittedAttachmentsByMessageId,
     setSubmittedAttachmentsByMessageId,
     setSelectedAttachmentPreview,
     submittedAttachmentUrlsRef
@@ -329,7 +327,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
       }
       submittedAttachmentUrls.clear()
     }
-  }, [submittedAttachmentUrlsRef])
+  }, [])
 
   useEffect(() => {
     const pendingSend = pendingSendRef.current
