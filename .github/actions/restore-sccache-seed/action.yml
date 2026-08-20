@@ -30,6 +30,7 @@ runs:
         cache_dir="$RUNNER_TEMP/mesh-llm-sccache"
         mkdir -p "$cache_dir"
         echo "SCCACHE_DIR=$cache_dir" >> "$GITHUB_ENV"
+        echo "SCCACHE_CACHE_SIZE=2G" >> "$GITHUB_ENV"
         if [[ "$ALLOW_TRUSTED_SEED" == "true" ]]; then
           # The restored archive is the persistent read-only tier. Jobs may
           # populate the same directory locally, but only the warmer saves it.

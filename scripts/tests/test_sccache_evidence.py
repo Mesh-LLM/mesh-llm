@@ -465,6 +465,10 @@ class SccacheEvidenceTests(unittest.TestCase):
             "run: cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
             warmer,
         )
+        restore = (
+            ROOT / ".github" / "actions" / "restore-sccache-seed" / "action.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('echo "SCCACHE_CACHE_SIZE=2G" >> "$GITHUB_ENV"', restore)
 
     def test_runtime_seed_restore_requires_matching_image_and_epoch(self) -> None:
         runtime = WORKFLOWS["runtime"].read_text(encoding="utf-8")
