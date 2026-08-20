@@ -108,6 +108,14 @@ fn detect_vulkan_profile() -> Option<HostVulkanProfile> {
 fn apply_gpu_arch_overrides(gpus: &mut [HostGpuProfile]) {
     let cuda_arches = env_string_vec("MESH_LLM_CUDA_GPU_ARCHES");
     let rocm_arches = env_string_vec("MESH_LLM_ROCM_GPU_ARCHES");
+    apply_gpu_arch_overrides_from(gpus, &cuda_arches, &rocm_arches);
+}
+
+fn apply_gpu_arch_overrides_from(
+    gpus: &mut [HostGpuProfile],
+    cuda_arches: &[String],
+    rocm_arches: &[String],
+) {
     for (index, gpu) in gpus.iter_mut().enumerate() {
         if let Some(cuda_sm) = cuda_arches.get(index) {
             gpu.cuda_sm = Some(cuda_sm.clone());
@@ -124,31 +132,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn clear(key: &'static str) -> Self {
-            let previous = std::env::var(key).ok();
-            // SAFETY: this test module only mutates these override vars inside scoped guards.
-            unsafe { std::env::remove_var(key) };
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.previous {
-                // SAFETY: restore the scoped test mutation before the guard leaves scope.
-                Some(value) => unsafe { std::env::set_var(self.key, value) },
-                // SAFETY: restore the scoped test mutation before the guard leaves scope.
-                None => unsafe { std::env::remove_var(self.key) },
-            }
-        }
-    }
 
     fn write_minimal_elf(path: &Path, class: u8, machine: u16) {
         let mut bytes = vec![0; 20];
@@ -381,15 +364,13 @@ mod tests {
 
     #[test]
     fn empty_gpu_arch_overrides_preserve_detected_arches() {
-        let _cuda_arches = EnvVarGuard::clear("MESH_LLM_CUDA_GPU_ARCHES");
-        let _rocm_arches = EnvVarGuard::clear("MESH_LLM_ROCM_GPU_ARCHES");
         let mut gpus = vec![HostGpuProfile {
             cuda_sm: Some("120".to_string()),
             rocm_gfx: Some("gfx1200".to_string()),
             ..profile("NVIDIA GeForce RTX 5090")
         }];
 
-        apply_gpu_arch_overrides(&mut gpus);
+        apply_gpu_arch_overrides_from(&mut gpus, &[], &[]);
 
         assert_eq!(gpus[0].cuda_sm.as_deref(), Some("120"));
         assert_eq!(gpus[0].rocm_gfx.as_deref(), Some("gfx1200"));

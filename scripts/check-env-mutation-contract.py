@@ -54,7 +54,6 @@ AUDITED_FILES = (
 # frozen by exact file/count so this checker cannot overstate their safety, and
 # so a new call (or a new mutation-bearing file) requires explicit review.
 KNOWN_UNAUDITED_MUTATION_COUNTS = {
-    "crates/mesh-llm-hardware-profile/src/lib.rs": 3,
     "crates/mesh-llm-host-runtime/src/api/routes/plugins.rs": 3,
     "crates/mesh-llm-host-runtime/src/api/tests/apply_config_diagnostics.rs": 3,
     "crates/mesh-llm-host-runtime/src/api/tests/mod.rs": 3,
@@ -72,7 +71,6 @@ KNOWN_UNAUDITED_MUTATION_COUNTS = {
     "crates/mesh-llm-runtime-install/src/lib.rs": 8,
     "crates/mesh-llm/src/commands/plugin_cli.rs": 3,
     "crates/model-hf/src/cache_paths.rs": 2,
-    "crates/skippy-server/src/frontend/tool_emulation.rs": 4,
 }
 
 # These are the only intentionally unresolved sites.  They execute on runtime
