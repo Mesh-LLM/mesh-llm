@@ -23,7 +23,7 @@ class EnvironmentMutationContractTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("34 Rust files", result.stdout)
-        self.assertIn("193 mutation sites", result.stdout)
+        self.assertIn("192 mutation sites", result.stdout)
         self.assertIn("17 contract-audited files", result.stdout)
 
     def test_unregistered_mutation_file_is_rejected_by_repository_discovery(self) -> None:
@@ -60,6 +60,41 @@ mod tests {
         // SAFETY: this comment cannot replace the required test lock.
         unsafe { std::env::set_var(\"MESH_LLM_TEST_ENV\", \"1\") };
     }
+}
+""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--root",
+                    str(root),
+                    "--file",
+                    AUDITED_FILE,
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("not covered by #[serial]", result.stderr)
+
+    def test_serial_text_in_production_comment_is_not_an_attribute(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / AUDITED_FILE
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                """#[cfg(test)]
+mod unrelated_tests {}
+
+fn production_mutation() {
+    // SAFETY: pretend the enclosing test contract is `#[serial]`.
+    unsafe { std::env::set_var("MESH_LLM_TEST_ENV", "1") };
 }
 """,
                 encoding="utf-8",

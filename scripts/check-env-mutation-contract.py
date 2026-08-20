@@ -85,7 +85,34 @@ DEFERRED_FILES = {
 }
 
 MUTATION_RE = re.compile(r"(?:std::)?env::(?:set_var|remove_var)\s*\(")
-FUNCTION_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+FUNCTION_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*<[^>{}]*>)?\s*\(")
+SERIAL_ATTR_RE = re.compile(r"^\s*#\[(?:serial|serial_test::serial)\]\s*$")
+
+# These helpers own scoped mutations for call sites that were manually
+# verified as serial tests. Listing the helpers prevents a production function
+# from passing merely because a nearby comment contains the text `#[serial]`.
+SERIAL_TEST_HELPERS = {
+    "crates/mesh-llm-host-runtime/src/capture.rs": {"drop"},
+    "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/cache_management.rs": {
+        "restore_env"
+    },
+    "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/package_download.rs": {
+        "restore_env"
+    },
+    "crates/mesh-llm-host-runtime/src/models/artifact_transfer.rs": {"restore_env"},
+    "crates/mesh-llm-host-runtime/src/models/delete_tests.rs": {"restore_env"},
+    "crates/mesh-llm-host-runtime/src/models/maintenance.rs": {"restore_env"},
+    "crates/mesh-llm-host-runtime/src/runtime/instance.rs": {
+        "drop",
+        "save_and_remove",
+        "save_and_set",
+    },
+    "crates/mesh-llm-system/src/benchmark/tests.rs": {
+        "drop",
+        "with_benchmark_child_override",
+    },
+    "crates/model-hf/src/store/local.rs": {"restore_env"},
+}
 
 
 def mutation_lines(lines: list[str]) -> list[int]:
@@ -107,17 +134,23 @@ def preceding_comments(lines: list[str], line_index: int, limit: int = 12) -> st
     return "\n".join(lines[start:line_index])
 
 
-def test_contract(lines: list[str], line_index: int, function: tuple[int, str] | None) -> bool:
+def test_contract(
+    relative_path: str,
+    lines: list[str],
+    line_index: int,
+    function: tuple[int, str] | None,
+) -> bool:
     """Whether a mutation has an explicit serial-test contract nearby."""
 
-    nearby = preceding_comments(lines, line_index)
-    if "#[serial]" in nearby or "serial test" in nearby.lower():
-        return True
     if function is None:
         return False
-    function_index, _ = function
-    attrs = "\n".join(lines[max(0, function_index - 8) : function_index])
-    return "#[serial]" in attrs
+    function_index, function_name = function
+    attrs = lines[max(0, function_index - 8) : function_index]
+    if any(SERIAL_ATTR_RE.match(line) for line in attrs):
+        return True
+    helpers = SERIAL_TEST_HELPERS.get(relative_path, set())
+    nearby = preceding_comments(lines, line_index).lower()
+    return function_name in helpers and "serial" in nearby
 
 
 def check_file(root: Path, relative_path: str) -> list[str]:
@@ -178,7 +211,7 @@ def check_file(root: Path, relative_path: str) -> list[str]:
                 f"{relative_path}:{line_number} ({function_name}): "
                 "test environment mutation needs a SAFETY comment"
             )
-        if not test_contract(lines, line_index, function):
+        if not test_contract(relative_path, lines, line_index, function):
             errors.append(
                 f"{relative_path}:{line_number} ({function_name}): "
                 "test environment mutation is not covered by #[serial]"
