@@ -202,6 +202,23 @@ pub fn parse_request_id(value: &str) -> Option<RequestId> {
     Uuid::parse_str(value).ok().map(RequestId::from)
 }
 
+/// Parse one canonical request ID from a header-like value sequence.
+///
+/// A missing value, malformed value, or duplicate header is rejected. The
+/// `Option<&str>` item shape lets byte-oriented ingress preserve invalid UTF-8
+/// as an invalid value instead of silently treating it as absent.
+pub fn parse_single_request_id<'a, I>(values: I) -> Option<RequestId>
+where
+    I: IntoIterator<Item = Option<&'a str>>,
+{
+    let mut values = values.into_iter();
+    let value = values.next()??;
+    if values.next().is_some() {
+        return None;
+    }
+    parse_request_id(value)
+}
+
 /// Parse the canonical inbound request identifier header only when it is a valid UUID.
 pub fn parse_request_id_header(headers: &HeaderMap) -> Option<RequestId> {
     headers
@@ -291,6 +308,26 @@ mod tests {
 
         let missing_id = request_id_from_headers_or_generate(&HeaderMap::new());
         assert!(Uuid::parse_str(&missing_id.as_ref().to_string()).is_ok());
+    }
+
+    #[test]
+    fn parse_single_request_id_golden_table_rejects_missing_invalid_and_duplicate_values() {
+        let valid = REQUEST_ID;
+        let cases = [
+            (vec![Some(valid)], true),
+            (vec![Some("not-a-uuid")], false),
+            (Vec::new(), false),
+            (vec![Some(valid), Some(valid)], false),
+            (vec![None], false),
+            (vec![None, Some(valid)], false),
+        ];
+
+        for (values, expected) in cases {
+            assert_eq!(
+                parse_single_request_id(values),
+                expected.then(|| parse_request_id(valid).unwrap())
+            );
+        }
     }
 
     #[test]

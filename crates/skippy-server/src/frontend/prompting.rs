@@ -361,7 +361,7 @@ pub(super) fn parse_emulated_chat_output(
         if request.parallel_tool_calls == Some(false) {
             calls.truncate(1);
         }
-        crate::frontend::generation::ensure_tool_call_ids(&mut calls);
+        openai_frontend::ensure_tool_call_ids(&mut calls);
         Some(Value::Array(calls))
     };
     Some(ParsedChatMessage {
