@@ -399,14 +399,14 @@ pub(in crate::output) fn process_column_widths(
         }
     }
 
-    // Narrower than even text + PID. Keep both and let the text truncate;
-    // there is no useful table left to render otherwise.
-    [
-        available.saturating_sub(pid_width + 1).max(1),
-        pid_width,
-        0,
-        0,
-    ]
+    // Narrower than even one text cell + spacing + PID. Preserve the table's
+    // width invariant by surrendering PID as well.
+    if available < pid_width.saturating_add(2) {
+        return [available, 0, 0, 0];
+    }
+
+    // Keep text + PID and let the text truncate.
+    [available - pid_width - 1, pid_width, 0, 0]
 }
 
 /// Constraints for the columns that survived [`process_column_widths`].

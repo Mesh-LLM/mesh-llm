@@ -11,7 +11,9 @@
 //! line into an `OutputEvent`, so stray output shows up as a dashboard event
 //! instead of painting over the frame. On restore the original descriptors are
 //! put back and any still-buffered lines are written to the real stderr so
-//! nothing is silently swallowed.
+//! nothing is silently swallowed. If a child keeps an old pipe open across a
+//! later dashboard session, that stale reader follows the current capture
+//! state and routes its output into the new dashboard.
 //!
 //! This is only safe because the dashboard renders to the controlling terminal
 //! (see [`super::terminal_out`]) rather than to fd 2; installing capture while
@@ -26,15 +28,14 @@ pub(in crate::output) use fallback::ConsoleCapture;
 
 #[cfg(unix)]
 mod unix {
-    use mesh_llm_events::{OutputEvent, emit_event};
+    use mesh_llm_events::OutputEvent;
     use rustix::event::{PollFd, PollFlags, poll};
     use rustix::io::fcntl_dupfd_cloexec;
     use rustix::stdio::{dup2_stderr, dup2_stdout, stderr, stdout};
     use std::fs::File;
     use std::io::{self, PipeReader, Read, Write};
     use std::os::fd::OwnedFd;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     /// How long a partial line may sit unflushed before it is shown anyway.
@@ -45,10 +46,14 @@ mod unix {
     /// until the process dies.
     const MAX_CAPTURED_LINE_BYTES: usize = 8 * 1024;
 
+    /// Readers can outlive the dashboard session that spawned them when a
+    /// child inherits a pipe write end, so delivery follows global activity.
+    static ACTIVE_CAPTURES: AtomicUsize = AtomicUsize::new(0);
+
     pub(in crate::output) struct ConsoleCapture {
         saved_stdout: OwnedFd,
         saved_stderr: OwnedFd,
-        active: Arc<AtomicBool>,
+        active: bool,
     }
 
     impl ConsoleCapture {
@@ -70,35 +75,35 @@ mod unix {
             // still deliver lines after the dashboard goes away.
             let reader_stderr = fcntl_dupfd_cloexec(stderr(), 0)?;
 
-            dup2_stdout(&write_fd)?;
+            // Start the reader before redirecting either descriptor. Once the
+            // capture is registered, stale readers from earlier children also
+            // route into the active dashboard.
+            spawn_reader(read_fd, reader_stderr)?;
+            ACTIVE_CAPTURES.fetch_add(1, Ordering::AcqRel);
+
+            if let Err(error) = dup2_stdout(&write_fd) {
+                unregister_capture();
+                return Err(error.into());
+            }
             if let Err(error) = dup2_stderr(&write_fd) {
                 // stdout was already redirected. Restore it before the pipe
                 // handles drop so a partial install cannot strand fd 1.
                 let _ = dup2_stdout(&saved_stdout);
+                unregister_capture();
                 return Err(error.into());
             }
             drop(write_fd);
 
-            let active = Arc::new(AtomicBool::new(true));
-            if let Err(error) = spawn_reader(read_fd, reader_stderr, Arc::clone(&active)) {
-                // With no reader, nothing drains the pipe: the process would
-                // block forever on the write that fills the pipe buffer. Put
-                // the real descriptors back before giving up.
-                let _ = dup2_stdout(&saved_stdout);
-                let _ = dup2_stderr(&saved_stderr);
-                return Err(error);
-            }
-
             Ok(Self {
                 saved_stdout,
                 saved_stderr,
-                active,
+                active: true,
             })
         }
 
         /// Put the original descriptors back. Safe to call more than once.
         pub(in crate::output) fn restore(&mut self) -> io::Result<()> {
-            if !self.active.load(Ordering::Acquire) {
+            if !self.active {
                 return Ok(());
             }
             let _ = io::stdout().flush();
@@ -106,7 +111,8 @@ mod unix {
             dup2_stdout(&self.saved_stdout)?;
             dup2_stderr(&self.saved_stderr)?;
             // Keep restoration retryable until both descriptors are back.
-            self.active.store(false, Ordering::Release);
+            self.active = false;
+            unregister_capture();
             Ok(())
         }
     }
@@ -121,11 +127,7 @@ mod unix {
     /// that inherited the write end keeps the pipe open past restore, so a join
     /// could block shutdown indefinitely; the thread instead exits on EOF
     /// whenever that arrives, and dies with the process at worst.
-    fn spawn_reader(
-        mut read_fd: PipeReader,
-        original_stderr: OwnedFd,
-        active: Arc<AtomicBool>,
-    ) -> io::Result<()> {
+    fn spawn_reader(mut read_fd: PipeReader, original_stderr: OwnedFd) -> io::Result<()> {
         std::thread::Builder::new()
             .name("mesh-console-capture".to_string())
             .spawn(move || {
@@ -139,7 +141,7 @@ mod unix {
                 while let Ok(readable) = wait_for_input(&read_fd, IDLE_FLUSH) {
                     if !readable {
                         for line in take_pending_lines(&mut pending, true) {
-                            deliver(line, &active, &mut passthrough);
+                            deliver(line, &mut passthrough);
                         }
                         continue;
                     }
@@ -151,24 +153,52 @@ mod unix {
                     // buffer without bound.
                     let force = pending.len() >= MAX_CAPTURED_LINE_BYTES;
                     for line in take_pending_lines(&mut pending, force) {
-                        deliver(line, &active, &mut passthrough);
+                        deliver(line, &mut passthrough);
                     }
                 }
                 for line in take_pending_lines(&mut pending, true) {
-                    deliver(line, &active, &mut passthrough);
+                    deliver(line, &mut passthrough);
                 }
             })
             .map(|_| ())
     }
 
-    fn deliver(text: String, active: &AtomicBool, passthrough: &mut File) {
+    fn unregister_capture() {
+        let result = ACTIVE_CAPTURES.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            count.checked_sub(1)
+        });
+        debug_assert!(result.is_ok(), "capture activity count underflowed");
+    }
+
+    fn dashboard_capture_active(active_captures: &AtomicUsize) -> bool {
+        active_captures.load(Ordering::Acquire) > 0
+    }
+
+    fn deliver(text: String, passthrough: &mut File) {
+        deliver_with(
+            text,
+            &ACTIVE_CAPTURES,
+            passthrough,
+            mesh_llm_events::emit_event,
+        );
+    }
+
+    pub(super) fn deliver_with<W, E>(
+        text: String,
+        active_captures: &AtomicUsize,
+        passthrough: &mut W,
+        emit: E,
+    ) where
+        W: Write,
+        E: FnOnce(OutputEvent) -> io::Result<()>,
+    {
         if text.trim().is_empty() {
             return;
         }
-        if active.load(Ordering::Acquire) {
+        if dashboard_capture_active(active_captures) {
             // Failure here means the dashboard sink is gone; fall back to the
             // real terminal rather than dropping the line.
-            if emit_event(dashboard_event(text.clone())).is_ok() {
+            if emit(dashboard_event(text.clone())).is_ok() {
                 return;
             }
         }
@@ -274,8 +304,11 @@ mod fallback {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::unix::{dashboard_event, take_pending_lines};
+    use super::unix::{dashboard_event, deliver_with, take_pending_lines};
     use mesh_llm_events::OutputEvent;
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
 
     fn split(input: &[u8], flush_remainder: bool) -> Vec<String> {
         let mut pending = input.to_vec();
@@ -352,5 +385,51 @@ mod tests {
             Some("stdout"),
             "the dashboard should show that this line was intercepted, not emitted"
         );
+    }
+
+    #[test]
+    fn stale_reader_routes_child_output_to_reentered_dashboard() {
+        let active_captures = AtomicUsize::new(1);
+        let (mut read_fd, write_fd) = std::io::pipe().expect("pipe should open");
+        let (child_ready_tx, child_ready_rx) = mpsc::channel();
+        let (write_tx, write_rx) = mpsc::channel();
+        let child = std::thread::spawn(move || {
+            let mut retained_write_fd = write_fd;
+            child_ready_tx
+                .send(())
+                .expect("parent should wait for retained pipe");
+            write_rx.recv().expect("parent should release child writer");
+            retained_write_fd
+                .write_all(b"late child output\n")
+                .expect("child output should write");
+        });
+
+        child_ready_rx
+            .recv()
+            .expect("child should retain the first pipe write end");
+        active_captures.fetch_sub(1, Ordering::AcqRel);
+        active_captures.fetch_add(1, Ordering::AcqRel);
+        write_tx.send(()).expect("child should still be waiting");
+
+        let mut captured = String::new();
+        read_fd
+            .read_to_string(&mut captured)
+            .expect("reader should receive late child output");
+        child.join().expect("child writer should exit");
+
+        let mut emitted = Vec::new();
+        let mut passthrough = Vec::new();
+        deliver_with(
+            captured.trim_end().to_string(),
+            &active_captures,
+            &mut passthrough,
+            |event| {
+                emitted.push(event);
+                Ok(())
+            },
+        );
+
+        assert_eq!(emitted.len(), 1, "late output belongs in the new dashboard");
+        assert!(passthrough.is_empty(), "it must not bypass the dashboard");
     }
 }

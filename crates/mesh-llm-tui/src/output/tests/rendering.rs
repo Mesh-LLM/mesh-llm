@@ -1885,6 +1885,23 @@ pub(super) fn process_columns_drop_port_next_and_still_keep_the_name() {
 }
 
 #[test]
+pub(super) fn process_columns_drop_pid_before_exceeding_the_table_width() {
+    let pid_width = 5;
+
+    // body width includes the two cells reserved for the highlight symbol.
+    assert_eq!(
+        process_column_widths((pid_width + 3) as u16, 8, pid_width, 8),
+        [pid_width + 1, 0, 0, 0],
+        "available == pid width + 1 cannot also fit text and spacing"
+    );
+    assert_eq!(
+        process_column_widths((pid_width + 4) as u16, 8, pid_width, 8),
+        [1, pid_width, 0, 0],
+        "available == pid width + 2 exactly fits text, spacing, and PID"
+    );
+}
+
+#[test]
 pub(super) fn process_table_renders_only_the_columns_that_fit() {
     let widths = [9usize, 5, 0, 0];
 
