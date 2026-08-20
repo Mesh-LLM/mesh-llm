@@ -54,6 +54,19 @@ class ManageBuildCacheTests(unittest.TestCase):
         self.assertEqual(metrics[0]["package"], "mesh-llm")
         self.assertEqual(metrics[0]["bytes"], 256)
 
+    def test_package_metrics_count_cross_target_debug_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "target"
+            artifact = (
+                target / "x86_64-unknown-linux-gnu" / "debug" / "deps"
+                / "mesh_llm-abc.rcgu.o"
+            )
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"x" * 384)
+            metrics = CACHE.package_metrics(target, ["mesh-llm"])
+        self.assertEqual(metrics[0]["package"], "mesh-llm")
+        self.assertEqual(metrics[0]["bytes"], 384)
+
     def test_incremental_pruning_is_oldest_first_and_target_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "target"
@@ -74,6 +87,60 @@ class ManageBuildCacheTests(unittest.TestCase):
             self.assertEqual(actions[0]["path"], str(old))
             self.assertEqual(remaining, 100)
 
+    def test_incremental_pruning_finds_cross_target_debug_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "target"
+            old = (
+                target / "x86_64-unknown-linux-gnu" / "debug" / "incremental" / "old"
+            )
+            old.mkdir(parents=True)
+            (old / "artifact").write_bytes(b"x" * 100)
+            old_time = time.time() - 30 * 86400
+            os.utime(old / "artifact", (old_time, old_time))
+            os.utime(old, (old_time, old_time))
+            remaining, actions = CACHE.prune_incremental(
+                target, time.time() - 14 * 86400, 100, 100, True,
+            )
+            self.assertFalse(old.exists())
+            self.assertEqual(actions[0]["path"], str(old))
+            self.assertEqual(remaining, 0)
+
+    def test_remove_tree_unlinks_symlink_without_deleting_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "target"
+            retained = target / "debug" / "incremental" / "retained"
+            retained.mkdir(parents=True)
+            (retained / "artifact").write_bytes(b"keep")
+            candidate = target / "debug" / "incremental" / "candidate"
+            candidate.symlink_to(retained, target_is_directory=True)
+            CACHE.remove_tree(candidate, target)
+            self.assertFalse(candidate.exists())
+            self.assertTrue((retained / "artifact").exists())
+
+    def test_build_command_holds_shared_cache_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            with mock.patch.object(CACHE, "cache_lock") as cache_lock:
+                cache_lock.return_value.__enter__.return_value = None
+                cache_lock.return_value.__exit__.return_value = None
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    [str(SCRIPT), "build", "--workspace", str(workspace), "--", "true"],
+                ):
+                    self.assertEqual(CACHE.main(), 0)
+            cache_lock.assert_called_once_with(
+                workspace.resolve() / "target", exclusive=False, nonblocking=False,
+            )
+
+    def test_shared_build_lock_excludes_pruning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "target"
+            with CACHE.cache_lock(target, exclusive=False, nonblocking=False):
+                with self.assertRaises(CACHE.CacheError):
+                    with CACHE.cache_lock(target, exclusive=True, nonblocking=True):
+                        self.fail("exclusive prune lock unexpectedly acquired")
+
     def test_execute_refuses_when_a_compiler_is_active(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -84,6 +151,33 @@ class ManageBuildCacheTests(unittest.TestCase):
                 ):
                     with self.assertRaises(CACHE.CacheError):
                         CACHE.main()
+
+    def test_execute_acquires_exclusive_lock_before_compiler_check(self) -> None:
+        events = []
+
+        class RecordingLock:
+            def __enter__(self):
+                events.append("lock")
+
+            def __exit__(self, *_args):
+                events.append("unlock")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            with mock.patch.object(CACHE, "cache_lock", return_value=RecordingLock()):
+                with mock.patch.object(
+                    CACHE,
+                    "active_compilers",
+                    side_effect=lambda: events.append("compiler-check") or ["1 cargo"],
+                ):
+                    with mock.patch.object(
+                        sys,
+                        "argv",
+                        [str(SCRIPT), "prune", "--workspace", str(workspace), "--execute"],
+                    ):
+                        with self.assertRaises(CACHE.CacheError):
+                            CACHE.main()
+        self.assertEqual(events, ["lock", "compiler-check", "unlock"])
 
 
 if __name__ == "__main__":

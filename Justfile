@@ -94,16 +94,21 @@ with-lld *COMMAND:
 with-lld *COMMAND:
     @powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = 'Stop'; $$linker = $$null; try { $$sysroot = (& rustc --print sysroot).Trim(); foreach ($$target in @('x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc')) { $$candidate = Join-Path $$sysroot \"lib\rustlib\$$target\bin\rust-lld.exe\"; if (Test-Path $$candidate) { $$linker = $$candidate; break } } } catch {}; if (-not $$linker) { foreach ($$name in @('rust-lld.exe', 'lld-link.exe')) { $$command = Get-Command $$name -ErrorAction SilentlyContinue; if ($$command) { $$linker = $$command.Source; break } } }; if (-not $$linker) { Write-Error \"LLVM lld was not found for the Windows MSVC target.`n`nlld is required for faster Rust builds (measured up to 26% faster locally).`n`nInstall one of these, then rerun the just command:`n  rustup component add llvm-tools-preview`n`nOr install LLVM lld-link:`n  winget install LLVM.LLVM`n  choco install llvm`n`nThe build requires lld. It looks for rust-lld.exe in the active Rust sysroot first, then falls back to rust-lld.exe or lld-link.exe on PATH.\"; exit 1 }; $$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $$linker; $$env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER = $$linker; Invoke-Expression '{{ COMMAND }}'"
 
+[private]
+[unix]
+with-build-cache-lock *COMMAND:
+    @python3 scripts/manage-build-cache.py build -- {{ COMMAND }}
+
 # Build a local product for the current platform. This is always a
 # backend-neutral dynamic host plus an adjacent packaged runtime.
 [macos]
 build backend="" cuda_arch="" rocm_arch="":
-    @scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+    @just with-build-cache-lock scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Fast local iteration build: dynamic host + adjacent native runtime + UI.
 [macos]
 build-dev:
-    @MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev
+    @just with-build-cache-lock env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev
 
 # Linux overrides:
 #   just build backend=cpu
@@ -112,12 +117,12 @@ build-dev:
 # just build backend=vulkan
 [linux]
 build backend="" cuda_arch="" rocm_arch="":
-    @scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+    @just with-build-cache-lock scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Fast local iteration build: dynamic host + adjacent native runtime + UI.
 [linux]
 build-dev backend="" cuda_arch="" rocm_arch="":
-    @MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+    @just with-build-cache-lock env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Windows overrides:
 #   just build backend=cpu
@@ -463,6 +468,11 @@ ui-test:
     cd "{{ ui_dir }}" && pnpm test
 
 # ── Full Validation Gate ───────────────────────────────────────
+
+# Populate the trusted Linux compiler-object seed with the dominant host graph.
+[linux]
+ci-sccache-seed-build:
+    cargo clippy --locked -p mesh-llm --all-targets -- -D warnings
 
 # Validate CI definitions, planner fixtures, and repository consistency.
 ci-validate:

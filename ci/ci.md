@@ -500,8 +500,11 @@ GitHub-hosted warmer publishes an exact-key compiler seed capped at 2 GiB after
 successful Main Quality. Central runner policy denies that seed to every Depot
 selection because Depot's Actions-cache proxy crosses trust scopes. Seeded
 jobs enforce measured hit-rate floors only after an exact warm restore; a
-missing seed is explicitly cold and does not fail. These four high-fanout job
-families also disable the per-object GHA backend on every provider. Small exact native
+missing seed is explicitly cold and does not fail. The seed key fingerprints
+the warmer container image and toolchain epoch; runtime rows whose image or
+epoch differs from the warmer are explicitly cold and skip seed restoration.
+These four high-fanout job families also disable the per-object GHA backend on
+every provider. Small exact native
 caches have substantially better reuse-to-storage value. Cache hits are always
 an optimization: native stamps/manifests/checksums are verified, and every job
 must still regenerate successfully after a miss.
