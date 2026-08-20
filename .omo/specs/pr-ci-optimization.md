@@ -40,6 +40,10 @@ or cache identity.
   reusable PR/main calls and protected manual dispatch.
 - PRs and routine main pushes expose native lane jobs and five stable
   topic/platform results; dispatched manual-full lanes retain correlated checks.
+- One protected default-branch `workflow_run` monitor observes the five focused
+  runs for one exact PR event epoch. After the first definitive job failure it
+  preserves that workflow and cancels the other queued or in-progress sibling
+  lanes; PR-controlled jobs never receive Actions-write permission.
 - Existing static ABI, native SDK, Swift, smoke and HF workflows remain
   lower-level reusable producers/consumers.
 - Current PR routing is GitHub-hosted except for the documented uncredentialed
@@ -82,6 +86,7 @@ Routine main validation has the same acceptance invariant and exposes
   PR Linux entry --> plan --> protected Linux lane --> PR / Linux
   PR macOS entry --> plan --> protected macOS lane --> PR / macOS
   PR Windows entry --> plan --> protected Windows lane --> PR / Windows
+  PR Quality in-progress --> protected sibling monitor --> cancel other exact-revision lanes after first failure
 
   Main Quality/Website/Linux/macOS/Windows entries --> same-commit matching lanes
   Explicit manual-full entry --> protected controller --> five dispatched lanes
@@ -194,10 +199,13 @@ heavy job has a timeout and a deterministic row identity.
 
 PR platform matrices for compilation, Rust tests, products and functional
 platform checks fail fast. Main/manual matrices continue all rows for exhaustive
-diagnostics, and Quality remains non-fail-fast and independent. A failure never
-cancels another focused PR workflow; declared producer dependencies suppress
-only consumers that can no longer run. Whole-workflow API cancellation is
-forbidden because every lane must reach its stable summary.
+diagnostics, and Quality remains non-fail-fast within its own matrix. Declared
+producer dependencies suppress consumers that can no longer run. Across the
+five focused PR workflows, the protected sibling monitor preserves the lane
+with the first definitive job failure and cancels the other exact-PR,
+exact-SHA, same-epoch runs. Main/manual and unrelated workflows are never
+targets. The monitor is the only owner of Actions-write permission; checked-out
+PR code cannot invoke the cancellation API.
 
 PR caching is selective. Large Cargo target caches restore trusted main and do
 not publish per-PR copies; sccache remains job-local. Exact verified static,
@@ -379,7 +387,8 @@ the relevant xtask repo-consistency checks.
   source plan;
 - every consumer has a reachable producer and no consumer fallback build;
 - every lane summary passes unplanned skips and fails planned skips;
-- cancellation leaves no required summary stuck in a running state;
+- a failed PR lane retains its stable diagnostic while sibling runs become
+  terminal cancellations, with no required result stuck running;
 - GitHub fallback passes all slice fixtures;
 - no branch ruleset, runner group, Depot setting or external capacity change
   is included in this implementation PR.

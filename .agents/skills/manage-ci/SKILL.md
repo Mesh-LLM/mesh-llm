@@ -175,10 +175,14 @@ owning source, and update the inventory and topology in the same change.
 - Cancel superseded PR runs. Do not cancel releases, deployments, cache
   warming, cleanup, or publishing unless their rollback semantics explicitly
   permit it.
-- Treat each focused PR workflow as an independent failure domain. A Quality
-  or Website failure must not cancel platform compilation, tests, products, or
-  smoke jobs, and a platform failure must not cancel another focused PR
-  workflow.
+- Keep the five focused PR workflows as separate visible checks, but stop
+  wasting capacity after the first definitive job failure for one exact PR
+  revision. The protected default-branch sibling monitor may cancel the other
+  queued or in-progress Quality, Website, Linux, macOS, and Windows workflow
+  runs for the same PR number, head SHA, and event epoch. It must preserve the
+  workflow containing the first failure so that lane can publish its stable
+  diagnostic result. This policy is PR-only; main, manual, release,
+  deployment, cleanup, cache-warming, and newer PR revisions are never targets.
 - Within a PR platform lane, compilation, functional-test, product, and smoke
   matrices fail fast so a required row failure cancels their queued and
   in-progress sibling rows. Keep this profile-derived: exhaustive main/manual
@@ -186,9 +190,11 @@ owning source, and update the inventory and topology in the same change.
   matrices continue all rows because they are independent diagnostics rather
   than producer/consumer gates.
 - Prefer declared `needs` edges to suppress impossible consumers after a
-  producer failure. Do not cancel an entire workflow run through the Actions
-  API on first failure: that prevents the stable lane summary from reporting a
-  terminal failure and discards unrelated failure-domain evidence.
+  producer failure. Cross-workflow PR cancellation is owned only by the
+  protected `workflow_run` monitor: ordinary PR-controlled workflows and
+  checked-out code must never receive `actions: write`. Cancelled sibling
+  checks are expected terminal evidence after another lane has already failed;
+  the preserved failed lane remains the root diagnostic.
 - Control fan-out in the graph. Use bounded matrices and `max-parallel` after
   eliminating irrelevant work; do not use additional runner capacity as a
   substitute for routing and composition.

@@ -14,6 +14,7 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `pr_linux.yml` (`PR · Linux`) | `pull_request` | Plans and calls the protected Linux lane |
 | `pr_macos.yml` (`PR · macOS`) | `pull_request` | Plans and calls the protected macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | `pull_request` | Plans and calls the protected Windows lane |
+| `pr-cancel-sibling-runs.yml` (`PR · Cancel sibling lanes`) | protected `workflow_run` for `PR · Quality` | Watches one exact PR revision and cancels its other validation lanes after the first job failure |
 | `pr_builds.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
 | `ci-orchestrator.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
 | `main_quality.yml` (`Main · Quality`) | push to `main` | Plans and calls the same-commit Quality lane |
@@ -36,8 +37,9 @@ trusted-main caches, and independently cancel superseded synchronizations.
 
 The five-way split is a hard CI architecture invariant. Keep exactly these PR
 validation entry workflows: Quality, Website, Linux, macOS, and Windows. PR
-metadata, cleanup, and auto-assignment workflows such as `pr_cleanup.yml` and
-`pr_auto_assign.yml` are outside this validation census. Every validation
+metadata, cleanup, auto-assignment, and sibling-cancellation workflows such as
+`pr_cleanup.yml`, `pr_auto_assign.yml`, and `pr-cancel-sibling-runs.yml` are
+outside this validation census. Every validation
 workflow must call only its matching protected reusable lane and finish with
 its own stable `PR / <lane>` result. Add or refactor jobs inside the owning
 reusable lane; do not move multiple lanes into a shared PR entrypoint.
@@ -135,6 +137,7 @@ flowchart TD
     MAIN["five focused main entry workflows"] --> MAINPLAN["same-commit exhaustive planning"]
     MANUAL["explicit manual-full"] --> CONTROL["protected manual dispatcher"]
     PRPLAN --> PLAN["compute changes + plan-ci per focused entry"]
+    PR --> MONITOR["protected exact-revision failure monitor"]
     MAINPLAN --> PLAN
     CONTROL --> PLAN
     PLAN --> QUALITY["Quality graph"]
@@ -152,6 +155,11 @@ flowchart TD
     LC --> LINUXGATE["PR / Linux"]
     MC --> MACGATE["PR / macOS"]
     XC --> WINGATE["PR / Windows"]
+    MONITOR -. "first definitive job failure" .-> QUALITY
+    MONITOR -. "cancel remaining siblings" .-> WEB
+    MONITOR -. "cancel remaining siblings" .-> LINUX
+    MONITOR -. "cancel remaining siblings" .-> MAC
+    MONITOR -. "cancel remaining siblings" .-> WIN
     QC --> MQ["Main / Quality"]
     WC --> MW["Main / Website"]
     LC --> ML["Main / Linux"]
@@ -274,10 +282,23 @@ raw inputs and dated reports under `/tmp` or a tracking artifact, never in
 
 ### PR failure domains
 
-The five PR workflows are independent failure domains. Quality and Website
-continue when a platform compile or functional test fails, and platform lanes
-do not cancel one another. This preserves useful, directly visible diagnostics
-and prevents one topic from hiding another topic's result.
+The five PR workflows remain separate visible checks, but they share a PR-only
+failure budget. A protected `workflow_run` monitor starts when `PR · Quality`
+enters progress and polls the five validation runs associated with the same PR
+number, exact head SHA, and two-minute event epoch. When it observes the first
+definitive failed, timed-out, startup-failed, stale, or action-required job, it
+preserves that workflow as the root diagnostic and cancels the other queued or
+in-progress lane runs. A newer PR synchronization has a different SHA and
+supersedes the old monitor through its PR-number concurrency group.
+
+The monitor executes only the default-branch implementation, checks out only
+the default branch, and owns the narrowly scoped `actions: write` token.
+PR-controlled entrypoints, reusable executors, and checked-out source never
+receive that permission. Main, manual-full, release, deployment, cleanup,
+cache-warming, unrelated workflows, other PRs, and a different event epoch are
+not cancellation targets. The monitor costs one GitHub-hosted Linux slot while
+the PR runs; this bounded overhead replaces five per-lane polling jobs and is
+expected to recover more capacity whenever a lane fails early.
 
 Inside Linux, macOS, and Windows, PR-only `fail_fast` inputs are enabled for
 Rust-test, host, native-runtime, product, and platform-check matrices. The
@@ -289,10 +310,10 @@ unusable.
 
 Producer/consumer `needs` edges are the second cancellation layer. A failed UI,
 ABI, host, or runtime producer prevents its product and smoke consumers from
-starting. Do not add an Actions-API watcher that cancels the whole workflow on
-first failure. Whole-run cancellation would also cancel the stable lane
-summary, leaving reviewers with a cancelled required result instead of a
-precise terminal failure.
+starting. Only the protected monitor may use the Actions API for cross-workflow
+cancellation. The failed workflow is never cancelled, so its stable summary
+can report the precise terminal failure; cancelled siblings are expected
+terminal results that release their runner capacity.
 
 ## Artifact contract
 

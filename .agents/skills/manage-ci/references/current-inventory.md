@@ -13,6 +13,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `pr_linux.yml` (`PR · Linux`) | PR lifecycle | Canonical PR planning plus the protected reusable Linux lane |
 | `pr_macos.yml` (`PR · macOS`) | PR lifecycle | Canonical PR planning plus the protected reusable macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | PR lifecycle | Canonical PR planning plus the protected reusable Windows lane |
+| `pr-cancel-sibling-runs.yml` (`PR · Cancel sibling lanes`) | protected `workflow_run` on `PR · Quality` entering progress | No-PR-checkout monitor that cancels other exact-revision PR validation lanes after the first definitive job failure |
 | `pr_builds.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger |
 | `ci-orchestrator.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger or lane calls |
 | `main_quality.yml` (`Main · Quality`) | push to `main` | Exhaustive main planning plus the same-commit reusable Quality lane |
@@ -44,8 +45,10 @@ target; prerelease tags are excluded so RC and final notes use the same stable
 baseline.
 
 The five PR lifecycle rows and five main push rows above are the complete
-allowed routine validation entry sets. Their separation and direct GitHub log
-visibility are contractual, not a presentation preference. `pr_builds.yml`,
+allowed routine validation entry sets. The protected sibling monitor is
+metadata/control infrastructure, not a sixth validation entrypoint or required
+check. Their separation and direct GitHub log visibility are contractual, not
+a presentation preference. `pr_builds.yml`,
 `ci-orchestrator.yml`, and `ci.yml` are reusable-only migration scaffolding;
 they must never regain event triggers or call the five lanes. They are
 removable after this branch's runner contract is active on protected main.
@@ -151,8 +154,15 @@ the pnpm store without racing to save it. Trusted main owns shared publication.
 
 PR Rust-test, host, native-runtime, product, and platform-check matrices receive
 `fail_fast: true`; main/manual pass `false`. Quality matrices remain
-non-fail-fast, failed producers suppress only declared consumers through
-`needs`, and focused PR workflows never cancel one another.
+non-fail-fast and failed producers suppress impossible consumers through
+`needs`. One protected, default-branch `workflow_run` monitor starts with
+`PR · Quality`, polls the five exact-PR/exact-SHA validation runs, preserves the
+run containing the first definitive failed job, and cancels its queued or
+in-progress siblings. It checks out only the default branch, owns the sole
+`actions: write` token for this operation, and never targets main, manual,
+release, deployment, cleanup, cache-warming, another PR event epoch, or a newer
+revision. PR-controlled workflows and executor jobs retain no Actions-write
+permission.
 
 ## Providers and variables
 

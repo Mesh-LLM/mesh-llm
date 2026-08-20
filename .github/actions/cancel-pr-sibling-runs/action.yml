@@ -1,0 +1,19 @@
+name: Cancel sibling PR validation runs
+description: Monitor one exact PR revision and cancel its other validation lanes after the first definitive job failure.
+
+inputs:
+  token:
+    description: Repository-scoped token with Actions write permission.
+    required: true
+  poll_seconds:
+    description: Seconds between read-only workflow/job status polls.
+    required: false
+    default: "30"
+  max_minutes:
+    description: Maximum monitoring duration before failing visibly.
+    required: false
+    default: "180"
+
+runs:
+  using: node24
+  main: index.js
