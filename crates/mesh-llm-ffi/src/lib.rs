@@ -33,8 +33,9 @@ pub use identity::generate_owner_keypair_hex;
 pub use model_types::{
     CapabilityLevel, CleanupPolicy, CleanupResult, DeleteModelOptions, DeleteModelResult,
     DevicePolicy, DownloadedModel, InstalledModel, LoadModelOptions, ModelCapabilities,
-    ModelDetails, ModelKind, ModelSearchQuery, ModelSource, ModelSummary, PrunePolicy, PruneResult,
-    ServedModel, ServingModelState, ServingStatus, UnloadModelOptions, UnloadTarget,
+    ModelCacheStatus, ModelDetails, ModelKind, ModelSearchQuery, ModelSource, ModelSummary,
+    PrunePolicy, PruneResult, ServedModel, ServingModelState, ServingStatus, UnloadModelOptions,
+    UnloadTarget,
 };
 pub use native_runtime::{
     current_mesh_version, current_skippy_abi_version, install_native_runtime,
