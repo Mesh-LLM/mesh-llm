@@ -357,7 +357,9 @@ jobs:
           allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
 
       - name: Install macOS native SDK dependencies
-        run: brew install cmake ninja lld
+        run: brew install cmake ninja
+      - name: Install macOS native SDK linker
+        uses: ./.github/actions/setup-macos-lld
 
       - name: Resolve macOS native toolchain epoch
         uses: ./.github/actions/resolve-native-toolchain-epoch

@@ -1,0 +1,45 @@
+name: Set up macOS lld linker
+description: >
+  Install and verify Homebrew's lld on a macOS runner, caching its Cellar so
+  most jobs skip the lld/llvm/z3 bottle pour. Always probe-links a throwaway
+  crate before any caller trusts the result -- a cache restore that does not
+  land ld64.lld where brew --prefix lld reports must fail loudly, not build
+  silently against the wrong (or no) linker.
+
+runs:
+  using: composite
+  steps:
+    - name: Restore cached lld Cellar
+      id: cache
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: |
+          /opt/homebrew/Cellar/lld
+          /opt/homebrew/Cellar/llvm
+          /opt/homebrew/Cellar/z3
+        key: ${{ runner.os }}-${{ runner.arch }}-setup-macos-lld-${{ hashFiles('.github/actions/setup-macos-lld/action.yml') }}
+
+    - name: Relink cached lld Cellar
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: brew link --overwrite lld llvm z3
+
+    - name: Install lld
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: brew install lld
+
+    - name: Verify lld links a real binary
+      shell: bash
+      run: |
+        set -euo pipefail
+        lld_bin="$(brew --prefix lld)/bin"
+        test -x "$lld_bin/ld64.lld"
+        probe="$RUNNER_TEMP/mesh-setup-macos-lld-probe"
+        mkdir -p "$probe/src"
+        printf '[package]\nname = "mesh-setup-macos-lld-probe"\nversion = "0.0.0"\nedition = "2024"\n' > "$probe/Cargo.toml"
+        printf 'fn main() {}\n' > "$probe/src/main.rs"
+        PATH="$lld_bin:$PATH" CARGO_ENCODED_RUSTFLAGS='-Clink-arg=-fuse-ld=lld' \
+          cargo rustc --quiet --manifest-path "$probe/Cargo.toml"
+        echo "$lld_bin" >> "$GITHUB_PATH"
+        echo 'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld' >> "$GITHUB_ENV"
