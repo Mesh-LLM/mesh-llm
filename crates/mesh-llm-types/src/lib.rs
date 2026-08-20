@@ -2,4 +2,5 @@
 
 pub mod mesh;
 pub mod models;
+pub mod router;
 pub mod runtime;
