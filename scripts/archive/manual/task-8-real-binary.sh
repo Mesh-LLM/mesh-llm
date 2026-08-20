@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PLAN_NAME="${TASK8_PLAN_NAME:-embedded-release-attestation}"
 EVIDENCE_DIR="${TASK8_EVIDENCE_DIR:-$REPO_ROOT/.sisyphus/evidence}"
 NOTEPAD_DIR="${TASK8_NOTEPAD_DIR:-$REPO_ROOT/.sisyphus/notepads/$PLAN_NAME}"
@@ -296,7 +296,7 @@ append_notepads() {
   cat >> "$NOTEPAD_DIR/learnings.md" <<'EOF'
 
 ## Task 8 real-binary script refresh
-- `scripts/task-8-real-binary.sh` now models only the embedded attestation flow: generate a temporary release-signing keypair, stamp copied binaries in place, inspect them with `xtask release-attestation inspect --json`, and tamper by mutating the binary bytes directly.
+- `scripts/archive/manual/task-8-real-binary.sh` now models only the embedded attestation flow: generate a temporary release-signing keypair, stamp copied binaries in place, inspect them with `xtask release-attestation inspect --json`, and tamper by mutating the binary bytes directly.
 - The maintained checked-in task-8 evidence set is now just the three live embedded-flow scenarios (`signed accepted`, `unsigned rejected`, `tampered rejected`), and the script scrubs bootstrap tokens from recorded commands/logs while keeping inspect output and `/api/status` release-attestation summaries.
 EOF
 }
