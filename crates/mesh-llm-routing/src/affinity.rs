@@ -226,11 +226,12 @@ pub fn scaffold_prefix_hash_from_body(
         }
     }
 
-    if prefix_fallback_to_first_user && !found {
-        if let Some(user_hash) = first_user_hash_from_body(body) {
-            hash = hash_combine(hash, user_hash);
-            found = true;
-        }
+    if prefix_fallback_to_first_user
+        && !found
+        && let Some(user_hash) = first_user_hash_from_body(body)
+    {
+        hash = hash_combine(hash, user_hash);
+        found = true;
     }
 
     found.then_some(hash)
