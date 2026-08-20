@@ -221,7 +221,7 @@ The workspace lives under `crates/`. The most important crates:
 
 Shipped binary and CLI surface:
 
-- `mesh-llm/` — shipped binary; `main.rs` builds the Tokio runtime, and `lib.rs` owns `run_main` (CLI parse → one-shot command dispatch via its `commands/` module → runtime handoff). No domain logic here.
+- `mesh-llm/` — shipped binary; `main.rs` builds the Tokio runtime, `lib.rs` owns `run_main` (CLI parse → one-shot command dispatch via its `commands/` module → runtime handoff), and re-exports `mesh-llm-host-runtime` as a transitional shim. No domain logic here.
 - `mesh-llm-cli/` — Clap types, argument parsing, serve/client surface normalization. No handlers.
 - `mesh-llm-commands/` — user-facing command handlers (auth, gpus, update, skills, agent launchers like goose/pi/opencode/claude, plugin, benchmark, model packaging).
 - `mesh-llm-tui/` — terminal UI and progress output surface.
@@ -426,7 +426,7 @@ Host runtime (main monolith — `crates/mesh-llm-host-runtime/src/`):
 Shipped binary and CLI (`crates/mesh-llm/src/`, `crates/mesh-llm-cli/src/`, `crates/mesh-llm-commands/src/`):
 
 - `mesh-llm/src/main.rs` — builds the Tokio runtime (custom stack size via `MESH_TOKIO_STACK_SIZE`) and calls `mesh_llm::run_main()`.
-- `mesh-llm/src/lib.rs` — `run_main`: CLI parse, one-shot command dispatch, and runtime handoff.
+- `mesh-llm/src/lib.rs` — `run_main`: CLI parse, one-shot command dispatch, runtime handoff; plus a transitional `pub use mesh_llm_host_runtime::*;` re-export.
 - `mesh-llm/src/commands/` — dispatch wiring from parsed `Command` values to handlers.
 - `mesh-llm-cli/src/parser.rs` — Clap surface, serve/client arg normalization, advanced help.
 - `mesh-llm-commands/src/` — user-facing handlers (auth, gpus, update, skills, agent launchers, plugin, benchmark).
