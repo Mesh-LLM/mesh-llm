@@ -1,13 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Cpu, HardDrive } from 'lucide-react'
-import { LiveDataUnavailableOverlay } from '@/components/ui/LiveDataUnavailableOverlay'
-import { DestructiveActionDialog } from '@/components/ui/DestructiveActionDialog'
-import { TextInputDialog } from '@/components/ui/TextInputDialog'
-import { ChatLiveLoadingGhost } from '@/features/chat/components/ChatLiveLoadingGhost'
-import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
-import { Composer } from '@/features/chat/components/Composer'
-import { ModelSelect } from '@/features/chat/components/ModelSelect'
-import { TransparencyPane } from '@/features/chat/components/transparency/TransparencyPane'
 import { uiMessagesToThreadMessages } from '@/features/chat/api/use-chat-messages'
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { createChatDraftConversationId } from '@/features/chat/api/chat-session-ids'
@@ -26,26 +17,14 @@ import { useDataMode } from '@/lib/data-mode'
 import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import { CHAT_HARNESS } from '@/features/app-tabs/data'
 import { statusBackedChatModels } from '@/features/chat/lib/live-chat-models'
-import type {
-  ChatActionMetric,
-  ChatHarnessData,
-  Conversation,
-  ModelSelectOption,
-  TransparencyMessage
-} from '@/features/app-tabs/types'
+import type { ChatHarnessData, Conversation, ModelSelectOption, TransparencyMessage } from '@/features/app-tabs/types'
 import {
-  AttachmentPreviewDialog,
   type AttachmentProcessingStatus,
   ATTACHMENT_PROCESSING_ORDER,
-  createObjectUrl,
-  getSubmittedAttachmentKind,
-  getSubmittedAttachmentLabel,
   revokeObjectUrl,
-  type SubmittedAttachmentKind,
-  type SubmittedAttachmentPreview,
   usesBrowserAnalyzerForAttachment
 } from '@/features/chat/pages/chat-page-attachments'
-import { ChatConversationPanel } from '@/features/chat/pages/ChatConversationPanel'
+import { ChatPageLayout } from '@/features/chat/pages/ChatPageLayout'
 import {
   AUTO_BACKEND_MODEL,
   AUTO_MODEL_OPTION,
@@ -64,18 +43,9 @@ import {
   type FailedSubmission,
   type QueuedSubmission
 } from '@/features/chat/pages/chat-page-submissions'
+import { useChatPageSubmittedAttachments } from '@/features/chat/pages/chat-page-submitted-attachments'
 
 type ChatPageProps = { data?: ChatHarnessData }
-
-function ChatMetricBadge({ metric }: { metric: ChatActionMetric }) {
-  const Icon = metric.icon === 'cpu' ? Cpu : HardDrive
-
-  return (
-    <span className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-border px-2.5 py-0.5 text-[length:var(--density-type-caption)] font-medium text-fg-faint md:inline-flex">
-      <Icon className="size-3" /> {metric.label}
-    </span>
-  )
-}
 
 export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const { mode, setMode } = useDataMode()
@@ -115,9 +85,11 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const [queuedSubmissions, setQueuedSubmissions] = useState<QueuedSubmission[]>([])
   const [attachmentProcessingStatus, setAttachmentProcessingStatus] = useState<AttachmentProcessingStatus | null>(null)
   const [submittedAttachmentsByMessageId, setSubmittedAttachmentsByMessageId] = useState<
-    Record<string, SubmittedAttachmentPreview[]>
+    Record<string, import('@/features/chat/pages/chat-page-attachments').SubmittedAttachmentPreview[]>
   >({})
-  const [selectedAttachmentPreview, setSelectedAttachmentPreview] = useState<SubmittedAttachmentPreview | null>(null)
+  const [selectedAttachmentPreview, setSelectedAttachmentPreview] = useState<
+    import('@/features/chat/pages/chat-page-attachments').SubmittedAttachmentPreview | null
+  >(null)
   const [failedSubmission, setFailedSubmission] = useState<FailedSubmission | null>(null)
   const [latestTurnToken, setLatestTurnToken] = useState(0)
   const queuedSubmissionsRef = useRef<QueuedSubmission[]>([])
@@ -170,77 +142,16 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const requestJumpToLatest = useCallback(() => {
     setLatestTurnToken((current) => current + 1)
   }, [])
-  const revokeSubmittedAttachmentPreviews = useCallback((previews: SubmittedAttachmentPreview[]) => {
-    for (const preview of previews) {
-      revokeObjectUrl(preview.objectUrl)
-      submittedAttachmentUrlsRef.current.delete(preview.objectUrl)
-    }
-  }, [])
-  const createSubmittedAttachmentPreviews = useCallback(
-    (attachments: File[], conversationId: string, messageId: string): SubmittedAttachmentPreview[] => {
-      const counters: Record<SubmittedAttachmentKind, number> = { image: 0, pdf: 0, audio: 0, file: 0 }
-
-      return attachments.map((attachment, index) => {
-        const kind = getSubmittedAttachmentKind(attachment)
-        counters[kind] += 1
-        const objectUrl = createObjectUrl(attachment)
-        if (objectUrl) submittedAttachmentUrlsRef.current.add(objectUrl)
-
-        return {
-          id: `${attachment.name}-${attachment.lastModified}-${index}`,
-          conversationId,
-          messageId,
-          label: getSubmittedAttachmentLabel(kind, counters[kind]),
-          kind,
-          fileName: attachment.name || getSubmittedAttachmentLabel(kind, counters[kind]),
-          mimeType: attachment.type,
-          objectUrl
-        }
-      })
-    },
-    []
-  )
-  const removeSubmittedAttachmentPreviewsForConversation = useCallback(
-    (conversationId: string) => {
-      setSubmittedAttachmentsByMessageId((current) => {
-        let changed = false
-        const next = { ...current }
-
-        for (const [messageId, previews] of Object.entries(current)) {
-          const removedPreviews = previews.filter((preview) => preview.conversationId === conversationId)
-          if (removedPreviews.length === 0) continue
-
-          const keptPreviews = previews.filter((preview) => preview.conversationId !== conversationId)
-          revokeSubmittedAttachmentPreviews(removedPreviews)
-          if (keptPreviews.length > 0) {
-            next[messageId] = keptPreviews
-          } else {
-            delete next[messageId]
-          }
-          changed = true
-        }
-
-        return changed ? next : current
-      })
-      setSelectedAttachmentPreview((current) => (current?.conversationId === conversationId ? null : current))
-    },
-    [revokeSubmittedAttachmentPreviews]
-  )
-  const removeSubmittedAttachmentPreviewsForMessage = useCallback(
-    (messageId: string) => {
-      setSubmittedAttachmentsByMessageId((current) => {
-        const previews = current[messageId]
-        if (!previews) return current
-
-        revokeSubmittedAttachmentPreviews(previews)
-        const next = { ...current }
-        delete next[messageId]
-        return next
-      })
-      setSelectedAttachmentPreview((current) => (current?.messageId === messageId ? null : current))
-    },
-    [revokeSubmittedAttachmentPreviews]
-  )
+  const {
+    createSubmittedAttachmentPreviews,
+    removeSubmittedAttachmentPreviewsForConversation,
+    removeSubmittedAttachmentPreviewsForMessage
+  } = useChatPageSubmittedAttachments({
+    submittedAttachmentsByMessageId,
+    setSubmittedAttachmentsByMessageId,
+    setSelectedAttachmentPreview,
+    submittedAttachmentUrlsRef
+  })
   const displayedConversationId = activeConversationKey || chatConversationId
   const composerConversationId = displayedConversationId || draftConversationId
   const composerDraft = useMemo<ConversationComposerDraft>(() => {
@@ -394,7 +305,8 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     isStreaming,
     liveMode,
     removeQueuedSubmissionsForConversation,
-    removeSubmittedAttachmentPreviewsForConversation
+    removeSubmittedAttachmentPreviewsForConversation,
+    setSelectedAttachmentPreview
   ])
   const retryLiveData = useCallback(() => {
     void statusQuery.refetch()
@@ -417,7 +329,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
       }
       submittedAttachmentUrls.clear()
     }
-  }, [])
+  }, [submittedAttachmentUrlsRef])
 
   useEffect(() => {
     const pendingSend = pendingSendRef.current
@@ -492,6 +404,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     removeSubmittedAttachmentPreviewsForMessage,
     setComposerDraft,
     setMessageModels,
+    setSubmittedAttachmentsByMessageId,
     submittedAttachmentsByMessageId,
     updateThread
   ])
@@ -774,13 +687,18 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const showStreamingPlaceholder =
     activeConversationIsStreaming && !lastMessageIsEmptyAssistant && !lastMessageHasAssistantText
 
-  const sidebar = (
-    <ChatSidebar
-      tab={sidebarTab}
-      onTabChange={setSidebarTab}
+  return (
+    <ChatPageLayout
+      data={data}
+      showLiveError={showLiveError}
+      showLiveLoading={showLiveLoading}
+      onRetryLiveData={retryLiveData}
+      onSwitchToTestData={switchToTestData}
+      sidebarTab={sidebarTab}
+      onSidebarTabChange={setSidebarTab}
       conversations={conversations.conversations}
       conversationGroups={conversations.conversationGroups}
-      activeId={conversations.activeConversationId || activeConversation?.id}
+      activeConversationId={conversations.activeConversationId || activeConversation?.id}
       messageCounts={messageCounts}
       streamingConversationIds={streamingConversationIds}
       onSelectConversation={selectConversation}
@@ -802,133 +720,71 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
         setSidebarTab('conversations')
         focusComposer()
       }}
-      transparency={<TransparencyPane message={inspectedMessage} nodes={data.transparencyNodes} />}
-      showTransparency={transparencyTabEnabled}
+      transparencyTabEnabled={transparencyTabEnabled}
+      inspectedMessage={inspectedMessage}
+      conversationPendingDelete={conversationPendingDelete}
+      onDeleteDialogOpenChange={(open) => {
+        if (!open) setConversationPendingDelete(null)
+      }}
+      onConfirmDeleteConversation={confirmDeleteSelectedConversation}
+      deleteDialogReturnFocusRef={deleteDialogReturnFocusRef}
+      systemPromptDialogOpen={systemPromptDialogOpen}
+      onSystemPromptDialogOpenChange={updateSystemPromptDialogOpen}
+      systemPromptDraft={systemPromptDraft}
+      onSystemPromptDraftChange={setSystemPromptDraft}
+      onSaveSystemPrompt={saveSystemPrompt}
+      systemPromptButtonRef={systemPromptButtonRef}
+      selectedAttachmentPreview={selectedAttachmentPreview}
+      onAttachmentPreviewOpenChange={(open) => {
+        if (!open) setSelectedAttachmentPreview(null)
+      }}
+      actionMetrics={data.actionMetrics}
+      modelLabel={data.modelLabel}
+      modelOptions={options}
+      selectedModelValue={selectedModelValue}
+      onModelChange={setModel}
+      composerConversationId={composerConversationId}
+      composerDraft={composerDraft}
+      onComposerPromptChange={updateComposerPrompt}
+      onComposerAttachmentsChange={(files) => {
+        setFailedSubmission(null)
+        handledChatErrorRef.current = null
+        pendingRetryRef.current = null
+        updateComposerAttachments((current) => [...current, ...files])
+      }}
+      composerAttachmentCount={composerDraft.attachments.length}
+      composerDisabled={composerIsPreparingAttachments || !canChat}
+      composerIsPreparingAttachments={composerIsPreparingAttachments}
+      attachmentProcessingStage={attachmentProcessingStatus?.stage}
+      attachmentProcessingCount={attachmentProcessingStatus?.attachmentCount ?? 0}
+      onOpenSystemPrompt={openSystemPromptDialog}
+      onSendPrompt={() => void sendPrompt()}
+      onStopStreaming={stopStreamingResponse}
+      onRetryLastResponse={() => void retryLastResponse()}
+      canRetry={canRetry}
+      composerIsStreaming={composerIsStreaming}
+      composerSendMode={composerShouldQueue ? 'queue' : 'send'}
+      composerTextareaRef={composerTextareaRef}
+      showSystemPromptButton={systemPromptButtonEnabled}
+      canChat={canChat}
+      activeConversation={activeConversation}
+      latestTurnToken={latestTurnToken}
+      activeMessages={activeMessages}
+      activeModelName={activeModelName}
+      activeConversationIsStreaming={activeConversationIsStreaming}
+      lastActiveMessage={lastActiveMessage}
+      displayedConversationId={displayedConversationId}
+      submittedAttachmentsByMessageId={submittedAttachmentsByMessageId}
+      stoppedConversationIds={stoppedConversationIds}
+      visibleAttachmentProcessingStatus={visibleAttachmentProcessingStatus}
+      visibleFailedSubmission={visibleFailedSubmission}
+      visibleQueuedSubmissions={visibleQueuedSubmissions}
+      showStreamingPlaceholder={showStreamingPlaceholder}
+      onMessageAreaClick={() => setInspectedMessage(undefined)}
+      onInspectMessage={inspectMessage}
+      onOpenAttachment={setSelectedAttachmentPreview}
+      onRemoveQueuedSubmission={removeQueuedSubmission}
     />
-  )
-
-  const actions = (
-    <>
-      {data.actionMetrics.map((metric) => (
-        <ChatMetricBadge key={metric.id} metric={metric} />
-      ))}
-      <div className="flex min-w-0 flex-1 basis-full items-center gap-2 sm:basis-auto md:flex-none">
-        <span className="hidden shrink-0 whitespace-nowrap text-[length:var(--density-type-caption)] text-fg-faint md:inline">
-          {data.modelLabel}
-        </span>
-        <ModelSelect options={options} value={selectedModelValue} onChange={setModel} />
-      </div>
-    </>
-  )
-
-  if (showLiveError) {
-    return (
-      <LiveDataUnavailableOverlay
-        debugTitle="Could not reach local runtime status"
-        title="Live chat is unavailable"
-        debugDescription="Chat could not fetch runtime status from the configured API target. Start the backend, verify the endpoint, or switch Data source back to Harness in Tweaks while debugging."
-        productionDescription="Chat is waiting for the local runtime to become reachable. Keep the page open while the service recovers, or switch Data source back to Harness in Tweaks to inspect sample conversations."
-        onRetry={retryLiveData}
-        onSwitchToTestData={switchToTestData}
-      >
-        <ChatLiveLoadingGhost />
-      </LiveDataUnavailableOverlay>
-    )
-  }
-
-  if (showLiveLoading) {
-    return <ChatLiveLoadingGhost />
-  }
-
-  return (
-    <>
-      <DestructiveActionDialog
-        open={conversationPendingDelete !== null}
-        onOpenChange={(open) => {
-          if (!open) setConversationPendingDelete(null)
-        }}
-        title={`Delete "${conversationPendingDelete?.title ?? 'chat'}"?`}
-        description="This permanently removes the selected chat and its message history from local storage. This action cannot be undone."
-        destructiveLabel="Delete chat"
-        onConfirm={confirmDeleteSelectedConversation}
-        returnFocusRef={deleteDialogReturnFocusRef}
-      />
-      <TextInputDialog
-        open={systemPromptDialogOpen}
-        onOpenChange={updateSystemPromptDialogOpen}
-        title="Set system prompt"
-        description="Saved instructions are sent before every chat message in this browser. Leave it empty to use the model defaults."
-        label="System prompt"
-        value={systemPromptDraft}
-        onValueChange={setSystemPromptDraft}
-        onSave={saveSystemPrompt}
-        placeholder="You are a careful mesh-llm operator. Keep answers grounded in the current cluster state."
-        saveLabel="Save prompt"
-        returnFocusRef={systemPromptButtonRef}
-      />
-      <AttachmentPreviewDialog
-        attachment={selectedAttachmentPreview}
-        onOpenChange={(open) => {
-          if (!open) setSelectedAttachmentPreview(null)
-        }}
-      />
-      <ChatConversationPanel
-        sidebar={sidebar}
-        hideSidebar={conversations.conversations.length === 0}
-        stickToBottomKey={`${displayedConversationId}:${latestTurnToken}`}
-        title={data.title}
-        subtitle={activeConversation?.title}
-        actions={actions}
-        composer={
-          <Composer
-            key={composerConversationId}
-            value={composerDraft.prompt}
-            onChange={updateComposerPrompt}
-            onAttach={(files) => {
-              setFailedSubmission(null)
-              handledChatErrorRef.current = null
-              pendingRetryRef.current = null
-              updateComposerAttachments((current) => [...current, ...files])
-            }}
-            attachmentCount={composerDraft.attachments.length}
-            disabled={composerIsPreparingAttachments || !canChat}
-            isPreparingAttachments={composerIsPreparingAttachments}
-            preparingStage={attachmentProcessingStatus?.stage}
-            preparingAttachmentCount={attachmentProcessingStatus?.attachmentCount ?? 0}
-            onSystemPrompt={openSystemPromptDialog}
-            onSend={() => void sendPrompt()}
-            onStop={stopStreamingResponse}
-            onRetry={() => void retryLastResponse()}
-            canRetry={canRetry}
-            isStreaming={composerIsStreaming}
-            sendMode={composerShouldQueue ? 'queue' : 'send'}
-            textareaRef={composerTextareaRef}
-            systemPromptButtonRef={systemPromptButtonRef}
-            showSystemPromptButton={systemPromptButtonEnabled}
-            placeholder={canChat ? 'Ask me anything...' : 'Waiting for a warm model...'}
-          />
-        }
-        activeMessages={activeMessages}
-        activeModelName={activeModelName}
-        conversations={conversations.conversations}
-        activeConversationIsStreaming={activeConversationIsStreaming}
-        lastActiveMessage={lastActiveMessage}
-        displayedConversationId={displayedConversationId}
-        submittedAttachmentsByMessageId={submittedAttachmentsByMessageId}
-        transparencyTabEnabled={transparencyTabEnabled}
-        inspectedMessage={inspectedMessage}
-        stoppedConversationIds={stoppedConversationIds}
-        visibleAttachmentProcessingStatus={visibleAttachmentProcessingStatus}
-        visibleFailedSubmission={visibleFailedSubmission}
-        visibleQueuedSubmissions={visibleQueuedSubmissions}
-        showStreamingPlaceholder={showStreamingPlaceholder}
-        onMessageAreaClick={() => setInspectedMessage(undefined)}
-        onInspectMessage={inspectMessage}
-        onStopStreaming={stopStreamingResponse}
-        onOpenAttachment={setSelectedAttachmentPreview}
-        onRemoveQueuedSubmission={removeQueuedSubmission}
-      />
-    </>
   )
 }
 
