@@ -820,13 +820,17 @@ mod tests {
         let prev_huggingface_hub_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
         let prev_hf_home = std::env::var_os("HF_HOME");
         let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", "/tmp/mesh-llm-hub-cache") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HUGGINGFACE_HUB_CACHE", "/tmp/mesh-llm-alt-hub-cache") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HOME", "/tmp/mesh-llm-hf-home") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("XDG_CACHE_HOME", "/tmp/mesh-llm-xdg") };
 
         assert_eq!(
@@ -847,13 +851,17 @@ mod tests {
         let prev_huggingface_hub_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
         let prev_hf_home = std::env::var_os("HF_HOME");
         let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("HF_HUB_CACHE") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HUGGINGFACE_HUB_CACHE", "/tmp/mesh-llm-alt-hub-cache") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HOME", "/tmp/mesh-llm-hf-home") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("XDG_CACHE_HOME", "/tmp/mesh-llm-xdg") };
 
         assert_eq!(
@@ -874,13 +882,17 @@ mod tests {
         let prev_huggingface_hub_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
         let prev_hf_home = std::env::var_os("HF_HOME");
         let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("HF_HUB_CACHE") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HOME", "/tmp/mesh-llm-hf-home") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("XDG_CACHE_HOME", "/tmp/mesh-llm-xdg") };
 
         assert_eq!(
@@ -932,11 +944,14 @@ mod tests {
         std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
         std::fs::write(&snapshot_path, b"gguf").unwrap();
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("HF_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let identity = huggingface_identity_for_path(&snapshot_path).unwrap();
@@ -983,11 +998,14 @@ mod tests {
         std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
         std::fs::write(&snapshot_path, b"gguf").unwrap();
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", temp.join("some-other-cache-root")) };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("HF_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let identity = huggingface_identity_for_path(&snapshot_path).unwrap();
@@ -1018,11 +1036,14 @@ mod tests {
         std::fs::create_dir_all(&temp).unwrap();
         std::fs::write(temp.join("Direct-Root-Q4_K_M.gguf"), b"gguf").unwrap();
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("HF_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let installed = scan_installed_models();
@@ -1078,11 +1099,14 @@ mod tests {
         std::fs::write(&nested_layer_002, b"layer-002").unwrap();
         std::fs::write(&nested_shared, b"nested").unwrap();
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("HF_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let installed = scan_installed_models();
@@ -1208,10 +1232,12 @@ mod tests {
 
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(value) = value {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             unsafe { std::env::set_var(key, value) };
         } else {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             unsafe { std::env::remove_var(key) };
         }
     }

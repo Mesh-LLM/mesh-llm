@@ -1023,7 +1023,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_release_asset_url() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(SELF_UPDATE_REPO_ENV) };
         assert_eq!(
             release_asset_url("v0.60.0", "mesh-llm-aarch64-apple-darwin.tar.gz"),
@@ -1034,7 +1035,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_release_repo_defaults_to_main_repo() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(SELF_UPDATE_REPO_ENV) };
         assert_eq!(release_repo(), "Mesh-LLM/mesh-llm");
         assert_eq!(
@@ -1046,7 +1048,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_release_repo_can_be_overridden_for_testing() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var(SELF_UPDATE_REPO_ENV, "jdumay/mesh-llm") };
         assert_eq!(release_repo(), "jdumay/mesh-llm");
         assert_eq!(
@@ -1061,7 +1064,8 @@ mod tests {
             release_asset_url("v0.60.0", "mesh-llm-x86_64-unknown-linux-gnu.tar.gz"),
             "https://github.com/jdumay/mesh-llm/releases/download/v0.60.0/mesh-llm-x86_64-unknown-linux-gnu.tar.gz"
         );
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(SELF_UPDATE_REPO_ENV) };
     }
 
