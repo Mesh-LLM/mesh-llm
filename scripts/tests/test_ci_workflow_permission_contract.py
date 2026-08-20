@@ -33,6 +33,33 @@ def _granted_scopes(permissions) -> set[str] | None:
     return {scope for scope, level in permissions.items() if level in _GRANTED_LEVELS}
 
 
+def _requested_scopes(doc: dict) -> set[str] | None:
+    """Every scope a reusable workflow can request: the workflow-level
+    permissions block unioned with every explicit job-level block. GitHub
+    evaluates permissions at both levels, so a callee that declares
+    `packages: read` on one job alone still needs its caller to grant it --
+    reading only the workflow-level block returns None there and silently
+    skips the caller edge, which is exactly the hop this test exists to
+    cover. Returns None when nothing explicit is declared anywhere, or when
+    any level uses read-all/write-all (unenumerable -- do not assert)."""
+    blocks = [doc.get("permissions")]
+    jobs = doc.get("jobs") or {}
+    if isinstance(jobs, dict):
+        for job in jobs.values():
+            if isinstance(job, dict):
+                blocks.append(job.get("permissions"))
+
+    requested: set[str] | None = None
+    for block in blocks:
+        if block is None:
+            continue
+        scopes = _granted_scopes(block)
+        if scopes is None:
+            return None
+        requested = scopes if requested is None else requested | scopes
+    return requested
+
+
 class CiWorkflowPermissionContractTests(unittest.TestCase):
     """A called reusable workflow can only use permissions its caller job
     actually grants it — GitHub rejects the run at creation time otherwise
@@ -50,7 +77,7 @@ class CiWorkflowPermissionContractTests(unittest.TestCase):
             path.name: _load_workflow(path) for path in sorted(WORKFLOWS_DIR.glob("*.yml"))
         }
         cls.requested: dict[str, set[str] | None] = {
-            name: _granted_scopes(doc.get("permissions"))
+            name: _requested_scopes(doc)
             for name, doc in cls.workflows.items()
             if isinstance(doc.get(True, doc.get("on")), dict)
             and "workflow_call" in doc.get(True, doc.get("on"))

@@ -18,7 +18,10 @@ _BASHISM_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"<<<"), "here-string (<<<)"),
     (re.compile(r"\bpipefail\b"), "set -o pipefail"),
     (re.compile(r"\[\["), "[[ ... ]] test"),
-    (re.compile(r"\$\(\("), "arithmetic expansion $(( ))"),
+    # Deliberately NOT listed: $(( )) arithmetic expansion. It is POSIX
+    # (Shell Command Language 2.6.4) and dash evaluates it correctly, so
+    # flagging it would reject valid sh steps and force a spurious
+    # `shell: bash`.
     (re.compile(r"\$\{\w+(//|\^\^|,,)"), "parameter expansion (${v//}/${v^^}/${v,,})"),
     (re.compile(r"&>"), "&> redirection"),
     (re.compile(r"\$RANDOM\b"), "$RANDOM"),

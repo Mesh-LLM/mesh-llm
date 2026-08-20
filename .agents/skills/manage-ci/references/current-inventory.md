@@ -173,6 +173,14 @@ the install too, and the step runs unconditionally for both it and the
 bare-metal `gpu-nvidia` row. Re-gate it only once the CPU digest is promoted
 past `mesh-llm-runner-images` #20 and that is confirmed from a green run.
 
+Both call sites install `openai@7.5.0`, not floating `openai`. The step runs
+with the full job environment (`HF_TOKEN` included) and npm lifecycle scripts
+inherit it, so an unreviewed upstream release must not be able to execute
+there; `zizmor`'s `adhoc-packages` rule flags the floating form. The version
+deliberately tracks the image's own `ARG OPENAI_NPM_VERSION`
+(`mesh-llm-runner-images` `Dockerfile:25`) so that re-gating the step later is
+a no-op rather than a version swap -- bump both sides together.
+
 ### Container jobs default `run:` to `sh`, not `bash`
 
 Jobs with a `container:` block resolve the default `run:` shell to
@@ -180,13 +188,39 @@ Jobs with a `container:` block resolve the default `run:` shell to
 bash; this only changes inside a container). Composite actions are
 unaffected -- they declare their own shell. Any `run:` step in a
 containerized job that uses a bashism (`<<<`, `set -o pipefail`, `[[`,
-`$(( ))`, array assignment, `${v//}`/`${v^^}`/`${v,,}`, `&>`, `source`,
-`+=(`, ...) must declare `shell: bash` explicitly or it fails at runtime with
-a `dash`/`sh` syntax error that `actionlint` cannot catch -- its shellcheck
+array assignment, `${v//}`/`${v^^}`/`${v,,}`, `&>`, `source`, `+=(`, ...)
+must declare `shell: bash` explicitly or it fails at runtime with a
+`dash`/`sh` syntax error that `actionlint` cannot catch -- its shellcheck
 integration assumes bash. Two sites hit this in the same PR:
 `ci-web-slice.yml`'s `ui_e2e` preflight (`<<<`) and
 `website-pages.yml`'s `Stage Pages artifact` (`set -euo pipefail`); both now
 declare `shell: bash`.
+
+`$(( ))` arithmetic expansion is **not** on that list and must not be added.
+It is POSIX (Shell Command Language 2.6.4) and `dash` evaluates it correctly;
+flagging it would reject valid `sh` steps and force a spurious `shell: bash`.
+`scripts/tests/test_ci_workflow_container_shell_contract.py` carries the
+pattern list and an inline note saying so.
+
+### Reusable-workflow permission chain
+
+A called reusable workflow may not request a permission scope its caller job
+does not grant; GitHub rejects at run creation with a **zero-job
+`startup_failure`** -- no jobs, no logs, no check run on the commit, and
+`actionlint` cannot see it. Containerizing surfaced this because
+`packages: read` (needed to pull the private GHCR runner images) has to be
+granted at *every* hop, and
+`ci-linux-product-smoke-slice.yml` / `ci-macos-product-smoke-slice.yml` sat at
+`contents: read` between granted parents and requesting children.
+`scripts/tests/test_ci_workflow_permission_contract.py` walks every local
+`uses: ./.github/workflows/X.yml` edge and asserts the caller's effective
+permissions (job-level, else workflow-level) are a superset of what `X.yml`
+requests. A callee's requested set is the workflow-level block **unioned with
+every explicit job-level block** -- five reusable workflows here
+(`native-sdk-artifact.yml`, `node-sdk-addon-artifact.yml`, `sdk-smoke.yml`,
+`static-abi-artifact.yml`, `swift-sdk-artifact.yml`) declare permissions only
+at job level, so reading the workflow-level block alone would skip their
+caller edges entirely -- exactly the hop the test exists to cover.
 
 ### `verify-runner-image` preflight
 
@@ -230,7 +264,7 @@ flag that would otherwise silently stop applying). Seven call sites:
 `swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
 `node-sdk-addon-artifact.yml`, and two in `release.yml`. Only the first
 three were reachable by the temporary branch-head harness used to validate
-#1380 (no macOS row in
+PR #1380 (no macOS row in
 `native-sdk-artifact.yml`/`node-sdk-addon-artifact.yml` ran there, and
 `release.yml` only runs on an actual release cut) -- the other four are
 statically cleared (macOS-gated, no android target on any of them) rather

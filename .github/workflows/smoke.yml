@@ -131,7 +131,14 @@ jobs:
         # (verify-runner-image reports mesh_llm_revision 5f341d68). Re-gate
         # this only when the CPU digest is promoted past #20 -- and confirm
         # it from a green run, not from the image repo's HEAD.
-        run: npm install --global openai
+        #
+        # Exact-pinned rather than floating: this step runs with the job
+        # environment (HF_TOKEN included) and npm lifecycle scripts inherit
+        # it, so an unreviewed upstream release must not be able to execute
+        # here. The version tracks the image's own ARG OPENAI_NPM_VERSION
+        # (mesh-llm-runner-images Dockerfile:25) so that re-gating this step
+        # once the digest is promoted is a no-op rather than a swap.
+        run: npm install --global openai@7.5.0
 
       - name: Install CUDA smoke runtime libraries
         if: inputs.runner == 'gpu-nvidia'
@@ -228,8 +235,10 @@ jobs:
       - name: Install OpenAI client (uncontainerized rows only)
         # This job never containerizes (see the setup-python/setup-node gates
         # above); gated the same way for consistency, not because it varies.
+        # Pinned to the same version as the Linux job above -- see the
+        # rationale there.
         if: job.container.id == ''
-        run: npm install --global openai
+        run: npm install --global openai@7.5.0
 
       - uses: ./.github/actions/restore-smoke-inputs
         with:
