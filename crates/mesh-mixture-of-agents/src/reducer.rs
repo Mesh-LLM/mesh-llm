@@ -282,8 +282,9 @@ mod tests {
 
     #[derive(Clone)]
     enum FakeBehavior {
-        OkAfter(Duration, String),
-        ErrAfter(Duration, String),
+        Text(Duration, String),
+        Raw(Duration, Value),
+        Error(Duration, String),
     }
 
     struct FakeBackend {
@@ -321,13 +322,17 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let behavior = self.behaviors.lock().unwrap().get(model).cloned();
             match behavior {
-                Some(FakeBehavior::OkAfter(d, body)) => {
+                Some(FakeBehavior::Text(d, body)) => {
                     tokio::time::sleep(d).await;
                     Ok(json!({
                         "choices": [{"message": {"content": body}}],
                     }))
                 }
-                Some(FakeBehavior::ErrAfter(d, msg)) => {
+                Some(FakeBehavior::Raw(d, body)) => {
+                    tokio::time::sleep(d).await;
+                    Ok(body)
+                }
+                Some(FakeBehavior::Error(d, msg)) => {
                     tokio::time::sleep(d).await;
                     Err(msg)
                 }
@@ -429,11 +434,11 @@ mod tests {
         let fake = FakeBackend::new(vec![
             (
                 "alpha",
-                FakeBehavior::OkAfter(Duration::from_millis(50), "alpha-resp".into()),
+                FakeBehavior::Text(Duration::from_millis(50), "alpha-resp".into()),
             ),
             (
                 "beta",
-                FakeBehavior::OkAfter(Duration::from_millis(50), "beta-resp".into()),
+                FakeBehavior::Text(Duration::from_millis(50), "beta-resp".into()),
             ),
         ]);
         let backends: Vec<Arc<dyn ModelBackend>> = vec![fake.clone(), fake.clone()];
@@ -462,11 +467,11 @@ mod tests {
             // alpha takes longer than hedge_delay; beta is fast.
             (
                 "alpha",
-                FakeBehavior::OkAfter(Duration::from_millis(800), "alpha-late".into()),
+                FakeBehavior::Text(Duration::from_millis(800), "alpha-late".into()),
             ),
             (
                 "beta",
-                FakeBehavior::OkAfter(Duration::from_millis(100), "beta-fast".into()),
+                FakeBehavior::Text(Duration::from_millis(100), "beta-fast".into()),
             ),
         ]);
         let backends: Vec<Arc<dyn ModelBackend>> = vec![fake.clone(), fake.clone()];
@@ -494,15 +499,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hedged_reducer_reasoning_only_primary_falls_through_to_next_candidate() {
+        let reasoning_only = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_content": "I'll start by inspecting the project structure."
+                }
+            }]
+        });
+        let fake = FakeBackend::new(vec![
+            (
+                "alpha",
+                FakeBehavior::Raw(Duration::from_millis(10), reasoning_only),
+            ),
+            (
+                "beta",
+                FakeBehavior::Text(Duration::from_millis(10), "beta-action".into()),
+            ),
+        ]);
+        let backends: Vec<Arc<dyn ModelBackend>> = vec![fake.clone(), fake.clone()];
+        let candidates = vec![("alpha".into(), 0), ("beta".into(), 1)];
+
+        let result = hedged_reducer_call(
+            &backends,
+            candidates,
+            vec![],
+            None,
+            Duration::from_secs(15),
+            Duration::from_secs(60),
+            Some(false),
+        )
+        .await
+        .expect("reasoning-only output must not win the reducer hedge");
+
+        assert_eq!(result.winner, "beta");
+        assert_eq!(result.text, "beta-action");
+        assert_eq!(result.attempts, 2);
+        assert_eq!(fake.calls(), 2);
+    }
+
+    #[tokio::test]
     async fn hedged_reducer_fast_fail_starts_next_immediately() {
         let fake = FakeBackend::new(vec![
             (
                 "alpha",
-                FakeBehavior::ErrAfter(Duration::from_millis(50), "boom".into()),
+                FakeBehavior::Error(Duration::from_millis(50), "boom".into()),
             ),
             (
                 "beta",
-                FakeBehavior::OkAfter(Duration::from_millis(100), "beta-ok".into()),
+                FakeBehavior::Text(Duration::from_millis(100), "beta-ok".into()),
             ),
         ]);
         let backends: Vec<Arc<dyn ModelBackend>> = vec![fake.clone(), fake.clone()];
@@ -541,11 +589,11 @@ mod tests {
         let fake = FakeBackend::new(vec![
             (
                 "alpha",
-                FakeBehavior::ErrAfter(Duration::from_millis(10), "alpha-boom".into()),
+                FakeBehavior::Error(Duration::from_millis(10), "alpha-boom".into()),
             ),
             (
                 "beta",
-                FakeBehavior::ErrAfter(Duration::from_millis(10), "beta-boom".into()),
+                FakeBehavior::Error(Duration::from_millis(10), "beta-boom".into()),
             ),
         ]);
         let backends: Vec<Arc<dyn ModelBackend>> = vec![fake.clone(), fake.clone()];

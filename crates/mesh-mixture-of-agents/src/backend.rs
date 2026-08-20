@@ -155,6 +155,7 @@ impl ModelBackend for HttpBackend {
                 let mut retry_body = body.clone();
                 if let Some(obj) = retry_body.as_object_mut() {
                     obj.remove("reasoning_effort");
+                    obj.remove("thinking_budget");
                     obj.remove("chat_template_kwargs");
                 }
                 let retry = self
@@ -316,6 +317,13 @@ pub fn apply_enable_thinking(body: &mut Value, enable: Option<bool>) {
     }
     if let Some(kwargs_obj) = kwargs.as_object_mut() {
         kwargs_obj.insert("enable_thinking".to_string(), json!(enable));
+        if !enable {
+            // Some templates key exclusively on an effort enum rather than the
+            // boolean. Put `none` inside the template kwargs as well as on the
+            // OpenAI surface below so every MoA worker/actor sees the same
+            // unambiguous instruction before prompt rendering.
+            kwargs_obj.insert("reasoning_effort".to_string(), json!("none"));
+        }
     }
 
     // reasoning_effort is the OpenAI-surface analogue. If the caller
@@ -325,6 +333,7 @@ pub fn apply_enable_thinking(body: &mut Value, enable: Option<bool>) {
     // specific effort level on the caller's behalf.
     if !enable {
         obj.insert("reasoning_effort".to_string(), json!("none"));
+        obj.insert("thinking_budget".to_string(), json!(0));
     }
 }
 
@@ -401,17 +410,24 @@ fn extract_text_from_response(resp: &Value) -> Result<BackendReply, String> {
         return Ok(reply(stripped));
     }
 
-    let thinking = worker::extract_thinking(&content);
-    if !thinking.is_empty() {
-        return Ok(reply(thinking));
-    }
-
-    let reasoning = message
-        .get("reasoning")
-        .and_then(|r| r.as_str())
-        .unwrap_or("");
-    if !reasoning.is_empty() {
-        return Ok(reply(reasoning.to_string()));
+    // A response containing only a thinking trace is not an answer. MoA sends
+    // `enable_thinking=false`, but backend/model combinations are allowed to
+    // ignore that hint. Treating their private reasoning as worker text turns
+    // an internal plan (for example, "I'll start by inspecting …") into a
+    // successful final response and prematurely ends agent tool loops.
+    //
+    // Fail this candidate instead. The normal worker fan-out can proceed with
+    // the remaining candidates, and the hedged actor/reducer path can try its
+    // next candidate. Native tool calls and post-thinking `content` were
+    // already handled above, so no actionable output is discarded here.
+    let has_reasoning_trace = ["reasoning_content", "reasoning"].into_iter().any(|field| {
+        message
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+    });
+    if has_reasoning_trace {
+        return Err("reasoning-only response: no answer or tool call".into());
     }
 
     Err("empty response".into())
@@ -466,6 +482,99 @@ mod tests {
         let resp: Value = serde_json::json!({"choices": []});
         let err = extract_text_from_response(&resp).unwrap_err();
         assert!(err.contains("missing choices"));
+    }
+
+    #[test]
+    fn extract_text_rejects_reasoning_content_without_an_answer() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_content": "I'll start by inspecting the project structure."
+                }
+            }]
+        });
+
+        let err = extract_text_from_response(&resp).unwrap_err();
+        assert_eq!(err, "reasoning-only response: no answer or tool call");
+    }
+
+    #[test]
+    fn extract_text_rejects_legacy_reasoning_without_an_answer() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning": "I should inspect the files before answering."
+                }
+            }]
+        });
+
+        let err = extract_text_from_response(&resp).unwrap_err();
+        assert_eq!(err, "reasoning-only response: no answer or tool call");
+    }
+
+    #[test]
+    fn extract_text_keeps_answer_when_reasoning_is_also_present() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42.",
+                    "reasoning_content": "Private reasoning."
+                }
+            }]
+        });
+
+        let reply = extract_text_from_response(&resp).expect("content is a usable answer");
+        assert_eq!(reply.text, "The answer is 42.");
+    }
+
+    #[test]
+    fn extract_text_keeps_native_tool_call_when_reasoning_is_also_present() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_content": "I need to inspect the project.",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "list_files",
+                            "arguments": "{\"path\":\".\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let reply = extract_text_from_response(&resp).expect("tool call is actionable output");
+        assert!(reply.text.contains("kind: tool_proposal"));
+        assert!(reply.text.contains("tool: list_files"));
+    }
+
+    #[test]
+    fn extract_text_rejects_think_block_without_post_thinking_content() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "<think>I'll start by inspecting the project.</think>"
+                }
+            }]
+        });
+
+        let err = extract_text_from_response(&resp).unwrap_err();
+        assert_eq!(err, "empty response");
     }
 
     #[test]
@@ -531,7 +640,12 @@ mod tests {
             body["chat_template_kwargs"]["enable_thinking"],
             json!(false)
         );
+        assert_eq!(
+            body["chat_template_kwargs"]["reasoning_effort"],
+            json!("none")
+        );
         assert_eq!(body["reasoning_effort"], json!("none"));
+        assert_eq!(body["thinking_budget"], json!(0));
     }
 
     #[test]
