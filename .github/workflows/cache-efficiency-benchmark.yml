@@ -1,0 +1,183 @@
+name: Benchmark · Bounded sccache seed
+
+on:
+  push:
+    branches: [codex/cache-efficiency]
+
+permissions:
+  contents: read
+  actions: write
+  packages: read
+
+concurrency:
+  group: cache-efficiency-benchmark
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  MESH_LLM_SKIP_UI: "1"
+  RUSTC_WRAPPER: sccache
+  RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+  SCCACHE_CACHE_SIZE: 2G
+  SCCACHE_GHA_ENABLED: "false"
+
+jobs:
+  plan:
+    name: Plan representative Clippy shards
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Reproduce the production Clippy partition
+        id: plan
+        run: |
+          set -euo pipefail
+          matrix="$(bash scripts/plan-clippy-batches.sh --all --bins 3)"
+          jq -e 'length == 3' <<<"$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  seed:
+    name: Publish measured 2 GiB compiler seed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Verify prebuilt CI environment
+        run: verify-runner-image public cpu
+      - name: Configure bounded local sccache
+        uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - name: Prepare UI placeholder
+        run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
+      - name: Compile the production seed graph
+        run: cargo clippy --locked -p mesh-llm --all-targets -- -D warnings
+      - name: Capture seed compiler evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: benchmark-seed-stats-${{ github.run_attempt }}
+          cache_expectation: cold
+      - name: Stop sccache before measuring and archiving
+        if: ${{ !cancelled() }}
+        run: sccache --stop-server
+      - name: Measure bounded seed on disk
+        if: ${{ !cancelled() }}
+        run: du -sb "$SCCACHE_DIR"
+      - name: Publish exact benchmark seed
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/mesh-llm-sccache
+          key: mesh-llm-sccache-benchmark-${{ github.sha }}
+
+  cold:
+    name: Cold Clippy (batch-${{ matrix.batch.idx }})
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: ${{ fromJson(needs.plan.outputs.matrix) }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Verify prebuilt CI environment
+        run: verify-runner-image public cpu
+      - name: Configure cold local sccache
+        uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - name: Run one production Clippy invocation for the batch
+        env:
+          CLIPPY_CRATES: ${{ toJson(matrix.batch.crates) }}
+        run: |
+          set -euo pipefail
+          mapfile -t crates < <(jq -r '.[]' <<<"$CLIPPY_CRATES")
+          args=()
+          for crate in "${crates[@]}"; do
+            [[ "$crate" == "skippy-ffi" ]] && continue
+            args+=("-p" "$crate")
+          done
+          [[ "${#args[@]}" -gt 0 ]] || exit 0
+          cargo clippy "${args[@]}" --all-targets -- -D warnings
+      - name: Capture cold compiler evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: benchmark-cold-batch-${{ matrix.batch.idx }}-${{ github.run_attempt }}
+          cache_expectation: cold
+
+  warm:
+    name: Warm Clippy (batch-${{ matrix.batch.idx }})
+    needs: [plan, seed]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: ${{ fromJson(needs.plan.outputs.matrix) }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Verify prebuilt CI environment
+        run: verify-runner-image public cpu
+      - id: seed
+        name: Restore measured compiler seed
+        uses: ./.github/actions/restore-sccache-seed
+        with:
+          allow_trusted_seed: "true"
+          cache_key: mesh-llm-sccache-benchmark-${{ github.sha }}
+      - name: Require exact seed restore
+        env:
+          CACHE_HIT: ${{ steps.seed.outputs.cache_hit }}
+        run: test "$CACHE_HIT" = true
+      - name: Configure restored local sccache
+        uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - name: Run one production Clippy invocation for the batch
+        env:
+          CLIPPY_CRATES: ${{ toJson(matrix.batch.crates) }}
+        run: |
+          set -euo pipefail
+          mapfile -t crates < <(jq -r '.[]' <<<"$CLIPPY_CRATES")
+          args=()
+          for crate in "${crates[@]}"; do
+            [[ "$crate" == "skippy-ffi" ]] && continue
+            args+=("-p" "$crate")
+          done
+          [[ "${#args[@]}" -gt 0 ]] || exit 0
+          cargo clippy "${args[@]}" --all-targets -- -D warnings
+      - name: Capture warm compiler evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: benchmark-warm-batch-${{ matrix.batch.idx }}-${{ github.run_attempt }}
+          cache_expectation: warm
+          minimum_hit_rate: "0.20"
