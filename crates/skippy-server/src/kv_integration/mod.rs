@@ -167,6 +167,8 @@ pub enum StagePrefixCachePayload {
     FullState,
 }
 
+pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 1;
+
 #[derive(Debug)]
 pub(crate) struct PendingExactStateRecord {
     pub(crate) page_id: String,
@@ -182,6 +184,10 @@ pub(crate) enum ExactStateRecordAdmission {
     WorkerStopped,
 }
 
+fn has_exact_state_record_capacity(pending_count: &AtomicUsize) -> bool {
+    pending_count.load(std::sync::atomic::Ordering::Acquire) < EXACT_STATE_RECORD_CAPACITY
+}
+
 fn enqueue_exact_state_record(
     sender: &SyncSender<PendingExactStateRecord>,
     inflight_records: &Mutex<BTreeSet<String>>,
@@ -190,14 +196,14 @@ fn enqueue_exact_state_record(
     pending_count: &AtomicUsize,
     pending: PendingExactStateRecord,
 ) -> ExactStateRecordAdmission {
-    pending_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    pending_count.fetch_add(1, std::sync::atomic::Ordering::Release);
     match sender.try_send(pending) {
         Ok(()) => {
             queued.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             ExactStateRecordAdmission::Queued
         }
         Err(TrySendError::Full(pending)) => {
-            pending_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            pending_count.fetch_sub(1, std::sync::atomic::Ordering::Release);
             inflight_records
                 .lock()
                 .expect("kv inflight record lock poisoned")
@@ -206,7 +212,7 @@ fn enqueue_exact_state_record(
             ExactStateRecordAdmission::DroppedFull
         }
         Err(TrySendError::Disconnected(pending)) => {
-            pending_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            pending_count.fetch_sub(1, std::sync::atomic::Ordering::Release);
             inflight_records
                 .lock()
                 .expect("kv inflight record lock poisoned")
@@ -257,6 +263,10 @@ impl KvStageIntegration {
             .lock()
             .expect("kv inflight record lock poisoned")
             .remove(page_id);
+    }
+
+    pub(crate) fn has_exact_state_record_capacity(&self) -> bool {
+        has_exact_state_record_capacity(&self.exact_state_records_pending)
     }
 
     pub(crate) fn enqueue_exact_state_record(
@@ -556,9 +566,7 @@ fn disk_tier_attrs(
         Err(std::sync::TryLockError::WouldBlock) => {
             return vec![("skippy.kv.disk_tier_stats_busy", json!(true))];
         }
-        Err(std::sync::TryLockError::Poisoned(_)) => {
-            return vec![("skippy.kv.disk_tier_stats_error", json!("lock_poisoned"))];
-        }
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
     };
     let Some(stats) = exact_states.disk_stats() else {
         return vec![("skippy.kv.disk_tier_enabled", json!(false))];
@@ -614,8 +622,9 @@ mod exact_state_record_queue_tests {
     use skippy_cache::{ExactStateCache, ExactStatePayload};
 
     use super::{
-        BTreeSet, ExactStateExtra, ExactStateRecordAdmission, PendingExactStateRecord,
-        disk_tier_attrs, enqueue_exact_state_record,
+        BTreeSet, EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, ExactStateRecordAdmission,
+        PendingExactStateRecord, disk_tier_attrs, enqueue_exact_state_record,
+        has_exact_state_record_capacity,
     };
 
     fn pending(page_id: &str) -> PendingExactStateRecord {
@@ -649,6 +658,15 @@ mod exact_state_record_queue_tests {
 
         release_tx.send(()).unwrap();
         holder.join().unwrap();
+    }
+
+    #[test]
+    fn pending_capacity_signal_rejects_work_before_export() {
+        let pending_count = AtomicUsize::new(0);
+        assert!(has_exact_state_record_capacity(&pending_count));
+
+        pending_count.store(EXACT_STATE_RECORD_CAPACITY, Ordering::Release);
+        assert!(!has_exact_state_record_capacity(&pending_count));
     }
 
     #[test]

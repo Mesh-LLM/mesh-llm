@@ -39,8 +39,8 @@ use skippy_runtime::ModelInfo;
 use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, infer_family_capability};
 
 use super::{
-    ExactStateExtra, KvStageIntegration, PendingExactStateRecord, StageKvMode,
-    StagePrefixCachePayload, disk_budget, disk_budget::NodeBudget,
+    EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, KvStageIntegration, PendingExactStateRecord,
+    StageKvMode, StagePrefixCachePayload, disk_budget, disk_budget::NodeBudget,
 };
 
 impl KvStageIntegration {
@@ -81,7 +81,7 @@ impl KvStageIntegration {
         }
         let exact_states = Arc::new(Mutex::new(exact_states));
         let (exact_state_record_tx, exact_state_record_rx) =
-            std::sync::mpsc::sync_channel::<PendingExactStateRecord>(1);
+            std::sync::mpsc::sync_channel::<PendingExactStateRecord>(EXACT_STATE_RECORD_CAPACITY);
         let worker_exact_states = exact_states.clone();
         let inflight_records = Arc::new(Mutex::new(BTreeSet::new()));
         let worker_inflight_records = inflight_records.clone();
@@ -89,14 +89,16 @@ impl KvStageIntegration {
         let exact_state_records_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let exact_state_records_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let worker_exact_state_records_pending = exact_state_records_pending.clone();
+        let worker_disk_budget_reservation = disk_budget_reservation.clone();
         std::thread::Builder::new()
             .name(format!("skippy-exact-cache-{}", config.stage_id))
             .spawn(move || {
+                let _disk_budget_reservation = worker_disk_budget_reservation;
                 while let Ok(pending) = exact_state_record_rx.recv() {
                     let page_id = pending.page_id.clone();
                     worker_exact_states
                         .lock()
-                        .expect("exact state cache lock poisoned")
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .record(
                             pending.page_id,
                             pending.token_count,
@@ -105,10 +107,10 @@ impl KvStageIntegration {
                         );
                     worker_inflight_records
                         .lock()
-                        .expect("kv inflight record lock poisoned")
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .remove(&page_id);
                     worker_exact_state_records_pending
-                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        .fetch_sub(1, std::sync::atomic::Ordering::Release);
                 }
             })?;
         Ok(Some(Self {

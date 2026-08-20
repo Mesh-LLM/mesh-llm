@@ -27,7 +27,7 @@ impl KvStageIntegration {
                 let mut cache = self
                     .exact_states
                     .lock()
-                    .expect("exact state cache lock poisoned");
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Fall through to the disk tier on a RAM miss, so a demoted
                 // page is actually readable. Without this the tier is
                 // write-only: eviction pays to serialize every payload and
@@ -170,6 +170,13 @@ impl KvStageIntegration {
             self.finish_record(&identity.page_id);
             return Ok(None);
         }
+        // Avoid paying a potentially multi-hundred-MiB runtime export when the
+        // bounded worker queue is already occupied. Admission remains best-effort:
+        // another producer may win the race before `try_send` below.
+        if !self.has_exact_state_record_capacity() {
+            self.finish_record(&identity.page_id);
+            return Ok(None);
+        }
         let exported = match self.payload {
             StagePrefixCachePayload::FullState => {
                 runtime.export_full_state(session_id).map(|state| {
@@ -253,8 +260,8 @@ fn try_touch_exact_state(
     match exact_states.try_lock() {
         Ok(mut exact_states) => Ok(Some(exact_states.touch(page_id))),
         Err(std::sync::TryLockError::WouldBlock) => Ok(None),
-        Err(std::sync::TryLockError::Poisoned(_)) => {
-            Err(anyhow::anyhow!("exact state cache lock poisoned"))
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            Ok(Some(poisoned.into_inner().touch(page_id)))
         }
     }
 }
@@ -332,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn poisoned_exact_state_lock_is_an_error() {
+    fn poisoned_exact_state_lock_recovers_without_panicking() {
         let cache = Arc::new(Mutex::new(ExactStateCache::<ExactStateExtra>::new(1, 1024)));
         let poisoned = cache.clone();
         assert!(
@@ -344,7 +351,9 @@ mod tests {
             .is_err()
         );
 
-        let error = try_touch_exact_state(&cache, "poisoned").unwrap_err();
-        assert_eq!(error.to_string(), "exact state cache lock poisoned");
+        assert_eq!(
+            try_touch_exact_state(&cache, "poisoned").unwrap(),
+            Some(false)
+        );
     }
 }
