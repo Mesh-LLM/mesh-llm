@@ -206,6 +206,21 @@ impl<E: Clone + serde::Serialize> ExactStateCache<E> {
         self.misses.note_identity_mismatch();
     }
 
+    /// Mark an existing page as recently used without reconstructing or
+    /// replacing its payload.
+    ///
+    /// Page identities include the complete prefix identity, so an existing
+    /// entry is already the checkpoint the caller intends to record. This
+    /// lets record paths avoid exporting and re-hashing the same state.
+    pub fn touch(&mut self, page_id: &str) -> bool {
+        self.clock = self.clock.saturating_add(1);
+        if let Some(entry) = self.entries.get_mut(page_id) {
+            entry.last_used = self.clock;
+            return true;
+        }
+        self.disk.as_mut().is_some_and(|disk| disk.touch(page_id))
+    }
+
     pub fn disk_contains(&self, page_id: &str) -> bool {
         self.disk
             .as_ref()
@@ -513,6 +528,36 @@ mod tests {
         assert!(cache.lookup("first").is_none());
         assert!(cache.lookup("second").is_some());
         assert_eq!(cache.stats().entries, 1);
+    }
+
+    #[test]
+    fn touching_existing_page_refreshes_lru_without_replacing_payload() {
+        let mut cache = ExactStateCache::new(2, 0);
+        cache.record(
+            "first".to_string(),
+            2,
+            ExactStatePayload::full_state(vec![1, 2]),
+            (),
+        );
+        cache.record(
+            "second".to_string(),
+            2,
+            ExactStatePayload::full_state(vec![3, 4]),
+            (),
+        );
+
+        assert!(cache.touch("first"));
+        assert!(!cache.touch("missing"));
+        cache.record(
+            "third".to_string(),
+            2,
+            ExactStatePayload::full_state(vec![5, 6]),
+            (),
+        );
+
+        assert!(cache.lookup("first").is_some());
+        assert!(cache.lookup("second").is_none());
+        assert!(cache.lookup("third").is_some());
     }
 
     #[test]
