@@ -93,6 +93,16 @@ jobs:
     timeout-minutes: ${{ inputs.timeout_minutes }}
     permissions:
       contents: read
+      packages: read
+    # Rust and Kotlin smoke both run on Linux (x86 or arm) and get the
+    # prebuilt image; Swift stays on bare macos-15, unchanged (that's
+    # chunk 6). Empty string is GitHub Actions' documented way to opt a
+    # job out of containerization per-run.
+    container:
+      image: ${{ inputs.sdk_kind != 'swift' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d' || '' }}
+    defaults:
+      run:
+        shell: bash
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -212,9 +222,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
         if: ${{ inputs.sdk_kind == 'rust' }}
 
-      - name: Install Linux SDK dependencies
-        if: ${{ runner.os == 'Linux' && inputs.sdk_kind == 'rust' }}
-        run: sudo apt-get update && sudo apt-get install -y build-essential libdbus-1-dev curl jq lsof lld patchelf
+      - name: Verify prebuilt smoke environment
+        if: ${{ inputs.sdk_kind != 'swift' }}
+        run: verify-runner-image public cpu
 
       - name: Configure Linux Rust linker
         if: ${{ runner.os == 'Linux' && inputs.sdk_kind == 'rust' }}
@@ -224,26 +234,6 @@ jobs:
           [target.x86_64-unknown-linux-gnu]
           rustflags = ["-C", "link-arg=-fuse-ld=lld"]
           EOF
-
-      - name: Verify Kotlin smoke runtime utilities
-        if: ${{ runner.os == 'Linux' && inputs.sdk_kind == 'kotlin' }}
-        run: |
-          set -euo pipefail
-          for utility in \
-            bash \
-            curl \
-            ldd \
-            pgrep \
-            python3 \
-            readelf \
-            sort \
-            tail \
-            xargs; do
-            command -v "$utility" >/dev/null || {
-              echo "missing Kotlin smoke runtime utility: $utility" >&2
-              exit 1
-            }
-          done
 
       - uses: ./.github/actions/restore-smoke-inputs
         with:
