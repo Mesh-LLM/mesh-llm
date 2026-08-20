@@ -54,12 +54,13 @@ impl MediaRequirements {
 pub fn strip_split_suffix(name: &str) -> &str {
     if let Some(idx) = name.rfind("-of-") {
         let after = &name[idx + 4..];
-        if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit()) {
-            if let Some(dash) = name[..idx].rfind('-') {
-                let between = &name[dash + 1..idx];
-                if !between.is_empty() && between.chars().all(|c| c.is_ascii_digit()) {
-                    return &name[..dash];
-                }
+        if !after.is_empty()
+            && after.chars().all(|c| c.is_ascii_digit())
+            && let Some(dash) = name[..idx].rfind('-')
+        {
+            let between = &name[dash + 1..idx];
+            if !between.is_empty() && between.chars().all(|c| c.is_ascii_digit()) {
+                return &name[..dash];
             }
         }
     }
