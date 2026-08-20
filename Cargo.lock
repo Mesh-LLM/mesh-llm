@@ -7541,6 +7541,7 @@ dependencies = [
  "clap",
  "futures-util",
  "libc",
+ "mesh-llm-events",
  "mesh-native-serving-plugin-api",
  "model-artifact",
  "openai-frontend",

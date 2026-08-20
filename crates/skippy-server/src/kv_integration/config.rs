@@ -27,6 +27,7 @@ pub fn configure_kv_disk_cache(config: KvDiskCacheConfig) -> Result<(), KvDiskCa
 }
 
 use anyhow::Result;
+use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_cache::{
     ExactStateCache, PrefixCandidatePolicy, PrefixDiskTier, ResidentActivationCache,
     ResidentCacheConfig, ResidentPrefixCache,
@@ -133,6 +134,13 @@ impl KvStageIntegration {
     }
 }
 
+fn emit_warning(message: String) {
+    let _ = emit_event(OutputEvent::Warning {
+        message,
+        context: None,
+    });
+}
+
 /// Open the KV disk tier for this stage. Host configuration wins; legacy
 /// environment variables remain compatibility input when no host configured it.
 struct OpenedDiskTier {
@@ -143,17 +151,19 @@ struct OpenedDiskTier {
 fn open_disk_tier(config: &StageConfig) -> Option<OpenedDiskTier> {
     let root = disk_tier_root(config);
     if !has_valid_content_digest(config) {
-        eprintln!(
+        emit_warning(format!(
             "skippy: KV disk tier disabled for stage {}: no valid content digest",
             config.stage_id
-        );
+        ));
         return None;
     }
     let reservation = stage_disk_budget(&root, config)?;
     match PrefixDiskTier::open(&root, reservation.bytes()) {
         Ok(tier) => Some(OpenedDiskTier { tier, reservation }),
         Err(error) => {
-            eprintln!("skippy: KV disk tier unavailable, continuing without it: {error}");
+            emit_warning(format!(
+                "skippy: KV disk tier unavailable, continuing without it: {error}"
+            ));
             None
         }
     }
@@ -185,12 +195,12 @@ fn stage_disk_budget(root: &Path, config: &StageConfig) -> Option<disk_budget::B
     };
     let budget = disk_budget::resolve_node_budget(explicit, enabled, free_bytes);
     if let NodeBudget::InsufficientSpace { free_bytes } = budget {
-        eprintln!(
+        emit_warning(format!(
             "skippy: KV disk tier disabled for stage {}: only {:.1} GiB free on {}",
             config.stage_id,
             free_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
             probe.display(),
-        );
+        ));
         return None;
     }
     let node_bytes = budget.bytes()?;

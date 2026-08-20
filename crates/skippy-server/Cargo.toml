@@ -28,6 +28,7 @@ futures-util = "0.3"
 skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc4"  }
 skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.0-rc4" }
 model-artifact = { path = "../model-artifact", version = "0.76.0-rc4" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc4" }
 mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.76.0-rc4" }
 skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc4"  }
 skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc4"  }

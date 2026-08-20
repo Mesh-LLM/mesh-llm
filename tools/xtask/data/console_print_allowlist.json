@@ -4347,20 +4347,6 @@
       "macro_name": "println!"
     }
   ],
-  "crates/skippy-server/src/kv_integration/config.rs": [
-    {
-      "line": 110,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 120,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 152,
-      "macro_name": "eprintln!"
-    }
-  ],
   "crates/skippy-server/src/main.rs": [
     {
       "line": 16,
