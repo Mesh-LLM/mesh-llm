@@ -164,12 +164,14 @@ Jobs with no bare-metal row at all (the `ci-web-slice.yml` / `website-pages.yml`
 now-redundant setup actions outright instead of gating them -- there is
 nothing for the `if:` to select between.
 
-`npm install --global openai` in `smoke.yml` is the one install left gated
-rather than deleted even though `install-core-tools.sh` bakes an
-exact-pinned `openai` into the image: it is genuinely needed on the
-bare-metal `gpu-nvidia` row, so it stays as its own
-`if: job.container.id == ''` step rather than being folded into the always-run
-`pip install` step next to it.
+`npm install --global openai` in `smoke.yml` is **not** gated on
+`job.container.id`, even though `install-core-tools.sh:83` bakes an
+exact-pinned `openai` into the image on `mesh-llm-runner-images` main. The
+`public cpu` digest pinned in `ci/slices.yml` predates that bake (see
+"A pinned digest is a frozen artifact" below), so the containerized row needs
+the install too, and the step runs unconditionally for both it and the
+bare-metal `gpu-nvidia` row. Re-gate it only once the CPU digest is promoted
+past `mesh-llm-runner-images` #20 and that is confirmed from a green run.
 
 ### Container jobs default `run:` to `sh`, not `bash`
 
@@ -235,6 +237,19 @@ than proven by a real run. `node-sdk-addon-artifact.yml`'s own
 `Validate macOS x64 cross-linker` step is a deliberate near-duplicate of the
 composite's probe, not dead code: it passes `--target x86_64-apple-darwin`
 where the composite only probes the host target.
+
+### A pinned digest is a frozen artifact
+
+`mesh-llm-runner-images` HEAD says nothing about what is inside the digest a
+workflow pins -- the `public cpu` digest pinned in `ci/slices.yml` was built
+2026-07-22 and does not contain changes merged to that repo afterwards
+(the `smoke.yml` openai bake landed a week later, in #20). Before deleting or
+gating a dependency install on the grounds that "the image bakes it,"
+confirm the capability exists **in the pinned digest**, and confirm it from a
+green run of the job that needs it. `verify-runner-image`'s JSON is the
+cheap probe: `mesh_llm_revision` dates the build, and missing keys (added to
+the asserted object in later `mesh-llm-runner-images` commits) date the
+baked verify script itself.
 
 ### Digest promotion
 
