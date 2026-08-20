@@ -1,7 +1,9 @@
+#[cfg(test)]
+use mesh_llm_types::router::strip_split_suffix;
 /// Smart model router — classifies requests and picks the best model.
 pub use mesh_llm_types::router::{
     Category, Classification, Complexity, MediaRequirements, classify, media_requirements,
-    strip_split_suffix, strip_split_suffix_owned,
+    strip_split_suffix_owned,
 };
 
 pub(crate) fn model_satisfies_media_requirements(

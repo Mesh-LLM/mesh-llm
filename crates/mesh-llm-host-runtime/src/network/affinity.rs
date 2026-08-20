@@ -118,6 +118,7 @@ impl AffinityRouter {
         self.target_health.record_outcome(model, target, outcome);
     }
 
+    #[cfg(test)]
     pub fn lookup_target(
         &self,
         model: &str,
