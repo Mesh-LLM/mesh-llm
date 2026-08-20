@@ -12,7 +12,6 @@ import {
   render
 } from './ConfigurationPage-test-support'
 
-
 vi.mock('@tanstack/react-router', () => ({
   useBlocker: (...args: unknown[]) => globalThis.__meshConfigurationPageTestGlobals.useBlocker(...args)
 }))
@@ -54,7 +53,6 @@ vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
   assertPluginUiRegistration: vi.fn(),
   assertPluginUiMountHandle: vi.fn()
 }))
-
 
 describe('ConfigurationPage placement and history', () => {
   it('renders remote nodes as read-only context and keeps TOML in the output tab', async () => {

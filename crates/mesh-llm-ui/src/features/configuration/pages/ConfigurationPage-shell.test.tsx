@@ -20,7 +20,6 @@ import {
 } from './ConfigurationPage-test-support'
 import * as configQueryModule from '@/features/configuration/api/use-config-query'
 
-
 vi.mock('@tanstack/react-router', () => ({
   useBlocker: (...args: unknown[]) => globalThis.__meshConfigurationPageTestGlobals.useBlocker(...args)
 }))
@@ -62,7 +61,6 @@ vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
   assertPluginUiRegistration: vi.fn(),
   assertPluginUiMountHandle: vi.fn()
 }))
-
 
 describe('ConfigurationPage shell and feature flags', () => {
   it('renders the persistent header, shared tab bar, and model settings workspace first', () => {

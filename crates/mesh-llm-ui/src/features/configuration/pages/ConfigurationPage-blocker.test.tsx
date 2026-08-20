@@ -2,12 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConfigurationFixturePage as ConfigurationPage } from '@/features/configuration/pages/ConfigurationPage'
-import {
-  blockedBlocker,
-  getCarrackSection,
-  mockUseBlocker,
-  render
-} from './ConfigurationPage-test-support'
+import { blockedBlocker, getCarrackSection, mockUseBlocker, render } from './ConfigurationPage-test-support'
 
 vi.mock('@tanstack/react-router', () => ({
   useBlocker: (...args: unknown[]) => globalThis.__meshConfigurationPageTestGlobals.useBlocker(...args)
@@ -50,7 +45,6 @@ vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
   assertPluginUiRegistration: vi.fn(),
   assertPluginUiMountHandle: vi.fn()
 }))
-
 
 describe('ConfigurationPage navigation blocker', () => {
   it('shows the navigation blocker only when enabled and there are unsaved changes', async () => {

@@ -149,5 +149,4 @@ describe('dashboard app tab', () => {
     expect(within(drawer).getByRole('heading', { name: /ownership/i })).toBeInTheDocument()
     expect(within(drawer).getByText(/gemma-4-26B-A4B-it-UD/i)).toBeInTheDocument()
   })
-
 })

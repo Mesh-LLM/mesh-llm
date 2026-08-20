@@ -24,9 +24,7 @@ import {
   modelPlacementPathsFromSchema,
   overlayDefaultsValues
 } from './config-adapter-schema'
-import {
-  DEFAULT_MODEL_PLACEMENT_PATHS
-} from './config-adapter-schema'
+import { DEFAULT_MODEL_PLACEMENT_PATHS } from './config-adapter-schema'
 import type {
   RuntimeConfigControlStatePayload,
   RuntimeControlMeshConfig,

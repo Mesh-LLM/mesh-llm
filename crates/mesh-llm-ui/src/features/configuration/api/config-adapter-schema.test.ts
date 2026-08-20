@@ -725,6 +725,4 @@ describe('configuration schema and status adaptation', () => {
       controlBehavior: { numeric: { min: 1, unit: 'sec' } }
     })
   })
-
 })
-

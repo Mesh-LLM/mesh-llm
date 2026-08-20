@@ -1,22 +1,6 @@
 export { APP_STORAGE_KEYS } from './storage-keys'
-export {
-  MESH_NODES,
-  MODELS,
-  PEER_SUMMARY,
-  PEERS,
-  STATUS_METRICS
-} from './dashboard-fixtures'
-export {
-  CHAT_THREADS,
-  CONVERSATIONS,
-  TRANSPARENCY_MESSAGE,
-  TRANSPARENCY_NODES
-} from './chat-fixtures'
+export { MESH_NODES, MODELS, PEER_SUMMARY, PEERS, STATUS_METRICS } from './dashboard-fixtures'
+export { CHAT_THREADS, CONVERSATIONS, TRANSPARENCY_MESSAGE, TRANSPARENCY_NODES } from './chat-fixtures'
 export { CFG_CATALOG, CFG_NODES, INITIAL_ASSIGNS } from './configuration-fixtures'
 export { CONFIGURATION_DEFAULTS } from './configuration-defaults'
-export {
-  CHAT_HARNESS,
-  CONFIGURATION_HARNESS,
-  DASHBOARD_HARNESS,
-  SHELL_HARNESS
-} from './harness-fixtures'
+export { CHAT_HARNESS, CONFIGURATION_HARNESS, DASHBOARD_HARNESS, SHELL_HARNESS } from './harness-fixtures'

@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs'
 import type { StatusPayload } from '@/lib/api/types'
 import type { RuntimeConfigSchemaEntry, RuntimeConfigSchemaReference } from './config-adapter-types'
 
-
 export type DefaultsUiSchemaReference = {
   readonly settings: readonly {
     readonly canonical_path: string

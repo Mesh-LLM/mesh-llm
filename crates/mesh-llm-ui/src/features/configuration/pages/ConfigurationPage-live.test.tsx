@@ -23,7 +23,6 @@ import {
 import * as configAdapterModule from '@/features/configuration/api/config-adapter'
 import * as configQueryModule from '@/features/configuration/api/use-config-query'
 
-
 vi.mock('@tanstack/react-router', () => ({
   useBlocker: (...args: unknown[]) => globalThis.__meshConfigurationPageTestGlobals.useBlocker(...args)
 }))
@@ -65,7 +64,6 @@ vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
   assertPluginUiRegistration: vi.fn(),
   assertPluginUiMountHandle: vi.fn()
 }))
-
 
 describe('ConfigurationPage live saving and diagnostics', () => {
   it('renders live local node placement data in Model Deployment', async () => {

@@ -378,4 +378,3 @@ describe('buildTOML model and plugin serialization', () => {
     expect(toml).toContain('[defaults]\ngpu_id = "MTL0"')
   })
 })
-

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { render, screen, within } from '@testing-library/react'
 import { vi } from 'vitest'
 import { CONFIGURATION_DEFAULTS } from '@/features/app-tabs/data'

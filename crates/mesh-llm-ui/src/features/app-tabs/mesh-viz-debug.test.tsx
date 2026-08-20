@@ -583,5 +583,4 @@ describe('MeshViz debug and visual behavior', () => {
     )
     await waitFor(() => expect(zoomInButton).toHaveClass('size-[26px]'))
   })
-
 })

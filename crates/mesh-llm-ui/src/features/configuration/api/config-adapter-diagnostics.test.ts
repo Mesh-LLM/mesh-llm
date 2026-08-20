@@ -324,4 +324,3 @@ describe('configuration model merge and diagnostics', () => {
     expect(defaults.settings.every((setting) => setting.id === setting.canonicalPath)).toBe(true)
   })
 })
-

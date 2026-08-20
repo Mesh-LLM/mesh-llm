@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event'
 import { ConfigurationFixturePage as ConfigurationPage } from '@/features/configuration/pages/ConfigurationPage'
 import { getTomlSource, render } from './ConfigurationPage-test-support'
 
-
 vi.mock('@tanstack/react-router', () => ({
   useBlocker: (...args: unknown[]) => globalThis.__meshConfigurationPageTestGlobals.useBlocker(...args)
 }))
@@ -46,7 +45,6 @@ vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
   assertPluginUiRegistration: vi.fn(),
   assertPluginUiMountHandle: vi.fn()
 }))
-
 
 describe('ConfigurationPage defaults controls', () => {
   it('renders the interactive slot meter as the only default slots control', async () => {

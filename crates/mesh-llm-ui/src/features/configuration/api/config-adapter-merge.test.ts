@@ -755,6 +755,4 @@ describe('runtime-control configuration merges', () => {
       expect(error.message).toContain('Runtime backends are unavailable on this host.')
     }
   })
-
 })
-

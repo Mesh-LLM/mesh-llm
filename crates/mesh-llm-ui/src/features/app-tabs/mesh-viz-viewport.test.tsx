@@ -616,6 +616,4 @@ describe('MeshViz viewport behavior', () => {
     expect(screen.getByTestId('mesh-viz-tertiary-dot-grid')).toHaveAttribute('fill', 'oklch(0.76 0.105 72 / 7%)')
     expectMeshNodeCoreFill('self', 'oklch(0.66 0.22 28)', '18%')
   })
-
 })
-

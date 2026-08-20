@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import type { ReactElement, ReactNode } from 'react'
 import { act, render as rtlRender, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -84,7 +85,6 @@ globalThis.__meshConfigurationPageTestGlobals = {
   }),
   importPluginUiBundle: (...args) => pluginQueryMocks.importBundle(...args)
 }
-
 
 function TestProviders({ children, dataMode = 'harness' }: { children: ReactNode; dataMode?: DataMode }) {
   return (
@@ -306,50 +306,50 @@ function nonePluginWebUi(): PluginWebUiStateRaw {
   }
 }
 
-  beforeEach(() => {
-    vi.clearAllMocks()
-    vi.useRealTimers()
-    featureFlagMocks.integrationsEnabled = false
-    featureFlagMocks.signingAttestationEnabled = false
-    featureFlagMocks.wakePolicyConfigurationEnabled = false
-    pluginQueryMocks.summaries = []
-    pluginQueryMocks.visibleConfig = {
-      plugin: 'blackboard',
-      settings: { endpoint_url: 'https://blackboard.local/v1', retention_days: 30 },
-      schema: { plugin_name: 'blackboard' }
-    }
-    pluginQueryMocks.mutateConfig.mockResolvedValue(pluginQueryMocks.visibleConfig)
-    pluginQueryMocks.importBundle.mockResolvedValue({ registerMeshPluginUi: pluginQueryMocks.register })
-    pluginQueryMocks.register.mockReturnValue({ configSections: { settings: pluginQueryMocks.mountConfig } })
-    pluginQueryMocks.mountConfig.mockImplementation(
-      ({ element, host, section }: MeshPluginUiConfigMountContext): MeshPluginUiMountHandle => {
-        const node = document.createElement('div')
-        node.textContent = `Mounted ${host.plugin.name} ${section.id}`
-        const setting = document.createElement('output')
-        setting.textContent = String(host.config.visible.settings.endpoint_url)
-        const button = document.createElement('button')
-        button.type = 'button'
-        button.textContent = 'Save retention'
-        button.addEventListener('click', () => {
-          void host.config.requestMutation({
-            plugin: host.plugin.name,
-            settings: { retention_days: 45 }
-          })
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.useRealTimers()
+  featureFlagMocks.integrationsEnabled = false
+  featureFlagMocks.signingAttestationEnabled = false
+  featureFlagMocks.wakePolicyConfigurationEnabled = false
+  pluginQueryMocks.summaries = []
+  pluginQueryMocks.visibleConfig = {
+    plugin: 'blackboard',
+    settings: { endpoint_url: 'https://blackboard.local/v1', retention_days: 30 },
+    schema: { plugin_name: 'blackboard' }
+  }
+  pluginQueryMocks.mutateConfig.mockResolvedValue(pluginQueryMocks.visibleConfig)
+  pluginQueryMocks.importBundle.mockResolvedValue({ registerMeshPluginUi: pluginQueryMocks.register })
+  pluginQueryMocks.register.mockReturnValue({ configSections: { settings: pluginQueryMocks.mountConfig } })
+  pluginQueryMocks.mountConfig.mockImplementation(
+    ({ element, host, section }: MeshPluginUiConfigMountContext): MeshPluginUiMountHandle => {
+      const node = document.createElement('div')
+      node.textContent = `Mounted ${host.plugin.name} ${section.id}`
+      const setting = document.createElement('output')
+      setting.textContent = String(host.config.visible.settings.endpoint_url)
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = 'Save retention'
+      button.addEventListener('click', () => {
+        void host.config.requestMutation({
+          plugin: host.plugin.name,
+          settings: { retention_days: 45 }
         })
-        element.append(node, setting, button)
-        return {
-          unmount: () => {
-            pluginQueryMocks.unmountConfig()
-            node.remove()
-          }
+      })
+      element.append(node, setting, button)
+      return {
+        unmount: () => {
+          pluginQueryMocks.unmountConfig()
+          node.remove()
         }
       }
-    )
-    mockUseBlocker.mockImplementation(
-      ({ shouldBlockFn }: { shouldBlockFn: (transition: typeof defaultBlockerTransition) => boolean }) =>
-        shouldBlockFn(defaultBlockerTransition) ? blockedBlocker : idleBlocker
-    )
-  })
+    }
+  )
+  mockUseBlocker.mockImplementation(
+    ({ shouldBlockFn }: { shouldBlockFn: (transition: typeof defaultBlockerTransition) => boolean }) =>
+      shouldBlockFn(defaultBlockerTransition) ? blockedBlocker : idleBlocker
+  )
+})
 export {
   blockedBlocker,
   configAdapterModule,

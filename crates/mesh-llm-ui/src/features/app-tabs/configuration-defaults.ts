@@ -75,5 +75,4 @@ export const CONFIGURATION_DEFAULTS = {
     { label: 'Generated defaults', value: '73 settings', meta: 'deployment overrides win' },
     { label: 'Signing', value: 'Unsigned', meta: 'attestation pending' }
   ]
-
 } as const satisfies ConfigurationDefaultsHarnessData

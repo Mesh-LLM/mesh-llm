@@ -11,13 +11,12 @@ import {
   mergeConfigurationDefaultsIntoMeshConfig,
   mergeConfigurationIntoMeshConfig
 } from '@/features/configuration/api/config-adapter'
-import {
-  AUDIT_SCHEMA,
-  loggingSchemaSetting,
-  SCHEMA_REFERENCE,
-  STATUS_PAYLOAD
-} from './config-adapter-test-support'
-import type { RuntimeConfigControlStatePayload, RuntimeConfigSchemaReference, RuntimeControlDiagnostic } from './config-adapter-types'
+import { AUDIT_SCHEMA, loggingSchemaSetting, SCHEMA_REFERENCE, STATUS_PAYLOAD } from './config-adapter-test-support'
+import type {
+  RuntimeConfigControlStatePayload,
+  RuntimeConfigSchemaReference,
+  RuntimeControlDiagnostic
+} from './config-adapter-types'
 
 describe('configuration logging and runtime-control metadata', () => {
   it('preserves current editability when runtime control-state is empty', () => {
@@ -381,5 +380,4 @@ describe('configuration logging and runtime-control metadata', () => {
       expect.arrayContaining(['logging.audit.enabled', 'logging.audit.log_format'])
     )
   })
-
 })
