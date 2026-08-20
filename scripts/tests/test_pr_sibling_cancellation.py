@@ -18,14 +18,21 @@ class PrSiblingCancellationTests(unittest.TestCase):
         self,
         permissions: object,
         scope: str,
+        *,
+        inherited_permissions: object = None,
+        require_explicit: bool = False,
     ) -> None:
-        self.assertNotEqual("write-all", permissions, f"{scope} grants write-all")
         if permissions is None:
-            return
+            self.assertFalse(
+                require_explicit,
+                f"{scope} must declare an explicit permissions mapping",
+            )
+            permissions = inherited_permissions
+        self.assertNotEqual("write-all", permissions, f"{scope} grants write-all")
         self.assertIsInstance(
             permissions,
             dict,
-            f"{scope} permissions must be a mapping or omitted",
+            f"{scope} effective permissions must be a mapping",
         )
         self.assertIn(
             permissions.get("actions"),
@@ -93,16 +100,35 @@ const action = require(process.argv[1]);
         for lane in ("quality", "website", "linux", "macos", "windows"):
             path = ROOT / ".github" / "workflows" / f"pr_{lane}.yml"
             document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            workflow_permissions = document.get("permissions")
             with self.subTest(lane=lane, scope="workflow"):
                 self.assert_actions_permission_denied(
-                    document.get("permissions"),
+                    workflow_permissions,
                     f"{path.name} workflow",
+                    require_explicit=True,
                 )
             for job_name, job in (document.get("jobs") or {}).items():
                 with self.subTest(lane=lane, scope=f"job:{job_name}"):
                     self.assert_actions_permission_denied(
                         job.get("permissions"),
                         f"{path.name} job {job_name}",
+                        inherited_permissions=workflow_permissions,
+                    )
+
+    def test_permission_assertion_rejects_implicit_or_write_access(self) -> None:
+        with self.assertRaises(AssertionError):
+            self.assert_actions_permission_denied(
+                None,
+                "workflow",
+                require_explicit=True,
+            )
+        for permissions in ("write-all", "read-all", {"actions": "write"}):
+            with self.subTest(permissions=permissions):
+                with self.assertRaises(AssertionError):
+                    self.assert_actions_permission_denied(
+                        permissions,
+                        "job",
+                        inherited_permissions={"actions": "none"},
                     )
 
     def test_trigger_requires_exact_quality_pr_identity(self) -> None:
