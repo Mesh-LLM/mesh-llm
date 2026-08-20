@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod affinity;
 pub mod prefix_affinity;
 
 /// Calculate total model size, summing all split files if present.

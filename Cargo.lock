@@ -4184,6 +4184,7 @@ name = "mesh-llm-routing"
 version = "0.76.0-rc6"
 dependencies = [
  "iroh",
+ "serde_json",
 ]
 
 [[package]]
