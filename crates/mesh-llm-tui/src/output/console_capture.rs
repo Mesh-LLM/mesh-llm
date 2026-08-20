@@ -78,18 +78,17 @@ mod unix {
             // Start the reader before redirecting either descriptor. Once the
             // capture is registered, stale readers from earlier children also
             // route into the active dashboard.
-            spawn_reader(read_fd, reader_stderr)?;
-            ACTIVE_CAPTURES.fetch_add(1, Ordering::AcqRel);
+            register_capture_reader(&ACTIVE_CAPTURES, || spawn_reader(read_fd, reader_stderr))?;
 
             if let Err(error) = dup2_stdout(&write_fd) {
-                unregister_capture();
+                unregister_capture(&ACTIVE_CAPTURES);
                 return Err(error.into());
             }
             if let Err(error) = dup2_stderr(&write_fd) {
                 // stdout was already redirected. Restore it before the pipe
                 // handles drop so a partial install cannot strand fd 1.
                 let _ = dup2_stdout(&saved_stdout);
-                unregister_capture();
+                unregister_capture(&ACTIVE_CAPTURES);
                 return Err(error.into());
             }
             drop(write_fd);
@@ -112,7 +111,7 @@ mod unix {
             dup2_stderr(&self.saved_stderr)?;
             // Keep restoration retryable until both descriptors are back.
             self.active = false;
-            unregister_capture();
+            unregister_capture(&ACTIVE_CAPTURES);
             Ok(())
         }
     }
@@ -163,8 +162,20 @@ mod unix {
             .map(|_| ())
     }
 
-    fn unregister_capture() {
-        let result = ACTIVE_CAPTURES.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+    pub(super) fn register_capture_reader(
+        active_captures: &AtomicUsize,
+        spawn_reader: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        active_captures.fetch_add(1, Ordering::AcqRel);
+        if let Err(error) = spawn_reader() {
+            unregister_capture(active_captures);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn unregister_capture(active_captures: &AtomicUsize) {
+        let result = active_captures.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
             count.checked_sub(1)
         });
         debug_assert!(result.is_ok(), "capture activity count underflowed");
@@ -304,9 +315,10 @@ mod fallback {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::unix::{dashboard_event, deliver_with, take_pending_lines};
+    use super::unix::{dashboard_event, deliver_with, register_capture_reader, take_pending_lines};
     use mesh_llm_events::OutputEvent;
     use std::io::{Read, Write};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
 
@@ -431,5 +443,62 @@ mod tests {
 
         assert_eq!(emitted.len(), 1, "late output belongs in the new dashboard");
         assert!(passthrough.is_empty(), "it must not bypass the dashboard");
+    }
+
+    #[test]
+    fn stale_reader_routes_output_during_reader_registration() {
+        let active_captures = Arc::new(AtomicUsize::new(0));
+        let (deliver_tx, deliver_rx) = mpsc::channel();
+        let (delivered_tx, delivered_rx) = mpsc::channel();
+        let reader_activity = Arc::clone(&active_captures);
+        let stale_reader = std::thread::spawn(move || {
+            deliver_rx
+                .recv()
+                .expect("registration should release reader");
+            let mut emitted = Vec::new();
+            let mut passthrough = Vec::new();
+            deliver_with(
+                "concurrent stale output".to_string(),
+                &reader_activity,
+                &mut passthrough,
+                |event| {
+                    emitted.push(event);
+                    Ok(())
+                },
+            );
+            delivered_tx
+                .send(())
+                .expect("registration should await delivery");
+            (emitted, passthrough)
+        });
+
+        register_capture_reader(&active_captures, || {
+            deliver_tx.send(()).expect("stale reader should be waiting");
+            delivered_rx
+                .recv()
+                .expect("stale reader should deliver during registration");
+            Ok(())
+        })
+        .expect("reader registration should succeed");
+
+        let (emitted, passthrough) = stale_reader.join().expect("stale reader should exit");
+        assert_eq!(
+            emitted.len(),
+            1,
+            "concurrent output belongs in the dashboard"
+        );
+        assert!(passthrough.is_empty(), "it must not bypass the dashboard");
+    }
+
+    #[test]
+    fn failed_reader_registration_rolls_back_capture_activity() {
+        let active_captures = AtomicUsize::new(0);
+
+        let result = register_capture_reader(&active_captures, || {
+            Err(std::io::Error::other("reader spawn failed"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(active_captures.load(Ordering::Acquire), 0);
     }
 }
