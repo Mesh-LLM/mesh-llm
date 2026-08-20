@@ -49,6 +49,7 @@ export type {
   LogDeleteReceipt,
   LogEventKind,
   LogExport,
+  LogExportItem,
   LogLifecycleEvent,
   LogMaintenanceCounts,
   LogOutcome,
