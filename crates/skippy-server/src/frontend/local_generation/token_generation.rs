@@ -22,7 +22,6 @@ use openai_frontend::ChatCompletionRequest;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde_json::json;
-use skippy_runtime::ActivationFrame;
 use skippy_runtime::NativeMtpDraft as RuntimeNativeMtpDraft;
 use skippy_runtime::SamplingConfig;
 use std::cell::RefCell;
@@ -1206,17 +1205,6 @@ pub(super) trait NativeMtpRuntime {
         sampling: Option<&SamplingConfig>,
         max_draft_tokens: usize,
     ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>)>;
-
-    #[allow(dead_code)]
-    fn decode_frame_sampled_mtp(
-        &mut self,
-        session_id: &str,
-        token_id: i32,
-        sampling: Option<&SamplingConfig>,
-        input: Option<&ActivationFrame>,
-        output_capacity: usize,
-        max_draft_tokens: usize,
-    ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>, ActivationFrame)>;
 }
 
 impl NativeMtpRuntime for RuntimeState {
@@ -1228,26 +1216,6 @@ impl NativeMtpRuntime for RuntimeState {
         max_draft_tokens: usize,
     ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>)> {
         RuntimeState::decode_sampled_mtp(self, session_id, token_id, sampling, max_draft_tokens)
-    }
-
-    fn decode_frame_sampled_mtp(
-        &mut self,
-        session_id: &str,
-        token_id: i32,
-        sampling: Option<&SamplingConfig>,
-        input: Option<&ActivationFrame>,
-        output_capacity: usize,
-        max_draft_tokens: usize,
-    ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>, ActivationFrame)> {
-        RuntimeState::decode_frame_sampled_mtp(
-            self,
-            session_id,
-            token_id,
-            sampling,
-            input,
-            output_capacity,
-            max_draft_tokens,
-        )
     }
 }
 
@@ -1274,7 +1242,6 @@ pub(super) fn decode_native_mtp(
 pub(in crate::frontend) fn native_mtp_dispatch_counts_for_test() -> (usize, usize) {
     struct FakeNativeMtpRuntime {
         sampled_calls: usize,
-        frame_calls: usize,
     }
 
     impl NativeMtpRuntime for FakeNativeMtpRuntime {
@@ -1288,28 +1255,12 @@ pub(in crate::frontend) fn native_mtp_dispatch_counts_for_test() -> (usize, usiz
             self.sampled_calls += 1;
             Ok((7, None))
         }
-
-        fn decode_frame_sampled_mtp(
-            &mut self,
-            _session_id: &str,
-            _token_id: i32,
-            _sampling: Option<&SamplingConfig>,
-            _input: Option<&ActivationFrame>,
-            _output_capacity: usize,
-            _max_draft_tokens: usize,
-        ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>, ActivationFrame)> {
-            self.frame_calls += 1;
-            anyhow::bail!("frame MTP API must not be used by local decode");
-        }
     }
 
-    let mut runtime = FakeNativeMtpRuntime {
-        sampled_calls: 0,
-        frame_calls: 0,
-    };
+    let mut runtime = FakeNativeMtpRuntime { sampled_calls: 0 };
     let (predicted, draft) =
         decode_native_mtp(&mut runtime, "test", 0, None, 1).expect("sampled MTP dispatch");
     assert_eq!(predicted, 7);
     assert!(draft.is_none());
-    (runtime.sampled_calls, runtime.frame_calls)
+    (runtime.sampled_calls, 0)
 }
