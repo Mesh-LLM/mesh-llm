@@ -2224,6 +2224,10 @@ class CiArtifactActionTests(unittest.TestCase):
                     outputs["allow_native_github_cache"],
                     expected_native_cache,
                 )
+                self.assertEqual(
+                    outputs["allow_trusted_sccache_seed"],
+                    "false" if enabled == "true" else "true",
+                )
                 self.assertEqual(outputs["runner"], runner)
                 expected_arm = (
                     "depot-ubuntu-24.04-arm"
@@ -2352,6 +2356,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertEqual(canary_pr["runner"], "depot-ubuntu-24.04")
         self.assertEqual(canary_pr["allow_depot_remote_cache"], "false")
         self.assertEqual(canary_pr["allow_native_github_cache"], "false")
+        self.assertEqual(canary_pr["allow_trusted_sccache_seed"], "false")
 
         unapproved_pr = self.run_runner_selector(
             event_name="pull_request",
@@ -2418,6 +2423,10 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertEqual(
             trusted_main_cross_branch_cache["allow_native_github_cache"],
             "true",
+        )
+        self.assertEqual(
+            trusted_main_cross_branch_cache["allow_trusted_sccache_seed"],
+            "false",
         )
 
         for name, kwargs in (
@@ -2528,10 +2537,15 @@ class CiArtifactActionTests(unittest.TestCase):
                 self.assertIn("CACHE_NAMESPACE: mesh-llm", workflow)
                 self.assertNotIn("CACHE_NAMESPACE: mesh-llm-pr", workflow)
                 self.assertNotIn("'mesh-llm-pr'", workflow)
-                self.assertNotIn(
-                    'SCCACHE_GHA_ENABLED: "false"',
-                    workflow,
-                )
+                if workflow_name in {
+                    "ci-quality-slice.yml",
+                    "ci-rust-tests-slice.yml",
+                    "ci-linux-host-slice.yml",
+                    "ci-linux-runtime-slice.yml",
+                }:
+                    self.assertIn('SCCACHE_GHA_ENABLED: "false"', workflow)
+                else:
+                    self.assertNotIn('SCCACHE_GHA_ENABLED: "false"', workflow)
                 if "uses: Swatinem/rust-cache@" in workflow:
                     self.assertIn(
                         "save-if: ${{ github.ref == 'refs/heads/main' && ",
@@ -2551,15 +2565,15 @@ class CiArtifactActionTests(unittest.TestCase):
 
     def test_depot_pr_native_cache_consumers_obey_central_policy(self) -> None:
         eligible_consumers = {
-            "ci-quality-slice.yml": ("Swatinem/rust-cache@",),
+            "ci-quality-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
             "ci-web-slice.yml": (
                 "uses: actions/cache/restore@",
                 "uses: actions/cache/save@",
             ),
             "ci-ui-artifact-slice.yml": ("uses: actions/cache/restore@",),
-            "ci-linux-host-slice.yml": ("Swatinem/rust-cache@",),
-            "ci-linux-runtime-slice.yml": ("Swatinem/rust-cache@",),
-            "ci-rust-tests-slice.yml": ("Swatinem/rust-cache@",),
+            "ci-linux-host-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
+            "ci-linux-runtime-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
+            "ci-rust-tests-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
             "ci-macos-host-slice.yml": ("Swatinem/rust-cache@",),
             "ci-platform-checks-slice.yml": (
                 "uses: actions/cache/restore@",
@@ -2636,7 +2650,10 @@ class CiArtifactActionTests(unittest.TestCase):
                 for marker in markers:
                     block = step_block(workflow, marker)
                     with self.subTest(consumer=marker):
-                        self.assertIn("allow_native_github_cache", block)
+                        if "restore-sccache-seed" in marker:
+                            self.assertIn("allow_trusted_sccache_seed", block)
+                        else:
+                            self.assertIn("allow_native_github_cache", block)
 
         for filename, jobs in expected_jobs.items():
             workflow = (

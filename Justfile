@@ -608,6 +608,21 @@ auto: build
 
 # ── Utilities ──────────────────────────────────────────────────
 
+# Measure repository-local Cargo build-cache usage (80 GiB / 14 day defaults).
+[unix]
+cache-status max_size="80GiB" max_age="14":
+    python3 scripts/manage-build-cache.py status --max-size "{{ max_size }}" --max-age "{{ max_age }}"
+
+# Preview bounded, oldest-first incremental and package-aware Cargo cleanup.
+[unix]
+cache-prune-dry-run max_size="80GiB" max_age="14":
+    python3 scripts/manage-build-cache.py prune --max-size "{{ max_size }}" --max-age "{{ max_age }}"
+
+# Prune only repository-local Cargo artifacts; refuses during compilation.
+[unix]
+cache-prune max_size="80GiB" max_age="14":
+    python3 scripts/manage-build-cache.py prune --execute --max-size "{{ max_size }}" --max-age "{{ max_age }}"
+
 # Update both tracked llama.cpp pin files from the prepared checkout.
 llama-update-pin:
     scripts/update-llama-pin.sh

@@ -82,6 +82,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("ci-rust-tests-slice.yml", "rust_tests"): policy,
             ("ci-windows-host-slice.yml", "windows_host"): policy,
             ("ci-windows-runtime-slice.yml", "windows_runtime"): policy,
+            ("cache-warm-sccache.yml", "warm"): "false",
             ("hf-download-smoke.yml", "hf_download_smoke"): "true",
             ("native-sdk-artifact.yml", "linux_native_sdk_artifact"): policy,
             ("native-sdk-artifact.yml", "macos_native_sdk_artifact"): policy,
@@ -122,6 +123,8 @@ class SccacheEvidenceTests(unittest.TestCase):
         *,
         artifact_name: str = "sccache-test-1",
         sccache_error: str = "",
+        cache_expectation: str = "opportunistic",
+        minimum_hit_rate: str = "0",
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -159,6 +162,10 @@ class SccacheEvidenceTests(unittest.TestCase):
                 str(stats_file),
                 "--github-output",
                 str(github_output),
+                "--cache-expectation",
+                cache_expectation,
+                "--minimum-hit-rate",
+                minimum_hit_rate,
             ],
             env={
                 **os.environ,
@@ -183,7 +190,15 @@ class SccacheEvidenceTests(unittest.TestCase):
             json.loads(stats_file.read_text()),
             {
                 "schema": "mesh-llm.sccache-stats",
-                "schema_version": 1,
+                "schema_version": 2,
+                "assessment": {
+                    "expectation": "opportunistic",
+                    "classification": "opportunistic",
+                    "minimum_hit_rate": 0.0,
+                    "hit_rate": 0.6,
+                    "cache_requests": 10,
+                    "passed": True,
+                },
                 "stats": {
                     "compile_requests": 12,
                     "requests_executed": 10,
@@ -202,6 +217,9 @@ class SccacheEvidenceTests(unittest.TestCase):
         self.assertIn("requests_executed=10", outputs)
         self.assertIn("cache_hits=6", outputs)
         self.assertIn("cache_misses=4", outputs)
+        self.assertIn("hit_rate=0.6", outputs)
+        self.assertIn("cache_classification=opportunistic", outputs)
+        self.assertIn("cache_passed=true", outputs)
 
     def test_raw_secrets_urls_and_paths_cannot_reach_logs_or_evidence(self) -> None:
         payload = valid_payload()
@@ -278,6 +296,26 @@ class SccacheEvidenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(stats_file.is_file())
         self.assertIn("::warning title=sccache reported zero compile requests", result.stdout)
+
+    def test_warm_and_cold_observations_are_classified_separately(self) -> None:
+        warm_result, warm_file, warm_output = self.run_capture(
+            valid_payload(), cache_expectation="warm", minimum_hit_rate="0.80",
+        )
+        cold_result, cold_file, cold_output = self.run_capture(
+            valid_payload(), cache_expectation="cold", minimum_hit_rate="0.80",
+        )
+        self.assertEqual(warm_result.returncode, 0, warm_result.stderr)
+        self.assertEqual(cold_result.returncode, 0, cold_result.stderr)
+        self.assertEqual(
+            json.loads(warm_file.read_text())["assessment"]["classification"],
+            "warm-failure",
+        )
+        self.assertIn("cache_passed=false", warm_output.read_text())
+        self.assertEqual(
+            json.loads(cold_file.read_text())["assessment"]["classification"],
+            "cold",
+        )
+        self.assertIn("cache_passed=true", cold_output.read_text())
 
     def test_missing_or_invalid_counter_rejects_evidence(self) -> None:
         payload = valid_payload()
