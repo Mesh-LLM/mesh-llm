@@ -723,16 +723,28 @@ impl InteractiveDashboardFormatter {
         if self.terminal_active {
             return Ok(());
         }
-        let out = TerminalOut::open();
+        let mut out = TerminalOut::open();
         // Capture is only installed when the dashboard has a descriptor of its
         // own. Redirecting stderr while still rendering to it would send every
         // frame into the capture pipe.
         let capture_is_safe = out.is_private();
-        write_tui_enter()?;
+        write_tui_enter_to_writer(&mut out)?;
         self.mark_terminal_escape_written();
         let backend = CrosstermBackend::new(out);
-        let mut terminal = Terminal::new(backend).map_err(io::Error::other)?;
-        terminal.hide_cursor().map_err(io::Error::other)?;
+        let mut terminal = match Terminal::new(backend).map_err(io::Error::other) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                self.rollback_terminal_enter();
+                return Err(error);
+            }
+        };
+        if let Err(error) = terminal.hide_cursor().map_err(io::Error::other) {
+            // Drop the buffered backend before writing the rollback sequence;
+            // otherwise its final flush could hide the cursor again afterward.
+            drop(terminal);
+            self.rollback_terminal_enter();
+            return Err(error);
+        }
         self.terminal = Some(terminal);
         if capture_is_safe {
             // A failure here is not fatal: the dashboard works without capture,
@@ -751,6 +763,22 @@ impl InteractiveDashboardFormatter {
         self.dirty = true;
     }
 
+    fn rollback_terminal_enter(&mut self) {
+        self.rollback_terminal_enter_with(write_tui_exit);
+    }
+
+    pub(super) fn rollback_terminal_enter_with(&mut self, exit: impl FnOnce() -> io::Result<()>) {
+        // The setup error remains the useful result, but teardown is still
+        // attempted. Reset the bookkeeping even if that best-effort write
+        // fails so a later enter can retry instead of observing a phantom TUI.
+        let _ = exit();
+        self.release_console_capture();
+        self.terminal = None;
+        self.terminal_active = false;
+        self.dirty = false;
+        self.tui_entered.store(false, Ordering::Release);
+    }
+
     pub(super) fn exit_terminal(&mut self) -> io::Result<()> {
         if !self.terminal_active {
             return Ok(());
@@ -760,7 +788,9 @@ impl InteractiveDashboardFormatter {
         // reader is about to stop projecting into a dashboard that is gone.
         self.release_console_capture();
         if let Some(mut terminal) = self.terminal.take() {
-            terminal.show_cursor().map_err(io::Error::other)?;
+            // `write_tui_exit` also shows the cursor, so a backend-specific
+            // show failure must not prevent the alternate-screen teardown.
+            let _ = terminal.show_cursor();
         }
         self.terminal_active = false;
         self.dirty = false;
@@ -1553,12 +1583,6 @@ pub(super) fn dashboard_layout_for_terminal_size(columns: u16, rows: u16) -> Das
         models_rows,
         requests_rows,
     )
-}
-
-pub(super) fn write_tui_enter() -> io::Result<()> {
-    // Must be the same destination the frames go to. Entering the alternate
-    // screen on one descriptor and leaving it on another strands the terminal.
-    write_tui_enter_to_writer(&mut TerminalOut::open())
 }
 
 pub(super) fn write_tui_exit() -> io::Result<()> {

@@ -13,7 +13,7 @@
 //! rather than trusting their standard descriptors.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 
 /// Where terminal control sequences and dashboard frames are written.
 ///
@@ -21,15 +21,15 @@ use std::io::{self, Write};
 /// piped or redirected session never reaches the dashboard path anyway, but
 /// the fallback keeps enter/exit sequences working for the fallback console.
 pub(in crate::output) enum TerminalOut {
-    Tty(File),
-    Stderr(io::Stderr),
+    Tty(BufWriter<File>),
+    Stderr(BufWriter<io::Stderr>),
 }
 
 impl TerminalOut {
     pub(in crate::output) fn open() -> Self {
         match open_controlling_terminal() {
-            Some(file) => Self::Tty(file),
-            None => Self::Stderr(io::stderr()),
+            Some(file) => Self::Tty(BufWriter::new(file)),
+            None => Self::Stderr(BufWriter::new(io::stderr())),
         }
     }
 

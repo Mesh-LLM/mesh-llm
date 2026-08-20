@@ -1,5 +1,5 @@
 use super::super::{
-    DashboardEndpointRow, DashboardModelRow, DashboardProcessRow,
+    DashboardEndpointRow, DashboardModelRow, DashboardPanelViewState, DashboardProcessRow,
     PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL, llama_process_model_name,
     model_name_without_variant_suffix, model_names_match,
 };
@@ -92,26 +92,20 @@ pub(in crate::output) fn render_process_table(
                     ))
                 })
                 .collect::<Vec<_>>();
-            let selected_local_index = view
-                .selected_row
-                .map(|selected| selected.saturating_sub(view.scroll_offset));
-            let mut table_state = TableState::default();
-            table_state.select(selected_local_index);
-            let table = Table::new(rows, process_table_constraints(widths))
-                .header(process_table_header_row(present_columns(
-                    widths,
-                    [
-                        "MODEL".to_string(),
-                        "PID".to_string(),
-                        "PORT".to_string(),
-                        right_align_text("STATE", status_width),
-                    ],
-                )))
-                .column_spacing(1)
-                .highlight_symbol(if is_focused { "› " } else { "  " })
-                .highlight_spacing(HighlightSpacing::Always)
-                .row_highlight_style(process_table_highlight_style(is_focused));
-            frame.render_stateful_widget(table, inner_area, &mut table_state);
+            render_populated_process_table(
+                frame,
+                inner_area,
+                view,
+                widths,
+                [
+                    "MODEL".to_string(),
+                    "PID".to_string(),
+                    "PORT".to_string(),
+                    right_align_text("STATE", status_width),
+                ],
+                rows,
+                is_focused,
+            );
         }
         DashboardPanel::Webserver => {
             if state.webserver_rows.is_empty() {
@@ -151,29 +145,46 @@ pub(in crate::output) fn render_process_table(
                     ))
                 })
                 .collect::<Vec<_>>();
-            let selected_local_index = view
-                .selected_row
-                .map(|selected| selected.saturating_sub(view.scroll_offset));
-            let mut table_state = TableState::default();
-            table_state.select(selected_local_index);
-            let table = Table::new(rows, process_table_constraints(widths))
-                .header(process_table_header_row(present_columns(
-                    widths,
-                    [
-                        PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL.to_string(),
-                        "PID".to_string(),
-                        "PORT".to_string(),
-                        right_align_text("STATE", status_width),
-                    ],
-                )))
-                .column_spacing(1)
-                .highlight_symbol(if is_focused { "› " } else { "  " })
-                .highlight_spacing(HighlightSpacing::Always)
-                .row_highlight_style(process_table_highlight_style(is_focused));
-            frame.render_stateful_widget(table, inner_area, &mut table_state);
+            render_populated_process_table(
+                frame,
+                inner_area,
+                view,
+                widths,
+                [
+                    PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL.to_string(),
+                    "PID".to_string(),
+                    "PORT".to_string(),
+                    right_align_text("STATE", status_width),
+                ],
+                rows,
+                is_focused,
+            );
         }
         _ => {}
     }
+}
+
+fn render_populated_process_table(
+    frame: &mut Frame,
+    inner_area: Rect,
+    view: DashboardPanelViewState,
+    widths: [usize; 4],
+    labels: [String; 4],
+    rows: Vec<Row<'static>>,
+    is_focused: bool,
+) {
+    let selected_local_index = view
+        .selected_row
+        .map(|selected| selected.saturating_sub(view.scroll_offset));
+    let mut table_state = TableState::default();
+    table_state.select(selected_local_index);
+    let table = Table::new(rows, process_table_constraints(widths))
+        .header(process_table_header_row(present_columns(widths, labels)))
+        .column_spacing(1)
+        .highlight_symbol(if is_focused { "› " } else { "  " })
+        .highlight_spacing(HighlightSpacing::Always)
+        .row_highlight_style(process_table_highlight_style(is_focused));
+    frame.render_stateful_widget(table, inner_area, &mut table_state);
 }
 
 pub(in crate::output) fn combine_panel_rect(title_area: Rect, body_area: Rect) -> Rect {

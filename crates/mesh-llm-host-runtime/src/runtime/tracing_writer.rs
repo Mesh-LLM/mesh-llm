@@ -301,11 +301,6 @@ pub(super) fn runtime_tracing_subscriber()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("mesh_inference=info".parse()?)
-                // Without this, `EnvFilter::from_default_env()` defaults to
-                // ERROR and every `skippy_server` warning is dropped before it
-                // reaches the writer — the diagnostics would be silently gone
-                // rather than routed to the dashboard.
-                .add_directive("skippy_server=warn".parse()?)
                 .add_directive("nostr_relay_pool=off".parse()?)
                 .add_directive("nostr_sdk=warn".parse()?)
                 .add_directive("noq_proto::connection=warn".parse()?),

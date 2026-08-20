@@ -11,7 +11,7 @@ use ratatui::{
 };
 use serde_json::Value;
 use std::{
-    io::Write as _,
+    io::{self, Write as _},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},

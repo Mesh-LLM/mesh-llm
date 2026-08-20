@@ -71,7 +71,12 @@ mod unix {
             let reader_stderr = fcntl_dupfd_cloexec(stderr(), 0)?;
 
             dup2_stdout(&write_fd)?;
-            dup2_stderr(&write_fd)?;
+            if let Err(error) = dup2_stderr(&write_fd) {
+                // stdout was already redirected. Restore it before the pipe
+                // handles drop so a partial install cannot strand fd 1.
+                let _ = dup2_stdout(&saved_stdout);
+                return Err(error.into());
+            }
             drop(write_fd);
 
             let active = Arc::new(AtomicBool::new(true));
@@ -93,13 +98,15 @@ mod unix {
 
         /// Put the original descriptors back. Safe to call more than once.
         pub(in crate::output) fn restore(&mut self) -> io::Result<()> {
-            if !self.active.swap(false, Ordering::Release) {
+            if !self.active.load(Ordering::Acquire) {
                 return Ok(());
             }
             let _ = io::stdout().flush();
             let _ = io::stderr().flush();
             dup2_stdout(&self.saved_stdout)?;
             dup2_stderr(&self.saved_stderr)?;
+            // Keep restoration retryable until both descriptors are back.
+            self.active.store(false, Ordering::Release);
             Ok(())
         }
     }
@@ -213,8 +220,9 @@ mod unix {
     /// timeout, `Err` means the descriptor is unusable and the reader stops.
     fn wait_for_input(read_fd: &PipeReader, timeout: Duration) -> io::Result<bool> {
         let mut fds = [PollFd::new(read_fd, PollFlags::IN)];
+        let timeout = timeout.try_into().map_err(io::Error::other)?;
         loop {
-            match poll(&mut fds, Some(&timeout.try_into().unwrap_or_default())) {
+            match poll(&mut fds, Some(&timeout)) {
                 Ok(0) => return Ok(false),
                 Ok(_) => return Ok(true),
                 Err(rustix::io::Errno::INTR) => continue,
