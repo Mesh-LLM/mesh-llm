@@ -89,7 +89,7 @@ def immediate_entries(path: Path) -> list[dict[str, Any]]:
 
 def cargo_metadata(workspace: Path) -> dict[str, Any]:
     result = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        ["just", "cache-cargo-metadata"],
         cwd=workspace, check=False, capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -101,7 +101,8 @@ def cargo_packages(workspace: Path) -> list[str]:
     return sorted({package["name"] for package in cargo_metadata(workspace)["packages"]})
 
 
-def reject_separate_build_directory(workspace: Path) -> None:
+def reject_separate_build_directory(workspace: Path, managed_target: Path) -> None:
+    managed_target = managed_target.resolve()
     if os.environ.get("CARGO_BUILD_BUILD_DIR"):
         raise CacheError("CARGO_BUILD_BUILD_DIR is unsupported by build-cache management")
     if not (workspace / "Cargo.toml").is_file():
@@ -113,6 +114,11 @@ def reject_separate_build_directory(workspace: Path) -> None:
         raise CacheError(
             "Cargo build.build-dir outside target-dir is unsupported by build-cache management: "
             f"{build_directory}"
+        )
+    if managed_target != target_directory:
+        raise CacheError(
+            "managed target directory does not match Cargo's effective target directory: "
+            f"{target_directory}"
         )
 
 
@@ -224,12 +230,14 @@ def prune_packages(
             "estimated_bytes": metrics["bytes"],
         })
         if execute:
+            environment = os.environ.copy()
+            environment.update({
+                "MESH_LLM_CACHE_TARGET_DIR": str(target),
+                "MESH_LLM_CACHE_PACKAGE": metrics["package"],
+            })
             result = subprocess.run(
-                [
-                    "cargo", "clean", "--target-dir", str(target),
-                    "-p", metrics["package"],
-                ],
-                cwd=workspace, check=False,
+                ["just", "cache-cargo-clean"],
+                cwd=workspace, env=environment, check=False,
             )
             if result.returncode != 0:
                 raise CacheError(f"cargo clean failed for {metrics['package']}")
@@ -288,7 +296,7 @@ def main() -> int:
     target = (arguments.target_dir or workspace / "target").resolve()
     if target == workspace or workspace not in target.parents:
         raise CacheError("target directory must be a child of the workspace")
-    reject_separate_build_directory(workspace)
+    reject_separate_build_directory(workspace, target)
     if arguments.command == "build":
         build_command = arguments.build_command
         if build_command[:1] == ["--"]:

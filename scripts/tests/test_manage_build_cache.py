@@ -87,13 +87,96 @@ class ManageBuildCacheTests(unittest.TestCase):
             }
             with mock.patch.object(CACHE, "cargo_metadata", return_value=metadata):
                 with self.assertRaisesRegex(CACHE.CacheError, "build.build-dir"):
-                    CACHE.reject_separate_build_directory(workspace)
+                    CACHE.reject_separate_build_directory(workspace, workspace / "target")
 
     def test_cargo_build_directory_environment_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.dict(os.environ, {"CARGO_BUILD_BUILD_DIR": "elsewhere"}):
                 with self.assertRaisesRegex(CACHE.CacheError, "CARGO_BUILD_BUILD_DIR"):
-                    CACHE.reject_separate_build_directory(Path(temporary))
+                    workspace = Path(temporary)
+                    CACHE.reject_separate_build_directory(workspace, workspace / "target")
+
+    def test_cargo_target_directory_environment_mismatch_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            configured_target = workspace / "configured-target"
+            (workspace / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+            metadata = {
+                "target_directory": str(configured_target),
+                "build_directory": str(configured_target),
+            }
+            with mock.patch.dict(
+                os.environ, {"CARGO_TARGET_DIR": str(configured_target)}, clear=False,
+            ):
+                with mock.patch.object(CACHE, "cargo_metadata", return_value=metadata):
+                    with self.assertRaisesRegex(CACHE.CacheError, "effective target"):
+                        CACHE.reject_separate_build_directory(
+                            workspace, workspace / "target",
+                        )
+
+    def test_explicit_target_directory_must_match_cargo_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            cargo_target = workspace / "target"
+            explicit_target = workspace / "other-target"
+            (workspace / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+            metadata = {
+                "target_directory": str(cargo_target),
+                "build_directory": str(cargo_target),
+            }
+            with mock.patch.object(CACHE, "cargo_metadata", return_value=metadata):
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        str(SCRIPT), "status", "--workspace", str(workspace),
+                        "--target-dir", str(explicit_target),
+                    ],
+                ):
+                    with self.assertRaisesRegex(CACHE.CacheError, "effective target"):
+                        CACHE.main()
+
+    def test_explicit_target_directory_matching_cargo_metadata_is_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            explicit_target = workspace / "configured-target"
+            (workspace / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+            metadata = {
+                "target_directory": str(explicit_target),
+                "build_directory": str(explicit_target),
+            }
+            with mock.patch.object(CACHE, "cargo_metadata", return_value=metadata):
+                CACHE.reject_separate_build_directory(workspace, explicit_target)
+
+    def test_cargo_operations_use_just_recipes(self) -> None:
+        workspace = Path("/workspace")
+        metadata_result = subprocess.CompletedProcess(
+            ["just", "cache-cargo-metadata"], 0, stdout='{"packages": []}', stderr="",
+        )
+        clean_result = subprocess.CompletedProcess(
+            ["just", "cache-cargo-clean"], 0,
+        )
+        with mock.patch.object(
+            CACHE.subprocess, "run", side_effect=[metadata_result, clean_result],
+        ) as run:
+            self.assertEqual(CACHE.cargo_metadata(workspace), {"packages": []})
+            with mock.patch.object(
+                CACHE, "package_metrics",
+                return_value=[{"package": "mesh-llm", "bytes": 1, "newest_mtime": 0}],
+            ):
+                with mock.patch.object(CACHE, "cargo_packages", return_value=["mesh-llm"]):
+                    with mock.patch.object(CACHE, "tree_metrics", return_value=(0, 0)):
+                        CACHE.prune_packages(workspace, workspace / "target", 1, 0, 0, True)
+        self.assertEqual(run.call_args_list[0].args[0], ["just", "cache-cargo-metadata"])
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["just", "cache-cargo-clean"],
+        )
+        clean_environment = run.call_args_list[1].kwargs["env"]
+        self.assertEqual(
+            clean_environment["MESH_LLM_CACHE_TARGET_DIR"], "/workspace/target",
+        )
+        self.assertEqual(clean_environment["MESH_LLM_CACHE_PACKAGE"], "mesh-llm")
 
     def test_incremental_pruning_is_oldest_first_and_target_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
