@@ -161,9 +161,17 @@ function githubApi(token, owner, repo) {
   const base = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 
   async function request(path, options = {}) {
+    let timeoutMs = REQUEST_TIMEOUT_MS;
+    if (options.remainingMs) {
+      const remainingMs = Math.floor(options.remainingMs());
+      if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+        fail("monitor deadline elapsed");
+      }
+      timeoutMs = Math.min(timeoutMs, remainingMs);
+    }
     const response = await fetch(`${base}${path}`, {
       method: options.method || "GET",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
@@ -182,10 +190,10 @@ function githubApi(token, owner, repo) {
     return body ? JSON.parse(body) : null;
   }
 
-  async function listAll(pathForPage, field) {
+  async function listAll(pathForPage, field, options) {
     const values = [];
     for (let page = 1; ; page += 1) {
-      const result = await request(pathForPage(page));
+      const result = await request(pathForPage(page), options);
       const batch = result?.[field];
       if (!Array.isArray(batch)) {
         fail(`GitHub API response is missing ${field}`);
@@ -196,7 +204,7 @@ function githubApi(token, owner, repo) {
   }
 
   return {
-    async listRuns(headSha) {
+    async listRuns(headSha, options = {}) {
       return listAll((page) => {
         const query = new URLSearchParams({
           event: "pull_request",
@@ -205,17 +213,21 @@ function githubApi(token, owner, repo) {
           per_page: String(PAGE_SIZE),
         });
         return `/actions/runs?${query}`;
-      }, "workflow_runs");
+      }, "workflow_runs", options);
     },
-    async listJobs(runId) {
+    async listJobs(runId, options = {}) {
       return listAll(
         (page) => `/actions/runs/${runId}/jobs?filter=latest&per_page=${PAGE_SIZE}&page=${page}`,
         "jobs",
+        options,
       );
     },
-    async cancelRun(runId) {
+    async cancelRun(runId, options = {}) {
       try {
-        await request(`/actions/runs/${runId}/cancel`, { method: "POST" });
+        await request(`/actions/runs/${runId}/cancel`, {
+          ...options,
+          method: "POST",
+        });
         return true;
       } catch (error) {
         // A sibling can finish between the status read and cancel request.
@@ -226,19 +238,34 @@ function githubApi(token, owner, repo) {
   };
 }
 
-async function monitor({ api, trigger, pollSeconds, maxMinutes, log = console.log, now = Date.now }) {
-  const maxPolls = Math.ceil((maxMinutes * 60) / pollSeconds);
+async function monitor({
+  api,
+  trigger,
+  pollSeconds,
+  maxMinutes,
+  log = console.log,
+  now = Date.now,
+  sleepFn = sleep,
+}) {
+  const monitorDeadline = now() + maxMinutes * 60_000;
+  const requestOptions = { remainingMs: () => monitorDeadline - now() };
   let consecutiveErrors = 0;
   let failure = null;
   let failureDeadline = null;
-  for (let poll = 1; poll <= maxPolls; poll += 1) {
+  while (now() < monitorDeadline) {
     try {
-      const runs = selectTargetRuns(await api.listRuns(trigger.headSha), trigger);
+      const runs = selectTargetRuns(
+        await api.listRuns(trigger.headSha, requestOptions),
+        trigger,
+      );
       if (!failure) {
         const runJobs = [];
         for (const run of runs) {
           if (run.status !== "queued") {
-            runJobs.push({ run, jobs: await api.listJobs(run.id) });
+            runJobs.push({
+              run,
+              jobs: await api.listJobs(run.id, requestOptions),
+            });
           }
         }
         failure = findEarliestFailure(runJobs);
@@ -249,7 +276,7 @@ async function monitor({ api, trigger, pollSeconds, maxMinutes, log = console.lo
           log(`::notice::Preserving failed ${failure.workflowName} run ${failure.runId}; cancelling sibling PR lanes for the same revision.`);
         }
         for (const sibling of cancellableSiblingRuns(runs, failure.runId)) {
-          const cancelled = await api.cancelRun(sibling.id);
+          const cancelled = await api.cancelRun(sibling.id, requestOptions);
           log(`::notice::${cancelled ? "Cancelled" : "Sibling already terminal"}: ${sibling.name} run ${sibling.id}.`);
         }
         // Workflow records normally appear together, but a planning failure
@@ -269,7 +296,10 @@ async function monitor({ api, trigger, pollSeconds, maxMinutes, log = console.lo
       console.warn(`::warning::PR sibling monitor poll failed (${consecutiveErrors}/3): ${error.message}`);
       if (consecutiveErrors >= 3) throw error;
     }
-    if (poll < maxPolls) await sleep(pollSeconds * 1000);
+    const remainingMs = monitorDeadline - now();
+    if (remainingMs > 0) {
+      await sleepFn(Math.min(pollSeconds * 1000, remainingMs));
+    }
   }
   fail(`monitor timed out after ${maxMinutes} minutes`);
 }

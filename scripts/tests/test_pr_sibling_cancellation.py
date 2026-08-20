@@ -298,15 +298,58 @@ const outcome = await action.monitor({
     cancelRun: async () => true,
   },
   trigger,
-  pollSeconds: 0,
-  maxMinutes: 1,
+  pollSeconds: 30,
+  maxMinutes: 10,
   log: () => {},
-  now: () => { const value = clock; clock += 60_000; return value; },
+  now: () => clock,
+  sleepFn: async (milliseconds) => { clock += milliseconds; },
 });
 return {failedRun: outcome.failure.runId, polls};
 """
         )
-        self.assertEqual({"failedRun": 601, "polls": 2}, result)
+        self.assertEqual({"failedRun": 601, "polls": 5}, result)
+
+    def test_monitor_caps_slow_successful_polls_at_absolute_deadline(self) -> None:
+        result = self.run_node_async(
+            """
+const trigger = {
+  createdAt: Date.parse("2026-08-20T12:00:00Z"),
+  headSha: "1".repeat(40),
+  pullNumber: 42,
+  triggerRunId: 801,
+};
+let clock = 0;
+let polls = 0;
+const sleeps = [];
+let error = null;
+try {
+  await action.monitor({
+    api: {
+      listRuns: async (_sha, options) => {
+        polls += 1;
+        if (options.remainingMs() <= 0) throw new Error("late API operation");
+        clock += 40_000;
+        return [];
+      },
+      listJobs: async () => [],
+      cancelRun: async () => true,
+    },
+    trigger,
+    pollSeconds: 30,
+    maxMinutes: 1,
+    log: () => {},
+    now: () => clock,
+    sleepFn: async (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+  });
+} catch (caught) {
+  error = caught.message;
+}
+return {error, polls, sleeps};
+"""
+        )
+        self.assertIn("timed out after 1 minutes", result["error"])
+        self.assertEqual(1, result["polls"])
+        self.assertEqual([20_000], result["sleeps"])
 
 
 if __name__ == "__main__":
