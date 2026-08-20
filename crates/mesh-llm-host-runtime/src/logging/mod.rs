@@ -24,6 +24,7 @@ mod request_metadata;
 mod runtime_state;
 mod sequences;
 mod service;
+mod service_errors;
 #[cfg(test)]
 mod service_tests;
 mod webhook_delivery;
