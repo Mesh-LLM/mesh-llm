@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   actions: write
+  packages: read
 
 concurrency:
   group: cache-efficiency-benchmark
