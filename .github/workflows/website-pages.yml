@@ -67,6 +67,9 @@ jobs:
         run: just crate-docs
 
       - name: Stage Pages artifact
+        # shell: bash is required: this job's container: resolves the
+        # default run: shell to sh -e {0}, and dash has no -o pipefail.
+        shell: bash
         run: |
           set -euo pipefail
 

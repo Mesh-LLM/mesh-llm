@@ -89,9 +89,12 @@ repository secrets. The trusted main entrypoint may pass the optional
 ## Prebuilt runner-image containerization
 
 Some CI jobs run inside a `container:` pinned to a digest from the
-`mesh-llm-runner-images` (general families) or `mesh-llm-runner-images-public-web`
-(adds baked Chromium/Playwright) sister repos instead of installing tooling
-per-run with `actions/setup-*`. The GHCR package name
+`mesh-llm-runner-images` repo instead of installing tooling per-run with
+`actions/setup-*`. There is no separate sister repo: the `public web`
+backend (baked Chromium/Playwright) lives on `mesh-llm-runner-images` main
+alongside every other family, added by `17283ab` (#20, the `public web`
+backend) and `5ea673b` (#21, the Playwright version assert). The GHCR
+package name
 `ghcr.io/mesh-llm/mesh-llm-cuda-runner` is legacy: it hosts every backend
 family (`public cpu`, `public cuda`, `public rocm`, `public vulkan`,
 `public web`, `self-hosted`), not only CUDA. Each image bakes
@@ -110,12 +113,12 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `ci-{linux}-host-slice.yml`, `ci-linux-runtime-slice.yml`, `ci-linux-product-slice.yml`, `ci-rust-tests-slice.yml`, `ci-quality-slice.yml` (Clippy batches) | matrix-selected | `public cpu` (pre-existing, predates this containerization pass) |
 | `native-sdk-artifact.yml`, `node-sdk-addon-artifact.yml`, `static-abi-artifact.yml`, `swift-sdk-artifact.yml` | producer job | `public cpu` (pre-existing) |
 | `hf-download-smoke.yml`, `scripted-binary-smoke.yml` | their single job | `public cpu`, sha256:8d93de6b... -- unconditional, no bare-metal row |
-| `smoke.yml` :: `smoke_tests` | `public cpu` when `inputs.runner != 'gpu-nvidia'`, else uncontainerized (see opt-out below) |
+| `smoke.yml` | `smoke_tests` | `public cpu` when `inputs.runner != 'gpu-nvidia'`, else uncontainerized (see opt-out below) |
 | `sdk-smoke.yml` | its job | `public cpu` when `inputs.sdk_kind != 'swift'`, else uncontainerized |
-| `ci-ui-artifact-slice.yml` :: `ui_artifact` | `public web`, sha256:1c73f0f2... |
-| `ci-web-slice.yml` :: `ui_quality`, `ui_e2e`, `website` | `public web` |
-| `website-pages.yml` :: `build` | `public web` |
-| `nightly-stability-run.yml` :: `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
+| `ci-ui-artifact-slice.yml` | `ui_artifact` | `public web`, sha256:1c73f0f2... |
+| `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `website` | `public web` |
+| `website-pages.yml` | `build` | `public web` |
+| `nightly-stability-run.yml` | `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
 | `release.yml` (several CUDA/ROCm/Vulkan build/compose rows) | per-backend `public` digests | pre-existing, unrelated to this containerization work; each row pins its own backend digest via `ci/slices.yml` / job matrix, not a shared convention |
 
 `public cpu` and `public web` are separate image builds (the latter adds
@@ -168,20 +171,45 @@ bare-metal `gpu-nvidia` row, so it stays as its own
 `if: job.container.id == ''` step rather than being folded into the always-run
 `pip install` step next to it.
 
+### Container jobs default `run:` to `sh`, not `bash`
+
+Jobs with a `container:` block resolve the default `run:` shell to
+`sh -e {0}`, not `bash -e {0}` (bare-metal Linux/macOS runners default to
+bash; this only changes inside a container). Composite actions are
+unaffected -- they declare their own shell. Any `run:` step in a
+containerized job that uses a bashism (`<<<`, `set -o pipefail`, `[[`,
+`$(( ))`, array assignment, `${v//}`/`${v^^}`/`${v,,}`, `&>`, `source`,
+`+=(`, ...) must declare `shell: bash` explicitly or it fails at runtime with
+a `dash`/`sh` syntax error that `actionlint` cannot catch -- its shellcheck
+integration assumes bash. Two sites hit this in the same PR:
+`ci-web-slice.yml`'s `ui_e2e` preflight (`<<<`) and
+`website-pages.yml`'s `Stage Pages artifact` (`set -euo pipefail`); both now
+declare `shell: bash`.
+
 ### `verify-runner-image` preflight
 
 Containerized jobs run `verify-runner-image <environment> <backend> ...`
 (positional args: environment, backend, mesh-llm revision, CUDA series, ROCm
-version, runner-images revision, and -- `public web` only, from the
-`mesh-llm-runner-images-public-web` fork of the script -- expected Playwright
-version) before doing real work, asserting `/etc/mesh-runner-*` files match
-what the job expects rather than trusting the digest pin alone. `ci-web-slice.yml`'s
-`ui_e2e` job resolves the installed `@playwright/test` version with
+version, runner-images revision, and -- `public web` only -- expected
+Playwright version, added in `mesh-llm-runner-images`#21) before doing real
+work, asserting `/etc/mesh-runner-*` files match what the job expects rather
+than trusting the digest pin alone. `ci-web-slice.yml`'s `ui_e2e` job
+resolves the installed `@playwright/test` version with
 `pnpm exec playwright --version | head -n1 | awk '{print $NF}'` (guarded by a
 `^[0-9]+\.[0-9]+\.[0-9]+$` shape assertion -- `playwright --version` can share
 stdout with an npm warning) and passes it as the seventh argument; a mismatch
 against the image's own build-time `playwright --version` fails fast instead
 of surfacing as a confusing Playwright/Chromium error deep in the E2E run.
+
+`crates/mesh-llm-ui/package.json`'s `@playwright/test` and
+`mesh-llm-runner-images`' `config/playwright-pin.txt` are now a matched pair
+(both `1.62.1` today). Bumping the mesh-llm side alone fails `ui_e2e` on
+**every** PR at this preflight, not just locally. The bump is a four-step
+cross-repo sequence, in order: bump `config/playwright-pin.txt` in
+`mesh-llm-runner-images`, rebuild and promote the `public web` image, re-pin
+the new digest in `ci-web-slice.yml` (and `ci-ui-artifact-slice.yml` /
+`website-pages.yml` / `nightly-stability-run.yml`, which share it), then
+bump `@playwright/test` in `crates/mesh-llm-ui/package.json`.
 
 ### `setup-macos-lld` composite
 

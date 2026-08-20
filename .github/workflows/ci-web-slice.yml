@@ -156,6 +156,10 @@ jobs:
         # re-download. This asserts the resolved @playwright/test version
         # actually matches what the image baked and verified at build time
         # (/etc/mesh-runner-playwright-version), not the pin file.
+        # shell: bash is required here: GitHub Actions defaults container
+        # jobs' run: steps to sh, and the <<< here-string below is a
+        # bashism dash/sh rejects ("Syntax error: redirection unexpected").
+        shell: bash
         run: |
           resolved="$(pnpm exec playwright --version | head -n1 | awk '{print $NF}')"
           grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"$resolved" \
