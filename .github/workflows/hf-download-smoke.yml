@@ -46,6 +46,11 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        # The prebuilt image bakes a venv on PATH; a host-side setup-python
+        # shadows it, leaving a bare interpreter with none of the image's
+        # installed deps. This job always runs in a container, so this step
+        # is now always skipped, not just conditionally redundant.
+        if: job.container.id == ''
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16

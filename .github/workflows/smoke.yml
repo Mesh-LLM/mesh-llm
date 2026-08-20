@@ -66,6 +66,11 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
+      # /github/home is a host-side mount the container's non-root `runner`
+      # user doesn't own; pip otherwise noisily disables its cache trying
+      # to use it. Only exercised in-container (setup-python's own cache:
+      # pip handles this itself on the uncontained gpu-nvidia row).
+      PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -77,6 +82,12 @@ jobs:
         run: scripts/release-version.sh "${{ inputs.release_tag }}"
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        # The prebuilt image bakes a venv on PATH; a host-side setup-python
+        # both shadows it (silently losing every installed dependency) and,
+        # in-container, fails outright because its pip cache dir isn't
+        # writable under the container's HOME. Only the uncontained
+        # gpu-nvidia row needs this.
+        if: job.container.id == ''
         with:
           python-version: "3.12"
           cache: pip
@@ -85,6 +96,7 @@ jobs:
             ci/requirements-ci-python.txt
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: job.container.id == ''
         with:
           node-version: 24
           package-manager-cache: false
@@ -176,6 +188,10 @@ jobs:
         run: scripts/release-version.sh "${{ inputs.release_tag }}"
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        # This job never containerizes, so this is always true today; gated
+        # for the same reason as the linux job's — a single expression that
+        # can't drift from whatever decides containerization.
+        if: job.container.id == ''
         with:
           python-version: "3.12"
           cache: pip
@@ -184,6 +200,7 @@ jobs:
             ci/requirements-ci-python.txt
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: job.container.id == ''
         with:
           node-version: 24
           package-manager-cache: false
