@@ -146,18 +146,14 @@ impl ModelBackend for HttpBackend {
             // until the flags were dropped. A strict endpoint must cost us a
             // slightly slower worker, not the whole worker.
             if status.as_u16() == 400
-                && text.to_ascii_lowercase().contains("reasoning")
+                && rejects_disabled_thinking_controls(&text)
                 && sampling.enable_thinking == Some(false)
             {
                 tracing::info!(
                     "moa: {model} rejected thinking-disable flags, retrying without them"
                 );
                 let mut retry_body = body.clone();
-                if let Some(obj) = retry_body.as_object_mut() {
-                    obj.remove("reasoning_effort");
-                    obj.remove("thinking_budget");
-                    obj.remove("chat_template_kwargs");
-                }
+                remove_disabled_thinking_controls(&mut retry_body);
                 let retry = self
                     .http
                     .post(&url)
@@ -337,6 +333,26 @@ pub fn apply_enable_thinking(body: &mut Value, enable: Option<bool>) {
     }
 }
 
+fn remove_disabled_thinking_controls(body: &mut Value) {
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("reasoning_effort");
+        obj.remove("thinking_budget");
+        obj.remove("chat_template_kwargs");
+    }
+}
+
+fn rejects_disabled_thinking_controls(error_body: &str) -> bool {
+    let lower = error_body.to_ascii_lowercase();
+    [
+        "reasoning",
+        "thinking_budget",
+        "chat_template_kwargs",
+        "enable_thinking",
+    ]
+    .into_iter()
+    .any(|field| lower.contains(field))
+}
+
 /// Extract retry-after seconds from an error message containing "retry-after: N".
 ///
 /// The earlier shape called `err.to_lowercase()` (Unicode-aware) and then
@@ -436,6 +452,146 @@ fn extract_text_from_response(resp: &Value) -> Result<BackendReply, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn read_http_json(stream: &mut tokio::net::TcpStream) -> Value {
+        use tokio::io::AsyncReadExt;
+
+        let mut bytes = Vec::new();
+        let header_end = loop {
+            let mut chunk = [0_u8; 1024];
+            let read = stream.read(&mut chunk).await.expect("read request");
+            assert!(read > 0, "request ended before headers");
+            bytes.extend_from_slice(&chunk[..read]);
+            if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end + 4;
+            }
+        };
+        let headers = std::str::from_utf8(&bytes[..header_end]).expect("ASCII HTTP headers");
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().expect("content length"))
+            })
+            .expect("content-length header");
+        while bytes.len() < header_end + content_length {
+            let mut chunk = [0_u8; 1024];
+            let read = stream.read(&mut chunk).await.expect("read request body");
+            assert!(read > 0, "request ended before body");
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        serde_json::from_slice(&bytes[header_end..header_end + content_length])
+            .expect("JSON request body")
+    }
+
+    async fn exercise_compatibility_retry(error: &str) -> (Value, Value, Value) {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test backend");
+        let address = listener.local_addr().expect("test backend address");
+        let error = error.to_string();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.expect("first request");
+            let first_body = read_http_json(&mut first).await;
+            let error_response = format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                error.len(),
+                error,
+            );
+            first
+                .write_all(error_response.as_bytes())
+                .await
+                .expect("write rejection");
+
+            let (mut retry, _) = listener.accept().await.expect("retry request");
+            let retry_body = read_http_json(&mut retry).await;
+            let success = r#"{"choices":[{"message":{"content":"ok"}}]}"#;
+            let success_response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                success.len(),
+                success,
+            );
+            retry
+                .write_all(success_response.as_bytes())
+                .await
+                .expect("write success");
+            (first_body, retry_body)
+        });
+
+        let backend = HttpBackend::new(format!("http://{address}/v1"));
+        let response = backend
+            .chat_completion(
+                "qwen",
+                &[json!({"role": "user", "content": "hello"})],
+                None,
+                32,
+                Duration::from_secs(5),
+                SamplingParams::worker().with_thinking(Some(false)),
+            )
+            .await
+            .expect("compatibility retry succeeds");
+        let (first_body, retry_body) = server.await.expect("test backend task");
+        (first_body, retry_body, response)
+    }
+
+    #[tokio::test]
+    async fn compatibility_retry_handles_each_rejected_thinking_surface_end_to_end() {
+        for error in [
+            "unknown field: reasoning_effort",
+            "unknown field: thinking_budget",
+            "unknown field: chat_template_kwargs",
+            "unknown field: enable_thinking",
+        ] {
+            let (first, retry, response) = exercise_compatibility_retry(error).await;
+
+            assert_eq!(first["reasoning_effort"], json!("none"));
+            assert_eq!(first["thinking_budget"], json!(0));
+            assert!(first.get("chat_template_kwargs").is_some());
+            assert!(retry.get("reasoning_effort").is_none());
+            assert!(retry.get("thinking_budget").is_none());
+            assert!(retry.get("chat_template_kwargs").is_none());
+            assert_eq!(response["choices"][0]["message"]["content"], json!("ok"));
+        }
+    }
+
+    #[test]
+    fn compatibility_retry_recognizes_every_injected_thinking_surface() {
+        for error in [
+            "Reasoning is mandatory for this endpoint",
+            "unknown field: reasoning_effort",
+            "unknown field: thinking_budget",
+            "unknown field: chat_template_kwargs",
+            "unknown field: enable_thinking",
+        ] {
+            assert!(
+                rejects_disabled_thinking_controls(error),
+                "retry predicate missed {error:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn compatibility_retry_removes_every_injected_thinking_surface() {
+        let mut body = json!({"model": "qwen", "messages": []});
+        apply_enable_thinking(&mut body, Some(false));
+        remove_disabled_thinking_controls(&mut body);
+
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("thinking_budget").is_none());
+        assert!(body.get("chat_template_kwargs").is_none());
+        assert_eq!(body["model"], json!("qwen"));
+        assert_eq!(body["messages"], json!([]));
+    }
+
+    #[test]
+    fn compatibility_retry_does_not_match_unrelated_bad_requests() {
+        assert!(!rejects_disabled_thinking_controls(
+            "unknown field: temperature"
+        ));
+    }
 
     #[test]
     fn parse_retry_after_from_header() {
