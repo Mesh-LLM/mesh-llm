@@ -2651,9 +2651,6 @@ class CiArtifactActionTests(unittest.TestCase):
                     r"^  [A-Za-z0-9_]+:\n(?:    [^\n]*\n){0,4}    if:.*allow_native_github_cache",
                 )
 
-        website = (
-            ROOT / ".github" / "workflows" / "ci-web-slice.yml"
-        ).read_text(encoding="utf-8")
         swift = (
             ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml"
         ).read_text(encoding="utf-8")
@@ -2669,14 +2666,12 @@ class CiArtifactActionTests(unittest.TestCase):
         native_cache_expression = (
             "needs.runner_policy.outputs.allow_native_github_cache == 'true'"
         )
-        self.assertIn(
-            f"cache: ${{{{ {native_cache_expression} && 'npm' || '' }}}}",
-            website,
-        )
-        self.assertIn(
-            f"package-manager-cache: ${{{{ {native_cache_expression} }}}}",
-            website,
-        )
+        # ci-web-slice.yml's `website` job runs in the prebuilt public-web
+        # image (no bare-metal row), so its setup-node native-cache
+        # consumer was deleted outright rather than gated -- there is
+        # nothing left in that job for the depot/native cache policy to
+        # govern. See `eligible_consumers["ci-web-slice.yml"]` above for
+        # the jobs in this file that still participate (ui_quality, ui_e2e).
         self.assertIn(
             f"cache: ${{{{ {native_cache_expression} && 'pnpm' || '' }}}}",
             swift,

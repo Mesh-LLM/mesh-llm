@@ -86,6 +86,139 @@ workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no
 repository secrets. The trusted main entrypoint may pass the optional
 `HF_TOKEN` for public-fixture rate-limit resilience.
 
+## Prebuilt runner-image containerization
+
+Some CI jobs run inside a `container:` pinned to a digest from the
+`mesh-llm-runner-images` (general families) or `mesh-llm-runner-images-public-web`
+(adds baked Chromium/Playwright) sister repos instead of installing tooling
+per-run with `actions/setup-*`. The GHCR package name
+`ghcr.io/mesh-llm/mesh-llm-cuda-runner` is legacy: it hosts every backend
+family (`public cpu`, `public cuda`, `public rocm`, `public vulkan`,
+`public web`, `self-hosted`), not only CUDA. Each image bakes
+`cargo cmake docker git jq just lld node ninja npm pnpm python rustc sccache`
+(asserted by `verify-runner-image`, see below) plus a Python venv on `PATH`
+(`VIRTUAL_ENV=/opt/mesh-llm/venv`), pinned pnpm/node (`PNPM_HOME`,
+`CARGO_HOME`, `RUSTUP_HOME` baked as ENV so they resolve the same regardless
+of the container's `HOME`), and, for the `public` stage only, runs as
+**root** (`USER root`, never dropped back) rather than `runner` --
+`self-hosted` is the only stage that ends `USER runner`.
+
+Reusable slices/workflows with a `container:` job, and what backs it:
+
+| Workflow | Job(s) | Image family |
+| --- | --- | --- |
+| `ci-{linux}-host-slice.yml`, `ci-linux-runtime-slice.yml`, `ci-linux-product-slice.yml`, `ci-rust-tests-slice.yml`, `ci-quality-slice.yml` (Clippy batches) | matrix-selected | `public cpu` (pre-existing, predates this containerization pass) |
+| `native-sdk-artifact.yml`, `node-sdk-addon-artifact.yml`, `static-abi-artifact.yml`, `swift-sdk-artifact.yml` | producer job | `public cpu` (pre-existing) |
+| `hf-download-smoke.yml`, `scripted-binary-smoke.yml` | their single job | `public cpu`, sha256:8d93de6b... -- unconditional, no bare-metal row |
+| `smoke.yml` :: `smoke_tests` | `public cpu` when `inputs.runner != 'gpu-nvidia'`, else uncontainerized (see opt-out below) |
+| `sdk-smoke.yml` | its job | `public cpu` when `inputs.sdk_kind != 'swift'`, else uncontainerized |
+| `ci-ui-artifact-slice.yml` :: `ui_artifact` | `public web`, sha256:1c73f0f2... |
+| `ci-web-slice.yml` :: `ui_quality`, `ui_e2e`, `website` | `public web` |
+| `website-pages.yml` :: `build` | `public web` |
+| `nightly-stability-run.yml` :: `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
+| `release.yml` (several CUDA/ROCm/Vulkan build/compose rows) | per-backend `public` digests | pre-existing, unrelated to this containerization work; each row pins its own backend digest via `ci/slices.yml` / job matrix, not a shared convention |
+
+`public cpu` and `public web` are separate image builds (the latter adds
+`PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`,
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, and a stamped
+`/etc/mesh-runner-playwright-version`); do not assume one digest covers both.
+
+### `image: ''` opt-out rows
+
+`smoke.yml`'s `gpu-nvidia` row (the approved uncredentialed self-hosted CUDA
+smoke exception) and `sdk-smoke.yml`'s `swift` row (host-only macOS SDK
+build, `macos-15`, never container-capable) opt out per-run with
+`image: ''` rather than being a separate job, so the rest of the job body
+(steps, `if: job.container.id == ''` gates) stays shared. This is proven to
+actually opt a job out of containerization by two runs on the branch-head
+harness (`_tmp-pr-head-validate.yml` run 32349670919, jobs 96370649138
+`CUDA inference smoke` and 96375145155 `swift SDK Smoke`): no
+`Initialize containers` log group, no `docker create`, and the gated
+`actions/setup-python`/`pnpm/action-setup` steps ran. There is no other
+empty-image job anywhere in this repo's workflow history.
+
+The ternary that selects `image: ''` must put the **non-empty** value in the
+`&&` branch: `cond && url || ''`, never `cond && '' || url`. GitHub Actions
+expressions are JS-style short-circuit and `''` is falsy, so
+`cond && '' || url` always evaluates to `url` regardless of `cond` -- the
+opt-out branch becomes unreachable. `scripts/tests/test_ci_workflow_ternary_contract.py`
+fails any `${{ }}` ternary whose `&&` branch is a falsy literal (`''`, `""`,
+`0`, `false`) across every workflow; it exists specifically because this bug
+class is invisible to `actionlint`.
+
+### `job.container.id == ''` gating
+
+When a job has both a containerized and a bare-metal row (the two rows
+above), `actions/setup-python`, `actions/setup-node`, and
+`pnpm/action-setup` steps are gated `if: job.container.id == ''` rather than
+deleted, because the bare-metal row still needs them -- the image is not
+present there. **Deliberate exception: `actions/setup-java` in
+`sdk-smoke.yml` is never gated.** `verify-runner-image`'s asserted tool list
+has no JDK, so the image provides nothing for it to shadow; gating it would
+break the Kotlin SDK smoke on the containerized row instead of protecting it.
+Jobs with no bare-metal row at all (the `ci-web-slice.yml` / `website-pages.yml`
+/ `ci-ui-artifact-slice.yml` / `nightly-stability-run.yml` set) delete the
+now-redundant setup actions outright instead of gating them -- there is
+nothing for the `if:` to select between.
+
+`npm install --global openai` in `smoke.yml` is the one install left gated
+rather than deleted even though `install-core-tools.sh` bakes an
+exact-pinned `openai` into the image: it is genuinely needed on the
+bare-metal `gpu-nvidia` row, so it stays as its own
+`if: job.container.id == ''` step rather than being folded into the always-run
+`pip install` step next to it.
+
+### `verify-runner-image` preflight
+
+Containerized jobs run `verify-runner-image <environment> <backend> ...`
+(positional args: environment, backend, mesh-llm revision, CUDA series, ROCm
+version, runner-images revision, and -- `public web` only, from the
+`mesh-llm-runner-images-public-web` fork of the script -- expected Playwright
+version) before doing real work, asserting `/etc/mesh-runner-*` files match
+what the job expects rather than trusting the digest pin alone. `ci-web-slice.yml`'s
+`ui_e2e` job resolves the installed `@playwright/test` version with
+`pnpm exec playwright --version | head -n1 | awk '{print $NF}'` (guarded by a
+`^[0-9]+\.[0-9]+\.[0-9]+$` shape assertion -- `playwright --version` can share
+stdout with an npm warning) and passes it as the seventh argument; a mismatch
+against the image's own build-time `playwright --version` fails fast instead
+of surfacing as a confusing Playwright/Chromium error deep in the E2E run.
+
+### `setup-macos-lld` composite
+
+`.github/actions/setup-macos-lld` replaces per-callsite
+`brew install lld` plus a hand-rolled `PATH`/`RUSTFLAGS` export with one
+composite: install lld via brew, resolve `$(brew --prefix lld)/bin`, link a
+real `edition = "2024"` probe binary with `-Clink-arg=-fuse-ld=lld`, then
+export `CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld` and the resolved bin
+directory. `CARGO_ENCODED_RUSTFLAGS` **replaces** any
+`target.<triple>.rustflags` from a checked-in `.cargo/config.toml` rather
+than merging with it -- confirmed safe here because every call site is
+macOS-gated and no call site touches an `android` target (the repo's
+`.cargo/config.toml` android entries carry a `-Wl,-z,max-page-size=16384`
+flag that would otherwise silently stop applying). Seven call sites:
+`ci-platform-checks-slice.yml`, `ci-macos-host-slice.yml`,
+`swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
+`node-sdk-addon-artifact.yml`, and two in `release.yml`. Only the first
+three are reachable by `_tmp-pr-head-validate.yml` (no macOS row in
+`native-sdk-artifact.yml`/`node-sdk-addon-artifact.yml` runs there, and
+`release.yml` only runs on an actual release cut) -- the other four are
+statically cleared (macOS-gated, no android target on any of them) rather
+than proven by a real run. `node-sdk-addon-artifact.yml`'s own
+`Validate macOS x64 cross-linker` step is a deliberate near-duplicate of the
+composite's probe, not dead code: it passes `--target x86_64-apple-darwin`
+where the composite only probes the host target.
+
+### Digest promotion
+
+`build-and-push.yml` (in `mesh-llm-runner-images`) runs `stage_families` for
+both `operation=stage` and `operation=promote`; `promote_versioned` reads the
+candidate descriptor artifact from that **same run**, not from an earlier
+stage run. A `promote` dispatch therefore re-stages and promotes its own
+build. Read the digest to pin from the promote job's own `digest=` output
+(e.g. `promoted ghcr.io/... -> sha256:...` in its log) -- never carry forward
+a digest observed from an earlier stage-only run, even one at the same
+source commit.
+
 ## Planner contract
 
 - `scripts/plan-ci.py` is the only routing implementation.

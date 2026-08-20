@@ -472,8 +472,8 @@ The implemented policy uses that isolation selectively:
 | Cargo `target` directories | Restore trusted main, never save from PR | A rerun reuses the latest compatible main cache, but not objects compiled by the earlier PR run |
 | Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged |
 | macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
-| Console pnpm store | Website is the sole publisher; platform UI jobs restore only | Avoids four platform workflows racing to upload the same entry; later same-PR runs reuse a lockfile-keyed store |
-| Website npm store | Website-only lockfile-keyed cache | Later same-PR website runs avoid downloading the unchanged dependency store |
+| Console pnpm store | `ui_quality` is the sole publisher; `ui_e2e` restores only | Avoids the two `ci-web-slice.yml` UI jobs racing to upload the same entry; later same-PR runs reuse a lockfile-keyed store |
+| Website npm store | None -- the `website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
 Outside the bounded exception, a Depot-selected run emits

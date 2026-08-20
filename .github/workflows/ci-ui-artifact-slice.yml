@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   CACHE_NAMESPACE: mesh-llm
@@ -73,6 +74,8 @@ jobs:
     needs: runner_policy
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:1c73f0f2e4b2ce657cc9dc49c9c27374f3c364af19f884f1970331c3689da5d2
     defaults:
       run:
         working-directory: crates/mesh-llm-ui
@@ -87,13 +90,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-        with:
-          version: 10
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          package-manager-cache: false
       - name: Configure isolated pnpm store
         run: pnpm config set store-dir ~/.pnpm-store
       - name: Restore pnpm store

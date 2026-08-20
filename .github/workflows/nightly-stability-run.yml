@@ -34,6 +34,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   stability:
@@ -42,6 +43,8 @@ jobs:
     # caller-selected label for a privileged runner group.
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:1c73f0f2e4b2ce657cc9dc49c9c27374f3c364af19f884f1970331c3689da5d2
     env:
       MESH_STABILITY_BASE_URL: ${{ inputs.base_url }}
       MESH_STABILITY_MODELS: ${{ inputs.models }}
@@ -80,18 +83,13 @@ jobs:
 
           echo "run=true" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        if: ${{ steps.preflight.outputs.run == 'true' && inputs.agent_smokes != '' }}
-        with:
-          node-version: 24
-
       - name: Install requested agent CLIs
+        # node/pnpm come from the prebuilt image; corepack is unneeded since
+        # the image already bakes the pinned pnpm version on PATH.
         if: ${{ steps.preflight.outputs.run == 'true' && inputs.agent_smokes != '' }}
         shell: bash
         run: |
           set -euo pipefail
-          corepack enable
-          corepack prepare pnpm@10 --activate
           export PNPM_HOME="$HOME/.local/share/pnpm"
           mkdir -p "$PNPM_HOME"
           echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"

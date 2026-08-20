@@ -69,6 +69,7 @@ jobs:
     permissions:
       checks: write
       contents: read
+      packages: read
     uses: ./.github/workflows/ci-website-lane.yml
     with:
       lane_plan_json: ${{ needs.plan.outputs.lane_plan }}
