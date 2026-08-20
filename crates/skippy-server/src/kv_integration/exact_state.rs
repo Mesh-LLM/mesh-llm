@@ -137,6 +137,15 @@ impl KvStageIntegration {
         if !self.try_begin_record(&identity.page_id) {
             return Ok(None);
         }
+        if self
+            .exact_states
+            .lock()
+            .expect("exact state cache lock poisoned")
+            .touch(&identity.page_id)
+        {
+            self.finish_record(&identity.page_id);
+            return Ok(None);
+        }
         let result = (|| {
             let (payload, extra) = match self.payload {
                 StagePrefixCachePayload::FullState => (

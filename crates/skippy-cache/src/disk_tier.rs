@@ -565,6 +565,17 @@ impl PrefixDiskTier {
         }))
     }
 
+    /// Mark an entry as recently used without mapping or verifying its payload.
+    pub fn touch(&mut self, page_id: &str) -> bool {
+        let Some(entry) = self.entries.get_mut(page_id) else {
+            return false;
+        };
+        self.use_clock = self.use_clock.saturating_add(1);
+        entry.last_used_secs = now_secs();
+        entry.use_sequence = self.use_clock;
+        true
+    }
+
     pub fn contains(&self, page_id: &str) -> bool {
         self.entries.contains_key(page_id)
     }
