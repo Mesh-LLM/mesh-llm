@@ -29,20 +29,43 @@ def _rank(level: str | None) -> int:
     return _LEVEL_RANK.get(level or "none", 0)
 
 
-def _format(scopes: dict[str, str]) -> str:
-    return "{" + ", ".join(f"{s}: {l}" for s, l in sorted(scopes.items())) + "}"
+class _AllScopes:
+    """`permissions: read-all` / `write-all` -- one blanket level across every
+    scope. Modelled rather than skipped, because as a *grant* it is perfectly
+    enumerable: `write-all` satisfies any request, and `read-all` satisfies a
+    `read` request but not a `write` one. (As a *request* it is still opaque --
+    see _requested_scopes -- since it names no scopes to check against.)"""
+
+    def __init__(self, level: str) -> None:
+        self.level = level
+
+    def get(self, scope: str, default: str = "none") -> str:
+        return self.level
+
+    def __repr__(self) -> str:
+        return f"{{every scope: {self.level}}}"
 
 
-def _scope_levels(permissions) -> dict[str, str] | None:
+def _format(scopes) -> str:
+    if isinstance(scopes, _AllScopes):
+        return repr(scopes)
+    return "{" + ", ".join(f"{scope}: {level}" for scope, level in sorted(scopes.items())) + "}"
+
+
+def _scope_levels(permissions) -> dict[str, str] | _AllScopes | None:
     """Map each scope in a permissions: value to the level it is set to, or
     None if no explicit block is present (meaning the check does not apply --
     GitHub falls back to the repo/org default token, which this test cannot
-    see). Scopes set to `none` are dropped: they neither grant nor request."""
+    see). `read-all`/`write-all` become an _AllScopes blanket level. Scopes set
+    to `none` are dropped: they neither grant nor request."""
     if permissions is None:
         return None
     if isinstance(permissions, str):
-        # permissions: read-all / write-all
-        return None if permissions in ("read-all", "write-all") else {}
+        if permissions == "read-all":
+            return _AllScopes("read")
+        if permissions == "write-all":
+            return _AllScopes("write")
+        return {}
     return {scope: level for scope, level in permissions.items() if level in _GRANTED_LEVELS}
 
 
@@ -69,7 +92,9 @@ def _requested_scopes(doc: dict) -> dict[str, str] | None:
         if block is None:
             continue
         levels = _scope_levels(block)
-        if levels is None:
+        if levels is None or isinstance(levels, _AllScopes):
+            # Unenumerable as a request: it names no scopes to hold the caller
+            # to, so asserting anything here would be invention.
             return None
         if requested is None:
             requested = {}
@@ -79,7 +104,7 @@ def _requested_scopes(doc: dict) -> dict[str, str] | None:
     return requested
 
 
-def _unsatisfied(requested: dict[str, str], granted: dict[str, str]) -> list[str]:
+def _unsatisfied(requested: dict[str, str], granted) -> list[str]:
     """Scopes the caller fails to cover, either because it omits them or
     because it grants a weaker level than the callee requests."""
     return [
@@ -103,7 +128,9 @@ class CiWorkflowPermissionContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflows: dict[str, dict] = {
-            path.name: _load_workflow(path) for path in sorted(WORKFLOWS_DIR.glob("*.yml"))
+            path.name: _load_workflow(path) for path in sorted(
+                [*WORKFLOWS_DIR.glob("*.yml"), *WORKFLOWS_DIR.glob("*.yaml")]
+            )
         }
         cls.requested: dict[str, dict[str, str] | None] = {
             name: _requested_scopes(doc)
@@ -181,6 +208,42 @@ class CiWorkflowPermissionContractTests(unittest.TestCase):
             ["contents: needs read, has none"],
             _unsatisfied(_requested_scopes({"permissions": {"contents": "read"}}), {"packages": "read"}),
             "an omitted scope must still be reported",
+        )
+
+    def test_all_scope_caller_grants_are_modelled_not_skipped(self) -> None:
+        """A caller declaring `read-all`/`write-all` used to return None and
+        skip the edge entirely. `write-all` genuinely satisfies anything;
+        `read-all` genuinely does not satisfy a `write` request, and skipping
+        it hid exactly the run-creation failure this test exists to catch."""
+        needs_write = _requested_scopes({"permissions": {"contents": "write"}})
+        needs_read = _requested_scopes({"permissions": {"contents": "read"}})
+
+        write_all = _scope_levels("write-all")
+        read_all = _scope_levels("read-all")
+        self.assertIsInstance(write_all, _AllScopes)
+        self.assertIsInstance(read_all, _AllScopes)
+
+        self.assertEqual([], _unsatisfied(needs_write, write_all), "write-all satisfies write")
+        self.assertEqual([], _unsatisfied(needs_read, write_all), "write-all satisfies read")
+        self.assertEqual([], _unsatisfied(needs_read, read_all), "read-all satisfies read")
+        self.assertEqual(
+            ["contents: needs write, has read"],
+            _unsatisfied(needs_write, read_all),
+            "read-all must NOT satisfy a write request",
+        )
+
+    def test_an_all_scope_callee_request_stays_unenumerable(self) -> None:
+        """The same forms are opaque in the other direction: a callee asking
+        `write-all` names no scopes, so there is nothing to hold the caller to
+        and the contract declines to assert rather than invent a scope list."""
+        self.assertIsNone(_requested_scopes({"permissions": "write-all"}))
+        self.assertIsNone(_requested_scopes({"permissions": "read-all"}))
+        self.assertIsNone(
+            _requested_scopes({
+                "permissions": {"contents": "read"},
+                "jobs": {"a": {"permissions": "write-all"}},
+            }),
+            "one all-scope job block makes the whole request unenumerable",
         )
 
     def test_the_strictest_level_wins_when_a_scope_is_declared_twice(self) -> None:

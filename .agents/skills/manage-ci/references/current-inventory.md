@@ -233,10 +233,22 @@ absent when the test was first written:
    the strictest level wins. A name-only set comparison silently passes the
    downgrade.
 
-Both gaps were coverage failures rather than breakages -- the repo satisfies
-the contract at every edge under the strict check -- which is the point: a
-permission test that under-reads its inputs reports green for edges it never
-examined.
+3. **`read-all`/`write-all` are modelled on the granting side, not skipped.**
+   As a *grant* they are perfectly enumerable -- `write-all` satisfies any
+   request, `read-all` satisfies a `read` request but not a `write` one -- so
+   returning "unknown" and skipping the edge would hide the same
+   run-creation failure. As a *request* they stay opaque: a callee asking
+   `write-all` names no scopes to hold its caller to, and asserting there
+   would be invention rather than checking.
+4. **Both workflow extensions are read.** Globbing `*.yml` alone would skip a
+   `*.yaml` callee entirely; the repo has none today, which is exactly when
+   that gap is cheapest to close.
+
+None of these were breakages -- the repo satisfies the contract at every edge
+under the strict check, and it has no `.yaml` workflows or all-scope grants at
+all. That is the point: a permission test that under-reads its inputs reports
+green for edges it never examined, and each of these was found by tightening
+the test rather than by anything failing.
 
 ### `verify-runner-image` preflight
 
@@ -255,7 +267,8 @@ of surfacing as a confusing Playwright/Chromium error deep in the E2E run.
 
 `crates/mesh-llm-ui/package.json`'s `@playwright/test` and
 `mesh-llm-runner-images`' `config/playwright-pin.txt` are now a matched pair
-(both `1.62.1` today). Bumping the mesh-llm side alone fails `ui_e2e` on
+(both `1.62.1` as of 2026-08-20; re-check the two sources rather than
+trusting this line). Bumping the mesh-llm side alone fails `ui_e2e` on
 **every** PR at this preflight, not just locally. The bump is a four-step
 cross-repo sequence, in order: bump `config/playwright-pin.txt` in
 `mesh-llm-runner-images`, rebuild and promote the `public web` image, re-pin

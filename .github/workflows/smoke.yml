@@ -138,6 +138,12 @@ jobs:
         # here. The version tracks the image's own ARG OPENAI_NPM_VERSION
         # (mesh-llm-runner-images Dockerfile:25) so that re-gating this step
         # once the digest is promoted is a no-op rather than a swap.
+        env:
+          # npm lifecycle scripts inherit the job environment, and neither
+          # token is needed to install a client library. Deny both to this
+          # step rather than relying on the version pin alone.
+          HF_TOKEN: ""
+          HUGGING_FACE_HUB_TOKEN: ""
         run: npm install --global openai@7.5.0
 
       - name: Install CUDA smoke runtime libraries
@@ -238,6 +244,12 @@ jobs:
         # Pinned to the same version as the Linux job above -- see the
         # rationale there.
         if: job.container.id == ''
+        env:
+          # npm lifecycle scripts inherit the job environment, and neither
+          # token is needed to install a client library. Deny both to this
+          # step rather than relying on the version pin alone.
+          HF_TOKEN: ""
+          HUGGING_FACE_HUB_TOKEN: ""
         run: npm install --global openai@7.5.0
 
       - uses: ./.github/actions/restore-smoke-inputs
