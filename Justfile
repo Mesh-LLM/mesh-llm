@@ -623,6 +623,16 @@ auto: build
 cache-status max_size="80GiB" max_age="14":
     python3 scripts/manage-build-cache.py status --max-size "{{ max_size }}" --max-age "{{ max_age }}"
 
+# Emit Cargo's effective workspace and artifact-directory metadata as JSON.
+[unix]
+cache-cargo-metadata:
+    @cargo metadata --no-deps --format-version 1
+
+# Remove one package from an explicitly validated Cargo target directory.
+[unix]
+cache-cargo-clean:
+    @cargo clean --target-dir "$MESH_LLM_CACHE_TARGET_DIR" -p "$MESH_LLM_CACHE_PACKAGE"
+
 # Preview bounded, oldest-first incremental and package-aware Cargo cleanup.
 [unix]
 cache-prune-dry-run max_size="80GiB" max_age="14":

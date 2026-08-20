@@ -36,7 +36,7 @@ NATIVE_SDK_WORKFLOW = (
 )
 SEED_WARMER = ROOT / ".github" / "workflows" / "cache-warm-sccache.yml"
 SEED_KEY_PATTERN = re.compile(
-    r"(mesh-llm-sccache-seed-[^\"\n]+?\$\{\{ hashFiles\([^}\n]+\) \}\})"
+    r"mesh-llm-sccache-seed-[^\n]+-\$\{\{ hashFiles\('[^'\n]+', '[^'\n]+'\) \}\}"
 )
 SEED_IMAGE = (
     "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:"
@@ -448,23 +448,45 @@ class SccacheEvidenceTests(unittest.TestCase):
         )
 
     def test_linux_seed_producer_and_consumers_share_compatible_key(self) -> None:
-        seeded = (
-            SEED_WARMER,
+        warmer_workflow = yaml.safe_load(SEED_WARMER.read_text(encoding="utf-8"))
+        warmer_steps = warmer_workflow["jobs"]["warm"]["steps"]
+        seed_steps = [step for step in warmer_steps if step.get("id") == "seed"]
+        self.assertEqual(len(seed_steps), 1)
+        seed_assignments = [
+            match.group(1)
+            for line in seed_steps[0]["run"].splitlines()
+            if (match := re.fullmatch(r'\s*key="([^"\n]+)"\s*', line))
+        ]
+        self.assertEqual(len(seed_assignments), 1)
+        expected_key = seed_assignments[0]
+        self.assertIsNotNone(SEED_KEY_PATTERN.fullmatch(expected_key))
+
+        cache_steps = [
+            step for step in warmer_steps
+            if str(step.get("uses", "")).startswith("actions/cache/")
+        ]
+        self.assertEqual(len(cache_steps), 2)
+        for step in cache_steps:
+            self.assertEqual(step["with"]["key"], "${{ steps.seed.outputs.key }}")
+
+        consumers = (
             WORKFLOWS["quality"],
             WORKFLOWS["rust-tests"],
             WORKFLOWS["host"],
             WORKFLOWS["runtime"],
         )
-        expected_key = None
-        for path in seeded:
+        for path in consumers:
             with self.subTest(workflow=path.name):
-                workflow = path.read_text(encoding="utf-8")
-                keys = SEED_KEY_PATTERN.findall(workflow)
+                workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+                keys = [
+                    step.get("with", {}).get("cache_key")
+                    for job in workflow["jobs"].values()
+                    for step in job.get("steps", [])
+                    if step.get("uses") == "./.github/actions/restore-sccache-seed"
+                ]
                 self.assertEqual(len(keys), 1)
-                if expected_key is None:
-                    expected_key = keys[0]
-                else:
-                    self.assertEqual(keys[0], expected_key)
+                self.assertIsNotNone(SEED_KEY_PATTERN.fullmatch(keys[0]))
+                self.assertEqual(keys[0], expected_key)
         warmer = SEED_WARMER.read_text(encoding="utf-8")
         self.assertIn("run: just ci-sccache-seed-build", warmer)
         self.assertNotIn(
