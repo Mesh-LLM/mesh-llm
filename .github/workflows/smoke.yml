@@ -56,10 +56,12 @@ jobs:
     timeout-minutes: ${{ inputs.timeout_minutes }}
     # Only the GitHub-hosted ubuntu-24.04 path gets prebuilt tooling; the
     # gpu-nvidia self-hosted runner keeps running bare-metal, unchanged.
-    # Empty string is GitHub Actions' documented way to opt a job out of
-    # containerization per-run.
+    # Empty string opts the job out of containerization per-run. The
+    # truthy value must come first in the `&&`: `cond && '' || url` always
+    # evaluates to `url`, because `cond && ''` collapses to the falsy `''`
+    # and the trailing `||` then overrides it regardless of `cond`.
     container:
-      image: ${{ inputs.runner == 'gpu-nvidia' && '' || 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d' }}
+      image: ${{ inputs.runner != 'gpu-nvidia' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d' || '' }}
     defaults:
       run:
         shell: bash
@@ -70,8 +72,11 @@ jobs:
       # public image's container runs as root (Dockerfile's public stage
       # never drops back from `USER root`), and pip refuses a cache dir
       # whose owner isn't its own euid, so it otherwise noisily disables
-      # its cache. Only exercised in-container (setup-python's own cache:
-      # pip handles this itself on the uncontained gpu-nvidia row).
+      # its cache. This is job-level env, so it applies to every step
+      # regardless of container -- including the bare-metal gpu-nvidia
+      # row, where it redirects setup-python's own `cache: pip` off
+      # `~/.cache/pip` and onto this ephemeral runner's `/tmp` instead.
+      # Harmless (the runner is single-use), just not container-only.
       PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

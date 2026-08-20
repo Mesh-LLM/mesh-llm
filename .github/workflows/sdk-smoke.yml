@@ -96,8 +96,9 @@ jobs:
       packages: read
     # Rust and Kotlin smoke both run on Linux (x86 or arm) and get the
     # prebuilt image; Swift stays on bare macos-15, unchanged (that's
-    # chunk 6). Empty string is GitHub Actions' documented way to opt a
-    # job out of containerization per-run.
+    # chunk 6). Empty string opts the job out of containerization
+    # per-run. The truthy value must stay first in the `&&` here --
+    # see smoke.yml's container block for what breaks if it isn't.
     container:
       image: ${{ inputs.sdk_kind != 'swift' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d' || '' }}
     defaults:
