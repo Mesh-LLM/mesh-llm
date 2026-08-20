@@ -241,9 +241,12 @@ def prune_packages(
             )
             if result.returncode != 0:
                 raise CacheError(f"cargo clean failed for {metrics['package']}")
-            current_bytes, _ = tree_metrics(target)
-        else:
-            current_bytes = max(0, current_bytes - metrics["bytes"])
+        # Estimate rather than re-walk: a full tree_metrics() per package is
+        # O(packages x tree) stat calls while the exclusive lock is held, which
+        # dominates runtime on a large target dir. The loop only needs this to
+        # decide when to stop; run_prune re-measures once at the end for the
+        # number it actually reports.
+        current_bytes = max(0, current_bytes - metrics["bytes"])
         if current_bytes <= max_bytes and metrics["newest_mtime"] >= cutoff:
             break
     return current_bytes, actions
@@ -330,8 +333,10 @@ def run_prune(arguments: argparse.Namespace, workspace: Path, target: Path) -> i
     current, packages = prune_packages(
         workspace, target, current, arguments.max_size, cutoff, arguments.execute,
     )
-    after = snapshot(workspace, target, arguments.max_size, arguments.max_age)
-    final_bytes = after["target_bytes"] if arguments.execute else current
+    # Only the execute path reports a measured total; building the dry-run
+    # snapshot would be a second full walk whose result is discarded.
+    after = snapshot(workspace, target, arguments.max_size, arguments.max_age) if arguments.execute else None
+    final_bytes = after["target_bytes"] if after is not None else current
     report = {
         "schema": "mesh-llm.local-build-cache-prune", "schema_version": 1,
         "mode": "execute" if arguments.execute else "dry-run",

@@ -134,8 +134,11 @@ just compat-smoke ~/.cache/huggingface/hub/<model>.gguf   # optional 2-node + 1-
 just --list           # list all recipes
 ```
 
-On macOS and Linux, local Cargo artifacts are bounded independently from the 10 GiB sccache
-compiler-object cache. Inspect and prune them with:
+On macOS and Linux, local Cargo artifacts are bounded independently from the sccache
+compiler-object cache, which here keeps sccache's own 10 GiB local default. That default is
+a developer-machine limit only -- CI does not use it, and pins a 2 GiB trusted seed instead
+(`SCCACHE_CACHE_SIZE=2G`, see `.github/actions/restore-sccache-seed`). Inspect and prune the
+local Cargo artifacts with:
 
 ```bash
 just cache-status
