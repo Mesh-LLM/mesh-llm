@@ -9,20 +9,18 @@ use crate::{
     ReleaseAttestationRequirement,
 };
 use anyhow::{Context, Result, bail};
-#[allow(unused_imports)]
 pub use mesh_llm_config::{
-    AdvancedConfig, AdvancedServerConfig, BoolOrAuto, BoolOrString, ConfigDiagnostic,
-    ConfigDiagnosticSeverity, ConfigEditor, ConfigStore, FlashAttentionType, GpuAssignment,
-    GpuConfig, HardwareConfig, IntegerOrString, LocalServingNodeConfig, MeshConfig,
-    MeshRequirementsConfig, ModelConfigDefaults, ModelConfigEditor, ModelConfigEntry,
-    ModelDefaultsEditor, ModelFitConfig, ModelRuntimeKind, MultimodalConfig, NativeRuntimeConfig,
-    OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginStartupConfig,
-    PluginWebUiPreference, PrefixCacheConfig, ReasoningBudget, ReasoningEnabled,
-    RequestDefaultsConfig, ReservedObjectConfig, SkippyConfig, SpeculativeConfig,
-    StringOrStringList, TelemetryConfig, TelemetryMetricsConfig, TensorSplitConfig,
-    ThroughputConfig, config_path, config_to_toml, parse_config_toml as base_parse_config_toml,
-    validate_config_with_plugin_schemas,
+    BoolOrAuto, ConfigDiagnostic, ConfigEditor, ConfigStore, GpuAssignment, GpuConfig,
+    HardwareConfig, IntegerOrString, LocalServingNodeConfig, MeshConfig, MeshRequirementsConfig,
+    ModelConfigDefaults, ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor, ModelFitConfig,
+    ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry,
+    PluginStartupConfig, PluginWebUiPreference, ReasoningBudget, ReasoningEnabled,
+    RequestDefaultsConfig, SkippyConfig, SpeculativeConfig, StringOrStringList, TelemetryConfig,
+    TelemetryMetricsConfig, ThroughputConfig, config_path, config_to_toml,
+    parse_config_toml as base_parse_config_toml, validate_config_with_plugin_schemas,
 };
+#[cfg(test)]
+use mesh_llm_config::{ConfigDiagnosticSeverity, FlashAttentionType, TensorSplitConfig};
 use mesh_llm_plugin::MeshVisibility;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

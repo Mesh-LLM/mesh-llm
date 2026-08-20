@@ -15,7 +15,7 @@ use mesh_client::protocol::{
     decode_owner_control_envelope, encode_control_frame, encode_owner_control_envelope,
     owner_control_rejection_envelope,
 };
-use mesh_llm::{
+use mesh_llm_host_runtime::{
     BootstrapStatus, DirectPeerProofStatus, MeshGenesisPolicy, MeshRequirementDecision,
     MeshRequirementEvaluationInput, MeshRequirementRejectReason, MeshRequirements,
     NodeVersionBounds, PeerReleaseAttestationStatus, ProtocolGenerationBounds,

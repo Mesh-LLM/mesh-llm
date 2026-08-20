@@ -170,7 +170,7 @@ pub use stage_transport::{
 };
 pub(crate) use stage_transport_bridge::{StageTransportBridge, StageTransportBridgeLabel};
 
-#[allow(unused_imports)]
+#[cfg(test)]
 use gossip::{apply_transitive_ann, peer_meaningfully_changed};
 #[cfg(test)]
 use heartbeat::heartbeat_failure_policy_for_peer;

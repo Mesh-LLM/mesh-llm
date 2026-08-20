@@ -14,8 +14,7 @@ use mesh_llm_events::logging::replay::ReplayChannel;
 use mesh_llm_events::{OutputEvent, OutputSink, clear_output_sink, set_output_sink};
 
 // Re-import service.rs types. These are private to the logging module but accessible via super.
-#[allow(unused_imports)]
-use crate::logging::service::{BusEnqueueError, LoggingService, ServiceConfig, SystemClock};
+use crate::logging::service::{LoggingService, ServiceConfig, SystemClock};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};

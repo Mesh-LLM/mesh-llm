@@ -8,8 +8,6 @@ use clap::{CommandFactory, Parser};
 
 mod commands;
 
-pub use mesh_llm_host_runtime::*;
-
 pub async fn run_main() -> i32 {
     match run_cli_entrypoint().await {
         Ok(()) => 0,

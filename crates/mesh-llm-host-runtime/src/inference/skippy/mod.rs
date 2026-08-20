@@ -61,11 +61,8 @@ pub(crate) use package::direct_gguf_source_paths;
 pub use package::{
     SkippyPackageIdentity, identity_from_layer_package, synthetic_direct_gguf_package,
 };
-#[allow(unused_imports)]
 pub(crate) use resolver::{
-    ResolvedEmbeddedOpenAiArgs, ResolvedHardwareConfig, ResolvedModelFitConfig,
-    ResolvedRequestDefaultsConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
-    ResolvedSpeculativeConfig, ResolvedThroughputConfig, SkippyConfigResolveRequest,
+    ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
     resolve_skippy_config,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;

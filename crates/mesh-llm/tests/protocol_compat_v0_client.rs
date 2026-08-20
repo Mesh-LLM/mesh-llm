@@ -11,7 +11,7 @@ use mesh_client::protocol::{
 use mesh_client::{
     ConfigTransportSelection, ControlPlaneBootstrapOptions, ControlPlaneRetryPolicy,
 };
-use mesh_llm::{
+use mesh_llm_host_runtime::{
     MeshGenesisPolicy, MeshRequirementDecision, MeshRequirementEvaluationInput, MeshRequirements,
 };
 
