@@ -66,9 +66,11 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
-      # /github/home is a host-side mount the container's non-root `runner`
-      # user doesn't own; pip otherwise noisily disables its cache trying
-      # to use it. Only exercised in-container (setup-python's own cache:
+      # /github/home is a host-side mount owned by the host runner uid; the
+      # public image's container runs as root (Dockerfile's public stage
+      # never drops back from `USER root`), and pip refuses a cache dir
+      # whose owner isn't its own euid, so it otherwise noisily disables
+      # its cache. Only exercised in-container (setup-python's own cache:
       # pip handles this itself on the uncontained gpu-nvidia row).
       PIP_CACHE_DIR: /tmp/pip-cache
     steps:
@@ -85,8 +87,8 @@ jobs:
         # The prebuilt image bakes a venv on PATH; a host-side setup-python
         # both shadows it (silently losing every installed dependency) and,
         # in-container, fails outright because its pip cache dir isn't
-        # writable under the container's HOME. Only the uncontained
-        # gpu-nvidia row needs this.
+        # owned by the container's (root) euid under the container's HOME.
+        # Only the uncontained gpu-nvidia row needs this.
         if: job.container.id == ''
         with:
           python-version: "3.12"
