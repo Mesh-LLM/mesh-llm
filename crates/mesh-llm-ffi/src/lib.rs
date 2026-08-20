@@ -32,8 +32,8 @@ pub use handles::{ConsoleHandle, MeshClientHandle, MeshNodeHandle};
 pub use identity::generate_owner_keypair_hex;
 pub use model_types::{
     CapabilityLevel, CleanupPolicy, CleanupResult, DeleteModelOptions, DeleteModelResult,
-    DevicePolicy, DownloadedModel, InstalledModel, LoadModelOptions, ModelCapabilities,
-    ModelCacheStatus, ModelDetails, ModelKind, ModelSearchQuery, ModelSource, ModelSummary,
+    DevicePolicy, DownloadedModel, InstalledModel, LoadModelOptions, ModelCacheStatus,
+    ModelCapabilities, ModelDetails, ModelKind, ModelSearchQuery, ModelSource, ModelSummary,
     PrunePolicy, PruneResult, ServedModel, ServingModelState, ServingStatus, UnloadModelOptions,
     UnloadTarget,
 };
