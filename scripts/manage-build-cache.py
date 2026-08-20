@@ -87,14 +87,33 @@ def immediate_entries(path: Path) -> list[dict[str, Any]]:
     return sorted(entries, key=lambda entry: entry["bytes"], reverse=True)
 
 
-def cargo_packages(workspace: Path) -> list[str]:
+def cargo_metadata(workspace: Path) -> dict[str, Any]:
     result = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"],
         cwd=workspace, check=False, capture_output=True, text=True,
     )
     if result.returncode != 0:
-        raise CacheError("cargo metadata failed; refusing package-aware cleanup")
-    return sorted({package["name"] for package in json.loads(result.stdout)["packages"]})
+        raise CacheError("cargo metadata failed; refusing build-cache management")
+    return json.loads(result.stdout)
+
+
+def cargo_packages(workspace: Path) -> list[str]:
+    return sorted({package["name"] for package in cargo_metadata(workspace)["packages"]})
+
+
+def reject_separate_build_directory(workspace: Path) -> None:
+    if os.environ.get("CARGO_BUILD_BUILD_DIR"):
+        raise CacheError("CARGO_BUILD_BUILD_DIR is unsupported by build-cache management")
+    if not (workspace / "Cargo.toml").is_file():
+        return
+    metadata = cargo_metadata(workspace)
+    target_directory = Path(metadata["target_directory"]).resolve()
+    build_directory = Path(metadata.get("build_directory") or target_directory).resolve()
+    if build_directory != target_directory:
+        raise CacheError(
+            "Cargo build.build-dir outside target-dir is unsupported by build-cache management: "
+            f"{build_directory}"
+        )
 
 
 def artifact_roots(target: Path, leaf: str) -> list[Path]:
@@ -108,8 +127,9 @@ def package_metrics(target: Path, packages: Iterable[str]) -> list[dict[str, Any
     totals = {package: [0, 0.0] for package in normalized}
     roots = [*artifact_roots(target, "deps"), *artifact_roots(target, "build")]
     for root in roots:
+        stems = normalized if root.name == "deps" else {package: package for package in normalized}
         for child in root.iterdir():
-            for package, stem in normalized.items():
+            for package, stem in stems.items():
                 name = child.name
                 if name == stem or name.startswith(f"{stem}-") or name.startswith(f"lib{stem}-"):
                     size, newest = tree_metrics(child)
@@ -268,6 +288,7 @@ def main() -> int:
     target = (arguments.target_dir or workspace / "target").resolve()
     if target == workspace or workspace not in target.parents:
         raise CacheError("target directory must be a child of the workspace")
+    reject_separate_build_directory(workspace)
     if arguments.command == "build":
         build_command = arguments.build_command
         if build_command[:1] == ["--"]:

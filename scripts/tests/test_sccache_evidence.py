@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -34,9 +35,8 @@ NATIVE_SDK_WORKFLOW = (
     ROOT / ".github" / "workflows" / "native-sdk-artifact.yml"
 )
 SEED_WARMER = ROOT / ".github" / "workflows" / "cache-warm-sccache.yml"
-SEED_KEY_PREFIX = (
-    "mesh-llm-sccache-seed-linux-x86_64-"
-    "img-8d93de6b-epoch-8d93de6b-v2-"
+SEED_KEY_PATTERN = re.compile(
+    r"(mesh-llm-sccache-seed-[^\"\n]+?\$\{\{ hashFiles\([^}\n]+\) \}\})"
 )
 SEED_IMAGE = (
     "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:"
@@ -455,10 +455,16 @@ class SccacheEvidenceTests(unittest.TestCase):
             WORKFLOWS["host"],
             WORKFLOWS["runtime"],
         )
+        expected_key = None
         for path in seeded:
             with self.subTest(workflow=path.name):
                 workflow = path.read_text(encoding="utf-8")
-                self.assertEqual(workflow.count(SEED_KEY_PREFIX), 1)
+                keys = SEED_KEY_PATTERN.findall(workflow)
+                self.assertEqual(len(keys), 1)
+                if expected_key is None:
+                    expected_key = keys[0]
+                else:
+                    self.assertEqual(keys[0], expected_key)
         warmer = SEED_WARMER.read_text(encoding="utf-8")
         self.assertIn("run: just ci-sccache-seed-build", warmer)
         self.assertNotIn(

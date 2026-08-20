@@ -151,7 +151,9 @@ cache status and dry-run pruning take the same lock in shared mode. Executed
 pruning requires the corresponding exclusive lock before measuring or deleting
 artifacts. Direct Cargo and lower-level build commands do not share that lock,
 so pruning also refuses to run when it detects an active Cargo or Rust compiler
-process as a best-effort safeguard.
+process as a best-effort safeguard. Cargo configurations that separate
+`build.build-dir` from `target-dir` are rejected because the cache manager does
+not report, lock, or clean a second artifact tree.
 
 On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks. Run it on macOS or Linux when you need full shell parity coverage.
 
