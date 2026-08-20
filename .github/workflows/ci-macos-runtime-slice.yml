@@ -98,8 +98,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - name: Install Metal runtime dependencies
-        run: brew install cmake ninja jq
       - uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
           include_tool_versions: "true"
