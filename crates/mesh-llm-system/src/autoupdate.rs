@@ -318,10 +318,7 @@ async fn apply_update_if_available(
     {
         Ok(InstallOutcome::RestartNow) => {
             eprintln!("✅ Updated to v{}; restarting", release.version);
-            // SAFETY: the enclosing test contract is `#[serial]`, so this process
-            // environment mutation cannot race another test.
-            unsafe { std::env::set_var(SELF_UPDATE_ATTEMPTED_ENV, "1") };
-            exec_current_binary(&target.exe)?;
+            exec_current_binary(&target.exe, SELF_UPDATE_ATTEMPTED_ENV, "1")?;
         }
         Ok(InstallOutcome::ExitNow) => {
             eprintln!("✅ Updated to v{}", release.version);

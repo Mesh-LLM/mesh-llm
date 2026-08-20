@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
-#[cfg(unix)]
-use std::ffi::CString;
 use std::io;
 #[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use crate::backend;
@@ -951,25 +949,19 @@ fn rollback_bundle_replace(
 }
 
 #[cfg(unix)]
-pub(super) fn exec_current_binary(exe: &Path) -> Result<()> {
-    let exe_c = CString::new(exe.as_os_str().as_bytes())
-        .context("Executable path contains an unexpected NUL byte")?;
-    let args: Vec<CString> = std::env::args_os()
-        .map(|arg| {
-            CString::new(arg.as_os_str().as_bytes())
-                .context("Argument contains an unexpected NUL byte")
-        })
-        .collect::<Result<_>>()?;
-    let mut argv: Vec<*const libc::c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
-    argv.push(std::ptr::null());
-    let rc = unsafe { libc::execv(exe_c.as_ptr(), argv.as_ptr()) };
-    let errno = std::io::Error::last_os_error();
-    anyhow::ensure!(rc != 0, "execv unexpectedly returned success");
-    Err(errno).context("Failed to restart updated mesh-llm")
+pub(super) fn exec_current_binary(exe: &Path, env_key: &str, env_value: &str) -> Result<()> {
+    let mut args = std::env::args_os();
+    let arg0 = args.next().unwrap_or_else(|| exe.as_os_str().to_owned());
+    let error = std::process::Command::new(exe)
+        .arg0(arg0)
+        .args(args)
+        .env(env_key, env_value)
+        .exec();
+    Err(error).context("Failed to restart updated mesh-llm")
 }
 
 #[cfg(not(unix))]
-pub(super) fn exec_current_binary(_exe: &Path) -> Result<()> {
+pub(super) fn exec_current_binary(_exe: &Path, _env_key: &str, _env_value: &str) -> Result<()> {
     anyhow::bail!("Self-update restart is only supported on Unix")
 }
 
