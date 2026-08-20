@@ -133,9 +133,9 @@ smoke exception) and `sdk-smoke.yml`'s `swift` row (host-only macOS SDK
 build, `macos-15`, never container-capable) opt out per-run with
 `image: ''` rather than being a separate job, so the rest of the job body
 (steps, `if: job.container.id == ''` gates) stays shared. This is proven to
-actually opt a job out of containerization by two runs on the branch-head
-harness (`_tmp-pr-head-validate.yml` run 32349670919, jobs 96370649138
-`CUDA inference smoke` and 96375145155 `swift SDK Smoke`): no
+actually opt a job out of containerization by two runs on the temporary
+branch-head harness used to validate #1380 (run 32349670919, jobs
+96370649138 `CUDA inference smoke` and 96375145155 `swift SDK Smoke`): no
 `Initialize containers` log group, no `docker create`, and the gated
 `actions/setup-python`/`pnpm/action-setup` steps ran. There is no other
 empty-image job anywhere in this repo's workflow history.
@@ -229,8 +229,9 @@ flag that would otherwise silently stop applying). Seven call sites:
 `ci-platform-checks-slice.yml`, `ci-macos-host-slice.yml`,
 `swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
 `node-sdk-addon-artifact.yml`, and two in `release.yml`. Only the first
-three are reachable by `_tmp-pr-head-validate.yml` (no macOS row in
-`native-sdk-artifact.yml`/`node-sdk-addon-artifact.yml` runs there, and
+three were reachable by the temporary branch-head harness used to validate
+#1380 (no macOS row in
+`native-sdk-artifact.yml`/`node-sdk-addon-artifact.yml` ran there, and
 `release.yml` only runs on an actual release cut) -- the other four are
 statically cleared (macOS-gated, no android target on any of them) rather
 than proven by a real run. `node-sdk-addon-artifact.yml`'s own
