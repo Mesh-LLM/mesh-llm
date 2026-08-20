@@ -1,6 +1,12 @@
 #[cfg(feature = "dynamic-runtime")]
 mod dynamic_library;
 
+// Keep these constants in the facade: packaging and SDK tooling reads this file
+// without compiling the crate to determine native-runtime compatibility.
+pub const ABI_VERSION_MAJOR: u32 = 0;
+pub const ABI_VERSION_MINOR: u32 = 1;
+pub const ABI_VERSION_PATCH: u32 = 39;
+
 mod abi;
 mod activation;
 #[cfg(feature = "dynamic-runtime")]
@@ -17,10 +23,10 @@ mod static_bindings;
 mod tests;
 
 pub use abi::{
-    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationDType,
-    ActivationLayout, BACKEND_DEVICE_CAP_ASYNC, BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR,
-    BACKEND_DEVICE_CAP_EVENTS, BACKEND_DEVICE_CAP_HOST_BUFFER, BackendDevice, BackendDeviceType,
-    Error, FEATURE_BACKEND_DEVICES, FEATURE_INKLING_MTP_MM, FEATURE_NATIVE_MTP_N1,
+    AbiVersion, ActivationDType, ActivationLayout, BACKEND_DEVICE_CAP_ASYNC,
+    BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR, BACKEND_DEVICE_CAP_EVENTS,
+    BACKEND_DEVICE_CAP_HOST_BUFFER, BackendDevice, BackendDeviceType, Error,
+    FEATURE_BACKEND_DEVICES, FEATURE_INKLING_MTP_MM, FEATURE_NATIVE_MTP_N1,
     FEATURE_NGRAM_CACHE_DRAFT, FEATURE_RUNTIME_EVENTS, LlamaLogCallback, LoadMode, Model,
     ModelInfo, MtmdProgressCallback, MtpSource, NgramCache, Opaque, RuntimeConfig, Session,
     SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventCallback,

@@ -1,10 +1,9 @@
 use std::ffi::{c_char, c_int, c_void};
 
-use crate::{NativeMtpDraft, SamplingConfig};
+use crate::{
+    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, NativeMtpDraft, SamplingConfig,
+};
 
-pub const ABI_VERSION_MAJOR: u32 = 0;
-pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 39;
 pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
