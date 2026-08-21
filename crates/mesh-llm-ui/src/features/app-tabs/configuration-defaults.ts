@@ -30,12 +30,6 @@ export const CONFIGURATION_DEFAULTS = {
       tomlSection: 'defaults.speculative'
     },
     {
-      id: 'advanced',
-      label: 'Reasoning',
-      summary: 'Reasoning and repetition controls.',
-      help: 'Reasoning and sampling defaults'
-    },
-    {
       id: 'request-defaults',
       label: 'Request Defaults',
       summary: 'Sampling, reasoning, and request-time fallback defaults.',
@@ -72,7 +66,11 @@ export const CONFIGURATION_DEFAULTS = {
   preview: [
     { label: 'Scope', value: 'carrack only', meta: 'remote nodes are read-only context' },
     { label: 'Config path', value: '~/.mesh-llm/config.toml' },
-    { label: 'Generated defaults', value: '73 settings', meta: 'deployment overrides win' },
+    {
+      label: 'Generated defaults',
+      value: `${CONFIGURATION_DEFAULT_RUNTIME_SETTINGS.length + CONFIGURATION_DEFAULT_SAMPLING_SETTINGS.length + CONFIGURATION_DEFAULT_TRANSPORT_SETTINGS.length} settings`,
+      meta: 'deployment overrides win'
+    },
     { label: 'Signing', value: 'Unsigned', meta: 'attestation pending' }
   ]
 } as const satisfies ConfigurationDefaultsHarnessData

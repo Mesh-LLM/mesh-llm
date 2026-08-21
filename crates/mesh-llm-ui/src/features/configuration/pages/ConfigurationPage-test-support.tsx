@@ -2,7 +2,7 @@
 import type { ReactElement, ReactNode } from 'react'
 import { act, render as rtlRender, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, vi } from 'vitest'
+import { afterEach, beforeEach, vi } from 'vitest'
 import { AppProviders } from '@/app/providers/AppProviders'
 import {
   adaptStatusToConfiguration,
@@ -349,6 +349,11 @@ beforeEach(() => {
     ({ shouldBlockFn }: { shouldBlockFn: (transition: typeof defaultBlockerTransition) => boolean }) =>
       shouldBlockFn(defaultBlockerTransition) ? blockedBlocker : idleBlocker
   )
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 export {
   blockedBlocker,

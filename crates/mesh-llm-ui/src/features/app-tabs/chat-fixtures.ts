@@ -36,7 +36,7 @@ export const TRANSPARENCY_MESSAGE: TransparencyMessage = {
   id: 'msg-a1',
   text: 'Here are three revisions with different tones — playful, serious, and technical. Want me to expand any of them?',
   at: '14:53',
-  servedBy: 'lemony-28',
+  servedBy: 'lemony',
   route: ['desk', 'carrack', 'lemony'],
   model: 'Qwen3.6-35B-A3B-UD',
   receipt: 'rx-92b7',

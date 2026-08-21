@@ -495,6 +495,7 @@ export function setMessageListDimensions(messageList: HTMLElement) {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
 })
 
 beforeEach(() => {

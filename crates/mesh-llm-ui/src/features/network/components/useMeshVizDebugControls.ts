@@ -43,14 +43,14 @@ export function useMeshVizDebugControls({
   const addDebugNode = useCallback(
     (shortcut: DebugNodeShortcut) => {
       const blueprint = getDebugNodeShortcutBlueprint(shortcut)
+      const debugIndex = debugNodeCounterRef.current + 1
+      debugNodeCounterRef.current = debugIndex
 
       setDebugNodes((current) => {
-        const debugIndex = debugNodeCounterRef.current + 1
         const placementNodes: MeshNode[] = [...nodes, ...current]
         const position = chooseClusteredMeshNodePosition(meshSeed, debugIndex, blueprint, placementNodes)
         const debugNode = createDebugNode(debugIndex, blueprint, position)
 
-        debugNodeCounterRef.current = debugIndex
         return [...current, debugNode]
       })
     },

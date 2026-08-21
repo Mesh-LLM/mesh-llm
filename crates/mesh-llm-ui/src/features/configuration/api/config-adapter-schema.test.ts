@@ -111,6 +111,29 @@ describe('configuration schema and status adaptation', () => {
     )
   })
 
+  it('maps loading and unknown node states without reporting them online', () => {
+    const configuration = adaptStatusToConfiguration(
+      {
+        ...STATUS_PAYLOAD,
+        node_state: 'loading',
+        peers: [
+          {
+            id: 'unknown-peer',
+            state: 'future-state',
+            role: 'Worker',
+            hostname: 'future.local',
+            serving_models: [],
+            vram_gb: 0
+          }
+        ]
+      },
+      []
+    )
+
+    expect(configuration.nodes[0]?.status).toBe('degraded')
+    expect(configuration.nodes[1]?.status).toBe('offline')
+  })
+
   it('accepts public API model rows without a nested capabilities object', () => {
     const models: MeshModelRaw[] = [
       {
@@ -164,6 +187,17 @@ describe('configuration schema and status adaptation', () => {
       })
     )
     expect(configuration.catalog.map((model) => model.id)).toContain('hf://meshllm/custom@main:Q4_K_M')
+  })
+
+  it('deduplicates repeated configured placeholder models', () => {
+    const configuration = adaptStatusToConfiguration(STATUS_PAYLOAD, [], undefined, CUSTOM_MODEL_PLACEMENT_SCHEMA, {
+      models: [
+        { runtime: { source: 'hf://meshllm/dupe@main:Q4_K_M' } },
+        { runtime: { source: 'hf://meshllm/dupe@main:Q4_K_M' } }
+      ]
+    })
+
+    expect(configuration.catalog.filter((model) => model.id === 'hf://meshllm/dupe@main:Q4_K_M')).toHaveLength(1)
   })
 
   it('overlays hydrated runtime-control defaults onto the harness settings', () => {

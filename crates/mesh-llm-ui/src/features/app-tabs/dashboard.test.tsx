@@ -129,11 +129,11 @@ describe('dashboard app tab', () => {
     expect(within(popover).getByText(/990232e1c1/i)).toBeInTheDocument()
     expect(within(popover).getByText(/VRAM/i)).toBeInTheDocument()
 
+    const lemonyCoreFill = getMeshNodeCore('lemony').style.color
     await user.click(screen.getByRole('button', { name: 'View LEMONY-28 node' }))
     popover = await screen.findByRole('tooltip')
     expect(getMeshNodeContextHighlight('self')).toHaveClass('opacity-0')
     expect(getMeshNodeContextHighlight('lemony')).toHaveClass('opacity-100', 'duration-150')
-    const lemonyCoreFill = getMeshNodeCore('lemony').style.color
     expect(getMeshNodeCore('self').style.color).toBe(selfCoreFill)
     expect(getMeshNodeCore('lemony').style.color).toBe(lemonyCoreFill)
     expect(getMeshNodeCoreOverlay('self')).toHaveClass('opacity-0')

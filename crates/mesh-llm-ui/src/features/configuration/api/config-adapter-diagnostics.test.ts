@@ -250,6 +250,20 @@ describe('configuration model merge and diagnostics', () => {
     )
   })
 
+  it('uses the canonical path when a diagnostic omits its display path', () => {
+    const result = formatConfigDiagnostics([
+      {
+        code: 'invalid_value',
+        severity: 'error',
+        source: 'validation',
+        canonical_path: 'logging.retention_ttl_secs',
+        message: 'retention must be positive'
+      }
+    ])
+
+    expect(result).toContain('**`logging.retention_ttl_secs`** · `ERROR`')
+  })
+
   it('formats multiple diagnostics separated by a horizontal rule', () => {
     const result = formatConfigDiagnostics([
       {

@@ -196,6 +196,7 @@ describe('ChatPage', () => {
   })
 
   it('shows conversation metadata as message count followed by localized timestamp', async () => {
+    vi.setSystemTime(new Date(2026, 7, 20, 12, 0, 0))
     const yesterday = new Date()
     yesterday.setDate(yesterday.getDate() - 1)
 

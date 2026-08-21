@@ -23,7 +23,8 @@ function formatDiagnosticBlock(diagnostic: RuntimeControlDiagnostic): string {
 
   // Header: path + severity
   const headerParts: string[] = []
-  if (diagnostic.path) headerParts.push(`**\`${diagnostic.path}\`**`)
+  const diagnosticPath = diagnostic.path ?? diagnostic.canonical_path
+  if (diagnosticPath) headerParts.push(`**\`${diagnosticPath}\`**`)
   headerParts.push(formatSeverity(diagnostic.severity))
   lines.push(headerParts.join(' · '))
   lines.push('')

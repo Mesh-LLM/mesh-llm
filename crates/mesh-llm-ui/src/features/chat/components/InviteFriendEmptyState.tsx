@@ -29,13 +29,15 @@ export function InviteFriendEmptyState({
         <button
           type="button"
           onClick={() => setOpen(!open)}
+          aria-controls="invite-friend-details"
+          aria-expanded={open}
           className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground/70 hover:text-foreground transition-colors"
         >
           <ChevronDown className={cn('h-3 w-3 transition-transform', open ? '' : '-rotate-90')} />
           <span>Learn more…</span>
         </button>
         {open ? (
-          <div className="space-y-4 rounded-md border border-dashed p-3 text-left">
+          <div id="invite-friend-details" className="space-y-4 rounded-md border border-dashed p-3 text-left">
             <div className="text-xs text-muted-foreground">
               <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">
                 Learn about this project →

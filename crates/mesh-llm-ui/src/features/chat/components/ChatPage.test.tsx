@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ChatPage } from '@/App'
 
@@ -257,7 +257,7 @@ describe('ChatPage', () => {
 
     const btn = screen.getByTestId('chat-send')
     expect(btn).toHaveTextContent('Queue')
-    btn.click()
+    fireEvent.click(btn)
     expect(onSubmit).toHaveBeenCalled()
   })
 
@@ -314,7 +314,7 @@ describe('ChatPage', () => {
 
     const btn = screen.getByTestId('chat-send')
     expect(btn).toHaveTextContent('Queue')
-    btn.click()
+    fireEvent.click(btn)
     expect(onSubmit).toHaveBeenCalled()
   })
 })

@@ -35,7 +35,9 @@ import { modelEntryPathSegments, readPath } from './config-adapter-paths'
 
 function mapNodeState(state: string | undefined): 'online' | 'degraded' | 'offline' {
   if (state === 'client') return 'offline'
-  return 'online'
+  if (state === 'loading') return 'degraded'
+  if (state === 'standby' || state === 'serving') return 'online'
+  return 'offline'
 }
 
 function finiteNumber(value: unknown, fallback = 0): number {
@@ -308,7 +310,11 @@ function mergeCatalogWithConfiguredModels(
   const existingIds = new Set(catalog.map((model) => model.id))
   const configuredModels = modelEntries(config)
     .map((entry) => placeholderModelFromEntry(entry, placementPaths))
-    .filter((model): model is ConfigModel => model !== undefined && !existingIds.has(model.id))
+    .filter((model): model is ConfigModel => {
+      if (model === undefined || existingIds.has(model.id)) return false
+      existingIds.add(model.id)
+      return true
+    })
   return [...catalog, ...configuredModels]
 }
 

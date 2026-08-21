@@ -206,10 +206,10 @@ export function optimizeTopologyPlacementForPlan<TNode extends { id: string }>(
     let improved = false
 
     for (let bandIndex = 0; bandIndex < workingBands.length; bandIndex += 1) {
-      const band = workingBands[bandIndex]
-      if (band.movableOrder.length < 2) continue
+      if (workingBands[bandIndex].movableOrder.length < 2) continue
 
-      for (let swapIndex = 0; swapIndex < band.movableOrder.length - 1; swapIndex += 1) {
+      for (let swapIndex = 0; swapIndex < workingBands[bandIndex].movableOrder.length - 1; swapIndex += 1) {
+        const band = workingBands[bandIndex]
         const nextOrder = [...band.movableOrder]
         ;[nextOrder[swapIndex], nextOrder[swapIndex + 1]] = [nextOrder[swapIndex + 1], nextOrder[swapIndex]]
 

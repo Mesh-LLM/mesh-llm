@@ -270,7 +270,7 @@ export function useMeshVizLifecycleAnimations({
       const stillActive = [...record.keys].some((key) => activeTransitionKeys.has(key))
 
       if (!stillActive) {
-        record.timeline.pause()
+        record.timeline.revert()
         meshLifecycleTimelineRecordsRef.current.delete(recordId)
       }
     }
@@ -544,7 +544,7 @@ export function useMeshVizLifecycleAnimations({
       })
 
       if (!stillRestoring) {
-        record.timeline.pause()
+        record.timeline.revert()
 
         for (const linkId of record.linkIds) {
           linkRestoreAnimationIdsRef.current.delete(linkId)

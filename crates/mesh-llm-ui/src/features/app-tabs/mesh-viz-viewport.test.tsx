@@ -463,7 +463,7 @@ describe('MeshViz viewport behavior', () => {
     expect(exitingEdge).toBeInTheDocument()
     expect(exitingEdge).toHaveAttribute('data-node-lifecycle', 'leaving')
     expect(pixelValue(lemony29.style.left)).toBeLessThan(90)
-    expect(pixelValue(lemony29.style.left)).toBeLessThan(90)
+    expect(pixelValue(lemony29.style.top)).toBeGreaterThan(0)
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /view edge node/i })).not.toBeInTheDocument()
     })
