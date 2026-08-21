@@ -182,12 +182,10 @@ pub(crate) async fn judge_once(
         .await
         .ok()?;
     let v = response_text(&body).trim().to_ascii_uppercase();
-    if v.starts_with('A') {
-        Some(1)
-    } else if v.starts_with('B') {
-        Some(2)
-    } else {
-        Some(0)
+    match v.as_str() {
+        "A" => Some(1),
+        "B" => Some(2),
+        _ => Some(0),
     }
 }
 

@@ -128,7 +128,7 @@ pub(crate) async fn handle_tool_result(
             output_kind: None,
             confidence: None,
         }],
-        reducer_used: true,
+        reducer_used: succeeded,
         reducer_attempts: attempts,
         turn_kind: TurnKind::ToolResult,
         elapsed_ms: start.elapsed().as_millis() as u64,
@@ -176,11 +176,12 @@ fn collect_short_tool_result_values(value: &Value, values: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
             for (key, nested) in map {
-                if !tool_result_value_key_is_evidence(key) {
-                    continue;
-                }
-                if let Some(scalar) = nested.as_str().filter(|s| short_exact_value(s)) {
+                if tool_result_value_key_is_evidence(key)
+                    && let Some(scalar) = nested.as_str().filter(|s| short_exact_value(s))
+                {
                     values.push(scalar.to_string());
+                } else if nested.is_object() || nested.is_array() {
+                    collect_short_tool_result_values(nested, values);
                 }
             }
         }

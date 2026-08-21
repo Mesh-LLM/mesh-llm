@@ -82,7 +82,7 @@ pub(crate) async fn deterministic_correction(
     task: &AblationTask,
 ) -> ArmOutcome {
     let mut extra: Vec<Value> = Vec::new();
-    for _ in 0..3 {
+    for correction_index in 0..3 {
         let draft = match draft_call(backend, finalizer, task, &extra).await {
             Ok(d) => d,
             Err(e) if e.starts_with("INFRA:") => return ArmOutcome::Infra,
@@ -99,9 +99,12 @@ pub(crate) async fn deterministic_correction(
         match validate_tool_call(&name, &args) {
             None => return outcome_for(&[(name, args)], task),
             Some(err) => {
+                let tool_call_id = format!("correction-{correction_index}");
                 extra.push(json!({"role": "assistant", "content": Value::Null,
-                    "tool_calls": [{"id": "c", "type": "function",
+                    "tool_calls": [{"id": tool_call_id, "type": "function",
                         "function": {"name": name, "arguments": args}}]}));
+                extra.push(json!({"role": "tool", "tool_call_id": tool_call_id,
+                    "content": format!("Tool call validation failed: {err}")}));
                 extra.push(json!({"role": "user",
                     "content": format!("That tool call is invalid: {err}. Emit a corrected tool call.")}));
             }

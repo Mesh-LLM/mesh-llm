@@ -185,10 +185,12 @@ mod response_builder_tests {
     use crate::normalize::{OutputKind, WorkerOutput};
     use crate::resolve::resolve_decision;
     use crate::session::Session;
-    use crate::tool_result::{repair_tool_result_answer, repeated_identical_tool_results};
+    use crate::tool_result::{
+        handle_tool_result, repair_tool_result_answer, repeated_identical_tool_results,
+    };
     use crate::turn::{DecisionResolution, ForcedToolChoice};
     use crate::worker::WorkerRole;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     fn answer(model: &str, confidence: f32, payload: &str) -> WorkerOutput {
         WorkerOutput {
@@ -435,7 +437,14 @@ mod response_builder_tests {
             "Use key=Primary",
         );
 
-        assert_eq!(args, json!({"key": "primary"}));
+        assert_eq!(args, json!({"key": "Primary"}));
+
+        let path_args = infer_tool_arguments_from_prompt(
+            "lookup_probe_fact",
+            tools.as_ref(),
+            "Use key=README.md.",
+        );
+        assert_eq!(path_args, json!({"key": "README.md"}));
     }
 
     #[tokio::test]
@@ -710,6 +719,63 @@ mod response_builder_tests {
         let repaired = repair_tool_result_answer(&session, "Done.");
 
         assert!(repaired.contains("signal-7429"));
+    }
+
+    #[test]
+    fn repair_tool_result_answer_descends_into_nested_evidence_objects() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "lookup"}),
+                tool_call_msg("call_nested", "lookup_fixture_fact"),
+                tool_result_msg(
+                    "call_nested",
+                    r#"{"data":{"result":{"value":"signal-7429"}}}"#,
+                ),
+            ],
+            &None,
+        );
+
+        let repaired = repair_tool_result_answer(&session, "Done.");
+
+        assert!(repaired.contains("signal-7429"));
+    }
+
+    #[tokio::test]
+    async fn failed_tool_result_reducer_is_not_reported_as_used() {
+        let config = GatewayConfig {
+            backends: Vec::new(),
+            models: Vec::new(),
+            worker_timeout: Duration::from_secs(1),
+            reducer_timeout: Duration::from_secs(1),
+            hedge_delay: Duration::ZERO,
+            first_answer_grace: Duration::ZERO,
+            strong_patience: Duration::ZERO,
+            enable_thinking: Some(false),
+            actor_candidates: Vec::new(),
+            reference_policy: Default::default(),
+            refinement_policy: Default::default(),
+        };
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "lookup"}),
+                tool_call_msg("call_failed", "lookup_fixture_fact"),
+                tool_result_msg("call_failed", r#"{"value":"signal-7429"}"#),
+            ],
+            &None,
+        );
+
+        let result = handle_tool_result(&config, &session, false, &[], Instant::now()).await;
+
+        assert!(!result.reducer_used);
+        assert_eq!(
+            result
+                .response_body
+                .pointer("/error/code")
+                .and_then(Value::as_str),
+            Some(crate::MOA_ERR_ALL_REDUCERS_FAILED)
+        );
     }
 
     #[test]

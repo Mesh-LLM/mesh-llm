@@ -516,12 +516,13 @@ fn infer_assignment_argument(field: &str, prompt: &str) -> Option<String> {
     let field_lc = field.to_ascii_lowercase();
     let marker = format!("{field_lc}=");
     let start = prompt_lc.find(&marker)? + marker.len();
-    let tail = prompt_lc.get(start..)?;
+    let tail = prompt.get(start..)?;
     let value = tail
-        .split(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+        .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
         .next()
         .unwrap_or("")
-        .trim_matches(|c| c == '"' || c == '\'' || c == '`');
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+        .trim_end_matches('.');
     (!value.is_empty()).then(|| value.to_string())
 }
 
