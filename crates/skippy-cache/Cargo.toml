@@ -14,11 +14,4 @@ path = "src/lib.rs"
 [dependencies]
 anyhow.workspace = true
 blake3.workspace = true
-memmap2.workspace = true
-libc = "0.2"
-serde.workspace = true
-serde_json.workspace = true
 skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc5"  }
-
-[dev-dependencies]
-tempfile = "3"

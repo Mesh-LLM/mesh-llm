@@ -30,7 +30,6 @@ export default [
       ["Runtime lifecycle", "/docs/pages/runtime-lifecycle/"],
       ["Choose a model", "/docs/pages/choose-a-model/"],
       ["Running large models", "/docs/pages/running-large-models/"],
-      ["KV disk cache", "/docs/pages/kv-disk-cache/"],
       ["Console chat", "/docs/pages/console-chat/"],
       ["Hardware support", "/docs/pages/hardware-support/"]
     ]

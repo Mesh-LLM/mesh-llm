@@ -30,7 +30,7 @@ fn runtime() -> (tempfile::TempDir, LoggingRuntimeState) {
 }
 
 #[tokio::test]
-async fn disk_prefix_cached_tokens_reach_durable_usage_dto() {
+async fn cached_prefix_tokens_reach_durable_usage_dto() {
     let (_temp, state) = runtime();
     let request_id = RequestId::new();
     let context = OpenAiLifecycleContext::new(
@@ -46,13 +46,13 @@ async fn disk_prefix_cached_tokens_reach_durable_usage_dto() {
     observer.observe(&OpenAiLifecycleEvent::Admitted {
         context: context.clone(),
     });
-    // A disk-prefix restoration is surfaced by the backend through the
-    // OpenAI usage detail; exercise that production conversion before logging.
-    let disk_prefix_usage = Usage::new(21, 8).with_cached_tokens(13);
+    // Cached-prefix restoration is surfaced by the backend through the OpenAI
+    // usage detail; exercise that production conversion before logging.
+    let cached_prefix_usage = Usage::new(21, 8).with_cached_tokens(13);
     observer.observe(&OpenAiLifecycleEvent::ResponseCompleted {
         context: context.clone(),
         operation,
-        usage: OpenAiUsage::from(&disk_prefix_usage),
+        usage: OpenAiUsage::from(&cached_prefix_usage),
     });
     observer.observe(&OpenAiLifecycleEvent::StreamTerminal {
         context,

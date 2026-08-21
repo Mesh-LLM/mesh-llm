@@ -46,10 +46,8 @@ pub fn prefix_hash(config: &StageConfig, token_start: u64, token_ids: &[i32]) ->
 /// Page files are raw runtime memory. Their interpretation depends on the CPU
 /// architecture, the native byte order, and the pointer width of the process
 /// that exported them, and none of those appear anywhere else in the identity.
-/// In the default machine-local cache directory that is harmless. It stops
-/// being harmless the moment a directory is shared or copied:
-/// `SKIPPY_KV_DISK_TIER_DIR` accepts any path, the stage directory key holds
-/// only model and stage shape, and `backend_device` does not separate an
+/// A serialized cache directory can be shared or copied, while a stage key may
+/// hold only model and stage shape. `backend_device` does not separate an
 /// x86_64 CUDA host from an aarch64 CUDA host, nor two CPU-only hosts that
 /// both record `<no-selected-device>`. The checksums would confirm the copied
 /// bytes arrived intact and the runtime would then import them as native — a
@@ -115,9 +113,8 @@ fn update_layout_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
 /// importing one under the other is silent numerical corruption.
 ///
 /// While `topology_id` was in the hash this was masked: it is derived from
-/// `unix_nanos` per process, so every restart produced fresh page ids and no
-/// stale page could ever be read back. Removing it to make the disk tier work
-/// across restarts removes that accidental protection, so weight identity now
+/// `unix_nanos` per process, so every restart produced fresh page ids. Stable
+/// identities remove that accidental protection, so weight identity now
 /// has to be explicit.
 ///
 /// `manifest_sha256` and `source_model_sha256` are content-derived and stable
@@ -267,9 +264,9 @@ mod identity_completeness_tests {
         prefix_hash(config, 0, &[1, 2, 3, 4])
     }
 
-    /// The motivating W0 corruption case: `kv_cache_policy: saver` rewrites
-    /// `cache_type_k`/`_v` to `q8_0`. Before this was hashed, the q8_0 bytes
-    /// on disk collided with an f16 `page_id` and were imported as f16.
+    /// Changing the KV cache policy rewrites `cache_type_k`/`_v`. These
+    /// formats must produce distinct page identities to prevent importing
+    /// cached q8_0 state as f16.
     #[test]
     fn kv_cache_dtype_changes_page_identity() {
         let quality = test_config();
@@ -474,8 +471,7 @@ mod identity_stability_tests {
     /// Weight identity is the protection that replaced `topology_id`.
     ///
     /// Two runs can share a `model_id` while serving different tensors — a
-    /// different quant, a re-published layer package, a swapped GGUF. Before
-    /// the disk tier this was masked by the per-process `topology_id`; now it
+    /// different quant, a re-published layer package, a swapped GGUF. This
     /// must be caught explicitly, because a false hit here imports the wrong
     /// weights' KV and silently corrupts output.
     #[test]

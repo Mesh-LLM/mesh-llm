@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize},
+        atomic::{AtomicU64, AtomicUsize},
         mpsc::{SyncSender, TrySendError},
     },
 };
@@ -23,22 +23,15 @@ use crate::kv_proto::{
 
 mod activation;
 mod config;
-pub use config::{KvDiskCacheBudget, KvDiskCacheConfig, configure_kv_disk_cache};
-mod dense_disk;
-mod disk_budget;
-pub use dense_disk::{
-    ArchiveCandidate, DenseArchiveFailure, DenseArchiveOutcome, DenseArchiveSkip,
-    offer_archive_candidate,
-};
 mod exact_state;
 mod identity;
 mod records;
 mod resident_prefix;
 
 pub use records::{
-    AttachedPage, ExactStateRecord, ExactStateRestore, ExactStateSource, LookupBatchOutcome,
-    PrefillKvIdentity, RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore,
-    ResidentPrefixRecord, ResidentPrefixRestore,
+    AttachedPage, ExactStateRecord, ExactStateRestore, LookupBatchOutcome, PrefillKvIdentity,
+    RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore, ResidentPrefixRecord,
+    ResidentPrefixRestore,
 };
 
 /// Return a bounded, stable telemetry class without exporting error text.
@@ -151,12 +144,6 @@ pub struct KvStageIntegration {
     pub(crate) first_tokens: Arc<Mutex<BTreeMap<String, i32>>>,
     pub(crate) replay_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
     pub(crate) split_prefill_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
-    /// Latches native layouts that cannot produce a disk-safe page. Composite ISWA
-    /// layouts are supported by ABI 0.1.39; unknown layouts still decline once.
-    pub(crate) dense_archive_unsupported: Arc<AtomicBool>,
-    /// Keeps this stage's node-level disk allowance reserved for exactly as
-    /// long as the stage integration can use its disk tier.
-    _disk_budget_reservation: Option<disk_budget::BudgetReservation>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -456,31 +443,7 @@ impl KvStageIntegration {
             ),
         ]
         .into_iter()
-        .chain(self.disk_tier_attrs())
         .collect()
-    }
-
-    /// Disk-tier counters, flattened into telemetry attributes.
-    ///
-    /// The tier already counts demotions, promotions, budget evictions,
-    /// corruption and checksum work, but until now none of it left the
-    /// process. Without these a disk tier that has quietly stopped storing
-    /// (full budget, every write failing, every entry quarantined) is
-    /// indistinguishable from one that is simply never probed.
-    pub fn disk_tier_attrs(&self) -> Vec<(&'static str, Value)> {
-        disk_tier_attrs(&self.exact_states)
-    }
-
-    /// Attach the disk-tier counters to a decision event.
-    ///
-    /// The OpenAI/embedded path builds its attribute maps per decision rather
-    /// than starting from `attrs()`, so without this the counters were only
-    /// ever visible on the binary transport -- i.e. never on the single-node
-    /// dense path that most users actually run.
-    pub fn insert_disk_tier_attrs(&self, attrs: &mut BTreeMap<String, Value>) {
-        for (key, value) in self.disk_tier_attrs() {
-            attrs.insert(key.to_string(), value);
-        }
     }
 
     fn record_candidate_token_counts(&self, token_count: u64) -> Vec<u64> {
@@ -558,47 +521,6 @@ impl KvStageIntegration {
     }
 }
 
-fn disk_tier_attrs(
-    exact_states: &Mutex<ExactStateCache<ExactStateExtra>>,
-) -> Vec<(&'static str, Value)> {
-    let exact_states = match exact_states.try_lock() {
-        Ok(exact_states) => exact_states,
-        Err(std::sync::TryLockError::WouldBlock) => {
-            return vec![("skippy.kv.disk_tier_stats_busy", json!(true))];
-        }
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-    };
-    let Some(stats) = exact_states.disk_stats() else {
-        return vec![("skippy.kv.disk_tier_enabled", json!(false))];
-    };
-    vec![
-        ("skippy.kv.disk_tier_enabled", json!(true)),
-        ("skippy.kv.disk_entries", json!(stats.entries)),
-        ("skippy.kv.disk_bytes", json!(stats.bytes)),
-        ("skippy.kv.disk_max_bytes", json!(stats.max_bytes)),
-        ("skippy.kv.disk_demotions", json!(stats.demotions)),
-        ("skippy.kv.disk_promotions", json!(stats.promotions)),
-        ("skippy.kv.disk_evictions", json!(stats.evictions)),
-        (
-            "skippy.kv.disk_pages_rejected_too_large",
-            json!(stats.pages_rejected_too_large),
-        ),
-        (
-            "skippy.kv.disk_last_rejected_page_bytes",
-            json!(stats.last_rejected_page_bytes),
-        ),
-        (
-            "skippy.kv.disk_corrupt_entries",
-            json!(stats.corrupt_entries),
-        ),
-        ("skippy.kv.disk_verifications", json!(stats.verifications)),
-        (
-            "skippy.kv.disk_verifications_skipped",
-            json!(stats.verifications_skipped),
-        ),
-    ]
-}
-
 fn local_trust_checksum(page_id: &str, byte_size: u64) -> Checksum {
     let mut digest = Sha256::new();
     digest.update(b"skippy-local-trust-v1");
@@ -612,19 +534,16 @@ fn local_trust_checksum(page_id: &str, byte_size: u64) -> Checksum {
 
 #[cfg(test)]
 mod exact_state_record_queue_tests {
+    use skippy_cache::ExactStatePayload;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc::sync_channel,
     };
-    use std::time::{Duration, Instant};
-
-    use skippy_cache::{ExactStateCache, ExactStatePayload};
 
     use super::{
         BTreeSet, EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, ExactStateRecordAdmission,
-        PendingExactStateRecord, disk_tier_attrs, enqueue_exact_state_record,
-        has_exact_state_record_capacity,
+        PendingExactStateRecord, enqueue_exact_state_record, has_exact_state_record_capacity,
     };
 
     fn pending(page_id: &str) -> PendingExactStateRecord {
@@ -634,30 +553,6 @@ mod exact_state_record_queue_tests {
             payload: ExactStatePayload::full_state(vec![1]),
             extra: ExactStateExtra::default(),
         }
-    }
-
-    #[test]
-    fn busy_exact_state_lock_skips_disk_stats_without_waiting() {
-        let cache = Arc::new(Mutex::new(ExactStateCache::<ExactStateExtra>::new(1, 1024)));
-        let locked = cache.clone();
-        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let holder = std::thread::spawn(move || {
-            let _guard = locked.lock().unwrap();
-            locked_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-        });
-        locked_rx.recv().unwrap();
-
-        let started = Instant::now();
-        assert_eq!(
-            disk_tier_attrs(&cache),
-            vec![("skippy.kv.disk_tier_stats_busy", serde_json::json!(true))]
-        );
-        assert!(started.elapsed() < Duration::from_millis(100));
-
-        release_tx.send(()).unwrap();
-        holder.join().unwrap();
     }
 
     #[test]

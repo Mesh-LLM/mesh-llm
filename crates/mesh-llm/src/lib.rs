@@ -394,8 +394,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         split_topology_lock: cli.split_topology_lock,
         ctx_size: cli.ctx_size,
         max_vram: cli.max_vram,
-        kv_cache_disk: cli.kv_cache_disk,
-        kv_cache_disk_dir: cli.kv_cache_disk_dir,
         no_enumerate_host: cli.no_enumerate_host,
         bin_dir: cli.bin_dir,
         llama_flavor: cli.llama_flavor.map(map_binary_flavor),

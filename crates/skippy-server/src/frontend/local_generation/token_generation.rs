@@ -558,14 +558,6 @@ impl StageOpenAiBackend {
                     "skippy.exact_cache.payload_kind".to_string(),
                     json!(restored.payload_kind.to_string()),
                 );
-                // Which tier served it. A RAM hit and a disk hit cost
-                // different amounts and fail for different reasons; without
-                // this the disk tier's effect is unmeasurable from the hit
-                // stream alone.
-                attrs.insert(
-                    "skippy.exact_cache.hit_source".to_string(),
-                    json!(restored.source.as_str()),
-                );
                 attrs.insert(
                     "skippy.exact_cache.restored_tokens".to_string(),
                     json!(restored.token_count),
@@ -650,88 +642,10 @@ impl StageOpenAiBackend {
                             .emit("stage.openai_kv_lookup_decision", attrs);
                     }
                     Ok(None) => {
-                        // Resident RAM miss. For dense families the prefix may
-                        // still exist in the disk tier, having outlived either
-                        // eviction or a restart. Restoring it here is what
-                        // turns a cold quadratic prefill into a linear read.
-                        match kv.restore_dense_prefix_from_disk(runtime, session_id, &identities) {
-                            Ok(Some(restored)) => {
-                                let restored_tokens =
-                                    (restored.token_count as usize).min(prefill_tokens.len());
-                                restored_prefill = true;
-                                restored_prefill_tokens = restored_tokens;
-                                cache_stats.status = "hit";
-                                cache_stats.hit_kind = Some("disk_prefix");
-                                cache_stats.cached_prompt_tokens = saturating_u32(restored_tokens);
-                                let mut attrs = self.openai_attrs(ids);
-                                attrs.insert("skippy.kv.decision".to_string(), json!("disk_hit"));
-                                attrs.insert(
-                                    "skippy.kv.hit_page_id".to_string(),
-                                    json!(restored.page_id),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.restored_tokens".to_string(),
-                                    json!(restored_tokens),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.matched_prefix_tokens".to_string(),
-                                    json!(restored_tokens),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.suffix_prefill_tokens".to_string(),
-                                    json!(prefill_tokens.len().saturating_sub(restored_tokens)),
-                                );
-                                // Split the restore cost so a slow restore can
-                                // be attributed to verification or to the
-                                // native import without guessing.
-                                attrs.insert(
-                                    "skippy.kv.disk_verify_ms".to_string(),
-                                    json!(restored.verify_ms),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.disk_import_ms".to_string(),
-                                    json!(restored.import_ms),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.disk_payload_bytes".to_string(),
-                                    json!(restored.payload_bytes),
-                                );
-                                // A dense disk hit is by definition served
-                                // from disk; state it explicitly so the hit
-                                // stream is attributable without knowing
-                                // which decision label implies which tier.
-                                attrs.insert(
-                                    "skippy.exact_cache.hit_source".to_string(),
-                                    json!("disk"),
-                                );
-                                kv.insert_disk_tier_attrs(&mut attrs);
-                                self.telemetry
-                                    .emit("stage.openai_kv_lookup_decision", attrs);
-                            }
-                            Ok(None) => {
-                                // Use the same attribute base as every other
-                                // branch. A bare map here produced a `miss`
-                                // event that could not be joined with the hit
-                                // and error events on session or model, which
-                                // is exactly the attribution the disk tier
-                                // needs to show a hit rate.
-                                let mut attrs = self.openai_attrs(ids);
-                                attrs.insert("skippy.kv.decision".to_string(), json!("miss"));
-                                kv.insert_disk_tier_attrs(&mut attrs);
-                                self.telemetry
-                                    .emit("stage.openai_kv_lookup_decision", attrs);
-                            }
-                            Err(error) => {
-                                let mut attrs = self.openai_attrs(ids);
-                                attrs.insert("skippy.kv.decision".to_string(), json!("disk_error"));
-                                attrs.insert(
-                                    "skippy.kv.error_class".to_string(),
-                                    json!(crate::kv_integration::telemetry_error_class(&error)),
-                                );
-                                self.telemetry
-                                    .emit("stage.openai_kv_lookup_decision", attrs);
-                            }
-                        }
+                        let mut attrs = self.openai_attrs(ids);
+                        attrs.insert("skippy.kv.decision".to_string(), json!("miss"));
+                        self.telemetry
+                            .emit("stage.openai_kv_lookup_decision", attrs);
                     }
                     Err(error) => {
                         let mut attrs = self.openai_attrs(ids);
@@ -844,33 +758,7 @@ impl StageOpenAiBackend {
                 self.telemetry
                     .emit("stage.openai_kv_record_decision", attrs);
             }
-            // At most one archive per request. Each archive is a full
-            // `export_kv_page` into a fresh buffer plus a synced file write,
-            // all under the runtime lock on the prefill path; doing that once
-            // per ladder candidate would mean several hundred-MB exports for a
-            // single large prompt.
-            let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
             for identity in kv.record_identities(&self.config, &base, 0, prefill_tokens) {
-                // Offer to the archive before the resident cache decides.
-                // The two tiers have different cost models -- KV cells versus
-                // bytes-and-a-write -- and must not share a veto. A large
-                // agentic prefix is exactly the case where they disagree:
-                // `max_resident_tokens` is half the context window, so on a
-                // 32k-context node every candidate for a 25k prompt is
-                // declined as uncacheable, and gating archival on that
-                // decision meant the node persisted nothing at precisely the
-                // prompt sizes the disk tier exists for.
-                //
-                // `ArchiveCandidate` still applies the selection policy and
-                // `archive_dense_prefix` still applies the size floor and
-                // dedupe check, so this remains at most one archive per
-                // request. See `ArchiveCandidate` for which candidate is
-                // chosen and why the obvious choices are both wrong.
-                crate::kv_integration::offer_archive_candidate(
-                    &mut archive_candidate,
-                    &identity,
-                    prefill_tokens.len(),
-                );
                 if let Ok(Some(record)) =
                     kv.record_resident_prefix(runtime, session_id, &identity, prefill_tokens)
                 {
@@ -899,30 +787,6 @@ impl StageOpenAiBackend {
                     self.telemetry
                         .emit("stage.openai_kv_record_decision", attrs);
                 }
-            }
-            // Archive dense prefixes so they outlive resident eviction and
-            // process restart. Done here, after recording, rather than on
-            // eviction: eviction runs on the decode hot path and a
-            // multi-hundred-MB export there would spike TTFT.
-            if let Some(identity) = archive_candidate.take() {
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert("skippy.kv.decision".to_string(), json!("disk_archive"));
-                kv.insert_disk_tier_attrs(&mut attrs);
-                match kv.archive_dense_prefix(runtime, session_id, &identity) {
-                    Ok(outcome) => outcome.insert_attrs(&identity, &mut attrs),
-                    Err(error) => {
-                        attrs.insert(
-                            "skippy.kv.archive_status".to_string(),
-                            json!("failed_error"),
-                        );
-                        attrs.insert(
-                            "skippy.kv.archive_error_class".to_string(),
-                            json!(crate::kv_integration::telemetry_error_class(&error)),
-                        );
-                    }
-                }
-                self.telemetry
-                    .emit("stage.openai_kv_record_decision", attrs);
             }
         }
         // Proactive eviction: after prefill recording, evict enough

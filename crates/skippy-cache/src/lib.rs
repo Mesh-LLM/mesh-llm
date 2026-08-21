@@ -1,5 +1,4 @@
 pub mod config;
-pub mod disk_tier;
 pub mod exact_state;
 pub mod identity;
 pub mod miss_reason;
@@ -7,7 +6,6 @@ pub mod payload;
 pub mod resident;
 
 pub use config::{PrefixCandidatePolicy, ResidentCacheConfig};
-pub use disk_tier::{DiskLoad, DiskTierStats, PrefixDiskTier};
 pub use exact_state::{
     ExactStateCache, ExactStateCacheStats, ExactStateLookup, ExactStateRecordOutcome,
 };

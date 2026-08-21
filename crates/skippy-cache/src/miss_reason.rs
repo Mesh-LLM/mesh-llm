@@ -1,8 +1,7 @@
 //! Why a prefix lookup missed, and how long ago the prefix was last seen.
 //!
-//! This is the measurement gate for the expensive retention work. A disk tier
-//! only pays for itself if misses are dominated by prefixes this node *had*
-//! and evicted. If misses are mostly `NeverSeen`, no amount of retention
+//! Retention only pays for itself if misses are dominated by prefixes this node
+//! *had* and evicted. If misses are mostly `NeverSeen`, no amount of retention
 //! capacity helps and the effort should be spent on routing instead.
 //!
 //! Distinguishing those cases needs a small amount of memory about prefixes
@@ -299,8 +298,7 @@ impl PrefixMissStats {
 
     /// Fraction of misses a retention tier could plausibly convert into hits.
     ///
-    /// This is the number the disk-tier decision turns on. Low means build
-    /// routing (W6), not storage.
+    /// A low value indicates routing is more useful than more retention.
     pub fn recoverable_miss_ratio(&self) -> f64 {
         let total = self.total_misses();
         if total == 0 {

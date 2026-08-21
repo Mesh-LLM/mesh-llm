@@ -37,11 +37,7 @@ impl CacheBlobStore {
         let len = bytes.len;
         let bytes = match bytes.repr {
             CacheBytesRepr::Inline(bytes) => bytes,
-            // Already deduped, or backed by the disk tier. A mapped payload
-            // must pass through untouched: hashing it would fault in the whole
-            // mapping, and taking block references for it would corrupt the
-            // ref-counts that `release_bytes` relies on.
-            repr @ (CacheBytesRepr::Blocks(_) | CacheBytesRepr::Mapped { .. }) => {
+            repr @ CacheBytesRepr::Blocks(_) => {
                 return (CacheBytes { len, repr }, CacheDedupeStats::default());
             }
         };
