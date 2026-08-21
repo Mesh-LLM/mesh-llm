@@ -43,20 +43,11 @@ pub fn prefix_hash(config: &StageConfig, token_start: u64, token_ids: &[i32]) ->
 
 /// Hash the identity of the *machine* the page bytes were produced on.
 ///
-/// Page files are raw runtime memory. Their interpretation depends on the CPU
-/// architecture, the native byte order, and the pointer width of the process
-/// that exported them, and none of those appear anywhere else in the identity.
-/// A serialized cache directory can be shared or copied, while a stage key may
-/// hold only model and stage shape. `backend_device` does not separate an
-/// x86_64 CUDA host from an aarch64 CUDA host, nor two CPU-only hosts that
-/// both record `<no-selected-device>`. The checksums would confirm the copied
-/// bytes arrived intact and the runtime would then import them as native — a
-/// silent misread, not a detected error.
-///
-/// Note that the identity hash deliberately encodes its own integers as
-/// little-endian, so two hosts of *different* native endianness otherwise
-/// compute the *same* page id. That is correct for a portable identifier and
-/// exactly why the byte order has to be named explicitly here.
+/// Exported KV state is raw runtime memory whose interpretation depends on the
+/// CPU architecture, native byte order, and pointer width. A stage key alone
+/// does not distinguish an x86_64 CUDA host from an aarch64 CUDA host, nor two
+/// CPU-only hosts that both record `<no-selected-device>`. Including these
+/// properties prevents incompatible state from sharing a page id.
 fn update_platform_identity(hasher: &mut blake3::Hasher) {
     hasher.update(b"kv-platform-identity-v1");
     hasher.update(std::env::consts::ARCH.as_bytes());
@@ -72,13 +63,9 @@ fn update_platform_identity(hasher: &mut blake3::Hasher) {
 /// exported KV page without changing the token sequence.
 ///
 /// Identity must cover every input that alters the serialized layout or the
-/// numerical content of a page. In-process this is nearly free to get wrong —
-/// a single running stage has one configuration, so a collision cannot occur.
-/// It becomes **silent numerical corruption** the moment a page outlives the
-/// process that wrote it (the mmap tier) or crosses a node boundary: flipping
-/// `kv_cache_policy` from `quality` to `saver` rewrites `cache_type_k`/`_v`
-/// from `f16` to `q8_0`, and without these fields in the hash the stale q8_0
-/// bytes collide with an f16 `page_id` and get imported as f16.
+/// numerical content of exported state. Flipping `kv_cache_policy` from
+/// `quality` to `saver` rewrites `cache_type_k`/`_v` from `f16` to `q8_0`;
+/// without these fields in the hash, incompatible state would share a page id.
 ///
 /// `NATIVE_KV_DTYPE` is a fixed layout tag and does **not** vary with the
 /// configured cache types, so it cannot stand in for them.
@@ -163,16 +150,12 @@ pub fn prefix_hash_with_namespace(
     // `topology_id` is deliberately **not** hashed. It is an instance
     // identifier, not a description of the work a stage does: local serving
     // derives it as `topology-mesh-skippy-{unix_nanos}`, so it is unique per
-    // process. Hashing it would make every page id change on restart and
-    // silently reduce any persistent tier to dead weight — the bytes survive
-    // and can never be found again.
+    // process and would prevent otherwise compatible cache identities from
+    // agreeing across runs.
     //
-    // What actually has to match for a page to be reusable is the *shape* of
-    // the stage: the model, which layers this stage owns, and its position in
-    // the pipeline. Those are hashed below, along with the runtime layout
-    // fields in `update_layout_identity`. Two stages that agree on all of
-    // them produce byte-compatible KV pages regardless of which run created
-    // them, which is exactly the reuse a persistent tier exists to provide.
+    // Reuse depends on the *shape* of the stage: the model, owned layers, and
+    // pipeline position. Those are hashed below with the runtime layout fields
+    // in `update_layout_identity`.
     hasher.update(config.stage_id.as_bytes());
     hasher.update(&config.stage_index.to_le_bytes());
     hasher.update(&config.layer_start.to_le_bytes());

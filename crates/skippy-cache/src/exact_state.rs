@@ -92,10 +92,6 @@ impl<E: Clone> ExactStateCache<E> {
         true
     }
 
-    pub fn all_token_counts_at_most(&self, max_token_count: u64) -> Vec<u64> {
-        self.token_counts_at_most(max_token_count)
-    }
-
     pub fn token_counts_at_most(&self, max_token_count: u64) -> Vec<u64> {
         self.token_count_refs
             .range(..=max_token_count)
@@ -237,6 +233,36 @@ mod tests {
         assert!(cache.lookup("first").is_none());
         assert!(cache.lookup("second").is_some());
         assert_eq!(cache.stats().entries, 1);
+    }
+
+    #[test]
+    fn touching_existing_page_refreshes_lru_without_replacing_payload() {
+        let mut cache = ExactStateCache::new(2, 0);
+        cache.record(
+            "first".to_string(),
+            2,
+            ExactStatePayload::full_state(vec![1, 2]),
+            (),
+        );
+        cache.record(
+            "second".to_string(),
+            2,
+            ExactStatePayload::full_state(vec![3, 4]),
+            (),
+        );
+
+        assert!(cache.touch("first"));
+        assert!(!cache.touch("missing"));
+        cache.record(
+            "third".to_string(),
+            2,
+            ExactStatePayload::full_state(vec![5, 6]),
+            (),
+        );
+
+        assert!(cache.lookup("first").is_some());
+        assert!(cache.lookup("second").is_none());
+        assert!(cache.lookup("third").is_some());
     }
 
     #[test]
