@@ -32,6 +32,8 @@ pub use types::{
 };
 
 #[cfg(test)]
+pub(crate) use cache::resolve_cache_root;
+#[cfg(test)]
 pub(crate) use install::{
     bundle_path_matches_explicit_root, emit_download_progress, install_resolved_runtime,
     verify_download_policy_before_fetch,
@@ -47,7 +49,7 @@ mod tests {
     use super::*;
     use mesh_llm_native_runtime::{NativeRuntimeBackend, NativeRuntimePlatform};
     use sha2::Digest;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
     static MANIFEST_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -411,6 +413,30 @@ mod tests {
             url_without_query("https://example.invalid/native-runtimes.json"),
             "https://example.invalid/native-runtimes.json"
         );
+    }
+
+    #[test]
+    fn resolve_cache_root_treats_empty_env_value_as_unset() {
+        let empty_env = resolve_cache_root(None, Some(std::ffi::OsString::new())).unwrap();
+        let unset_env = resolve_cache_root(None, None).unwrap();
+        assert_eq!(empty_env, unset_env);
+    }
+
+    #[test]
+    fn resolve_cache_root_honours_non_empty_env_value() {
+        let root =
+            resolve_cache_root(None, Some(std::ffi::OsString::from("/tmp/custom-cache"))).unwrap();
+        assert_eq!(root, PathBuf::from("/tmp/custom-cache"));
+    }
+
+    #[test]
+    fn resolve_cache_root_prefers_explicit_override_over_env() {
+        let root = resolve_cache_root(
+            Some(Path::new("/tmp/explicit-cache")),
+            Some(std::ffi::OsString::from("/tmp/env-cache")),
+        )
+        .unwrap();
+        assert_eq!(root, PathBuf::from("/tmp/explicit-cache"));
     }
 
     #[test]
