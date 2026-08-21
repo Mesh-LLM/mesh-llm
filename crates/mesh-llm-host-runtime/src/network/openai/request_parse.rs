@@ -745,11 +745,10 @@ fn try_decode_chunked_body(buf: &[u8], max_body_bytes: usize) -> Result<Option<(
 }
 
 fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_present: bool) -> bool {
-    let body_text = std::str::from_utf8(body).ok();
     openai_frontend::request_body_requires_json_normalization(path, body)
         || (plugin_manager_present
             && path.split('?').next().unwrap_or(path) == "/v1/chat/completions"
-            && body_text.is_some_and(|body_text| {
+            && std::str::from_utf8(body).ok().is_some_and(|body_text| {
                 body_text.contains("mesh://blob/")
                     || body_text.contains("\"blob_token\"")
                     || body_text.contains("\"mesh_token\"")

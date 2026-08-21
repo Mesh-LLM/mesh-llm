@@ -96,7 +96,7 @@ prepare_binary() {
 stamp_binary() {
   local name="$1"
   local node_version="$2"
-  cargo run -q -p xtask -- release-attestation stamp \
+  just --justfile "$REPO_ROOT/justfile" release-attestation stamp \
     --binary "$WORK_ROOT/$name/mesh-llm" \
     --signing-key-file "$RELEASE_KEY_PRIVATE" \
     --node-version "$node_version" \
@@ -109,14 +109,43 @@ inspect_binary() {
   local binary="$1"
   local output="$2"
   shift 2
-  cargo run -q -p xtask -- release-attestation inspect --binary "$binary" --json "$@" > "$output"
+  just --justfile "$REPO_ROOT/justfile" release-attestation inspect --binary "$binary" --json "$@" > "$output"
 }
 
 init_release_signer() {
-  cargo run -q -p xtask -- release-attestation generate-keypair \
+  just --justfile "$REPO_ROOT/justfile" release-attestation generate-keypair \
     --private-key-out "$RELEASE_KEY_PRIVATE" \
     --public-key-out "$RELEASE_KEY_PUBLIC" \
     >/dev/null
+}
+
+assert_peer_count() {
+  local status_file="$1"
+  local comparison="$2"
+  local expected="$3"
+  python3 - "$status_file" "$comparison" "$expected" <<'PY'
+import json, operator, sys
+path, comparison, expected = sys.argv[1], sys.argv[2], int(sys.argv[3])
+with open(path, 'r', encoding='utf-8') as fh:
+    count = len(json.load(fh).get('peers') or [])
+comparisons = {'eq': operator.eq, 'ge': operator.ge}
+if not comparisons[comparison](count, expected):
+    raise SystemExit(f"expected peer count {comparison} {expected}, got {count} in {path}")
+PY
+}
+
+assert_rejection_reason() {
+  local status_file="$1"
+  local expected_reason="$2"
+  python3 - "$status_file" "$expected_reason" <<'PY'
+import json, sys
+path, expected = sys.argv[1:3]
+with open(path, 'r', encoding='utf-8') as fh:
+    status = json.load(fh)
+reasons = [event.get('reason') for event in status.get('recent_mesh_rejections') or []]
+if expected not in reasons:
+    raise SystemExit(f"expected rejection {expected!r}, got {reasons!r} in {path}")
+PY
 }
 
 init_owner() {
@@ -238,6 +267,8 @@ run_signed_acceptance() {
   sleep 5
   wait_for_status 3611 "$WORK_ROOT/signed-host/status.json"
   wait_for_status 3612 "$WORK_ROOT/signed-joiner/status.json"
+  assert_peer_count "$WORK_ROOT/signed-host/status.json" ge 1
+  assert_peer_count "$WORK_ROOT/signed-joiner/status.json" ge 1
   write_evidence "$SIGNED_EVIDENCE" "signed accepted" "$signer_key" "$token" signed-host signed-joiner 3611 9611 8041 3612 9612 8042
   stop_node signed-joiner
   stop_node signed-host
@@ -258,6 +289,9 @@ run_unsigned_rejection() {
   sleep 5
   wait_for_status 3621 "$WORK_ROOT/unsigned-host/status.json"
   wait_for_status 3622 "$WORK_ROOT/unsigned-joiner/status.json"
+  assert_peer_count "$WORK_ROOT/unsigned-host/status.json" eq 0
+  assert_peer_count "$WORK_ROOT/unsigned-joiner/status.json" eq 0
+  assert_rejection_reason "$WORK_ROOT/unsigned-host/status.json" certified_binary_required
   write_evidence "$UNSIGNED_EVIDENCE" "unsigned rejected" "$signer_key" "$token" unsigned-host unsigned-joiner 3621 9621 8051 3622 9622 8052
   stop_node unsigned-joiner
   stop_node unsigned-host
@@ -287,6 +321,9 @@ PY
   sleep 5
   wait_for_status 3631 "$WORK_ROOT/tampered-host/status.json"
   wait_for_status 3632 "$WORK_ROOT/tampered-joiner/status.json"
+  assert_peer_count "$WORK_ROOT/tampered-host/status.json" eq 0
+  assert_peer_count "$WORK_ROOT/tampered-joiner/status.json" eq 0
+  assert_rejection_reason "$WORK_ROOT/tampered-host/status.json" build_proof_invalid
   write_evidence "$TAMPERED_EVIDENCE" "tampered rejected" "$signer_key" "$token" tampered-host tampered-joiner 3631 9631 8061 3632 9632 8062
   stop_node tampered-joiner
   stop_node tampered-host

@@ -16,14 +16,14 @@ workspace:
   scope.
 
 The crates intentionally do not share a Rust dev-dependency just for this
-test helper. Build scripts and runtime startup code have different process
-boundaries, so they retain explicit safety notes and audit TODOs until their
-single-threaded ordering is proven. The repository-level census check covers
+test helper. Build scripts have an isolated process boundary; runtime startup
+code retains explicit safety notes and audit TODOs until its single-threaded
+ordering is proven. The repository-level census check covers
 all 17 files from the original 128-comment audit and rejects a test mutation
 that is not covered by `#[serial]`:
 
 ```bash
-python3 scripts/check-env-mutation-contract.py
+just check-env-mutation-contract
 ```
 
 The same check runs through `scripts/tests` in the normal CI validation path.

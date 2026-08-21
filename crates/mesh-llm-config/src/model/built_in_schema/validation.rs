@@ -590,3 +590,14 @@ fn enum_values(schema: &ConfigValueSchema) -> Vec<String> {
         _ => Vec::new(),
     }
 }
+
+#[test]
+fn mesh_requirement_version_options_include_published_releases() {
+    let versions = schema_enum_values("mesh_requirements.min_node_version");
+    for version in ["0.72.2", "0.73.0", "0.73.1", "0.74.0", "0.75.0", "0.75.1"] {
+        assert!(
+            versions.iter().any(|candidate| candidate == version),
+            "{version}"
+        );
+    }
+}

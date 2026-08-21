@@ -33,7 +33,7 @@ pub use types::{
 
 #[cfg(test)]
 pub(crate) use install::{
-    bundle_path_matches_explicit_root, install_resolved_runtime,
+    bundle_path_matches_explicit_root, emit_download_progress, install_resolved_runtime,
     verify_download_policy_before_fetch,
 };
 #[cfg(test)]
@@ -48,7 +48,7 @@ mod tests {
     use mesh_llm_native_runtime::{NativeRuntimeBackend, NativeRuntimePlatform};
     use sha2::Digest;
     use std::path::PathBuf;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     static MANIFEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -88,6 +88,30 @@ mod tests {
             err.to_string().contains("missing required sha256"),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn download_progress_redacts_url_query_tokens() {
+        let captured = Arc::new(Mutex::new(None));
+        let captured_for_callback = Arc::clone(&captured);
+        let options = NativeRuntimeInstallOptions {
+            progress: Some(Arc::new(move |progress| {
+                *captured_for_callback.lock().unwrap() = Some(progress);
+            })),
+            ..Default::default()
+        };
+
+        emit_download_progress(
+            &artifact_with_sha(None),
+            "https://example.invalid/runtime.tar.gz?token=secret",
+            10,
+            Some(20),
+            false,
+            &options,
+        );
+
+        let progress = captured.lock().unwrap().clone().expect("progress event");
+        assert_eq!(progress.url, "https://example.invalid/runtime.tar.gz");
     }
 
     #[test]

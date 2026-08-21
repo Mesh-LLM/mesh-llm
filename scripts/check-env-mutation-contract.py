@@ -77,8 +77,6 @@ KNOWN_UNAUDITED_MUTATION_COUNTS = {
 # startup / native-runtime setup paths that may already have Tokio worker
 # threads, so replacing the TODO with a guessed SAFETY claim would be unsafe.
 DEFERRED_FILES = {
-    "crates/skippy-protocol/build.rs",
-    "crates/mesh-llm-plugin/build.rs",
     "crates/skippy-runtime/src/logging.rs",
     "crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs",
     "crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",
@@ -129,9 +127,24 @@ def nearest_function(lines: list[str], line_index: int) -> tuple[int, str] | Non
     return None
 
 
-def preceding_comments(lines: list[str], line_index: int, limit: int = 12) -> str:
-    start = max(0, line_index - limit)
-    return "\n".join(lines[start:line_index])
+def preceding_comment_block(lines: list[str], line_index: int) -> str:
+    """Return only the comment block directly adjacent to a mutation."""
+
+    block: list[str] = []
+    index = line_index - 1
+    in_block_comment = False
+    while index >= 0:
+        stripped = lines[index].strip()
+        if stripped.endswith("*/"):
+            in_block_comment = True
+        if in_block_comment or stripped.startswith(("//", "/*", "*")):
+            block.append(lines[index])
+            if stripped.startswith("/*"):
+                in_block_comment = False
+            index -= 1
+            continue
+        break
+    return "\n".join(reversed(block))
 
 
 def test_contract(
@@ -149,7 +162,7 @@ def test_contract(
     if any(SERIAL_ATTR_RE.match(line) for line in attrs):
         return True
     helpers = SERIAL_TEST_HELPERS.get(relative_path, set())
-    nearby = preceding_comments(lines, line_index).lower()
+    nearby = preceding_comment_block(lines, line_index).lower()
     return function_name in helpers and "serial" in nearby
 
 
@@ -171,7 +184,7 @@ def check_file(root: Path, relative_path: str) -> list[str]:
 
     for line_index in mutation_lines(lines):
         line_number = line_index + 1
-        nearby = preceding_comments(lines, line_index)
+        nearby = preceding_comment_block(lines, line_index)
         function = nearest_function(lines, line_index)
         function_name = function[1] if function else "<module>"
 
@@ -181,21 +194,16 @@ def check_file(root: Path, relative_path: str) -> list[str]:
                     f"{relative_path}:{line_number} ({function_name}): "
                     "build-script environment mutation needs a build-script SAFETY comment"
                 )
-            if TODO not in nearby:
-                errors.append(
-                    f"{relative_path}:{line_number} ({function_name}): "
-                    "build-script mutation lost its explicit audit TODO"
-                )
             continue
 
         if is_deferred:
             # Keep an explicit marker at every unresolved runtime mutation. A
             # future audit can remove it only after establishing an ordering
             # guarantee or eliminating the process-global mutation.
-            if TODO not in nearby:
+            if "SAFETY:" not in nearby or TODO not in nearby:
                 errors.append(
                     f"{relative_path}:{line_number} ({function_name}): "
-                    "deferred runtime mutation lost its audit TODO"
+                    "deferred runtime mutation needs adjacent SAFETY and audit TODO comments"
                 )
             continue
 

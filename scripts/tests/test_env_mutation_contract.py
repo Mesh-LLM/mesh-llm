@@ -9,6 +9,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check-env-mutation-contract.py"
 AUDITED_FILE = "crates/model-hf/src/store/local.rs"
+TODO = "// TODO: Audit that the environment access only happens in single-threaded code."
 
 
 class EnvironmentMutationContractTests(unittest.TestCase):
@@ -117,6 +118,64 @@ fn production_mutation() {
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("not covered by #[serial]", result.stderr)
+
+    def test_non_adjacent_safety_comment_does_not_cover_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / AUDITED_FILE
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                """#[cfg(test)]
+mod tests {
+    #[test]
+    #[serial]
+    fn mutation_with_distant_comment() {
+        // SAFETY: this applies only to the first mutation.
+        unsafe { std::env::set_var("FIRST", "1") };
+        let _intervening_statement = true;
+        unsafe { std::env::set_var("SECOND", "2") };
+    }
+}
+""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "--root", str(root), "--file", AUDITED_FILE],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("test environment mutation needs a SAFETY comment", result.stderr)
+
+    def test_deferred_mutation_requires_safety_comment_and_todo(self) -> None:
+        deferred_file = "crates/skippy-runtime/src/logging.rs"
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / deferred_file
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                f"""fn configure_runtime() {{
+    {TODO}
+    unsafe {{ std::env::set_var("RUNTIME", "1") }};
+}}
+""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "--root", str(root), "--file", deferred_file],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("needs adjacent SAFETY and audit TODO comments", result.stderr)
 
 
 if __name__ == "__main__":

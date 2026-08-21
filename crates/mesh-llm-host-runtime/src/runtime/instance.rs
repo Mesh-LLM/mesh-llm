@@ -652,6 +652,7 @@ mod tests {
             // SAFETY: the enclosing test contract is `#[serial]`, so this process
             // environment mutation cannot race another test.
             unsafe {
+                // SAFETY: every caller is an enclosing `#[serial]` test.
                 std::env::remove_var(key)
             };
             Self {
@@ -666,6 +667,7 @@ mod tests {
             // SAFETY: the enclosing test contract is `#[serial]`, so this process
             // environment mutation cannot race another test.
             unsafe {
+                // SAFETY: every caller is an enclosing `#[serial]` test.
                 std::env::set_var(key, value)
             };
             Self {

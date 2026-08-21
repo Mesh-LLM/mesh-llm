@@ -34,11 +34,13 @@ fn rejects_other_patch_runtimes() {
         ABI_VERSION_MINOR,
         ABI_VERSION_PATCH + 1,
     )));
-    assert!(!runtime_abi_supported(version(
-        ABI_VERSION_MAJOR,
-        ABI_VERSION_MINOR,
-        ABI_VERSION_PATCH - 1,
-    )));
+    if let Some(lower_patch) = ABI_VERSION_PATCH.checked_sub(1) {
+        assert!(!runtime_abi_supported(version(
+            ABI_VERSION_MAJOR,
+            ABI_VERSION_MINOR,
+            lower_patch,
+        )));
+    }
 }
 
 #[test]

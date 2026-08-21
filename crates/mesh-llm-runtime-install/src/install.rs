@@ -194,6 +194,7 @@ async fn download_runtime_archive(
     options: &NativeRuntimeInstallOptions,
 ) -> Result<()> {
     verify_download_policy_before_fetch(artifact, options.verification_policy)?;
+    let diagnostic_url = crate::manifest::url_without_query(url);
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(600))
         .build()
@@ -202,9 +203,11 @@ async fn download_runtime_archive(
         .header("User-Agent", "mesh-llm")
         .send()
         .await
-        .with_context(|| format!("download native runtime {url}"))?
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| format!("download native runtime {diagnostic_url}"))?
         .error_for_status()
-        .with_context(|| format!("native runtime request failed for {url}"))?;
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| format!("native runtime request failed for {diagnostic_url}"))?;
     let total = response.content_length();
     let mut stream = response.bytes_stream();
     let mut file = tokio::fs::File::create(path)
@@ -213,7 +216,9 @@ async fn download_runtime_archive(
     let mut downloaded = 0_u64;
     let mut hasher = sha2::Sha256::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.with_context(|| format!("read native runtime body from {url}"))?;
+        let chunk = chunk
+            .map_err(reqwest::Error::without_url)
+            .with_context(|| format!("read native runtime body from {diagnostic_url}"))?;
         file.write_all(&chunk)
             .await
             .with_context(|| format!("write native runtime archive {}", path.display()))?;
@@ -281,7 +286,7 @@ pub(crate) fn emit_download_progress(
     };
     progress(NativeRuntimeDownloadProgress {
         native_runtime_id: artifact.id.clone(),
-        url: url.to_string(),
+        url: crate::manifest::url_without_query(url).to_string(),
         downloaded_bytes,
         total_bytes,
         finished,

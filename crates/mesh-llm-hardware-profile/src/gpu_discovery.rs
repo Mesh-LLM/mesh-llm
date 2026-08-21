@@ -195,7 +195,7 @@ pub(crate) fn nvidia_lspci_bdf_for_name(output: &str, name: &str) -> Option<Stri
 
 pub(crate) fn normalize_pci_bdf(bdf: &str) -> String {
     if bdf.matches(':').count() == 1 {
-        format!("0000:{bdf}")
+        format!("0000:{bdf}").to_ascii_lowercase()
     } else {
         bdf.to_ascii_lowercase()
     }
@@ -264,4 +264,15 @@ pub(crate) fn linux_nvidia_proc_information_entries() -> Vec<NvidiaProcInformati
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn linux_nvidia_proc_information_entries() -> Vec<NvidiaProcInformationEntry> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_pci_bdf;
+
+    #[test]
+    fn normalizes_short_and_long_pci_bdf_case() {
+        assert_eq!(normalize_pci_bdf("AB:0C.0"), "0000:ab:0c.0");
+        assert_eq!(normalize_pci_bdf("0000:AB:0C.0"), "0000:ab:0c.0");
+    }
 }
