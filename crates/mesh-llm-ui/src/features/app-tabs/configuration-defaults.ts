@@ -8,6 +8,12 @@ import {
   SKIPPY_TRANSPORT_TOML_SECTION
 } from './configuration-defaults-constants'
 
+const CONFIGURATION_DEFAULT_SETTINGS = [
+  ...CONFIGURATION_DEFAULT_RUNTIME_SETTINGS,
+  ...CONFIGURATION_DEFAULT_SAMPLING_SETTINGS,
+  ...CONFIGURATION_DEFAULT_TRANSPORT_SETTINGS
+]
+
 export const CONFIGURATION_DEFAULTS = {
   categories: [
     {
@@ -58,17 +64,13 @@ export const CONFIGURATION_DEFAULTS = {
     }
   ],
 
-  settings: [
-    ...CONFIGURATION_DEFAULT_RUNTIME_SETTINGS,
-    ...CONFIGURATION_DEFAULT_SAMPLING_SETTINGS,
-    ...CONFIGURATION_DEFAULT_TRANSPORT_SETTINGS
-  ],
+  settings: CONFIGURATION_DEFAULT_SETTINGS,
   preview: [
     { label: 'Scope', value: 'carrack only', meta: 'remote nodes are read-only context' },
     { label: 'Config path', value: '~/.mesh-llm/config.toml' },
     {
       label: 'Generated defaults',
-      value: `${CONFIGURATION_DEFAULT_RUNTIME_SETTINGS.length + CONFIGURATION_DEFAULT_SAMPLING_SETTINGS.length + CONFIGURATION_DEFAULT_TRANSPORT_SETTINGS.length} settings`,
+      value: `${CONFIGURATION_DEFAULT_SETTINGS.length} settings`,
       meta: 'deployment overrides win'
     },
     { label: 'Signing', value: 'Unsigned', meta: 'attestation pending' }

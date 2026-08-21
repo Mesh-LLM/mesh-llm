@@ -222,4 +222,14 @@ describe('CONFIGURATION_DEFAULTS', () => {
     expect(new Set(settingIds).size).toBe(settingIds.length)
     expect(CONFIGURATION_DEFAULTS.settings.every((setting) => setting.tomlSection.startsWith('defaults.'))).toBe(true)
   })
+
+  it('derives the preview settings count from the composed settings array', () => {
+    const preview = CONFIGURATION_DEFAULTS.preview.find((entry) => entry.label === 'Generated defaults')
+
+    if (!preview) {
+      throw new Error('Expected a "Generated defaults" preview entry')
+    }
+
+    expect(preview.value).toBe(`${CONFIGURATION_DEFAULTS.settings.length} settings`)
+  })
 })
