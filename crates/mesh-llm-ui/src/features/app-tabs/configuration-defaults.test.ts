@@ -70,12 +70,6 @@ describe('CONFIGURATION_DEFAULTS', () => {
         tomlSection: 'defaults.speculative'
       },
       {
-        id: 'advanced',
-        label: 'Reasoning',
-        summary: 'Reasoning and repetition controls.',
-        help: 'Reasoning and sampling defaults'
-      },
-      {
         id: 'request-defaults',
         label: 'Request Defaults',
         summary: 'Sampling, reasoning, and request-time fallback defaults.',
