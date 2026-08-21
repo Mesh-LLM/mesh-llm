@@ -472,7 +472,7 @@ The implemented policy uses that isolation selectively:
 | Linux Cargo `target` directories | Disabled for Clippy, Rust tests, host, and runtime | Avoids sharded multi-GiB generations and their restore/upload latency |
 | Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged |
 | macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
-| Console pnpm store | `ui_quality` is the sole publisher; `ui_e2e` restores only | Avoids the two `ci-web-slice.yml` UI jobs racing to upload the same entry; later same-PR runs reuse a lockfile-keyed store |
+| Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |
 | Website npm store | None -- the `website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 

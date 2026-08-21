@@ -250,8 +250,16 @@ class PrWorkflowArtifactTests(unittest.TestCase):
     def test_pr_cache_publishers_are_exact_and_bounded(self):
         ui_artifact = self.workflow("ci-ui-artifact-slice.yml")
         website = self.workflow("ci-web-slice.yml")
+        # UI installs no longer round-trip through the Actions cache at all
+        # (#1392): the runner image bakes a warm pnpm store and every pnpm
+        # job in these two files points store-dir at it directly, so there
+        # is nothing here to save or restore.
         self.assertNotIn("name: Save pnpm store", ui_artifact)
-        self.assertEqual(1, website.count("name: Save pnpm store"))
+        self.assertNotIn("name: Restore pnpm store", ui_artifact)
+        self.assertNotIn("actions/cache", ui_artifact)
+        self.assertNotIn("name: Save pnpm store", website)
+        self.assertNotIn("name: Restore pnpm store", website)
+        self.assertNotIn("actions/cache", website)
         # The `website` job itself runs in the prebuilt public-web image with
         # no bare-metal row, so it has no native-cache-gated npm consumer
         # left to publish or bound -- setup-node's own cache was deleted

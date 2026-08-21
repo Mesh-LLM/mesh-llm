@@ -397,9 +397,9 @@ warmer image and toolchain epoch, so mismatched native-runtime rows are cold and
 do not restore it. These four high-fanout families disable per-object GHA
 publication on every provider. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
 and Windows native ABI caches may publish into GitHub's isolated PR merge-ref
-scope for same-PR reruns. The Website slice is the sole publisher for the
-shared pnpm key and owns the website npm cache; platform UI producers restore
-the pnpm store without racing to save it. Trusted main owns shared publication.
+scope for same-PR reruns. UI installs (`ui_quality`, `ui_e2e`, `ui_artifact`) point pnpm at the runner
+image's baked store instead of an Actions cache — there is no shared pnpm
+key or publisher to race. Trusted main owns shared publication.
 
 PR Rust-test, host, native-runtime, product, and platform-check matrices receive
 `fail_fast: true`; main/manual pass `false`. Quality matrices remain
