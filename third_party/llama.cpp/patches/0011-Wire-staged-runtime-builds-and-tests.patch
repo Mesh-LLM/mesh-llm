@@ -1447,10 +1447,10 @@ index 909e34290..b1341dd04 100644
      LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
      LLM_KV_FULL_ATTENTION_INTERVAL,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 19a0e5138..aab6c4aea 100644
+index f22aa2532..fa9e356dc 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1249,7 +1249,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+@@ -1251,7 +1251,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
      if (sampler && can_offload) {
          auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
  
@@ -1459,7 +1459,7 @@ index 19a0e5138..aab6c4aea 100644
  
          sampling.samplers[seq_id] = sampler;
  
-@@ -1608,90 +1608,38 @@ static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubat
+@@ -1610,90 +1610,38 @@ static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubat
      return seq_to_row;
  }
  
@@ -1569,7 +1569,7 @@ index 19a0e5138..aab6c4aea 100644
      }
  }
  
-@@ -2036,11 +1984,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
+@@ -2038,11 +1986,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
              const auto stride = n_vocab;
  
              // async copy the sampling data from the backend to the host
@@ -1585,7 +1585,7 @@ index 19a0e5138..aab6c4aea 100644
          }
  
          n_outputs_prev += n_outputs;
-@@ -3580,6 +3527,7 @@ llama_context_params llama_context_default_params() {
+@@ -3575,6 +3522,7 @@ llama_context_params llama_context_default_params() {
          /*.n_seq_max                   =*/ 1,
          /*.n_rs_seq                    =*/ 0,
          /*.n_outputs_max               =*/ 0,
