@@ -824,13 +824,6 @@ topology.
 - Miss-reason stats are collected but **not yet exported** as OTLP metrics, so
   W2 cannot yet answer the W4/W5 go/no-go question in production.
 
-### Operational notes
-
-The tier is **opt-in**: `SKIPPY_KV_DISK_TIER_MIB=<size>` (or
-`SKIPPY_KV_DISK_TIER=1`), with `SKIPPY_KV_DISK_TIER_DIR` overriding the
-location. Default-off means the serving path is unchanged apart from the
-identity hash and ladder depth.
-
 Cache directories are per stage-shape and hold an exclusive lock; a second
 instance on the same directory declines the tier rather than sharing it, because
 the index is last-writer-wins and orphan reclaim would delete the other

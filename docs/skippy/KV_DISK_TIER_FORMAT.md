@@ -10,19 +10,6 @@ migrated. Every recovery path in this document ends in "discard and recompute",
 because a cache that starts empty is merely slow while a cache that serves the
 wrong bytes is numerically wrong.
 
-## Enabling it
-
-The tier is opt-in and off by default.
-
-| Variable | Effect |
-|---|---|
-| `SKIPPY_KV_DISK_TIER=1` | Enable with the default node budget |
-| `SKIPPY_KV_DISK_TIER_MIB=<mib>` | Enable with an explicit node-total budget |
-| `SKIPPY_KV_DISK_TIER_DIR=<path>` | Override the cache base directory |
-
-The budget is a **node total**, shared out across stages, not a per-stage
-allowance. See `crates/skippy-server/src/kv_integration/disk_budget.rs`.
-
 The tier also declines to open at all when the stage configuration carries no
 valid content digest (`manifest_sha256` or `source_model_sha256`). A page that
 outlives its process must be anchored to the weights' *content*, never to the
