@@ -1,4 +1,4 @@
-From 11f56bf76211f636c2d60887064f31211207db72 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 17:06:42 +1000
 Subject: [PATCH 05/15] Add Skippy model lifecycle and package support
@@ -2349,3 +2349,6 @@ index 000000000..c20c52e71
 +    std::vector<skippy_verify_checkpoint> verify_checkpoints;
 +};
 +
+-- 
+2.54.0 (Apple Git-157)
+

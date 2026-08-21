@@ -1,8 +1,8 @@
-From 241c2c06787bb26428bcc9e081fb1f1de547c59f Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Tue, 18 Aug 2026 20:41:42 +1000
-Subject: [PATCH] skippy: prune unverified MTP proposal rows from the sidecar
- cache
+Subject: [PATCH 15/15] skippy: prune unverified MTP proposal rows from the
+ sidecar cache
 
 A multi-token proposal against a sidecar KV cache of its own writes one
 row per draft depth, but bookkeeping records only the first drafted
@@ -20,10 +20,6 @@ where the target owns position bookkeeping.
 
 Observed on CUDA at draft 3 with Qwen3.8-27B: rc=-1, resume position 152,
 sidecar seq_pos_max 153.
----
- src/skippy/runtime_types.h          |  5 +++++
- src/skippy/speculative_decoding.cpp | 28 ++++++++++++++++++++++++++++
- 2 files changed, 33 insertions(+)
 
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 index c1ce9298a..ff8024a5f 100644
@@ -129,5 +125,5 @@ index bbea68c3d..22bc61858 100644
      return skippy_success(out_error);
  }
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

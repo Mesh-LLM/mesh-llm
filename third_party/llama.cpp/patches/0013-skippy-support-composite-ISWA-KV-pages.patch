@@ -1,15 +1,8 @@
-From a8ddfab6b7f5aa4ad38ea2e4c2748507fdd276f1 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 13 Aug 2026 22:32:25 +1000
-Subject: [PATCH] skippy: support composite ISWA KV pages
+Subject: [PATCH 13/15] skippy: support composite ISWA KV pages
 
----
- include/skippy/common.h |   2 +-
- include/skippy/state.h  |  32 +++++-
- src/llama-kv-cache.cpp  |   6 +-
- src/llama-kv-cache.h    |   4 +-
- src/skippy/state.cpp    | 244 ++++++++++++++++++++++++++++++++--------
- 5 files changed, 237 insertions(+), 51 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 0911776cd..012aceb9a 100644
@@ -82,10 +75,85 @@ index 446da8dad..890fa5ae5 100644
          struct skippy_session * session,
          const struct skippy_kv_page_desc * desc,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 138a7c63b..190c6aff9 100644
+index 117de97f9..8a3b72f4c 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1651,7 +1651,8 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1447,6 +1447,26 @@ const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
+     return v_cells[seq_to_stream[seq_id]];
+ }
+ 
++struct llama_kv_cache_cell_run {
++    uint32_t first;
++    uint32_t count;
++};
++
++static std::vector<llama_kv_cache_cell_run> llama_kv_cache_cell_runs(const std::vector<uint32_t> & cell_idxs) {
++    std::vector<llama_kv_cache_cell_run> runs;
++    runs.reserve(cell_idxs.size());
++
++    for (uint32_t cell_idx : cell_idxs) {
++        if (!runs.empty() && cell_idx == runs.back().first + runs.back().count) {
++            ++runs.back().count;
++        } else {
++            runs.push_back({ cell_idx, 1 });
++        }
++    }
++
++    return runs;
++}
++
+ bool llama_kv_cache::stage_export_kv_page(
+         llama_seq_id seq_id,
+         int32_t layer_start,
+@@ -1607,12 +1627,14 @@ bool llama_kv_cache::stage_export_kv_page(
+         return false;
+     }
+ 
++    const auto cell_runs = llama_kv_cache_cell_runs(cell_idxs);
+     char * dst = static_cast<char *>(output);
+     for (const auto * layer : selected) {
+         auto * k = layer->k_stream[strm];
+-        for (uint32_t cell_idx : cell_idxs) {
+-            ggml_backend_tensor_get(k, dst, static_cast<size_t>(cell_idx) * k_row_bytes, k_row_bytes);
+-            dst += k_row_bytes;
++        for (const auto & run : cell_runs) {
++            const size_t run_bytes = static_cast<size_t>(run.count) * k_row_bytes;
++            ggml_backend_tensor_get(k, dst, static_cast<size_t>(run.first) * k_row_bytes, run_bytes);
++            dst += run_bytes;
+         }
+     }
+ 
+@@ -1622,9 +1644,10 @@ bool llama_kv_cache::stage_export_kv_page(
+                 continue;
+             }
+             auto * v = layer->v_stream[strm];
+-            for (uint32_t cell_idx : cell_idxs) {
+-                ggml_backend_tensor_get(v, dst, static_cast<size_t>(cell_idx) * v_row_bytes, v_row_bytes);
+-                dst += v_row_bytes;
++            for (const auto & run : cell_runs) {
++                const size_t run_bytes = static_cast<size_t>(run.count) * v_row_bytes;
++                ggml_backend_tensor_get(v, dst, static_cast<size_t>(run.first) * v_row_bytes, run_bytes);
++                dst += run_bytes;
+             }
+         }
+     } else {
+@@ -1635,10 +1658,11 @@ bool llama_kv_cache::stage_export_kv_page(
+             auto * v = layer->v_stream[strm];
+             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
+             for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+-                for (uint32_t cell_idx : cell_idxs) {
+-                    const size_t src_offset = (static_cast<size_t>(cell_idx) + static_cast<size_t>(j) * cells.size()) * v_element_bytes;
+-                    ggml_backend_tensor_get(v, dst, src_offset, v_element_bytes);
+-                    dst += v_element_bytes;
++                for (const auto & run : cell_runs) {
++                    const size_t run_bytes = static_cast<size_t>(run.count) * v_element_bytes;
++                    const size_t src_offset = (static_cast<size_t>(run.first) + static_cast<size_t>(j) * cells.size()) * v_element_bytes;
++                    ggml_backend_tensor_get(v, dst, src_offset, run_bytes);
++                    dst += run_bytes;
+                 }
+             }
+         }
+@@ -1652,7 +1676,8 @@ bool llama_kv_cache::stage_import_kv_page(
          const skippy_kv_page_desc & desc,
          const void * input,
          size_t input_bytes,
@@ -95,7 +163,16 @@ index 138a7c63b..190c6aff9 100644
      if (input == nullptr) {
          error = "input payload is required";
          return false;
-@@ -1747,6 +1748,9 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1663,7 +1688,7 @@ bool llama_kv_cache::stage_import_kv_page(
+     }
+     if (desc.layer_start < 0 ||
+             desc.layer_end <= desc.layer_start ||
+-            static_cast<uint32_t>(desc.layer_end) > hparams.n_layer() ||
++            static_cast<uint32_t>(desc.layer_end) > hparams.n_layer_all ||
+             desc.token_count == 0) {
+         error = "invalid native KV page descriptor";
+         return false;
+@@ -1748,6 +1773,9 @@ bool llama_kv_cache::stage_import_kv_page(
          error = "native KV page descriptor payload size is inconsistent";
          return false;
      }
@@ -105,6 +182,54 @@ index 138a7c63b..190c6aff9 100644
  
      llama_ubatch ubatch = {};
      auto udata = std::make_shared<llama_ubatch::data_t>();
+@@ -1813,12 +1841,14 @@ bool llama_kv_cache::stage_import_kv_page(
+     }
+     apply_ubatch(sinfo, ubatch);
+ 
++    const auto cell_runs = llama_kv_cache_cell_runs(sinfo.idxs[0]);
+     const char * src = static_cast<const char *>(input);
+     for (const auto * layer : selected) {
+         auto * k = layer->k_stream[strm];
+-        for (uint32_t i = 0; i < n_tokens; ++i) {
+-            ggml_backend_tensor_set(k, src, static_cast<size_t>(sinfo.idxs[0][i]) * desc.k_row_bytes, desc.k_row_bytes);
+-            src += desc.k_row_bytes;
++        for (const auto & run : cell_runs) {
++            const size_t run_bytes = static_cast<size_t>(run.count) * desc.k_row_bytes;
++            ggml_backend_tensor_set(k, src, static_cast<size_t>(run.first) * desc.k_row_bytes, run_bytes);
++            src += run_bytes;
+         }
+     }
+ 
+@@ -1829,9 +1859,10 @@ bool llama_kv_cache::stage_import_kv_page(
+                 continue;
+             }
+             auto * v = layer->v_stream[strm];
+-            for (uint32_t i = 0; i < n_tokens; ++i) {
+-                ggml_backend_tensor_set(v, src, static_cast<size_t>(sinfo.idxs[0][i]) * desc.v_row_bytes, desc.v_row_bytes);
+-                src += desc.v_row_bytes;
++            for (const auto & run : cell_runs) {
++                const size_t run_bytes = static_cast<size_t>(run.count) * desc.v_row_bytes;
++                ggml_backend_tensor_set(v, src, static_cast<size_t>(run.first) * desc.v_row_bytes, run_bytes);
++                src += run_bytes;
+             }
+         }
+     } else {
+@@ -1842,10 +1873,11 @@ bool llama_kv_cache::stage_import_kv_page(
+             auto * v = layer->v_stream[strm];
+             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
+             for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+-                for (uint32_t i = 0; i < n_tokens; ++i) {
+-                    const size_t dst_offset = (static_cast<size_t>(sinfo.idxs[0][i]) + static_cast<size_t>(j) * cells.size()) * desc.v_element_bytes;
+-                    ggml_backend_tensor_set(v, src, dst_offset, desc.v_element_bytes);
+-                    src += desc.v_element_bytes;
++                for (const auto & run : cell_runs) {
++                    const size_t run_bytes = static_cast<size_t>(run.count) * desc.v_element_bytes;
++                    const size_t dst_offset = (static_cast<size_t>(run.first) + static_cast<size_t>(j) * cells.size()) * desc.v_element_bytes;
++                    ggml_backend_tensor_set(v, src, dst_offset, run_bytes);
++                    src += run_bytes;
+                 }
+             }
+         }
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
 index 274ef4492..98dbcb198 100644
 --- a/src/llama-kv-cache.h
@@ -128,10 +253,38 @@ index 274ef4492..98dbcb198 100644
      //
      // graph_build API
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 2bfd88523..a70701844 100644
+index 2bfd88523..a5ab006aa 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -397,27 +397,140 @@ static llama_kv_cache * skippy_get_kv_cache(
+@@ -356,24 +356,14 @@ enum skippy_status skippy_import_recurrent_state(
+         return SKIPPY_STATUS_UNSUPPORTED;
+     }
+ 
+-    std::vector<uint8_t> remapped(
+-            static_cast<const uint8_t *>(input),
+-            static_cast<const uint8_t *>(input) + input_bytes);
+-    constexpr size_t seq_id_offset = sizeof(uint32_t);
+-    if (remapped.size() < seq_id_offset + sizeof(llama_seq_id)) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "recurrent state input is too small");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
+-    }
+-    std::memcpy(remapped.data() + seq_id_offset, &session->seq_id, sizeof(session->seq_id));
+-
+     session->ctx->synchronize();
+     const size_t read = llama_state_seq_set_data_ext(
+             session->ctx,
+-            remapped.data(),
+-            remapped.size(),
++            static_cast<const uint8_t *>(input),
++            input_bytes,
+             session->seq_id,
+             LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+-    if (read != remapped.size()) {
++    if (read != input_bytes) {
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to import recurrent state");
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+@@ -397,27 +387,140 @@ static llama_kv_cache * skippy_get_kv_cache(
      }
  
      if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
@@ -283,7 +436,7 @@ index 2bfd88523..a70701844 100644
  enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -429,24 +542,24 @@ enum skippy_status skippy_export_kv_page(
+@@ -429,24 +532,24 @@ enum skippy_status skippy_export_kv_page(
          size_t output_capacity,
          size_t * out_bytes,
          struct skippy_error ** out_error) {
@@ -323,7 +476,7 @@ index 2bfd88523..a70701844 100644
      if (!ok) {
          const bool too_small = out_bytes != nullptr && *out_bytes > output_capacity;
          const enum skippy_status status = too_small ? SKIPPY_STATUS_BUFFER_TOO_SMALL : SKIPPY_STATUS_RUNTIME_ERROR;
-@@ -457,46 +570,83 @@ enum skippy_status skippy_export_kv_page(
+@@ -457,46 +560,83 @@ enum skippy_status skippy_export_kv_page(
          skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "native KV page output buffer is too small");
          return SKIPPY_STATUS_BUFFER_TOO_SMALL;
      }
@@ -428,6 +581,220 @@ index 2bfd88523..a70701844 100644
      return skippy_success(out_error);
  }
  
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 7a963ca24..5a4e3cc17 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -154,6 +154,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build_and_test(test-skippy-kv-page-export.cpp)
+     llama_build_and_test(test-skippy-verify-checkpoint-retirement.cpp)
+     llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
++    llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
+     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+     llama_build_and_test(test-unicode.cpp)
+     llama_build_and_test(test-sampling.cpp)
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+index 82075076c..96937c8dc 100644
+--- a/tests/test-skippy-kv-page-export.cpp
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -16,7 +16,8 @@ int main() {
+         return 1;
+     }
+     llama_hparams hparams = {};
+-    hparams.n_layer_all = 1;
++    hparams.n_layer_all = 2;
++    hparams.n_layer_nextn = 1;
+     hparams.n_embd_head_k_full = 4;
+     hparams.n_embd_head_v_full = 4;
+     hparams.n_embd_head_k_swa = 4;
+@@ -40,7 +41,7 @@ int main() {
+             0,
+             LLAMA_SWA_TYPE_NONE,
+             nullptr,
+-            {},
++            [](int32_t il) { return il == 0; },
+             {},
+             {});
+ 
+@@ -122,11 +123,12 @@ int main() {
+             0,
+             LLAMA_SWA_TYPE_NONE,
+             nullptr,
+-            {},
++            [](int32_t il) { return il == 0; },
+             {},
+             {});
+     restore_kv.apply_ubatch(slot, ubatch);
+ 
++    desc.layer_end = 2;
+     if (!restore_kv.stage_import_kv_page(
+                 0,
+                 desc,
+diff --git a/tests/test-skippy-recurrent-state-roundtrip.cpp b/tests/test-skippy-recurrent-state-roundtrip.cpp
+new file mode 100644
+index 000000000..9ef80a6ce
+--- /dev/null
++++ b/tests/test-skippy-recurrent-state-roundtrip.cpp
+@@ -0,0 +1,159 @@
++#include "../src/llama-batch.h"
++#include "../src/llama-io.h"
++#include "../src/llama-memory-recurrent.h"
++#include "../src/llama-model.h"
++
++#include "ggml-backend.h"
++
++#include <cstdio>
++#include <cstring>
++#include <memory>
++#include <stdexcept>
++#include <vector>
++
++class buffer_writer final : public llama_io_write_i {
++public:
++    void write(const void * src, size_t size) override {
++        const auto * bytes = static_cast<const uint8_t *>(src);
++        data.insert(data.end(), bytes, bytes + size);
++    }
++
++    void write_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
++        const size_t old_size = data.size();
++        data.resize(old_size + size);
++        ggml_backend_tensor_get(tensor, data.data() + old_size, offset, size);
++    }
++
++    size_t n_bytes() override {
++        return data.size();
++    }
++
++    std::vector<uint8_t> data;
++};
++
++class buffer_reader final : public llama_io_read_i {
++public:
++    explicit buffer_reader(const std::vector<uint8_t> & data) : data(data) {}
++
++    void read(void * dst, size_t size) override {
++        require(size);
++        std::memcpy(dst, data.data() + offset, size);
++        offset += size;
++    }
++
++    void read_tensor(ggml_tensor * tensor, size_t tensor_offset, size_t size) override {
++        require(size);
++        ggml_backend_tensor_set(tensor, data.data() + offset, tensor_offset, size);
++        offset += size;
++    }
++
++    size_t n_bytes() override {
++        return offset;
++    }
++
++private:
++    void require(size_t size) const {
++        if (size > data.size() - offset) {
++            throw std::runtime_error("unexpectedly reached end of recurrent-state buffer");
++        }
++    }
++
++    const std::vector<uint8_t> & data;
++    size_t offset = 0;
++};
++
++static llama_memory_recurrent make_memory(const llama_model & model) {
++    return llama_memory_recurrent(
++            model,
++            GGML_TYPE_F32,
++            GGML_TYPE_F32,
++            false,
++            4,
++            2,
++            0,
++            {});
++}
++
++int main() {
++    std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_MAMBA, llama_model_default_params()));
++    if (!model) {
++        std::fprintf(stderr, "failed to create test model\n");
++        return 1;
++    }
++
++    model->hparams.n_layer_all = 1;
++    model->hparams.n_embd_r_impl = 4;
++    model->hparams.ssm_d_state = 2;
++    model->hparams.ssm_d_inner = 2;
++
++    auto source = make_memory(*model);
++    llama_pos source_pos = 7;
++    llama_seq_id source_seq_id = 0;
++    llama_seq_id * source_seq_ids = &source_seq_id;
++    int32_t source_n_seq_id = 1;
++    llama_ubatch source_batch = {};
++    source_batch.b_equal_seqs = 1;
++    source_batch.n_tokens = 1;
++    source_batch.n_seq_tokens = 1;
++    source_batch.n_seqs = 1;
++    source_batch.n_pos = 1;
++    source_batch.pos = &source_pos;
++    source_batch.n_seq_id = &source_n_seq_id;
++    source_batch.seq_id = &source_seq_ids;
++    if (!source.find_slot(source_batch)) {
++        std::fprintf(stderr, "failed to allocate source recurrent cell\n");
++        return 2;
++    }
++
++    const std::vector<float> source_r = { 1.0f, 2.0f, 3.0f, 4.0f };
++    const std::vector<float> source_s = { 5.0f, 6.0f, 7.0f, 8.0f };
++    ggml_backend_tensor_set(source.r_l[0], source_r.data(), 0, source_r.size() * sizeof(float));
++    ggml_backend_tensor_set(source.s_l[0], source_s.data(), 0, source_s.size() * sizeof(float));
++
++    buffer_writer writer;
++    source.state_write(writer, source_seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++
++    uint32_t cell_count = 0;
++    llama_pos serialized_pos = -1;
++    uint32_t serialized_n_seq_id = 1;
++    std::memcpy(&cell_count, writer.data.data(), sizeof(cell_count));
++    std::memcpy(&serialized_pos, writer.data.data() + sizeof(cell_count), sizeof(serialized_pos));
++    std::memcpy(
++            &serialized_n_seq_id,
++            writer.data.data() + sizeof(cell_count) + sizeof(serialized_pos),
++            sizeof(serialized_n_seq_id));
++    if (cell_count != 1 || serialized_pos != source_pos || serialized_n_seq_id != 0) {
++        std::fprintf(stderr, "unexpected single-sequence recurrent-state metadata\n");
++        return 3;
++    }
++
++    auto destination = make_memory(*model);
++    constexpr llama_seq_id destination_seq_id = 1;
++    buffer_reader reader(writer.data);
++    destination.state_read(reader, destination_seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++
++    if (reader.n_bytes() != writer.n_bytes()) {
++        std::fprintf(stderr, "recurrent-state round-trip byte count mismatch\n");
++        return 4;
++    }
++    if (destination.seq_pos_min(destination_seq_id) != source_pos ||
++            destination.seq_pos_max(destination_seq_id) != source_pos) {
++        std::fprintf(stderr, "recurrent-state position was not preserved across sequence ids\n");
++        return 5;
++    }
++    if (destination.seq_pos_min(source_seq_id) != -1) {
++        std::fprintf(stderr, "recurrent state retained the source sequence id\n");
++        return 6;
++    }
++
++    std::vector<float> restored_r(source_r.size());
++    std::vector<float> restored_s(source_s.size());
++    ggml_backend_tensor_get(destination.r_l[0], restored_r.data(), 0, restored_r.size() * sizeof(float));
++    ggml_backend_tensor_get(destination.s_l[0], restored_s.data(), 0, restored_s.size() * sizeof(float));
++    if (restored_r != source_r || restored_s != source_s) {
++        std::fprintf(stderr, "recurrent tensor data changed during cross-sequence restore\n");
++        return 7;
++    }
++
++    return 0;
++}
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

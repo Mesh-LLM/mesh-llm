@@ -1,4 +1,4 @@
-From e5f1991d8d86991e11cc00e9418caf88573bfc8e Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 17:06:42 +1000
 Subject: [PATCH 04/15] Add Skippy public ABI surface
@@ -657,3 +657,6 @@ index 000000000..e3e7cb38d
 +    }
 +    return SKIPPY_STATUS_OK;
 +}
+-- 
+2.54.0 (Apple Git-157)
+
