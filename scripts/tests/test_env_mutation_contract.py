@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -13,14 +14,17 @@ TODO = "// TODO: Audit that the environment access only happens in single-thread
 
 
 class EnvironmentMutationContractTests(unittest.TestCase):
-    def test_repository_census_is_serialized_or_explicitly_deferred(self) -> None:
-        result = subprocess.run(
-            ["python3", str(SCRIPT)],
+    def run_checker(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
             cwd=ROOT,
             capture_output=True,
             text=True,
             check=False,
         )
+
+    def test_repository_census_is_serialized_or_explicitly_deferred(self) -> None:
+        result = self.run_checker()
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("34 Rust files", result.stdout)
@@ -37,13 +41,7 @@ class EnvironmentMutationContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                ["python3", str(SCRIPT), "--root", str(root)],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            result = self.run_checker("--root", str(root))
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unregistered process-environment mutation file", result.stderr)
@@ -66,20 +64,7 @@ mod tests {
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(SCRIPT),
-                    "--root",
-                    str(root),
-                    "--file",
-                    AUDITED_FILE,
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            result = self.run_checker("--root", str(root), "--file", AUDITED_FILE)
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("not covered by #[serial]", result.stderr)
@@ -101,20 +86,7 @@ fn production_mutation() {
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(SCRIPT),
-                    "--root",
-                    str(root),
-                    "--file",
-                    AUDITED_FILE,
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            result = self.run_checker("--root", str(root), "--file", AUDITED_FILE)
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("not covered by #[serial]", result.stderr)
@@ -140,13 +112,7 @@ mod tests {
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                ["python3", str(SCRIPT), "--root", str(root), "--file", AUDITED_FILE],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            result = self.run_checker("--root", str(root), "--file", AUDITED_FILE)
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("test environment mutation needs a SAFETY comment", result.stderr)
@@ -166,13 +132,7 @@ mod tests {
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                ["python3", str(SCRIPT), "--root", str(root), "--file", deferred_file],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            result = self.run_checker("--root", str(root), "--file", deferred_file)
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("needs adjacent SAFETY and audit TODO comments", result.stderr)
