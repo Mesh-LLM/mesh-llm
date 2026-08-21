@@ -113,9 +113,10 @@ function clientAnchorThreshold(
   return threshold
 }
 
-// Ownership/invariants: this module owns topology pair planning, placement/crossing reduction,
-// perimeter client placement, and node sizing. Render-space edge geometry belongs in
-// `render/line-builders.ts`.
+// Ownership/invariants: this module owns topology pair planning only. Angular placement and
+// crossing-swap reduction live in `placement.ts`, edge-crossing detection in `crossings.ts`,
+// perimeter client placement in `perimeter.ts`, and node-overlap resolution/sizing in
+// `overlap.ts`. Render-space edge geometry belongs in `render/line-builders.ts`.
 
 export function buildTopologyPairPlan(nodes: TopologyGraphNode[], centerNodeId?: string): TopologyGraphEdge[] {
   if (nodes.length < 2) {
