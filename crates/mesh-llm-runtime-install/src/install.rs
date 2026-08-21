@@ -286,7 +286,7 @@ pub(crate) fn emit_download_progress(
     };
     progress(NativeRuntimeDownloadProgress {
         native_runtime_id: artifact.id.clone(),
-        url: crate::manifest::url_without_query(url).to_string(),
+        url: crate::manifest::url_without_query(url),
         downloaded_bytes,
         total_bytes,
         finished,

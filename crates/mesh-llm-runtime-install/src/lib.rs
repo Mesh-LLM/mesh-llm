@@ -416,6 +416,18 @@ mod tests {
     }
 
     #[test]
+    fn manifest_diagnostic_urls_redact_userinfo() {
+        let redacted =
+            url_without_query("https://user:secret@example.invalid/native-runtimes.json?token=abc");
+        assert!(!redacted.contains("secret"), "{redacted}");
+        assert!(!redacted.contains("abc"), "{redacted}");
+        assert_eq!(
+            redacted,
+            "https://[REDACTED]@example.invalid/native-runtimes.json"
+        );
+    }
+
+    #[test]
     fn resolve_cache_root_treats_empty_env_value_as_unset() {
         let empty_env = resolve_cache_root(None, Some(std::ffi::OsString::new())).unwrap();
         let unset_env = resolve_cache_root(None, None).unwrap();

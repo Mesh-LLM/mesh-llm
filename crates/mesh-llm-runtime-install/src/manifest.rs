@@ -147,8 +147,33 @@ pub(crate) fn release_manifest_checksum_url(url: &str) -> String {
     }
 }
 
-pub(crate) fn url_without_query(url: &str) -> &str {
-    url.split_once('?').map_or(url, |(base, _)| base)
+/// Strips the query string and redacts any userinfo (`user:pass@`) from a
+/// URL before it is surfaced in error context or progress events. Mirrors
+/// `redact_url_userinfo` in `mesh-llm-host-runtime::logging::policy`; kept
+/// local because this crate does not otherwise depend on host-runtime.
+pub(crate) fn url_without_query(url: &str) -> String {
+    let without_query = url.split_once('?').map_or(url, |(base, _)| base);
+    redact_url_userinfo(without_query)
+}
+
+fn redact_url_userinfo(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let authority_start = scheme_end + 3;
+    let authority_end = url[authority_start..]
+        .find(['/', '#'])
+        .map_or(url.len(), |offset| authority_start + offset);
+    let authority = &url[authority_start..authority_end];
+    let Some(user_info_end) = authority.rfind('@') else {
+        return url.to_string();
+    };
+    format!(
+        "{}[REDACTED]@{}{}",
+        &url[..authority_start],
+        &authority[user_info_end + 1..],
+        &url[authority_end..]
+    )
 }
 
 pub(crate) fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<String> {
