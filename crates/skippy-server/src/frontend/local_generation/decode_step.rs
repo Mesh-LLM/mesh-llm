@@ -140,6 +140,7 @@ impl StageOpenAiBackend {
             return Ok(TokenControl::Continue);
         }
         state.decoded_tokens += 1;
+        state.generated_token_ids.push(state.current);
         if let Some(committed_token_ids) = state.linear_context_tokens.as_mut() {
             committed_token_ids.push(state.current);
         }

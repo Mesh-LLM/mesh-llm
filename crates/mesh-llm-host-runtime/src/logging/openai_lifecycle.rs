@@ -15,7 +15,8 @@ use mesh_llm_events::logging::{
 };
 use openai_frontend::{
     OpenAiBackendOperation, OpenAiFailure, OpenAiLifecycleContext, OpenAiLifecycleEvent,
-    OpenAiLifecycleObserver, OpenAiRejection, OpenAiTerminalResult, OpenAiUsage,
+    OpenAiLifecycleObserver, OpenAiRejection, OpenAiRequestMethod, OpenAiTerminalResult,
+    OpenAiUsage,
 };
 
 use super::{
@@ -446,7 +447,9 @@ impl OpenAiLifecycleLoggingAdapter {
 
         let (guard, _) = self.service.register_request_with_metadata(
             request_id,
-            RequestSummaryMetadata::from_openai_frontend_route(context.route),
+            RequestSummaryMetadata::from_openai_frontend_route(context.route)
+                .with_source(Some("direct_http"))
+                .with_method(Some(openai_method_label(context.method))),
         );
         tracked.requests.insert(
             request_id,
@@ -655,6 +658,14 @@ impl OpenAiLifecycleLoggingAdapter {
     #[cfg(test)]
     fn tracked_len(&self) -> usize {
         lock_recover(&self.tracked).requests.len()
+    }
+}
+
+const fn openai_method_label(method: OpenAiRequestMethod) -> &'static str {
+    match method {
+        OpenAiRequestMethod::Get => "GET",
+        OpenAiRequestMethod::Post => "POST",
+        OpenAiRequestMethod::Other => "OTHER",
     }
 }
 
@@ -919,6 +930,8 @@ mod tests {
             .get_recent(&request_id.as_uuid().to_string())
             .expect("terminal request summary");
         assert_eq!(summary.metadata.route(), Some("chat_completions"));
+        assert_eq!(summary.metadata.source(), Some("direct_http"));
+        assert_eq!(summary.metadata.method(), Some("POST"));
         assert_eq!(summary.metadata.provider(), Some("openai_frontend"));
         assert_eq!(summary.metadata.engine(), Some("chat_completion"));
         let records = service.bus_ref().replay_window().records;

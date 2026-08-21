@@ -1,11 +1,14 @@
+use std::time::Instant;
+
 use anyhow::{Context, Result};
 use skippy_cache::ExactStatePayload;
 
 use crate::runtime_state::RuntimeState;
 
 use super::{
-    ExactStateExtra, ExactStateRecord, ExactStateRestore, ExactStateSource, KvStageIntegration,
-    PrefillKvIdentity, StagePrefixCachePayload, records::add_reconstruct_stats,
+    ExactStateExtra, ExactStateRecord, ExactStateRecordAdmission, ExactStateRestore,
+    ExactStateSource, KvStageIntegration, PendingExactStateRecord, PrefillKvIdentity,
+    StagePrefixCachePayload, records::add_reconstruct_stats,
 };
 
 impl KvStageIntegration {
@@ -19,11 +22,12 @@ impl KvStageIntegration {
             return Ok(None);
         }
         for identity in identities {
+            let lookup_started = Instant::now();
             let lookup = {
                 let mut cache = self
                     .exact_states
                     .lock()
-                    .expect("exact state cache lock poisoned");
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Fall through to the disk tier on a RAM miss, so a demoted
                 // page is actually readable. Without this the tier is
                 // write-only: eviction pays to serialize every payload and
@@ -44,10 +48,13 @@ impl KvStageIntegration {
             let Some(lookup) = lookup else {
                 continue;
             };
+            let lookup_ms = lookup_started.elapsed().as_secs_f64() * 1000.0;
             let from_disk = lookup.from_disk;
             let mut reconstruct_ms = 0.0;
             let mut reconstruct_bytes = 0u64;
             let mut reconstruct_blocks = 0usize;
+            let mut kv_import_ms = 0.0;
+            let mut recurrent_import_ms = 0.0;
             match lookup.payload.kind().into() {
                 StagePrefixCachePayload::FullState => {
                     let (full_state, stats) = lookup
@@ -60,11 +67,13 @@ impl KvStageIntegration {
                         &mut reconstruct_blocks,
                         stats,
                     );
+                    let import_started = Instant::now();
                     runtime.import_full_state_for_token_count(
                         session_id,
                         full_state.as_ref(),
                         lookup.token_count,
                     )?;
+                    kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
                 }
                 StagePrefixCachePayload::KvRecurrent => {
                     if let Some((kv, stats)) = lookup
@@ -79,7 +88,9 @@ impl KvStageIntegration {
                             stats,
                         );
                         if let Some(desc) = lookup.extra.kv_desc {
+                            let import_started = Instant::now();
                             runtime.import_kv_page(session_id, &desc, kv.as_ref())?;
+                            kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
                         } else if !kv.is_empty() {
                             continue;
                         }
@@ -94,11 +105,13 @@ impl KvStageIntegration {
                         &mut reconstruct_blocks,
                         stats,
                     );
+                    let import_started = Instant::now();
                     runtime.import_recurrent_state_for_token_count(
                         session_id,
                         recurrent.as_ref(),
                         lookup.token_count,
                     )?;
+                    recurrent_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
                 }
                 _ => continue,
             }
@@ -116,6 +129,9 @@ impl KvStageIntegration {
                 reconstruct_ms,
                 reconstruct_bytes,
                 reconstruct_blocks,
+                lookup_ms,
+                kv_import_ms,
+                recurrent_import_ms,
             }));
         }
         Ok(None)
@@ -137,51 +153,116 @@ impl KvStageIntegration {
         if !self.try_begin_record(&identity.page_id) {
             return Ok(None);
         }
-        let result = (|| {
-            let (payload, extra) = match self.payload {
-                StagePrefixCachePayload::FullState => (
-                    ExactStatePayload::full_state(runtime.export_full_state(session_id)?),
-                    ExactStateExtra::default(),
-                ),
-                StagePrefixCachePayload::KvRecurrent => {
-                    let kv = match runtime.export_kv_page(session_id, 0, token_count) {
-                        Ok(kv) => Some(kv),
-                        Err(error) if is_native_kv_unavailable(&error) => None,
-                        Err(error) => return Err(error),
-                    };
-                    let recurrent = runtime.export_recurrent_state(session_id)?;
+        let already_recorded = match try_touch_exact_state(&self.exact_states, &identity.page_id) {
+            Ok(Some(already_recorded)) => already_recorded,
+            Ok(None) => {
+                // Recording is optional. A background worker may hold this lock
+                // while hashing hundreds of MiB; never make inference wait for it.
+                self.finish_record(&identity.page_id);
+                return Ok(None);
+            }
+            Err(error) => {
+                self.finish_record(&identity.page_id);
+                return Err(error);
+            }
+        };
+        if already_recorded {
+            self.finish_record(&identity.page_id);
+            return Ok(None);
+        }
+        // Avoid paying a potentially multi-hundred-MiB runtime export when the
+        // bounded worker queue is already occupied. Admission remains best-effort:
+        // another producer may win the race before `try_send` below.
+        if !self.has_exact_state_record_capacity() {
+            self.finish_record(&identity.page_id);
+            return Ok(None);
+        }
+        let exported = match self.payload {
+            StagePrefixCachePayload::FullState => {
+                runtime.export_full_state(session_id).map(|state| {
                     (
-                        ExactStatePayload::kv_recurrent(
-                            kv.as_ref().map(|kv| kv.payload.clone()).unwrap_or_default(),
-                            recurrent,
-                        ),
-                        ExactStateExtra {
-                            kv_desc: kv.as_ref().map(|kv| kv.desc.clone()),
-                        },
+                        ExactStatePayload::full_state(state),
+                        ExactStateExtra::default(),
                     )
-                }
-                _ => return Ok(None),
-            };
-            let outcome = self
-                .exact_states
-                .lock()
-                .expect("exact state cache lock poisoned")
-                .record(identity.page_id.clone(), token_count, payload, extra);
-            Ok(Some(ExactStateRecord {
-                page_id: outcome.page_id,
-                token_count: outcome.token_count as usize,
-                payload_kind: self.payload.into(),
-                stored: outcome.stored,
-                logical_bytes: outcome.logical_bytes,
-                physical_bytes: outcome.physical_bytes,
-                entries: outcome.entries,
-                evicted_entries: outcome.evicted_entries,
-                evicted_logical_bytes: outcome.evicted_logical_bytes,
-                dedupe: outcome.dedupe,
-            }))
-        })();
-        self.finish_record(&identity.page_id);
-        result
+                })
+            }
+            StagePrefixCachePayload::KvRecurrent => (|| {
+                let kv = match runtime.export_kv_page(session_id, 0, token_count) {
+                    Ok(kv) => Some(kv),
+                    Err(error) if is_native_kv_unavailable(&error) => None,
+                    Err(error) => return Err(error),
+                };
+                let recurrent = runtime.export_recurrent_state(session_id)?;
+                Ok((
+                    ExactStatePayload::kv_recurrent(
+                        kv.as_ref().map(|kv| kv.payload.clone()).unwrap_or_default(),
+                        recurrent,
+                    ),
+                    ExactStateExtra {
+                        kv_desc: kv.as_ref().map(|kv| kv.desc.clone()),
+                    },
+                ))
+            })(),
+            StagePrefixCachePayload::Disabled | StagePrefixCachePayload::ResidentKv => {
+                self.finish_record(&identity.page_id);
+                return Ok(None);
+            }
+        };
+        let (payload, extra) = match exported {
+            Ok(exported) => exported,
+            Err(error) => {
+                self.finish_record(&identity.page_id);
+                return Err(error);
+            }
+        };
+        let payload_kind = payload.kind();
+        let logical_bytes = payload.byte_len();
+        match self.enqueue_exact_state_record(PendingExactStateRecord {
+            page_id: identity.page_id.clone(),
+            token_count,
+            payload,
+            extra,
+        }) {
+            ExactStateRecordAdmission::Queued => {
+                // Recording owns the exact-state mutex while it hashes a potentially
+                // multi-hundred-MiB payload. Telemetry must not turn that background
+                // work back into request latency by waiting for cache stats here.
+                let stats = self
+                    .exact_states
+                    .try_lock()
+                    .ok()
+                    .map(|states| states.stats())
+                    .unwrap_or_default();
+                Ok(Some(ExactStateRecord {
+                    page_id: identity.page_id.clone(),
+                    token_count: token_count as usize,
+                    payload_kind,
+                    stored: false,
+                    logical_bytes,
+                    physical_bytes: stats.physical_bytes,
+                    entries: stats.entries,
+                    evicted_entries: 0,
+                    evicted_logical_bytes: 0,
+                    dedupe: Default::default(),
+                }))
+            }
+            ExactStateRecordAdmission::DroppedFull | ExactStateRecordAdmission::WorkerStopped => {
+                Ok(None)
+            }
+        }
+    }
+}
+
+fn try_touch_exact_state(
+    exact_states: &std::sync::Mutex<skippy_cache::ExactStateCache<ExactStateExtra>>,
+    page_id: &str,
+) -> Result<Option<bool>> {
+    match exact_states.try_lock() {
+        Ok(mut exact_states) => Ok(Some(exact_states.touch(page_id))),
+        Err(std::sync::TryLockError::WouldBlock) => Ok(None),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            Ok(Some(poisoned.into_inner().touch(page_id)))
+        }
     }
 }
 
@@ -222,5 +303,57 @@ impl From<StagePrefixCachePayload> for skippy_cache::ExactStatePayloadKind {
                 Self::FullState
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
+
+    use skippy_cache::ExactStateCache;
+
+    use super::{ExactStateExtra, try_touch_exact_state};
+
+    #[test]
+    fn busy_exact_state_lock_skips_touch_without_waiting() {
+        let cache = Arc::new(Mutex::new(ExactStateCache::<ExactStateExtra>::new(1, 1024)));
+        let locked = cache.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = locked.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        locked_rx.recv().unwrap();
+
+        let started = Instant::now();
+        assert_eq!(try_touch_exact_state(&cache, "busy").unwrap(), None);
+        assert!(started.elapsed() < Duration::from_millis(100));
+
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+    }
+
+    #[test]
+    fn poisoned_exact_state_lock_recovers_without_panicking() {
+        let cache = Arc::new(Mutex::new(ExactStateCache::<ExactStateExtra>::new(1, 1024)));
+        let poisoned = cache.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("poison exact-state cache for test");
+            })
+            .join()
+            .is_err()
+        );
+
+        assert_eq!(
+            try_touch_exact_state(&cache, "poisoned").unwrap(),
+            Some(false)
+        );
     }
 }

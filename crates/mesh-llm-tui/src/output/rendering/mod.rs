@@ -1,5 +1,6 @@
 #[cfg(test)]
 use super::PRETTY_TUI_LIST_HIGHLIGHT_SYMBOL_WIDTH;
+use super::terminal_out::TerminalOut;
 use super::{
     DashboardEventsFilterState, DashboardPanel, DashboardState, MeshEventState,
     PRETTY_TUI_EVENT_LEVEL_WIDTH, PRETTY_TUI_EVENTS_COLUMN_PERCENT,
@@ -25,7 +26,7 @@ use ratatui::{
 };
 #[cfg(test)]
 use std::fmt::Write as _;
-use std::io;
+
 use tokio::time::Duration;
 
 mod events;
@@ -160,7 +161,7 @@ pub(super) enum TuiEventRow<'a> {
     Padding,
 }
 
-pub(in crate::output) type TuiTerminal = Terminal<CrosstermBackend<io::Stderr>>;
+pub(in crate::output) type TuiTerminal = Terminal<CrosstermBackend<TerminalOut>>;
 pub(in crate::output) fn dashboard_status_line(
     state: &DashboardState,
     width: u16,

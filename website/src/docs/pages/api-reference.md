@@ -28,6 +28,61 @@ For privacy-safe local request history, live replay, export, cleanup, and
 terminal webhook delivery, see the
 [Local Logging API](/docs/pages/logging-api/).
 
+## Liveness and local readiness
+
+Use `GET /health` for a lightweight management-process probe:
+
+```http
+GET /health
+```
+
+This endpoint is served on the management port (default `3131`). The
+OpenAI-compatible serving port has its own `/health`, `/healthz`, and `/readyz`
+probes; those do not include the management endpoint's mesh and local-model
+summary.
+
+An answering management process always returns HTTP `200` with
+`Content-Type: application/json` and `"status":"ok"`. This is deliberately a
+liveness contract: joining a mesh, having peers, loading a model, and
+successful inference are not required. The response also reports the
+node's current `mode` (`worker`, `client`, or `serving`), compact mesh
+connection state, and locally healthy serving models for callers that need
+readiness context without fetching `/api/status`.
+
+Representative response:
+
+```json
+{
+  "status": "ok",
+  "mode": "serving",
+  "mesh": {
+    "status": "connected",
+    "admitted_peer_count": 2,
+    "connected_peer_count": 2
+  },
+  "serving": {
+    "status": "healthy",
+    "models": ["Qwen3-8B-Q4_K_M"]
+  }
+}
+```
+
+The exact `mode` vocabulary is `worker`, `client`, or `serving`. Mesh
+`status` is `standalone` when there are no admitted peers, `connected` when at
+least one admitted peer has a current control connection, and `disconnected`
+when admitted membership exists without a current connection. Serving `status`
+is `healthy` when local models or worker stages are ready, `degraded` when
+ready work coexists with a terminal local failure, `unhealthy` when local work
+has failed and none is ready, `starting` when local work exists but has not
+reached readiness, `idle` when a worker/serving node has no local work, and
+`not_applicable` for clients. Worker `models` contains ready local split-stage
+model IDs; serving `models` contains healthy local or cached plugin-inference
+models.
+
+For full mesh topology, routing, model inventory, and runtime diagnostics, use
+`GET /api/status`. Do not treat `/health`'s HTTP status as an inference
+readiness result.
+
 ## Runtime lifecycle
 
 ### Load a local model

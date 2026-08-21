@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   ArrowLeftRight,
-  Calendar,
   CircleCheckBig,
   CircleX,
   Database,
@@ -18,8 +17,6 @@ import { Card } from '@/components/ui/card'
 import { FilterPopover, type FilterCategory, type FilterValueOption } from '@/components/ui/FilterPopover'
 import { InfoBanner } from '@/components/ui/InfoBanner'
 import { Input } from '@/components/ui/input'
-import { NativeSelect } from '@/components/ui/NativeSelect'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Sparkline } from '@/components/ui/Sparkline'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
 import { DataTable, TanStackTable as DataTableTanStackTableType } from '@/components/ui/data-table'
@@ -28,13 +25,16 @@ import { DataTableViewOptions } from '@/components/ui/data-table-view-options'
 import { useLogsAuditQuery } from '@/features/logs/api/use-logs-audit-query'
 import { useLogsLedgerQuery } from '@/features/logs/api/use-logs-ledger-query'
 import { useLogsLiveRecovery, type LogsLiveConnectionState } from '@/features/logs/api/use-logs-live-recovery'
+import { LogAuditCursor } from '@/features/logs/api/ids'
 import {
   buildLogEventLedgerColumns,
   LOG_EVENT_LEDGER_COLUMN_LABELS
 } from '@/features/logs/components/LogEventLedgerColumns'
+import { EventsOverTimeChart } from '@/features/logs/components/EventsOverTimeChart'
 import { LogEventInspector } from '@/features/logs/components/LogEventInspector'
 import { LogOperations } from '@/features/logs/components/LogOperations'
-import { RequestsOverTimeChart } from '@/features/logs/components/RequestsOverTimeChart'
+import { LogsLedgerLoadingGhost } from '@/features/logs/components/LogsLedgerLoadingGhost'
+import { LogsSchemaCompatibilityAlert } from '@/features/logs/components/LogsSchemaCompatibilityAlert'
 import type { LogRequest } from '@/features/logs/api/schemas'
 import type { LoggingStatus } from '@/lib/api/types'
 import {
@@ -47,6 +47,7 @@ import {
 } from '@/features/logs/lib/log-event-ledger'
 import { compareLogInstants } from '@/features/logs/lib/log-instant'
 import { buildLogKpiMetrics } from '@/features/logs/lib/log-kpis'
+import { resolveLogsSchemaCompatibility } from '@/features/logs/lib/logs-schema-compatibility'
 import type { VolumeTimeRangeKey } from '@/features/logs/lib/log-volume'
 import { useAdvancingChartClock } from '@/features/logs/lib/use-advancing-chart-clock'
 import {
@@ -246,11 +247,11 @@ function selectedRange(
   const rangeMs =
     resolvedFrom !== undefined && !Number.isNaN(resolvedFrom) ? endMs - resolvedFrom : Number.POSITIVE_INFINITY
   return {
-    label: preset?.label ?? (requestScope.from || requestScope.to ? 'Custom time range' : 'All time'),
+    label: preset?.label ?? (requestScope.from || requestScope.to ? 'Custom time range' : 'Lifetime'),
     rangeMs,
     endMs,
     chartRange:
-      timeRange === '1h' || timeRange === '6h' || timeRange === '24h' || timeRange === '7d'
+      timeRange === '1h' || timeRange === '6h' || timeRange === '12h' || timeRange === '24h' || timeRange === '7d'
         ? timeRange
         : requestScope.from || requestScope.to
           ? 'selected'
@@ -268,16 +269,19 @@ function KpiStrip({
   readonly range: ReturnType<typeof selectedRange>
 }) {
   const counts = buildLogKpiMetrics(rows, range.endMs, range.rangeMs)
+  const scopeDescription = complete
+    ? `Selected range: ${range.label} · retained records only`
+    : `Selected range: ${range.label} · first 1,000 retained records`
   const tiles: KpiTileProps[] = [
     {
       Icon: Database,
-      label: 'Total requests',
+      label: 'Total',
       valueText: String(counts.totalCount),
       valueColor: 'var(--color-foreground)',
-      secondaryLabel: complete ? range.label : `First 1,000 matching records · ${range.label}`,
+      secondaryLabel: complete ? 'Retained records' : 'First 1,000 records',
       sparklineValues: counts.totalValues,
       sparklineColor: 'var(--color-foreground)',
-      sparklineLabel: `Total requests trend · ${range.label}`
+      sparklineLabel: `Retained request records over ${range.label}`
     },
     {
       Icon: CircleCheckBig,
@@ -311,13 +315,18 @@ function KpiStrip({
     }
   ]
   return (
-    <section
-      className="grid grid-cols-1 gap-[calc(var(--shell-normal)*1.25)] sm:grid-cols-2 xl:grid-cols-4"
-      aria-label="Request summary"
-    >
-      {tiles.map((tile) => (
-        <KpiTile key={tile.label} {...tile} />
-      ))}
+    <section aria-labelledby="request-records-heading">
+      <div className="mb-3 flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
+        <h2 className="type-panel-title text-foreground" id="request-records-heading">
+          Request records
+        </h2>
+        <p className="type-caption text-fg-dim">{scopeDescription}</p>
+      </div>
+      <div className="grid grid-cols-1 gap-[calc(var(--shell-normal)*1.25)] sm:grid-cols-2 xl:grid-cols-4">
+        {tiles.map((tile) => (
+          <KpiTile key={tile.label} {...tile} />
+        ))}
+      </div>
     </section>
   )
 }
@@ -331,12 +340,94 @@ type TableCaptureProps = {
   readonly onCapture: (table: DataTableTanStackTableType<LogEventLedgerRow> | null) => void
 }
 
+type LogWindowRecoverySource = {
+  readonly id: 'requests' | 'operations'
+  readonly label: string
+  readonly error: boolean
+  readonly fetching: boolean
+  readonly loading: boolean
+  readonly hasLoadedData: boolean
+  readonly onRetry: () => void
+}
+
 function TableCapture({ table, onCapture }: TableCaptureProps) {
   useEffect(() => {
     onCapture(table)
     return () => onCapture(null)
   }, [table, onCapture])
   return null
+}
+
+function recoverySourceStatus(source: LogWindowRecoverySource) {
+  if (source.error && source.fetching) return { label: 'Retrying', tone: 'accent' as const }
+  if (source.error && source.hasLoadedData) return { label: 'Showing last window', tone: 'warn' as const }
+  if (source.error) return { label: 'Unavailable', tone: 'bad' as const }
+  return { label: 'Loading', tone: 'accent' as const }
+}
+
+function LogWindowRecoveryAlert({ sources }: { readonly sources: readonly LogWindowRecoverySource[] }) {
+  const failedSources = sources.filter((source) => source.error)
+  if (failedSources.length === 0) return null
+
+  const visibleSources = sources.filter((source) => source.error || source.loading)
+  const hasLoadedFailure = failedSources.some((source) => source.hasLoadedData)
+  const title = `${failedSources.length === sources.length ? 'Log data' : 'Some log data'} could not be ${
+    hasLoadedFailure ? 'refreshed' : 'loaded'
+  }`
+  const description =
+    failedSources.length === sources.length
+      ? 'The local logging service did not return a usable response. Retry each source independently.'
+      : failedSources[0]?.hasLoadedData
+        ? `${failedSources[0].label} could not be refreshed. The last loaded window remains visible.`
+        : `${failedSources[0]?.label ?? 'One source'} could not be loaded. Data from the other source remains usable when loaded.`
+
+  return (
+    <Alert
+      className="panel-shell rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-bad)_35%,var(--color-border))] bg-panel p-[var(--panel-x)]"
+      variant="destructive"
+    >
+      <div className="min-w-0">
+        <AlertTitle className="type-panel-title text-foreground">{title}</AlertTitle>
+        <AlertDescription className="mt-1 max-w-[68ch] type-caption text-fg-dim">{description}</AlertDescription>
+      </div>
+      <div
+        aria-label="Log data source recovery"
+        className={`mt-3 grid gap-3 border-t border-border-soft pt-3 ${visibleSources.length > 1 ? 'md:grid-cols-2 md:gap-0' : ''}`}
+        role="group"
+      >
+        {visibleSources.map((source, index) => {
+          const status = recoverySourceStatus(source)
+          return (
+            <div
+              className={`flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between ${
+                visibleSources.length > 1 && index === 0 ? 'md:pr-4' : ''
+              } ${visibleSources.length > 1 && index > 0 ? 'md:border-l md:border-border-soft md:pl-4' : ''}`}
+              key={source.id}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="type-caption font-medium text-foreground">{source.label}</span>
+                <StatusBadge dot size="caption" tone={status.tone}>
+                  {status.label}
+                </StatusBadge>
+              </div>
+              {source.error ? (
+                <Button
+                  className="ui-control min-h-[3.15rem] shrink-0 gap-1.5 !text-xs sm:min-h-0"
+                  disabled={source.fetching}
+                  onClick={source.onRetry}
+                  size="sm"
+                  variant="outline"
+                >
+                  <RotateCcw className={`size-3.5 ${source.fetching ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  {source.fetching ? 'Retrying…' : `Retry ${source.id}`}
+                </Button>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    </Alert>
+  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -356,14 +447,22 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
   const { refetch: refetchAudit } = auditQuery
   const requestResult = requestQuery.data
   const auditResult = auditQuery.data
+  const schemaCompatibility = resolveLogsSchemaCompatibility(loggingStatus, requestQuery.error, auditQuery.error)
   const hydrate = useCallback(async () => refetch(), [refetch])
   const hydrateAudit = useCallback(async () => refetchAudit(), [refetchAudit])
+  const auditCursor = useMemo(() => {
+    if (auditResult?.state !== 'supported' || auditResult.value.items.length === 0) return undefined
+    const sequence = auditResult.value.items.reduce((latest, entry) => Math.max(latest, entry.sequence), 0)
+    return LogAuditCursor.parse(`a1:${sequence}`)
+  }, [auditResult])
   const live = useLogsLiveRecovery({
     enabled: requestResult?.state === 'supported',
+    authoritativeSnapshot: requestResult?.state === 'supported' ? requestResult.value : undefined,
     auditEnabled: auditResult?.state === 'supported',
     search,
     hydrate,
-    hydrateAudit
+    hydrateAudit,
+    auditCursor
   })
   const liveStatusLabel = requestQuery.isFetching
     ? 'Updating'
@@ -375,21 +474,29 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
     : live.state === 'polling' && !live.pollingEnabled
       ? 'muted'
       : liveStateTone(live.state)
-  const allRequestRows = useMemo(
-    () => (requestResult?.state === 'supported' ? requestResult.value.items : []),
-    [requestResult]
-  )
-  const [showManagementRecords, setShowManagementRecords] = useState(false)
+  const allRequestRows = useMemo(() => {
+    const rows = requestResult?.state === 'supported' ? requestResult.value.items : []
+    const excluded = new Set(live.excludedRequestIds ?? [])
+    const merged = new Map(
+      rows.filter((row) => !excluded.has(row.requestId.toString())).map((row) => [row.requestId.toString(), row])
+    )
+    for (const update of live.requestUpdates ?? []) merged.set(update.requestId.toString(), update)
+    return [...merged.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+  }, [live.excludedRequestIds, live.requestUpdates, requestResult])
   const requestRows = useMemo(
-    () =>
-      showManagementRecords ? allRequestRows : allRequestRows.filter((row) => !row.route?.startsWith('management_')),
-    [allRequestRows, showManagementRecords]
+    () => allRequestRows.filter((row) => row.route !== 'models' && !row.route?.startsWith('management_')),
+    [allRequestRows]
   )
   const selectedLedgerRange = useMemo(
     () => selectedRange(requestScope, search.timeRange, ledgerNow),
     [ledgerNow, requestScope, search.timeRange]
   )
-  const auditEntries = useMemo(() => (auditResult?.state === 'supported' ? auditResult.value.items : []), [auditResult])
+  const auditEntries = useMemo(() => {
+    const rows = auditResult?.state === 'supported' ? auditResult.value.items : []
+    const merged = new Map(rows.map((entry) => [entry.entryId, entry]))
+    for (const entry of live.auditEntries ?? []) merged.set(entry.entryId, entry)
+    return [...merged.values()].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+  }, [auditResult, live.auditEntries])
   const filteredAuditEntries = useMemo(() => {
     if (!auditBounds.from && !auditBounds.to) return auditEntries
     return auditEntries.filter(
@@ -478,6 +585,8 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
               operation="cleanup"
               onMaintenanceMutationSucceeded={onMaintenanceMutationSucceeded}
               query={requestScope}
+              rows={mergedRows}
+              selectedCategories={selectedCategoryValues}
             />
           ) : undefined
         }
@@ -531,10 +640,15 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
         titleLevel="h1"
       />
 
-      {requestResult?.state === 'supported' ? (
-        <RequestsOverTimeChart
+      {hasSupportedWindow ? (
+        <EventsOverTimeChart
           now={selectedLedgerRange.endMs}
-          rows={requestRows}
+          onSelectedRangeChange={(range) => {
+            if (range === 'selected') return
+            onSearchChange(updateLogsTimeRange(search, range === 'all' ? '' : range))
+          }}
+          rows={categoryRows}
+          selectedCategories={selectedCategoryValues}
           selectedRange={selectedLedgerRange.chartRange}
           selectedRangeMs={selectedLedgerRange.rangeMs}
         />
@@ -564,65 +678,32 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
         </Alert>
       ) : null}
 
-      {requestQuery.isLoading && auditQuery.isLoading ? (
-        <div
-          role="status"
-          className="panel-shell min-h-[14rem] rounded-[var(--radius)] border border-border bg-panel p-[var(--panel-x)]"
-        >
-          <div className="type-label text-fg-faint">Loading event ledger</div>
-          <p className="type-body mt-2 text-fg-dim">Retrieving the independent request and operational windows.</p>
-        </div>
-      ) : null}
+      {requestQuery.isLoading && auditQuery.isLoading && !schemaCompatibility ? <LogsLedgerLoadingGhost /> : null}
 
-      {requestQuery.isError ? (
-        <Alert
-          className="panel-shell rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-bad)_35%,var(--color-border))] bg-panel p-[var(--panel-x)]"
-          variant="destructive"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <AlertTitle className="type-panel-title text-foreground">Request window could not be loaded</AlertTitle>
-              <AlertDescription className="type-caption mt-1 text-fg-dim">
-                The local logging service did not return a usable response.
-              </AlertDescription>
-            </div>
-            <Button
-              className="ui-control gap-1.5"
-              onClick={() => void requestQuery.refetch()}
-              size="sm"
-              variant="outline"
-            >
-              Retry requests
-            </Button>
-          </div>
-        </Alert>
-      ) : null}
+      {schemaCompatibility ? <LogsSchemaCompatibilityAlert {...schemaCompatibility} /> : null}
 
-      {auditQuery.isError ? (
-        <Alert
-          className="panel-shell rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-bad)_35%,var(--color-border))] bg-panel p-[var(--panel-x)]"
-          variant="destructive"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <AlertTitle className="type-panel-title text-foreground">
-                Operational window could not be loaded
-              </AlertTitle>
-              <AlertDescription className="type-caption mt-1 text-fg-dim">
-                The local logging service did not return a usable operational response.
-              </AlertDescription>
-            </div>
-            <Button
-              className="ui-control gap-1.5"
-              onClick={() => void auditQuery.refetch()}
-              size="sm"
-              variant="outline"
-            >
-              Retry operations
-            </Button>
-          </div>
-        </Alert>
-      ) : null}
+      <LogWindowRecoveryAlert
+        sources={[
+          {
+            id: 'requests',
+            label: 'Request history',
+            error: requestQuery.isError && !schemaCompatibility,
+            fetching: requestQuery.isFetching,
+            loading: requestQuery.isLoading,
+            hasLoadedData: requestResult?.state === 'supported',
+            onRetry: () => void requestQuery.refetch()
+          },
+          {
+            id: 'operations',
+            label: 'Operational events',
+            error: auditQuery.isError && !schemaCompatibility,
+            fetching: auditQuery.isFetching,
+            loading: auditQuery.isLoading,
+            hasLoadedData: auditResult?.state === 'supported',
+            onRetry: () => void auditQuery.refetch()
+          }
+        ]}
+      />
 
       {requestResult?.state === 'unsupported' ? (
         <div
@@ -695,20 +776,6 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
                   </Button>
                 ) : null}
               </div>
-              <div className="flex items-center gap-1.5 text-[length:var(--density-type-caption)] text-fg-dim">
-                <Calendar className="size-3.5 text-fg-faint" aria-hidden="true" />
-                <NativeSelect
-                  ariaLabel="Filter logs by time range"
-                  className="w-[11.5rem] min-w-0 pl-7"
-                  name="logs-time-range"
-                  onValueChange={(value) => {
-                    const preset = RELATIVE_TIME_PRESETS.find((option) => option.value === value)
-                    if (preset) onSearchChange(updateLogsTimeRange(search, preset.value))
-                  }}
-                  options={RELATIVE_TIME_PRESETS}
-                  value={search.timeRange ?? ''}
-                />
-              </div>
               <Button
                 className="ui-control h-8 gap-1.5 rounded-[var(--radius)] px-2.5 text-[length:var(--density-type-caption)]"
                 disabled={activeFilterGroups === 0 && !search.cursor && !trimmedQuery}
@@ -721,15 +788,6 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
               >
                 <RotateCcw className="size-3.5" aria-hidden="true" />
                 Reset view
-              </Button>
-              <Button
-                aria-pressed={showManagementRecords}
-                className="ui-control h-8 rounded-[var(--radius)] px-2.5 text-[length:var(--density-type-caption)]"
-                onClick={() => setShowManagementRecords((current) => !current)}
-                size="sm"
-                variant="outline"
-              >
-                {showManagementRecords ? 'Hide management records' : 'Show management records'}
               </Button>
               <FilterPopover
                 activeFilterGroups={categoryFilterGroups}
@@ -766,11 +824,12 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
             </div>
           </section>
 
-          <ScrollArea
+          <div
+            aria-label="Scrollable event columns"
+            className="overflow-x-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent"
             ref={tableRegionRef}
-            className="max-h-[71rem]"
-            horizontal
-            viewportLabel="Scrollable event columns"
+            role="region"
+            tabIndex={0}
           >
             <DataTable
               ariaLabel="MeshLLM event logs"
@@ -788,10 +847,11 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
               getRowId={eventRowId}
               onRowActivate={handleEventOpen}
               tableClassName="min-w-[780px] text-[length:var(--density-type-caption-lg)] [&_td]:py-3 [&_thead]:bg-transparent"
+              tableWrapperClassName="overflow-visible"
             >
               {(tableInstance) => <TableCapture onCapture={handleSetTable} table={tableInstance} />}
             </DataTable>
-          </ScrollArea>
+          </div>
 
           {table && visibleRows.length > 0 ? (
             <nav aria-label="Loaded event rows" className="border-t border-border-soft">

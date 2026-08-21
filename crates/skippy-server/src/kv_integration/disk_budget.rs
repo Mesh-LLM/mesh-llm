@@ -175,6 +175,16 @@ mod tests {
     }
 
     #[test]
+    fn reservation_clone_keeps_ownership_until_last_clone_drops() {
+        let reservation = BudgetReservation(Arc::new(ReservationInner { bytes: 600 }));
+        let worker_reservation = reservation.clone();
+        assert_eq!(Arc::strong_count(&reservation.0), 2);
+
+        drop(reservation);
+        assert_eq!(Arc::strong_count(&worker_reservation.0), 1);
+    }
+
+    #[test]
     fn reservation_is_reclaimed_on_drop() {
         let first = reserve(1000, 600).expect("first reservation");
         let second = reserve(1000, 600).expect("remaining reservation");

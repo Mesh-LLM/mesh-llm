@@ -1,6 +1,7 @@
 //! Mesh management API — read-only dashboard on port 3131 (default).
 //!
 //! Endpoints:
+//!   GET  /health         — lightweight liveness plus mesh/serving summary (JSON, always 200 when answering)
 //!   GET  /api/status    — live mesh state plus local-only routing metrics (JSON)
 //!   GET  /api/models    — mesh model inventory plus local-only routing metrics (JSON)
 //!   GET  /api/search    — catalog or Hugging Face model search with the same JSON payload as `mesh-llm models search --json`
@@ -17,6 +18,7 @@
 //!   GET  /api/runtime/stages — backend-neutral staged-serving state (JSON)
 //!   GET  /api/runtime/config-schema — merged built-in and installed-plugin config schema (JSON)
 //!   GET  /api/runtime/config-control-state — local-only runtime config availability/options overlay (JSON)
+//!   POST /api/runtime/pick-directory — open the trusted-local host directory picker
 //!   GET  /api/runtime/control-bootstrap — local-only owner-control bootstrap policy (JSON)
 //!   POST /api/runtime/control/get-config — run local owner-control get-config against an explicit endpoint
 //!   POST /api/runtime/control/refresh-inventory — run local owner-control refresh-inventory against an explicit endpoint

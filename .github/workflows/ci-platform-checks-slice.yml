@@ -114,14 +114,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
       - name: Configure macOS linker
         if: ${{ matrix.check.platform == 'macos' }}
-        run: |
-          brew install lld
-          mkdir -p .cargo
-          lld_prefix="$(brew --prefix lld)"
-          cat > .cargo/config.toml <<EOF
-          [target.aarch64-apple-darwin]
-          rustflags = ["-C", "link-arg=-fuse-ld=$lld_prefix/bin/ld64.lld"]
-          EOF
+        uses: ./.github/actions/setup-macos-lld
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         if: ${{ matrix.check.platform == 'windows' }}
         with:
@@ -156,7 +149,7 @@ jobs:
         run: cargo test --locked -p mesh-llm-log-store --lib sqlite_root_database_and_sidecars_have_only_current_user_acl
       - name: Install macOS unit-test dependencies
         if: ${{ matrix.check.kind == 'unit' }}
-        run: brew install cmake ninja jq lld
+        run: brew install cmake ninja jq
       - name: Resolve macOS unit-test toolchain epoch
         if: ${{ matrix.check.kind == 'unit' }}
         id: native_toolchain

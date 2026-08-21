@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   metal_model_load:

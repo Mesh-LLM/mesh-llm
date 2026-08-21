@@ -1,11 +1,14 @@
 use mesh_llm_events::logging::envelope::CanonicalEnvelope;
+use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_events::logging::replay::ReplayChannel;
+use mesh_llm_log_store::{AuditEntryRow, AuditEntrySeverity};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
 use super::super::event_kind;
 use super::query::{AuditCursor, Cursor};
 use crate::logging::OperationalAuditContext;
+use crate::logging::RequestSummaryEventSnapshots;
 use crate::logging::{AuditReplayRecord, ReplayRecord};
 
 pub(in crate::api::routes::logs) const MAX_FRAME_BYTES: usize = 16 * 1024;
@@ -38,6 +41,23 @@ struct PublicEvent {
     channel: ChannelName,
     sequence: u64,
     kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request: Option<PublicRequest>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicRequest {
+    request_id: String,
+    outcome: String,
+    created_at: String,
+    terminal_at: Option<String>,
+    route: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+    engine: Option<String>,
+    status_code: Option<u16>,
+    source: &'static str,
 }
 
 #[derive(Serialize)]
@@ -97,6 +117,7 @@ struct RestRecovery {
 /// and an exhaustive event-kind label cross the SSE boundary.
 pub(super) fn event_frame(record: &ReplayRecord) -> Result<String, ()> {
     let envelope = envelope(record)?;
+    let request = request_projection(record, &envelope);
     let data = PublicEvent {
         event_id: envelope.event_id.as_uuid().to_string(),
         request_id: envelope.request_id.as_uuid().to_string(),
@@ -104,8 +125,44 @@ pub(super) fn event_frame(record: &ReplayRecord) -> Result<String, ()> {
         channel: record.replay.channel.into(),
         sequence: record.replay.sequence,
         kind: event_kind(&envelope.event),
+        request,
     };
     frame("log_event", &cursor_id(record.cursor), &data)
+}
+
+fn request_projection(
+    record: &ReplayRecord,
+    envelope: &CanonicalEnvelope,
+) -> Option<PublicRequest> {
+    let payload: serde_json::Value = serde_json::from_str(&record.entry.payload).ok()?;
+    let snapshots = payload
+        .get("request_summary_snapshots")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<RequestSummaryEventSnapshots>(value).ok())?;
+    let snapshot = snapshots.after()?;
+    let metadata = snapshot.metadata();
+    Some(PublicRequest {
+        request_id: envelope.request_id.as_uuid().to_string(),
+        outcome: snapshot.state().to_owned(),
+        created_at: snapshot.created_at().to_owned(),
+        terminal_at: snapshot.terminal_at().map(str::to_owned),
+        route: metadata.route().map(str::to_owned),
+        model: metadata.model().map(str::to_owned),
+        provider: metadata.provider().map(str::to_owned),
+        engine: metadata.engine().map(str::to_owned),
+        status_code: lifecycle_status_code(&envelope.event),
+        source: "active",
+    })
+}
+
+const fn lifecycle_status_code(event: &LifecycleEvent) -> Option<u16> {
+    match event {
+        LifecycleEvent::AttemptCompleted { status_code, .. }
+        | LifecycleEvent::Completed { status_code, .. } => *status_code,
+        LifecycleEvent::Failed { status_code, .. }
+        | LifecycleEvent::Rejected { status_code, .. } => *status_code,
+        _ => None,
+    }
 }
 
 pub(super) fn gap_frame(cursor: Cursor, gap: &GapData) -> Result<String, ()> {
@@ -119,6 +176,19 @@ pub(super) fn error_frame(cursor: Cursor) -> String {
         &serde_json::json!({"code":"invalid_event"}),
     )
     .expect("fixed stream error frame fits the SSE bound")
+}
+
+/// Fixed `stream_error` frame emitted exactly once when the durable audit
+/// reconcile query fails. The audit cursor keeps the client's replay position
+/// stable while the code distinguishes a failed reconcile from the
+/// `invalid_event` frame used for malformed entries.
+pub(super) fn audit_reconcile_error_frame(sequence: u64) -> String {
+    frame(
+        "stream_error",
+        &AuditCursor(sequence).event_id(),
+        &serde_json::json!({"code":"audit_reconcile_failed"}),
+    )
+    .expect("fixed audit reconcile error frame fits the SSE bound")
 }
 
 pub(in crate::api::routes::logs) fn heartbeat_frame() -> &'static str {
@@ -150,6 +220,36 @@ fn frame<T: Serialize>(event: &str, id: &str, data: &T) -> Result<String, ()> {
     let data = serde_json::to_string(data).map_err(|_| ())?;
     let frame = format!("event: {event}\nid: {id}\ndata: {data}\n\n");
     (frame.len() <= MAX_FRAME_BYTES).then_some(frame).ok_or(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditEntryData {
+    entry_id: String,
+    occurred_at: String,
+    source: String,
+    code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    severity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_version: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    numeric_summaries: BTreeMap<String, u64>,
+    sequence: u64,
 }
 
 /// Audit entry frame: privacy-safe projection of an audit replay record.
@@ -222,36 +322,6 @@ pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()
             .collect()
     });
 
-    #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct AuditEntryData {
-        entry_id: String,
-        occurred_at: String,
-        source: String,
-        code: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        severity: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        context_version: Option<u8>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        subject_kind: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        subject_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        operation_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        request_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reason_code: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        outcome: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        duration_ms: Option<u64>,
-        #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-        numeric_summaries: BTreeMap<String, u64>,
-        sequence: u64,
-    }
-
     let data = AuditEntryData {
         entry_id,
         occurred_at,
@@ -278,6 +348,36 @@ pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()
         &AuditCursor(record.sequence).event_id(),
         &data,
     )
+}
+
+/// Render a row read back from the durable store. This is the production audit
+/// reconciliation path and deliberately uses the database sequence as the SSE
+/// cursor so entries written by another process share the same ordering.
+pub(super) fn durable_audit_entry_frame(record: AuditEntryRow) -> Result<String, ()> {
+    let sequence = u64::try_from(record.sequence).map_err(|_| ())?;
+    let severity = record.severity.map(|severity| match severity {
+        AuditEntrySeverity::Info => "info".to_string(),
+        AuditEntrySeverity::Warning => "warning".to_string(),
+        AuditEntrySeverity::Error => "error".to_string(),
+    });
+    let data = AuditEntryData {
+        entry_id: record.entry_id,
+        occurred_at: record.occurred_at,
+        source: record.source,
+        code: record.code,
+        severity,
+        context_version: record.context_version,
+        subject_kind: record.subject_kind,
+        subject_id: record.subject_id,
+        operation_id: record.operation_id,
+        request_id: record.correlation_request_id,
+        reason_code: record.reason_code,
+        outcome: record.outcome,
+        duration_ms: record.duration_ms,
+        numeric_summaries: record.numeric_summaries,
+        sequence,
+    };
+    frame("audit_entry", &AuditCursor(sequence).event_id(), &data)
 }
 
 /// Audit gap frame: points to `/api/logs/audit` for recovery.

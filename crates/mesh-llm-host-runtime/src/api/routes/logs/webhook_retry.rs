@@ -33,7 +33,7 @@ pub(super) async fn handle(
     body: &str,
 ) -> Result<(), LogsError> {
     let request = super::parse::webhook_retry_request(delivery_id, path, body)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = super::query_facade(state)?;
     let audit_facade = facade.clone();
     let reason = request.reason.clone();
     let result = run_blocking(move || retry_delivery(&facade, request)).await;

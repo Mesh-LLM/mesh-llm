@@ -1,0 +1,32 @@
+name: PR · Cancel sibling lanes
+
+on:
+  workflow_run:
+    workflows: [PR · Quality]
+    types: [in_progress]
+
+permissions: {}
+
+concurrency:
+  group: pr-sibling-cancel-${{ github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    name: Monitor PR lane failures
+    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0] != null }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 185
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Check out protected cancellation policy
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Cancel sibling lanes after the first job failure
+        uses: ./.github/actions/cancel-pr-sibling-runs
+        with:
+          token: ${{ github.token }}

@@ -342,6 +342,24 @@ impl RuntimeState {
         Ok(predicted)
     }
 
+    /// Verifies a speculative span in one batched forward, returning the target
+    /// predictions plus the MTP draft for the branch that was verified.
+    pub(crate) fn verify_tokens_sampled_mtp(
+        &mut self,
+        session_id: &str,
+        token_ids: &[i32],
+        sampling: Option<&SamplingConfig>,
+        max_draft_tokens: usize,
+    ) -> Result<(Vec<i32>, Option<NativeMtpDraft>)> {
+        let token_count = u64::try_from(token_ids.len())
+            .context("native MTP verification token count exceeds u64")?;
+        let session = self.session(session_id)?;
+        let (predicted, draft) =
+            session.verify_tokens_sampled_mtp(token_ids, sampling, max_draft_tokens)?;
+        self.add_session_tokens(session_id, token_count);
+        Ok((predicted, draft))
+    }
+
     pub(crate) fn session_token_count(&self, session_id: &str) -> Option<u64> {
         self.session_token_counts.get(session_id).copied()
     }

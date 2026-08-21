@@ -252,11 +252,10 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         website = self.workflow("ci-web-slice.yml")
         self.assertNotIn("name: Save pnpm store", ui_artifact)
         self.assertEqual(1, website.count("name: Save pnpm store"))
-        self.assertIn(
-            "cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && 'npm' || '' }}",
-            website,
-        )
-        self.assertIn("website/package-lock.json", website)
+        # The `website` job itself runs in the prebuilt public-web image with
+        # no bare-metal row, so it has no native-cache-gated npm consumer
+        # left to publish or bound -- setup-node's own cache was deleted
+        # outright, not gated.
 
         windows = self.workflow("ci-windows-runtime-slice.yml")
         self.assertIn("name: Save exact PR-scoped Windows ABI build", windows)
@@ -268,8 +267,9 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("key: ${{ steps.llama_cache.outputs.cache-primary-key }}", platform)
 
         rust_tests = self.workflow("ci-rust-tests-slice.yml")
-        self.assertIn("github.ref == 'refs/heads/main'", rust_tests)
-        self.assertIn("original_event_name != 'pull_request'", rust_tests)
+        self.assertNotIn("Swatinem/rust-cache@", rust_tests)
+        self.assertIn("uses: ./.github/actions/restore-sccache-seed", rust_tests)
+        self.assertIn("allow_trusted_sccache_seed", rust_tests)
 
 
 if __name__ == "__main__":

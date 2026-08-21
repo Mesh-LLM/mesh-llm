@@ -1,6 +1,29 @@
 use super::*;
 use openai_frontend::ChatCompletionRequest;
+use openai_frontend::FinishReason;
 use serde_json::json;
+use tokio::runtime::Runtime;
+
+/// A disabled telemetry sink for `StreamEventSender` construction in tests.
+///
+/// `TelemetryLevel::Off` makes `emit` a no-op, so these tests exercise the
+/// stall/drop control flow without needing a collector; the sink only has to
+/// be a valid handle.
+fn test_telemetry() -> crate::telemetry::Telemetry {
+    let config: skippy_protocol::StageConfig = serde_json::from_value(json!({
+        "run_id": "run",
+        "topology_id": "topology",
+        "model_id": "org/model:Q4_K_M",
+        "stage_id": "stage-0",
+        "stage_index": 0,
+        "layer_start": 0,
+        "layer_end": 4,
+        "load_mode": "runtime-slice",
+        "bind_addr": "127.0.0.1:0",
+    }))
+    .expect("minimal stage config for telemetry");
+    crate::telemetry::Telemetry::new(None, 1, config, crate::telemetry::TelemetryLevel::Off)
+}
 
 fn trusted_ids(session_id: &str) -> OpenAiGenerationIds {
     OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), Some(session_id), true)
@@ -520,4 +543,195 @@ fn internal_stream_usage_observation_preserves_client_wire_preference() {
 
     let observed = OpenAiRequestContext::new().with_stream_usage_observation();
     assert!(should_emit_stream_usage(false, &observed));
+}
+
+/// Reproduces the orphaned-generation report: a client can vanish (dropped
+/// connection, or one that hasn't been noticed yet -- e.g. behind a proxy
+/// that doesn't propagate the close) leaving the SSE receiver alive but
+/// permanently undrained. `StreamEventSender::send` must not let that pin
+/// the generation worker, and the execution lane it holds, forever: once the
+/// request is cancelled it must give up promptly even though the channel
+/// stays full and the receiver is never dropped.
+///
+/// This runs the send on its own thread and waits for a result over a
+/// bounded `recv_timeout` rather than joining directly, so a regression back
+/// to an unconditional blocking send fails this test instead of hanging the
+/// suite. It uses the real `STREAM_SEND_STALL_TIMEOUT`, so cancellation --
+/// not the stall timeout -- must be what ends the wait.
+#[test]
+fn stalled_receiver_does_not_pin_the_generation_worker_forever() {
+    let (tx, rx) = mpsc::channel(1);
+    tx.try_send(Ok(GenerationStreamEvent::Delta("first".to_owned())))
+        .expect("channel has room for the first event");
+    let context = OpenAiRequestContext::new();
+    let rt = Runtime::new().expect("tokio runtime for stall test");
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        STREAM_SEND_STALL_TIMEOUT,
+        "test-request".to_owned(),
+        test_telemetry(),
+    );
+
+    let sender_context = context.clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = sender.send(
+            Ok(GenerationStreamEvent::Delta("second".to_owned())),
+            &sender_context,
+        );
+        // Keep `rx` alive without draining it until after the send settles,
+        // so a fix that works only because the channel closed doesn't pass.
+        drop(rx);
+        let _ = done_tx.send(result.is_err());
+    });
+
+    // Give the sender thread a chance to observe the full channel before
+    // cancelling -- simulating cancellation arriving (e.g. from a
+    // connection-drop observer) after the worker is already stuck sending.
+    std::thread::sleep(Duration::from_millis(50));
+    context.cancel();
+
+    let cancelled = done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a stalled send must be interrupted by cancellation, not block forever");
+    assert!(cancelled, "cancelled send must return an error");
+}
+
+/// Covers the case the report actually flagged as unproven: nothing ever
+/// calls `cancel()` -- the connection-drop observer (`CancelOnDropSseStream`)
+/// simply never fires, e.g. because the client vanished behind a proxy that
+/// kept the socket to mesh-llm open. A stalled, never-dropped, never-drained
+/// receiver must still cause the send to give up and self-cancel once it has
+/// been full for the (here, injected and short) stall timeout, so the lane
+/// isn't held indefinitely.
+#[test]
+fn stalled_receiver_self_cancels_after_the_stall_timeout_with_no_external_cancel() {
+    let (tx, rx) = mpsc::channel(1);
+    tx.try_send(Ok(GenerationStreamEvent::Delta("first".to_owned())))
+        .expect("channel has room for the first event");
+    let context = OpenAiRequestContext::new();
+    let rt = Runtime::new().expect("tokio runtime for stall test");
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        Duration::from_millis(50),
+        "test-request".to_owned(),
+        test_telemetry(),
+    );
+
+    let result = sender.send(
+        Ok(GenerationStreamEvent::Delta("second".to_owned())),
+        &context,
+    );
+
+    assert!(
+        result.is_err(),
+        "a send stalled past the timeout must fail rather than hang"
+    );
+    assert!(
+        context.is_cancelled(),
+        "a self-detected stall must cancel the request so the lane is freed"
+    );
+    drop(rx);
+}
+
+/// Red->green for the swallowed-terminal-frame defect: on the pre-fix code,
+/// the `run_generation_stream` cancellation branch checked
+/// `context.is_cancelled()` before sending, so an already-cancelled request
+/// caused the cancellation error frame -- and, by the same shape, the
+/// `parser.finish` error frame and the outer generation error frame -- to be
+/// silently dropped instead of enqueued. That flips
+/// `stream_lifecycle`'s terminal classification: without the `Err` frame,
+/// `drop_outcome()` falls through to `StreamDropOutcome::Cancelled` instead
+/// of the `BackendError`/`StreamTerminal` path `lifecycle.failed(error)`
+/// drives. `send_terminal` must deliver the frame to a receiver that is
+/// merely cancelled but still alive and draining, while `send` (used only
+/// for in-flight events) must still refuse to send once cancelled.
+#[test]
+fn terminal_frames_are_delivered_after_the_request_is_cancelled() {
+    let (tx, mut rx) = mpsc::channel(4);
+    let context = OpenAiRequestContext::new();
+    context.cancel();
+    let rt = Runtime::new().expect("tokio runtime for terminal-delivery test");
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        STREAM_SEND_STALL_TIMEOUT,
+        "test-request".to_owned(),
+        test_telemetry(),
+    );
+
+    sender
+        .send_terminal(Ok(GenerationStreamEvent::Done(FinishReason::Stop)))
+        .expect("terminal frames must still reach a live, cancelled-but-draining receiver");
+
+    let received = rx
+        .try_recv()
+        .expect("the terminal frame must be enqueued, not silently swallowed");
+    assert!(matches!(
+        received,
+        Ok(GenerationStreamEvent::Done(FinishReason::Stop))
+    ));
+
+    let send_result = sender.send(
+        Ok(GenerationStreamEvent::Delta("late".to_owned())),
+        &context,
+    );
+    assert!(
+        send_result.is_err(),
+        "the cancellation check is bypassed only for terminal frames, not in-flight ones"
+    );
+}
+
+/// Bounds the double-wait hazard: once an in-flight send has already proven
+/// the receiver unreachable (stalled past the timeout, here injected short),
+/// a subsequent terminal send must not wait out the same stall timeout a
+/// second time -- that would double the execution lane's hold to
+/// `2 * stall_timeout` and defeat the point of freeing it promptly.
+#[test]
+fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
+    let (tx, rx) = mpsc::channel(1);
+    tx.try_send(Ok(GenerationStreamEvent::Delta("first".to_owned())))
+        .expect("channel has room for the first event");
+    let context = OpenAiRequestContext::new();
+    let rt = Runtime::new().expect("tokio runtime for double-wait test");
+    // Inject a generous stall timeout so the short-circuit assertion has a wide
+    // margin on a loaded CI runner: a terminal send that (wrongly) waited out
+    // the stall again would take at least `stall_timeout`, while the correct
+    // short-circuit is one atomic load. Deriving the bound from the timeout
+    // instead of a fixed wall-clock number keeps the two coupled.
+    let stall_timeout = Duration::from_millis(500);
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        stall_timeout,
+        "test-request".to_owned(),
+        test_telemetry(),
+    );
+
+    let stalled = sender.send(
+        Ok(GenerationStreamEvent::Delta("second".to_owned())),
+        &context,
+    );
+    assert!(
+        stalled.is_err(),
+        "the in-flight send must self-cancel once the receiver proves unreachable"
+    );
+
+    let started = Instant::now();
+    let terminal = sender.send_terminal(Ok(GenerationStreamEvent::Done(FinishReason::Stop)));
+    let elapsed = started.elapsed();
+
+    assert!(
+        terminal.is_err(),
+        "a proven-unreachable receiver must not be handed a terminal frame either"
+    );
+    // The short-circuit must complete in a small fraction of the injected
+    // stall timeout; a second wait would consume at least the whole timeout.
+    assert!(
+        elapsed < stall_timeout / 5,
+        "terminal send must short-circuit instead of waiting out the stall timeout again, took {elapsed:?} (timeout {stall_timeout:?})"
+    );
+    drop(rx);
 }

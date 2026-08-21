@@ -46,57 +46,83 @@ pub struct UpdateCommandOptions<'a> {
     pub current_version: &'static str,
 }
 
-pub async fn check_for_update(current_version: &str) {
+enum NoticeGuidance {
+    RunUpdateCommand,
+    #[cfg(not(windows))]
+    ReinstallScript,
+    #[cfg(windows)]
+    DownloadReleases,
+}
+
+/// A newer-version notice for callers to surface through their own output
+/// facility; this crate performs no console I/O of its own.
+#[derive(Clone, Debug)]
+pub struct UpdateNotice {
+    pub message: String,
+}
+
+fn notice_message(current_version: &str, latest_version: &str, guidance: NoticeGuidance) -> String {
+    match guidance {
+        NoticeGuidance::RunUpdateCommand => format!(
+            "✨ New version: v{current_version} -> v{latest_version}. Run 'mesh-llm update'."
+        ),
+        #[cfg(not(windows))]
+        NoticeGuidance::ReinstallScript => format!(
+            "✨ New version: v{current_version} -> v{latest_version}. Reinstall with: curl -fsSL {} | bash",
+            release_fetch::INSTALL_SCRIPT_URL
+        ),
+        #[cfg(windows)]
+        NoticeGuidance::DownloadReleases => format!(
+            "✨ New version: v{current_version} -> v{latest_version}. Download from {RELEASES_URL}"
+        ),
+    }
+}
+
+/// Checks for a newer release and returns a notice when one is available.
+///
+/// Returns `None` when the platform has no release assets, no release could be
+/// fetched, or the local version is not older than the latest release. Callers
+/// are responsible for presenting [`UpdateNotice::message`] through their own
+/// output facility.
+pub async fn check_for_update(current_version: &str) -> Option<UpdateNotice> {
     if !platform_has_release_assets() {
-        return;
+        return None;
     }
-    if let Some(release) = latest_release_info().await {
-        if !version_newer(&release.version, current_version) {
-            return;
-        }
-        // Determine whether this is a bundle install and, if so, whether the
-        // specific installed flavor's asset is present in the new release.
-        let bundle_asset = std::env::current_exe().ok().and_then(|exe| {
-            let (_, flavor) = bundle_install_dir(&exe, None)?;
-            current_release_target(flavor).and_then(|target| {
-                resolve_release_asset_name(&release, target, ReleaseAssetPreference::StableFirst)
-            })
-        });
-        match bundle_asset {
-            Some(ref asset) if release_fetch::release_has_asset(&release, asset) => {
-                eprintln!(
-                    "✨ New version: v{current_version} -> v{}. Run 'mesh-llm update'.",
-                    release.version
-                );
-            }
-            _ => {
-                // Either not a bundle install, or the installed flavor's asset
-                // is not published in the new release — fall back to generic guidance.
-                #[cfg(not(windows))]
-                if release_has_any_platform_asset(
-                    &release,
-                    std::env::consts::OS,
-                    std::env::consts::ARCH,
-                ) {
-                    eprintln!(
-                        "✨ New version: v{current_version} -> v{}. Reinstall with: curl -fsSL {INSTALL_SCRIPT_URL} | bash",
-                        release.version
-                    );
-                }
-                #[cfg(windows)]
-                if release_has_any_platform_asset(
-                    &release,
-                    std::env::consts::OS,
-                    std::env::consts::ARCH,
-                ) {
-                    eprintln!(
-                        "✨ New version: v{current_version} -> v{}. Download from {RELEASES_URL}",
-                        release.version
-                    );
-                }
-            }
-        }
+    let release = latest_release_info().await?;
+    if !version_newer(&release.version, current_version) {
+        return None;
     }
+    // Determine whether this is a bundle install and, if so, whether the
+    // specific installed flavor's asset is present in the new release.
+    let bundle_asset = std::env::current_exe().ok().and_then(|exe| {
+        let (_, flavor) = bundle_install_dir(&exe, None)?;
+        current_release_target(flavor).and_then(|target| {
+            resolve_release_asset_name(&release, target, ReleaseAssetPreference::StableFirst)
+        })
+    });
+    let has_matching_bundle_asset = bundle_asset
+        .as_ref()
+        .is_some_and(|asset| release_fetch::release_has_asset(&release, asset));
+    let guidance = if has_matching_bundle_asset {
+        NoticeGuidance::RunUpdateCommand
+    } else {
+        // Either not a bundle install, or the installed flavor's asset is not
+        // published in the new release — fall back to generic guidance.
+        if !release_has_any_platform_asset(&release, std::env::consts::OS, std::env::consts::ARCH) {
+            return None;
+        }
+        #[cfg(not(windows))]
+        {
+            NoticeGuidance::ReinstallScript
+        }
+        #[cfg(windows)]
+        {
+            NoticeGuidance::DownloadReleases
+        }
+    };
+    Some(UpdateNotice {
+        message: notice_message(current_version, &release.version, guidance),
+    })
 }
 
 pub async fn maybe_auto_update(options: AutoUpdateOptions) -> Result<bool> {
@@ -428,5 +454,41 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_notice_message_run_update_command() {
+        assert_eq!(
+            notice_message("0.76.0-rc3", "0.99.0", NoticeGuidance::RunUpdateCommand),
+            "✨ New version: v0.76.0-rc3 -> v0.99.0. Run 'mesh-llm update'."
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_notice_message_reinstall_script() {
+        let install_script_url = release_fetch::INSTALL_SCRIPT_URL;
+        assert_eq!(
+            notice_message("0.75.2", "1.4.0", NoticeGuidance::ReinstallScript),
+            format!(
+                "✨ New version: v0.75.2 -> v1.4.0. Reinstall with: curl -fsSL {install_script_url} | bash"
+            )
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_notice_message_download_releases() {
+        assert_eq!(
+            notice_message("0.75.2", "1.4.0", NoticeGuidance::DownloadReleases),
+            format!("✨ New version: v0.75.2 -> v1.4.0. Download from {RELEASES_URL}")
+        );
+    }
+
+    #[test]
+    fn test_update_notice_carries_complete_user_facing_text() {
+        let message = notice_message("0.1.0", "9.9.9", NoticeGuidance::RunUpdateCommand);
+        let UpdateNotice { message: carried } = UpdateNotice { message };
+        assert!(carried.starts_with("✨ New version: v0.1.0 -> v9.9.9."));
     }
 }

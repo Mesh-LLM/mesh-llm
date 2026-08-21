@@ -4,6 +4,7 @@ import { Slider, type SliderBoundary } from '@/components/ui/Slider'
 import { cn } from '@/lib/cn'
 import { CtxSlider } from '@/features/configuration/components/CtxSlider'
 import { NumberField } from '@/features/configuration/components/settings/NumberField'
+import { ByteSizeControl } from '@/features/configuration/components/settings/ByteSizeControl'
 import {
   effectiveRendererId,
   numericMetadataForSetting,
@@ -159,6 +160,19 @@ export function SchemaNumberControl({
   const showSlider = sliderMin !== undefined && sliderMax !== undefined
   const unit = numberUnit(setting, value)
   const rendererId = effectiveRendererId(setting)
+
+  if (rendererId === 'byte-size') {
+    return (
+      <ByteSizeControl
+        ariaDescribedBy={ariaDescribedBy}
+        disabled={disabled}
+        invalid={invalid}
+        onChange={onChange}
+        setting={setting}
+        value={value}
+      />
+    )
+  }
 
   if (rendererId === 'slot-meter') {
     return (

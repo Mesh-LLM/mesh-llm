@@ -47,6 +47,7 @@ pub use maintenance::{
     MaintenanceExecutionControl, MaintenanceFingerprint, MaintenanceOperationId, MaintenanceReason,
     MaintenanceReceipt, MaintenanceReceiptState, MaintenanceTimestamp,
 };
+pub use migrations::CURRENT_VERSION as LOG_STORE_SCHEMA_VERSION;
 pub use query::{
     ArtifactRecord, EventRecord, MAX_QUERY_LIMIT, PageQuery, ProxyQuery, ProxyRecord, QueryPage,
     QuerySort, RequestOutcome, RequestQuery, RequestRecord,

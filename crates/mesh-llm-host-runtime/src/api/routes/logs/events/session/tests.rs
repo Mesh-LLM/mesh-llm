@@ -36,7 +36,8 @@ fn terminal_snapshots(
     after_metadata: RequestSummaryMetadata,
 ) -> RequestSummaryEventSnapshots {
     let before = summary(created_at, "active", before_metadata);
-    let after = summary(created_at, state, after_metadata);
+    let mut after = summary(created_at, state, after_metadata);
+    after.terminal_at = Some("2026-08-03T00:00:09Z".into());
     RequestSummaryEventSnapshots::terminal(&before, &after)
 }
 
@@ -52,6 +53,29 @@ fn entry(bus: &ReplayBus, channel: ReplayChannel, sequence: u64, request: Reques
             model: None,
             method: None,
         },
+    );
+}
+
+fn entry_with_metadata(
+    bus: &ReplayBus,
+    channel: ReplayChannel,
+    sequence: u64,
+    request: RequestId,
+    metadata: RequestSummaryMetadata,
+) {
+    let occurred_at = format!("2026-08-03T00:00:0{sequence}Z");
+    let snapshots = current_snapshots(&occurred_at, "active", metadata);
+    entry_with_event_and_snapshots(
+        bus,
+        channel,
+        sequence,
+        request,
+        occurred_at,
+        LifecycleEvent::Admitted {
+            model: None,
+            method: None,
+        },
+        snapshots,
     );
 }
 
@@ -306,7 +330,18 @@ fn lagged_live_receiver_recovers_from_the_bounded_snapshot() {
 fn request_filter_selects_only_the_requested_lifecycle() {
     let bus = ReplayBus::new(3);
     let wanted = RequestId::new();
-    entry(&bus, ReplayChannel::Requests, 1, wanted);
+    entry_with_metadata(
+        &bus,
+        ReplayChannel::Requests,
+        1,
+        wanted,
+        RequestSummaryMetadata::from_parts(
+            Some("chat_completions"),
+            Some("Qwen/Qwen3"),
+            Some("mesh"),
+            Some("skippy"),
+        ),
+    );
     entry(&bus, ReplayChannel::Requests, 2, RequestId::new());
     let mut subscription = subscription(vec![ReplayChannel::Requests], Cursor::default());
     subscription
@@ -317,6 +352,10 @@ fn request_filter_selects_only_the_requested_lifecycle() {
     let frames = replay_frames(&bus, &subscription, None);
     assert_eq!(frames.len(), 1);
     assert!(frames[0].contains(&wanted.as_uuid().to_string()));
+    assert!(frames[0].contains("\"request\":"));
+    assert!(frames[0].contains("\"route\":\"chat_completions\""));
+    assert!(frames[0].contains("\"model\":\"Qwen/Qwen3\""));
+    assert!(frames[0].contains("\"source\":\"active\""));
 }
 
 #[test]

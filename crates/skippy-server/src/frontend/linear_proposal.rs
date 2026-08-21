@@ -185,6 +185,14 @@ pub struct LinearProposalReceipt {
     pub verification_rows: usize,
     /// Number of source tokens accepted by target verification.
     pub accepted_proposal_tokens: usize,
+    /// Total target tokens generated after applying this proposal outcome.
+    ///
+    /// Serving integrations must use this target-authoritative position to
+    /// verify that ordered lifecycle commits reached the proposal boundary
+    /// before reporting the outcome. It is deliberately separate from the
+    /// committed token slice: the slice describes this outcome, while this
+    /// count describes the complete generation prefix at the boundary.
+    pub generated_token_count: usize,
     /// Target tokens committed to the response stream.
     pub committed_tokens: Box<[i32]>,
     /// Authoritative prediction prefix through the full-accept boundary or
@@ -219,6 +227,45 @@ pub struct LinearProposalReceipt {
 }
 
 impl LinearProposalReceipt {
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_fixture(decision_id: OpaqueProposalDecisionId) -> Self {
+        Self::test_fixture_with_generated_token_count(decision_id, 1)
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_fixture_with_generated_token_count(
+        decision_id: OpaqueProposalDecisionId,
+        generated_token_count: usize,
+    ) -> Self {
+        Self {
+            request_id: 1,
+            session_id: 2,
+            decision_id,
+            disposition: LinearProposalDisposition::FullAccept,
+            proposal_token_count: 1,
+            verification_rows: 1,
+            accepted_proposal_tokens: 1,
+            generated_token_count,
+            committed_tokens: vec![1].into_boxed_slice(),
+            verification_row_predictions: vec![1].into_boxed_slice(),
+            canonical_prediction_count: 1,
+            correction_or_boundary_token: Some(1),
+            base_position: 0,
+            position_after_verification: 1,
+            canonical_position: 1,
+            trimmed_rows: 0,
+            proposal_elapsed_us: 0,
+            verification_elapsed_us: 0,
+            repair_elapsed_us: 0,
+            total_elapsed_us: 0,
+            runtime_lock_wait_us: 0,
+            runtime_lock_hold_us: 0,
+            runtime_lock_acquires: 0,
+        }
+    }
+
     pub(crate) fn insert_telemetry_attrs(&self, attrs: &mut BTreeMap<String, serde_json::Value>) {
         attrs.insert(
             "llama_stage.linear_proposal.disposition".to_string(),
@@ -349,6 +396,11 @@ pub trait LinearProposalIngress: Send + Sync {
     /// Receives the target-authoritative outcome for a verified proposal.
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()>;
 
+    /// Returns asynchronous failures observed after a report was accepted.
+    fn report_delivery_failures(&self) -> u64 {
+        0
+    }
+
     /// Resolves a source decision that Skippy could not verify.
     fn discard(
         &self,
@@ -470,6 +522,11 @@ impl LinearProposalIngressConfig {
     pub fn source(&self) -> &Arc<dyn LinearProposalIngress> {
         &self.source
     }
+
+    /// Returns report callback failures observed after enqueue-time success.
+    pub fn report_delivery_failures(&self) -> u64 {
+        self.source.report_delivery_failures()
+    }
 }
 
 pub(crate) struct QueriedLinearProposal {
@@ -480,8 +537,8 @@ pub(crate) struct QueriedLinearProposal {
 }
 
 pub(crate) enum LinearProposalQueryOutcome {
-    /// No proposal command was submitted, so any pending token delta remains
-    /// owned by the caller.
+    /// No proposal command was submitted because the bounded query was not
+    /// admissible at this boundary.
     Skipped,
     NoProposal {
         source_telemetry: Option<LinearProposalSourceTelemetry>,
@@ -654,6 +711,7 @@ mod tests {
         committed_token_count: usize,
         decode_step: usize,
         max_proposal_tokens: usize,
+        pending_token_ids: Box<[i32]>,
     }
 
     fn query_params(
@@ -684,17 +742,12 @@ mod tests {
         discard_fails: Mutex<bool>,
         report_fails: Mutex<bool>,
         queries: Mutex<Vec<RecordedQuery>>,
-        pending_token_batches: Mutex<Vec<Box<[i32]>>>,
         receipts: Mutex<Vec<LinearProposalReceipt>>,
         discards: Mutex<Vec<(OpaqueProposalDecisionId, LinearProposalDiscardReason)>>,
     }
 
     impl LinearProposalIngress for FakeIngress {
         fn propose(&self, query: LinearProposalQuery) -> Result<LinearProposalSourceResponse> {
-            self.pending_token_batches
-                .lock()
-                .unwrap()
-                .push(query.pending_token_ids.clone());
             self.queries.lock().unwrap().push(RecordedQuery {
                 request_id: query.request_id,
                 session_id: query.session_id,
@@ -702,6 +755,7 @@ mod tests {
                 committed_token_count: query.committed_token_count,
                 decode_step: query.decode_step,
                 max_proposal_tokens: query.max_proposal_tokens,
+                pending_token_ids: query.pending_token_ids,
             });
             thread::sleep(*self.delay.lock().unwrap());
             Ok(LinearProposalSourceResponse::new(
@@ -827,6 +881,7 @@ mod tests {
             proposal_token_count: 1,
             verification_rows: 2,
             accepted_proposal_tokens: 1,
+            generated_token_count: 2,
             committed_tokens: vec![11, 12].into_boxed_slice(),
             verification_row_predictions: vec![11, 12].into_boxed_slice(),
             canonical_prediction_count: 2,
@@ -919,6 +974,7 @@ mod tests {
                 decode_step: 1,
                 committed_token_count: 3,
                 max_proposal_tokens: 4,
+                pending_token_ids: Vec::new().into_boxed_slice(),
             }]
         );
         assert!(source.discards.lock().unwrap().is_empty());
@@ -927,34 +983,27 @@ mod tests {
     #[test]
     fn query_forwards_pending_tokens_to_the_proposal_source() {
         let source = Arc::new(FakeIngress::default());
+        let id = OpaqueProposalDecisionId::new(vec![7]).unwrap();
+        *source.proposal.lock().unwrap() = Some(LinearProposal::new(id, vec![41]));
         let config =
             LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
         let mut params = query_params(7, 8, 2, 1, 3, 5, 4);
         params.pending_token_ids = vec![31, 32].into_boxed_slice();
 
-        assert!(matches!(
-            query_linear_proposal(&config, params).unwrap(),
-            LinearProposalQueryOutcome::NoProposal { .. }
-        ));
+        query_linear_proposal(&config, params).expect("proposal query should succeed");
+
         assert_eq!(
-            source.pending_token_batches.lock().unwrap().as_slice(),
-            &[vec![31, 32].into_boxed_slice()]
+            source.queries.lock().unwrap().as_slice(),
+            &[RecordedQuery {
+                request_id: 7,
+                session_id: 8,
+                prompt_token_count: 2,
+                committed_token_count: 3,
+                decode_step: 1,
+                max_proposal_tokens: 4,
+                pending_token_ids: vec![31, 32].into_boxed_slice(),
+            }]
         );
-    }
-
-    #[test]
-    fn query_does_not_accept_pending_tokens_without_proposal_capacity() {
-        let source = Arc::new(FakeIngress::default());
-        let config =
-            LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
-        let mut params = query_params(7, 8, 2, 1, 3, 1, 4);
-        params.pending_token_ids = vec![31].into_boxed_slice();
-
-        assert!(matches!(
-            query_linear_proposal(&config, params).unwrap(),
-            LinearProposalQueryOutcome::Skipped
-        ));
-        assert!(source.pending_token_batches.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1050,6 +1099,7 @@ mod tests {
             proposal_token_count: 4,
             verification_rows: 5,
             accepted_proposal_tokens: 1,
+            generated_token_count: 2,
             committed_tokens: vec![11, 42].into_boxed_slice(),
             verification_row_predictions: vec![11, 42, 43, 44, 45].into_boxed_slice(),
             canonical_prediction_count: 2,
@@ -1102,6 +1152,7 @@ mod tests {
             proposal_token_count: 1,
             verification_rows: 2,
             accepted_proposal_tokens: 1,
+            generated_token_count: 2,
             committed_tokens: vec![12_345, 67_890].into_boxed_slice(),
             verification_row_predictions: vec![12_345, 67_890].into_boxed_slice(),
             canonical_prediction_count: 2,

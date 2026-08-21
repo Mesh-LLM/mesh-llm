@@ -19,6 +19,7 @@ type SchemaControlPresentation = {
   readonly placeholder?: string
   readonly unit?: string
   readonly control_hint?: string
+  readonly choices?: readonly ConfigurationDefaultsChoice[]
 }
 
 export type SchemaControlFactoryEntry = {
@@ -57,9 +58,12 @@ function normalizedChoiceValue(value: string): string {
   return value
 }
 
-function choiceOption(value: string): ConfigurationDefaultsChoice {
+function choiceOption(value: string, presentation?: SchemaControlPresentation): ConfigurationDefaultsChoice {
   const normalized = normalizedChoiceValue(value)
-  return { value: normalized, label: normalized }
+  const presented = presentation?.choices?.find((option) => normalizedChoiceValue(option.value) === normalized)
+  return presented?.description
+    ? { value: normalized, label: presented.label, description: presented.description }
+    : { value: normalized, label: presented?.label ?? normalized }
 }
 
 function controlConditionValueString(value: ConfigurationRuntimeControlOption['value']): string {
@@ -193,7 +197,10 @@ export function createSchemaControl(input: CreateSchemaControlInput): Configurat
   }
 
   if (values.length > 0 || boolLike) {
-    const options = values.length > 0 ? values.map(choiceOption) : ['on', 'off'].map(choiceOption)
+    const options =
+      values.length > 0
+        ? values.map((value) => choiceOption(value, entry.presentation))
+        : ['on', 'off'].map((value) => choiceOption(value, entry.presentation))
     return {
       kind: 'choice',
       name,

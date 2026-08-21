@@ -1125,19 +1125,19 @@ fn logging_settings() -> Vec<ConfigSettingSchema> {
         let path = setting.path.render();
         setting.description = match path.as_str() {
             "logging.summary_line_limit" => Some(
-                "Maximum Unicode characters in each payload-free local presentation summary line; changes require a process restart."
+                "Maximum number of Unicode characters in each generated request summary."
                     .to_string(),
             ),
             "logging.event_buffer_size" => Some(
-                "Process-restart hard ceiling on entries held by the in-memory replay buffer."
+                "Maximum number of event entries held in memory for replay."
                     .to_string(),
             ),
             "logging.replay_capacity" => Some(
-                "Initial and live current replay target in entries; it applies dynamically and must not exceed logging.event_buffer_size."
+                "Number of recent events available to reconnecting console clients."
                     .to_string(),
             ),
             "logging.queue_capacity" => Some(
-                "Process-restart capacity of the persistence/dispatch queue; it does not control replay retention."
+                "Maximum number of pending log entries waiting for persistence and webhook dispatch."
                     .to_string(),
             ),
             _ => setting.description.take(),
@@ -1310,6 +1310,10 @@ fn tensor_split_schema() -> ConfigValueSchema {
 /// This list should be updated during the release process.
 fn known_mesh_llm_versions() -> &'static [&'static str] {
     &[
+        "0.76.0-rc5",
+        "0.76.0-rc4",
+        "0.76.0-rc3",
+        "0.76.0-rc2",
         "0.76.0-rc1",
         "0.72.1",
         "0.72.0",

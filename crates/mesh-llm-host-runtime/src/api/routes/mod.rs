@@ -2,12 +2,14 @@ mod chat;
 mod control_apply_diagnostics;
 mod diagnostics;
 mod discover;
+mod health;
 pub(crate) mod logs;
 mod mcp;
 mod mesh_hook;
 mod model_interests;
 mod model_targets;
 mod objects;
+mod path_picker;
 mod plugins;
 pub(crate) mod runtime;
 mod runtime_activity;
@@ -44,6 +46,10 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                     discover::handle(stream, state).await?;
                     Ok(true)
                 }
+                ("GET", "/health") => {
+                    health::handle(stream, state).await?;
+                    Ok(true)
+                }
                 ("POST", p) if p == crate::network::discovery::LAN_DETAILS_PATH => {
                     discover::handle_lan_details(stream, state, body).await?;
                     Ok(true)
@@ -58,6 +64,10 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 }
                 ("GET" | "POST" | "DELETE", "/mcp") => {
                     mcp::handle(stream, state, raw_request).await?;
+                    Ok(true)
+                }
+                ("POST", "/api/runtime/pick-directory") => {
+                    path_picker::handle(stream).await?;
                     Ok(true)
                 }
                 ("GET", "/api/status")

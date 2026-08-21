@@ -87,6 +87,32 @@ impl StageOpenAiBackend {
             Some(prepared) => prepared,
             None => self.prepare_text_prompt(&prompt, max_tokens, &ids)?,
         };
+        // This is an optional cache candidate. The already-rendered prompt is
+        // valid even when its second, assistant-marker-free rendering cannot
+        // be tokenized, so bypass the candidate rather than failing the chat
+        // request.
+        let recurrent_cache_prefix_token_ids = prompt
+            .recurrent_cache_prefix_text
+            .as_deref()
+            .and_then(|prefix| match self.tokenize(prefix) {
+                Ok(prefix) => Some(prefix),
+                Err(_error) => {
+                    let mut attrs = self.openai_attrs(&ids);
+                    attrs.insert(
+                        "skippy.kv.decision".to_string(),
+                        json!("recurrent_prefix_candidate_skipped"),
+                    );
+                    attrs.insert("skippy.kv.error_class".to_string(), json!("tokenize_error"));
+                    self.telemetry
+                        .emit_debug("stage.openai_kv_record_decision", attrs);
+                    None
+                }
+            })
+            .filter(|prefix| {
+                !prefix.is_empty()
+                    && prefix.len() <= prompt_token_ids.len()
+                    && prompt_token_ids.starts_with(prefix)
+            });
         if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
             return Err(OpenAiError::backend("request cancelled"));
         }
@@ -132,6 +158,7 @@ impl StageOpenAiBackend {
             OpenAiBackendMode::LocalRuntime => self.generate_local_tokens(
                 LocalGeneration {
                     prompt_token_ids: &prompt_token_ids,
+                    recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids.as_deref(),
                     max_tokens,
                     sampling: &sampling,
                     chat_sampling_metadata,

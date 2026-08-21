@@ -594,7 +594,7 @@ fn select_targets(
 ) -> Result<(Vec<String>, bool), LogStoreError> {
     let filters = scope.filters();
     let mut sql = String::from(
-        "SELECT request_id FROM summaries WHERE state IN ('completed', 'failed', 'rejected', 'cancelled', 'dropped') AND created_at < ?",
+        "SELECT request_id FROM summaries WHERE state IN ('completed', 'failed', 'rejected', 'cancelled', 'dropped') AND created_at < ? AND (route IS NULL OR route NOT GLOB 'management_*')",
     );
     let mut parameters = vec![rusqlite::types::Value::Text(
         scope.cutoff_before.as_str().to_owned(),

@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use axum::Router;
 use openai_frontend::{OpenAiBackend, OpenAiFrontendConfig, OpenAiLifecycleObserver};
 use skippy_protocol::{StageConfig, StageTopology};
+use skippy_runtime::MtpSource;
 use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{
@@ -74,6 +75,7 @@ pub struct EmbeddedRuntimeOptions {
     pub topology: Option<StageTopology>,
     pub n_threads: Option<usize>,
     pub n_threads_batch: Option<usize>,
+    pub mtp_source: MtpSource,
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: TelemetryLevel,
@@ -166,7 +168,7 @@ impl SkippyRuntimeHandle {
             &RuntimeLaunchOverrides {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
-                mtp_source: skippy_runtime::MtpSource::Disabled,
+                mtp_source: options.mtp_source,
             },
         )?
         .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;
@@ -202,7 +204,7 @@ impl SkippyRuntimeHandle {
             &RuntimeLaunchOverrides {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
-                mtp_source: skippy_runtime::MtpSource::Disabled,
+                mtp_source: options.mtp_source,
             },
             model_open_event_reporter.as_mut().map(|reporter| {
                 reporter.as_mut() as &mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)

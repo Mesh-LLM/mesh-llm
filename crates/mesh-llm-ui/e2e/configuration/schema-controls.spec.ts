@@ -545,9 +545,21 @@ test.describe('schema-driven configuration controls', () => {
     await expect(page.getByRole('heading', { name: 'Configuration' })).toBeVisible()
     await expect(page.getByRole('tab', { name: 'Logs' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible()
+
+    // Security-audit settings (logging.audit.*) are advanced-gated by design
+    // (config-adapter.ts resolvedVisibilityForPath), not a rendering bug.
+    // Assert the starting state instead of assuming it, since
+    // SHOW_ADVANCED_STORAGE_KEY persists across tests in this file.
+    const advancedToggle = page.getByRole('button', { name: 'Show advanced', exact: true })
+    await expect(advancedToggle).toBeVisible()
+    await advancedToggle.click()
+
     await expect(page.getByRole('radiogroup', { name: 'Enabled' }).getByRole('radio', { name: 'on' })).toBeChecked()
     await expect(page.getByRole('combobox', { name: 'Log Format' })).toHaveValue('json_lines')
-    await expect(page.getByText(/Written to config\.toml under the \[audit\]/)).toBeVisible()
+    // The old copy ("...Written to config.toml under the [audit] and
+    // [logging] sections.") was replaced in #1339; this suite never ran in
+    // CI (#1372) so the assertion was never updated to match.
+    await expect(page.getByText(/Changes are saved to the local MeshLLM configuration file\./)).toBeVisible()
 
     await expectNoHorizontalOverflow(page)
     await testInfo.attach('audit-settings-desktop', {

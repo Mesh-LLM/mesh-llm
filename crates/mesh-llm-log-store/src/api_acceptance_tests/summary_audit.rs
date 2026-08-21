@@ -372,6 +372,43 @@ fn audit_entries_page_by_occurred_at_and_entry_id_without_detail_leakage() {
 }
 
 #[test]
+fn audit_entries_reconcile_forward_by_durable_sequence() {
+    let (store, clock, tmp) = open_store();
+    let external_writer = LogStore::open(tmp.path(), clock).expect("open independent writer");
+    for entry_id in ["audit-sequence-1", "audit-sequence-2", "audit-sequence-3"] {
+        external_writer
+            .insert_audit_entry(
+                entry_id,
+                None,
+                "2026-08-12T12:00:00Z",
+                "runtime",
+                "runtime_ready",
+                Some(r#"{"severity":"info"}"#),
+            )
+            .unwrap();
+    }
+
+    let first = store
+        .list_audit_entries_after_sequence(0, 2, AuditEntryFilters::default())
+        .unwrap();
+    assert_eq!(
+        first
+            .iter()
+            .map(|entry| entry.entry_id.as_str())
+            .collect::<Vec<_>>(),
+        ["audit-sequence-1", "audit-sequence-2"]
+    );
+    let second = store
+        .list_audit_entries_after_sequence(
+            u64::try_from(first[1].sequence).unwrap(),
+            2,
+            AuditEntryFilters::default(),
+        )
+        .unwrap();
+    assert_eq!(second[0].entry_id, "audit-sequence-3");
+}
+
+#[test]
 fn audit_entries_project_only_versioned_bounded_context() {
     let (store, _, _tmp) = open_store();
     store

@@ -156,7 +156,7 @@ fn command_outcome(result: &Result<()>) -> CliCommandOutcome {
 mod tests {
     use super::*;
     use anyhow::{Error, anyhow};
-    use mesh_llm_events::{clear_output_sink, set_output_sink};
+    use mesh_llm_events::{clear_output_sink, set_cli_command_event_verbose, set_output_sink};
     use std::io;
 
     #[derive(Default)]
@@ -204,6 +204,14 @@ mod tests {
     impl Drop for OutputSinkResetGuard {
         fn drop(&mut self) {
             clear_output_sink();
+        }
+    }
+
+    struct CommandEventVerboseResetGuard;
+
+    impl Drop for CommandEventVerboseResetGuard {
+        fn drop(&mut self) {
+            mesh_llm_events::set_cli_command_event_verbose(false);
         }
     }
 
@@ -317,6 +325,8 @@ mod tests {
     fn command_dispatch_keeps_output_events_unchanged_when_bridge_installed() {
         let sink = Arc::new(RecordingOutputSink::default());
         let _sink_guard = OutputSinkResetGuard;
+        let _verbose_guard = CommandEventVerboseResetGuard;
+        set_cli_command_event_verbose(true);
         set_output_sink(sink.clone());
         let recording = Arc::new(RecordingBridge::default());
         let _bridge_guard = BridgeResetGuard;

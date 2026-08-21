@@ -277,8 +277,15 @@ pub(super) async fn run_runtime_cli(
     .await?;
 
     // Finish the release check before startup continues.
-    if !checked_updates && !options.command_is_update && !options.command_uses_machine_output {
-        autoupdate::check_for_update(crate::BUILD_VERSION).await;
+    if !checked_updates
+        && !options.command_is_update
+        && !options.command_uses_machine_output
+        && let Some(notice) = autoupdate::check_for_update(crate::BUILD_VERSION).await
+    {
+        let _ = emit_event(OutputEvent::Info {
+            message: notice.message,
+            context: None,
+        });
     }
 
     let mut config = plugin::load_config(options.config.as_deref())?;

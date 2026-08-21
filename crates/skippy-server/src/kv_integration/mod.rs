@@ -1,13 +1,18 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize},
+        mpsc::{SyncSender, TrySendError},
+    },
 };
 
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use skippy_cache::{
-    ExactStateCache, PrefixCandidatePolicy, ResidentActivationCache, ResidentPrefixCache,
+    ExactStateCache, ExactStatePayload, PrefixCandidatePolicy, ResidentActivationCache,
+    ResidentPrefixCache,
 };
 use skippy_metrics::attr as attr_key;
 use skippy_runtime::{ActivationFrame, RuntimeKvPageDesc};
@@ -139,6 +144,10 @@ pub struct KvStageIntegration {
     pub(crate) resident: Arc<Mutex<ResidentPrefixCache>>,
     pub(crate) activations: Arc<Mutex<ResidentActivationCache<ActivationFrame>>>,
     pub(crate) exact_states: Arc<Mutex<ExactStateCache<ExactStateExtra>>>,
+    pub(crate) exact_state_record_tx: SyncSender<PendingExactStateRecord>,
+    pub(crate) exact_state_records_queued: Arc<AtomicU64>,
+    pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
+    pub(crate) exact_state_records_pending: Arc<AtomicUsize>,
     pub(crate) first_tokens: Arc<Mutex<BTreeMap<String, i32>>>,
     pub(crate) replay_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
     pub(crate) split_prefill_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
@@ -156,6 +165,62 @@ pub enum StagePrefixCachePayload {
     ResidentKv,
     KvRecurrent,
     FullState,
+}
+
+pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 1;
+
+#[derive(Debug)]
+pub(crate) struct PendingExactStateRecord {
+    pub(crate) page_id: String,
+    pub(crate) token_count: u64,
+    pub(crate) payload: ExactStatePayload,
+    pub(crate) extra: ExactStateExtra,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExactStateRecordAdmission {
+    Queued,
+    DroppedFull,
+    WorkerStopped,
+}
+
+fn has_exact_state_record_capacity(pending_count: &AtomicUsize) -> bool {
+    pending_count.load(std::sync::atomic::Ordering::Acquire) < EXACT_STATE_RECORD_CAPACITY
+}
+
+fn enqueue_exact_state_record(
+    sender: &SyncSender<PendingExactStateRecord>,
+    inflight_records: &Mutex<BTreeSet<String>>,
+    queued: &AtomicU64,
+    dropped: &AtomicU64,
+    pending_count: &AtomicUsize,
+    pending: PendingExactStateRecord,
+) -> ExactStateRecordAdmission {
+    pending_count.fetch_add(1, std::sync::atomic::Ordering::Release);
+    match sender.try_send(pending) {
+        Ok(()) => {
+            queued.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ExactStateRecordAdmission::Queued
+        }
+        Err(TrySendError::Full(pending)) => {
+            pending_count.fetch_sub(1, std::sync::atomic::Ordering::Release);
+            inflight_records
+                .lock()
+                .expect("kv inflight record lock poisoned")
+                .remove(&pending.page_id);
+            dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ExactStateRecordAdmission::DroppedFull
+        }
+        Err(TrySendError::Disconnected(pending)) => {
+            pending_count.fetch_sub(1, std::sync::atomic::Ordering::Release);
+            inflight_records
+                .lock()
+                .expect("kv inflight record lock poisoned")
+                .remove(&pending.page_id);
+            dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ExactStateRecordAdmission::WorkerStopped
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -198,6 +263,24 @@ impl KvStageIntegration {
             .lock()
             .expect("kv inflight record lock poisoned")
             .remove(page_id);
+    }
+
+    pub(crate) fn has_exact_state_record_capacity(&self) -> bool {
+        has_exact_state_record_capacity(&self.exact_state_records_pending)
+    }
+
+    pub(crate) fn enqueue_exact_state_record(
+        &self,
+        pending: PendingExactStateRecord,
+    ) -> ExactStateRecordAdmission {
+        enqueue_exact_state_record(
+            &self.exact_state_record_tx,
+            &self.inflight_records,
+            &self.exact_state_records_queued,
+            &self.exact_state_records_dropped,
+            &self.exact_state_records_pending,
+            pending,
+        )
     }
 
     pub async fn hello(&self) -> Result<()> {
@@ -283,6 +366,13 @@ impl KvStageIntegration {
             .lock()
             .expect("resident activation cache lock poisoned");
         let activations = activations.stats();
+        let exact_state_stats = self
+            .exact_states
+            .try_lock()
+            .ok()
+            .map(|states| states.stats());
+        let exact_state_stats_busy = exact_state_stats.is_none();
+        let exact_state_stats = exact_state_stats.unwrap_or_default();
         vec![
             ("skippy.kv.mode", json!(format!("{:?}", self.mode))),
             ("skippy.kv.payload", json!(format!("{:?}", self.payload))),
@@ -308,19 +398,44 @@ impl KvStageIntegration {
             ),
             (
                 "skippy.exact_cache.entries",
-                json!(self.exact_state_stats().entries),
+                json!(exact_state_stats.entries),
             ),
             (
                 "skippy.exact_cache.logical_bytes",
-                json!(self.exact_state_stats().logical_bytes),
+                json!(exact_state_stats.logical_bytes),
             ),
             (
                 "skippy.exact_cache.physical_bytes",
-                json!(self.exact_state_stats().physical_bytes),
+                json!(exact_state_stats.physical_bytes),
+            ),
+            (
+                "skippy.exact_cache.stats_busy",
+                json!(exact_state_stats_busy),
+            ),
+            (
+                "skippy.exact_cache.records_queued",
+                json!(
+                    self.exact_state_records_queued
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                ),
+            ),
+            (
+                "skippy.exact_cache.records_dropped",
+                json!(
+                    self.exact_state_records_dropped
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                ),
+            ),
+            (
+                "skippy.exact_cache.records_pending",
+                json!(
+                    self.exact_state_records_pending
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                ),
             ),
             (
                 "skippy.exact_cache.max_bytes",
-                json!(self.exact_state_stats().max_bytes),
+                json!(exact_state_stats.max_bytes),
             ),
             ("skippy.kv.correctness_mode", json!(self.correctness_mode)),
             (
@@ -353,40 +468,7 @@ impl KvStageIntegration {
     /// (full budget, every write failing, every entry quarantined) is
     /// indistinguishable from one that is simply never probed.
     pub fn disk_tier_attrs(&self) -> Vec<(&'static str, Value)> {
-        let Some(stats) = self
-            .exact_states
-            .lock()
-            .expect("exact state cache lock poisoned")
-            .disk_stats()
-        else {
-            return vec![("skippy.kv.disk_tier_enabled", json!(false))];
-        };
-        vec![
-            ("skippy.kv.disk_tier_enabled", json!(true)),
-            ("skippy.kv.disk_entries", json!(stats.entries)),
-            ("skippy.kv.disk_bytes", json!(stats.bytes)),
-            ("skippy.kv.disk_max_bytes", json!(stats.max_bytes)),
-            ("skippy.kv.disk_demotions", json!(stats.demotions)),
-            ("skippy.kv.disk_promotions", json!(stats.promotions)),
-            ("skippy.kv.disk_evictions", json!(stats.evictions)),
-            (
-                "skippy.kv.disk_pages_rejected_too_large",
-                json!(stats.pages_rejected_too_large),
-            ),
-            (
-                "skippy.kv.disk_last_rejected_page_bytes",
-                json!(stats.last_rejected_page_bytes),
-            ),
-            (
-                "skippy.kv.disk_corrupt_entries",
-                json!(stats.corrupt_entries),
-            ),
-            ("skippy.kv.disk_verifications", json!(stats.verifications)),
-            (
-                "skippy.kv.disk_verifications_skipped",
-                json!(stats.verifications_skipped),
-            ),
-        ]
+        disk_tier_attrs(&self.exact_states)
     }
 
     /// Attach the disk-tier counters to a decision event.
@@ -399,13 +481,6 @@ impl KvStageIntegration {
         for (key, value) in self.disk_tier_attrs() {
             attrs.insert(key.to_string(), value);
         }
-    }
-
-    fn exact_state_stats(&self) -> skippy_cache::ExactStateCacheStats {
-        self.exact_states
-            .lock()
-            .expect("exact state cache lock poisoned")
-            .stats()
     }
 
     fn record_candidate_token_counts(&self, token_count: u64) -> Vec<u64> {
@@ -483,6 +558,47 @@ impl KvStageIntegration {
     }
 }
 
+fn disk_tier_attrs(
+    exact_states: &Mutex<ExactStateCache<ExactStateExtra>>,
+) -> Vec<(&'static str, Value)> {
+    let exact_states = match exact_states.try_lock() {
+        Ok(exact_states) => exact_states,
+        Err(std::sync::TryLockError::WouldBlock) => {
+            return vec![("skippy.kv.disk_tier_stats_busy", json!(true))];
+        }
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+    };
+    let Some(stats) = exact_states.disk_stats() else {
+        return vec![("skippy.kv.disk_tier_enabled", json!(false))];
+    };
+    vec![
+        ("skippy.kv.disk_tier_enabled", json!(true)),
+        ("skippy.kv.disk_entries", json!(stats.entries)),
+        ("skippy.kv.disk_bytes", json!(stats.bytes)),
+        ("skippy.kv.disk_max_bytes", json!(stats.max_bytes)),
+        ("skippy.kv.disk_demotions", json!(stats.demotions)),
+        ("skippy.kv.disk_promotions", json!(stats.promotions)),
+        ("skippy.kv.disk_evictions", json!(stats.evictions)),
+        (
+            "skippy.kv.disk_pages_rejected_too_large",
+            json!(stats.pages_rejected_too_large),
+        ),
+        (
+            "skippy.kv.disk_last_rejected_page_bytes",
+            json!(stats.last_rejected_page_bytes),
+        ),
+        (
+            "skippy.kv.disk_corrupt_entries",
+            json!(stats.corrupt_entries),
+        ),
+        ("skippy.kv.disk_verifications", json!(stats.verifications)),
+        (
+            "skippy.kv.disk_verifications_skipped",
+            json!(stats.verifications_skipped),
+        ),
+    ]
+}
+
 fn local_trust_checksum(page_id: &str, byte_size: u64) -> Checksum {
     let mut digest = Sha256::new();
     digest.update(b"skippy-local-trust-v1");
@@ -491,6 +607,154 @@ fn local_trust_checksum(page_id: &str, byte_size: u64) -> Checksum {
     Checksum {
         algorithm: ChecksumAlgorithm::Sha256 as i32,
         digest: digest.finalize().to_vec(),
+    }
+}
+
+#[cfg(test)]
+mod exact_state_record_queue_tests {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        mpsc::sync_channel,
+    };
+    use std::time::{Duration, Instant};
+
+    use skippy_cache::{ExactStateCache, ExactStatePayload};
+
+    use super::{
+        BTreeSet, EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, ExactStateRecordAdmission,
+        PendingExactStateRecord, disk_tier_attrs, enqueue_exact_state_record,
+        has_exact_state_record_capacity,
+    };
+
+    fn pending(page_id: &str) -> PendingExactStateRecord {
+        PendingExactStateRecord {
+            page_id: page_id.to_string(),
+            token_count: 1,
+            payload: ExactStatePayload::full_state(vec![1]),
+            extra: ExactStateExtra::default(),
+        }
+    }
+
+    #[test]
+    fn busy_exact_state_lock_skips_disk_stats_without_waiting() {
+        let cache = Arc::new(Mutex::new(ExactStateCache::<ExactStateExtra>::new(1, 1024)));
+        let locked = cache.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = locked.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        locked_rx.recv().unwrap();
+
+        let started = Instant::now();
+        assert_eq!(
+            disk_tier_attrs(&cache),
+            vec![("skippy.kv.disk_tier_stats_busy", serde_json::json!(true))]
+        );
+        assert!(started.elapsed() < Duration::from_millis(100));
+
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+    }
+
+    #[test]
+    fn pending_capacity_signal_rejects_work_before_export() {
+        let pending_count = AtomicUsize::new(0);
+        assert!(has_exact_state_record_capacity(&pending_count));
+
+        pending_count.store(EXACT_STATE_RECORD_CAPACITY, Ordering::Release);
+        assert!(!has_exact_state_record_capacity(&pending_count));
+    }
+
+    #[test]
+    fn full_queue_drops_optional_record_and_releases_inflight_page() {
+        let (sender, _receiver) = sync_channel(1);
+        sender.send(pending("queued")).unwrap();
+        let inflight = Mutex::new(BTreeSet::from(["dropped".to_string()]));
+        let queued = AtomicU64::new(0);
+        let dropped = AtomicU64::new(0);
+        let pending_count = AtomicUsize::new(0);
+
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                pending("dropped"),
+            ),
+            ExactStateRecordAdmission::DroppedFull
+        );
+        assert!(!inflight.lock().unwrap().contains("dropped"));
+        assert_eq!(queued.load(Ordering::Relaxed), 0);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(pending_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn disconnected_worker_releases_inflight_page() {
+        let (sender, receiver) = sync_channel(1);
+        drop(receiver);
+        let inflight = Mutex::new(BTreeSet::from(["orphaned".to_string()]));
+        let queued = AtomicU64::new(0);
+        let dropped = AtomicU64::new(0);
+        let pending_count = AtomicUsize::new(0);
+
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                pending("orphaned"),
+            ),
+            ExactStateRecordAdmission::WorkerStopped
+        );
+        assert!(!inflight.lock().unwrap().contains("orphaned"));
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(pending_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn worker_keeps_page_inflight_until_record_finishes() {
+        let (sender, receiver) = sync_channel(1);
+        let inflight = Arc::new(Mutex::new(BTreeSet::from(["page".to_string()])));
+        let worker_inflight = inflight.clone();
+        let queued = AtomicU64::new(0);
+        let dropped = AtomicU64::new(0);
+        let pending_count = Arc::new(AtomicUsize::new(0));
+        let worker_pending_count = pending_count.clone();
+
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                pending("page"),
+            ),
+            ExactStateRecordAdmission::Queued
+        );
+        assert!(inflight.lock().unwrap().contains("page"));
+
+        let worker = std::thread::spawn(move || {
+            let pending = receiver.recv().unwrap();
+            assert!(worker_inflight.lock().unwrap().contains(&pending.page_id));
+            worker_inflight.lock().unwrap().remove(&pending.page_id);
+            worker_pending_count.fetch_sub(1, Ordering::Relaxed);
+        });
+        worker.join().unwrap();
+
+        assert!(!inflight.lock().unwrap().contains("page"));
+        assert_eq!(queued.load(Ordering::Relaxed), 1);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(pending_count.load(Ordering::Relaxed), 0);
     }
 }
 

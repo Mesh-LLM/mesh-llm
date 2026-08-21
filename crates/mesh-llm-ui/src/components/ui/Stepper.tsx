@@ -13,6 +13,8 @@ type StepperProps = {
   onChange: (value: number) => void
   onBlur?: (event: FocusEvent<HTMLInputElement>) => void
   'aria-label'?: string
+  'aria-describedby'?: string
+  'aria-invalid'?: boolean
 }
 
 function clamp(value: number, min: number | undefined, max: number | undefined) {
@@ -32,9 +34,11 @@ function Stepper({
   inputClassName,
   onChange,
   onBlur,
-  'aria-label': ariaLabel
+  'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
+  'aria-invalid': ariaInvalid
 }: StepperProps) {
-  step = Math.max(1, Math.abs(step))
+  step = Number.isFinite(step) && step !== 0 ? Math.abs(step) : 1
 
   const canDecrement = min === undefined || value > min
   const canIncrement = max === undefined || value < max
@@ -96,7 +100,7 @@ function Stepper({
       </button>
       <input
         type="text"
-        inputMode="numeric"
+        inputMode="decimal"
         value={value}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
@@ -108,6 +112,8 @@ function Stepper({
           inputClassName
         )}
         aria-label={ariaLabel ? `${ariaLabel} value` : undefined}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid ? 'true' : undefined}
       />
       <button
         type="button"

@@ -30,7 +30,12 @@ mod tests {
         store::Store,
         util::now_unix_nanos,
     };
-    use axum::{body::Bytes, extract::State, http::StatusCode, response::IntoResponse};
+    use axum::{
+        body::Bytes,
+        extract::State,
+        http::{HeaderMap, HeaderValue, StatusCode, header},
+        response::IntoResponse,
+    };
     use opentelemetry_proto::tonic::metrics::v1::{
         Gauge, ResourceMetrics, ScopeMetrics as MetricScopeMetrics,
     };
@@ -247,6 +252,15 @@ mod tests {
         assert!(raw_json.is_empty());
     }
 
+    fn protobuf_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-protobuf"),
+        );
+        headers
+    }
+
     #[tokio::test]
     async fn otlp_http_trace_ingest_accepts_protobuf() {
         let store = in_memory_store(false);
@@ -255,7 +269,7 @@ mod tests {
         };
         let body = Bytes::from(fixture_request("run-http").encode_to_vec());
 
-        let response = otlp_http_traces(State(state), body)
+        let response = otlp_http_traces(State(state), protobuf_headers(), body)
             .await
             .unwrap()
             .into_response();
@@ -263,5 +277,77 @@ mod tests {
 
         let report = store.report("run-http").unwrap();
         assert_eq!(report.counts["spans"], 1);
+    }
+
+    #[tokio::test]
+    async fn otlp_http_trace_ingest_accepts_protobuf_with_charset_parameter() {
+        let store = in_memory_store(false);
+        let state = AppState {
+            store: store.clone(),
+        };
+        let body = Bytes::from(fixture_request("run-http-charset").encode_to_vec());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-protobuf; charset=utf-8"),
+        );
+
+        let response = otlp_http_traces(State(state), headers, body)
+            .await
+            .unwrap()
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let report = store.report("run-http-charset").unwrap();
+        assert_eq!(report.counts["spans"], 1);
+    }
+
+    /// A drive-by web page can only send CORS-safelisted content types without
+    /// a preflight. Sending `text/plain` protobuf bytes must be rejected and
+    /// must not create a run, closing the cross-origin injection path (#886).
+    #[tokio::test]
+    async fn otlp_http_trace_ingest_rejects_cors_safelisted_content_type() {
+        let store = in_memory_store(false);
+        let state = AppState {
+            store: store.clone(),
+        };
+        let body = Bytes::from(fixture_request("run-driveby").encode_to_vec());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain;charset=UTF-8"),
+        );
+
+        let status = match otlp_http_traces(State(state), headers, body).await {
+            Ok(_) => panic!("text/plain OTLP export must be rejected"),
+            Err(error) => error.into_response().status(),
+        };
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        assert!(
+            store.report("run-driveby").is_err(),
+            "rejected drive-by request must not create a run"
+        );
+    }
+
+    /// A request with no `Content-Type` at all must also be rejected.
+    #[tokio::test]
+    async fn otlp_http_trace_ingest_rejects_missing_content_type() {
+        let store = in_memory_store(false);
+        let state = AppState {
+            store: store.clone(),
+        };
+        let body = Bytes::from(fixture_request("run-no-ct").encode_to_vec());
+
+        let status = match otlp_http_traces(State(state), HeaderMap::new(), body).await {
+            Ok(_) => panic!("OTLP export without a content type must be rejected"),
+            Err(error) => error.into_response().status(),
+        };
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        assert!(
+            store.report("run-no-ct").is_err(),
+            "rejected request must not create a run"
+        );
     }
 }

@@ -104,6 +104,12 @@ impl StageOpenAiBackend {
                     .copied()
                     .expect("checked non-empty committed tokens")
             });
+        let generated_token_count = params
+            .generated_len
+            .checked_add(execution.committed_tokens.len())
+            .ok_or_else(|| {
+                OpenAiError::backend("linear proposal generated-token count overflow")
+            })?;
         let total_elapsed_us = elapsed_us(queried.operation_started);
         Ok(Some(LinearProposalReceipt {
             request_id: params.request_id,
@@ -113,6 +119,7 @@ impl StageOpenAiBackend {
             proposal_token_count,
             verification_rows: verify_inputs.len(),
             accepted_proposal_tokens,
+            generated_token_count,
             canonical_prediction_count: execution.committed_tokens.len(),
             committed_tokens: execution.committed_tokens.into_boxed_slice(),
             verification_row_predictions: execution.predictions.into_boxed_slice(),

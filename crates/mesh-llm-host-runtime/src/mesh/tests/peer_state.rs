@@ -1751,3 +1751,18 @@ fn proto_v1_route_table_rejects_bad_generation_or_legacy_payload() {
         err
     );
 }
+
+#[tokio::test]
+async fn connectivity_snapshot_does_not_treat_admitted_membership_as_connected() {
+    let node = Node::new_for_tests(super::NodeRole::Worker).await.unwrap();
+    node.insert_test_peer(make_test_peer_info(make_test_endpoint_id(42)))
+        .await;
+
+    assert_eq!(
+        node.connectivity_snapshot().await,
+        super::connectivity::MeshConnectivitySnapshot {
+            admitted_peer_count: 1,
+            connected_peer_count: 0,
+        }
+    );
+}

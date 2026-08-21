@@ -429,6 +429,8 @@ fn plugin_presentation_from_installed(
         placeholder: presentation.placeholder.clone(),
         control_hint: presentation.control_hint.clone(),
         renderer_id: presentation.renderer_id.clone(),
+        choices: vec![],
+        display_units: vec![],
     })
 }
 

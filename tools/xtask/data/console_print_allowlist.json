@@ -1,0 +1,4388 @@
+{
+  "crates/llama-spec-bench/src/main.rs": [
+    {
+      "line": 170,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 187,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 211,
+      "macro_name": "println!"
+    },
+    {
+      "line": 532,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 533,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 537,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 543,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 552,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 553,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 557,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 558,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 566,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 574,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 575,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-client/src/models/catalog.rs": [
+    {
+      "line": 116,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 117,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 124,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-client/tests/runtime_thread_leak.rs": [
+    {
+      "line": 46,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/agent_cli.rs": [
+    {
+      "line": 174,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 391,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 407,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 437,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 456,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 457,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 542,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 543,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 581,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 587,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 595,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 600,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 610,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 612,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 613,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 614,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 618,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 663,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 677,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 679,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 680,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 681,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 685,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 845,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 910,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 917,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 920,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 961,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 971,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 975,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1136,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/auth.rs": [
+    {
+      "line": 344,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 345,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 346,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 347,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 348,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 349,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 350,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 353,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 358,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 362,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 363,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 366,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 374,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 379,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 381,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 403,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 404,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 407,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 408,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 409,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 413,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 415,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 418,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 420,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 424,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 427,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 432,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 437,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 440,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 446,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 451,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 452,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 455,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 460,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 461,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 462,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 463,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 464,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 465,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 467,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 491,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 492,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 493,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 494,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 501,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 502,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 506,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 508,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 511,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 514,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 553,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 557,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 558,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 559,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 560,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 607,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 608,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 609,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 610,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 611,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 612,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 613,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 617,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 675,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 677,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 680,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 684,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 685,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 709,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 710,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 736,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 780,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 790,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 792,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 839,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 840,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 842,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 859,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 869,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 874,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 880,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 881,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 882,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 883,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 885,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 889,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 890,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 894,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 895,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 897,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 901,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 902,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 906,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 907,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 909,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 913,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 914,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 918,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 919,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 921,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 925,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 926,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/auth/tests.rs": [
+    {
+      "line": 45,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 81,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 114,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/config.rs": [
+    {
+      "line": 358,
+      "macro_name": "println!"
+    },
+    {
+      "line": 373,
+      "macro_name": "println!"
+    },
+    {
+      "line": 378,
+      "macro_name": "println!"
+    },
+    {
+      "line": 379,
+      "macro_name": "println!"
+    },
+    {
+      "line": 386,
+      "macro_name": "println!"
+    },
+    {
+      "line": 388,
+      "macro_name": "println!"
+    },
+    {
+      "line": 402,
+      "macro_name": "println!"
+    },
+    {
+      "line": 410,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/gpus.rs": [
+    {
+      "line": 29,
+      "macro_name": "println!"
+    },
+    {
+      "line": 50,
+      "macro_name": "println!"
+    },
+    {
+      "line": 61,
+      "macro_name": "println!"
+    },
+    {
+      "line": 78,
+      "macro_name": "println!"
+    },
+    {
+      "line": 79,
+      "macro_name": "println!"
+    },
+    {
+      "line": 83,
+      "macro_name": "println!"
+    },
+    {
+      "line": 84,
+      "macro_name": "println!"
+    },
+    {
+      "line": 195,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/gpus/tune/benchmark/mod.rs": [
+    {
+      "line": 91,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/gpus/tune/benchmark_progress.rs": [
+    {
+      "line": 5,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 13,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 24,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 37,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 48,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/model_package.rs": [
+    {
+      "line": 117,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 124,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 147,
+      "macro_name": "println!"
+    },
+    {
+      "line": 164,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 165,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 166,
+      "macro_name": "println!"
+    },
+    {
+      "line": 174,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 183,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 184,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 185,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 186,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 189,
+      "macro_name": "println!"
+    },
+    {
+      "line": 210,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 211,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 212,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 227,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 228,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 229,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 231,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 233,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 234,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 243,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 244,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 252,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 260,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 261,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 271,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 277,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 295,
+      "macro_name": "println!"
+    },
+    {
+      "line": 308,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 312,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 313,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 315,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 316,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 317,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 342,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 353,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 367,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 378,
+      "macro_name": "println!"
+    },
+    {
+      "line": 387,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 388,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 390,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 393,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 405,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 406,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 407,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 414,
+      "macro_name": "println!"
+    },
+    {
+      "line": 416,
+      "macro_name": "println!"
+    },
+    {
+      "line": 418,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 432,
+      "macro_name": "println!"
+    },
+    {
+      "line": 441,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 453,
+      "macro_name": "println!"
+    },
+    {
+      "line": 463,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 467,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 468,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 471,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 486,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 491,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 506,
+      "macro_name": "println!"
+    },
+    {
+      "line": 508,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 517,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 518,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 523,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 532,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 546,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 554,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 558,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 562,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/plugin.rs": [
+    {
+      "line": 89,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 103,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 115,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 117,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 125,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 132,
+      "macro_name": "println!"
+    },
+    {
+      "line": 133,
+      "macro_name": "println!"
+    },
+    {
+      "line": 134,
+      "macro_name": "println!"
+    },
+    {
+      "line": 135,
+      "macro_name": "println!"
+    },
+    {
+      "line": 136,
+      "macro_name": "println!"
+    },
+    {
+      "line": 137,
+      "macro_name": "println!"
+    },
+    {
+      "line": 138,
+      "macro_name": "println!"
+    },
+    {
+      "line": 140,
+      "macro_name": "println!"
+    },
+    {
+      "line": 143,
+      "macro_name": "println!"
+    },
+    {
+      "line": 146,
+      "macro_name": "println!"
+    },
+    {
+      "line": 155,
+      "macro_name": "println!"
+    },
+    {
+      "line": 161,
+      "macro_name": "println!"
+    },
+    {
+      "line": 195,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 199,
+      "macro_name": "println!"
+    },
+    {
+      "line": 215,
+      "macro_name": "println!"
+    },
+    {
+      "line": 222,
+      "macro_name": "println!"
+    },
+    {
+      "line": 230,
+      "macro_name": "println!"
+    },
+    {
+      "line": 267,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 269,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 293,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 320,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 327,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 331,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 335,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/runtime_native.rs": [
+    {
+      "line": 65,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 123,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 126,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 167,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 168,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 170,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 173,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 201,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 237,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 241,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 249,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/runtime_native/formatters.rs": [
+    {
+      "line": 95,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 96,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 97,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 108,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 110,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 119,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 121,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 126,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 193,
+      "macro_name": "println!"
+    },
+    {
+      "line": 206,
+      "macro_name": "println!"
+    },
+    {
+      "line": 207,
+      "macro_name": "println!"
+    },
+    {
+      "line": 210,
+      "macro_name": "println!"
+    },
+    {
+      "line": 218,
+      "macro_name": "println!"
+    },
+    {
+      "line": 223,
+      "macro_name": "println!"
+    },
+    {
+      "line": 228,
+      "macro_name": "println!"
+    },
+    {
+      "line": 231,
+      "macro_name": "println!"
+    },
+    {
+      "line": 238,
+      "macro_name": "println!"
+    },
+    {
+      "line": 239,
+      "macro_name": "println!"
+    },
+    {
+      "line": 242,
+      "macro_name": "println!"
+    },
+    {
+      "line": 243,
+      "macro_name": "println!"
+    },
+    {
+      "line": 245,
+      "macro_name": "println!"
+    },
+    {
+      "line": 249,
+      "macro_name": "println!"
+    },
+    {
+      "line": 256,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 260,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 261,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 262,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 265,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 266,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 267,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 268,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 274,
+      "macro_name": "println!"
+    },
+    {
+      "line": 275,
+      "macro_name": "println!"
+    },
+    {
+      "line": 276,
+      "macro_name": "println!"
+    },
+    {
+      "line": 277,
+      "macro_name": "println!"
+    },
+    {
+      "line": 278,
+      "macro_name": "println!"
+    },
+    {
+      "line": 279,
+      "macro_name": "println!"
+    },
+    {
+      "line": 284,
+      "macro_name": "println!"
+    },
+    {
+      "line": 287,
+      "macro_name": "println!"
+    },
+    {
+      "line": 290,
+      "macro_name": "println!"
+    },
+    {
+      "line": 292,
+      "macro_name": "println!"
+    },
+    {
+      "line": 293,
+      "macro_name": "println!"
+    },
+    {
+      "line": 301,
+      "macro_name": "println!"
+    },
+    {
+      "line": 304,
+      "macro_name": "println!"
+    },
+    {
+      "line": 306,
+      "macro_name": "println!"
+    },
+    {
+      "line": 309,
+      "macro_name": "println!"
+    },
+    {
+      "line": 313,
+      "macro_name": "println!"
+    },
+    {
+      "line": 316,
+      "macro_name": "println!"
+    },
+    {
+      "line": 317,
+      "macro_name": "println!"
+    },
+    {
+      "line": 322,
+      "macro_name": "println!"
+    },
+    {
+      "line": 323,
+      "macro_name": "println!"
+    },
+    {
+      "line": 325,
+      "macro_name": "println!"
+    },
+    {
+      "line": 329,
+      "macro_name": "println!"
+    },
+    {
+      "line": 330,
+      "macro_name": "println!"
+    },
+    {
+      "line": 332,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/setup/command.rs": [
+    {
+      "line": 163,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 165,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 178,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 196,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/setup/summary.rs": [
+    {
+      "line": 14,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 20,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 36,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 42,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 44,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 45,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 46,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 47,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 54,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 55,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 56,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 58,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/skills.rs": [
+    {
+      "line": 28,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 83,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 92,
+      "macro_name": "println!"
+    },
+    {
+      "line": 101,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 104,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 105,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 109,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 115,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 116,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 120,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 129,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 136,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 141,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 180,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/terminal.rs": [
+    {
+      "line": 32,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 54,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/uninstall.rs": [
+    {
+      "line": 457,
+      "macro_name": "println!"
+    },
+    {
+      "line": 461,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 468,
+      "macro_name": "println!"
+    },
+    {
+      "line": 471,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 473,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-events/src/terminal_progress.rs": [
+    {
+      "line": 25,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 72,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 118,
+      "macro_name": "eprint!"
+    }
+  ],
+  "crates/mesh-llm-ffi/tests/live_sdk_smoke.rs": [
+    {
+      "line": 20,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/package_download.rs": [
+    {
+      "line": 146,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 190,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 194,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 299,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 304,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 501,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 504,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/inference/skippy/resolver/native_mtp_tests.rs": [
+    {
+      "line": 898,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/models/catalog.rs": [
+    {
+      "line": 418,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 602,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 659,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 762,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 782,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 792,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 806,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 849,
+      "macro_name": "eprint!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/models/maintenance.rs": [
+    {
+      "line": 29,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 30,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 62,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 63,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 64,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 65,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 76,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 77,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 78,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 79,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 80,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 81,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 84,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 88,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 94,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 95,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 96,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 97,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 100,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 101,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 102,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 104,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 117,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 139,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 140,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 141,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 142,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 143,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 147,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 157,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 350,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 354,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 355,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 368,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 376,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 381,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 383,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/models/remote_catalog.rs": [
+    {
+      "line": 863,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/models/resolve/mod.rs": [
+    {
+      "line": 206,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 252,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/models/search.rs": [
+    {
+      "line": 253,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/network/discovery.rs": [
+    {
+      "line": 339,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1342,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/network/nostr/keys.rs": [
+    {
+      "line": 91,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 93,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 99,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 101,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 104,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 105,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/network/nostr/publish.rs": [
+    {
+      "line": 130,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 240,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 341,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 399,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 409,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 454,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 465,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 637,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 646,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/runtime/interactive.rs": [
+    {
+      "line": 212,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 226,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/runtime/local_split/tests.rs": [
+    {
+      "line": 1601,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1606,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1619,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1641,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-identity/src/keychain.rs": [
+    {
+      "line": 236,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 257,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 269,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 281,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-runtime-install/src/discovery.rs": [
+    {
+      "line": 100,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 271,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-system/src/autoupdate.rs": [
+    {
+      "line": 150,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 175,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 197,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 201,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 208,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 297,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 304,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 320,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 326,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 329,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 333,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-system/src/benchmark_prompts.rs": [
+    {
+      "line": 128,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-test-harness/src/bin/spawn-fixture.rs": [
+    {
+      "line": 9,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm-tui/src/terminal_progress.rs": [
+    {
+      "line": 25,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 72,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 118,
+      "macro_name": "eprint!"
+    }
+  ],
+  "crates/mesh-llm/src/commands/discover.rs": [
+    {
+      "line": 48,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 52,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 58,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 69,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 88,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 103,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 105,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 106,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 111,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 112,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 113,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 114,
+      "macro_name": "println!"
+    },
+    {
+      "line": 116,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 117,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 118,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 119,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 131,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 143,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 145,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 146,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 151,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 164,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 172,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 177,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 180,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 182,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 187,
+      "macro_name": "println!"
+    },
+    {
+      "line": 189,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 190,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 193,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 194,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 195,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 206,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 222,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 228,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 231,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 243,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm/src/commands/doctor.rs": [
+    {
+      "line": 77,
+      "macro_name": "println!"
+    },
+    {
+      "line": 80,
+      "macro_name": "println!"
+    },
+    {
+      "line": 83,
+      "macro_name": "println!"
+    },
+    {
+      "line": 84,
+      "macro_name": "println!"
+    },
+    {
+      "line": 86,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm/src/commands/download.rs": [
+    {
+      "line": 28,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 34,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 35,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 41,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm/src/commands/models/formatters.rs": [
+    {
+      "line": 148,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm/src/commands/models/formatters_console.rs": [
+    {
+      "line": 189,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 242,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 377,
+      "macro_name": "println!"
+    },
+    {
+      "line": 378,
+      "macro_name": "println!"
+    },
+    {
+      "line": 463,
+      "macro_name": "println!"
+    },
+    {
+      "line": 465,
+      "macro_name": "println!"
+    },
+    {
+      "line": 468,
+      "macro_name": "println!"
+    },
+    {
+      "line": 470,
+      "macro_name": "println!"
+    },
+    {
+      "line": 471,
+      "macro_name": "println!"
+    },
+    {
+      "line": 472,
+      "macro_name": "println!"
+    },
+    {
+      "line": 473,
+      "macro_name": "println!"
+    },
+    {
+      "line": 475,
+      "macro_name": "println!"
+    },
+    {
+      "line": 477,
+      "macro_name": "println!"
+    },
+    {
+      "line": 481,
+      "macro_name": "println!"
+    },
+    {
+      "line": 484,
+      "macro_name": "println!"
+    },
+    {
+      "line": 486,
+      "macro_name": "println!"
+    },
+    {
+      "line": 487,
+      "macro_name": "println!"
+    },
+    {
+      "line": 489,
+      "macro_name": "println!"
+    },
+    {
+      "line": 492,
+      "macro_name": "println!"
+    },
+    {
+      "line": 495,
+      "macro_name": "println!"
+    },
+    {
+      "line": 498,
+      "macro_name": "println!"
+    },
+    {
+      "line": 500,
+      "macro_name": "println!"
+    },
+    {
+      "line": 502,
+      "macro_name": "println!"
+    },
+    {
+      "line": 504,
+      "macro_name": "println!"
+    },
+    {
+      "line": 510,
+      "macro_name": "println!"
+    },
+    {
+      "line": 511,
+      "macro_name": "println!"
+    },
+    {
+      "line": 544,
+      "macro_name": "print!"
+    },
+    {
+      "line": 551,
+      "macro_name": "println!"
+    },
+    {
+      "line": 552,
+      "macro_name": "println!"
+    },
+    {
+      "line": 554,
+      "macro_name": "println!"
+    },
+    {
+      "line": 557,
+      "macro_name": "println!"
+    },
+    {
+      "line": 558,
+      "macro_name": "println!"
+    },
+    {
+      "line": 559,
+      "macro_name": "println!"
+    },
+    {
+      "line": 574,
+      "macro_name": "println!"
+    },
+    {
+      "line": 575,
+      "macro_name": "println!"
+    },
+    {
+      "line": 576,
+      "macro_name": "println!"
+    },
+    {
+      "line": 577,
+      "macro_name": "println!"
+    },
+    {
+      "line": 586,
+      "macro_name": "println!"
+    },
+    {
+      "line": 587,
+      "macro_name": "println!"
+    },
+    {
+      "line": 588,
+      "macro_name": "println!"
+    },
+    {
+      "line": 590,
+      "macro_name": "println!"
+    },
+    {
+      "line": 592,
+      "macro_name": "println!"
+    },
+    {
+      "line": 595,
+      "macro_name": "println!"
+    },
+    {
+      "line": 597,
+      "macro_name": "println!"
+    },
+    {
+      "line": 603,
+      "macro_name": "println!"
+    },
+    {
+      "line": 605,
+      "macro_name": "println!"
+    },
+    {
+      "line": 607,
+      "macro_name": "println!"
+    },
+    {
+      "line": 612,
+      "macro_name": "println!"
+    },
+    {
+      "line": 616,
+      "macro_name": "println!"
+    },
+    {
+      "line": 617,
+      "macro_name": "println!"
+    },
+    {
+      "line": 619,
+      "macro_name": "println!"
+    },
+    {
+      "line": 625,
+      "macro_name": "println!"
+    },
+    {
+      "line": 626,
+      "macro_name": "println!"
+    },
+    {
+      "line": 631,
+      "macro_name": "println!"
+    },
+    {
+      "line": 632,
+      "macro_name": "println!"
+    },
+    {
+      "line": 633,
+      "macro_name": "println!"
+    },
+    {
+      "line": 635,
+      "macro_name": "println!"
+    },
+    {
+      "line": 637,
+      "macro_name": "println!"
+    },
+    {
+      "line": 638,
+      "macro_name": "println!"
+    },
+    {
+      "line": 642,
+      "macro_name": "println!"
+    },
+    {
+      "line": 643,
+      "macro_name": "println!"
+    },
+    {
+      "line": 644,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm/src/commands/models/mod.rs": [
+    {
+      "line": 120,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 175,
+      "macro_name": "println!"
+    },
+    {
+      "line": 177,
+      "macro_name": "println!"
+    },
+    {
+      "line": 181,
+      "macro_name": "println!"
+    },
+    {
+      "line": 182,
+      "macro_name": "println!"
+    },
+    {
+      "line": 183,
+      "macro_name": "println!"
+    },
+    {
+      "line": 184,
+      "macro_name": "println!"
+    },
+    {
+      "line": 186,
+      "macro_name": "println!"
+    },
+    {
+      "line": 268,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 272,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 281,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 308,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 315,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 339,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 342,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 384,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 566,
+      "macro_name": "println!"
+    },
+    {
+      "line": 575,
+      "macro_name": "println!"
+    },
+    {
+      "line": 576,
+      "macro_name": "println!"
+    },
+    {
+      "line": 577,
+      "macro_name": "println!"
+    },
+    {
+      "line": 578,
+      "macro_name": "println!"
+    },
+    {
+      "line": 586,
+      "macro_name": "println!"
+    },
+    {
+      "line": 595,
+      "macro_name": "println!"
+    },
+    {
+      "line": 596,
+      "macro_name": "println!"
+    },
+    {
+      "line": 633,
+      "macro_name": "println!"
+    },
+    {
+      "line": 635,
+      "macro_name": "println!"
+    },
+    {
+      "line": 637,
+      "macro_name": "println!"
+    },
+    {
+      "line": 641,
+      "macro_name": "println!"
+    },
+    {
+      "line": 642,
+      "macro_name": "println!"
+    },
+    {
+      "line": 644,
+      "macro_name": "println!"
+    },
+    {
+      "line": 646,
+      "macro_name": "println!"
+    },
+    {
+      "line": 649,
+      "macro_name": "println!"
+    },
+    {
+      "line": 652,
+      "macro_name": "println!"
+    },
+    {
+      "line": 654,
+      "macro_name": "println!"
+    },
+    {
+      "line": 656,
+      "macro_name": "println!"
+    },
+    {
+      "line": 664,
+      "macro_name": "println!"
+    },
+    {
+      "line": 666,
+      "macro_name": "println!"
+    },
+    {
+      "line": 668,
+      "macro_name": "println!"
+    },
+    {
+      "line": 670,
+      "macro_name": "println!"
+    },
+    {
+      "line": 672,
+      "macro_name": "println!"
+    },
+    {
+      "line": 676,
+      "macro_name": "println!"
+    },
+    {
+      "line": 681,
+      "macro_name": "println!"
+    },
+    {
+      "line": 682,
+      "macro_name": "println!"
+    },
+    {
+      "line": 683,
+      "macro_name": "println!"
+    },
+    {
+      "line": 687,
+      "macro_name": "println!"
+    },
+    {
+      "line": 688,
+      "macro_name": "println!"
+    },
+    {
+      "line": 693,
+      "macro_name": "println!"
+    },
+    {
+      "line": 700,
+      "macro_name": "println!"
+    },
+    {
+      "line": 707,
+      "macro_name": "println!"
+    },
+    {
+      "line": 713,
+      "macro_name": "println!"
+    },
+    {
+      "line": 714,
+      "macro_name": "println!"
+    },
+    {
+      "line": 715,
+      "macro_name": "print!"
+    },
+    {
+      "line": 717,
+      "macro_name": "print!"
+    },
+    {
+      "line": 719,
+      "macro_name": "println!"
+    },
+    {
+      "line": 729,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm/src/commands/plugin_cli.rs": [
+    {
+      "line": 206,
+      "macro_name": "print!"
+    },
+    {
+      "line": 212,
+      "macro_name": "println!"
+    },
+    {
+      "line": 232,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 236,
+      "macro_name": "print!"
+    }
+  ],
+  "crates/mesh-llm/src/commands/runtime.rs": [
+    {
+      "line": 252,
+      "macro_name": "println!"
+    },
+    {
+      "line": 256,
+      "macro_name": "println!"
+    },
+    {
+      "line": 380,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 383,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 384,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 385,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 390,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 467,
+      "macro_name": "println!"
+    },
+    {
+      "line": 468,
+      "macro_name": "println!"
+    },
+    {
+      "line": 471,
+      "macro_name": "println!"
+    },
+    {
+      "line": 472,
+      "macro_name": "println!"
+    },
+    {
+      "line": 473,
+      "macro_name": "println!"
+    },
+    {
+      "line": 477,
+      "macro_name": "println!"
+    },
+    {
+      "line": 478,
+      "macro_name": "println!"
+    },
+    {
+      "line": 480,
+      "macro_name": "println!"
+    },
+    {
+      "line": 496,
+      "macro_name": "println!"
+    },
+    {
+      "line": 512,
+      "macro_name": "println!"
+    },
+    {
+      "line": 517,
+      "macro_name": "println!"
+    },
+    {
+      "line": 687,
+      "macro_name": "println!"
+    },
+    {
+      "line": 688,
+      "macro_name": "println!"
+    },
+    {
+      "line": 690,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-llm/src/lib.rs": [
+    {
+      "line": 286,
+      "macro_name": "print!"
+    },
+    {
+      "line": 338,
+      "macro_name": "print!"
+    },
+    {
+      "line": 339,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm/src/main.rs": [
+    {
+      "line": 63,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 70,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm/tests/virtual_llm_injection.rs": [
+    {
+      "line": 232,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 239,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 244,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 245,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 253,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 287,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 297,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 319,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 320,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 327,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 357,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 362,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 369,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 371,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 374,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 385,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-mixture-of-agents/tests/diag_small_pool.rs": [
+    {
+      "line": 106,
+      "macro_name": "println!"
+    },
+    {
+      "line": 107,
+      "macro_name": "println!"
+    },
+    {
+      "line": 114,
+      "macro_name": "println!"
+    },
+    {
+      "line": 124,
+      "macro_name": "println!"
+    },
+    {
+      "line": 134,
+      "macro_name": "println!"
+    },
+    {
+      "line": 156,
+      "macro_name": "println!"
+    },
+    {
+      "line": 161,
+      "macro_name": "println!"
+    },
+    {
+      "line": 164,
+      "macro_name": "println!"
+    },
+    {
+      "line": 165,
+      "macro_name": "println!"
+    },
+    {
+      "line": 166,
+      "macro_name": "println!"
+    },
+    {
+      "line": 170,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-mixture-of-agents/tests/eval_openrouter.rs": [
+    {
+      "line": 448,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 570,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 578,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 787,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 861,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 862,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 906,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 917,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 919,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 925,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 934,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 938,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1218,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1219,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1244,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1270,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1271,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1278,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1429,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1430,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1431,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1432,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1501,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1526,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1527,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1534,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1539,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1752,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1753,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1754,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1795,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1819,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1820,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1827,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2226,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2227,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2228,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2249,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2253,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2300,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2301,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2302,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2307,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2338,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2339,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2340,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2341,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2388,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2398,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2436,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2441,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2442,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2443,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2444,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2450,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2487,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2495,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2513,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2522,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2528,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2530,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2532,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2533,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2574,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 2630,
+      "macro_name": "println!"
+    },
+    {
+      "line": 2635,
+      "macro_name": "println!"
+    },
+    {
+      "line": 2655,
+      "macro_name": "println!"
+    },
+    {
+      "line": 2665,
+      "macro_name": "println!"
+    },
+    {
+      "line": 2668,
+      "macro_name": "println!"
+    },
+    {
+      "line": 2704,
+      "macro_name": "println!"
+    },
+    {
+      "line": 2732,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/mesh-native-serving-plugin-host/src/lib.rs": [
+    {
+      "line": 603,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-native-serving-plugin-host/src/plugin_dispatch.rs": [
+    {
+      "line": 445,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 458,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 515,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 561,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 613,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 658,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 670,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 778,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/metrics-server/src/fixture.rs": [
+    {
+      "line": 70,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/metrics-server/src/server.rs": [
+    {
+      "line": 79,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/model-hf/tests/hf_download.rs": [
+    {
+      "line": 62,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 92,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 135,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 160,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 199,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 260,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 278,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 303,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 323,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 341,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 365,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/model-package/src/bin/queue-unsloth-layer-packages.rs": [
+    {
+      "line": 160,
+      "macro_name": "println!"
+    },
+    {
+      "line": 165,
+      "macro_name": "println!"
+    },
+    {
+      "line": 166,
+      "macro_name": "println!"
+    },
+    {
+      "line": 170,
+      "macro_name": "println!"
+    },
+    {
+      "line": 174,
+      "macro_name": "println!"
+    },
+    {
+      "line": 197,
+      "macro_name": "println!"
+    },
+    {
+      "line": 217,
+      "macro_name": "println!"
+    },
+    {
+      "line": 226,
+      "macro_name": "println!"
+    },
+    {
+      "line": 233,
+      "macro_name": "println!"
+    },
+    {
+      "line": 240,
+      "macro_name": "println!"
+    },
+    {
+      "line": 247,
+      "macro_name": "println!"
+    },
+    {
+      "line": 270,
+      "macro_name": "println!"
+    },
+    {
+      "line": 304,
+      "macro_name": "println!"
+    },
+    {
+      "line": 318,
+      "macro_name": "println!"
+    },
+    {
+      "line": 327,
+      "macro_name": "println!"
+    },
+    {
+      "line": 454,
+      "macro_name": "println!"
+    },
+    {
+      "line": 482,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 490,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 494,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 498,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 516,
+      "macro_name": "println!"
+    },
+    {
+      "line": 531,
+      "macro_name": "println!"
+    },
+    {
+      "line": 551,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 555,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 564,
+      "macro_name": "println!"
+    },
+    {
+      "line": 589,
+      "macro_name": "println!"
+    },
+    {
+      "line": 683,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 687,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 691,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 704,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 719,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 734,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-bench/src/chat_corpus.rs": [
+    {
+      "line": 225,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/distributed.rs": [
+    {
+      "line": 337,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/evals.rs": [
+    {
+      "line": 450,
+      "macro_name": "println!"
+    },
+    {
+      "line": 452,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/evals/doctor.rs": [
+    {
+      "line": 10,
+      "macro_name": "println!"
+    },
+    {
+      "line": 14,
+      "macro_name": "println!"
+    },
+    {
+      "line": 15,
+      "macro_name": "println!"
+    },
+    {
+      "line": 17,
+      "macro_name": "println!"
+    },
+    {
+      "line": 18,
+      "macro_name": "println!"
+    },
+    {
+      "line": 19,
+      "macro_name": "println!"
+    },
+    {
+      "line": 20,
+      "macro_name": "println!"
+    },
+    {
+      "line": 23,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/evals/registry.rs": [
+    {
+      "line": 13,
+      "macro_name": "println!"
+    },
+    {
+      "line": 17,
+      "macro_name": "println!"
+    },
+    {
+      "line": 18,
+      "macro_name": "println!"
+    },
+    {
+      "line": 25,
+      "macro_name": "println!"
+    },
+    {
+      "line": 40,
+      "macro_name": "println!"
+    },
+    {
+      "line": 44,
+      "macro_name": "println!"
+    },
+    {
+      "line": 45,
+      "macro_name": "println!"
+    },
+    {
+      "line": 46,
+      "macro_name": "println!"
+    },
+    {
+      "line": 47,
+      "macro_name": "println!"
+    },
+    {
+      "line": 48,
+      "macro_name": "println!"
+    },
+    {
+      "line": 49,
+      "macro_name": "println!"
+    },
+    {
+      "line": 50,
+      "macro_name": "println!"
+    },
+    {
+      "line": 51,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/evals/run.rs": [
+    {
+      "line": 39,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/evals/sync.rs": [
+    {
+      "line": 13,
+      "macro_name": "println!"
+    },
+    {
+      "line": 77,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/focused_runtime.rs": [
+    {
+      "line": 133,
+      "macro_name": "println!"
+    },
+    {
+      "line": 429,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/local_single.rs": [
+    {
+      "line": 196,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/local_split.rs": [
+    {
+      "line": 84,
+      "macro_name": "println!"
+    },
+    {
+      "line": 154,
+      "macro_name": "println!"
+    },
+    {
+      "line": 169,
+      "macro_name": "println!"
+    },
+    {
+      "line": 912,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/main.rs": [
+    {
+      "line": 33,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 41,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-bench/src/token_lengths.rs": [
+    {
+      "line": 149,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-bench/src/verify_window_local.rs": [
+    {
+      "line": 148,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-correctness/src/glm_dsa_trace.rs": [
+    {
+      "line": 1439,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-correctness/src/main.rs": [
+    {
+      "line": 22,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 30,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-correctness/src/native_mtp_openai/reporting.rs": [
+    {
+      "line": 14,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-correctness/src/runner/native_mtp.rs": [
+    {
+      "line": 210,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-correctness/src/runner/stage_fa_parity.rs": [
+    {
+      "line": 51,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-correctness/tests/parity_models/mod.rs": [
+    {
+      "line": 104,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-model-package/src/glm_dsa_generation_policy.rs": [
+    {
+      "line": 73,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-model-package/src/inspect.rs": [
+    {
+      "line": 32,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-model-package/src/main.rs": [
+    {
+      "line": 27,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 35,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 64,
+      "macro_name": "println!"
+    },
+    {
+      "line": 135,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-model-package/src/package.rs": [
+    {
+      "line": 370,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-model-package/src/progress.rs": [
+    {
+      "line": 47,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 57,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 66,
+      "macro_name": "eprint!"
+    }
+  ],
+  "crates/skippy-model-package/src/tests.rs": [
+    {
+      "line": 414,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 421,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-model-package/src/validate.rs": [
+    {
+      "line": 152,
+      "macro_name": "println!"
+    },
+    {
+      "line": 295,
+      "macro_name": "println!"
+    },
+    {
+      "line": 314,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-model-package/src/write.rs": [
+    {
+      "line": 104,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-prompt/src/prompt_cli/binary_repl.rs": [
+    {
+      "line": 45,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 92,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 111,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 118,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 125,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 132,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 134,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 136,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 137,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 143,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 146,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 149,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 154,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 158,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 220,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 225,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 241,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 244,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 308,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-prompt/src/prompt_cli/generation.rs": [
+    {
+      "line": 60,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 75,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 90,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 115,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 130,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 138,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 153,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 161,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 189,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 212,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 219,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 241,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 263,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 298,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 340,
+      "macro_name": "print!"
+    },
+    {
+      "line": 400,
+      "macro_name": "print!"
+    },
+    {
+      "line": 416,
+      "macro_name": "println!"
+    },
+    {
+      "line": 419,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 443,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-prompt/src/prompt_cli/history.rs": [
+    {
+      "line": 58,
+      "macro_name": "println!"
+    },
+    {
+      "line": 96,
+      "macro_name": "println!"
+    },
+    {
+      "line": 100,
+      "macro_name": "println!"
+    },
+    {
+      "line": 136,
+      "macro_name": "println!"
+    },
+    {
+      "line": 141,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-prompt/src/prompt_cli/launch.rs": [
+    {
+      "line": 193,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 198,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 204,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 210,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 238,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 248,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 255,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 267,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 268,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 272,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 287,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 293,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-prompt/src/prompt_cli/live_session.rs": [
+    {
+      "line": 75,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-prompt/src/prompt_cli/logs.rs": [
+    {
+      "line": 7,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 8,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 85,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 118,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 123,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 129,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 132,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 135,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-prompt/src/prompt_cli/remote_sync.rs": [
+    {
+      "line": 50,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 117,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 223,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 226,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 234,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 246,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 253,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 259,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-prompt/src/prompt_cli/stage_config.rs": [
+    {
+      "line": 343,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 383,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 449,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 463,
+      "macro_name": "eprint!"
+    }
+  ],
+  "crates/skippy-prompt/src/prompt_cli/wire_messages.rs": [
+    {
+      "line": 172,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 173,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 181,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 185,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 189,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 191,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 225,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 232,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 241,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 249,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 250,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 259,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 273,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 286,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 312,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 329,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 346,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 361,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-quantize/src/output.rs": [
+    {
+      "line": 21,
+      "macro_name": "println!"
+    },
+    {
+      "line": 48,
+      "macro_name": "println!"
+    },
+    {
+      "line": 56,
+      "macro_name": "println!"
+    },
+    {
+      "line": 60,
+      "macro_name": "println!"
+    },
+    {
+      "line": 64,
+      "macro_name": "println!"
+    },
+    {
+      "line": 69,
+      "macro_name": "println!"
+    },
+    {
+      "line": 75,
+      "macro_name": "println!"
+    },
+    {
+      "line": 80,
+      "macro_name": "println!"
+    },
+    {
+      "line": 84,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-quantize/src/type_catalog.rs": [
+    {
+      "line": 36,
+      "macro_name": "println!"
+    },
+    {
+      "line": 55,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-runtime/src/tests.rs": [
+    {
+      "line": 101,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 123,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 177,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 243,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 267,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 356,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/binary_transport/binary_messaging.rs": [
+    {
+      "line": 194,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 198,
+      "macro_name": "println!"
+    },
+    {
+      "line": 219,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 234,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 242,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 291,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/binary_transport/binary_messaging/reply.rs": [
+    {
+      "line": 57,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 62,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 78,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/binary_transport/direct_return.rs": [
+    {
+      "line": 89,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 97,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 106,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 223,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/binary_transport/preconnect.rs": [
+    {
+      "line": 45,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 55,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/binary_transport/socket.rs": [
+    {
+      "line": 52,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 101,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 139,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/binary_transport/stage_execution.rs": [
+    {
+      "line": 211,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/frontend/embedded_generation/lifecycle.rs": [
+    {
+      "line": 155,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/frontend/generation/persistent_lanes.rs": [
+    {
+      "line": 276,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 316,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 324,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/frontend/generation/server.rs": [
+    {
+      "line": 157,
+      "macro_name": "println!"
+    },
+    {
+      "line": 255,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-server/src/frontend/linear_proposal.rs": [
+    {
+      "line": 664,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/frontend/tests/multimodal.rs": [
+    {
+      "line": 27,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 36,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 43,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 270,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/http.rs": [
+    {
+      "line": 186,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-server/src/main.rs": [
+    {
+      "line": 16,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-server/src/runtime_state.rs": [
+    {
+      "line": 486,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 562,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 593,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 630,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 634,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 639,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/runtime_state/lane_lifecycle.rs": [
+    {
+      "line": 79,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-server/src/telemetry.rs": [
+    {
+      "line": 192,
+      "macro_name": "eprintln!"
+    }
+  ]
+}

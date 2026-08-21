@@ -103,6 +103,8 @@ impl StageOpenAiBackend {
                 return Ok(LinearProposalProgress::NotUsed);
             }
             Ok(outcome) => {
+                // The source has synchronously received this delta; do not
+                // resend it on the next proposal boundary.
                 state.pending_linear_proposal_tokens.clear();
                 match outcome {
                     LinearProposalQueryOutcome::Skipped => unreachable!("handled above"),
@@ -427,6 +429,7 @@ mod tests {
         let prompt_token_ids = [1, 2];
         let request = LocalGeneration {
             prompt_token_ids: &prompt_token_ids,
+            recurrent_cache_prefix_token_ids: None,
             max_tokens: 5,
             sampling: &sampling,
             chat_sampling_metadata: None,
@@ -440,6 +443,7 @@ mod tests {
         let mut state = DecodeState {
             decoded_tokens: 0,
             current: 2,
+            generated_token_ids: Vec::new(),
             stopped: false,
             runtime_lock_wait_ms: 0.0,
             runtime_lock_wait_max_ms: 0.0,
@@ -457,6 +461,7 @@ mod tests {
             emit_token_debug: false,
             native_mtp_options: NativeMtpDecodeOptions::from_config(&speculative),
             native_mtp: NativeMtpVerifier::default(),
+            native_mtp_span_admitted: false,
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
         };
@@ -484,6 +489,7 @@ mod tests {
                             committed_tokens: [41, 42].into(),
                             verification_row_predictions: [41, 42, 43].into(),
                             canonical_prediction_count: 2,
+                            generated_token_count: 2,
                             correction_or_boundary_token: Some(43),
                             base_position: 1,
                             position_after_verification: 4,

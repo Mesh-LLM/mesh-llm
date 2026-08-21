@@ -27,6 +27,7 @@ pub fn configure_kv_disk_cache(config: KvDiskCacheConfig) -> Result<(), KvDiskCa
 }
 
 use anyhow::Result;
+use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_cache::{
     ExactStateCache, PrefixCandidatePolicy, PrefixDiskTier, ResidentActivationCache,
     ResidentCacheConfig, ResidentPrefixCache,
@@ -38,8 +39,8 @@ use skippy_runtime::ModelInfo;
 use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, infer_family_capability};
 
 use super::{
-    ExactStateExtra, KvStageIntegration, StageKvMode, StagePrefixCachePayload, disk_budget,
-    disk_budget::NodeBudget,
+    EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, KvStageIntegration, PendingExactStateRecord,
+    StageKvMode, StagePrefixCachePayload, disk_budget, disk_budget::NodeBudget,
 };
 
 impl KvStageIntegration {
@@ -78,16 +79,54 @@ impl KvStageIntegration {
         if let Some(opened) = disk {
             exact_states = exact_states.with_disk_tier(opened.tier);
         }
+        let exact_states = Arc::new(Mutex::new(exact_states));
+        let (exact_state_record_tx, exact_state_record_rx) =
+            std::sync::mpsc::sync_channel::<PendingExactStateRecord>(EXACT_STATE_RECORD_CAPACITY);
+        let worker_exact_states = exact_states.clone();
+        let inflight_records = Arc::new(Mutex::new(BTreeSet::new()));
+        let worker_inflight_records = inflight_records.clone();
+        let exact_state_records_queued = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let exact_state_records_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let exact_state_records_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_exact_state_records_pending = exact_state_records_pending.clone();
+        let worker_disk_budget_reservation = disk_budget_reservation.clone();
+        std::thread::Builder::new()
+            .name(format!("skippy-exact-cache-{}", config.stage_id))
+            .spawn(move || {
+                let _disk_budget_reservation = worker_disk_budget_reservation;
+                while let Ok(pending) = exact_state_record_rx.recv() {
+                    let page_id = pending.page_id.clone();
+                    worker_exact_states
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .record(
+                            pending.page_id,
+                            pending.token_count,
+                            pending.payload,
+                            pending.extra,
+                        );
+                    worker_inflight_records
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .remove(&page_id);
+                    worker_exact_state_records_pending
+                        .fetch_sub(1, std::sync::atomic::Ordering::Release);
+                }
+            })?;
         Ok(Some(Self {
             mode,
             payload,
             correctness_mode: false,
             trust_local_writes: true,
             candidate_policy,
-            inflight_records: Arc::new(Mutex::new(BTreeSet::new())),
+            inflight_records,
             resident: Arc::new(Mutex::new(ResidentPrefixCache::new(resident_config))),
             activations: Arc::new(Mutex::new(ResidentActivationCache::new(resident_config))),
-            exact_states: Arc::new(Mutex::new(exact_states)),
+            exact_states,
+            exact_state_record_tx,
+            exact_state_records_queued,
+            exact_state_records_dropped,
+            exact_state_records_pending,
             first_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             replay_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
@@ -95,6 +134,13 @@ impl KvStageIntegration {
             _disk_budget_reservation: disk_budget_reservation,
         }))
     }
+}
+
+fn emit_warning(message: String) {
+    let _ = emit_event(OutputEvent::Warning {
+        message,
+        context: None,
+    });
 }
 
 /// Open the KV disk tier for this stage. Host configuration wins; legacy
@@ -107,17 +153,19 @@ struct OpenedDiskTier {
 fn open_disk_tier(config: &StageConfig) -> Option<OpenedDiskTier> {
     let root = disk_tier_root(config);
     if !has_valid_content_digest(config) {
-        eprintln!(
+        emit_warning(format!(
             "skippy: KV disk tier disabled for stage {}: no valid content digest",
             config.stage_id
-        );
+        ));
         return None;
     }
     let reservation = stage_disk_budget(&root, config)?;
     match PrefixDiskTier::open(&root, reservation.bytes()) {
         Ok(tier) => Some(OpenedDiskTier { tier, reservation }),
         Err(error) => {
-            eprintln!("skippy: KV disk tier unavailable, continuing without it: {error}");
+            emit_warning(format!(
+                "skippy: KV disk tier unavailable, continuing without it: {error}"
+            ));
             None
         }
     }
@@ -149,12 +197,12 @@ fn stage_disk_budget(root: &Path, config: &StageConfig) -> Option<disk_budget::B
     };
     let budget = disk_budget::resolve_node_budget(explicit, enabled, free_bytes);
     if let NodeBudget::InsufficientSpace { free_bytes } = budget {
-        eprintln!(
+        emit_warning(format!(
             "skippy: KV disk tier disabled for stage {}: only {:.1} GiB free on {}",
             config.stage_id,
             free_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
             probe.display(),
-        );
+        ));
         return None;
     }
     let node_bytes = budget.bytes()?;

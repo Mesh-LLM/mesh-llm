@@ -285,6 +285,7 @@ impl StageOpenAiBackend {
         self.generate_local_tokens(
             LocalGeneration {
                 prompt_token_ids: request.prompt_token_ids,
+                recurrent_cache_prefix_token_ids: None,
                 max_tokens: request.max_tokens,
                 sampling: request.sampling,
                 chat_sampling_metadata: request.chat_sampling_metadata,

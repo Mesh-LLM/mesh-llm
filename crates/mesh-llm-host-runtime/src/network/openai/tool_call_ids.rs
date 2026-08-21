@@ -184,6 +184,39 @@ mod tests {
     }
 
     #[test]
+    fn chat_completion_json_normalizer_preserves_skippy_assigned_tool_call_ids() {
+        // skippy-server now assigns `call_<uuid>` before the body reaches the
+        // proxy. The front door must pass those through untouched rather than
+        // rewriting them to `call_mesh_*`, so a client that already saw the id
+        // in a streamed chunk can still pair its tool result.
+        let body = br#"{"id":"chatcmpl-a","object":"chat.completion","choices":[{"message":{"tool_calls":[{"id":"call_d3af7876d2c44ea19baff5339fb53b1b","type":"function","function":{"name":"read_file","arguments":"{}"}}]}}]}"#;
+        let normalized = normalize_chat_completion_json_body(body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&normalized).unwrap();
+
+        assert_eq!(
+            parsed["choices"][0]["message"]["tool_calls"][0]["id"],
+            "call_d3af7876d2c44ea19baff5339fb53b1b"
+        );
+    }
+
+    #[test]
+    fn chat_stream_normalizer_preserves_skippy_assigned_tool_call_ids() {
+        let mut state = ChatStreamNormalizationState {
+            synthetic_seed: Some(42),
+            ..Default::default()
+        };
+        let normalized = state.normalize_data(
+            r#"{"id":"chatcmpl-a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_d3af7876d2c44ea19baff5339fb53b1b","type":"function","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":null}]}"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&normalized).unwrap();
+
+        assert_eq!(
+            parsed["choices"][0]["delta"]["tool_calls"][0]["id"],
+            "call_d3af7876d2c44ea19baff5339fb53b1b"
+        );
+    }
+
+    #[test]
     fn chat_completion_json_normalizer_keeps_ids_unique_across_choices() {
         let body = br#"{"id":"chatcmpl-a","object":"chat.completion","choices":[{"message":{"tool_calls":[{"type":"function","function":{"name":"first","arguments":"{}"}},{"type":"function","function":{"name":"second","arguments":"{}"}}]}},{"message":{"tool_calls":[{"type":"function","function":{"name":"third","arguments":"{}"}}]}}]}"#;
         let normalized = normalize_chat_completion_json_body(body).unwrap();
@@ -219,6 +252,46 @@ mod tests {
             parsed["choices"][0]["delta"]["tool_calls"][0]["id"],
             "call_mesh_42_0"
         );
+    }
+
+    #[test]
+    fn chat_stream_normalizer_carries_one_id_across_incrementally_streamed_tool_calls() {
+        // The in-process serving path streams a tool call as a header delta
+        // (`id` + `function.name`) followed by `function.arguments` fragments.
+        // The front door must leave the producer's id alone and repeat it on the
+        // fragments, so a client sees one call with the concatenated arguments.
+        let mut state = ChatStreamNormalizationState {
+            synthetic_seed: Some(11),
+            ..Default::default()
+        };
+        let chunks = [
+            r#"{"id":"chatcmpl-a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_skippy_abc","type":"function","function":{"name":"read_file","arguments":"{"}}]},"finish_reason":null}]}"#,
+            r#"{"id":"chatcmpl-a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"path\":\"a.md\""}}]},"finish_reason":null}]}"#,
+            r#"{"id":"chatcmpl-a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"finish_reason":null}]}"#,
+        ];
+
+        let normalized = chunks
+            .iter()
+            .map(|chunk| {
+                serde_json::from_str::<serde_json::Value>(&state.normalize_data(chunk)).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        for chunk in &normalized {
+            assert_eq!(
+                chunk["choices"][0]["delta"]["tool_calls"][0]["id"], "call_skippy_abc",
+                "every fragment must carry the producer's id: {chunk}"
+            );
+        }
+        let arguments = normalized
+            .iter()
+            .map(|chunk| {
+                chunk["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+                    .as_str()
+                    .unwrap_or_default()
+            })
+            .collect::<String>();
+        assert_eq!(arguments, r#"{"path":"a.md"}"#);
     }
 
     #[test]

@@ -7,6 +7,7 @@
 
 use super::{LogFormat, OutputEvent, OutputLevel, OutputSink, output_sink};
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Stable family for a parsed command. The enum intentionally groups commands
 /// by responsibility instead of carrying user-supplied subcommand names or
@@ -91,6 +92,12 @@ impl CliCommandOutcome {
 
 /// Emit a structured command event without contaminating command JSON output.
 ///
+/// Presentation is silent unless the CLI enabled verbose command tracking with
+/// `--debug`. One-shot commands keep the terminal clean by default; the raw
+/// stderr fallback (and a pretty sink) only render these lines for debugging.
+/// The durable audit bridge installed by the dispatcher is independent of this
+/// toggle and keeps recording command outcomes either way.
+///
 /// A pretty sink receives the typed [`OutputEvent`]. A JSON sink is deliberately
 /// bypassed because command handlers can independently write their JSON result
 /// to stdout; the static command record is written to stderr instead. The same
@@ -99,6 +106,10 @@ pub fn emit_cli_command_event(
     family: CliCommandFamily,
     outcome: CliCommandOutcome,
 ) -> io::Result<()> {
+    if !cli_command_event_verbose() {
+        return Ok(());
+    }
+
     let event = OutputEvent::CliCommandLifecycle { family, outcome };
     let sink = output_sink();
     if emit_to_pretty_sink(&event, sink.as_deref()) {
@@ -108,6 +119,24 @@ pub fn emit_cli_command_event(
     let stderr_handle = io::stderr();
     let mut stderr = stderr_handle.lock();
     write_cli_command_event_to_stderr(&event, &mut stderr)
+}
+
+/// Process-global toggle for presenting CLI command lifecycle events to the
+/// terminal. Defaults to off; the shipped binary enables it only when `--debug`
+/// is provided.
+static CLI_COMMAND_EVENT_VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Enable or disable the terminal presentation of CLI command lifecycle events.
+///
+/// This controls only the presentation emitted by [`emit_cli_command_event`]
+/// (pretty sink or raw stderr fallback). It does not affect the durable
+/// operational-audit bridge, which records command outcomes independently.
+pub fn set_cli_command_event_verbose(enabled: bool) {
+    CLI_COMMAND_EVENT_VERBOSE.store(enabled, Ordering::Relaxed);
+}
+
+fn cli_command_event_verbose() -> bool {
+    CLI_COMMAND_EVENT_VERBOSE.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -151,7 +180,8 @@ fn write_cli_command_event_to_stderr<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::{clear_output_sink, set_output_sink};
+    use std::sync::{Arc, Mutex};
 
     struct RecordingSink {
         mode: LogFormat,
@@ -176,6 +206,50 @@ mod tests {
         fn mode(&self) -> LogFormat {
             self.mode
         }
+    }
+
+    struct VerboseResetGuard;
+
+    impl Drop for VerboseResetGuard {
+        fn drop(&mut self) {
+            set_cli_command_event_verbose(false);
+        }
+    }
+
+    struct OutputSinkResetGuard;
+
+    impl Drop for OutputSinkResetGuard {
+        fn drop(&mut self) {
+            clear_output_sink();
+        }
+    }
+
+    #[test]
+    fn public_emit_is_silent_unless_verbose_enabled() {
+        let sink = Arc::new(RecordingSink::new(LogFormat::Pretty));
+        let _sink_guard = OutputSinkResetGuard;
+        let _verbose_guard = VerboseResetGuard;
+        set_output_sink(sink.clone());
+
+        set_cli_command_event_verbose(false);
+        emit_cli_command_event(CliCommandFamily::Runtime, CliCommandOutcome::Started)
+            .expect("silent emission must succeed");
+        assert!(
+            sink.events.lock().expect("recording sink lock").is_empty(),
+            "without --debug the command event must not be presented"
+        );
+
+        set_cli_command_event_verbose(true);
+        emit_cli_command_event(CliCommandFamily::Runtime, CliCommandOutcome::Completed)
+            .expect("verbose emission must succeed");
+        assert_eq!(
+            *sink.events.lock().expect("recording sink lock"),
+            vec![OutputEvent::CliCommandLifecycle {
+                family: CliCommandFamily::Runtime,
+                outcome: CliCommandOutcome::Completed,
+            }],
+            "with --debug the command event must reach the pretty sink"
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ import { RotateCcw } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/cn'
 
-export const SETTING_RESET_TOOLTIP = 'Reset this setting to its default value'
+export const SETTING_RESET_TOOLTIP = 'Restore default'
 
 type SettingResetButtonProps = {
   className?: string

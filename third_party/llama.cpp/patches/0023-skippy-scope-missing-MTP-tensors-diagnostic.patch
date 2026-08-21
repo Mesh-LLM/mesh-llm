@@ -1,0 +1,31 @@
+From f4b4d044140e958e8e965ac4232834d1c7e66ade Mon Sep 17 00:00:00 2001
+From: Jimmy
+ <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
+Date: Mon, 17 Aug 2026 10:49:29 +1000
+Subject: [PATCH] skippy: scope missing MTP tensors diagnostic
+
+Co-authored-by: Jimmy <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
+Signed-off-by: Jimmy <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
+---
+ src/skippy/model_loading.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index ba1fe345d..4a2c64239 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -691,9 +691,10 @@ static enum skippy_status skippy_finish_model_open(
+             fprintf(stderr, "skippy: native MTP sidecar unavailable for this final stage; continuing without drafts\n");
+         }
+     } else if (config != nullptr &&
++               config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED &&
+                config->include_output &&
+                model->hparams.n_layer_nextn > 0) {
+-        fprintf(stderr, "skippy: native MTP sidecar skipped because this split stage is missing required MTP graph tensors; continuing without drafts\n");
++        fprintf(stderr, "skippy: integrated MTP requested, but this split stage is missing required MTP graph tensors; continuing without drafts\n");
+     }
+ 
+     stage_model->lane_in_use.assign(stage_model->lane_count, false);
+-- 
+2.50.1 (Apple Git-155)
+

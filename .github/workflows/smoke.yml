@@ -44,6 +44,7 @@ env:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   smoke_tests:
@@ -53,9 +54,30 @@ jobs:
     # uncredentialed PR CUDA smoke. Other credential-bearing smoke stays hosted.
     runs-on: ${{ inputs.runner == 'gpu-nvidia' && fromJSON('["self-hosted","Linux","X64","amd64","gpu-nvidia","mesh-llm-amd64","mesh-llm"]') || 'ubuntu-24.04' }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    # Only the GitHub-hosted ubuntu-24.04 path gets prebuilt tooling; the
+    # gpu-nvidia self-hosted runner keeps running bare-metal, unchanged.
+    # Empty string opts the job out of containerization per-run. The
+    # truthy value must come first in the `&&`: `cond && '' || url` always
+    # evaluates to `url`, because `cond && ''` collapses to the falsy `''`
+    # and the trailing `||` then overrides it regardless of `cond`.
+    container:
+      image: ${{ inputs.runner != 'gpu-nvidia' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d' || '' }}
+    defaults:
+      run:
+        shell: bash
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
+      # /github/home is a host-side mount owned by the host runner uid; the
+      # public image's container runs as root (Dockerfile's public stage
+      # never drops back from `USER root`), and pip refuses a cache dir
+      # whose owner isn't its own euid, so it otherwise noisily disables
+      # its cache. This is job-level env, so it applies to every step
+      # regardless of container -- including the bare-metal gpu-nvidia
+      # row, where it redirects setup-python's own `cache: pip` off
+      # `~/.cache/pip` and onto this ephemeral runner's `/tmp` instead.
+      # Harmless (the runner is single-use), just not container-only.
+      PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -67,6 +89,12 @@ jobs:
         run: scripts/release-version.sh "${{ inputs.release_tag }}"
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        # The prebuilt image bakes a venv on PATH; a host-side setup-python
+        # both shadows it (silently losing every installed dependency) and,
+        # in-container, fails outright because its pip cache dir isn't
+        # owned by the container's (root) euid under the container's HOME.
+        # Only the uncontained gpu-nvidia row needs this.
+        if: job.container.id == ''
         with:
           python-version: "3.12"
           cache: pip
@@ -75,16 +103,48 @@ jobs:
             ci/requirements-ci-python.txt
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: job.container.id == ''
         with:
           node-version: 24
           package-manager-cache: false
 
-      - name: Install smoke dependencies
+      - name: Verify prebuilt smoke environment
+        if: inputs.runner != 'gpu-nvidia'
+        run: verify-runner-image public cpu
+
+      - name: Install smoke runtime utilities (self-hosted)
+        if: inputs.runner == 'gpu-nvidia'
         run: |
           sudo apt-get update
           sudo apt-get install -y curl jq lsof
-          python -m pip install --upgrade pip -r ci/requirements-ci-python.txt
-          npm install --global openai
+
+      - name: Install smoke dependencies
+        # The venv baked into the image is pinned to the image's own mesh-llm
+        # revision; this reconciles it against the repo's current
+        # requirements even in-container, where it's close to a no-op.
+        run: python -m pip install --upgrade pip -r ci/requirements-ci-python.txt
+
+      - name: Install OpenAI client
+        # NOT gated on job.container.id: install-core-tools.sh:83 bakes an
+        # exact-pinned openai, but that landed in runner-images #20
+        # (2026-08-19) and the CPU digest pinned here was built 2026-07-22
+        # (verify-runner-image reports mesh_llm_revision 5f341d68). Re-gate
+        # this only when the CPU digest is promoted past #20 -- and confirm
+        # it from a green run, not from the image repo's HEAD.
+        #
+        # Exact-pinned rather than floating: this step runs with the job
+        # environment (HF_TOKEN included) and npm lifecycle scripts inherit
+        # it, so an unreviewed upstream release must not be able to execute
+        # here. The version tracks the image's own ARG OPENAI_NPM_VERSION
+        # (mesh-llm-runner-images Dockerfile:25) so that re-gating this step
+        # once the digest is promoted is a no-op rather than a swap.
+        env:
+          # npm lifecycle scripts inherit the job environment, and neither
+          # token is needed to install a client library. Deny both to this
+          # step rather than relying on the version pin alone.
+          HF_TOKEN: ""
+          HUGGING_FACE_HUB_TOKEN: ""
+        run: npm install --global openai@7.5.0
 
       - name: Install CUDA smoke runtime libraries
         if: inputs.runner == 'gpu-nvidia'
@@ -158,6 +218,10 @@ jobs:
         run: scripts/release-version.sh "${{ inputs.release_tag }}"
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        # This job never containerizes, so this is always true today; gated
+        # for the same reason as the linux job's — a single expression that
+        # can't drift from whatever decides containerization.
+        if: job.container.id == ''
         with:
           python-version: "3.12"
           cache: pip
@@ -166,14 +230,27 @@ jobs:
             ci/requirements-ci-python.txt
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: job.container.id == ''
         with:
           node-version: 24
           package-manager-cache: false
 
       - name: Install smoke dependencies
-        run: |
-          python -m pip install --upgrade pip -r ci/requirements-ci-python.txt
-          npm install --global openai
+        run: python -m pip install --upgrade pip -r ci/requirements-ci-python.txt
+
+      - name: Install OpenAI client (uncontainerized rows only)
+        # This job never containerizes (see the setup-python/setup-node gates
+        # above); gated the same way for consistency, not because it varies.
+        # Pinned to the same version as the Linux job above -- see the
+        # rationale there.
+        if: job.container.id == ''
+        env:
+          # npm lifecycle scripts inherit the job environment, and neither
+          # token is needed to install a client library. Deny both to this
+          # step rather than relying on the version pin alone.
+          HF_TOKEN: ""
+          HUGGING_FACE_HUB_TOKEN: ""
+        run: npm install --global openai@7.5.0
 
       - uses: ./.github/actions/restore-smoke-inputs
         with:

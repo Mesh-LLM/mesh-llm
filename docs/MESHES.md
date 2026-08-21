@@ -214,6 +214,19 @@ curl -s http://localhost:3131/api/status | jq .
 curl -s http://localhost:3131/api/discover | jq .
 ```
 
+Infrastructure liveness probes can use `GET /health`. It returns HTTP 200 with
+JSON as soon as the management process can answer, including when the node has
+not joined a mesh or has no model ready. The response also includes a compact
+`mode`, `mesh`, and `serving` summary; those nested fields are readiness
+signals, not liveness gates. Use `/api/status` for the full mesh and runtime
+payload. `mesh.status` is `standalone` when there are no admitted peers,
+`connected` when an admitted peer has a current control connection, and
+`disconnected` when membership exists without a current connection.
+`serving.status` is `healthy`, `starting`, `idle`, or
+`not_applicable` (client mode), with `degraded` or `unhealthy` reporting local
+terminal failures. The response's `mode` is exactly `worker`, `client`, or
+`serving`.
+
 `/api/status` reports whether the local mesh publication is `private`,
 `public`, or `publish_failed`. `/api/discover` follows the active discovery
 mode: Nostr mode returns public relay results, while mDNS mode returns LAN

@@ -17,6 +17,7 @@ use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
 use skippy_runtime::MediaInput;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 
 pub(in crate::frontend) fn ensure_requested_model(
     advertised_model_id: &str,
@@ -129,6 +130,12 @@ pub(in crate::frontend) struct PreparedGenerationPrompt {
     pub(in crate::frontend) text: String,
     pub(in crate::frontend) media: Vec<MediaInput>,
     pub(in crate::frontend) chat_parse_metadata: Option<String>,
+    /// Rendered message-history text before an assistant-generation suffix.
+    ///
+    /// This is only a candidate. The generation path retokenizes it with the
+    /// loaded model and requires the resulting IDs to be an exact prefix of
+    /// `text` before it can be used for recurrent-state caching.
+    pub(in crate::frontend) recurrent_cache_prefix_text: Option<String>,
 }
 
 impl PreparedGenerationPrompt {
@@ -137,6 +144,7 @@ impl PreparedGenerationPrompt {
             text,
             media: Vec::new(),
             chat_parse_metadata: None,
+            recurrent_cache_prefix_text: None,
         }
     }
 
@@ -293,10 +301,34 @@ pub(in crate::frontend) fn parsed_tool_calls_from_message_value(
     if tool_calls.is_empty() {
         return None;
     }
+    ensure_tool_call_ids(&mut tool_calls);
     Some(ParsedToolCalls {
         content: string_field(value, "content"),
         tool_calls: Value::Array(tool_calls),
     })
+}
+
+pub(in crate::frontend) fn ensure_tool_call_ids(tool_calls: &mut [Value]) {
+    let mut emitted_ids = HashSet::new();
+    for tool_call in tool_calls {
+        let Some(object) = tool_call.as_object_mut() else {
+            continue;
+        };
+        let valid_unseen_id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .filter(|id| emitted_ids.insert((*id).to_string()));
+        if valid_unseen_id.is_none() {
+            let id = loop {
+                let candidate = format!("call_{}", uuid::Uuid::new_v4().simple());
+                if emitted_ids.insert(candidate.clone()) {
+                    break candidate;
+                }
+            };
+            object.insert("id".to_string(), Value::String(id));
+        }
+    }
 }
 
 pub(in crate::frontend) fn string_field(value: &Value, field: &str) -> Option<String> {

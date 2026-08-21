@@ -140,6 +140,7 @@ pub(in crate::frontend) struct PreparedTextPrompt {
 
 pub(in crate::frontend) struct LocalGeneration<'a> {
     pub(in crate::frontend) prompt_token_ids: &'a [i32],
+    pub(in crate::frontend) recurrent_cache_prefix_token_ids: Option<&'a [i32]>,
     pub(in crate::frontend) max_tokens: u32,
     pub(in crate::frontend) sampling: &'a SamplingConfig,
     pub(in crate::frontend) chat_sampling_metadata: Option<&'a str>,

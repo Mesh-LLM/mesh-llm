@@ -4,6 +4,7 @@
 //! It never accepts raw paths, query strings, credentials, payloads, or
 //! transport targets.
 
+use mesh_llm_events::logging::envelope::{closed_method, closed_source};
 use openai_frontend::OpenAiFrontendRoute;
 
 use super::policy::{RedactMode, apply_redaction};
@@ -22,6 +23,10 @@ pub(crate) struct RequestSummaryMetadata {
     provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    method: Option<String>,
 }
 
 impl RequestSummaryMetadata {
@@ -37,7 +42,19 @@ impl RequestSummaryMetadata {
             model: bounded_metadata(model),
             provider: bounded_metadata(provider),
             engine: bounded_metadata(engine),
+            source: None,
+            method: None,
         }
+    }
+
+    pub(crate) fn with_source(mut self, source: Option<&str>) -> Self {
+        self.source = source.and_then(bounded_source);
+        self
+    }
+
+    pub(crate) fn with_method(mut self, method: Option<&str>) -> Self {
+        self.method = method.and_then(bounded_method);
+        self
     }
 
     /// Capture only the closed frontend route vocabulary. Unknown routes stay
@@ -82,11 +99,21 @@ impl RequestSummaryMetadata {
         self.engine.as_deref()
     }
 
+    pub(crate) fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
+    pub(crate) fn method(&self) -> Option<&str> {
+        self.method.as_deref()
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.route.is_none()
             && self.model.is_none()
             && self.provider.is_none()
             && self.engine.is_none()
+            && self.source.is_none()
+            && self.method.is_none()
     }
 
     /// Preserve the first truthful value for each field. A later source can
@@ -97,6 +124,8 @@ impl RequestSummaryMetadata {
         changed |= merge_field(&mut self.model, update.model);
         changed |= merge_field(&mut self.provider, update.provider);
         changed |= merge_field(&mut self.engine, update.engine);
+        changed |= merge_field(&mut self.source, update.source);
+        changed |= merge_field(&mut self.method, update.method);
         changed
     }
 }
@@ -136,6 +165,16 @@ fn bounded_metadata(value: Option<&str>) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+fn bounded_source(value: &str) -> Option<String> {
+    closed_source(value)
+}
+
+fn bounded_method(value: &str) -> Option<String> {
+    // Unrecognized or empty methods classify as OTHER so the method field is
+    // never silently missing; recognized methods keep their normalized value.
+    closed_method(value).or(Some("OTHER".to_owned()))
+}
+
 fn is_safe_metadata(value: &str) -> bool {
     let bytes = value.as_bytes();
     let windows_path = bytes.len() > 1 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic();
@@ -169,6 +208,7 @@ mod tests {
         assert_eq!(metadata.model(), Some("acme/model:Q4_K_M#low-ctx"));
         assert!(metadata.provider().is_none());
         assert_eq!(metadata.engine(), Some("raw_ingress"));
+        assert!(metadata.source().is_none());
     }
 
     #[test]
@@ -179,6 +219,35 @@ mod tests {
         assert!(
             RequestSummaryMetadata::from_openai_ingress_path("/private/path?token=secret")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn source_and_method_keep_only_closed_values() {
+        let metadata = RequestSummaryMetadata::from_parts(None, None, None, None)
+            .with_source(Some("direct_http"))
+            .with_method(Some("post"));
+        assert_eq!(metadata.source(), Some("direct_http"));
+        assert_eq!(metadata.method(), Some("POST"));
+        // Unknown source values are discarded entirely.
+        assert!(
+            RequestSummaryMetadata::from_parts(None, None, None, None)
+                .with_source(Some("10.0.0.1"))
+                .is_empty()
+        );
+        // Unrecognized or empty methods classify as OTHER rather than being
+        // silently dropped, so the method field is never absent.
+        assert_eq!(
+            RequestSummaryMetadata::from_parts(None, None, None, None)
+                .with_method(Some("PATCH"))
+                .method(),
+            Some("OTHER")
+        );
+        assert_eq!(
+            RequestSummaryMetadata::from_parts(None, None, None, None)
+                .with_method(Some(""))
+                .method(),
+            Some("OTHER")
         );
     }
 }

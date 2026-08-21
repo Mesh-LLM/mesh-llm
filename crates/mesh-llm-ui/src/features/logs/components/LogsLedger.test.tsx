@@ -4,6 +4,7 @@ import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LogRequestId } from '@/features/logs/api/ids'
+import { LogsApiError } from '@/features/logs/api/client'
 import type { LogAuditEntry, LogRequest } from '@/features/logs/api/schemas'
 import {
   HARNESS_LOG_FIXTURES,
@@ -171,7 +172,22 @@ describe('LogsLedger', () => {
     expect(useLogsLedgerQueryMock).toHaveBeenLastCalledWith(expect.objectContaining(resolvedBounds))
     expect(useLogsAuditQueryMock).toHaveBeenLastCalledWith(resolvedBounds)
     expect(screen.getByLabelText('Chart time range')).toHaveValue('1h')
-    expect(screen.getByText('Total requests').closest('.panel-shell')).toHaveTextContent('2')
+    expect(screen.getByText('Total').closest('.panel-shell')).toHaveTextContent('1')
+    expect(screen.getByRole('region', { name: 'Request records' })).toHaveTextContent(
+      'Selected range: Last hour · retained records only'
+    )
+  })
+
+  it('describes lifetime KPIs as retained records in the selected range', () => {
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    const chartRange = screen.getByLabelText('Chart time range')
+    expect(within(chartRange).getByRole('option', { name: 'Lifetime' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Request records' })).toHaveTextContent(
+      'Selected range: Lifetime · retained records only'
+    )
+    expect(screen.getByText('Total').closest('.panel-shell')).toHaveTextContent('Retained records')
+    expect(screen.getByLabelText('Retained request records over Lifetime')).toBeInTheDocument()
   })
 
   it('presents the seven-day ledger window truthfully in the chart selector', () => {
@@ -182,7 +198,7 @@ describe('LogsLedger', () => {
     expect(within(chartRange).getByRole('option', { name: 'Last week' })).toBeInTheDocument()
   })
 
-  it('keeps an active row in place when it supersedes durable history and renders stable table pagination', async () => {
+  it('keeps an active row in place when it supersedes durable history and renders table pagination', async () => {
     const user = userEvent.setup()
     const onSearchChange = vi.fn()
     render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={onSearchChange} />)
@@ -301,7 +317,7 @@ describe('LogsLedger', () => {
     expect(within(controls).getByLabelText('Search loaded event window')).toBeVisible()
     expect(within(controls).queryByRole('heading')).not.toBeInTheDocument()
     expect(within(controls).getByRole('button', { name: 'Export view' })).toBeVisible()
-    expect(within(controls).queryByRole('button', { name: 'Scoped cleanup' })).not.toBeInTheDocument()
+    expect(within(controls).queryByRole('button', { name: 'Clean up logs' })).not.toBeInTheDocument()
 
     const infoBanner = screen.getByRole('region', { name: 'System logs' })
     expect(within(infoBanner).getByRole('heading', { level: 1, name: 'System logs' })).toHaveAttribute(
@@ -311,7 +327,7 @@ describe('LogsLedger', () => {
     expect(infoBanner).toHaveTextContent('Monitor request activity and operational events from this MeshLLM host.')
     expect(infoBanner).toHaveTextContent('Live')
     expect(infoBanner).toHaveTextContent('Local only')
-    expect(within(infoBanner).getByRole('button', { name: 'Scoped cleanup' })).toBeVisible()
+    expect(within(infoBanner).getByRole('button', { name: 'Clean up logs' })).toBeVisible()
     expect(infoBanner).not.toContainElement(screen.getByRole('button', { name: 'Export view' }))
     expect(screen.queryByRole('button', { name: 'Dead-letter retry' })).not.toBeInTheDocument()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
@@ -324,7 +340,7 @@ describe('LogsLedger', () => {
     render(<LogsLedger search={parseLogsLedgerSearch({ model: 'Qwen3' })} onSearchChange={vi.fn()} />)
 
     await user.tab()
-    expect(screen.getByRole('button', { name: 'Scoped cleanup' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Clean up logs' })).toHaveFocus()
     await user.tab()
     expect(screen.getByLabelText('Bucket interval')).toHaveFocus()
     await user.tab()
@@ -332,17 +348,24 @@ describe('LogsLedger', () => {
     await user.tab()
     expect(screen.getByLabelText('Search loaded event window')).toHaveFocus()
     await user.tab()
-    expect(screen.getByLabelText('Filter logs by time range')).toHaveFocus()
-    await user.tab()
     expect(screen.getByRole('button', { name: 'Reset view' })).toHaveFocus()
-    await user.tab()
-    expect(screen.getByRole('button', { name: 'Show management records' })).toHaveFocus()
     await user.tab()
     expect(screen.getByRole('button', { name: /^Filter event logs/ })).toHaveFocus()
     await user.tab()
     expect(screen.getByRole('button', { name: 'Columns' })).toHaveFocus()
     await user.tab()
     expect(screen.getByRole('button', { name: 'Export view' })).toHaveFocus()
+  })
+
+  it('uses the chart selector as the only page-wide time-range control', async () => {
+    const user = userEvent.setup()
+    const onSearchChange = vi.fn()
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={onSearchChange} />)
+
+    expect(screen.queryByLabelText('Filter logs by time range')).not.toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText('Chart time range'), '12h')
+
+    expect(onSearchChange).toHaveBeenCalledWith(expect.objectContaining({ timeRange: '12h' }))
   })
 
   it('filters the loaded page by request ID', async () => {
@@ -362,20 +385,33 @@ describe('LogsLedger', () => {
     expect(screen.queryByRole('row', { name: `Inspect request ${REQUEST_B}` })).not.toBeInTheDocument()
   })
 
-  it('excludes management self-observation from workload by default and reveals it explicitly', async () => {
-    const user = userEvent.setup()
+  it('excludes management self-observation from the workload ledger', () => {
     const managementRequest = { ...request(REQUEST_A, 'completed', 'durable'), route: 'management_get_status' }
     queryState.current = supported([managementRequest])
     render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
 
     expect(screen.queryByRole('row', { name: `Inspect request ${REQUEST_A}` })).not.toBeInTheDocument()
-    const toggle = screen.getByRole('button', { name: 'Show management records' })
-    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByRole('button', { name: /management records/i })).not.toBeInTheDocument()
+  })
 
-    await user.click(toggle)
+  it('uses document scrolling when a larger page size renders more rows', async () => {
+    const user = userEvent.setup()
+    queryState.current = supported(
+      Array.from({ length: 50 }, (_, index) =>
+        request(`00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, 'completed', 'durable')
+      )
+    )
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
 
-    expect(screen.getByRole('row', { name: `Inspect request ${REQUEST_A}` })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Hide management records' })).toHaveAttribute('aria-pressed', 'true')
+    const tableRegion = screen.getByRole('region', { name: 'Scrollable event columns' })
+    expect(tableRegion).toHaveClass('overflow-x-auto')
+    expect(tableRegion.className).not.toMatch(/max-h-|overflow-y-/)
+    expect(screen.getAllByRole('row', { name: /Inspect request/ })).toHaveLength(20)
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Rows per page' }), '50')
+
+    expect(screen.getAllByRole('row', { name: /Inspect request/ })).toHaveLength(50)
+    expect(screen.getByText('Page 1 of 1')).toBeVisible()
   })
 
   it('restores focus to the opened request after returning from the inspector', () => {
@@ -519,7 +555,7 @@ describe('LogsLedger', () => {
     expect(screen.getByRole('table', { name: 'MeshLLM event logs' })).toHaveTextContent(
       'No request or operational events are loaded yet.'
     )
-    expect(screen.getByLabelText('Filter logs by time range')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Filter logs by time range')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Search loaded event window')).toBeInTheDocument()
   })
 
@@ -529,7 +565,10 @@ describe('LogsLedger', () => {
     queryState.current = { isLoading: false, isError: true, isFetching: false, data: undefined, refetch }
     render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Request window could not be loaded')
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Some log data could not be loaded')
+    expect(alert).toHaveTextContent('Request history')
+    expect(alert).toHaveTextContent('Unavailable')
     const retry = screen.getByRole('button', { name: 'Retry requests' })
     expect(retry).toBeEnabled()
 
@@ -538,7 +577,168 @@ describe('LogsLedger', () => {
     expect(refetch).toHaveBeenCalledOnce()
   })
 
-  it('renders the populated harness ledger across outcomes, durability states, metadata fallbacks, KPIs, and pages', () => {
+  it('renders a composed logs skeleton while both sources are initially loading', () => {
+    queryState.current = {
+      isLoading: true,
+      isError: false,
+      isFetching: true,
+      data: undefined,
+      refetch: vi.fn()
+    }
+    auditQueryState.current = {
+      isLoading: true,
+      isError: false,
+      isFetching: true,
+      data: undefined,
+      refetch: vi.fn()
+    }
+
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    const loadingStatus = screen.getByRole('status', { name: 'Loading system logs' })
+    expect(loadingStatus).toHaveTextContent('Loading system logs')
+    expect(loadingStatus.querySelector('[data-loading-region="logs-chart"]')).toBeInTheDocument()
+    expect(loadingStatus.querySelector('[data-loading-region="logs-kpis"]')).toBeInTheDocument()
+    expect(loadingStatus.querySelector('[data-loading-region="logs-ledger"]')).toBeInTheDocument()
+    expect(loadingStatus.querySelector('[data-loading-region="logs-ledger-table"]')).toBeInTheDocument()
+    expect(loadingStatus.querySelector('[data-loading-region="logs-ledger-pagination"]')).toBeInTheDocument()
+    expect(loadingStatus.querySelectorAll('[data-loading-ghost-shimmer]').length).toBeGreaterThan(10)
+
+    expect(screen.queryByRole('region', { name: 'Event log controls' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: 'MeshLLM event logs' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Bucket interval')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Search loaded event window')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it('keeps the usable source surface when only the other window is initially loading', () => {
+    auditQueryState.current = {
+      isLoading: true,
+      isError: false,
+      isFetching: true,
+      data: undefined,
+      refetch: vi.fn()
+    }
+
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    expect(screen.queryByRole('status', { name: 'Loading system logs' })).not.toBeInTheDocument()
+    expect(screen.getByRole('table', { name: 'MeshLLM event logs' })).toBeInTheDocument()
+    expect(screen.getByLabelText(/Events over time stacked bar chart/)).toBeInTheDocument()
+  })
+
+  it('combines simultaneous source failures while preserving independent retries', async () => {
+    const user = userEvent.setup()
+    const refetchRequests = vi.fn()
+    const refetchOperations = vi.fn()
+    queryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      data: undefined,
+      refetch: refetchRequests
+    }
+    auditQueryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      data: undefined,
+      refetch: refetchOperations
+    }
+
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    const alert = screen.getByRole('alert')
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(alert).toHaveTextContent('Log data could not be loaded')
+    expect(within(alert).getByRole('group', { name: 'Log data source recovery' })).toHaveTextContent(
+      'Request historyUnavailable'
+    )
+    expect(alert).toHaveTextContent('Operational eventsUnavailable')
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry requests' }))
+    expect(refetchRequests).toHaveBeenCalledOnce()
+    expect(refetchOperations).not.toHaveBeenCalled()
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry operations' }))
+    expect(refetchOperations).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the combined recovery surface stable while one source retries', () => {
+    queryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: true,
+      data: undefined,
+      refetch: vi.fn()
+    }
+
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Request historyRetrying')
+    expect(within(alert).getByRole('button', { name: 'Retrying…' })).toBeDisabled()
+  })
+
+  it('renders one actionable compatibility state instead of the recovery surface', () => {
+    queryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      error: new LogsApiError(503, 'logging_schema_incompatible'),
+      data: undefined,
+      refetch: vi.fn()
+    }
+    auditQueryState.current = { ...queryState.current, refetch: vi.fn() }
+
+    render(
+      <LogsLedger
+        loggingStatus={{
+          metadata_available: false,
+          metadata_state: 'schema_incompatible',
+          schema_version: 14,
+          supported_schema_version: 11,
+          capture_mode: 'unavailable',
+          artifact_capture_available: false,
+          artifact_capture_ready: false
+        }}
+        search={parseLogsLedgerSearch({})}
+        onSearchChange={vi.fn()}
+      />
+    )
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Log database version mismatch')
+    expect(alert).toHaveTextContent('Update the node to a build that supports schema v14')
+    expect(alert).toHaveTextContent('Log history was left unchanged')
+    expect(alert).toHaveTextContent('Database schema v14')
+    expect(alert).toHaveTextContent('Runtime supports v11')
+    expect(screen.queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Log data source recovery' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: 'Loading system logs' })).not.toBeInTheDocument()
+  })
+
+  it('uses typed HTTP compatibility details when status has not loaded yet', () => {
+    queryState.current = {
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      error: new LogsApiError(503, 'logging_schema_incompatible', {
+        schemaVersion: 10,
+        supportedSchemaVersion: 11
+      }),
+      data: undefined,
+      refetch: vi.fn()
+    }
+
+    render(<LogsLedger search={parseLogsLedgerSearch({})} onSearchChange={vi.fn()} />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('This MeshLLM build cannot safely upgrade')
+    expect(screen.getByText('Database schema v10')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Retry requests' })).not.toBeInTheDocument()
+  })
+
+  it('renders the populated harness ledger across outcomes, durability states, and metadata fallbacks', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(HARNESS_REFERENCE_TIME))
     queryState.current = supported(HARNESS_LOG_FIXTURES)
@@ -558,11 +758,20 @@ describe('LogsLedger', () => {
           name: `Inspect request ${HARNESS_LOG_SCENARIO_IDS.droppedCapacity.toString()}`
         })
       ).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Show management records' })).toBeInTheDocument()
-      expect(screen.getByLabelText('Requests over time bar chart')).toBeInTheDocument()
-      expect(screen.queryByText('No requests during the selected time range.')).not.toBeInTheDocument()
+      expect(
+        within(table).queryByRole('row', {
+          name: `Inspect request ${HARNESS_LOG_SCENARIO_IDS.completedActiveSource.toString()}`
+        })
+      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /management records/i })).not.toBeInTheDocument()
+      expect(screen.getByLabelText(/Events over time stacked bar chart/)).toBeInTheDocument()
+      expect(screen.queryByText('No selected events during the chart time range.')).not.toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Rows per page' })).toHaveValue('20')
+      expect(screen.getByRole('navigation', { name: 'Loaded event rows' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Go to next page' })).toBeEnabled()
-      const workloadFixtureCount = HARNESS_LOG_FIXTURES.filter((row) => !row.route?.startsWith('management_')).length
+      const workloadFixtureCount = HARNESS_LOG_FIXTURES.filter(
+        (row) => row.route !== 'models' && !row.route?.startsWith('management_')
+      ).length
       expect(screen.getAllByText(String(workloadFixtureCount)).length).toBeGreaterThan(0)
     } finally {
       vi.useRealTimers()

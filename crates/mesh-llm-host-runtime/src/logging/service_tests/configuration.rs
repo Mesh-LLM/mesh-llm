@@ -37,7 +37,27 @@ fn configured_summary_limit_bounds_the_safe_presentation_projection() {
     let summary = record["presentation_summary"]
         .as_str()
         .expect("canonical records include a presentation summary");
-    assert_eq!(summary.chars().count(), 5);
+
+    // The message body is bounded by the configured summary_line_limit...
+    let body = summary
+        .split(" request_id=")
+        .next()
+        .expect("correlation suffix is appended after the bounded body");
+    assert!(
+        body.chars().count() <= 5,
+        "message body must be bounded to the configured limit, got {body:?}"
+    );
+    // ...while the correlation metadata survives the truncation so operator
+    // correlation is not lost at small limits.
+    assert!(
+        summary.contains(" request_id="),
+        "correlation request_id must survive truncation"
+    );
+    assert!(
+        summary.contains(" event_id="),
+        "correlation event_id must survive truncation"
+    );
+    // Secrets never reach the presentation projection.
     assert!(!summary.contains("secret-token"));
     assert!(!summary.contains("Bearer"));
 }

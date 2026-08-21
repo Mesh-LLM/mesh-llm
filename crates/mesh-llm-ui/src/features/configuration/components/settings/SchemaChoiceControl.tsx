@@ -61,6 +61,7 @@ export function SchemaChoiceControl({
 }: SchemaSettingControlProps) {
   const options = resolvedChoiceOptions(setting)
   const presentation = setting.control.kind === 'choice' ? (setting.control.presentation ?? 'segmented') : 'segmented'
+  const selectedDescription = options.find((option) => option.value === value)?.description
 
   return (
     <div
@@ -97,6 +98,11 @@ export function SchemaChoiceControl({
         />
       )}
       {effectiveRendererId(setting) === 'kv-cache-policy' ? <KvPolicyMatrix policy={value} /> : null}
+      {selectedDescription ? (
+        <p className="mt-1.5 max-w-[360px] text-[length:var(--density-type-annotation)] leading-snug text-fg-faint">
+          {selectedDescription}
+        </p>
+      ) : null}
     </div>
   )
 }

@@ -324,7 +324,7 @@ impl ActivePlugin {
         let prior_generated_token_count = committed_generated_tokens
             .get(&key)
             .copied()
-            .unwrap_or_else(|| generated_token_count.saturating_sub(token_ids.len()));
+            .context("native serving plugin commit has no active generation state")?;
         let expected_generated_token_count = prior_generated_token_count
             .checked_add(token_ids.len())
             .context("native serving plugin generated-token count overflow")?;
@@ -425,40 +425,40 @@ impl ActivePlugin {
         Ok(())
     }
 
-    fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
-        if !query.pending_token_ids.is_empty() {
-            let generated_token_count = query
-                .committed_token_count
-                .checked_sub(query.prompt_token_count)
-                .context(
-                    "native serving plugin proposal committed token count precedes prompt token count",
-                )?;
-            let key = (query.request_id, query.session_id);
-            let tracked_generated_token_count = self
-                .committed_generated_tokens
-                .lock()
-                .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?
-                .get(&key)
-                .copied()
-                .context("native serving plugin proposal has no active generation state")?;
-            if generated_token_count < tracked_generated_token_count {
-                bail!("native serving plugin proposal rewound the tracked generated-token prefix");
-            }
-            if generated_token_count > tracked_generated_token_count {
-                let delta = generated_token_count - tracked_generated_token_count;
-                if delta != query.pending_token_ids.len() {
-                    bail!(
-                        "native serving plugin proposal pending-token count does not match the uncommitted suffix"
-                    );
-                }
-                self.commit_tokens(
-                    query.request_id,
-                    query.session_id,
-                    generated_token_count,
-                    &query.pending_token_ids,
-                )?;
-            }
+    fn ensure_generated_token_count(
+        &self,
+        request_id: u64,
+        session_id: u64,
+        expected_generated_token_count: usize,
+    ) -> Result<()> {
+        let committed_generated_tokens = self
+            .committed_generated_tokens
+            .lock()
+            .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?;
+        let Some(actual_generated_token_count) = committed_generated_tokens
+            .get(&(request_id, session_id))
+            .copied()
+        else {
+            bail!("native serving plugin proposal has no active generation state");
+        };
+        if actual_generated_token_count != expected_generated_token_count {
+            bail!(
+                "native serving plugin generation state is at {actual_generated_token_count} tokens, expected {expected_generated_token_count}"
+            );
         }
+        Ok(())
+    }
+
+    fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+        let generated_token_count = query
+            .committed_token_count
+            .checked_sub(query.prompt_token_count)
+            .context("native serving plugin proposal precedes its prompt boundary")?;
+        self.ensure_generated_token_count(
+            query.request_id,
+            query.session_id,
+            generated_token_count,
+        )?;
         let event = abi::ProposalQuery {
             struct_size: size_of::<abi::ProposalQuery>(),
             request_id: query.request_id,
@@ -550,10 +550,10 @@ impl ActivePlugin {
     }
 
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
-        self.commit_proposal_tokens(
+        self.ensure_generated_token_count(
             receipt.request_id,
             receipt.session_id,
-            &receipt.committed_tokens,
+            receipt.generated_token_count,
         )?;
         let event = abi::ProposalOutcome {
             struct_size: size_of::<abi::ProposalOutcome>(),
@@ -576,32 +576,6 @@ impl ActivePlugin {
         };
         let status = unsafe { (self.definition.api().report_proposal)(self.instance()?, &event) };
         self.call_status("report proposal", status)
-    }
-
-    fn commit_proposal_tokens(
-        &self,
-        request_id: u64,
-        session_id: u64,
-        committed_tokens: &[i32],
-    ) -> Result<()> {
-        let mut committed_generated_tokens = self
-            .committed_generated_tokens
-            .lock()
-            .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?;
-        let key = (request_id, session_id);
-        let generated_token_count = committed_generated_tokens
-            .get(&key)
-            .copied()
-            .unwrap_or_default()
-            .checked_add(committed_tokens.len())
-            .context("native serving plugin generated-token count overflow")?;
-        self.commit_tokens_locked(
-            &mut committed_generated_tokens,
-            request_id,
-            session_id,
-            generated_token_count,
-            committed_tokens,
-        )
     }
 
     fn discard(&self, decision_id: &[u8], reason: LinearProposalDiscardReason) -> Result<()> {
@@ -673,7 +647,12 @@ impl LinearProposalIngress for NativeProposalIngress {
     }
 
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
-        self.driver.enqueue(PluginCommand::Report(receipt.clone()))
+        self.driver
+            .enqueue_terminal(PluginCommand::ReportHandoff(receipt.clone()))
+    }
+
+    fn report_delivery_failures(&self) -> u64 {
+        self.driver.report_delivery_failures()
     }
 
     fn discard(
@@ -853,66 +832,24 @@ mod tests {
     }
 
     #[test]
-    fn proposal_does_not_recommit_tokens_already_delivered_by_lifecycle() {
-        let (active, events) = test_support::fake_active_with_events(Duration::ZERO);
-        active
-            .begin(&GenerationStart {
-                request_id: 1,
-                session_id: 2,
-                agent_session_id: None,
-                prompt_token_ids: Arc::from([3]),
-            })
-            .unwrap();
-        active
-            .committed(&GenerationCommit {
-                request_id: 1,
-                session_id: 2,
-                generated_token_count: 1,
-                token_ids: vec![4].into_boxed_slice(),
-            })
-            .unwrap();
-
-        let result = active
-            .propose(
-                LinearProposalQuery::new(
-                    1,
-                    2,
-                    1,
-                    2,
-                    1,
-                    8,
-                    Instant::now() + Duration::from_millis(100),
-                )
-                .with_pending_token_ids(vec![4].into_boxed_slice()),
-            )
-            .unwrap();
-
-        assert!(result.is_none());
-        assert_eq!(*events.lock().unwrap(), ["begin", "commit", "proposal"]);
-    }
-
-    #[test]
     fn proposal_rejects_missing_generation_state() {
         let (active, _) = test_support::fake_active_with_events(Duration::ZERO);
         let error = active
-            .propose(
-                LinearProposalQuery::new(
-                    1,
-                    2,
-                    1,
-                    2,
-                    1,
-                    8,
-                    Instant::now() + Duration::from_millis(100),
-                )
-                .with_pending_token_ids(vec![4].into_boxed_slice()),
-            )
+            .propose(LinearProposalQuery::new(
+                1,
+                2,
+                1,
+                1,
+                0,
+                8,
+                Instant::now() + Duration::from_millis(100),
+            ))
             .unwrap_err();
         assert!(error.to_string().contains("no active generation state"));
     }
 
     #[test]
-    fn proposal_rejects_a_rewound_generation_prefix() {
+    fn proposal_rejects_a_rewound_generation_position() {
         let (active, _) = test_support::fake_active_with_events(Duration::ZERO);
         active
             .begin(&GenerationStart {
@@ -932,24 +869,93 @@ mod tests {
             .unwrap();
 
         let error = active
-            .propose(
-                LinearProposalQuery::new(
-                    1,
-                    2,
-                    1,
-                    2,
-                    1,
-                    8,
-                    Instant::now() + Duration::from_millis(100),
-                )
-                .with_pending_token_ids(vec![4].into_boxed_slice()),
-            )
+            .propose(LinearProposalQuery::new(
+                1,
+                2,
+                1,
+                2,
+                1,
+                8,
+                Instant::now() + Duration::from_millis(100),
+            ))
             .unwrap_err();
-        assert!(error.to_string().contains("rewound"));
+        assert!(error.to_string().contains("at 2 tokens, expected 1"));
     }
 
     #[test]
-    fn proposal_rejects_an_inconsistent_pending_suffix() {
+    fn proposal_lifecycle_sequence_does_not_duplicate_verified_tokens() {
+        let (active, events) = test_support::fake_active_with_events(Duration::ZERO);
+        active
+            .begin(&GenerationStart {
+                request_id: 1,
+                session_id: 2,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([3]),
+            })
+            .unwrap();
+        active
+            .committed(&GenerationCommit {
+                request_id: 1,
+                session_id: 2,
+                generated_token_count: 1,
+                token_ids: vec![4].into_boxed_slice(),
+            })
+            .unwrap();
+        active
+            .propose(LinearProposalQuery::new(
+                1,
+                2,
+                1,
+                2,
+                1,
+                8,
+                Instant::now() + Duration::from_millis(100),
+            ))
+            .unwrap();
+        active
+            .committed(&GenerationCommit {
+                request_id: 1,
+                session_id: 2,
+                generated_token_count: 3,
+                token_ids: vec![5, 6].into_boxed_slice(),
+            })
+            .unwrap();
+        active
+            .report(
+                &LinearProposalReceipt::test_fixture_with_generated_token_count(
+                    OpaqueProposalDecisionId::new(vec![7]).unwrap(),
+                    3,
+                ),
+            )
+            .unwrap();
+        active
+            .propose(LinearProposalQuery::new(
+                1,
+                2,
+                1,
+                4,
+                3,
+                8,
+                Instant::now() + Duration::from_millis(100),
+            ))
+            .unwrap();
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "begin",
+                "commit",
+                "proposal",
+                "commit",
+                "report",
+                "report_complete",
+                "proposal"
+            ]
+        );
+    }
+
+    #[test]
+    fn report_rejects_a_generated_token_count_mismatch() {
         let (active, _) = test_support::fake_active_with_events(Duration::ZERO);
         active
             .begin(&GenerationStart {
@@ -959,21 +965,23 @@ mod tests {
                 prompt_token_ids: Arc::from([3]),
             })
             .unwrap();
+        active
+            .committed(&GenerationCommit {
+                request_id: 1,
+                session_id: 2,
+                generated_token_count: 1,
+                token_ids: vec![4].into_boxed_slice(),
+            })
+            .unwrap();
 
         let error = active
-            .propose(
-                LinearProposalQuery::new(
-                    1,
+            .report(
+                &LinearProposalReceipt::test_fixture_with_generated_token_count(
+                    OpaqueProposalDecisionId::new(vec![8]).unwrap(),
                     2,
-                    1,
-                    3,
-                    1,
-                    8,
-                    Instant::now() + Duration::from_millis(100),
-                )
-                .with_pending_token_ids(vec![4].into_boxed_slice()),
+                ),
             )
             .unwrap_err();
-        assert!(error.to_string().contains("pending-token count"));
+        assert!(error.to_string().contains("at 1 tokens, expected 2"));
     }
 }

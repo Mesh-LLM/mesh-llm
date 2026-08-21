@@ -9,6 +9,7 @@ use crate::frontend::generation::request_allowed_tool_names;
 use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::tool_emulation;
 use crate::frontend::util::openai_backend_error;
+use crate::kv_integration::StagePrefixCachePayload;
 use openai_frontend::ChatCompletionRequest;
 use openai_frontend::GenerationHookSignals;
 use openai_frontend::OpenAiError;
@@ -62,17 +63,49 @@ impl StageOpenAiBackend {
                 tool_emulation::rewrite_history_for_emulation(&request.messages, &instruction);
             let emulated =
                 self.render_chat_prompt(request, &options, &marker, Some(&rewritten), false)?;
+            let recurrent_cache_prefix_text = if self
+                .kv
+                .as_ref()
+                .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent)
+                && emulated.media.is_empty()
+                && options.add_assistant
+            {
+                let mut prefix_options = options.clone();
+                prefix_options.add_assistant = false;
+                self.render_chat_prompt(request, &prefix_options, &marker, Some(&rewritten), false)
+                    .ok()
+                    .map(|rendered| rendered.prompt)
+            } else {
+                None
+            };
             return Ok(PreparedGenerationPrompt {
                 text: emulated.prompt,
                 media: emulated.media,
                 chat_parse_metadata: Some(emulated.metadata_json),
+                recurrent_cache_prefix_text,
             });
         }
 
+        let recurrent_cache_prefix_text = if self
+            .kv
+            .as_ref()
+            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent)
+            && native.media.is_empty()
+            && options.add_assistant
+        {
+            let mut prefix_options = options.clone();
+            prefix_options.add_assistant = false;
+            self.render_chat_prompt(request, &prefix_options, &marker, None, true)
+                .ok()
+                .map(|rendered| rendered.prompt)
+        } else {
+            None
+        };
         Ok(PreparedGenerationPrompt {
             text: native.prompt,
             media: native.media,
             chat_parse_metadata: Some(native.metadata_json),
+            recurrent_cache_prefix_text,
         })
     }
 
@@ -305,7 +338,13 @@ impl StageOpenAiBackend {
 /// [`ParsedChatMessage`]. During streaming (`is_partial`) the trailing
 /// incomplete line is held back and tool calls are withheld, so a half-formed
 /// `TOOL_CALL` marker is never streamed as content and calls are emitted once,
-/// on finalization — matching native tool-call streaming semantics.
+/// on finalization.
+///
+/// Unlike the native path, emulated tool calls are therefore *not* streamed
+/// incrementally. The emulated parser only recognises a call once its JSON
+/// object closes (`tool_emulation::parse_emulated_tool_calls`), so it has no
+/// representation of a partially generated argument object to stream from;
+/// streaming it needs a partial-JSON scanner, not a change to this gate.
 pub(super) fn parse_emulated_chat_output(
     text: &str,
     request: &ChatCompletionRequest,
@@ -322,6 +361,7 @@ pub(super) fn parse_emulated_chat_output(
         if request.parallel_tool_calls == Some(false) {
             calls.truncate(1);
         }
+        crate::frontend::generation::ensure_tool_call_ids(&mut calls);
         Some(Value::Array(calls))
     };
     Some(ParsedChatMessage {

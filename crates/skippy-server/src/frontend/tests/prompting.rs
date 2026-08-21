@@ -96,6 +96,35 @@ fn parses_llama_message_tool_calls() {
 }
 
 #[test]
+fn assigns_id_when_llama_message_tool_call_omits_it() {
+    let parsed = parsed_tool_calls_from_message_json(
+        r#"{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"lookup","arguments":"{\"city\":\"Sydney\"}"}}]}"#,
+        &tool_request(),
+    )
+    .expect("tool call");
+
+    let id = parsed.tool_calls[0]["id"].as_str().expect("tool call id");
+    assert!(id.starts_with("call_"));
+}
+
+#[test]
+fn assigns_unique_ids_when_llama_message_tool_calls_repeat_an_id() {
+    let mut request = tool_request();
+    request.parallel_tool_calls = Some(true);
+    let parsed = parsed_tool_calls_from_message_json(
+        r#"{"role":"assistant","content":null,"tool_calls":[{"id":"call_duplicate","type":"function","function":{"name":"lookup","arguments":"{\"city\":\"Sydney\"}"}},{"id":"call_duplicate","type":"function","function":{"name":"lookup","arguments":"{\"city\":\"Melbourne\"}"}}]}"#,
+        &request,
+    )
+    .expect("tool calls");
+
+    let first_id = parsed.tool_calls[0]["id"].as_str().expect("first id");
+    let second_id = parsed.tool_calls[1]["id"].as_str().expect("second id");
+    assert_eq!(first_id, "call_duplicate");
+    assert!(second_id.starts_with("call_"));
+    assert_ne!(first_id, second_id);
+}
+
+#[test]
 fn parses_llama_message_reasoning_content() {
     let parsed = parsed_chat_message_from_json(
         r#"{"role":"assistant","reasoning_content":"Checked facts first.","content":"Final answer."}"#,
@@ -426,6 +455,7 @@ fn emulated_output_final_parses_tool_call() {
     assert_eq!(parsed.content.as_deref(), Some("Let me check."));
     let calls = parsed.tool_calls.expect("tool calls");
     assert_eq!(calls[0]["function"]["name"], "lookup");
+    assert!(calls[0]["id"].as_str().unwrap().starts_with("call_"));
     let args: serde_json::Value =
         serde_json::from_str(calls[0]["function"]["arguments"].as_str().unwrap()).unwrap();
     assert_eq!(args["city"], "Sydney");

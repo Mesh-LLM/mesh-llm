@@ -647,7 +647,11 @@ fn raw_artifact_bytes_are_redacted_before_the_capture_boundary() {
 fn unavailable_foundation_is_sanitized_and_fail_open() {
     let root = tempfile::tempdir().expect("temporary logging root");
     let foundation = LoggingFoundation::init(false, Some(&root.path().to_path_buf()));
-    let state = LoggingRuntimeState::initialize(&foundation, &Default::default());
+    let config = mesh_llm_config::LoggingConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let state = LoggingRuntimeState::initialize(&foundation, &config);
 
     assert_eq!(state.health(), LoggingRuntimeHealth::unavailable());
     assert!(state.store().is_none());
@@ -655,6 +659,9 @@ fn unavailable_foundation_is_sanitized_and_fail_open() {
         state.status(),
         LoggingRuntimeStatus {
             metadata_available: false,
+            metadata_state: "disabled",
+            schema_version: None,
+            supported_schema_version: None,
             capture_mode: "unavailable",
             artifact_capture_available: false,
             artifact_capture_ready: false,
@@ -677,6 +684,24 @@ fn unavailable_foundation_is_sanitized_and_fail_open() {
         }),
         Err(LoggingRuntimeApplyError::Unavailable)
     );
+}
+
+#[test]
+fn incompatible_schema_is_reported_without_exposing_storage_details() {
+    let state = LoggingRuntimeState::unavailable(LoggingMetadataState::SchemaIncompatible {
+        found: 99,
+        supported: mesh_llm_log_store::LOG_STORE_SCHEMA_VERSION,
+    });
+    let status = state.status();
+
+    assert!(!status.metadata_available);
+    assert_eq!(status.metadata_state, "schema_incompatible");
+    assert_eq!(status.schema_version, Some(99));
+    assert_eq!(
+        status.supported_schema_version,
+        Some(mesh_llm_log_store::LOG_STORE_SCHEMA_VERSION)
+    );
+    assert!(state.store().is_none());
 }
 
 #[tokio::test]
@@ -913,7 +938,7 @@ fn applies_retention_and_replay_limits_together_to_the_installed_service() {
 #[test]
 fn openai_lifecycle_observer_snapshot_is_absent_when_disabled_or_retired() {
     assert!(
-        LoggingRuntimeState::unavailable()
+        LoggingRuntimeState::unavailable(LoggingMetadataState::StorageUnavailable)
             .openai_lifecycle_observer()
             .is_none()
     );

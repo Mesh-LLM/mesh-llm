@@ -79,6 +79,7 @@ mod artifact_transfer_io;
 mod capacity;
 mod connection_reservation;
 mod connections;
+mod connectivity;
 mod direct_path;
 mod gossip;
 mod heartbeat;
@@ -124,6 +125,7 @@ use stage_transport::*;
 use stun::*;
 
 pub use connections::{QuicBindSelection, RelayConfig, RelayPolicy};
+pub(crate) use connectivity::MeshConnectivitySnapshot;
 pub use gossip::backfill_legacy_descriptors;
 #[expect(
     unused_imports,

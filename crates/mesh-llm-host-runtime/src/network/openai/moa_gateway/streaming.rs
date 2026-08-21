@@ -1152,6 +1152,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_sse_preserves_worker_assigned_tool_call_ids() {
+        // skippy-server assigns `call_<uuid>` before the body reaches MoA.
+        // The SSE adapter must forward that id rather than substituting its
+        // `call_0` fallback, so the client can pair its tool result.
+        let response = serde_json::json!({
+            "id": "chatcmpl-moa-tool",
+            "object": "chat.completion",
+            "model": "mesh",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_d3af7876d2c44ea19baff5339fb53b1b",
+                        "type": "function",
+                        "function": {"name": "read", "arguments": "{\"path\":\"/x\"}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let raw = capture_chat_sse_body(response).await;
+        assert!(
+            raw.contains("call_d3af7876d2c44ea19baff5339fb53b1b"),
+            "worker tool_call id must survive the SSE adapter\nraw: {raw}"
+        );
+        assert!(
+            !raw.contains("\"id\":\"call_0\""),
+            "SSE adapter must not fall back to call_0 when an id is present\nraw: {raw}"
+        );
+    }
+
+    #[tokio::test]
     async fn responses_sse_emits_multiple_deltas_for_long_content() {
         let long_content = "Hello world. ".repeat(40);
         let response = serde_json::json!({

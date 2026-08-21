@@ -22,14 +22,21 @@ env:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   hf_download_smoke:
     name: HuggingFace download smoke
-    # This credential-bearing reusable workflow is intentionally ineligible for
-    # Depot and self-hosted runner groups.
+    # Model credentials stay on an isolated GitHub-hosted runner; the
+    # container just supplies prebuilt smoke utilities, it does not move
+    # execution to self-hosted/depot infra.
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    defaults:
+      run:
+        shell: bash
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -39,11 +46,16 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        # The prebuilt image bakes a venv on PATH; a host-side setup-python
+        # shadows it, leaving a bare interpreter with none of the image's
+        # installed deps. This job always runs in a container, so this step
+        # is now always skipped, not just conditionally redundant.
+        if: job.container.id == ''
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev libdbus-1-dev lld
+      - name: Verify prebuilt smoke environment
+        run: verify-runner-image public cpu
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo

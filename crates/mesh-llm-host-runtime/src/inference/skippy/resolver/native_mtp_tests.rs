@@ -5,9 +5,12 @@ use crate::inference::skippy::SkippyTelemetryOptions;
 use anyhow::Result;
 use openai_frontend::OpenAiBackend;
 use skippy_protocol::LoadMode;
-use skippy_runtime::package::{
-    PackageExtensionPolicyInfo, PackageGenerationInfo, PackageSpeculativeDecodingInfo,
-    PackageSpeculativeProposerInfo, PackageSpeculativeStrategyInfo, PackageWindowPolicyInfo,
+use skippy_runtime::{
+    MtpSource,
+    package::{
+        PackageExtensionPolicyInfo, PackageGenerationInfo, PackageSpeculativeDecodingInfo,
+        PackageSpeculativeProposerInfo, PackageSpeculativeStrategyInfo, PackageWindowPolicyInfo,
+    },
 };
 use std::{
     collections::BTreeMap,
@@ -335,6 +338,14 @@ fn speculative_strategy_auto_detects_direct_gguf_native_mtp_tensors() {
         .to_embedded_openai_args(4096, true)
         .expect("openai args should build");
     assert!(openai.native_mtp_enabled);
+    let runtime_options = resolved
+        .to_embedded_runtime_options(
+            &SkippyTelemetryOptions::off(),
+            Some(fake_package_identity(24)),
+            LoadMode::LayerPackage,
+        )
+        .expect("embedded runtime options should build");
+    assert_eq!(runtime_options.mtp_source, MtpSource::Integrated);
 }
 
 #[test]
@@ -421,7 +432,8 @@ fn speculative_strategy_auto_uses_package_native_mtp_default() {
         .to_embedded_openai_args(4096, true)
         .expect("openai args should build");
     assert!(openai.native_mtp_enabled);
-    assert_eq!(openai.native_mtp_max_tokens, 3);
+    // Native MTP defaults to a single draft token: depth 1 is the only measured win.
+    assert_eq!(openai.native_mtp_max_tokens, 1);
     assert_eq!(openai.native_mtp_min_tokens, 0);
 }
 
@@ -1029,6 +1041,14 @@ draft_min_tokens = 0
     assert!(openai.draft_model_path.is_none());
     assert_eq!(openai.native_mtp_max_tokens, 3);
     assert_eq!(openai.native_mtp_min_tokens, 0);
+    let runtime_options = resolved
+        .to_embedded_runtime_options(
+            &SkippyTelemetryOptions::off(),
+            Some(fake_package_identity(24)),
+            LoadMode::LayerPackage,
+        )
+        .expect("embedded runtime options should build");
+    assert_eq!(runtime_options.mtp_source, MtpSource::External);
 }
 
 #[test]

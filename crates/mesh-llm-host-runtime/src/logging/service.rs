@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mesh_llm_events::logging::envelope::CanonicalEnvelope;
+use mesh_llm_events::logging::envelope::{CanonicalEnvelope, CanonicalPresentationContext};
 use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_events::logging::identifiers::{AttemptId, EventId, RequestId};
 use mesh_llm_events::logging::proxy::ProxyRecord;
@@ -582,6 +582,30 @@ fn sanitize_noncanonical_payload(payload_json: String) -> String {
     }
 }
 
+fn presentation_context_for(
+    metadata: &RequestSummaryMetadata,
+    event: &LifecycleEvent,
+) -> CanonicalPresentationContext {
+    let (event_model, event_method) = match event {
+        LifecycleEvent::Admitted { model, method } => (model.as_deref(), method.as_deref()),
+        LifecycleEvent::RouteSelected {
+            model,
+            provider: _,
+            engine: _,
+        }
+        | LifecycleEvent::StreamStarted { model } => (model.as_deref(), None),
+        _ => (None, None),
+    };
+    CanonicalPresentationContext::from_parts(
+        metadata.route(),
+        metadata.source(),
+        metadata.model().or(event_model),
+        metadata.provider(),
+        metadata.engine(),
+        metadata.method().or(event_method),
+    )
+}
+
 fn enqueue_event_with_delivery(
     event_delivery: &EventDelivery,
     request_id: RequestId,
@@ -595,18 +619,62 @@ fn enqueue_event_with_delivery(
     let occurred_at =
         occurred_at.unwrap_or_else(|| canonical_clock_timestamp(event_delivery.clock.as_ref()));
     let event_id = EventId::new();
+    let request_id_string = request_id.as_uuid().to_string();
+    let registry_entry = event_delivery
+        .registry
+        .get_active(&request_id_string)
+        .or_else(|| event_delivery.registry.get_recent(&request_id_string));
+    let summary_snapshots = summary_snapshots.or_else(|| {
+        registry_entry
+            .as_ref()
+            .map(RequestSummaryEventSnapshots::current)
+    });
+    let metadata = terminal_summary
+        .as_ref()
+        .map(RequestSummaryEntry::metadata)
+        .filter(|metadata| !metadata.is_empty())
+        .cloned()
+        .or_else(|| {
+            summary_snapshots.as_ref().and_then(|snapshots| {
+                snapshots
+                    .iter()
+                    .filter(|snapshot| !snapshot.metadata().is_empty())
+                    .map(|snapshot| snapshot.metadata().clone())
+                    .last()
+            })
+        })
+        .or_else(|| {
+            // Match the two fallbacks above and skip empty metadata: an empty
+            // `RequestSummaryMetadata` carries no route/source/kind, so building
+            // a presentation context from it stamps `kind=unknown` onto every
+            // message for the request. Leaving it `None` keeps the envelope
+            // free of a misleading context instead.
+            registry_entry
+                .as_ref()
+                .map(RequestSummaryEntry::metadata)
+                .filter(|metadata| !metadata.is_empty())
+                .cloned()
+        });
     let canonical_envelope = serde_json::from_str::<LifecycleEvent>(&payload_json)
         .ok()
         .map(sanitize_lifecycle_event)
         .map(|event| {
-            CanonicalEnvelope::new(
+            let context = metadata
+                .as_ref()
+                .map(|metadata| presentation_context_for(metadata, &event));
+            let envelope = CanonicalEnvelope::new(
                 event_id,
                 request_id,
                 channel,
                 sequence,
                 occurred_at.clone(),
                 event,
-            )
+            );
+            if let Some(context) = context {
+                envelope.with_presentation_context(context)
+            } else {
+                envelope
+            }
         });
     let payload_json = canonical_envelope
         .as_ref()
@@ -635,14 +703,6 @@ fn enqueue_event_with_delivery(
             ),
         );
     }
-    let request_id_string = request_id.as_uuid().to_string();
-    let summary_snapshots = summary_snapshots.or_else(|| {
-        event_delivery
-            .registry
-            .get_active(&request_id_string)
-            .or_else(|| event_delivery.registry.get_recent(&request_id_string))
-            .map(|entry| RequestSummaryEventSnapshots::current(&entry))
-    });
     if let Some(summary_snapshots) = summary_snapshots {
         entry
             .as_object_mut()
@@ -1435,6 +1495,8 @@ impl LoggingService {
 
         // Register summary in active set.
         let created_at = canonical_clock_timestamp(self.clock.as_ref());
+        let admitted_model = metadata.model().map(str::to_owned);
+        let admitted_method = metadata.method().map(str::to_owned);
         let summary = RequestSummaryEntry {
             request_id: request_id.as_uuid().to_string(),
             state: "active".into(),
@@ -1462,8 +1524,8 @@ impl LoggingService {
             request_id,
             ReplayChannel::Requests,
             serde_json::to_string(&LifecycleEvent::Admitted {
-                model: None,
-                method: None,
+                model: admitted_model,
+                method: admitted_method,
             })
             .expect("LifecycleEvent serialization is infallible"),
             Some(created_at),

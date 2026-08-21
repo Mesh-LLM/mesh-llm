@@ -183,6 +183,12 @@ runtime ownership solely to add logging hooks before that system is implemented.
 - **The Logs tab says unsupported.** The connected host predates the local log
   API or has it disabled. Upgrade or use a host that exposes the service; do
   not point the console at status/runtime SSE as a workaround.
+- **The Logs tab reports a database version mismatch.** Compare the database
+  and runtime schema versions shown in the warning. Update MeshLLM when the
+  database is newer, or restore/update to a build that recognizes an older
+  schema, then restart the node. The incompatible store is left unchanged and
+  inference remains available; repeated retries and manual database edits are
+  not recovery steps.
 - **The ledger says reconnecting, polling, gap, or stale.** Check local host
   availability first. The page will hydrate from the request listing after a
   replay gap and uses bounded polling only while the dedicated stream is
