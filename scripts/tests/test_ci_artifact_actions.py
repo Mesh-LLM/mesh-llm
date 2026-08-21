@@ -2566,11 +2566,12 @@ class CiArtifactActionTests(unittest.TestCase):
     def test_depot_pr_native_cache_consumers_obey_central_policy(self) -> None:
         eligible_consumers = {
             "ci-quality-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
-            "ci-web-slice.yml": (
-                "uses: actions/cache/restore@",
-                "uses: actions/cache/save@",
-            ),
-            "ci-ui-artifact-slice.yml": ("uses: actions/cache/restore@",),
+            # ci-web-slice.yml and ci-ui-artifact-slice.yml have no native
+            # GitHub cache consumers left: their pnpm jobs (ui_quality,
+            # ui_e2e, ui_artifact) point store-dir at the runner image's
+            # baked store instead of the Actions cache (#1392), and
+            # `website` was already deleted-outright rather than gated (see
+            # the comment on that job's entry below).
             "ci-linux-host-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
             "ci-linux-runtime-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
             "ci-rust-tests-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
@@ -2687,8 +2688,11 @@ class CiArtifactActionTests(unittest.TestCase):
         # image (no bare-metal row), so its setup-node native-cache
         # consumer was deleted outright rather than gated -- there is
         # nothing left in that job for the depot/native cache policy to
-        # govern. See `eligible_consumers["ci-web-slice.yml"]` above for
-        # the jobs in this file that still participate (ui_quality, ui_e2e).
+        # govern. The other jobs in that file (ui_quality, ui_e2e) and in
+        # ci-ui-artifact-slice.yml (ui_artifact) have no native-cache
+        # consumer left either now that they point at the runner image's
+        # baked pnpm store instead (#1392); see the comment on
+        # `eligible_consumers` above.
         self.assertIn(
             f"cache: ${{{{ {native_cache_expression} && 'pnpm' || '' }}}}",
             swift,

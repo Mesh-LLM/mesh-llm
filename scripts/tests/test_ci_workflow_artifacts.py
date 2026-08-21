@@ -175,9 +175,13 @@ class CiWorkflowArtifactTests(unittest.TestCase):
     def test_ui_cache_and_website_dependencies_are_explicit(self):
         ui = (ROOT / ".github/workflows/ci-ui-artifact-slice.yml").read_text()
         web = (ROOT / ".github/workflows/ci-web-slice.yml").read_text()
-        self.assertIn("uses: actions/cache/restore@", ui)
-        self.assertNotIn("uses: actions/cache/save@", ui)
-        self.assertIn("uses: actions/cache/save@", web)
+        # UI installs point at the runner image's baked pnpm store instead
+        # of the Actions cache (#1392) -- there is nothing left here to
+        # restore or save.
+        self.assertIn("run: pnpm config set store-dir /home/runner/.local/share/pnpm/store", ui)
+        self.assertNotIn("uses: actions/cache", ui)
+        self.assertIn("run: pnpm config set store-dir /home/runner/.local/share/pnpm/store", web)
+        self.assertNotIn("uses: actions/cache", web)
         # The `website` job runs in the prebuilt public-web image with no
         # bare-metal row, so setup-node's own npm cache and the `just`
         # install-action were deleted outright (both are baked in the

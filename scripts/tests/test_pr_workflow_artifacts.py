@@ -260,6 +260,12 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("name: Save pnpm store", website)
         self.assertNotIn("name: Restore pnpm store", website)
         self.assertNotIn("actions/cache", website)
+        # Every pnpm job in the two files points store-dir at the image's
+        # baked store directly: once for ui_artifact, and once each for
+        # ui_quality and ui_e2e.
+        store_dir_config = "run: pnpm config set store-dir /home/runner/.local/share/pnpm/store"
+        self.assertEqual(1, ui_artifact.count(store_dir_config))
+        self.assertEqual(2, website.count(store_dir_config))
         # The `website` job itself runs in the prebuilt public-web image with
         # no bare-metal row, so it has no native-cache-gated npm consumer
         # left to publish or bound -- setup-node's own cache was deleted
