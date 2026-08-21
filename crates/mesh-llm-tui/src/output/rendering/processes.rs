@@ -1,5 +1,5 @@
 use super::super::{
-    DashboardEndpointRow, DashboardModelRow, DashboardProcessRow,
+    DashboardEndpointRow, DashboardModelRow, DashboardPanelViewState, DashboardProcessRow,
     PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL, llama_process_model_name,
     model_name_without_variant_suffix, model_names_match,
 };
@@ -62,8 +62,9 @@ pub(in crate::output) fn render_process_table(
                 return;
             }
 
-            let [model_width, pid_width, port_width, status_width] =
+            let widths =
                 llama_process_column_widths_for_rows(inner_area.width, &state.llama_process_rows);
+            let [model_width, pid_width, port_width, status_width] = widths;
             let available_rows = usize::from(inner_area.height.saturating_sub(1));
             let rows = state
                 .llama_process_rows
@@ -74,45 +75,37 @@ pub(in crate::output) fn render_process_table(
                 .map(|(_, row)| {
                     let model = llama_process_model_metadata(row, &state.loaded_model_rows);
                     let model_name = model.map(|model| model.name.as_str()).unwrap_or(&row.name);
-                    Row::new(vec![
-                        Cell::from(truncate_with_ellipsis(
-                            model_name_without_variant_suffix(model_name),
-                            model_width,
-                        )),
-                        Cell::from(truncate_with_ellipsis(
-                            &format_dashboard_pid((row.pid != 0).then_some(row.pid)),
-                            pid_width,
-                        )),
-                        Cell::from(truncate_with_ellipsis(&row.port.to_string(), port_width)),
-                        process_status_cell(&row.status, status_width),
-                    ])
+                    Row::new(present_columns(
+                        widths,
+                        [
+                            Cell::from(truncate_with_ellipsis(
+                                model_name_without_variant_suffix(model_name),
+                                model_width,
+                            )),
+                            Cell::from(truncate_with_ellipsis(
+                                &format_dashboard_pid((row.pid != 0).then_some(row.pid)),
+                                pid_width,
+                            )),
+                            Cell::from(truncate_with_ellipsis(&row.port.to_string(), port_width)),
+                            process_status_cell(&row.status, status_width),
+                        ],
+                    ))
                 })
                 .collect::<Vec<_>>();
-            let selected_local_index = view
-                .selected_row
-                .map(|selected| selected.saturating_sub(view.scroll_offset));
-            let mut table_state = TableState::default();
-            table_state.select(selected_local_index);
-            let table = Table::new(
-                rows,
+            render_populated_process_table(
+                frame,
+                inner_area,
+                view,
+                widths,
                 [
-                    Constraint::Fill(1),
-                    Constraint::Length(u16::try_from(pid_width).unwrap_or(u16::MAX)),
-                    Constraint::Length(u16::try_from(port_width).unwrap_or(u16::MAX)),
-                    Constraint::Length(u16::try_from(status_width).unwrap_or(u16::MAX)),
+                    "MODEL".to_string(),
+                    "PID".to_string(),
+                    "PORT".to_string(),
+                    right_align_text("STATE", status_width),
                 ],
-            )
-            .header(process_table_header_row([
-                "MODEL".to_string(),
-                "PID".to_string(),
-                "PORT".to_string(),
-                right_align_text("STATE", status_width),
-            ]))
-            .column_spacing(1)
-            .highlight_symbol(if is_focused { "› " } else { "  " })
-            .highlight_spacing(HighlightSpacing::Always)
-            .row_highlight_style(process_table_highlight_style(is_focused));
-            frame.render_stateful_widget(table, inner_area, &mut table_state);
+                rows,
+                is_focused,
+            );
         }
         DashboardPanel::Webserver => {
             if state.webserver_rows.is_empty() {
@@ -124,8 +117,9 @@ pub(in crate::output) fn render_process_table(
                 return;
             }
 
-            let [label_width, pid_width, port_width, status_width] =
+            let widths =
                 webserver_process_column_widths_for_rows(inner_area.width, &state.webserver_rows);
+            let [label_width, pid_width, port_width, status_width] = widths;
             let available_rows = usize::from(inner_area.height.saturating_sub(1));
             let rows = state
                 .webserver_rows
@@ -134,48 +128,63 @@ pub(in crate::output) fn render_process_table(
                 .skip(view.scroll_offset)
                 .take(available_rows)
                 .map(|(_, row)| {
-                    Row::new(vec![
-                        Cell::from(truncate_with_ellipsis(&row.label, label_width)),
-                        Cell::from(truncate_with_ellipsis(
-                            &format_dashboard_pid(row.pid),
-                            pid_width,
-                        )),
-                        Cell::from(truncate_with_ellipsis(
-                            &format_dashboard_port(row.port),
-                            port_width,
-                        )),
-                        process_status_cell(&row.status, status_width),
-                    ])
+                    Row::new(present_columns(
+                        widths,
+                        [
+                            Cell::from(truncate_with_ellipsis(&row.label, label_width)),
+                            Cell::from(truncate_with_ellipsis(
+                                &format_dashboard_pid(row.pid),
+                                pid_width,
+                            )),
+                            Cell::from(truncate_with_ellipsis(
+                                &format_dashboard_port(row.port),
+                                port_width,
+                            )),
+                            process_status_cell(&row.status, status_width),
+                        ],
+                    ))
                 })
                 .collect::<Vec<_>>();
-            let selected_local_index = view
-                .selected_row
-                .map(|selected| selected.saturating_sub(view.scroll_offset));
-            let mut table_state = TableState::default();
-            table_state.select(selected_local_index);
-            let table = Table::new(
-                rows,
+            render_populated_process_table(
+                frame,
+                inner_area,
+                view,
+                widths,
                 [
-                    Constraint::Fill(1),
-                    Constraint::Length(u16::try_from(pid_width).unwrap_or(u16::MAX)),
-                    Constraint::Length(u16::try_from(port_width).unwrap_or(u16::MAX)),
-                    Constraint::Length(u16::try_from(status_width).unwrap_or(u16::MAX)),
+                    PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL.to_string(),
+                    "PID".to_string(),
+                    "PORT".to_string(),
+                    right_align_text("STATE", status_width),
                 ],
-            )
-            .header(process_table_header_row([
-                PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL.to_string(),
-                "PID".to_string(),
-                "PORT".to_string(),
-                right_align_text("STATE", status_width),
-            ]))
-            .column_spacing(1)
-            .highlight_symbol(if is_focused { "› " } else { "  " })
-            .highlight_spacing(HighlightSpacing::Always)
-            .row_highlight_style(process_table_highlight_style(is_focused));
-            frame.render_stateful_widget(table, inner_area, &mut table_state);
+                rows,
+                is_focused,
+            );
         }
         _ => {}
     }
+}
+
+fn render_populated_process_table(
+    frame: &mut Frame,
+    inner_area: Rect,
+    view: DashboardPanelViewState,
+    widths: [usize; 4],
+    labels: [String; 4],
+    rows: Vec<Row<'static>>,
+    is_focused: bool,
+) {
+    let selected_local_index = view
+        .selected_row
+        .map(|selected| selected.saturating_sub(view.scroll_offset));
+    let mut table_state = TableState::default();
+    table_state.select(selected_local_index);
+    let table = Table::new(rows, process_table_constraints(widths))
+        .header(process_table_header_row(present_columns(widths, labels)))
+        .column_spacing(1)
+        .highlight_symbol(if is_focused { "› " } else { "  " })
+        .highlight_spacing(HighlightSpacing::Always)
+        .row_highlight_style(process_table_highlight_style(is_focused));
+    frame.render_stateful_widget(table, inner_area, &mut table_state);
 }
 
 pub(in crate::output) fn combine_panel_rect(title_area: Rect, body_area: Rect) -> Rect {
@@ -245,8 +254,8 @@ pub(in crate::output) fn process_table_highlight_style(is_focused: bool) -> Styl
     }
 }
 
-pub(in crate::output) fn process_table_header_row<const N: usize>(
-    labels: [String; N],
+pub(in crate::output) fn process_table_header_row<L: IntoIterator<Item = String>>(
+    labels: L,
 ) -> Row<'static> {
     let theme = tui_theme();
     Row::new(labels.into_iter().map(|label| {
@@ -363,18 +372,65 @@ pub(in crate::output) fn webserver_process_column_widths_for_rows(
     )
 }
 
+/// Column widths for a process table, in render order. A width of `0` means
+/// the column does not fit and is not rendered at all.
+///
+/// Columns are surrendered from the right — STATE first, then PORT — because
+/// the text column identifies the row. Crushing it instead produces the
+/// one-character `MODEL` column that made narrow dashboards unreadable, and
+/// truncating a header to `STA` is not an improvement over dropping it.
 pub(in crate::output) fn process_column_widths(
     body_width: u16,
     min_text_width: usize,
     pid_width: usize,
     status_width: usize,
 ) -> [usize; 4] {
-    let port_width = 5usize;
-    let reserved_width = pid_width + port_width + status_width + 3 + 2;
-    let text_width = usize::from(body_width)
-        .saturating_sub(reserved_width)
-        .max(min_text_width);
-    [text_width, pid_width, port_width, status_width]
+    const PORT_WIDTH: usize = 5;
+    // Ratatui always reserves room for the row highlight symbol.
+    const HIGHLIGHT_WIDTH: usize = 2;
+
+    let available = usize::from(body_width).saturating_sub(HIGHLIGHT_WIDTH);
+    for (port_width, status_width) in [(PORT_WIDTH, status_width), (PORT_WIDTH, 0), (0, 0)] {
+        let rendered_columns = 2 + usize::from(port_width > 0) + usize::from(status_width > 0);
+        let fixed_width =
+            pid_width + port_width + status_width + rendered_columns.saturating_sub(1);
+        if available >= fixed_width + min_text_width {
+            return [available - fixed_width, pid_width, port_width, status_width];
+        }
+    }
+
+    // Narrower than even one text cell + spacing + PID. Preserve the table's
+    // width invariant by surrendering PID as well.
+    if available < pid_width.saturating_add(2) {
+        return [available, 0, 0, 0];
+    }
+
+    // Keep text + PID and let the text truncate.
+    [available - pid_width - 1, pid_width, 0, 0]
+}
+
+/// Constraints for the columns that survived [`process_column_widths`].
+///
+/// These are exact `Length`s rather than a `Fill`, so what ratatui lays out is
+/// what the cell contents were truncated to. The two disagreeing was the
+/// original defect: the text was fitted to a floored width while the column got
+/// whatever `Fill(1)` had left, which could be a single character.
+pub(in crate::output) fn process_table_constraints(widths: [usize; 4]) -> Vec<Constraint> {
+    widths
+        .into_iter()
+        .filter(|width| *width > 0)
+        .map(|width| Constraint::Length(u16::try_from(width).unwrap_or(u16::MAX)))
+        .collect()
+}
+
+/// Drop the labels/cells whose column was not rendered.
+pub(in crate::output) fn present_columns<T>(widths: [usize; 4], values: [T; 4]) -> Vec<T> {
+    values
+        .into_iter()
+        .zip(widths)
+        .filter(|(_, width)| *width > 0)
+        .map(|(value, _)| value)
+        .collect()
 }
 
 pub(in crate::output) fn process_pid_width<I>(pids: I) -> usize

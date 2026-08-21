@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: public-website-pages
@@ -30,23 +31,25 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:1c73f0f2e4b2ce657cc9dc49c9c27374f3c364af19f884f1970331c3689da5d2
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Rust
+        # Kept deliberately: the image's rustc comes from `rustup ...
+        # --default-toolchain stable` at image-build time, an unpinned
+        # moving target, not this repo's pinned toolchain SHA. `just
+        # crate-docs` (below) runs `cargo doc` for the published crate API
+        # docs this job deploys to Pages, and this workflow has no
+        # pre-merge harness coverage at all (push-to-main, path-filtered) --
+        # so a silent toolchain drift here would ship unnoticed. Re-pins on
+        # top of the baked toolchain; CARGO_HOME/RUSTUP_HOME are baked ENV
+        # so this resolves the same install location regardless of the
+        # container's HOME.
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
-
-      - name: Install just
-        uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
-
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: website/package-lock.json
 
       - name: Install website dependencies
         working-directory: website
@@ -64,6 +67,9 @@ jobs:
         run: just crate-docs
 
       - name: Stage Pages artifact
+        # shell: bash is required: this job's container: resolves the
+        # default run: shell to sh -e {0}, and dash has no -o pipefail.
+        shell: bash
         run: |
           set -euo pipefail
 

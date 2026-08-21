@@ -250,7 +250,7 @@ jobs:
           fi
 
       - name: Verify prebuilt native SDK environment
-        run: verify-runner-image public
+        run: verify-runner-image public cpu
 
       - name: Resolve static ABI toolchain epoch
         uses: ./.github/actions/resolve-native-toolchain-epoch
@@ -357,7 +357,9 @@ jobs:
           allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
 
       - name: Install macOS native SDK dependencies
-        run: brew install cmake ninja lld
+        run: brew install cmake ninja
+      - name: Install macOS native SDK linker
+        uses: ./.github/actions/setup-macos-lld
 
       - name: Resolve macOS native toolchain epoch
         uses: ./.github/actions/resolve-native-toolchain-epoch

@@ -194,15 +194,14 @@ jobs:
           allow_depot_remote_cache: "false"
           allow_native_github_cache: "true"
       - name: Install macOS native dependencies
-        run: brew install cmake ninja lld
-      - name: Configure and validate macOS x64 linker
+        run: brew install cmake ninja
+      - name: Install macOS native linker
+        uses: ./.github/actions/setup-macos-lld
+      - name: Validate macOS x64 cross-linker
         if: ${{ inputs.target == 'darwin-x64' }}
         run: |
           set -euo pipefail
           lld_bin="$(brew --prefix lld)/bin"
-          test -x "$lld_bin/ld64.lld"
-          echo "$lld_bin" >> "$GITHUB_PATH"
-          echo 'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld' >> "$GITHUB_ENV"
           probe="$RUNNER_TEMP/mesh-cargo-linker-check"
           mkdir -p "$probe/src"
           printf '[package]\nname = "mesh-cargo-linker-check"\nversion = "0.0.0"\nedition = "2024"\n' > "$probe/Cargo.toml"

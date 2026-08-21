@@ -115,7 +115,7 @@ jobs:
           shared-key: ci-host-macos-${{ inputs.profile }}
           save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
       - name: Install host linker
-        run: brew install lld
+        uses: ./.github/actions/setup-macos-lld
       - name: Download immutable UI distribution
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:

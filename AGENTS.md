@@ -475,6 +475,33 @@ The patched llama.cpp staged runtime has its own ABI version, tracked in `skippy
 
 For changes in `crates/mesh-llm-ui/`, use components and compose interfaces consistently with shadcn/ui patterns. Prefer extending existing primitives in `src/components/ui/` over ad-hoc markup.
 
+### Terminal dashboard integrity
+
+The dashboard renders to the **controlling terminal** (`/dev/tty`, `CONOUT$`),
+never to fd 1 or fd 2, and while it owns the screen those two descriptors are
+redirected into it (`crates/mesh-llm-tui/src/output/console_capture.rs`). Stray
+`println!`/`eprintln!`, inherited child stderr, and native llama.cpp output
+therefore arrive as dashboard events instead of painting over the frame.
+
+Consequences worth knowing before changing this area:
+
+- Do not point the TUI backend, or the enter/exit escape writers, at
+  `io::stderr()`. Capture would then redirect the dashboard into its own pipe.
+- Anything restoring the terminal (panic hooks, emergency writers) must release
+  the capture *before* writing, or the message goes into the pipe.
+- Capture cannot intercept a write to the tty by a process that did not inherit
+  our descriptors. `R` is the repair for that case: a physical clear plus a
+  ratatui diff invalidation. A logical `Clear` widget does not fix backend
+  desynchronization.
+- Do not perform that clear on every draw. It repaints from blank and reads as
+  a black blink; measured on an idle dashboard it was ~2.6 full repaints/s.
+
+Prefer `OutputEvent` or `tracing` in runtime code regardless — captured lines
+have no level and are shown with a `stdout` context. When adding a `tracing`
+target that must reach the dashboard, add a directive for it in
+`runtime_tracing_subscriber`: `EnvFilter::from_default_env()` defaults to ERROR,
+so an unlisted target's `warn!` is dropped before the writer sees it.
+
 ## Testing
 
 Read `docs/design/TESTING.md` before running tests. It has all test scenarios, remote deploy instructions, and cleanup commands.

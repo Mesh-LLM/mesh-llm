@@ -178,14 +178,13 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("uses: actions/cache/restore@", ui)
         self.assertNotIn("uses: actions/cache/save@", ui)
         self.assertIn("uses: actions/cache/save@", web)
-        self.assertIn(
-            "cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && 'npm' || '' }}",
-            web,
-        )
-        self.assertIn("website/package-lock.json", web)
+        # The `website` job runs in the prebuilt public-web image with no
+        # bare-metal row, so setup-node's own npm cache and the `just`
+        # install-action were deleted outright (both are baked in the
+        # image) rather than gated -- unlike ui_quality/ui_e2e above, this
+        # job has no native-cache consumer left to assert on.
         self.assertIn("working-directory: website", web)
         self.assertIn("run: npm ci", web)
-        self.assertIn("uses: taiki-e/install-action@", web)
 
 
 if __name__ == "__main__":

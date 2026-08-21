@@ -1,11 +1,14 @@
+use super::console_capture::ConsoleCapture;
 use super::logging_projection::{projected_json_fields, projected_message, projected_pretty_text};
+use super::terminal_out::TerminalOut;
 use super::{
     ConsoleSessionMode, DashboardAction, DashboardLayoutState, DashboardSnapshot,
     DashboardSnapshotProvider, DashboardState, LogFormat, ModelProgressStatus, OutputEvent,
     OutputSink, OutputSinkFuture, PRETTY_TUI_JOIN_TOKEN_PANEL_HEIGHT,
     PRETTY_TUI_MIN_DASHBOARD_WIDTH, PRETTY_TUI_REDRAW_INTERVAL, PRETTY_TUI_SNAPSHOT_INTERVAL,
     RuntimeStatus, TuiControlFlow, TuiEvent, TuiTerminal, draw_tui_dashboard_with_terminal,
-    format_invite_mesh_label, render_dashboard_text, strip_leading_severity_icon,
+    format_invite_mesh_label, render_dashboard_text, repair_tui_terminal,
+    strip_leading_severity_icon,
 };
 use chrono::{SecondsFormat, Utc};
 use crossterm::{
@@ -629,6 +632,10 @@ pub struct InteractiveDashboardFormatter {
     pub(in crate::output) tui_entered: Arc<AtomicBool>,
     pub(in crate::output) panic_restored: Arc<AtomicBool>,
     pub(in crate::output) dirty: bool,
+    /// Holds fd 1/2 redirected into the dashboard for as long as it owns the
+    /// screen. `None` when capture could not be installed, in which case stray
+    /// output still lands on the frame and `R` remains the repair.
+    pub(in crate::output) console_capture: Option<ConsoleCapture>,
 }
 
 impl InteractiveDashboardFormatter {
@@ -652,7 +659,17 @@ impl InteractiveDashboardFormatter {
         self.panic_restored.load(Ordering::Acquire)
     }
 
+    /// Restore the real stdout/stderr. Idempotent, and safe on the panic path.
+    pub(super) fn release_console_capture(&mut self) {
+        if let Some(mut capture) = self.console_capture.take() {
+            let _ = capture.restore();
+        }
+    }
+
     pub(super) fn mark_panic_restored(&mut self) {
+        // A panic message is about to be written to stderr; it must not go
+        // into the capture pipe.
+        self.release_console_capture();
         self.terminal = None;
         self.terminal_active = false;
         self.dirty = false;
@@ -706,12 +723,34 @@ impl InteractiveDashboardFormatter {
         if self.terminal_active {
             return Ok(());
         }
-        write_tui_enter()?;
+        let mut out = TerminalOut::open();
+        // Capture is only installed when the dashboard has a descriptor of its
+        // own. Redirecting stderr while still rendering to it would send every
+        // frame into the capture pipe.
+        let capture_is_safe = out.is_private();
+        write_tui_enter_to_writer(&mut out)?;
         self.mark_terminal_escape_written();
-        let backend = CrosstermBackend::new(io::stderr());
-        let mut terminal = Terminal::new(backend).map_err(io::Error::other)?;
-        terminal.hide_cursor().map_err(io::Error::other)?;
+        let backend = CrosstermBackend::new(out);
+        let mut terminal = match Terminal::new(backend).map_err(io::Error::other) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                self.rollback_terminal_enter();
+                return Err(error);
+            }
+        };
+        if let Err(error) = terminal.hide_cursor().map_err(io::Error::other) {
+            // Drop the buffered backend before writing the rollback sequence;
+            // otherwise its final flush could hide the cursor again afterward.
+            drop(terminal);
+            self.rollback_terminal_enter();
+            return Err(error);
+        }
         self.terminal = Some(terminal);
+        if capture_is_safe {
+            // A failure here is not fatal: the dashboard works without capture,
+            // it is just no longer immune to stray writes.
+            self.console_capture = ConsoleCapture::install().ok();
+        }
         Ok(())
     }
 
@@ -724,12 +763,34 @@ impl InteractiveDashboardFormatter {
         self.dirty = true;
     }
 
+    fn rollback_terminal_enter(&mut self) {
+        self.rollback_terminal_enter_with(write_tui_exit);
+    }
+
+    pub(super) fn rollback_terminal_enter_with(&mut self, exit: impl FnOnce() -> io::Result<()>) {
+        // The setup error remains the useful result, but teardown is still
+        // attempted. Reset the bookkeeping even if that best-effort write
+        // fails so a later enter can retry instead of observing a phantom TUI.
+        let _ = exit();
+        self.release_console_capture();
+        self.terminal = None;
+        self.terminal_active = false;
+        self.dirty = false;
+        self.tui_entered.store(false, Ordering::Release);
+    }
+
     pub(super) fn exit_terminal(&mut self) -> io::Result<()> {
         if !self.terminal_active {
             return Ok(());
         }
+        // Put fd 1/2 back before tearing the screen down, so anything written
+        // during shutdown reaches the real terminal instead of a pipe whose
+        // reader is about to stop projecting into a dashboard that is gone.
+        self.release_console_capture();
         if let Some(mut terminal) = self.terminal.take() {
-            terminal.show_cursor().map_err(io::Error::other)?;
+            // `write_tui_exit` also shows the cursor, so a backend-specific
+            // show failure must not prevent the alternate-screen teardown.
+            let _ = terminal.show_cursor();
         }
         self.terminal_active = false;
         self.dirty = false;
@@ -755,6 +816,14 @@ impl InteractiveDashboardFormatter {
         let terminal = self.terminal.as_mut().ok_or_else(|| {
             io::Error::other("pretty TUI terminal missing while terminal mode is active")
         })?;
+        if self.state.pending_full_repaint {
+            // Cleared only once the repair actually happened: if the erase
+            // fails, the next draw would be an ordinary diff against a screen
+            // ratatui still believes is intact, and the damage would survive
+            // the key press the operator already made.
+            repair_tui_terminal(terminal)?;
+            self.state.pending_full_repaint = false;
+        }
         draw_tui_dashboard_with_terminal(terminal, &self.state)?;
         self.dirty = false;
         Ok(true)
@@ -1516,14 +1585,8 @@ pub(super) fn dashboard_layout_for_terminal_size(columns: u16, rows: u16) -> Das
     )
 }
 
-pub(super) fn write_tui_enter() -> io::Result<()> {
-    let mut stderr = io::stderr().lock();
-    write_tui_enter_to_writer(&mut stderr)
-}
-
 pub(super) fn write_tui_exit() -> io::Result<()> {
-    let mut stderr = io::stderr().lock();
-    write_tui_exit_to_writer(&mut stderr)
+    write_tui_exit_to_writer(&mut TerminalOut::open())
 }
 
 #[cfg(test)]

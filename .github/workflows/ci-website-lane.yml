@@ -40,6 +40,7 @@ on:
     inputs: *lane_inputs
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: ci-website-${{ inputs.supersession_key || inputs.source_sha }}

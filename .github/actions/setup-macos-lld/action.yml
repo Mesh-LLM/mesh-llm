@@ -1,0 +1,38 @@
+name: Set up macOS lld linker
+description: >
+  Install and verify Homebrew's lld on a macOS runner. Always probe-links a
+  throwaway crate before any caller trusts the result -- a bad install must
+  fail loudly, not build silently against the wrong (or no) linker.
+  Deliberately uncached: mesh-llm's Actions cache is already over the 10GB
+  per-repo quota (see gh cache list), so a ~1.9GB lld/llvm/z3 Cellar entry
+  here would evict the far more expensive macOS Rust target/ cache for a
+  15-30s bottle-pour saving. Revisit only with a measured number and a
+  quota plan, not an assumption.
+
+runs:
+  using: composite
+  steps:
+    - name: Install lld
+      shell: bash
+      run: brew install lld
+
+    - name: Verify lld links a real binary
+      shell: bash
+      run: |
+        set -euo pipefail
+        lld_bin="$(brew --prefix lld)/bin"
+        test -x "$lld_bin/ld64.lld"
+        probe="$RUNNER_TEMP/mesh-setup-macos-lld-probe"
+        mkdir -p "$probe/src"
+        printf '[package]\nname = "mesh-setup-macos-lld-probe"\nversion = "0.0.0"\nedition = "2024"\n' > "$probe/Cargo.toml"
+        printf 'fn main() {}\n' > "$probe/src/main.rs"
+        PATH="$lld_bin:$PATH" CARGO_ENCODED_RUSTFLAGS='-Clink-arg=-fuse-ld=lld' \
+          cargo rustc --quiet --manifest-path "$probe/Cargo.toml"
+        echo "$lld_bin" >> "$GITHUB_PATH"
+        # Job-global via GITHUB_ENV, and cargo prefers CARGO_ENCODED_RUSTFLAGS
+        # over RUSTFLAGS -- any later step in the same job that sets RUSTFLAGS
+        # is silently ignored, and any macOS job that cross-builds an android
+        # target loses .cargo/config.toml's -Wl,-z,max-page-size=16384 for
+        # that job. Verified safe today: no other RUSTFLAGS setter and no
+        # android targets on any of this action's macOS call sites.
+        echo 'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld' >> "$GITHUB_ENV"

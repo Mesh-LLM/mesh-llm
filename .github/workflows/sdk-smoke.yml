@@ -93,6 +93,17 @@ jobs:
     timeout-minutes: ${{ inputs.timeout_minutes }}
     permissions:
       contents: read
+      packages: read
+    # Rust and Kotlin smoke both run on Linux (x86 or arm) and get the
+    # prebuilt image; Swift stays on bare macos-15, unchanged (that's
+    # chunk 6). Empty string opts the job out of containerization
+    # per-run. The truthy value must stay first in the `&&` here --
+    # see smoke.yml's container block for what breaks if it isn't.
+    container:
+      image: ${{ inputs.sdk_kind != 'swift' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d' || '' }}
+    defaults:
+      run:
+        shell: bash
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -189,21 +200,29 @@ jobs:
           path: ${{ inputs.kotlin_artifact_path }}
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        if: ${{ inputs.sdk_kind == 'rust' }}
+        # rust is always containerized (only swift opts out), so this stays
+        # gated off in practice — the image bakes the venv this would shadow.
+        if: ${{ inputs.sdk_kind == 'rust' && job.container.id == '' }}
         with:
           python-version: "3.12"
 
       - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        # No JDK is baked into the image (not in verify-runner-image's
+        # asserted tool list), so this stays ungated.
         if: ${{ inputs.sdk_kind == 'kotlin' }}
         with:
           distribution: temurin
           java-version: '21'
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        # Only the uncontained swift row (macos-15) needs this; rust/kotlin
+        # get pnpm from the image.
+        if: job.container.id == ''
         with:
           version: 10
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: job.container.id == ''
         with:
           node-version: "24"
           cache: pnpm
@@ -212,9 +231,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
         if: ${{ inputs.sdk_kind == 'rust' }}
 
-      - name: Install Linux SDK dependencies
-        if: ${{ runner.os == 'Linux' && inputs.sdk_kind == 'rust' }}
-        run: sudo apt-get update && sudo apt-get install -y build-essential libdbus-1-dev curl jq lsof lld patchelf
+      - name: Verify prebuilt smoke environment
+        if: ${{ inputs.sdk_kind != 'swift' }}
+        run: verify-runner-image public cpu
 
       - name: Configure Linux Rust linker
         if: ${{ runner.os == 'Linux' && inputs.sdk_kind == 'rust' }}
@@ -224,26 +243,6 @@ jobs:
           [target.x86_64-unknown-linux-gnu]
           rustflags = ["-C", "link-arg=-fuse-ld=lld"]
           EOF
-
-      - name: Verify Kotlin smoke runtime utilities
-        if: ${{ runner.os == 'Linux' && inputs.sdk_kind == 'kotlin' }}
-        run: |
-          set -euo pipefail
-          for utility in \
-            bash \
-            curl \
-            ldd \
-            pgrep \
-            python3 \
-            readelf \
-            sort \
-            tail \
-            xargs; do
-            command -v "$utility" >/dev/null || {
-              echo "missing Kotlin smoke runtime utility: $utility" >&2
-              exit 1
-            }
-          done
 
       - uses: ./.github/actions/restore-smoke-inputs
         with:

@@ -29,6 +29,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   CACHE_NAMESPACE: mesh-llm
@@ -72,6 +73,8 @@ jobs:
     if: ${{ inputs.ui_changed }}
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:1c73f0f2e4b2ce657cc9dc49c9c27374f3c364af19f884f1970331c3689da5d2
     defaults:
       run:
         working-directory: crates/mesh-llm-ui
@@ -86,13 +89,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-        with:
-          version: 10
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          package-manager-cache: false
       - name: Configure isolated pnpm store
         run: pnpm config set store-dir ~/.pnpm-store
       - name: Restore pnpm store
@@ -124,6 +120,8 @@ jobs:
     if: ${{ inputs.ui_changed }}
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:1c73f0f2e4b2ce657cc9dc49c9c27374f3c364af19f884f1970331c3689da5d2
     defaults:
       run:
         working-directory: crates/mesh-llm-ui
@@ -138,13 +136,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-        with:
-          version: 10
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          package-manager-cache: false
       - name: Configure isolated pnpm store
         run: pnpm config set store-dir ~/.pnpm-store
       - name: Restore pnpm store
@@ -159,23 +150,21 @@ jobs:
           restore-keys: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-
       - name: Install UI dependencies
         run: pnpm i --frozen-lockfile
-      - name: Restore Playwright browser cache
-        id: playwright_cache
-        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          # Keyed on the resolved @playwright/test version via the lockfile hash
-          # (not a hardcoded version literal) so an upgrade busts the cache.
-          key: ${{ env.CACHE_NAMESPACE }}-playwright-chromium-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
-      - name: Install Playwright chromium
-        run: pnpm exec playwright install --with-deps chromium
-      - name: Save Playwright browser cache
-        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && steps.playwright_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
+      - name: Verify prebuilt web environment
+        # The image bakes PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1, so a stray
+        # `playwright install` elsewhere becomes a no-op instead of a silent
+        # re-download. This asserts the resolved @playwright/test version
+        # actually matches what the image baked and verified at build time
+        # (/etc/mesh-runner-playwright-version), not the pin file.
+        # shell: bash is required here: GitHub Actions defaults container
+        # jobs' run: steps to sh, and the <<< here-string below is a
+        # bashism dash/sh rejects ("Syntax error: redirection unexpected").
+        shell: bash
+        run: |
+          resolved="$(pnpm exec playwright --version | head -n1 | awk '{print $NF}')"
+          grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"$resolved" \
+            || { echo "unexpected playwright --version output: $resolved" >&2; exit 1; }
+          verify-runner-image public web "" "" "" "" "$resolved"
       - name: Run console E2E
         run: pnpm run test:e2e
       - name: Upload E2E failure artifacts
@@ -193,6 +182,8 @@ jobs:
     if: ${{ inputs.website_changed }}
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:1c73f0f2e4b2ce657cc9dc49c9c27374f3c364af19f884f1970331c3689da5d2
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -204,15 +195,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          package-manager-cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
-          cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && 'npm' || '' }}
-          cache-dependency-path: |
-            .github/cache-version.txt
-            website/package-lock.json
-      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Install website dependencies
         working-directory: website
         run: npm ci

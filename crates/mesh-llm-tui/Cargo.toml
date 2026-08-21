@@ -24,3 +24,8 @@ ratatui = "0.30"
 serde_json.workspace = true
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tracing = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+# Safe wrappers for the dup/dup2/pipe plumbing behind console capture. Used in
+# preference to raw libc so this crate keeps `#![forbid(unsafe_code)]`.
+rustix = { version = "1", features = ["event", "stdio"] }

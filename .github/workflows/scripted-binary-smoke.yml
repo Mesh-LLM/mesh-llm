@@ -55,13 +55,21 @@ env:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   scripted_binary_smoke:
     name: Scripted Binary Smoke
-    # Model credentials stay on an isolated GitHub-hosted runner.
+    # Model credentials stay on an isolated GitHub-hosted runner; the
+    # container just supplies prebuilt smoke utilities, it does not move
+    # execution to self-hosted/depot infra.
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    defaults:
+      run:
+        shell: bash
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -71,18 +79,8 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
-      - name: Verify smoke runtime utilities
-        run: |
-          set -euo pipefail
-          for utility in \
-            curl \
-            jq \
-            lsof; do
-            command -v "$utility" >/dev/null || {
-              echo "missing smoke runtime utility: $utility" >&2
-              exit 1
-            }
-          done
+      - name: Verify prebuilt smoke environment
+        run: verify-runner-image public cpu
 
       - uses: ./.github/actions/restore-smoke-inputs
         with:

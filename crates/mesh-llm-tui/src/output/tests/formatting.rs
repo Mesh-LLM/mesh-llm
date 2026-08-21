@@ -1331,6 +1331,30 @@ pub(super) fn tui_terminal_setup_marks_cleanup_required_after_enter_escape() {
 }
 
 #[test]
+pub(super) fn tui_terminal_setup_rollback_resets_state_even_when_exit_fails() {
+    let mut formatter = InteractiveDashboardFormatter::default();
+    formatter.mark_terminal_escape_written();
+    let mut exit_attempted = false;
+
+    formatter.rollback_terminal_enter_with(|| {
+        exit_attempted = true;
+        Err(io::Error::other("simulated terminal exit failure"))
+    });
+
+    assert!(exit_attempted);
+    assert!(formatter.terminal.is_none());
+    assert!(!formatter.terminal_active);
+    assert!(!formatter.tui_entered());
+    assert!(!formatter.dirty);
+
+    formatter.mark_terminal_escape_written();
+    assert!(
+        formatter.terminal_active && formatter.tui_entered(),
+        "a later terminal setup must be able to retry normally"
+    );
+}
+
+#[test]
 pub(super) fn tui_panic_restore_flag_tracks_terminal_entry() {
     let mut formatter = InteractiveDashboardFormatter::default();
 

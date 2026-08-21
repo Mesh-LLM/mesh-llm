@@ -2,8 +2,8 @@ use super::*;
 use crate::output::formatting::*;
 use crate::output::rendering::*;
 use ratatui::{
-    Terminal,
-    backend::TestBackend,
+    Terminal, TerminalOptions, Viewport,
+    backend::{Backend, CrosstermBackend, TestBackend},
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::Modifier,
@@ -11,9 +11,9 @@ use ratatui::{
 };
 use serde_json::Value;
 use std::{
-    io::Write as _,
+    io::{self, Write as _},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };

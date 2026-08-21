@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -32,6 +33,18 @@ INSTRUMENTED = WORKFLOWS.keys() - {"main"}
 HF_WORKFLOW = ROOT / ".github" / "workflows" / "hf-download-smoke.yml"
 NATIVE_SDK_WORKFLOW = (
     ROOT / ".github" / "workflows" / "native-sdk-artifact.yml"
+)
+SEED_WARMER = ROOT / ".github" / "workflows" / "cache-warm-sccache.yml"
+SEED_KEY_PATTERN = re.compile(
+    r"mesh-llm-sccache-seed-[^\n]+-\$\{\{ hashFiles\('[^'\n]+', '[^'\n]+'\) \}\}"
+)
+SEED_IMAGE = (
+    "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:"
+    "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
+)
+SEED_EPOCH = (
+    "mesh-llm-cuda-runner-sha256-"
+    "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
 )
 
 
@@ -82,6 +95,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("ci-rust-tests-slice.yml", "rust_tests"): policy,
             ("ci-windows-host-slice.yml", "windows_host"): policy,
             ("ci-windows-runtime-slice.yml", "windows_runtime"): policy,
+            ("cache-warm-sccache.yml", "warm"): "false",
             ("hf-download-smoke.yml", "hf_download_smoke"): "true",
             ("native-sdk-artifact.yml", "linux_native_sdk_artifact"): policy,
             ("native-sdk-artifact.yml", "macos_native_sdk_artifact"): policy,
@@ -122,6 +136,8 @@ class SccacheEvidenceTests(unittest.TestCase):
         *,
         artifact_name: str = "sccache-test-1",
         sccache_error: str = "",
+        cache_expectation: str = "opportunistic",
+        minimum_hit_rate: str = "0",
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -159,6 +175,10 @@ class SccacheEvidenceTests(unittest.TestCase):
                 str(stats_file),
                 "--github-output",
                 str(github_output),
+                "--cache-expectation",
+                cache_expectation,
+                "--minimum-hit-rate",
+                minimum_hit_rate,
             ],
             env={
                 **os.environ,
@@ -183,7 +203,15 @@ class SccacheEvidenceTests(unittest.TestCase):
             json.loads(stats_file.read_text()),
             {
                 "schema": "mesh-llm.sccache-stats",
-                "schema_version": 1,
+                "schema_version": 2,
+                "assessment": {
+                    "expectation": "opportunistic",
+                    "classification": "opportunistic",
+                    "minimum_hit_rate": 0.0,
+                    "hit_rate": 0.6,
+                    "cache_requests": 10,
+                    "passed": True,
+                },
                 "stats": {
                     "compile_requests": 12,
                     "requests_executed": 10,
@@ -202,6 +230,9 @@ class SccacheEvidenceTests(unittest.TestCase):
         self.assertIn("requests_executed=10", outputs)
         self.assertIn("cache_hits=6", outputs)
         self.assertIn("cache_misses=4", outputs)
+        self.assertIn("hit_rate=0.6", outputs)
+        self.assertIn("cache_classification=opportunistic", outputs)
+        self.assertIn("cache_passed=true", outputs)
 
     def test_raw_secrets_urls_and_paths_cannot_reach_logs_or_evidence(self) -> None:
         payload = valid_payload()
@@ -278,6 +309,26 @@ class SccacheEvidenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(stats_file.is_file())
         self.assertIn("::warning title=sccache reported zero compile requests", result.stdout)
+
+    def test_warm_and_cold_observations_are_classified_separately(self) -> None:
+        warm_result, warm_file, warm_output = self.run_capture(
+            valid_payload(), cache_expectation="warm", minimum_hit_rate="0.80",
+        )
+        cold_result, cold_file, cold_output = self.run_capture(
+            valid_payload(), cache_expectation="cold", minimum_hit_rate="0.80",
+        )
+        self.assertEqual(warm_result.returncode, 0, warm_result.stderr)
+        self.assertEqual(cold_result.returncode, 0, cold_result.stderr)
+        self.assertEqual(
+            json.loads(warm_file.read_text())["assessment"]["classification"],
+            "warm-failure",
+        )
+        self.assertIn("cache_passed=false", warm_output.read_text())
+        self.assertEqual(
+            json.loads(cold_file.read_text())["assessment"]["classification"],
+            "cold",
+        )
+        self.assertIn("cache_passed=true", cold_output.read_text())
 
     def test_missing_or_invalid_counter_rejects_evidence(self) -> None:
         payload = valid_payload()
@@ -395,6 +446,62 @@ class SccacheEvidenceTests(unittest.TestCase):
             "&& github.ref == 'refs/heads/main' }}",
             swift,
         )
+
+    def test_linux_seed_producer_and_consumers_share_compatible_key(self) -> None:
+        warmer_workflow = yaml.safe_load(SEED_WARMER.read_text(encoding="utf-8"))
+        warmer_steps = warmer_workflow["jobs"]["warm"]["steps"]
+        seed_steps = [step for step in warmer_steps if step.get("id") == "seed"]
+        self.assertEqual(len(seed_steps), 1)
+        seed_assignments = [
+            match.group(1)
+            for line in seed_steps[0]["run"].splitlines()
+            if (match := re.fullmatch(r'\s*key="([^"\n]+)"\s*', line))
+        ]
+        self.assertEqual(len(seed_assignments), 1)
+        expected_key = seed_assignments[0]
+        self.assertIsNotNone(SEED_KEY_PATTERN.fullmatch(expected_key))
+
+        cache_steps = [
+            step for step in warmer_steps
+            if str(step.get("uses", "")).startswith("actions/cache/")
+        ]
+        self.assertEqual(len(cache_steps), 2)
+        for step in cache_steps:
+            self.assertEqual(step["with"]["key"], "${{ steps.seed.outputs.key }}")
+
+        consumers = (
+            WORKFLOWS["quality"],
+            WORKFLOWS["rust-tests"],
+            WORKFLOWS["host"],
+            WORKFLOWS["runtime"],
+        )
+        for path in consumers:
+            with self.subTest(workflow=path.name):
+                workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+                keys = [
+                    step.get("with", {}).get("cache_key")
+                    for job in workflow["jobs"].values()
+                    for step in job.get("steps", [])
+                    if step.get("uses") == "./.github/actions/restore-sccache-seed"
+                ]
+                self.assertEqual(len(keys), 1)
+                self.assertIsNotNone(SEED_KEY_PATTERN.fullmatch(keys[0]))
+                self.assertEqual(keys[0], expected_key)
+        warmer = SEED_WARMER.read_text(encoding="utf-8")
+        self.assertIn("run: just ci-sccache-seed-build", warmer)
+        self.assertNotIn(
+            "run: cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
+            warmer,
+        )
+        restore = (
+            ROOT / ".github" / "actions" / "restore-sccache-seed" / "action.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('echo "SCCACHE_CACHE_SIZE=2G" >> "$GITHUB_ENV"', restore)
+
+    def test_runtime_seed_restore_requires_matching_image_and_epoch(self) -> None:
+        runtime = WORKFLOWS["runtime"].read_text(encoding="utf-8")
+        self.assertIn(f"matrix.runtime.container_image == '{SEED_IMAGE}'", runtime)
+        self.assertIn(f"matrix.runtime.toolchain_epoch == '{SEED_EPOCH}'", runtime)
 
     def test_instrumented_workflows_use_unique_evidence_artifacts(self) -> None:
         for workflow_name in INSTRUMENTED:
