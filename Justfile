@@ -408,7 +408,7 @@ check-release:
 check-release:
     @just with-lld cargo run -p xtask -- repo-consistency release-targets
 
-# Verify every Rust process-environment mutation has an explicit contract.
+# Check the Rust process-environment mutation census and contract annotations.
 check-env-mutation-contract:
     @python3 scripts/check-env-mutation-contract.py
 
