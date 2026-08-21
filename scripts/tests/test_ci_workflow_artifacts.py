@@ -180,8 +180,14 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         # restore or save.
         self.assertIn("run: pnpm config set store-dir /home/runner/.local/share/pnpm/store", ui)
         self.assertNotIn("uses: actions/cache", ui)
+        self.assertNotIn("cache: pnpm", ui)
+        self.assertNotIn("cache: npm", ui)
+        self.assertNotIn("CACHE_NAMESPACE", ui)
         self.assertIn("run: pnpm config set store-dir /home/runner/.local/share/pnpm/store", web)
         self.assertNotIn("uses: actions/cache", web)
+        self.assertNotIn("cache: pnpm", web)
+        self.assertNotIn("cache: npm", web)
+        self.assertNotIn("CACHE_NAMESPACE", web)
         # The `website` job runs in the prebuilt public-web image with no
         # bare-metal row, so setup-node's own npm cache and the `just`
         # install-action were deleted outright (both are baked in the
