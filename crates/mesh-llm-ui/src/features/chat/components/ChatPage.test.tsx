@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { ChatPage } from '@/App'
+import { ChatPage } from '@/features/chat/components/ChatPage'
 
 vi.mock('@/components/ui/select', async () => {
   const React = await import('react')
