@@ -419,6 +419,12 @@ fn unix_socket_path_fits(path: &Path) -> bool {
 /// way `mesh_llm_plugin::bind_side_stream` already does for side streams --
 /// the bound path is handed to the plugin process verbatim, so relocating it
 /// costs nothing as long as it stays unique per instance.
+///
+/// Note that the fallback directory is typically world-writable, and
+/// `bind_local_listener` unlinks the path before binding. That unlink is
+/// deliberate, and safe only because the file name is unguessable ahead of
+/// time: the `p{pid}-{random:08x}` instance id (`make_instance_id`) leaves
+/// nothing for another user to pre-place and have us remove on their behalf.
 #[cfg(unix)]
 fn unix_socket_path_within(
     preferred_dir: &Path,
