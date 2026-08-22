@@ -1520,12 +1520,20 @@ verify_window_pipeline_depth = 2
     )
     .expect("explicit ngram-suffix must resolve");
     let decode = resolved.decode;
-    assert_eq!(decode.effective_strategy, "ngram-suffix", "effective strategy");
+    assert_eq!(
+        decode.effective_strategy, "ngram-suffix",
+        "effective strategy"
+    );
     let ngram = decode.ngram.expect("suffix proposer must be present");
+    assert_eq!(ngram.kind, skippy_server::NgramProposerKind::Suffix);
     assert_eq!(ngram.min_ngram, 5);
     assert_eq!(ngram.max_ngram, 32);
+    assert_eq!(ngram.max_proposal_tokens, 48);
     assert_eq!(decode.verify_window.pipeline_depth, 2);
-    assert_eq!(resolved.mode, "ngram", "resolved mode drives the embedded frontend");
+    assert_eq!(
+        resolved.mode, "ngram",
+        "resolved mode drives the embedded frontend"
+    );
 }
 
 #[test]
@@ -1567,7 +1575,9 @@ verify_window_pipeline_depth = 2
         .ngram
         .as_ref()
         .expect("resolved decode plan must keep the suffix proposer");
+    assert_eq!(ngram.kind, skippy_server::NgramProposerKind::Suffix);
     assert_eq!(ngram.min_ngram, 5);
+    assert_eq!(ngram.max_proposal_tokens, 48);
     let args = resolved
         .to_embedded_openai_args(4096, true)
         .expect("staged translation");
@@ -1576,6 +1586,9 @@ verify_window_pipeline_depth = 2
         .ngram
         .as_ref()
         .expect("staged embedded args must keep the suffix proposer");
+    assert_eq!(translated.kind, skippy_server::NgramProposerKind::Suffix);
+    assert_eq!(translated.min_ngram, 5);
     assert_eq!(translated.max_ngram, 32);
+    assert_eq!(translated.max_proposal_tokens, 48);
     assert_eq!(args.speculative.verify_window.pipeline_depth, 2);
 }

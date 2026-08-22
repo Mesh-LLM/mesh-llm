@@ -107,6 +107,11 @@ pub(super) fn compose_target_predictions(
     let boundary = prior_boundary_prediction.ok_or_else(|| {
         OpenAiError::backend("continuation verify window has no prior boundary prediction")
     })?;
+    if traversal_predictions.is_empty() {
+        return Err(OpenAiError::backend(
+            "continuation verify window returned no predictions",
+        ));
+    }
     let available = proposal_count.min(traversal_predictions.len());
     let mut predictions = Vec::with_capacity(available.saturating_add(1));
     predictions.push(boundary);
@@ -220,6 +225,19 @@ mod prediction_tests {
         let predictions = compose_target_predictions(false, 2, Some(11), &[12, 13]).unwrap();
 
         assert_eq!(predictions, [11, 12, 13]);
+    }
+
+    #[test]
+    fn early_stopped_replies_pass_through_short_prediction_arrays() {
+        let predictions = compose_target_predictions(false, 3, Some(11), &[12]).unwrap();
+
+        assert_eq!(predictions, [11, 12]);
+    }
+
+    #[test]
+    fn empty_replies_are_protocol_errors_on_both_paths() {
+        assert!(compose_target_predictions(true, 2, None, &[]).is_err());
+        assert!(compose_target_predictions(false, 2, Some(11), &[]).is_err());
     }
 
     #[test]
