@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import re
 import shlex
-import shutil
 import subprocess
 import tempfile
 from typing import Final
@@ -15,140 +14,71 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 JUSTFILE: Final = ROOT / "Justfile"
 
 
-def _recipe_body_lines(recipe: str) -> list[str]:
-    """Strip a recipe down to the shell script just would actually execute.
+def _recipe_dependencies(header_line: str) -> list[str]:
+    """The just-recipe names a recipe header declares as dependencies.
 
-    Drops the `name: deps` header, removes the recipe's indentation, and strips
-    just's line prefixes. `@` (suppress echo) and `-` (ignore failure) are
-    directives to just, not shell syntax — leaving them in makes the first line
-    parse as a command name, so every variable it was supposed to set silently
-    stays unset.
+    e.g. "release-build-aarch64-cuda: release-host-build" -> ["release-host-build"].
+    Parameterized headers like 'build-runtime backend="" cuda_arch="":' have no
+    colon before the trailing one, so they correctly yield no dependencies.
     """
-    lines = recipe.splitlines()[1:]
-    lines = [line[4:] if line.startswith("    ") else line for line in lines]
-    lines = [line for line in lines if not line.startswith("#!")]
-    for index, line in enumerate(lines):
-        if line.strip():
-            lines[index] = line.lstrip("@-")
-            break
-    return lines
+    _, _, deps_part = header_line.partition(":")
+    return deps_part.split()
 
 
-def _run_cuda_arch_selection(recipe: str, mesh_cuda_version: str) -> str:
-    """Execute the real arch-selection lines out of a `release-build-cuda`-shaped
-    recipe body (up to, but not including, the package-native-runtime.sh call),
-    with MESH_CUDA_VERSION forced, and return the selected `arches` list.
-
-    This runs the actual recipe source rather than a hand-copied duplicate, so
-    it can't silently drift from what `just` executes.
-    """
-    lines = recipe.splitlines()[1:]  # drop the "recipe-name: deps" header line
-    lines = [line[4:] if line.startswith("    ") else line for line in lines]
-    lines = [line for line in lines if not line.startswith("#!/usr/bin/env bash")]
-    body: list[str] = []
-    for line in lines:
-        if line.strip().startswith("MESH_LLM_CUDA_TOOLKIT_MAJOR="):
-            break
-        body.append(line)
-    script = "\n".join(body) + '\necho "$arches"\n'
-    result = subprocess.run(
-        ["bash", "-c", script],
-        check=True,
-        capture_output=True,
-        text=True,
-        env={"PATH": "/usr/bin:/bin", "MESH_CUDA_VERSION": mesh_cuda_version},
-    )
-    return result.stdout.strip()
-
-
-def _run_recipe_body_capturing_packager_env(
-    recipe: str, mesh_cuda_version: str, interpreter: str
+def _run_release_recipe(
+    name: str, recipe_text: str, *args: str, env: dict[str, str] | None = None
 ) -> dict[str, str]:
-    """Run a whole release-build recipe body with `package-native-runtime.sh`
-    stubbed out, and return the environment the stub actually observed.
+    """Run a real Justfile release-build recipe through `just`, with the
+    packager and CUDA-toolkit-detection scripts replaced by stubs that record
+    what they were called with.
 
-    This executes the recipe source as-is — including the trailing
-    `VAR=... scripts/package-native-runtime.sh` line — so it reports what the
-    packager would really be handed, rather than re-deriving the selection.
-    `interpreter` is the shell just would use for this recipe: `bash` for a
-    `#!/usr/bin/env bash` script recipe, `sh`/`dash` for a plain one.
+    The recipe is written verbatim into an isolated temporary Justfile (any
+    just-recipe dependency it declares is stubbed out alongside it) and
+    invoked with the real `just` binary, so interpolation, `@`/`-`
+    directives, and script-recipe shebang handling all come from `just`
+    itself rather than a hand-rolled reimplementation.
     """
-    lines = _recipe_body_lines(recipe)
+    header = recipe_text.splitlines()[0]
+    deps = _recipe_dependencies(header)
 
-    with tempfile.TemporaryDirectory() as workdir:
-        scripts_dir = Path(workdir) / "scripts"
+    with tempfile.TemporaryDirectory() as workdir_str:
+        workdir = Path(workdir_str)
+        scripts_dir = workdir / "scripts"
         scripts_dir.mkdir()
-        probe = Path(workdir) / "packager-env.txt"
-        stub = scripts_dir / "package-native-runtime.sh"
-        stub.write_text(
+
+        probe = workdir / "packager-env.txt"
+        packager_stub = scripts_dir / "package-native-runtime.sh"
+        packager_stub.write_text(
             "#!/usr/bin/env bash\n"
             f'printf "%s\\n" "$LLAMA_STAGE_CUDA_ARCHITECTURES" '
             f'"$MESH_LLM_CUDA_TOOLKIT_MAJOR" "$*" > {shlex.quote(str(probe))}\n',
             encoding="utf-8",
         )
-        stub.chmod(0o755)
-        detect = scripts_dir / "detect-cuda-toolkit-version.sh"
-        detect.write_text("#!/usr/bin/env bash\necho 12\n", encoding="utf-8")
-        detect.chmod(0o755)
+        packager_stub.chmod(0o755)
+        detect_stub = scripts_dir / "detect-cuda-toolkit-version.sh"
+        detect_stub.write_text("#!/usr/bin/env bash\necho 12\n", encoding="utf-8")
+        detect_stub.chmod(0o755)
 
-        script = Path(workdir) / "recipe-body"
-        script.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        justfile = workdir / "Justfile"
+        stub_recipes = "".join(f"{dep}:\n    @true\n\n" for dep in deps)
+        justfile.write_text(stub_recipes + recipe_text + "\n", encoding="utf-8")
+
+        run_env = {"PATH": os.environ["PATH"]}
+        run_env.update(env or {})
         subprocess.run(
-            [interpreter, str(script)],
+            ["just", "-f", str(justfile), name, *args],
             cwd=workdir,
+            env=run_env,
             check=False,
             capture_output=True,
             text=True,
-            env={"PATH": os.environ["PATH"], "MESH_CUDA_VERSION": mesh_cuda_version},
         )
+
         if not probe.exists():
             return {"arches": "", "toolkit_major": "", "args": ""}
         recorded = probe.read_text(encoding="utf-8").splitlines()
         recorded += [""] * (3 - len(recorded))
-        return {
-            "arches": recorded[0],
-            "toolkit_major": recorded[1],
-            "args": recorded[2],
-        }
-
-
-def _run_build_runtime_body(recipe: str, interpreter: str, backend: str) -> dict[str, str]:
-    """Run `build-runtime`'s body with `{{ backend }}` substituted the way just
-    would, and report the backend the packager was actually handed.
-    """
-    body = "\n".join(_recipe_body_lines(recipe))
-    for placeholder, value in (
-        ("{{ backend }}", backend),
-        ("{{ cuda_arch }}", ""),
-        ("{{ rocm_arch }}", ""),
-    ):
-        body = body.replace(placeholder, value)
-
-    with tempfile.TemporaryDirectory() as workdir:
-        scripts_dir = Path(workdir) / "scripts"
-        scripts_dir.mkdir()
-        probe = Path(workdir) / "packager-env.txt"
-        stub = scripts_dir / "package-native-runtime.sh"
-        stub.write_text(
-            "#!/usr/bin/env bash\n"
-            f'printf "%s\\n" "$*" > {shlex.quote(str(probe))}\n',
-            encoding="utf-8",
-        )
-        stub.chmod(0o755)
-        script = Path(workdir) / "recipe-body"
-        script.write_text(body + "\n", encoding="utf-8")
-        subprocess.run(
-            [interpreter, str(script)],
-            cwd=workdir,
-            check=False,
-            capture_output=True,
-            text=True,
-            env={"PATH": os.environ["PATH"]},
-        )
-        args = probe.read_text(encoding="utf-8").strip() if probe.exists() else ""
-
-    match = re.search(r"--backend (\S+)", args)
-    return {"args": args, "backend": match.group(1) if match else ""}
+        return {"arches": recorded[0], "toolkit_major": recorded[1], "args": recorded[2]}
 
 
 class JustfileReleaseRuntimeTests(unittest.TestCase):
@@ -202,6 +132,13 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         )
 
     def test_cuda_release_build_selects_arches_at_the_12_8_boundary(self) -> None:
+        """Run the real recipe through `just`, with MESH_CUDA_VERSION forced,
+        and check what the packager stub actually received.
+
+        Blackwell (sm_100/103/120/121) needs toolkit >= 12.8, the first
+        release that shipped support for it -- gate on that boundary, not on
+        the CUDA major alone.
+        """
         recipe = self.recipe("release-build-cuda")
         pre_blackwell = "61;75;80;86;87;89;90"
         blackwell = "75;80;86;87;89;90;100;103;120;121"
@@ -217,20 +154,23 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         }
         for mesh_cuda_version, expected in cases.items():
             with self.subTest(mesh_cuda_version=mesh_cuda_version):
-                self.assertEqual(
-                    _run_cuda_arch_selection(recipe, mesh_cuda_version), expected
+                observed = _run_release_recipe(
+                    "release-build-cuda",
+                    recipe,
+                    env={"MESH_CUDA_VERSION": mesh_cuda_version},
                 )
+                self.assertEqual(observed["arches"], expected)
 
     def test_aarch64_cuda_release_build_selects_arches_at_the_13_boundary(self) -> None:
-        """Run the recipe body the way just would and check what the packager gets.
+        """Run the real recipe through `just`, exactly as the release build
+        does -- the fixed recipe is a `#!/usr/bin/env bash` script recipe, so
+        `just` executes it with bash regardless of what `/bin/sh` is on the
+        host.
 
-        `sm_110` (Thor) needs toolkit major >= 13, so this mirrors how the
-        x86_64 sibling gates Blackwell on >= 12.8. The interpreter is taken
-        from the recipe itself: a plain recipe is run under `dash`, which is
-        what `/bin/sh` is on the Debian/Ubuntu aarch64 build hosts.
+        `sm_110` (Thor) needs toolkit major >= 13, mirroring how the x86_64
+        sibling gates Blackwell on >= 12.8.
         """
         recipe = self.recipe("release-build-aarch64-cuda")
-        interpreter = self.recipe_interpreter(recipe)
         pre_13 = "61;75;80;86;87;89;90"
         thor = "75;80;86;87;89;90;110"
 
@@ -244,8 +184,10 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         }
         for mesh_cuda_version, expected in cases.items():
             with self.subTest(mesh_cuda_version=mesh_cuda_version):
-                observed = _run_recipe_body_capturing_packager_env(
-                    recipe, mesh_cuda_version, interpreter
+                observed = _run_release_recipe(
+                    "release-build-aarch64-cuda",
+                    recipe,
+                    env={"MESH_CUDA_VERSION": mesh_cuda_version},
                 )
                 self.assertEqual(observed["arches"], expected)
 
@@ -253,8 +195,8 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         self,
     ) -> None:
         recipe = self.recipe("release-build-aarch64-cuda")
-        observed = _run_recipe_body_capturing_packager_env(
-            recipe, "13.1.2", self.recipe_interpreter(recipe)
+        observed = _run_release_recipe(
+            "release-build-aarch64-cuda", recipe, env={"MESH_CUDA_VERSION": "13.1.2"}
         )
 
         self.assertEqual(observed["toolkit_major"], "13")
@@ -269,32 +211,16 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         """`$$backend` read the shell PID, not the recipe argument.
 
         Under just, `$$` is two literal dollars, so `"$$backend"` expanded to
-        "<pid>backend" — the default-to-cpu test never inspected the variable
+        "<pid>backend" -- the default-to-cpu test never inspected the variable
         it appeared to, and the packager was handed a nonsense backend name.
         """
         recipe = self.recipe("build-runtime")
-        interpreter = self.recipe_interpreter(recipe)
 
-        defaulted = _run_build_runtime_body(recipe, interpreter, backend="")
-        self.assertEqual(defaulted["backend"], "cpu")
+        defaulted = _run_release_recipe("build-runtime", recipe)
+        self.assertIn("--backend cpu", defaulted["args"])
 
-        explicit = _run_build_runtime_body(recipe, interpreter, backend="cuda")
-        self.assertEqual(explicit["backend"], "cuda")
-
-    def recipe_interpreter(self, recipe: str) -> str:
-        """The shell just would run this recipe body with.
-
-        A `#!` script recipe is executed with the interpreter it names; a plain
-        recipe goes to just's default shell, `sh`, which is dash on the Debian
-        and Ubuntu hosts these release recipes target.
-        """
-        body = [line for line in recipe.splitlines()[1:] if line.strip()]
-        if body and body[0].strip().startswith("#!"):
-            self.assertEqual(body[0].strip(), "#!/usr/bin/env bash")
-            return "bash"
-        if not shutil.which("dash") and not Path("/bin/dash").exists():
-            self.skipTest("dash is required to exercise just's default `sh` faithfully")
-        return "dash" if shutil.which("dash") else "/bin/dash"
+        explicit = _run_release_recipe("build-runtime", recipe, "cuda")
+        self.assertIn("--backend cuda", explicit["args"])
 
     def test_bundle_uses_the_product_packager_and_copies_its_checksum(self) -> None:
         recipe = self.recipe("bundle")
