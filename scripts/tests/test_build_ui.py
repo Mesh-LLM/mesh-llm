@@ -82,7 +82,7 @@ class BuildUiScriptTests(unittest.TestCase):
         for workflow in sorted(workflows):
             for block in re.finditer(
                 r"uses:\s*pnpm/action-setup@[^\n]*\n"
-                r"(?P<rest>(?:[ \t]+(?!-)[^\n]*\n)*)",
+                r"(?P<rest>(?:[ \t]+(?![ \t]*-)[^\n]*\n)*)",
                 workflow.read_text(encoding="utf-8"),
             ):
                 version = re.search(

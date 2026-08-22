@@ -174,8 +174,12 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         with self.subTest(mesh_cuda_version="<unset>"):
             # No MESH_CUDA_VERSION at all -- this is the only case that
             # actually exercises the `$(scripts/detect-cuda-toolkit-version.sh)`
-            # fallback rather than short-circuiting on the env var.
+            # fallback rather than short-circuiting on the env var. Assert on
+            # toolkit_major too: every explicit case below the 12.8 gate also
+            # yields `pre_blackwell`, so arches alone can't tell the fallback
+            # ran from a coincidence.
             observed = _run_release_recipe("release-build-cuda", recipe)
+            self.assertEqual(observed["toolkit_major"], "11")
             self.assertEqual(observed["arches"], pre_blackwell)
 
     def test_aarch64_cuda_release_build_selects_arches_at_the_13_boundary(self) -> None:
@@ -211,8 +215,12 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         with self.subTest(mesh_cuda_version="<unset>"):
             # No MESH_CUDA_VERSION at all -- this is the only case that
             # actually exercises the `$(scripts/detect-cuda-toolkit-version.sh)`
-            # fallback rather than short-circuiting on the env var.
+            # fallback rather than short-circuiting on the env var. Assert on
+            # toolkit_major too: every explicit case below the 13 gate also
+            # yields `pre_13`, so arches alone can't tell the fallback ran
+            # from a coincidence.
             observed = _run_release_recipe("release-build-aarch64-cuda", recipe)
+            self.assertEqual(observed["toolkit_major"], "11")
             self.assertEqual(observed["arches"], pre_13)
 
     def test_aarch64_cuda_release_build_propagates_major_and_target_to_the_packager(
