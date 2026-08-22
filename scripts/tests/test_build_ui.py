@@ -81,10 +81,13 @@ class BuildUiScriptTests(unittest.TestCase):
         workflows = [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]
         for workflow in sorted(workflows):
             for block in re.finditer(
-                r"uses:\s*pnpm/action-setup@[^\n]*\n(?P<rest>(?:[ \t]+[^\n]*\n)*)",
+                r"uses:\s*pnpm/action-setup@[^\n]*\n"
+                r"(?P<rest>(?:[ \t]+(?!-)[^\n]*\n)*)",
                 workflow.read_text(encoding="utf-8"),
             ):
-                version = re.search(r"version:\s*[\"']?(\d+)", block.group("rest"))
+                version = re.search(
+                    r"(?m)^[ \t]*version:\s*[\"']?(\d+)", block.group("rest")
+                )
                 if version:
                     majors.add(version.group(1))
         return majors

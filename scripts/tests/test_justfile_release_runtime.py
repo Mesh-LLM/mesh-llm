@@ -18,8 +18,11 @@ def _recipe_dependencies(header_line: str) -> list[str]:
     """The just-recipe names a recipe header declares as dependencies.
 
     e.g. "release-build-aarch64-cuda: release-host-build" -> ["release-host-build"].
-    Parameterized headers like 'build-runtime backend="" cuda_arch="":' have no
-    colon before the trailing one, so they correctly yield no dependencies.
+    Splits on the *last* colon, since a parameterized header's default value
+    (e.g. 'bundle output="/tmp/x:y": release-build') can itself contain one;
+    the header's own closing colon is always the final one. Parameterized
+    headers with no dependencies, like 'build-runtime backend="" cuda_arch="":',
+    correctly yield an empty list either way.
     """
     _, _, deps_part = header_line.rpartition(":")
     return deps_part.split()
@@ -56,7 +59,10 @@ def _run_release_recipe(
         )
         packager_stub.chmod(0o755)
         detect_stub = scripts_dir / "detect-cuda-toolkit-version.sh"
-        detect_stub.write_text("#!/usr/bin/env bash\necho 12\n", encoding="utf-8")
+        # A value no test ever passes as an explicit MESH_CUDA_VERSION, so a
+        # case that omits the env var can only get this from the fallback
+        # actually running the detect script, not from a coincidental match.
+        detect_stub.write_text("#!/usr/bin/env bash\necho 11\n", encoding="utf-8")
         detect_stub.chmod(0o755)
 
         justfile = workdir / "Justfile"
@@ -72,6 +78,7 @@ def _run_release_recipe(
             check=False,
             capture_output=True,
             text=True,
+            timeout=60,
         )
 
         if not probe.exists():
@@ -147,7 +154,7 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         blackwell = "75;80;86;87;89;90;100;103;120;121"
 
         cases = {
-            "12": pre_blackwell,  # detect script's own static fallback
+            "12": pre_blackwell,
             "12.0": pre_blackwell,
             "12.7": pre_blackwell,
             "12.8": blackwell,  # first toolkit release with Blackwell support
@@ -164,6 +171,13 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
                 )
                 self.assertEqual(observed["arches"], expected)
 
+        with self.subTest(mesh_cuda_version="<unset>"):
+            # No MESH_CUDA_VERSION at all -- this is the only case that
+            # actually exercises the `$(scripts/detect-cuda-toolkit-version.sh)`
+            # fallback rather than short-circuiting on the env var.
+            observed = _run_release_recipe("release-build-cuda", recipe)
+            self.assertEqual(observed["arches"], pre_blackwell)
+
     def test_aarch64_cuda_release_build_selects_arches_at_the_13_boundary(self) -> None:
         """Run the real recipe through `just`, exactly as the release build
         does -- the fixed recipe is a `#!/usr/bin/env bash` script recipe, so
@@ -178,7 +192,7 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         thor = "75;80;86;87;89;90;110"
 
         cases = {
-            "12": pre_13,  # detect script's own static fallback
+            "12": pre_13,
             "12.4": pre_13,
             "12.8": pre_13,  # Blackwell gate is x86-only; aarch64 gates on 13
             "13": thor,
@@ -193,6 +207,13 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
                     env={"MESH_CUDA_VERSION": mesh_cuda_version},
                 )
                 self.assertEqual(observed["arches"], expected)
+
+        with self.subTest(mesh_cuda_version="<unset>"):
+            # No MESH_CUDA_VERSION at all -- this is the only case that
+            # actually exercises the `$(scripts/detect-cuda-toolkit-version.sh)`
+            # fallback rather than short-circuiting on the env var.
+            observed = _run_release_recipe("release-build-aarch64-cuda", recipe)
+            self.assertEqual(observed["arches"], pre_13)
 
     def test_aarch64_cuda_release_build_propagates_major_and_target_to_the_packager(
         self,
@@ -220,10 +241,10 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         recipe = self.recipe("build-runtime")
 
         defaulted = _run_release_recipe("build-runtime", recipe)
-        self.assertIn("--backend cpu", defaulted["args"])
+        self.assertEqual(defaulted["args"], "--build --backend cpu")
 
         explicit = _run_release_recipe("build-runtime", recipe, "cuda")
-        self.assertIn("--backend cuda", explicit["args"])
+        self.assertEqual(explicit["args"], "--build --backend cuda")
 
     def test_bundle_uses_the_product_packager_and_copies_its_checksum(self) -> None:
         recipe = self.recipe("bundle")
