@@ -41,7 +41,7 @@ use crate::binary_transport::stage_execution::binary_message_session_id;
 use crate::binary_transport::stage_execution::decode_record_tokens_sideband;
 use crate::binary_transport::stage_execution::elapsed_ms;
 use crate::binary_transport::stage_execution::empty_activation_frame;
-use crate::binary_transport::stage_execution::input_activation_frame;
+use crate::binary_transport::stage_execution::input_activation_frame_with_codec;
 use crate::binary_transport::stage_execution::is_decode_frame_batch_candidate;
 use crate::binary_transport::stage_execution::nanos_delta_ms;
 use crate::binary_transport::stage_execution::runtime_sampling_config;
@@ -88,6 +88,7 @@ pub(super) fn handle_binary_connection(
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
+    boundary_codec: Option<&crate::binary_transport::boundary_codec::BoundaryCodec>,
     prediction_return_sinks: &PredictionReturnSinks,
     first_message: StageWireMessage,
 ) -> Result<()> {
@@ -108,6 +109,7 @@ pub(super) fn handle_binary_connection(
         downstream_wire_condition,
         downstream_connect_timeout_secs,
         native_mtp_enabled,
+        boundary_codec,
         prediction_return_sinks,
         first_message,
         &mut session_tracker,
@@ -138,6 +140,7 @@ fn handle_binary_connection_messages(
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
+    boundary_codec: Option<&crate::binary_transport::boundary_codec::BoundaryCodec>,
     prediction_return_sinks: &PredictionReturnSinks,
     first_message: StageWireMessage,
     session_tracker: &mut ConnectionSessionTracker,
@@ -478,7 +481,13 @@ fn handle_binary_connection_messages(
             } else {
                 let input_decode_started = Instant::now();
                 let input = suffix_activation_frame(
-                    input_activation_frame(config, topology, &mut message, activation_width)?,
+                    input_activation_frame_with_codec(
+                        config,
+                        topology,
+                        &mut message,
+                        activation_width,
+                        boundary_codec,
+                    )?,
                     executable_prefill_start,
                 )?;
                 input_activation_decode_ms = if input_activation_bytes == 0 {
@@ -754,13 +763,31 @@ fn handle_binary_connection_messages(
             if output.payload.is_empty() {
                 bail!("stage has downstream but produced an empty activation payload");
             }
-            let forwarded = forwarded_stage_message_timed(
-                config,
-                &message,
-                &output,
-                wire_dtype,
-                activation_width,
-            )?;
+            if output.desc.dtype == skippy_runtime::RuntimeActivationDType::F32 {
+                crate::binary_transport::boundary_codec::maybe_capture_boundary_activations(
+                    &output.payload,
+                );
+            }
+            let forwarded = if wire_dtype == WireActivationDType::Lowrank {
+                let codec = boundary_codec.context(
+                    "lowrank activation wire dtype requires a boundary codec on this stage",
+                )?;
+                crate::binary_transport::forwarding::forwarded_stage_message_lowrank_timed(
+                    config,
+                    &message,
+                    &output,
+                    codec,
+                    activation_width,
+                )?
+            } else {
+                forwarded_stage_message_timed(
+                    config,
+                    &message,
+                    &output,
+                    wire_dtype,
+                    activation_width,
+                )?
+            };
             forward_activation_encode_ms += forwarded.activation_encode_ms;
             forward_activation_bytes = forwarded.message.activation.len();
             let mut downstream_write_attrs = BTreeMap::new();

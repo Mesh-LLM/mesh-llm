@@ -9,6 +9,7 @@ use super::{
     WireReplyKind,
     activation::{
         activation_decoded_f32_bytes_with_state_flags, activation_wire_bytes_with_state_flags,
+        lowrank_activation_wire_bytes,
     },
     invalid_data, invalid_input,
 };
@@ -268,7 +269,13 @@ pub fn write_stage_message(
     )?;
 
     let mut state = message.state;
-    state.reserved = dtype as i32;
+    // A lowrank frame's reserved field carries the rank alongside the dtype
+    // tag; preserve it instead of clobbering it with the bare tag.
+    if dtype == WireActivationDType::Lowrank {
+        state.lowrank_k().map_err(io::Error::other)?;
+    } else {
+        state.reserved = dtype as i32;
+    }
     if message.sampling.is_some() {
         state.flags |= super::state_flags::SAMPLING;
     } else {
@@ -421,6 +428,8 @@ pub fn read_stage_message(mut reader: impl Read, n_embd: i32) -> io::Result<Stag
     let activation_bytes =
         if state.source_stage_index < 0 || kind.is_activationless_prefix_cache_control() {
             0
+        } else if dtype == WireActivationDType::Lowrank {
+            lowrank_activation_wire_bytes(token_count, state.lowrank_k()?, state.flags)?
         } else {
             activation_wire_bytes_with_state_flags(dtype, token_count, n_embd, state.flags)?
         };

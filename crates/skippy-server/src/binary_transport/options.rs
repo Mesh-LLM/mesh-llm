@@ -27,6 +27,7 @@ pub struct BinaryStageOptions {
     pub downstream_wire_condition: WireCondition,
     pub downstream_connect_timeout_secs: u64,
     pub native_mtp_enabled: bool,
+    pub boundary_codec: Option<std::sync::Arc<crate::binary_transport::boundary_codec::BoundaryCodec>>,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
 }
 
@@ -64,6 +65,16 @@ impl BinaryStageOptions {
             bail!("--openai-prefill-chunk-size must be greater than zero");
         }
         let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
+        let boundary_codec = match (&args.boundary_codec, wire_dtype) {
+            (Some(path), _) => Some(std::sync::Arc::new(
+                crate::binary_transport::boundary_codec::BoundaryCodec::load(path)
+                    .with_context(|| format!("load boundary codec {}", path.display()))?,
+            )),
+            (None, WireActivationDType::Lowrank) => {
+                bail!("--activation-wire-dtype lowrank requires --boundary-codec");
+            }
+            (None, _) => None,
+        };
         let downstream_wire_condition = WireCondition::with_jitter(
             args.downstream_wire_delay_ms,
             args.downstream_wire_mbps,
@@ -127,6 +138,7 @@ impl BinaryStageOptions {
             downstream_wire_condition,
             downstream_connect_timeout_secs: args.downstream_connect_timeout_secs,
             native_mtp_enabled,
+            boundary_codec,
             openai,
         })
     }
@@ -154,6 +166,7 @@ pub fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
         "fp32" | "f32" => Ok(WireActivationDType::F32),
         "fp16" | "f16" => Ok(WireActivationDType::F16),
         "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
+        "lowrank" => Ok(WireActivationDType::Lowrank),
         _ => bail!("unsupported activation wire dtype {value}"),
     }
 }

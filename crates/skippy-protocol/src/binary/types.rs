@@ -29,6 +29,10 @@ pub enum WireActivationDType {
     F32 = 0,
     F16 = 1,
     Q8 = 2,
+    /// Learned low-rank projection at a split boundary. The rank `k` rides in
+    /// the high bits of `StageStateHeader::reserved`; both stages must hold
+    /// byte-identical codec tensors to use it.
+    Lowrank = 3,
 }
 
 impl TryFrom<i32> for WireActivationDType {
@@ -39,6 +43,7 @@ impl TryFrom<i32> for WireActivationDType {
             0 => Ok(Self::F32),
             1 => Ok(Self::F16),
             2 => Ok(Self::Q8),
+            3 => Ok(Self::Lowrank),
             _ => Err(invalid_data("unknown activation wire dtype")),
         }
     }
@@ -330,7 +335,31 @@ impl StageStateHeader {
     }
 
     pub fn dtype(self) -> io::Result<WireActivationDType> {
-        WireActivationDType::try_from(self.reserved)
+        // The low byte carries the dtype tag; Lowrank packs its rank into the
+        // high bits (existing dtypes always have zero high bits).
+        WireActivationDType::try_from(self.reserved & 0xFF)
+    }
+
+    /// The low-rank codec rank carried by a `Lowrank` frame.
+    pub fn lowrank_k(self) -> io::Result<usize> {
+        if self.dtype()? != WireActivationDType::Lowrank {
+            return Err(invalid_data("state header is not a lowrank frame"));
+        }
+        let k = (self.reserved >> 8) as usize;
+        if k == 0 {
+            return Err(invalid_data("lowrank frame has zero rank"));
+        }
+        Ok(k)
+    }
+
+    /// Tags this header as a `Lowrank` frame of rank `k`.
+    pub fn set_lowrank(&mut self, k: usize) -> io::Result<()> {
+        let k = i32::try_from(k).map_err(|_| invalid_data("lowrank rank exceeds i32"))?;
+        if k <= 0 || k > (i32::MAX >> 8) {
+            return Err(invalid_data("lowrank rank out of range"));
+        }
+        self.reserved = WireActivationDType::Lowrank as i32 | (k << 8);
+        Ok(())
     }
 
     pub fn matches_kind(self, kind: WireMessageKind) -> bool {
@@ -556,6 +585,9 @@ impl StageWireMessage {
                 n_embd,
                 self.state.flags,
             ),
+            WireActivationDType::Lowrank => Err(invalid_data(
+                "lowrank activation requires a boundary codec to decode",
+            )),
         }
     }
 
@@ -579,6 +611,9 @@ impl StageWireMessage {
                 n_embd,
                 self.state.flags,
             ),
+            WireActivationDType::Lowrank => Err(invalid_data(
+                "lowrank activation requires a boundary codec to decode",
+            )),
         }
     }
 }

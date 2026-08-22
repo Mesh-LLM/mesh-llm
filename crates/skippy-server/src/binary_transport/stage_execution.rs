@@ -794,12 +794,47 @@ pub(in crate::binary_transport) fn input_activation_frame(
     message: &mut StageWireMessage,
     activation_width: i32,
 ) -> Result<Option<ActivationFrame>> {
+    input_activation_frame_with_codec(config, topology, message, activation_width, None)
+}
+
+pub(in crate::binary_transport) fn input_activation_frame_with_codec(
+    config: &StageConfig,
+    topology: Option<&StageTopology>,
+    message: &mut StageWireMessage,
+    activation_width: i32,
+    boundary_codec: Option<&crate::binary_transport::boundary_codec::BoundaryCodec>,
+) -> Result<Option<ActivationFrame>> {
     if message.activation.is_empty() {
         return Ok(None);
     }
-    let payload = message
-        .take_activation_f32_payload(activation_width)
-        .context("decode wire activation payload")?;
+    let payload = if message.state.dtype().context("read activation wire dtype")?
+        == skippy_protocol::binary::WireActivationDType::Lowrank
+    {
+        let codec = boundary_codec
+            .context("lowrank activation frame arrived on a stage without a boundary codec")?;
+        let k = message.state.lowrank_k().context("read lowrank rank")?;
+        if k != codec.k() {
+            bail!(
+                "lowrank frame rank {k} does not match loaded codec rank {}",
+                codec.k()
+            );
+        }
+        let multiplier = skippy_protocol::binary::activation_payload_multiplier_from_state_flags(
+            message.state.flags,
+        );
+        let token_count = (message.token_count.max(0) as usize)
+            .checked_mul(multiplier)
+            .context("lowrank token count overflow")?;
+        let decoded = codec
+            .decode(&message.activation, token_count)
+            .context("decode lowrank activation payload")?;
+        message.activation = Vec::new();
+        decoded
+    } else {
+        message
+            .take_activation_f32_payload(activation_width)
+            .context("decode wire activation payload")?
+    };
     let (layer_start, layer_end) = upstream_layer_range(config, topology, message);
     Ok(Some(ActivationFrame {
         desc: ActivationDesc {

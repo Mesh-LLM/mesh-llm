@@ -16,5 +16,8 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&example_config())?);
             Ok(())
         }
+        Command::FitBoundaryCodec(args) => {
+            skippy_server::binary_transport::boundary_codec::fit_boundary_codec_cli(&args)
+        }
     }
 }

@@ -25,6 +25,62 @@ pub(crate) struct ForwardedStageMessage {
     pub activation_encode_ms: f64,
 }
 
+/// Lowrank-aware forward builder: projects the stage's f32 output activation
+/// through the boundary codec and tags the state header with the codec rank.
+pub(crate) fn forwarded_stage_message_lowrank_timed(
+    config: &StageConfig,
+    incoming: &StageWireMessage,
+    output: &ActivationFrame,
+    codec: &crate::binary_transport::boundary_codec::BoundaryCodec,
+    activation_width: i32,
+) -> Result<ForwardedStageMessage> {
+    if output.desc.dtype != RuntimeActivationDType::F32 {
+        bail!(
+            "lowrank encoding requires an F32 output activation frame, got {:?}",
+            output.desc.dtype
+        );
+    }
+    if activation_width.max(0) as usize != codec.d() {
+        bail!(
+            "boundary codec width {} does not match activation width {activation_width}",
+            codec.d()
+        );
+    }
+    let mut state = incoming.state;
+    state.source_stage_index = config.stage_index as i32;
+    state
+        .set_lowrank(codec.k())
+        .map_err(anyhow::Error::from)
+        .context("tag lowrank state header")?;
+    state.flags |= activation_state_flags_from_frame_flags(output.desc.flags);
+    let multiplier =
+        skippy_protocol::binary::activation_payload_multiplier_from_state_flags(state.flags);
+    let token_count = (incoming.token_count.max(0) as usize)
+        .checked_mul(multiplier)
+        .context("lowrank token count overflow")?;
+    let encode_started = Instant::now();
+    let activation = codec
+        .encode(&output.payload, token_count)
+        .context("encode lowrank activation payload")?;
+    Ok(ForwardedStageMessage {
+        message: StageWireMessage {
+            kind: incoming.kind,
+            pos_start: incoming.pos_start,
+            token_count: incoming.token_count,
+            state,
+            request_id: incoming.request_id,
+            session_id: incoming.session_id,
+            sampling: incoming.sampling.clone(),
+            chat_sampling_metadata: None,
+            tokens: incoming.tokens.clone(),
+            positions: incoming.positions.clone(),
+            activation,
+            raw_bytes: Vec::new(),
+        },
+        activation_encode_ms: encode_started.elapsed().as_secs_f64() * 1000.0,
+    })
+}
+
 pub(crate) fn forwarded_stage_message_timed(
     config: &StageConfig,
     incoming: &StageWireMessage,

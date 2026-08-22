@@ -183,6 +183,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         downstream_wire_condition,
         downstream_connect_timeout_secs,
         native_mtp_enabled,
+        boundary_codec,
         openai,
     } = options;
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
@@ -344,6 +345,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
             let worker_shutdown = shutdown.clone();
             let prediction_returns = prediction_returns.clone();
             let prediction_return_sinks = prediction_return_sinks.clone();
+            let boundary_codec = boundary_codec.clone();
             let worker_control = Arc::new(ConnectionWorkerControl::default());
             worker_control
                 .track(&upstream)
@@ -402,6 +404,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         downstream_wire_condition,
                         downstream_connect_timeout_secs,
                         native_mtp_enabled,
+                        boundary_codec.as_deref(),
                         &prediction_return_sinks,
                         first_message,
                     )

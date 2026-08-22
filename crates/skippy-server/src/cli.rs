@@ -17,6 +17,28 @@ pub enum Command {
     #[command(name = "serve-openai")]
     ServeOpenAi(ServeOpenAiArgs),
     ExampleConfig,
+    /// Fit a low-rank boundary codec from captured boundary activations.
+    FitBoundaryCodec(FitBoundaryCodecArgs),
+}
+
+#[derive(Parser)]
+pub struct FitBoundaryCodecArgs {
+    /// Raw little-endian f32 file of concatenated activation rows, as written
+    /// by SKIPPY_CAPTURE_BOUNDARY_ACTIVATIONS.
+    #[arg(long)]
+    pub input: PathBuf,
+    /// Activation width (the split boundary's embedding dimension).
+    #[arg(long)]
+    pub width: usize,
+    /// Codec rank: coefficients kept per token.
+    #[arg(long)]
+    pub rank: usize,
+    /// Orthogonal-iteration refinement passes.
+    #[arg(long, default_value_t = 8)]
+    pub iterations: usize,
+    /// Output .skbc codec file.
+    #[arg(long)]
+    pub output: PathBuf,
 }
 
 #[derive(Parser)]
@@ -96,6 +118,11 @@ pub struct ServeBinaryArgs {
         help = "Probability in [0, 1] that a downstream message is hit by --downstream-wire-stall-ms."
     )]
     pub downstream_wire_stall_p: f64,
+    #[arg(
+        long,
+        help = "Path to a fitted boundary codec (.skbc) enabling the lowrank activation wire dtype."
+    )]
+    pub boundary_codec: Option<PathBuf>,
     #[arg(long, default_value_t = 60)]
     pub downstream_connect_timeout_secs: u64,
     #[arg(

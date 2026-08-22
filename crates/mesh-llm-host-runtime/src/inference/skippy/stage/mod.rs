@@ -448,6 +448,10 @@ impl StageControlState {
             downstream_wire_condition: super::benchmark_downstream_wire_condition()?,
             downstream_connect_timeout_secs: 30,
             native_mtp_enabled: effective_load.native_mtp_enabled,
+            // Boundary-codec config plumbing is env-only for now: full model
+            // config / package-manifest integration is tracked in the lowrank
+            // codec plan.
+            boundary_codec: boundary_codec_from_env()?,
             openai: None,
         });
         self.stages.insert(
@@ -770,6 +774,22 @@ fn probe_binary_stage_ready(
         .context(format!(
             "binary stage did not become ready at {bind_addr} before timeout"
         )))
+}
+
+/// Optional boundary codec for the lowrank activation wire dtype, loaded from
+/// `MESH_LLM_BOUNDARY_CODEC` (a path to a fitted `.skbc` file).
+fn boundary_codec_from_env() -> Result<
+    Option<std::sync::Arc<skippy_server::binary_transport::boundary_codec::BoundaryCodec>>,
+> {
+    match std::env::var_os("MESH_LLM_BOUNDARY_CODEC") {
+        Some(path) => {
+            let path = std::path::PathBuf::from(path);
+            let codec = skippy_server::binary_transport::boundary_codec::BoundaryCodec::load(&path)
+                .with_context(|| format!("load boundary codec {}", path.display()))?;
+            Ok(Some(std::sync::Arc::new(codec)))
+        }
+        None => Ok(None),
+    }
 }
 
 fn stage_config(

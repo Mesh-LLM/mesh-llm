@@ -41,7 +41,33 @@ pub fn activation_wire_bytes_with_state_flags(
             .checked_mul(4)
             .and_then(|scales| scales.checked_add(elements))
             .ok_or_else(|| invalid_data("activation byte count overflow")),
+        // The rank is not knowable from (dtype, n_embd) alone; use
+        // `lowrank_activation_wire_bytes` with the rank from the state header.
+        WireActivationDType::Lowrank => Err(invalid_data(
+            "lowrank activation size requires the frame's rank",
+        )),
     }
+}
+
+/// Wire byte count of a lowrank frame: a per-token f32 scale followed by
+/// `token_count * k` int8 coefficients.
+pub fn lowrank_activation_wire_bytes(
+    token_count: i32,
+    k: usize,
+    state_flag_bits: i32,
+) -> io::Result<usize> {
+    if token_count < 0 {
+        return Err(invalid_data("negative activation dimensions"));
+    }
+    let token_count = (token_count as usize)
+        .checked_mul(activation_payload_multiplier_from_state_flags(
+            state_flag_bits,
+        ))
+        .ok_or_else(|| invalid_data("activation token count overflow"))?;
+    token_count
+        .checked_mul(4)
+        .and_then(|scales| token_count.checked_mul(k)?.checked_add(scales))
+        .ok_or_else(|| invalid_data("activation byte count overflow"))
 }
 
 pub(crate) fn activation_decoded_f32_bytes_with_state_flags(
@@ -96,6 +122,9 @@ pub fn encode_f32_activation_payload_with_state_flags(
                 .ok_or_else(|| invalid_data("Q8 activation token count overflow"))?;
             encode_f32_to_q8_bytes(f32_payload, token_count, n_embd)
         }
+        WireActivationDType::Lowrank => Err(invalid_data(
+            "lowrank activation requires a boundary codec to encode",
+        )),
     }
 }
 
