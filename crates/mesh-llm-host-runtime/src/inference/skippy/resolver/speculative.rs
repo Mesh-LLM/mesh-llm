@@ -423,9 +423,7 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
     config.ngram_fallback_draft = match ngram_fallback {
         "draft" => {
             if config.ngram.is_none() {
-                bail!(
-                    "skippy speculative ngram_fallback = \"draft\" requires an N-gram strategy"
-                );
+                bail!("skippy speculative ngram_fallback = \"draft\" requires an N-gram strategy");
             }
             true
         }

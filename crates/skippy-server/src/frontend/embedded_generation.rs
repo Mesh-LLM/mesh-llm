@@ -824,9 +824,8 @@ impl StageOpenAiBackend {
             let standalone_ngram_pipelining = !request.native_mtp_enabled
                 && effective_speculative.ngram.is_some()
                 && !draft_blocks_pipeline;
-            let native_mtp_verify_windows_enabled = (request.native_mtp_enabled
-                || composite_sidecar_enabled)
-                && !draft_blocks_pipeline;
+            let native_mtp_verify_windows_enabled =
+                (request.native_mtp_enabled || composite_sidecar_enabled) && !draft_blocks_pipeline;
             let pipelined_decode_enabled = (composite_sidecar_enabled
                 || standalone_ngram_pipelining)
                 && verify_window_scheduler.depth() > 1;
@@ -1080,8 +1079,7 @@ impl StageOpenAiBackend {
                                             draft_tokens.len();
                                         speculative_stats.fallback_draft_ms +=
                                             fallback_timer.elapsed_ms();
-                                        appended =
-                                            pipeline.append_ngram_candidates(&draft_tokens);
+                                        appended = pipeline.append_ngram_candidates(&draft_tokens);
                                     }
                                 }
                                 verify_window_scheduler.record_horizon_refill(appended);
