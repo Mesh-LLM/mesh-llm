@@ -26,7 +26,6 @@ BASHISMS: Final = {
     r"\[\[": "[[ ]] test — dash: '[[: not found', then takes the else branch",
     r"<<<": "here-string — dash: 'Syntax error: redirection unexpected'",
     r"\bpipefail\b": "set -o pipefail — dash: 'set: Illegal option -o pipefail'",
-    r"\$\(\(": "arithmetic expansion is POSIX, but $(( )) with bash-only operators is not",
     r"\becho -e\b": "echo -e — dash's echo has no -e flag, prints the flag literally",
     r"\$\{[A-Za-z_][A-Za-z0-9_]*\[[@*]\]\}": "array expansion — dash has no arrays",
     r"\bfunction\s+[A-Za-z_]": "`function` keyword — dash only accepts name() { }",
@@ -110,6 +109,16 @@ class JustfileShellPortabilityTests(unittest.TestCase):
         recipes = default_shell_recipes()
         self.assertNotIn("release-build-cuda", recipes, "script recipe leaked into the sh set")
         self.assertIn("llama-prepare", recipes, "plain recipe missing from the sh set")
+
+    def test_arithmetic_expansion_is_not_flagged_as_a_bashism(self) -> None:
+        """$(( )) is POSIX arithmetic expansion; dash implements it natively.
+
+        A recipe using it is portable under the default shell and must not be
+        forced into an unneeded `#!/usr/bin/env bash` shebang.
+        """
+        body = 'attempt="$((attempt + 1))"\necho "$attempt"'
+        offenders = [pattern for pattern in BASHISMS if re.search(pattern, body)]
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":
