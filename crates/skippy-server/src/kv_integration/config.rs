@@ -242,6 +242,15 @@ fn infer_cache_payload(config: &StageConfig) -> StagePrefixCachePayload {
 }
 
 fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
+    // An explicit environment kill-switch beats the planned stage config so
+    // benches and incident response can turn the prefix cache off without
+    // replanning the topology.
+    if let Ok(value) =
+        std::env::var("SKIPPY_KV_CACHE").or_else(|_| std::env::var("SKIPPY_PREFIX_CACHE"))
+        && parse_cache_mode(&value) == Some(StageKvCacheMode::Disabled)
+    {
+        return None;
+    }
     if let Some(cache) = config.kv_cache.clone() {
         return Some(cache);
     }
