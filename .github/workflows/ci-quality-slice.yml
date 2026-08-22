@@ -128,6 +128,7 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/install-actionlint
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Validate GitHub Actions
         run: actionlint -config-file .github/actionlint.yaml
       - name: Test CI, packaging, and SDK contracts
@@ -147,7 +148,6 @@ jobs:
             exit 1
           fi
 
-      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Check console print drift
         run: just no-console-print
 
