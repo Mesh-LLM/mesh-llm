@@ -230,6 +230,40 @@ mod tests {
     use tokio::io::AsyncReadExt;
     use tokio::io::ReadBuf;
     use tokio::net::TcpListener;
+    use tokio::sync::Notify;
+
+    /// A real duplex pipe as the upstream half of `CancelUpstream`, wrapped to
+    /// signal a `Notify` the moment a read finds nothing buffered yet.
+    ///
+    /// Unlike `ScriptedUpstream` below, this can genuinely block waiting for
+    /// more bytes, which is what lets a test prove the route arm is actively
+    /// relaying (header consumed, now waiting on the body) at a specific
+    /// moment, rather than assuming it from timing.
+    struct DuplexUpstream {
+        inner: tokio::io::DuplexStream,
+        cancels: Arc<AtomicUsize>,
+        waiting_for_more: Arc<Notify>,
+    }
+
+    impl AsyncRead for DuplexUpstream {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+            if result.is_pending() {
+                self.waiting_for_more.notify_one();
+            }
+            result
+        }
+    }
+
+    impl CancelUpstream for DuplexUpstream {
+        async fn cancel(&mut self) {
+            self.cancels.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 
     /// An upstream that hands out a fixed script of reads, then records whether
     /// the route arm cancelled it.
@@ -279,14 +313,14 @@ mod tests {
     /// `request_dropped`.
     #[tokio::test]
     async fn a_remote_attempt_cancels_the_peer_tunnel_when_the_client_disconnects() {
-        let header =
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n";
-        let mut upstream = ScriptedUpstream::new(vec![
-            Ok(header.as_bytes().to_vec()),
-            // The client is gone; relaying the body fails with a disconnect.
-            Err(io::ErrorKind::ConnectionReset),
-        ]);
-        let cancels = Arc::clone(&upstream.cancels);
+        let (mut upstream_writer, upstream_reader) = tokio::io::duplex(64 * 1024);
+        let cancels = Arc::new(AtomicUsize::new(0));
+        let waiting_for_more = Arc::new(Notify::new());
+        let mut upstream = DuplexUpstream {
+            inner: upstream_reader,
+            cancels: Arc::clone(&cancels),
+            waiting_for_more: Arc::clone(&waiting_for_more),
+        };
         let host_id = iroh::SecretKey::generate().public();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -304,7 +338,32 @@ mod tests {
             )
             .await
         });
-        let _socket = TcpStream::connect(address).await.unwrap();
+        let client_socket = TcpStream::connect(address).await.unwrap();
+
+        let body = "x".repeat(64);
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        // Send only the header. The route arm buffers it, then blocks asking
+        // upstream for body bytes that have not arrived yet.
+        upstream_writer.write_all(header.as_bytes()).await.unwrap();
+        waiting_for_more.notified().await;
+
+        // The route arm is now genuinely waiting on upstream body bytes, not
+        // still parsing the header -- closing the client here means the write
+        // it makes once the body arrives lands on an actually disconnected
+        // socket, rather than an upstream read failure standing in for one.
+        //
+        // A graceful close (a plain `drop`) sends only a FIN; the server's
+        // very next write can still succeed locally before it learns the
+        // peer is gone, which is exactly the kind of timing-dependent gap
+        // this test exists to close. Zero linger forces an RST instead, so
+        // the eventual write fails deterministically.
+        client_socket.set_zero_linger().unwrap();
+        drop(client_socket);
+
+        upstream_writer.write_all(body.as_bytes()).await.unwrap();
 
         let result = task.await.unwrap();
 
