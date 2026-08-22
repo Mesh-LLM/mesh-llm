@@ -814,6 +814,9 @@ impl StageOpenAiBackend {
             return Ok(None);
         };
         if restore.restored_tokens < request.prompt_token_ids.len() {
+            // A partial restore leaves the session holding a lane; drop it so
+            // retries do not exhaust the execution lanes (502 cascade).
+            self.drop_embedded_split_restore(request, session_key, downstream);
             return Ok(None);
         }
         let mut attrs = self.openai_attrs(request.ids);
@@ -1001,6 +1004,11 @@ impl StageOpenAiBackend {
             return Ok(None);
         };
         if local_restore.token_count < prefill_tokens.len() {
+            // Same lane-leak guard as the chain-restore paths: a partial local
+            // restore must not keep the session resident.
+            if let Ok(mut runtime) = self.runtime.lock() {
+                let _ = runtime.drop_session_timed(session_key);
+            }
             return Ok(None);
         }
         reply_stats.kv_lookup_hits += 1;
