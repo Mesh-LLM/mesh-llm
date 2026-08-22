@@ -807,7 +807,10 @@ pub(in crate::binary_transport) fn input_activation_frame_with_codec(
     if message.activation.is_empty() {
         return Ok(None);
     }
-    let payload = if message.state.dtype().context("read activation wire dtype")?
+    let payload = if message
+        .state
+        .dtype()
+        .context("read activation wire dtype")?
         == skippy_protocol::binary::WireActivationDType::Lowrank
     {
         let codec = boundary_codec

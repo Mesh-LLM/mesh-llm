@@ -27,7 +27,8 @@ pub struct BinaryStageOptions {
     pub downstream_wire_condition: WireCondition,
     pub downstream_connect_timeout_secs: u64,
     pub native_mtp_enabled: bool,
-    pub boundary_codec: Option<std::sync::Arc<crate::binary_transport::boundary_codec::BoundaryCodec>>,
+    pub boundary_codec:
+        Option<std::sync::Arc<crate::binary_transport::boundary_codec::BoundaryCodec>>,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
 }
 

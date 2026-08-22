@@ -83,8 +83,8 @@ impl BoundaryCodec {
             }
             let mut max_abs = 0.0_f32;
             for (component_index, coeff) in coeffs.iter_mut().enumerate() {
-                let component = &self.components
-                    [component_index * self.d..(component_index + 1) * self.d];
+                let component =
+                    &self.components[component_index * self.d..(component_index + 1) * self.d];
                 let mut dot = 0.0_f32;
                 for (value, weight) in centered.iter().zip(component) {
                     dot += value * weight;
@@ -133,8 +133,8 @@ impl BoundaryCodec {
                 if coeff == 0.0 {
                     continue;
                 }
-                let component = &self.components
-                    [component_index * self.d..(component_index + 1) * self.d];
+                let component =
+                    &self.components[component_index * self.d..(component_index + 1) * self.d];
                 for (value, weight) in row.iter_mut().zip(component) {
                     *value += coeff * weight;
                 }
@@ -154,7 +154,10 @@ impl BoundaryCodec {
             bail!("boundary codec dimensions out of range: d={d} k={k}");
         }
         if samples.is_empty() || !samples.len().is_multiple_of(d) {
-            bail!("calibration sample length {} is not a multiple of d {d}", samples.len());
+            bail!(
+                "calibration sample length {} is not a multiple of d {d}",
+                samples.len()
+            );
         }
         let n = samples.len() / d;
         if n < k {
@@ -195,8 +198,7 @@ impl BoundaryCodec {
                         continue;
                     }
                     let target = &mut next[component_index * d..(component_index + 1) * d];
-                    for ((accumulator, value), mean_value) in
-                        target.iter_mut().zip(row).zip(&mean)
+                    for ((accumulator, value), mean_value) in target.iter_mut().zip(row).zip(&mean)
                     {
                         *accumulator += coeff * (value - mean_value);
                     }
@@ -223,8 +225,8 @@ impl BoundaryCodec {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let file =
-            fs::File::open(path).with_context(|| format!("open boundary codec {}", path.display()))?;
+        let file = fs::File::open(path)
+            .with_context(|| format!("open boundary codec {}", path.display()))?;
         let mut reader = io::BufReader::new(file);
         let mut magic = [0_u8; 8];
         reader.read_exact(&mut magic).context("read codec magic")?;
@@ -234,7 +236,10 @@ impl BoundaryCodec {
         let d = read_u32(&mut reader)? as usize;
         let k = read_u32(&mut reader)? as usize;
         if d == 0 || k == 0 || k > d || d > MAX_CODEC_DIM {
-            bail!("boundary codec {} has invalid dimensions d={d} k={k}", path.display());
+            bail!(
+                "boundary codec {} has invalid dimensions d={d} k={k}",
+                path.display()
+            );
         }
         let mean = read_f32_vec(&mut reader, d)?;
         let components = read_f32_vec(&mut reader, k * d)?;
@@ -384,7 +389,10 @@ mod tests {
     }
 
     fn payload_bytes(values: &[f32]) -> Vec<u8> {
-        values.iter().flat_map(|value| value.to_le_bytes()).collect()
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
     }
 
     fn payload_values(bytes: &[u8]) -> Vec<f32> {

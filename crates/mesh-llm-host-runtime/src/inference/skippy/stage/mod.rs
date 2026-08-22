@@ -778,9 +778,8 @@ fn probe_binary_stage_ready(
 
 /// Optional boundary codec for the lowrank activation wire dtype, loaded from
 /// `MESH_LLM_BOUNDARY_CODEC` (a path to a fitted `.skbc` file).
-fn boundary_codec_from_env() -> Result<
-    Option<std::sync::Arc<skippy_server::binary_transport::boundary_codec::BoundaryCodec>>,
-> {
+fn boundary_codec_from_env()
+-> Result<Option<std::sync::Arc<skippy_server::binary_transport::boundary_codec::BoundaryCodec>>> {
     match std::env::var_os("MESH_LLM_BOUNDARY_CODEC") {
         Some(path) => {
             let path = std::path::PathBuf::from(path);
