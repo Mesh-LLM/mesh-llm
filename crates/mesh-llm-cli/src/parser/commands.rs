@@ -1453,6 +1453,8 @@ mod tests {
             ("--spec-draft-models", "/models/draft.gguf"),
             ("--spec-draft-max-tokens", "8"),
             ("--spec-draft-min-tokens", "2"),
+            ("--spec-draft-acceptance-threshold", "0.8"),
+            ("--spec-draft-split-probability", "0.5"),
             ("--spec-ngram-min", "2"),
             ("--spec-ngram-max", "4"),
         ] {

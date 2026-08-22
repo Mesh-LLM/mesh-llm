@@ -19,6 +19,17 @@ export function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString()
 }
 
+export function formatClockTime(value: string): string {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    fractionalSecondDigits: 3
+  })
+}
+
 export function machineValue(value: string | number | undefined): string {
   return value === undefined ? 'Not recorded' : String(value)
 }

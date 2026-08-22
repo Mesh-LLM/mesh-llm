@@ -922,18 +922,20 @@ fn write_audit(
     reason: &str,
 ) -> Result<(), LogStoreError> {
     let occurred_at = canonical_persisted_timestamp(occurred_at)?;
-    let detail = serde_json::json!({
-        "actor": "trusted_local_operator",
-        "source": "logs_api",
-        "result": result,
-        "reason": reason,
-        "operationId": operation_id.to_string(),
-    })
-    .to_string();
+    let detail = mesh_llm_events::audit::SanitizedAuditDetailJson::sanitize(
+        &serde_json::json!({
+            "actor": "trusted_local_operator",
+            "source": "logs_api",
+            "result": result,
+            "reason": reason,
+            "operationId": operation_id.to_string(),
+        })
+        .to_string(),
+    );
     transaction
         .execute(
             "INSERT INTO audit_entries (entry_id, request_id, occurred_at, actor, action, detail_json) VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
-            rusqlite::params![entry_id, occurred_at, "logs_api", action, detail],
+            rusqlite::params![entry_id, occurred_at, "logs_api", action, detail.as_str()],
         )
         .map_err(LogStoreError::Sqlite)?;
     Ok(())

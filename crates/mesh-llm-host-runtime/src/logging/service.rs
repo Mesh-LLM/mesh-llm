@@ -29,8 +29,8 @@ mod operational_audit;
 mod persistence_delivery;
 use event_delivery::{EventDelivery, ServiceLifecycleRecorder, enqueue_event_with_delivery};
 pub use operational_audit::{
-    OperationalAuditContext, OperationalAuditRecord, OperationalAuditRecordBuilder,
-    OperationalAuditSeverity, OperationalAuditSubjectKind,
+    OperationalAuditContext, OperationalAuditPathType, OperationalAuditRecord,
+    OperationalAuditRecordBuilder, OperationalAuditSeverity, OperationalAuditSubjectKind,
 };
 pub(crate) use persistence_delivery::PersistenceWorkerState;
 pub use persistence_delivery::WorkerHandle;
@@ -740,6 +740,29 @@ impl LoggingService {
         }
     }
 
+    pub(crate) fn merge_authenticated_remote_caller(
+        &self,
+        request_id: RequestId,
+        metadata: RequestSummaryMetadata,
+    ) -> bool {
+        let Some(summary) = self
+            .registry
+            .merge_authenticated_remote_caller(&request_id.as_uuid().to_string(), metadata)
+        else {
+            return false;
+        };
+        if self.sink.is_some() {
+            offer_summary_persistence(
+                &self.delivery,
+                &self.persistence_queue_drops,
+                &self.persistence_outstanding,
+                &self.metrics,
+                summary,
+            );
+        }
+        true
+    }
+
     /// Record the beginning of a transport attempt under an existing request.
     /// The returned branded identifier is used by its completion or failure and
     /// never changes the parent request lifecycle.
@@ -895,29 +918,24 @@ impl LoggingService {
     pub(crate) fn retire(&self) {
         self.startable.store(false, Ordering::Release);
     }
-
     pub(crate) fn is_startable(&self) -> bool {
         self.startable.load(Ordering::Acquire)
     }
-
     #[cfg(test)]
     pub(crate) fn with_shutdown_drain_timeout(mut self, timeout: Duration) -> Self {
         self.shutdown_drain_timeout = timeout;
         self
     }
-
     /// Check if the service is currently spawned and running. For observability / tests.
     #[allow(dead_code)]
     pub fn is_spawned(&self) -> bool {
         self.spawned.load(Ordering::Acquire)
     }
-
     /// Clone writer for external observation of drop counters.
     #[allow(dead_code)]
     pub fn writer_ref(&self) -> Arc<FailOpenWriter> {
         Arc::clone(&self.writer)
     }
-
     #[cfg(test)]
     pub(crate) fn worker_handle_lock_for_test(
         &self,

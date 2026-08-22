@@ -1,6 +1,7 @@
 import { FileText, TriangleAlert } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { JsonPayloadView } from '@/features/logs/components/JsonPayloadView'
+import { JsonPayloadView, type JsonFormat } from '@/features/logs/components/JsonPayloadView'
+import { SsePayloadView } from '@/features/logs/components/SsePayloadView'
 import type { LogPayloadContent } from '@/features/logs/lib/log-payload-content'
 
 const UNAVAILABLE_REASON_DETAIL = {
@@ -45,16 +46,27 @@ function PlaintextPayload({ text, label }: { readonly text: string; readonly lab
 
 export function LogPayloadContentView({
   content,
+  format,
   label
 }: {
   readonly content: LogPayloadContent
+  readonly format: JsonFormat
   readonly label: string
 }) {
   switch (content.state) {
     case 'json':
-      return <JsonPayloadView ariaLabel={`${label} JSON payload`} prettyText={content.prettyText} text={content.text} />
+      return (
+        <JsonPayloadView
+          ariaLabel={`${label} JSON payload`}
+          format={format}
+          prettyText={content.prettyText}
+          text={content.text}
+        />
+      )
     case 'text':
       return <PlaintextPayload label={`${label} plaintext payload`} text={content.text} />
+    case 'event-stream':
+      return <SsePayloadView ariaLabel={`${label} event stream`} format={format} frames={content.frames} />
     case 'malformed-json':
       return (
         <div>

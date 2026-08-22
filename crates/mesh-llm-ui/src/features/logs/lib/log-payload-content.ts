@@ -1,5 +1,13 @@
 import type { LogArtifact, LogArtifactUnavailableReason } from '@/features/logs/api/schemas'
+import {
+  decodeEventStream,
+  type LogEventStreamData,
+  type LogEventStreamFrame
+} from '@/features/logs/lib/log-event-stream'
 import { sortByOccurredAt } from '@/features/logs/lib/log-instant'
+
+export { decodeEventStream }
+export type { LogEventStreamData, LogEventStreamFrame }
 
 export type AvailableLogArtifact = Extract<LogArtifact, { contentState: 'available' }>
 
@@ -24,6 +32,7 @@ export type LogPayloadContent =
       readonly prettyText: string
     }
   | { readonly state: 'text'; readonly text: string }
+  | { readonly state: 'event-stream'; readonly frames: readonly LogEventStreamFrame[] }
   | { readonly state: 'malformed-json'; readonly text: string }
   | { readonly state: 'binary'; readonly bytes: Uint8Array }
   | { readonly state: 'not-loaded' }
@@ -201,6 +210,11 @@ function decodeAvailableContent(artifact: AvailableLogArtifact): LogPayloadConte
   const decodedText = decodeUtf8(bytes)
   const normalizedMediaType = mediaType(artifact.mediaKind)
 
+  if (normalizedMediaType === 'text/event-stream') {
+    return decodedText === undefined
+      ? { state: 'decode-error', reason: 'utf8' }
+      : { state: 'event-stream', frames: decodeEventStream(decodedText) }
+  }
   if (isJsonMediaType(normalizedMediaType)) {
     return decodedText === undefined ? { state: 'decode-error', reason: 'utf8' } : decodeJson(decodedText)
   }

@@ -53,3 +53,41 @@ export function formatShortDuration(seconds: number | null | undefined): string 
   if (s >= MINUTE) return `${Math.floor(s / MINUTE)}m`
   return `${s}s`
 }
+
+const SECOND_MS = 1_000
+const MINUTE_MS = 60 * SECOND_MS
+const HOUR_MS = 60 * MINUTE_MS
+
+/**
+ * Format an elapsed duration in milliseconds as a compact human-readable string.
+ *
+ * Examples: `"388ms"`, `"2.5s"`, `"51s"`, `"2m 5s"`, `"2h 30m"`.
+ * Returns `"-"` when the input is null, undefined, non-finite, or negative.
+ *
+ * Pass `prefix` to mark the value as a delta, e.g. `formatElapsedMs(388, { prefix: '+' })`
+ * yields `"+388ms"`. The prefix is omitted for values that cannot be formatted.
+ */
+export function formatElapsedMs(
+  milliseconds: number | null | undefined,
+  options?: { readonly prefix?: string }
+): string {
+  if (milliseconds == null || !Number.isFinite(milliseconds) || milliseconds < 0) return '-'
+
+  const prefix = options?.prefix ?? ''
+
+  if (milliseconds < SECOND_MS) return `${prefix}${Math.floor(milliseconds)}ms`
+  if (milliseconds < MINUTE_MS) {
+    const seconds = Number((milliseconds / SECOND_MS).toFixed(1))
+    return seconds < MINUTE_MS / SECOND_MS ? `${prefix}${seconds}s` : `${prefix}1m`
+  }
+
+  if (milliseconds < HOUR_MS) {
+    const minutes = Math.floor(milliseconds / MINUTE_MS)
+    const seconds = Math.floor((milliseconds % MINUTE_MS) / SECOND_MS)
+    return seconds > 0 ? `${prefix}${minutes}m ${seconds}s` : `${prefix}${minutes}m`
+  }
+
+  const hours = Math.floor(milliseconds / HOUR_MS)
+  const minutes = Math.floor((milliseconds % HOUR_MS) / MINUTE_MS)
+  return minutes > 0 ? `${prefix}${hours}h ${minutes}m` : `${prefix}${hours}h`
+}

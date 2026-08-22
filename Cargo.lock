@@ -3797,6 +3797,7 @@ version = "0.76.0-rc7"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "dirs",
  "hex",
  "iroh",

@@ -34,6 +34,8 @@ pub(super) fn request_query(path: &str) -> Result<RequestListQuery, LogsError> {
         from: None,
         to: None,
         route: None,
+        exclude_route: None,
+        exclude_route_prefix: None,
         model: None,
         provider: None,
         engine: None,
@@ -49,6 +51,8 @@ pub(super) fn request_query(path: &str) -> Result<RequestListQuery, LogsError> {
             "from" => query.from = Some(timestamp(&value)?),
             "to" => query.to = Some(timestamp(&value)?),
             "route" => query.route = Some(filter(value)?),
+            "exclude_route" => query.exclude_route = Some(filter(value)?),
+            "exclude_route_prefix" => query.exclude_route_prefix = Some(filter(value)?),
             "model" => query.model = Some(filter(value)?),
             "provider" => query.provider = Some(filter(value)?),
             "engine" => query.engine = Some(filter(value)?),
@@ -591,6 +595,31 @@ mod tests {
             id(&request_id.to_string()).expect("uuid"),
             request_id.to_string()
         );
+    }
+
+    #[test]
+    fn parses_and_validates_request_route_exclusions() {
+        // Given / When
+        let query = request_query(
+            "/api/logs/requests?exclude_route=models&exclude_route_prefix=management_",
+        )
+        .expect("parse route exclusions");
+
+        // Then
+        assert_eq!(query.store.exclude_route.as_deref(), Some("models"));
+        assert_eq!(
+            query.store.exclude_route_prefix.as_deref(),
+            Some("management_")
+        );
+        for path in [
+            "/api/logs/requests?exclude_route=",
+            "/api/logs/requests?exclude_route_prefix=%00",
+        ] {
+            assert!(matches!(
+                request_query(path),
+                Err(LogsError::InvalidQuery(_))
+            ));
+        }
     }
 
     #[test]

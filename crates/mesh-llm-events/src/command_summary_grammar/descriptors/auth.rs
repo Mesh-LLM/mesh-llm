@@ -1,0 +1,125 @@
+use super::{Descriptor, NONE, RawKind, descriptor, descriptor_with_conflicts};
+
+const AUTH_INIT_FLAGS: &[&str] = &["--force", "--no-passphrase", "--keychain"];
+const AUTH_INIT_CONFLICTS: &[&[&str]] = &[&["--no-passphrase", "--keychain"]];
+
+pub(super) const DESCRIPTORS: &[Descriptor] = &[
+    descriptor_with_conflicts(
+        &["mesh-llm", "auth", "init"],
+        AUTH_INIT_FLAGS,
+        &["--owner-key"],
+        AUTH_INIT_CONFLICTS,
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "status"],
+        NONE,
+        &[
+            "--owner-key",
+            "--node-key",
+            "--node-ownership",
+            "--trust-store",
+        ],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "sign-node"],
+        NONE,
+        &[
+            "--owner-key",
+            "--node-key",
+            "--out",
+            "--hostname-hint",
+            "--node-label",
+            "--expires-in-hours",
+        ],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "renew-node"],
+        NONE,
+        &[
+            "--owner-key",
+            "--node-key",
+            "--out",
+            "--hostname-hint",
+            "--node-label",
+            "--expires-in-hours",
+        ],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "verify-node"],
+        NONE,
+        &[
+            "--file",
+            "--node-id",
+            "--trust-store",
+            "--verify-trust-policy",
+        ],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "rotate-node"],
+        &["--revoke-current"],
+        &[
+            "--owner-key",
+            "--node-key",
+            "--out",
+            "--hostname-hint",
+            "--node-label",
+            "--expires-in-hours",
+            "--reason",
+            "--trust-store",
+        ],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "revoke-owner"],
+        NONE,
+        &["owner_id", "--reason", "--trust-store"],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "revoke-node"],
+        NONE,
+        &["--cert-id", "--node-id", "--reason", "--trust-store"],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "rotate-owner"],
+        &["--no-passphrase", "--force"],
+        &["--owner-key"],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "trust", "add"],
+        NONE,
+        &["owner_id", "--label", "--trust-store"],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "trust", "remove"],
+        NONE,
+        &["owner_id", "--trust-store"],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "trust", "list"],
+        NONE,
+        &["--trust-store"],
+        false,
+        RawKind::None,
+    ),
+];

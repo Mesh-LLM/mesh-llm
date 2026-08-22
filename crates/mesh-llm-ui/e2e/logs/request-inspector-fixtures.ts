@@ -4,7 +4,8 @@ export const REQUEST_INSPECTOR_IDS = {
   empty: '10000000-0000-4000-8000-000000000003',
   failed: '10000000-0000-4000-8000-000000000004',
   active: '10000000-0000-4000-8000-000000000005',
-  transient: '10000000-0000-4000-8000-000000000006'
+  transient: '10000000-0000-4000-8000-000000000006',
+  streaming: '10000000-0000-4000-8000-000000000007'
 } as const
 
 export const REQUEST_INSPECTOR_ARTIFACT_IDS = {
@@ -15,7 +16,8 @@ export const REQUEST_INSPECTOR_ARTIFACT_IDS = {
   unavailable: '30000000-0000-4000-8000-000000000005',
   corrupt: '30000000-0000-4000-8000-000000000006',
   errorCorrupt: '30000000-0000-4000-8000-000000000007',
-  errorMissing: '30000000-0000-4000-8000-000000000008'
+  errorMissing: '30000000-0000-4000-8000-000000000008',
+  streamingResponse: '30000000-0000-4000-8000-000000000009'
 } as const
 
 export const REQUEST_INSPECTOR_SHELL_STATUS = {
@@ -25,6 +27,8 @@ export const REQUEST_INSPECTOR_SHELL_STATUS = {
   models: [],
   gpus: []
 }
+
+const CALLER_ENDPOINT_ID = '9f0c4cbe8cb7a8d5d577c20e50ef03fd2f63a2e7fd9897c155823bcbb281bb04'
 
 type EventFixture = readonly [
   sequence: number,
@@ -137,11 +141,23 @@ const failedArtifacts = [
   artifact(REQUEST.failed, [ARTIFACT.errorCorrupt, 'error_diagnostic', 'corrupt', 2048, 4]),
   artifact(REQUEST.failed, [ARTIFACT.errorMissing, 'error_trace', 'missing'])
 ] as const
+const streamingResponseArtifact = {
+  ...artifact(REQUEST.streaming, [ARTIFACT.streamingResponse, 'response_body', 'available']),
+  mediaKind: 'text/event-stream'
+}
+
+export const REQUEST_INSPECTOR_STREAM_HOSTILE_TEXT = '<img src=stream onerror=alert(4)><script>alert(5)</script>'
 
 export const REQUEST_INSPECTOR_SCENARIOS: Readonly<Record<string, RequestInspectorScenario>> = {
   [REQUEST.completed]: {
-    summary: summary(REQUEST.completed, 'completed', 0),
+    summary: {
+      ...summary(REQUEST.completed, 'completed', 0),
+      callerEndpointId: CALLER_ENDPOINT_ID,
+      callerAddr: '203.0.113.24:48712',
+      callerPathType: 'remote_quic_http'
+    },
     events: [
+      event(REQUEST.completed, [0, timestamp(0, '00.500'), 'admitted']),
       event(REQUEST.completed, [1, timestamp(0, '01.200'), 'stream_started']),
       event(REQUEST.completed, [2, timestamp(0, '02'), 'stream_chunk']),
       event(REQUEST.completed, [3, timestamp(0, '03'), 'stream_completed', undefined, undefined, 42])
@@ -188,6 +204,12 @@ export const REQUEST_INSPECTOR_SCENARIOS: Readonly<Record<string, RequestInspect
     events: [],
     attempts: [],
     artifacts: []
+  },
+  [REQUEST.streaming]: {
+    summary: summary(REQUEST.streaming, 'completed', 6),
+    events: [],
+    attempts: [],
+    artifacts: [streamingResponseArtifact]
   }
 }
 
@@ -209,6 +231,22 @@ export const REQUEST_INSPECTOR_ARTIFACT_DETAILS: Readonly<Record<string, WireArt
   [ARTIFACT.malformed]: {
     ...malformedArtifact,
     contentBase64: encoded('{"broken": "<img src=malformed onerror=alert(3)>"')
+  },
+  [ARTIFACT.streamingResponse]: {
+    ...streamingResponseArtifact,
+    contentBase64: encoded(
+      [
+        'event: delta',
+        'id: stream-1',
+        'data: {"delta":"hello"}',
+        '',
+        `data: ${REQUEST_INSPECTOR_STREAM_HOSTILE_TEXT}`,
+        '',
+        'event: done',
+        'data: [DONE]',
+        ''
+      ].join('\n')
+    )
   }
 }
 
@@ -219,8 +257,8 @@ export function requestDeleteReceipt(requestId: string) {
     requestId,
     state: 'completed',
     selectionFingerprint: 'request-inspector-delete',
-    planned: { requests: 1, events: 3, artifacts: 5, proxyRecords: 1, databaseRows: 10 },
-    executed: { requests: 1, events: 3, artifacts: 5, proxyRecords: 1, databaseRows: 10 },
+    planned: { requests: 1, events: 4, artifacts: 5, proxyRecords: 1, databaseRows: 11 },
+    executed: { requests: 1, events: 4, artifacts: 5, proxyRecords: 1, databaseRows: 11 },
     artifactDeletion: { removed: 5, failed: 0 }
   }
 }

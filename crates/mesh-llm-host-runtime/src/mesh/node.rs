@@ -115,8 +115,11 @@ pub struct Node {
     pub(crate) runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
     pub(crate) tunnel_tx:
         tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
-    pub(crate) tunnel_http_tx:
-        tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
+    pub(crate) tunnel_http_tx: tokio::sync::mpsc::Sender<(
+        EndpointId,
+        iroh::endpoint::SendStream,
+        iroh::endpoint::RecvStream,
+    )>,
     pub(crate) stage_transport_tx: tokio::sync::mpsc::Sender<(
         EndpointId,
         iroh::endpoint::SendStream,

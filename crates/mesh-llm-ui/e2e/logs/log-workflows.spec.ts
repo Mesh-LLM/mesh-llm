@@ -431,6 +431,7 @@ test('metadata-only export and previewed cleanup stay separated without dead-let
 }) => {
   const backend = await installLogsBackend(browserPage, { lifecycle: 'completed', streamMode: 'unavailable' })
 
+  await browserPage.setViewportSize({ width: 1280, height: 900 })
   await browserPage.goto('/logs')
   const infoBanner = browserPage.getByRole('region', { name: 'System logs' })
   const ledgerControls = browserPage.getByRole('region', { name: 'Event log controls' })
@@ -458,6 +459,77 @@ test('metadata-only export and previewed cleanup stay separated without dead-let
   await expect(
     cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ })
   ).toHaveAttribute('data-state', 'on')
+  const layerControls = cleanupDialog.getByRole('button', { name: /chart layer/ })
+  const desktopLayerLayout = await layerControls.evaluateAll(([requests, system, quic]) => {
+    if (!(requests instanceof HTMLElement) || !(system instanceof HTMLElement) || !(quic instanceof HTMLElement)) {
+      return { controlsFit: false, twoColumns: false }
+    }
+    const requestsBounds = requests.getBoundingClientRect()
+    const systemBounds = system.getBoundingClientRect()
+    const quicBounds = quic.getBoundingClientRect()
+    return {
+      controlsFit: [system, quic].every((control) => control.scrollWidth <= control.clientWidth),
+      twoColumns: Math.abs(requestsBounds.top - systemBounds.top) <= 1 && quicBounds.top >= requestsBounds.bottom - 1
+    }
+  })
+  expect.soft(desktopLayerLayout).toEqual({ controlsFit: true, twoColumns: true })
+
+  await browserPage.setViewportSize({ width: 375, height: 900 })
+  const mobileLayerLayout = await layerControls.evaluateAll(([requests, system, quic]) => {
+    if (!(requests instanceof HTMLElement) || !(system instanceof HTMLElement) || !(quic instanceof HTMLElement)) {
+      return { controlsFit: false, oneColumn: false }
+    }
+    const requestsBounds = requests.getBoundingClientRect()
+    const systemBounds = system.getBoundingClientRect()
+    const quicBounds = quic.getBoundingClientRect()
+    return {
+      controlsFit: [system, quic].every((control) => control.scrollWidth <= control.clientWidth),
+      oneColumn:
+        systemBounds.top >= requestsBounds.bottom - 1 &&
+        quicBounds.top >= systemBounds.bottom - 1 &&
+        Math.abs(requestsBounds.left - systemBounds.left) <= 1 &&
+        Math.abs(systemBounds.left - quicBounds.left) <= 1
+    }
+  })
+  expect.soft(mobileLayerLayout).toEqual({ controlsFit: true, oneColumn: true })
+
+  const selectorPanelBottom = await cleanupDialog
+    .getByRole('slider', { name: 'Window start' })
+    .evaluate(
+      (element) => element.parentElement?.parentElement?.getBoundingClientRect().bottom ?? Number.POSITIVE_INFINITY
+    )
+  const helperTop = await cleanupDialog
+    .getByText('Drag either edge to narrow the loaded history. The server preview confirms what can be removed.', {
+      exact: true
+    })
+    .evaluate((element) => element.getBoundingClientRect().top)
+  expect.soft(helperTop).toBeGreaterThanOrEqual(selectorPanelBottom)
+
+  const requestSummaryGeometry = await cleanupDialog
+    .locator('p')
+    .filter({
+      hasText: /loaded request events? in this window\. Server review identifies removable terminal request groups\./
+    })
+    .evaluate((explanation) => {
+      const summary = explanation.parentElement
+      const counter = summary?.querySelector(':scope > span')
+      if (!(summary instanceof HTMLElement) || !(counter instanceof HTMLElement)) return null
+      const counterBounds = counter.getBoundingClientRect()
+      const explanationBounds = explanation.getBoundingClientRect()
+      const counterStyle = getComputedStyle(counter)
+      return {
+        counter: counter.textContent?.trim() ?? '',
+        fontFamily: counterStyle.fontFamily,
+        fontVariantNumeric: counterStyle.fontVariantNumeric,
+        gap: explanationBounds.left - counterBounds.right
+      }
+    })
+  expect.soft(requestSummaryGeometry?.counter ?? '').toMatch(/^\d+$/)
+  expect.soft(requestSummaryGeometry?.fontFamily ?? '').toMatch(/JetBrains Mono|ui-monospace|Menlo|monospace/i)
+  expect.soft(requestSummaryGeometry?.fontVariantNumeric ?? '').toContain('tabular-nums')
+  expect.soft(requestSummaryGeometry?.gap ?? 0).toBeGreaterThan(0)
+
+  await browserPage.setViewportSize({ width: 1280, height: 900 })
   await cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ }).click()
   await expect(
     cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ })

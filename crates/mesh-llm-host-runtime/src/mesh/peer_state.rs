@@ -1277,7 +1277,8 @@ impl Node {
         state.dead_peers.insert(id, std::time::Instant::now());
         state.connections.remove(&id);
         drop(state);
-        self.remove_peer(id).await;
+        self.remove_peer(id, MeshPeerRemovalReason::PeerDownProbeFailed)
+            .await;
     }
 
     pub(crate) async fn record_peer_down_rejection(&self, remote: EndpointId, dead_id: EndpointId) {

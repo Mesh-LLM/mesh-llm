@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 
-import { act, render, renderHook, screen, within } from '@testing-library/react'
+import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChartTooltipPayloadItem } from '@/components/ui/chart'
@@ -137,8 +137,42 @@ describe('EventsOverTimeChart', () => {
 
     const bucketSelect = screen.getByLabelText('Bucket interval') as HTMLSelectElement
     const rangeSelect = screen.getByLabelText('Chart time range') as HTMLSelectElement
-    expect(bucketSelect.value).toBe('5m')
+    expect(bucketSelect.value).toBe('15m')
     expect(rangeSelect.value).toBe('12h')
+  })
+
+  it('pairs the bucket interval with the selected time range', async () => {
+    const user = userEvent.setup()
+    render(<EventsOverTimeChart rows={[]} selectedCategories={ALL_CATEGORIES} now={NOW} />)
+
+    const bucketSelect = screen.getByLabelText('Bucket interval') as HTMLSelectElement
+    const rangeSelect = screen.getByLabelText('Chart time range')
+
+    await user.selectOptions(rangeSelect, '1h')
+    expect(bucketSelect.value).toBe('1m')
+
+    await user.selectOptions(rangeSelect, '24h')
+    expect(bucketSelect.value).toBe('30m')
+
+    await user.selectOptions(rangeSelect, 'all')
+    expect(bucketSelect.value).toBe('1h')
+  })
+
+  it('keeps an explicit bucket interval for the range it was chosen in', async () => {
+    const user = userEvent.setup()
+    render(<EventsOverTimeChart rows={[]} selectedCategories={ALL_CATEGORIES} now={NOW} />)
+
+    const bucketSelect = screen.getByLabelText('Bucket interval') as HTMLSelectElement
+    const rangeSelect = screen.getByLabelText('Chart time range')
+
+    await user.selectOptions(bucketSelect, '1m')
+    expect(bucketSelect.value).toBe('1m')
+
+    await user.selectOptions(rangeSelect, '24h')
+    expect(bucketSelect.value).toBe('30m')
+
+    await user.selectOptions(rangeSelect, '12h')
+    expect(bucketSelect.value).toBe('1m')
   })
 
   it('reports time-range changes to an owning page', async () => {
@@ -206,6 +240,72 @@ describe('EventsOverTimeChart', () => {
     expect(legend).toHaveTextContent('System1')
     expect(legend).toHaveTextContent('QUIC1')
     expect(legend).toHaveTextContent('Gossip0')
+  })
+
+  it('selects the active bucket with the keyboard', async () => {
+    const user = userEvent.setup()
+    const onBucketSelect = vi.fn()
+    render(
+      <EventsOverTimeChart
+        onBucketSelect={onBucketSelect}
+        rows={[eventAt('requests', iso(NOW))]}
+        selectedCategories={ALL_CATEGORIES}
+        now={NOW}
+      />
+    )
+
+    const chart = screen.getByRole('img', { name: /Events over time stacked bar chart/ })
+    chart.focus()
+    await user.keyboard('{Enter}')
+
+    expect(onBucketSelect).toHaveBeenCalledOnce()
+    expect(onBucketSelect).toHaveBeenCalledWith({
+      from: expect.any(String),
+      to: expect.any(String)
+    })
+  })
+
+  it('renders a full-bucket band for a point-sized current table page window', async () => {
+    // Given
+    const occurredAt = NOW - 5 * 60_000
+
+    // When
+    const { container } = render(
+      <EventsOverTimeChart
+        currentPageTimeWindow={{ from: occurredAt, to: occurredAt }}
+        rows={[eventAt('requests', iso(occurredAt))]}
+        selectedCategories={ALL_CATEGORIES}
+        now={NOW}
+      />
+    )
+
+    // Then
+    const band = await waitFor(() => {
+      const element = container.querySelector<SVGPathElement>('.recharts-reference-area-rect')
+      expect(element).toBeInTheDocument()
+      return element
+    })
+    expect(Number(band?.getAttribute('width'))).toBeGreaterThan(0)
+    expect(screen.getByText(/Accent band marks current table page:/i)).toBeVisible()
+  })
+
+  it('omits the current table page band when its window is outside the chart range', () => {
+    // Given
+    const occurredAt = NOW - 5 * 60_000
+
+    // When
+    const { container } = render(
+      <EventsOverTimeChart
+        currentPageTimeWindow={{ from: NOW - 14 * 3_600_000, to: NOW - 13 * 3_600_000 }}
+        rows={[eventAt('requests', iso(occurredAt))]}
+        selectedCategories={ALL_CATEGORIES}
+        now={NOW}
+      />
+    )
+
+    // Then
+    expect(container.querySelector('.recharts-reference-area')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Accent band marks current table page:/i)).not.toBeInTheDocument()
   })
 
   it('uses a stable, differentiated series palette and marker shapes', () => {
@@ -276,5 +376,53 @@ describe('EventsOverTimeChart', () => {
 
     expect(screen.getByText(/Auto-bucketed to/)).toBeInTheDocument()
     expect(screen.getByLabelText(/Events over time stacked bar chart/)).toBeInTheDocument()
+  })
+
+  it('offers a window clear action only while a clicked window is the active filter', async () => {
+    const user = userEvent.setup()
+    const onClearBucketSelection = vi.fn()
+    const { rerender } = render(
+      <EventsOverTimeChart
+        onClearBucketSelection={onClearBucketSelection}
+        rows={[]}
+        selectedCategories={ALL_CATEGORIES}
+        selectedRange="6h"
+        now={NOW}
+      />
+    )
+
+    expect(screen.queryByRole('button', { name: 'Clear window' })).not.toBeInTheDocument()
+
+    rerender(
+      <EventsOverTimeChart
+        onClearBucketSelection={onClearBucketSelection}
+        rows={[]}
+        selectedCategories={ALL_CATEGORIES}
+        selectedRange="selected"
+        selectedRangeMs={300_000}
+        now={NOW}
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Clear window' }))
+
+    expect(onClearBucketSelection).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a loading window in a reserved slot that keeps the range controls in place', () => {
+    const { rerender } = render(
+      <EventsOverTimeChart loading rows={[]} selectedCategories={ALL_CATEGORIES} selectedRange="6h" now={NOW} />
+    )
+
+    const slot = screen.getByText('Loading system logs').parentElement
+    expect(slot).toHaveAttribute('aria-live', 'polite')
+    const controls = slot?.parentElement
+    expect(controls?.firstElementChild).toBe(slot)
+    expect(controls).toContainElement(screen.getByLabelText('Chart time range'))
+
+    rerender(<EventsOverTimeChart rows={[]} selectedCategories={ALL_CATEGORIES} selectedRange="6h" now={NOW} />)
+
+    expect(controls?.firstElementChild).toBe(slot)
+    expect(slot).toBeEmptyDOMElement()
   })
 })

@@ -135,7 +135,7 @@ describe('LogsLedger request inspector capability', () => {
 
     // Then
     expect(screen.getByRole('dialog', { name: 'Request Inspector' })).toBeInTheDocument()
-    expect(requestQueries.summary).toHaveBeenCalledWith(requestId)
+    expect(requestQueries.summary).toHaveBeenCalledWith(requestId, undefined)
     expect(requestQueries.events).toHaveBeenCalledWith(requestId, true)
     expect(requestQueries.artifacts).toHaveBeenCalledWith(requestId, true)
     expect(requestQueries.attempts).toHaveBeenCalledWith(requestId, true)

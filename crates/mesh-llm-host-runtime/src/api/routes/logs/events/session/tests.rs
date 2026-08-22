@@ -4,11 +4,15 @@ use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_events::logging::identifiers::{EventId, RequestId};
 use mesh_llm_events::logging::replay::ReplaySequence;
 
+use super::super::protocol::MAX_FRAME_BYTES;
 use super::*;
 use crate::logging::{
-    LoggingService, ReplayBus, RequestSummaryEntry, RequestSummaryEventSnapshots,
+    CallerPathType, LoggingService, ReplayBus, RequestSummaryEntry, RequestSummaryEventSnapshots,
     RequestSummaryMetadata, TerminalOutcome,
 };
+
+mod audit;
+mod queue;
 
 fn summary(created_at: &str, state: &str, metadata: RequestSummaryMetadata) -> RequestSummaryEntry {
     RequestSummaryEntry {
@@ -601,295 +605,88 @@ fn terminal_replay_uses_enriched_summary_metadata_for_filters() {
 }
 
 #[test]
+fn lifecycle_replay_projects_canonical_caller_attribution() {
+    let bus = ReplayBus::new(4);
+    let cases = [
+        (
+            RequestSummaryMetadata::from_parts(None, None, None, None).with_caller_identity(
+                Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+                Some("192.0.2.71:11204"),
+                Some(CallerPathType::RemoteQuicHttp),
+            ),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            Some("192.0.2.71:11204"),
+            Some("remote_quic_http"),
+        ),
+        (
+            RequestSummaryMetadata::from_parts(None, None, None, None).with_caller_identity(
+                Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"),
+                Some("192.0.2.72:11204"),
+                Some(CallerPathType::Relay),
+            ),
+            Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"),
+            None,
+            Some("relay"),
+        ),
+        (
+            RequestSummaryMetadata::from_parts(None, None, None, None).with_caller_identity(
+                Some("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"),
+                None,
+                None,
+            ),
+            Some("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"),
+            None,
+            None,
+        ),
+        (RequestSummaryMetadata::default(), None, None, None),
+    ];
+
+    for (sequence, (metadata, endpoint_id, caller_addr, path_type)) in cases.into_iter().enumerate()
+    {
+        entry_with_metadata(
+            &bus,
+            ReplayChannel::Requests,
+            sequence as u64 + 1,
+            RequestId::new(),
+            metadata,
+        );
+        let frame = replay_frames(
+            &bus,
+            &subscription(vec![ReplayChannel::Requests], Cursor::default()),
+            None,
+        )
+        .pop()
+        .expect("caller attribution replay frame");
+        let data = frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .expect("lifecycle replay data");
+        let request = &data["request"];
+
+        assert_eq!(
+            request
+                .get("callerEndpointId")
+                .and_then(|value| value.as_str()),
+            endpoint_id
+        );
+        assert!(endpoint_id.is_some() || request.get("callerEndpointId").is_none());
+        assert_eq!(
+            request.get("callerAddr").and_then(|value| value.as_str()),
+            caller_addr
+        );
+        assert!(caller_addr.is_some() || request.get("callerAddr").is_none());
+        assert_eq!(
+            request
+                .get("callerPathType")
+                .and_then(|value| value.as_str()),
+            path_type
+        );
+        assert!(path_type.is_some() || request.get("callerPathType").is_none());
+    }
+}
+
+#[test]
 fn heartbeat_is_an_sse_comment() {
     assert_eq!(super::super::heartbeat_frame(), ": keepalive\n\n");
-}
-
-#[tokio::test]
-async fn queue_bounds_slow_consumers_and_cancellation() {
-    let (queue, mut receiver) = ConnectionQueue::new(1);
-    queue.try_send("first".into()).expect("first fits");
-    assert_eq!(
-        queue.try_send("second".into()),
-        Err(QueueError::SlowConsumer)
-    );
-    assert_eq!(receiver.recv().await.as_deref(), Some("first"));
-    queue.cancel();
-    assert_eq!(
-        queue.try_send("after-cancel".into()),
-        Err(QueueError::Cancelled)
-    );
-    assert!(receiver.recv().await.is_none());
-}
-
-#[tokio::test]
-async fn queue_times_out_a_slow_socket_writer_without_unbounded_growth() {
-    let (queue, _receiver) = ConnectionQueue::new(1);
-    queue.try_send("first".into()).unwrap();
-    assert_eq!(
-        queue
-            .send_with_timeout("second".into(), std::time::Duration::from_millis(5))
-            .await,
-        Err(QueueError::SlowConsumer)
-    );
-}
-
-fn audit_subscription(cursor: AuditCursor) -> Subscription {
-    Subscription {
-        channels: Vec::new(),
-        filters: Default::default(),
-        cursor: Cursor::default(),
-        audit: Some(AuditSelection {
-            cursor,
-            source: None,
-            severity: None,
-        }),
-    }
-}
-
-fn push_audit(bus: &ReplayBus, payload: &str) {
-    bus.push_audit_replay(payload.to_string(), 2);
-}
-
-fn audit_payload(
-    entry_id: &str,
-    occurred_at: &str,
-    source: &str,
-    code: &str,
-    severity: Option<&str>,
-) -> String {
-    let mut obj = serde_json::json!({
-        "kind": "audit",
-        "entry_id": entry_id,
-        "occurred_at": occurred_at,
-        "source": source,
-        "code": code,
-    });
-    if let Some(s) = severity {
-        obj.as_object_mut()
-            .unwrap()
-            .insert("severity".into(), serde_json::json!(s));
-    }
-    obj.to_string()
-}
-
-#[test]
-fn audit_replay_emits_ordered_frames_with_a1_ids() {
-    let bus = ReplayBus::new(4);
-    push_audit(
-        &bus,
-        &audit_payload(
-            "id-1",
-            "2026-01-01T00:00:01Z",
-            "runtime",
-            "startup",
-            Some("info"),
-        ),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "mesh", "peer_joined", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload(
-            "id-3",
-            "2026-01-01T00:00:03Z",
-            "cli",
-            "command",
-            Some("warning"),
-        ),
-    );
-
-    let frames = replay_frames(&bus, &audit_subscription(AuditCursor(0)), None);
-    assert_eq!(frames.len(), 3);
-    assert!(frames[0].contains("event: audit_entry"));
-    assert!(frames[0].contains("id: a1:1"));
-    assert!(frames[1].contains("id: a1:2"));
-    assert!(frames[2].contains("id: a1:3"));
-    assert!(frames[0].contains("\"entryId\":\"id-1\""));
-    assert!(frames[1].contains("\"entryId\":\"id-2\""));
-    assert!(frames[2].contains("\"entryId\":\"id-3\""));
-}
-
-#[test]
-fn audit_live_updates_are_incremental_and_advance_filtered_records() {
-    let bus = ReplayBus::new(4);
-    let mut selected = audit_subscription(AuditCursor(0));
-    selected.audit.as_mut().unwrap().source = Some("runtime".into());
-    let mut session = ReplaySession::new(selected);
-    let mut updates = bus.subscribe_updates();
-
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "mesh", "ignored", None),
-    );
-    let filtered = updates.try_recv().expect("filtered audit update");
-    assert!(session.next_update_frames(&bus, &filtered, None).is_empty());
-    assert!(session.next_update_frames(&bus, &filtered, None).is_empty());
-
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "runtime", "selected", None),
-    );
-    let update = updates.try_recv().expect("selected audit update");
-    let frames = session.next_update_frames(&bus, &update, None);
-    assert_eq!(frames.len(), 1);
-    assert!(frames[0].contains("id: a1:2"));
-    assert!(frames[0].contains("\"entryId\":\"id-2\""));
-}
-
-#[test]
-fn audit_replay_dedupes_records_at_or_below_cursor() {
-    let bus = ReplayBus::new(4);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "runtime", "a", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "runtime", "b", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-3", "2026-01-01T00:00:03Z", "runtime", "c", None),
-    );
-
-    let frames = replay_frames(&bus, &audit_subscription(AuditCursor(2)), None);
-    assert_eq!(frames.len(), 1);
-    assert!(frames[0].contains("id: a1:3"));
-    assert!(frames[0].contains("id-3"));
-}
-
-#[test]
-fn audit_replay_filters_by_source() {
-    let bus = ReplayBus::new(4);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "mesh", "a", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "runtime", "b", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-3", "2026-01-01T00:00:03Z", "mesh", "c", None),
-    );
-
-    let sel = AuditSelection {
-        cursor: AuditCursor(0),
-        source: Some("mesh".to_owned()),
-        severity: None,
-    };
-    let sub = Subscription {
-        channels: Vec::new(),
-        filters: Default::default(),
-        cursor: Cursor::default(),
-        audit: Some(sel.clone()),
-    };
-    let frames = replay_frames(&bus, &sub, None);
-    assert_eq!(frames.len(), 2);
-    assert!(frames[0].contains("id-1"));
-    assert!(frames[1].contains("id-3"));
-    assert!(!frames[0].contains("id-2"));
-}
-
-#[test]
-fn audit_replay_filters_by_severity() {
-    let bus = ReplayBus::new(4);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "runtime", "a", Some("info")),
-    );
-    push_audit(
-        &bus,
-        &audit_payload(
-            "id-2",
-            "2026-01-01T00:00:02Z",
-            "runtime",
-            "b",
-            Some("warning"),
-        ),
-    );
-    push_audit(
-        &bus,
-        &audit_payload(
-            "id-3",
-            "2026-01-01T00:00:03Z",
-            "runtime",
-            "c",
-            Some("error"),
-        ),
-    );
-
-    let sel = AuditSelection {
-        cursor: AuditCursor(0),
-        source: None,
-        severity: Some("warning".to_owned()),
-    };
-    let sub = Subscription {
-        channels: Vec::new(),
-        filters: Default::default(),
-        cursor: Cursor::default(),
-        audit: Some(sel),
-    };
-    let frames = replay_frames(&bus, &sub, None);
-    assert_eq!(frames.len(), 1);
-    assert!(frames[0].contains("id-2"));
-}
-
-#[test]
-fn audit_gap_emits_recovery_endpoint() {
-    let bus = ReplayBus::new(1);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "runtime", "a", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "runtime", "b", None),
-    );
-
-    let frames = replay_frames(
-        &bus,
-        &audit_subscription(AuditCursor(0)),
-        Some("a1:2".to_owned()),
-    );
-    assert!(frames[0].contains("event: replay_gap"));
-    assert!(frames[0].contains("/api/logs/audit"));
-    assert!(frames[0].contains("id: a1:1"));
-    assert!(frames[1].contains("event: audit_entry"));
-    assert!(frames[1].contains("id: a1:2"));
-}
-
-#[test]
-fn audit_frames_never_contain_lifecycle_fields() {
-    let bus = ReplayBus::new(3);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "runtime", "a", None),
-    );
-
-    let frames = replay_frames(&bus, &audit_subscription(AuditCursor(0)), None);
-    assert_eq!(frames.len(), 1);
-    assert!(!frames[0].contains("canonical_envelope"));
-    assert!(!frames[0].contains("detail_json"));
-    assert!(!frames[0].contains("requestId"));
-}
-
-#[test]
-fn lifecycle_gap_regression_still_uses_requests_endpoint() {
-    let bus = ReplayBus::new(1);
-    entry(&bus, ReplayChannel::Requests, 1, RequestId::new());
-    entry(&bus, ReplayChannel::Requests, 2, RequestId::new());
-
-    let frames = replay_frames(
-        &bus,
-        &subscription(vec![ReplayChannel::Requests], Cursor::default()),
-        Some("opaque-rest-cursor".into()),
-    );
-    assert!(frames[0].contains("event: replay_gap"));
-    assert!(frames[0].contains("/api/logs/requests"));
-    assert!(!frames[0].contains("/api/logs/audit"));
 }

@@ -6,6 +6,8 @@ use openai_frontend::{
 
 use super::*;
 
+mod audit_sanitization;
+
 #[test]
 fn export_route_classifies_before_method_validation() {
     let get_route = classify_mutating_route(Some("/api/logs/requests/export"), "GET")
@@ -139,6 +141,91 @@ async fn list_merges_active_and_durable_without_duplicate_ids() {
 }
 
 #[test]
+fn route_exclusions_apply_to_every_merged_active_and_durable_page() {
+    // Given
+    let (_temp, state) = runtime();
+    let store = state.store().expect("store");
+    for (request_id, route, created_at) in [
+        ("durable-visible", Some("responses"), "2026-08-03T00:00:01Z"),
+        (
+            "durable-hidden-management",
+            Some("management_get_status"),
+            "2026-08-03T00:00:02Z",
+        ),
+        (
+            "durable-hidden-models",
+            Some("models"),
+            "2026-08-03T00:00:03Z",
+        ),
+    ] {
+        store
+            .insert_summary(
+                request_id, None, route, None, None, created_at, None, None, None,
+            )
+            .expect("seed durable summary");
+    }
+    let active = [
+        (
+            "active-hidden-management",
+            Some("management_post"),
+            "2026-08-03T00:00:04Z",
+        ),
+        ("active-visible-null", None, "2026-08-03T00:00:05Z"),
+        (
+            "active-visible-chat",
+            Some("chat_completions"),
+            "2026-08-03T00:00:06Z",
+        ),
+        (
+            "active-hidden-models",
+            Some("models"),
+            "2026-08-03T00:00:07Z",
+        ),
+    ]
+    .map(|(request_id, route, created_at)| RequestSummaryEntry {
+        request_id: request_id.to_string(),
+        state: "active".to_string(),
+        created_at: created_at.to_string(),
+        terminal_at: None,
+        metadata: crate::logging::RequestSummaryMetadata::from_parts(route, None, None, None),
+    })
+    .to_vec();
+    let facade = state.query_facade().expect("query facade");
+    let base_path =
+        "/api/logs/requests?limit=1&exclude_route=models&exclude_route_prefix=management_";
+
+    // When
+    let first = list_requests_blocking(
+        facade.clone(),
+        active.clone(),
+        parse::request_query(base_path).expect("parse first page"),
+    )
+    .expect("list first page");
+    let first_cursor = first.next_cursor.expect("first page cursor");
+    let second = list_requests_blocking(
+        facade.clone(),
+        active.clone(),
+        parse::request_query(&format!("{base_path}&cursor={first_cursor}"))
+            .expect("parse second page"),
+    )
+    .expect("list second page");
+    let second_cursor = second.next_cursor.expect("second page cursor");
+    let third = list_requests_blocking(
+        facade,
+        active,
+        parse::request_query(&format!("{base_path}&cursor={second_cursor}"))
+            .expect("parse third page"),
+    )
+    .expect("list third page");
+
+    // Then
+    assert_eq!(first.items[0].request_id(), "active-visible-chat");
+    assert_eq!(second.items[0].request_id(), "active-visible-null");
+    assert_eq!(third.items[0].request_id(), "durable-visible");
+    assert!(third.next_cursor.is_none());
+}
+
+#[test]
 fn active_request_time_bounds_compare_instants_within_the_boundary_second() {
     let (_temp, state) = runtime();
     let entries = [
@@ -241,6 +328,11 @@ async fn active_request_uses_registered_metadata_before_durable_persistence() {
             None,
             None,
             None,
+        )
+        .with_caller_identity(
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            Some("192.0.2.42:11204"),
+            Some(crate::logging::CallerPathType::RemoteQuicHttp),
         ),
     );
     service.merge_request_metadata(
@@ -277,8 +369,77 @@ async fn active_request_uses_registered_metadata_before_durable_persistence() {
     assert_eq!(json["items"][0]["model"], "acme/model");
     assert_eq!(json["items"][0]["provider"], "mesh");
     assert_eq!(json["items"][0]["engine"], "raw_ingress");
+    assert_eq!(
+        json["items"][0]["callerEndpointId"],
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    );
+    assert_eq!(json["items"][0]["callerAddr"], "192.0.2.42:11204");
+    assert_eq!(json["items"][0]["callerPathType"], "remote_quic_http");
     assert_eq!(json["items"][0]["source"], "active");
     drop(guard);
+}
+
+#[tokio::test]
+async fn active_and_durable_api_json_expose_endpoint_only_caller_without_path_fields() {
+    let (_temp, state) = runtime();
+    let service = state.service_for_test().expect("logging service");
+    let active_request_id = RequestId::new();
+    let durable_request_id = RequestId::new();
+    let active_endpoint_id = "ad".repeat(32);
+    let durable_endpoint_id = "ae".repeat(32);
+    let (active_guard, _) = service.register_request_with_metadata(
+        active_request_id,
+        crate::logging::RequestSummaryMetadata::from_parts(
+            Some("responses"),
+            Some("active-model"),
+            None,
+            None,
+        )
+        .with_caller_identity(Some(&active_endpoint_id), None, None),
+    );
+    let (durable_guard, _) = service.register_request_with_metadata(
+        durable_request_id,
+        crate::logging::RequestSummaryMetadata::from_parts(
+            Some("responses"),
+            Some("durable-model"),
+            None,
+            None,
+        )
+        .with_caller_identity(Some(&durable_endpoint_id), None, None),
+    );
+    service
+        .transition_terminal(
+            durable_request_id,
+            &durable_guard,
+            crate::logging::TerminalOutcome::Completed,
+        )
+        .expect("durable request terminalizes");
+    assert!(service.pump_sync().await > 0);
+
+    let active_page = list_requests(
+        &state,
+        "/api/logs/requests?source=active&model=active-model",
+    )
+    .await
+    .expect("active endpoint-only request");
+    let durable_page = list_requests(
+        &state,
+        "/api/logs/requests?source=durable&model=durable-model&outcome=completed",
+    )
+    .await
+    .expect("durable endpoint-only request");
+
+    for (page, endpoint_id) in [
+        (active_page, active_endpoint_id.as_str()),
+        (durable_page, durable_endpoint_id.as_str()),
+    ] {
+        let json = serde_json::to_value(page).expect("request page JSON");
+        assert_eq!(json["items"].as_array().expect("items").len(), 1);
+        assert_eq!(json["items"][0]["callerEndpointId"], endpoint_id);
+        assert!(json["items"][0].get("callerAddr").is_none());
+        assert!(json["items"][0].get("callerPathType").is_none());
+    }
+    drop(active_guard);
 }
 
 #[tokio::test]
@@ -345,6 +506,11 @@ async fn registered_metadata_is_persisted_and_durably_filterable_without_fabrica
             None,
             None,
             None,
+        )
+        .with_caller_identity(
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            None,
+            Some(crate::logging::CallerPathType::Relay),
         ),
     );
     service.merge_request_metadata(
@@ -388,6 +554,12 @@ async fn registered_metadata_is_persisted_and_durably_filterable_without_fabrica
     assert_eq!(json["items"][0]["model"], "acme/model");
     assert_eq!(json["items"][0]["provider"], "mesh");
     assert_eq!(json["items"][0]["engine"], "raw_ingress");
+    assert_eq!(
+        json["items"][0]["callerEndpointId"],
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    );
+    assert!(json["items"][0].get("callerAddr").is_none());
+    assert_eq!(json["items"][0]["callerPathType"], "relay");
     assert_eq!(json["items"][0]["source"], "durable");
 
     let absent_detail = request_detail(&state, &absent.as_uuid().to_string())
@@ -398,6 +570,9 @@ async fn registered_metadata_is_persisted_and_durably_filterable_without_fabrica
     assert_eq!(absent_json["model"], serde_json::Value::Null);
     assert_eq!(absent_json["provider"], serde_json::Value::Null);
     assert_eq!(absent_json["engine"], serde_json::Value::Null);
+    assert!(absent_json.get("callerEndpointId").is_none());
+    assert!(absent_json.get("callerAddr").is_none());
+    assert!(absent_json.get("callerPathType").is_none());
 }
 
 #[tokio::test]
@@ -636,6 +811,150 @@ async fn audit_list_exposes_typed_context_without_arbitrary_detail() {
     assert_eq!(row["outcome"], "ready");
     assert_eq!(row["durationMs"], 42);
     assert!(!json.to_string().contains("SENTINEL-AUDIT-SECRET"));
+}
+
+#[tokio::test]
+async fn audit_list_omits_malformed_command_summary() {
+    let (_temp, state) = runtime();
+    state
+        .store()
+        .expect("store")
+        .insert_audit_entry(
+            "00000000-0000-4000-8000-000000000024",
+            None,
+            "2026-08-12T12:00:00Z",
+            "cli",
+            "command_completed",
+            Some(
+                r#"{"context_version":1,"command_summary":"mesh-llm gpus --draft run-benchmark --backend cuda"}"#,
+            ),
+        )
+        .expect("seed malformed command summary");
+
+    let page = list_audits(&state, "/api/logs/audit?limit=10")
+        .await
+        .expect("list malformed command summary");
+    let json = serde_json::to_value(page).expect("serialize audit page");
+    assert!(json["items"][0].get("commandSummary").is_none());
+    assert!(!json.to_string().contains("private-model-name"));
+}
+
+#[tokio::test]
+async fn audit_list_omits_duplicate_command_summary_flags() {
+    let (_temp, state) = runtime();
+    state
+        .store()
+        .expect("store")
+        .insert_audit_entry(
+            "00000000-0000-4000-8000-000000000027",
+            None,
+            "2026-08-12T12:00:00Z",
+            "cli",
+            "command_completed",
+            Some(r#"{"context_version":1,"command_summary":"mesh-llm models list --json --json"}"#),
+        )
+        .expect("seed duplicate command summary");
+
+    let page = list_audits(&state, "/api/logs/audit?limit=10")
+        .await
+        .expect("list duplicate command summary");
+    let json = serde_json::to_value(page).expect("serialize audit page");
+    assert!(json["items"][0].get("commandSummary").is_none());
+}
+
+#[tokio::test]
+async fn audit_list_omits_deep_malformed_command_summary() {
+    let (_temp, state) = runtime();
+    state
+        .store()
+        .expect("store")
+        .insert_audit_entry(
+            "00000000-0000-4000-8000-000000000026",
+            None,
+            "2026-08-12T12:00:00Z",
+            "cli",
+            "command_completed",
+            Some(
+                r#"{"context_version":1,"command_summary":"mesh-llm load unload status discover rotate-key setup --port 1234"}"#,
+            ),
+        )
+        .expect("seed deep malformed command summary");
+
+    let page = list_audits(&state, "/api/logs/audit?limit=10")
+        .await
+        .expect("list deep malformed command summary");
+    let json = serde_json::to_value(page).expect("serialize audit page");
+    assert!(json["items"][0].get("commandSummary").is_none());
+}
+
+#[tokio::test]
+async fn audit_list_preserves_valid_command_summary() {
+    let (_temp, state) = runtime();
+    state
+        .store()
+        .expect("store")
+        .insert_audit_entry(
+            "00000000-0000-4000-8000-000000000025",
+            None,
+            "2026-08-12T12:00:00Z",
+            "cli",
+            "command_completed",
+             Some(r#"{"context_version":1,"command_summary":"mesh-llm runtime guardrails --mode metrics --port 41731 --root-relay [REDACTED]"}"#),
+        )
+        .expect("seed valid command summary");
+
+    let page = list_audits(&state, "/api/logs/audit?limit=10")
+        .await
+        .expect("list valid command summary");
+    let json = serde_json::to_value(page).expect("serialize audit page");
+    assert_eq!(
+        json["items"][0]["commandSummary"],
+        "mesh-llm runtime guardrails --mode metrics --port 41731 --root-relay [REDACTED]"
+    );
+}
+
+#[tokio::test]
+async fn audit_list_exposes_mesh_peer_direct_path_and_omits_relay_address() {
+    let (_temp, state) = runtime();
+    let store = state.store().expect("store");
+    store
+        .insert_audit_entry(
+            "00000000-0000-4000-8000-000000000023",
+            None,
+            "2026-08-12T12:00:01Z",
+            "mesh",
+            "mesh_quic_inbound_accepted",
+            Some(
+                r#"{"context_version":1,"subject_kind":"mesh_peer","subject_id":"peer-direct","remote_addr":"192.168.1.44:11204","path_type":"direct"}"#,
+            ),
+        )
+        .expect("seed direct peer audit");
+    store
+        .insert_audit_entry(
+            "00000000-0000-4000-8000-000000000024",
+            None,
+            "2026-08-12T12:00:00Z",
+            "mesh",
+            "mesh_quic_inbound_accepted",
+            Some(
+                r#"{"context_version":1,"subject_kind":"mesh_peer","subject_id":"peer-relay","remote_addr":"203.0.113.10:443","path_type":"relay"}"#,
+            ),
+        )
+        .expect("seed relay peer audit");
+
+    let page = list_audits(&state, "/api/logs/audit?limit=10")
+        .await
+        .expect("list peer audits");
+    let json = serde_json::to_value(page).expect("serialize page");
+    let direct = &json["items"][0];
+    let relay = &json["items"][1];
+
+    assert_eq!(direct["subjectKind"], "mesh_peer");
+    assert_eq!(direct["subjectId"], "peer-direct");
+    assert_eq!(direct["remoteAddr"], "192.168.1.44:11204");
+    assert_eq!(direct["pathType"], "direct");
+    assert_eq!(relay["pathType"], "relay");
+    assert!(relay.get("remoteAddr").is_none());
 }
 
 #[tokio::test]
