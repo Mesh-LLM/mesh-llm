@@ -15,6 +15,57 @@ UI_DIR = ROOT / "crates" / "mesh-llm-ui"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
+def _parse_partial_version(text: str) -> tuple[int, int, int]:
+    parts = (text.split(".") + ["0", "0"])[:3]
+    return tuple(int(part) for part in parts)
+
+
+def _version_satisfies_range(version: str, range_spec: str) -> bool:
+    """Check a concrete x.y.z version against a small, space-separated-AND
+    subset of node-semver ranges: `>=`, `<=`, `>`, `<`, and bare-equals
+    comparators only.
+
+    `engines.pnpm` in this repo has never needed `^`, `~`, or `||`; if it
+    grows one, extend this rather than reaching for a dependency.
+    """
+    version_tuple = _parse_partial_version(version)
+    comparator = re.compile(r"^(>=|<=|>|<|=)?(\d+(?:\.\d+){0,2})$")
+    for token in range_spec.split():
+        match = comparator.match(token)
+        if match is None:
+            raise ValueError(f"unsupported engines.pnpm range token: {token!r}")
+        operator, bound = match.group(1) or "=", match.group(2)
+        bound_tuple = _parse_partial_version(bound)
+        satisfied = {
+            ">=": version_tuple >= bound_tuple,
+            "<=": version_tuple <= bound_tuple,
+            ">": version_tuple > bound_tuple,
+            "<": version_tuple < bound_tuple,
+            "=": version_tuple == bound_tuple,
+        }[operator]
+        if not satisfied:
+            return False
+    return True
+
+
+class SemverRangeTests(unittest.TestCase):
+    """Direct coverage for the range check the engines.pnpm test relies on."""
+
+    def test_satisfies_a_lower_bound(self) -> None:
+        self.assertTrue(_version_satisfies_range("10.30.3", ">=10"))
+
+    def test_rejects_a_pin_below_an_exclusive_upper_bound_stated_as_a_lower_bound(
+        self,
+    ) -> None:
+        self.assertFalse(_version_satisfies_range("10.30.3", "<10"))
+
+    def test_rejects_a_pin_outside_a_narrow_conjunctive_range(self) -> None:
+        self.assertFalse(_version_satisfies_range("10.30.3", ">=10 <10.30.0"))
+
+    def test_satisfies_a_wide_conjunctive_range(self) -> None:
+        self.assertTrue(_version_satisfies_range("10.30.3", ">=10 <11"))
+
+
 class BuildUiScriptTests(unittest.TestCase):
     def test_ui_pnpm_workspace_names_root_package(self) -> None:
         workspace = ROOT / "crates" / "mesh-llm-ui" / "pnpm-workspace.yaml"
@@ -69,9 +120,10 @@ class BuildUiScriptTests(unittest.TestCase):
             {declared_major.group(1)},
             "engines.pnpm and CI's pnpm/action-setup version have drifted apart",
         )
+        pinned_version = pinned.removeprefix("pnpm@")
         self.assertTrue(
-            pinned.startswith(f"pnpm@{declared_major.group(1)}."),
-            f"packageManager {pinned} is outside the declared engines.pnpm range {required}",
+            _version_satisfies_range(pinned_version, required),
+            f"packageManager {pinned} does not satisfy the declared engines.pnpm range {required!r}",
         )
 
     def test_ui_npmrc_enforces_the_declared_engine(self) -> None:
