@@ -78,7 +78,8 @@ class BuildUiScriptTests(unittest.TestCase):
     def ci_pnpm_majors(self) -> set[str]:
         """Every pnpm major `pnpm/action-setup` is asked to install in CI."""
         majors: set[str] = set()
-        for workflow in sorted(WORKFLOWS.glob("*.yml")):
+        workflows = [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]
+        for workflow in sorted(workflows):
             for block in re.finditer(
                 r"uses:\s*pnpm/action-setup@[^\n]*\n(?P<rest>(?:[ \t]+[^\n]*\n)*)",
                 workflow.read_text(encoding="utf-8"),

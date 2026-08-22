@@ -21,7 +21,7 @@ def _recipe_dependencies(header_line: str) -> list[str]:
     Parameterized headers like 'build-runtime backend="" cuda_arch="":' have no
     colon before the trailing one, so they correctly yield no dependencies.
     """
-    _, _, deps_part = header_line.partition(":")
+    _, _, deps_part = header_line.rpartition(":")
     return deps_part.split()
 
 
@@ -65,7 +65,7 @@ def _run_release_recipe(
 
         run_env = {"PATH": os.environ["PATH"]}
         run_env.update(env or {})
-        subprocess.run(
+        result = subprocess.run(
             ["just", "-f", str(justfile), name, *args],
             cwd=workdir,
             env=run_env,
@@ -75,7 +75,10 @@ def _run_release_recipe(
         )
 
         if not probe.exists():
-            return {"arches": "", "toolkit_major": "", "args": ""}
+            raise AssertionError(
+                f"`just {name}` did not reach the packager stub "
+                f"(exit {result.returncode})\nstdout: {result.stdout}\nstderr: {result.stderr}"
+            )
         recorded = probe.read_text(encoding="utf-8").splitlines()
         recorded += [""] * (3 - len(recorded))
         return {"arches": recorded[0], "toolkit_major": recorded[1], "args": recorded[2]}
