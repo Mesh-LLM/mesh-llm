@@ -411,6 +411,27 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
     if config.verify_window.min_tokens > config.verify_window.max_tokens {
         bail!("skippy speculative verify window requires min_tokens <= max_tokens");
     }
+    let ngram_fallback = pick_string(
+        input
+            .model_config
+            .and_then(|value| value.ngram_fallback.as_deref()),
+        input
+            .global_config
+            .and_then(|value| value.ngram_fallback.as_deref()),
+        None,
+    );
+    config.ngram_fallback_draft = match ngram_fallback {
+        "draft" => {
+            if config.ngram.is_none() {
+                bail!(
+                    "skippy speculative ngram_fallback = \"draft\" requires an N-gram strategy"
+                );
+            }
+            true
+        }
+        "none" | "" => false,
+        other => bail!("skippy speculative ngram_fallback must be draft or none, got {other}"),
+    };
     config.validate()?;
     Ok(config)
 }
@@ -506,6 +527,7 @@ fn package_decode_config(
         ngram,
         extension,
         verify_window,
+        ngram_fallback_draft: false,
     }))
 }
 

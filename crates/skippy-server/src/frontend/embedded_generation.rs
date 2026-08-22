@@ -805,17 +805,28 @@ impl StageOpenAiBackend {
                     )
                 },
             );
+            // Draft fallback keeps the draft model resident purely as a
+            // proposal source for the pipelined path when the N-gram proposer
+            // misses; the classic serial draft loop stays disabled. Pipelined
+            // paths only — at depth 1 the classic draft loop is strictly
+            // better.
+            let ngram_fallback_draft_enabled = effective_speculative.ngram_fallback_draft
+                && effective_speculative.ngram.is_some()
+                && draft_guard.is_some()
+                && verify_window_scheduler.depth() > 1;
+            let draft_blocks_pipeline = draft_guard.is_some() && !ngram_fallback_draft_enabled;
             let composite_sidecar_enabled =
-                native_mtp_options.ngram_hybrid && draft_guard.is_none();
+                native_mtp_options.ngram_hybrid && !draft_blocks_pipeline;
             // A standalone N-gram plan (no native MTP, no draft model) can drive
             // the same verify-window pipeline; the single-window native-MTP path
             // stays composite-only, so standalone drafting still falls back to the
             // serial block at depth 1.
             let standalone_ngram_pipelining = !request.native_mtp_enabled
                 && effective_speculative.ngram.is_some()
-                && draft_guard.is_none();
-            let native_mtp_verify_windows_enabled =
-                (request.native_mtp_enabled || composite_sidecar_enabled) && draft_guard.is_none();
+                && !draft_blocks_pipeline;
+            let native_mtp_verify_windows_enabled = (request.native_mtp_enabled
+                || composite_sidecar_enabled)
+                && !draft_blocks_pipeline;
             let pipelined_decode_enabled = (composite_sidecar_enabled
                 || standalone_ngram_pipelining)
                 && verify_window_scheduler.depth() > 1;
@@ -897,6 +908,32 @@ impl StageOpenAiBackend {
                             ),
                             cached_ngram_proposer.as_mut(),
                         )?;
+                    let proposal = if proposal.tokens().len() < 2
+                        && ngram_fallback_draft_enabled
+                        && pipelined_decode_enabled
+                    {
+                        let fallback_timer = PhaseTimer::start();
+                        let draft = draft_guard
+                            .as_deref_mut()
+                            .expect("fallback requires a draft guard");
+                        draft
+                            .sync_to_context(&context_tokens)
+                            .map_err(openai_backend_error)?;
+                        let budget = native_mtp_options
+                            .ngram_max_proposal_tokens
+                            .min(draft.window.max(1))
+                            .min(native_mtp_remaining)
+                            .max(2);
+                        let draft_tokens = draft
+                            .propose(current, budget)
+                            .map_err(openai_backend_error)?;
+                        speculative_stats.fallback_draft_proposals += 1;
+                        speculative_stats.fallback_draft_tokens += draft_tokens.len();
+                        speculative_stats.fallback_draft_ms += fallback_timer.elapsed_ms();
+                        NativeMtpHybridProposal::from_parts(draft_tokens, 0, true)
+                    } else {
+                        proposal
+                    };
                     if proposal.supports_positional_pipeline(verify_window_scheduler.depth())
                         && ngram_sidecar_controller.permit_pipeline_start()
                         && verify_window_scheduler.supports_pipelining(
@@ -1013,12 +1050,40 @@ impl StageOpenAiBackend {
                                     );
                                 let refill_budget =
                                     ngram_sidecar_controller.refill_limit(available_refill_tokens);
-                                let appended = refill_pipeline_ngram_candidates(
+                                let mut appended = refill_pipeline_ngram_candidates(
                                     pipeline,
                                     &context_tokens,
                                     &mut cached_ngram_proposer,
                                     refill_budget,
                                 )?;
+                                if appended == 0
+                                    && !pipeline.has_remaining_candidates()
+                                    && ngram_fallback_draft_enabled
+                                    && refill_budget >= 2
+                                {
+                                    let fallback_timer = PhaseTimer::start();
+                                    let draft = draft_guard
+                                        .as_deref_mut()
+                                        .expect("fallback requires a draft guard");
+                                    let mut sequence = context_tokens.clone();
+                                    sequence.extend_from_slice(pipeline.optimistic_suffix());
+                                    if let Some(&last) = sequence.last() {
+                                        draft
+                                            .sync_to_context(&sequence)
+                                            .map_err(openai_backend_error)?;
+                                        let budget = refill_budget.min(draft.window.max(1));
+                                        let draft_tokens = draft
+                                            .propose(last, budget)
+                                            .map_err(openai_backend_error)?;
+                                        speculative_stats.fallback_draft_proposals += 1;
+                                        speculative_stats.fallback_draft_tokens +=
+                                            draft_tokens.len();
+                                        speculative_stats.fallback_draft_ms +=
+                                            fallback_timer.elapsed_ms();
+                                        appended =
+                                            pipeline.append_ngram_candidates(&draft_tokens);
+                                    }
+                                }
                                 verify_window_scheduler.record_horizon_refill(appended);
                             }
                             if !pipeline.has_remaining_candidates() {
@@ -1402,7 +1467,7 @@ impl StageOpenAiBackend {
                         continue;
                     }
                 }
-                if draft_guard.is_some()
+                if (draft_guard.is_some() && !ngram_fallback_draft_enabled)
                     || (effective_speculative.ngram.is_some() && !pipelined_decode_enabled)
                 {
                     let remaining = (request.max_tokens as usize).saturating_sub(decoded_tokens);

@@ -641,7 +641,15 @@ fn validate_verify_window_controls(
         // can switch run-ahead back off when the global defaults enable it.
         0,
         u32::try_from(MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS).expect("runahead limit fits u32"),
-    )
+    )?;
+    if let Some(fallback) = config.ngram_fallback.as_deref() {
+        validate_allowed(
+            fallback,
+            &["draft", "none"],
+            &format!("{base_path}.ngram_fallback"),
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) -> DiagnosticResult {

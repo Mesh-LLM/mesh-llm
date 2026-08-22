@@ -20,6 +20,10 @@ pub(in crate::frontend) struct DraftRunner {
     pub(in crate::frontend) window: usize,
     pub(in crate::frontend) _model: StageModel,
     pub(in crate::frontend) session: StageSession,
+    /// Tokens currently materialized in the draft session's KV, maintained so
+    /// fallback proposals can advance incrementally instead of re-prefilling
+    /// the whole context on every call.
+    synced: Vec<i32>,
 }
 
 impl DraftRunner {
@@ -70,17 +74,41 @@ impl DraftRunner {
             window,
             _model: model,
             session,
+            synced: Vec::new(),
         })
     }
 
     pub(in crate::frontend) fn reset_to_context(&mut self, context_tokens: &[i32]) -> Result<()> {
         self.session.reset().context("reset draft session")?;
+        self.synced.clear();
         if context_tokens.len() > 1 {
+            let prefix = &context_tokens[..context_tokens.len() - 1];
             self.session
-                .prefill_chunk(&context_tokens[..context_tokens.len() - 1])
+                .prefill_chunk(prefix)
                 .context("prefill draft context")?;
+            self.synced.extend_from_slice(prefix);
         }
         Ok(())
+    }
+
+    /// Brings the draft session to `context_tokens` (all but the last token
+    /// prefilled, ready to propose from the last). Extends incrementally when
+    /// the already-synced tokens are a prefix of the target — the common case
+    /// when prior fallback proposals were accepted — and falls back to a full
+    /// reset on divergence.
+    pub(in crate::frontend) fn sync_to_context(&mut self, context_tokens: &[i32]) -> Result<()> {
+        let target = &context_tokens[..context_tokens.len().saturating_sub(1)];
+        if !self.synced.is_empty() && target.starts_with(&self.synced) {
+            let delta = &target[self.synced.len()..];
+            if !delta.is_empty() {
+                self.session
+                    .prefill_chunk(delta)
+                    .context("advance draft context")?;
+                self.synced.extend_from_slice(delta);
+            }
+            return Ok(());
+        }
+        self.reset_to_context(context_tokens)
     }
 
     pub(in crate::frontend) fn propose(
@@ -90,6 +118,7 @@ impl DraftRunner {
     ) -> Result<Vec<i32>> {
         let mut tokens = Vec::with_capacity(max_tokens);
         for _ in 0..max_tokens {
+            self.synced.push(current);
             current = self
                 .session
                 .decode_step(current)
