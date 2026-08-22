@@ -151,9 +151,13 @@ build-linux backend="" cuda_arch="" rocm_arch="":
 # Backward-compatible spelling for the explicit native-runtime primitive.
 [linux]
 build-runtime backend="" cuda_arch="" rocm_arch="":
-    @backend="{{ backend }}"; \
-      [[ -n "$$backend" ]] || backend=cpu; \
-      LLAMA_STAGE_CUDA_ARCHITECTURES="{{ cuda_arch }}" LLAMA_STAGE_AMDGPU_TARGETS="{{ rocm_arch }}" scripts/package-native-runtime.sh --build --backend "$$backend"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    backend="{{ backend }}"
+    [[ -n "$backend" ]] || backend=cpu
+    LLAMA_STAGE_CUDA_ARCHITECTURES="{{ cuda_arch }}" \
+      LLAMA_STAGE_AMDGPU_TARGETS="{{ rocm_arch }}" \
+      scripts/package-native-runtime.sh --build --backend "$backend"
 
 # Build release artifacts for the current platform.
 
@@ -189,11 +193,22 @@ release-build-aarch64: release-host-build
 # Build a Linux aarch64 CUDA release artifact (Jetson/Orin).
 # SM arches selected by MESH_CUDA_VERSION env (set by CI matrix); a bare
 # `just` invocation with the var unset detects the installed toolkit instead
-# of assuming one (see scripts/detect-cuda-toolkit-version.sh).
+# of assuming one (see scripts/detect-cuda-toolkit-version.sh). Thor (sm_110)
+# needs toolkit >= 13 -- gate on the major, the same shape as the x86_64
+# recipe's Blackwell gate, so a future CUDA 14 keeps Thor instead of falling
+# back to the pre-13 list the way a `13.*` glob did.
 release-build-aarch64-cuda: release-host-build
-    @cuda_version="${MESH_CUDA_VERSION:-$(scripts/detect-cuda-toolkit-version.sh)}"; \
-      MESH_LLM_CUDA_TOOLKIT_MAJOR="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}" \
-      LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "$cuda_version" == 13.* ]]; then echo '75;80;86;87;89;90;110'; else echo '61;75;80;86;87;89;90'; fi)" \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cuda_version="${MESH_CUDA_VERSION:-$(scripts/detect-cuda-toolkit-version.sh)}"
+    major="${cuda_version%%.*}"
+    if [[ "$major" -ge 13 ]]; then
+      arches='75;80;86;87;89;90;110'
+    else
+      arches='61;75;80;86;87;89;90'
+    fi
+    MESH_LLM_CUDA_TOOLKIT_MAJOR="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-$major}" \
+      LLAMA_STAGE_CUDA_ARCHITECTURES="$arches" \
       scripts/package-native-runtime.sh --build --backend cuda --target aarch64-unknown-linux-gnu
 
 # Prepare the pinned llama.cpp checkout and apply the Mesh-LLM ABI patch queue.
