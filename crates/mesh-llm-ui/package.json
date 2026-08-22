@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.76.0-rc6",
   "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "pnpm": ">=10"
+  },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",

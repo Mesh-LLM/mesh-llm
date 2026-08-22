@@ -9,7 +9,9 @@ This file covers local build and development workflows for this repository.
 - `just`
 - `cmake`
 - Rust toolchain (`cargo`)
-- Node.js 24 + npm (for UI development)
+- Node.js 24 + pnpm 10 or newer (for UI development). The UI lockfile keeps
+  `overrides` in `pnpm-workspace.yaml`, which pnpm 9 does not read, so pnpm 9
+  cannot install it. `corepack pnpm@10` is enough if your host pnpm is older.
 
 **macOS**: Apple Silicon. Metal is used automatically.
 
