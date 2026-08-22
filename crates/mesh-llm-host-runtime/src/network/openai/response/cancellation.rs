@@ -95,12 +95,15 @@ mod tests {
             RouteAttemptResult::RetryableTimeout,
             RouteAttemptResult::RetryableUnavailable,
             RouteAttemptResult::RetryableContextOverflow,
-            RouteAttemptResult::RetryableResponseQuality(ResponseQualityFailure::EmptyAssistantOutput),
+            RouteAttemptResult::RetryableResponseQuality(
+                ResponseQualityFailure::EmptyAssistantOutput,
+            ),
             RouteAttemptResult::CommittedStreamFailure { status_code: 200 },
         ] {
             let mut upstream = CancelRecorder::default();
 
-            let passed_through = cancel_upstream_if_client_disconnected(result, &mut upstream).await;
+            let passed_through =
+                cancel_upstream_if_client_disconnected(result, &mut upstream).await;
 
             assert_eq!(upstream.cancels, 0, "{result:?} should not cancel");
             assert_eq!(passed_through, result);

@@ -279,7 +279,8 @@ mod tests {
     /// `request_dropped`.
     #[tokio::test]
     async fn a_remote_attempt_cancels_the_peer_tunnel_when_the_client_disconnects() {
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n";
+        let header =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n";
         let mut upstream = ScriptedUpstream::new(vec![
             Ok(header.as_bytes().to_vec()),
             // The client is gone; relaying the body fails with a disconnect.
