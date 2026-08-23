@@ -103,6 +103,63 @@ serialize `(request, route)` / `(request, outcome)` into a
 transport (`plugin/types.rs:10`) to any plugin subscribed to that channel. Building that
 bridge, plus the channel-declaration/subscription plumbing, is the natural milestone 2.
 
+## Can/can't verdict: the rung-ladder response leg (acknowledged_receipt → full_bilateral)
+
+Steven's question: could the terminal/response hook (a) write an `X-Capsule-Id`-style
+value into the response, and (b) surface the terminal event, so a plugin could later
+observe the client's signed ack (over `capsule_id`+`nonce`) that lifts
+`acknowledged_receipt` → `full_bilateral`? This is the actual point of the response leg
+— an assurance rung can't be lifted without a hook that reaches both directions (server
+→ client marker, and client → server ack). Checked against source, not assumed:
+
+**(a) Writing an `X-Capsule-Id`-style value into the response: cannot, on this seam, for
+two independent reasons.**
+
+1. `on_chat_completion_terminal`'s `Success` variant carries `response: &'a
+   ChatCompletionResponse` — an **immutable** reference, by design (this milestone's hooks
+   are observe-only; see "What this milestone implements" above). Even a policy that
+   wanted to stamp a capsule id has no write access to the response through this call.
+2. Even with a mutable reference, there is nowhere on `ChatCompletionResponse` to put it.
+   The struct (`crates/openai-frontend/src/chat.rs:270-278`: `id, object, created, model,
+   choices, usage, timings`) has no open field — contrast `ChatCompletionRequest`, which
+   does carry a `pub extra: BTreeMap<String, Value>` bag (`chat.rs:45`) that
+   `chat_mesh_hooks_enabled`/`set_chat_mesh_hooks_enabled` already read/write. Nothing
+   equivalent exists on the response type today.
+3. More fundamentally, a real `X-Capsule-Id` would ride as an **HTTP response header**,
+   the same way `x-request-id` does — and that header is attached by
+   `frontend_lifecycle_middleware` (`router.rs:849-866`), an axum middleware layer that
+   wraps the *entire* `Response` **after** the handler (and therefore after
+   `HookedOpenAiBackend` and every `OpenAiHookPolicy` call) has already run
+   (`json_response_with_usage`, `router.rs:774`, is what turns the typed
+   `ChatCompletionResponse` into that `Response`, with no hook in between). `OpenAiBackend`
+   and `OpenAiHookPolicy` never see an `axum::http::Response` or its headers at all — that
+   capability lives one layer up, at the same place `x-request-id` is set, not inside this
+   milestone's hook surface.
+
+**(b) Surfacing the terminal event: partially — surfaces the exchange's own completion,
+not the later ack.** `on_chat_completion_terminal` already fires exactly once per
+non-streaming request with `Success`/`Error`/`Denied`, so a bridged plugin would learn
+"this exchange just completed" at the right moment. But it cannot surface a client ack
+for two reasons that are architectural, not just unimplemented: no capsule id exists to
+correlate against (per (a)), and — separately — the client's ack is necessarily a
+**different, later HTTP request** (there is no wire mechanism, in this exchange's
+response, for the client to attach anything to *this* call). `OpenAiHookPolicy` and
+`HookedOpenAiBackend` are scoped to one request's lifecycle; nothing in `openai-frontend`
+threads state from one request to a later, unrelated one. Observing the ack would need a
+new endpoint (or a recognized field on an existing one) plus a correlation store, neither
+of which exists.
+
+**Verdict: can't, today, on the `OpenAiHookPolicy`/`HookedOpenAiBackend` seam this
+milestone extends.** Both halves of the response leg need capability that lives outside
+it: (a) needs a seam at the HTTP middleware/response-header layer (the
+`frontend_lifecycle_middleware` layer, not `OpenAiBackend`), and (b) needs cross-request
+correlation that no part of this crate provides. A future design for the response leg is
+closer to "add a second, header-capable hook point next to
+`frontend_lifecycle_middleware`, and give `ChatCompletionResponse` an extensible field the
+way the request already has one" than to "extend the existing terminal hook" — that's a
+materially different, larger change than this milestone, and it's the concrete next
+question for whoever picks up the rung-ladder work.
+
 ## Mapping #1331's acceptance criteria
 
 | #1331 acceptance item | This milestone |
@@ -111,6 +168,7 @@ bridge, plus the channel-declaration/subscription plumbing, is the natural miles
 | Terminal event (success/error/denial) | ✅ for path 1, non-streaming; ❌ streaming (deferred); ❌ path 2 (only status-code-level metadata via `OpenAiRouteObserver`, no plugin delivery) |
 | Out-of-process plugin observes it | ⚠️ not yet — this milestone proves the in-process hook seam; the out-of-process hop is designed above but not built (see "Why this stays in-process here") |
 | Streaming / delegation | ❌ explicitly out of scope this milestone |
+| Rung-ladder response leg (capsule-id marker + client-ack observation) | ❌ not on this seam — see verdict above; needs a header-capable response hook + response extensibility + cross-request correlation, none of which exist here |
 
 ## Deliberately deferred
 
