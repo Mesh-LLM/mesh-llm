@@ -108,6 +108,60 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
     ) -> OpenAiResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::none())
     }
+
+    /// Observe the effective (post-mutation) request immediately before it is
+    /// dispatched to the backend for a non-streaming chat completion.
+    ///
+    /// This fires after [`Self::before_chat_completion`] has run and its
+    /// outcome has been applied, so `request` reflects what will actually be
+    /// sent. The route carries only what this layer knows about backend
+    /// selection: the frontend dispatches every request to one already-chosen
+    /// [`crate::backend::OpenAiBackend`], so there is no per-request backend
+    /// identity to report here.
+    async fn on_effective_chat_completion(
+        &self,
+        _request: &ChatCompletionRequest,
+        _route: &ChatExchangeRoute,
+    ) {
+    }
+
+    /// Observe the terminal outcome of a non-streaming chat completion:
+    /// success, a backend error, or denial by an earlier hook.
+    async fn on_chat_completion_terminal(
+        &self,
+        _request: &ChatCompletionRequest,
+        _outcome: &ChatCompletionOutcome<'_>,
+    ) {
+    }
+}
+
+/// The route information available to a hook at dispatch time.
+///
+/// Deliberately narrow: see [`OpenAiHookPolicy::on_effective_chat_completion`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatExchangeRoute {
+    pub model: String,
+}
+
+impl ChatExchangeRoute {
+    pub fn for_request(request: &ChatCompletionRequest) -> Self {
+        Self {
+            model: request.model.clone(),
+        }
+    }
+}
+
+/// The terminal outcome of a non-streaming chat completion, as seen by
+/// [`OpenAiHookPolicy::on_chat_completion_terminal`].
+#[derive(Debug, Clone, Copy)]
+pub enum ChatCompletionOutcome<'a> {
+    /// The backend returned a response.
+    Success { response: &'a ChatCompletionResponse },
+    /// The backend call failed or timed out.
+    Error { status: u16, message: &'a str },
+    /// An earlier hook (`before_chat_completion`) denied the request before
+    /// it reached the backend.
+    Denied { status: u16, reason: &'a str },
 }
 
 pub struct HookedOpenAiBackend {
@@ -140,11 +194,44 @@ impl OpenAiBackend for HookedOpenAiBackend {
         mut request: ChatCompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
-        let outcome = self.hooks.before_chat_completion(&mut request).await?;
+        let outcome = match self.hooks.before_chat_completion(&mut request).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let reason = error.to_string();
+                let denial = ChatCompletionOutcome::Denied {
+                    status: error.status().as_u16(),
+                    reason: &reason,
+                };
+                self.hooks
+                    .on_chat_completion_terminal(&request, &denial)
+                    .await;
+                return Err(error);
+            }
+        };
         apply_chat_hook_outcome(&mut request, &outcome);
-        self.backend
-            .chat_completion_with_context(request, context)
-            .await
+        let route = ChatExchangeRoute::for_request(&request);
+        self.hooks
+            .on_effective_chat_completion(&request, &route)
+            .await;
+        let result = self
+            .backend
+            .chat_completion_with_context(request.clone(), context)
+            .await;
+        let error_message;
+        let terminal = match &result {
+            Ok(response) => ChatCompletionOutcome::Success { response },
+            Err(error) => {
+                error_message = error.to_string();
+                ChatCompletionOutcome::Error {
+                    status: error.status().as_u16(),
+                    message: &error_message,
+                }
+            }
+        };
+        self.hooks
+            .on_chat_completion_terminal(&request, &terminal)
+            .await;
+        result
     }
 
     async fn chat_completion_stream(
@@ -471,6 +558,91 @@ mod tests {
         }
     }
 
+    struct FailingBackend;
+
+    #[async_trait]
+    impl OpenAiBackend for FailingBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(Vec::new())
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            Err(crate::errors::OpenAiError::backend("upstream exploded"))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            Err(crate::errors::OpenAiError::backend("upstream exploded"))
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum TerminalRecord {
+        Success { model: String },
+        Error { status: u16, message: String },
+        Denied { status: u16, reason: String },
+    }
+
+    #[derive(Default)]
+    struct RecordingPolicy {
+        deny: bool,
+        effective: Mutex<Vec<(ChatCompletionRequest, ChatExchangeRoute)>>,
+        terminals: Mutex<Vec<TerminalRecord>>,
+    }
+
+    #[async_trait]
+    impl OpenAiHookPolicy for RecordingPolicy {
+        async fn before_chat_completion(
+            &self,
+            _request: &mut ChatCompletionRequest,
+        ) -> OpenAiResult<ChatHookOutcome> {
+            if self.deny {
+                return Err(crate::errors::OpenAiError::invalid_request(
+                    "denied by policy",
+                ));
+            }
+            Ok(ChatHookOutcome::injected("[hint]\n"))
+        }
+
+        async fn on_effective_chat_completion(
+            &self,
+            request: &ChatCompletionRequest,
+            route: &ChatExchangeRoute,
+        ) {
+            self.effective
+                .lock()
+                .unwrap()
+                .push((request.clone(), route.clone()));
+        }
+
+        async fn on_chat_completion_terminal(
+            &self,
+            _request: &ChatCompletionRequest,
+            outcome: &ChatCompletionOutcome<'_>,
+        ) {
+            let record = match outcome {
+                ChatCompletionOutcome::Success { response } => TerminalRecord::Success {
+                    model: response.model.clone(),
+                },
+                ChatCompletionOutcome::Error { status, message } => TerminalRecord::Error {
+                    status: *status,
+                    message: (*message).to_string(),
+                },
+                ChatCompletionOutcome::Denied { status, reason } => TerminalRecord::Denied {
+                    status: *status,
+                    reason: (*reason).to_string(),
+                },
+            };
+            self.terminals.lock().unwrap().push(record);
+        }
+    }
+
     struct MediaRescueHook;
 
     #[async_trait]
@@ -734,5 +906,105 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    fn request_for(model: &str) -> ChatCompletionRequest {
+        serde_json::from_value(json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "original"}]
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn effective_request_is_observed_after_mutation_and_terminal_reports_success() {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let policy = Arc::new(RecordingPolicy::default());
+        let hooked = HookedOpenAiBackend::new(backend.clone(), policy.clone());
+
+        let response = hooked
+            .chat_completion(request_for("gpt-mesh"))
+            .await
+            .expect("backend call succeeds");
+        assert_eq!(response.model, "gpt-mesh");
+
+        // The backend actually ran: the extension must not short-circuit dispatch.
+        let seen = backend.seen.lock().unwrap().clone().expect("dispatched");
+        assert_eq!(
+            seen.messages[0].content,
+            Some(MessageContent::Text("[hint]\noriginal".to_string()))
+        );
+
+        let effective = policy.effective.lock().unwrap();
+        assert_eq!(effective.len(), 1);
+        let (effective_request, route) = &effective[0];
+        assert_eq!(route.model, "gpt-mesh");
+        assert_eq!(
+            effective_request.messages[0].content,
+            Some(MessageContent::Text("[hint]\noriginal".to_string())),
+            "the effective request must reflect before_chat_completion's mutation"
+        );
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(
+            terminals.as_slice(),
+            [TerminalRecord::Success {
+                model: "gpt-mesh".to_string()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn backend_failure_reports_terminal_error_after_observing_effective_request() {
+        let backend = Arc::new(FailingBackend);
+        let policy = Arc::new(RecordingPolicy::default());
+        let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+
+        let error = hooked
+            .chat_completion(request_for("gpt-mesh"))
+            .await
+            .expect_err("backend fails");
+        assert_eq!(error.status().as_u16(), 502);
+
+        assert_eq!(policy.effective.lock().unwrap().len(), 1);
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0],
+            TerminalRecord::Error { status: 502, message }
+                if message.contains("upstream exploded")
+        ));
+    }
+
+    #[tokio::test]
+    async fn denial_by_before_hook_skips_dispatch_and_effective_request_but_reports_terminal() {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let policy = Arc::new(RecordingPolicy {
+            deny: true,
+            ..RecordingPolicy::default()
+        });
+        let hooked = HookedOpenAiBackend::new(backend.clone(), policy.clone());
+
+        let error = hooked
+            .chat_completion(request_for("gpt-mesh"))
+            .await
+            .expect_err("policy denies the request");
+        assert_eq!(error.status().as_u16(), 400);
+
+        // A denied request must never reach the backend or be reported as dispatched.
+        assert!(backend.seen.lock().unwrap().is_none());
+        assert!(policy.effective.lock().unwrap().is_empty());
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0],
+            TerminalRecord::Denied { status: 400, reason }
+                if reason.contains("denied by policy")
+        ));
     }
 }

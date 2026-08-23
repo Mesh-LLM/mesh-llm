@@ -42,9 +42,9 @@ pub use guardrails::{
     StreamingGuardrailMode,
 };
 pub use hooks::{
-    ChatHookAction, ChatHookOutcome, ChatMediaKind, ChatMediaRef, GenerationHookSignals,
-    HookedOpenAiBackend, MESH_HOOKS_FIELD, OpenAiHookPolicy, PrefillHookSignals,
-    apply_chat_hook_outcome, chat_mesh_hooks_enabled, first_chat_media,
+    ChatCompletionOutcome, ChatExchangeRoute, ChatHookAction, ChatHookOutcome, ChatMediaKind,
+    ChatMediaRef, GenerationHookSignals, HookedOpenAiBackend, MESH_HOOKS_FIELD, OpenAiHookPolicy,
+    PrefillHookSignals, apply_chat_hook_outcome, chat_mesh_hooks_enabled, first_chat_media,
     inject_text_into_chat_messages, set_chat_mesh_hooks_enabled,
 };
 pub use lifecycle::{
