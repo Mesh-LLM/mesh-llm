@@ -104,7 +104,7 @@ deadline handling.
 
 - `serve-binary` is the tuned binary stage-to-stage path.
 - `serve-binary` participates in the breaking generation-4 stage protocol.
-  Stage compatibility requires `stage-generation-4`; direct prediction return and
+  Stage compatibility requires `stage-generation-5`; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
   generation-4 topology.

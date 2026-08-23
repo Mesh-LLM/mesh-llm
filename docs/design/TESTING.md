@@ -848,7 +848,7 @@ cached and a worker does not:
   to open `skippy-stage/2`, then Skippy artifact-transfer stream 0x03, to
   fetch only its assigned package files before the normal HF fallback path.
 - Current/released mixed mesh: a released coordinator without advertised
-  `skippy-stage/2` `artifact-transfer`, `stage-generation-4`, and
+  `skippy-stage/2` `artifact-transfer`, `stage-generation-5`, and
   `direct-prediction-return` support must not be selected for a generation-4
   split topology; the worker must fall back to local/HF package resolution.
 - Default public-mesh safety: with `MESH_LLM_ARTIFACT_TRANSFER` unset, the node

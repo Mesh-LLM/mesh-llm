@@ -44,7 +44,7 @@ chain alone makes the hot path six hops, or about 60 ms before compute.
 
 Stage protocol generation 4 is a compatibility-breaking change. A peer is stage
 compatible only when it advertises both `skippy-stage/2` and
-`stage-generation-4`. Prediction-bearing messages return
+`stage-generation-5`. Prediction-bearing messages return
 directly from the final/readout stage to the driver-facing stage. Intermediate stages
 continue to forward activations and may handle cold-path control acknowledgments,
 but they are not part of the decode-token prediction return path.
