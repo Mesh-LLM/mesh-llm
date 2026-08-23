@@ -123,14 +123,14 @@ Profiles are closed and event-derived:
 
 | Profile | Selection |
 | --- | --- |
-| pr-draft | Quality, affected Rust signal, directly owned web/product rows, core smoke only |
+| pr-draft | No build slices; stable planner/gate results only, except CI-control or runner-infrastructure fail-open |
 | pr-ready | Complete targeted rows for direct domains and affected Rust dependents |
 | main | Every workspace crate and every supported product/platform/backend/SDK row |
 | manual-full | Main-equivalent non-publishing dispatch |
 
-The selected PR row is semantically identical to main. Only plan membership,
-trust-derived cache mode, short-lived artifact namespace, provider label and
-optional trusted credentials may differ.
+The selected ready-PR row is semantically identical to main. Draft PRs select
+no build row. Only plan membership, trust-derived cache mode, short-lived
+artifact namespace, provider label and optional trusted credentials may differ.
 
 ## Slice catalog
 

@@ -71,6 +71,15 @@ class PlanCiTests(unittest.TestCase):
             },
         )
 
+    def test_draft_profile_skips_build_slices_for_regular_changes(self) -> None:
+        payload = fixture("runtime.json")
+        payload.update({"profile": "pr-draft", "event_name": "pull_request"})
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        self.assertEqual(plan["required_slices"], [])
+        self.assertTrue(all(not rows for rows in plan["matrices"].values()))
+
     def test_runtime_change_separates_direct_and_affected_crates(self) -> None:
         plan = PLANNER.build_plan(fixture("runtime.json"), root=ROOT)
 

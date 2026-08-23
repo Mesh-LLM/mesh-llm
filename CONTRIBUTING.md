@@ -201,7 +201,7 @@ new jobs.
 
 | Change class | PR profile | Main profile |
 | --- | --- | --- |
-| Draft pull request | `pr-draft`: quality plus the smallest affected signal and core smoke | n/a |
+| Draft pull request | `pr-draft`: stable planner/gate results only; no build slices unless CI-control fail-open applies | n/a |
 | Ready pull request | `pr-ready`: complete targeted rows and affected Rust dependents | n/a |
 | Push to `main` | n/a | `main`: every workspace crate and supported product/platform/backend/SDK row |
 | Manual dispatch | `manual-full` when invoked from the PR entrypoint | `main`-equivalent full validation from `ci.yml` |
