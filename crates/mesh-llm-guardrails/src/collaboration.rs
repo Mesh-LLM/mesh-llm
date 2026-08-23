@@ -139,6 +139,7 @@ impl CollaborationContract {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CollaborationOutputError {
+    InvalidChoiceCount,
     InvalidToolCallCount,
     WrongTool { expected: String, actual: String },
     InvalidArguments,
@@ -148,6 +149,9 @@ pub enum CollaborationOutputError {
 impl std::fmt::Display for CollaborationOutputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidChoiceCount => {
+                f.write_str("report_required output must contain exactly one choice")
+            }
             Self::InvalidToolCallCount => {
                 f.write_str("report_required output must contain exactly one tool call")
             }
@@ -227,8 +231,17 @@ pub fn finalize_openai_response_value(
     response: &mut Value,
     contract: &CollaborationContract,
 ) -> Result<bool, CollaborationOutputError> {
-    let message = response
-        .pointer_mut("/choices/0/message")
+    let choices = response
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .filter(|choices| choices.len() == 1)
+        .ok_or(CollaborationOutputError::InvalidChoiceCount)?;
+    let choice = choices
+        .first_mut()
+        .and_then(Value::as_object_mut)
+        .ok_or(CollaborationOutputError::InvalidChoiceCount)?;
+    let message = choice
+        .get_mut("message")
         .and_then(Value::as_object_mut)
         .ok_or(CollaborationOutputError::MissingReportBody)?;
     let tool_calls = message.get("tool_calls").cloned();
@@ -251,12 +264,7 @@ pub fn finalize_openai_response_value(
             }
         }]),
     );
-    if let Some(choice) = response
-        .pointer_mut("/choices/0")
-        .and_then(Value::as_object_mut)
-    {
-        choice.insert("finish_reason".into(), Value::String("tool_calls".into()));
-    }
+    choice.insert("finish_reason".into(), Value::String("tool_calls".into()));
     Ok(true)
 }
 

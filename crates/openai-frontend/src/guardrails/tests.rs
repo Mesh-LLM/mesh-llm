@@ -1429,7 +1429,7 @@ async fn report_required_wraps_prose_and_locks_routing() {
         "small-model",
         "Tests pass.",
     ))]));
-    let guarded = GuardedOpenAiBackend::new(backend, enforce_policy());
+    let guarded = GuardedOpenAiBackend::new(backend, GuardrailPolicy::default());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "small-model",
         "messages": [{"role":"user","content":"Report the result"}],
@@ -1480,6 +1480,34 @@ async fn report_required_wraps_prose_and_locks_routing() {
 }
 
 #[tokio::test]
+async fn report_required_rejects_multiple_choices() {
+    let mut backend_response = response_with_content("small-model", "first");
+    let mut second = backend_response.choices[0].clone();
+    second.index = 1;
+    second.message.content = Some("second".to_string());
+    backend_response.choices.push(second);
+    let backend = Arc::new(SequencedBackend::new(vec![Ok(backend_response)]));
+    let guarded = GuardedOpenAiBackend::new(backend, GuardrailPolicy::default());
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model":"small-model",
+        "messages":[{"role":"user","content":"Report the result"}],
+        "tools":[{"type":"function","function":{"name":"buzz_send","parameters":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}}}],
+        "mesh_collaboration":{"mode":"report_required","version":1,"tool":"buzz_send","body_argument":"content","locked_arguments":{}}
+    }))
+    .expect("request");
+
+    let error = guarded
+        .chat_completion(request)
+        .await
+        .expect_err("multiple choices must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("report_required output must contain exactly one choice")
+    );
+}
+
+#[tokio::test]
 async fn absent_collaboration_contract_preserves_ordinary_response() {
     let backend = Arc::new(SequencedBackend::new(vec![Ok(response_with_content(
         "small-model",
@@ -1508,7 +1536,7 @@ async fn report_required_passes_intermediate_tool_call_through() {
         None,
     );
     let backend = Arc::new(SequencedBackend::new(vec![Ok(intermediate.clone())]));
-    let guarded = GuardedOpenAiBackend::new(backend, enforce_policy());
+    let guarded = GuardedOpenAiBackend::new(backend, GuardrailPolicy::default());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model":"small-model",
         "messages":[{"role":"user","content":"Inspect then report"}],

@@ -94,10 +94,7 @@ impl GuardedOpenAiBackend {
             request.tools.as_ref(),
         )
         .map_err(|error| crate::errors::OpenAiError::invalid_request(error.to_string()))?;
-        let response = self
-            .backend
-            .chat_completion_with_context(request, context)
-            .await?;
+        let response = self.guarded_chat_completion(request, context).await?;
         finalize_collaboration_response(response, &contract)
     }
 
@@ -333,10 +330,12 @@ fn finalize_collaboration_response(
     mut response: ChatCompletionResponse,
     contract: &mesh_llm_guardrails::CollaborationContract,
 ) -> OpenAiResult<ChatCompletionResponse> {
-    let choice = response
-        .choices
-        .first_mut()
-        .ok_or_else(|| crate::errors::OpenAiError::backend("backend returned no choices"))?;
+    if response.choices.len() != 1 {
+        return Err(crate::errors::OpenAiError::backend(
+            "report_required output must contain exactly one choice",
+        ));
+    }
+    let choice = response.choices.first_mut().expect("choice count checked");
     if let Some(tool_calls) = choice.message.tool_calls.as_ref()
         && !mesh_llm_guardrails::collaboration_calls_output_tool(tool_calls, contract)
     {
