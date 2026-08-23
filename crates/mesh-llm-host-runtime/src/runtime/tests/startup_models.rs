@@ -1394,7 +1394,11 @@ fn skippy_telemetry_debug_keeps_debug_level_when_endpoint_is_set() {
 }
 
 #[test]
-fn pinned_gpu_startup_preflight_cli_models_bypass_config_gpu_id() {
+fn pinned_gpu_startup_preflight_cli_models_ignore_unrelated_config_gpu_id() {
+    // The CLI-requested model ref ("Qwen3-8B-Q4_K_M") does not match the
+    // configured row ("Ignored-Model"), so that row's device pin must never
+    // apply — unlike `pinned_gpu_startup_preflight_cli_models_resolve_matching_config_gpu_id`,
+    // where the refs match and the persisted pin does apply.
     let options = runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M"]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
@@ -1442,6 +1446,237 @@ fn pinned_gpu_startup_preflight_cli_models_bypass_config_gpu_id() {
     assert!(!specs[0].config_owned);
     assert_eq!(plans[0].gpu_id, None);
     assert_eq!(plans[0].pinned_gpu, None);
+}
+
+#[test]
+fn pinned_gpu_startup_preflight_cli_models_resolve_matching_config_gpu_id() {
+    // Reproduces the reported startup failure: `mesh-llm serve --model
+    // <ref>` on a host with a persisted per-model PCI stable-id pin for that
+    // exact ref must resolve the pin to a native backend device name before
+    // it reaches the runtime, not bypass it the way an unrelated config row
+    // legitimately does.
+    let options = runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M"]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        models: vec![plugin::ModelConfigEntry {
+            model: "Qwen3-8B-Q4_K_M".into(),
+            gpu_id: Some("pci:0000:65:00.0".into()),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
+
+    let mut plans = vec![StartupModelPlan {
+        declared_ref: "Qwen3-8B-Q4_K_M".into(),
+        resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
+        mmproj_path: None,
+        ctx_size: None,
+        gpu_id: specs[0].gpu_id.clone(),
+        pinned_gpu: None,
+        parallel: None,
+        cache_type_k: None,
+        cache_type_v: None,
+        n_batch: None,
+        n_ubatch: None,
+        flash_attention: FlashAttentionType::Auto,
+        profile: String::new(),
+    }];
+    let gpus = vec![
+        synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0")),
+        synthetic_gpu(1, Some("pci:0000:b3:00.0"), Some("CUDA1")),
+    ];
+
+    preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+        .unwrap();
+
+    assert!(!specs[0].config_owned);
+    assert_eq!(
+        plans[0]
+            .pinned_gpu
+            .as_ref()
+            .map(|gpu| gpu.backend_device.as_str()),
+        Some("CUDA0")
+    );
+}
+
+#[test]
+fn pinned_gpu_startup_preflight_cli_device_overrides_stale_config_gpu_id() {
+    // An explicit CLI `--device` must win over a persisted per-model
+    // `hardware.device` for the model being started, even when the
+    // persisted value points at a different (e.g. stale/incompatible) GPU.
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--model",
+        "Qwen3-8B-Q4_K_M",
+        "--device",
+        "CUDA1",
+    ]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        models: vec![plugin::ModelConfigEntry {
+            model: "Qwen3-8B-Q4_K_M".into(),
+            gpu_id: Some("pci:0000:65:00.0".into()),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("CUDA1"));
+
+    let mut plans = vec![StartupModelPlan {
+        declared_ref: "Qwen3-8B-Q4_K_M".into(),
+        resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
+        mmproj_path: None,
+        ctx_size: None,
+        gpu_id: specs[0].gpu_id.clone(),
+        pinned_gpu: None,
+        parallel: None,
+        cache_type_k: None,
+        cache_type_v: None,
+        n_batch: None,
+        n_ubatch: None,
+        flash_attention: FlashAttentionType::Auto,
+        profile: String::new(),
+    }];
+    let gpus = vec![
+        synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0")),
+        synthetic_gpu(1, Some("pci:0000:b3:00.0"), Some("CUDA1")),
+    ];
+
+    preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+        .unwrap();
+
+    assert_eq!(
+        plans[0]
+            .pinned_gpu
+            .as_ref()
+            .map(|gpu| gpu.backend_device.as_str()),
+        Some("CUDA1")
+    );
+}
+
+#[test]
+fn pinned_gpu_startup_preflight_cli_device_resolves_under_auto_assignment() {
+    // `--device` must resolve even when `gpu.assignment` stays "auto" (the
+    // default) and no per-model device is configured at all — the
+    // documented "bypass the persisted config entirely" workaround must not
+    // be the only way to make `--device` take effect.
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--model",
+        "Qwen3-8B-Q4_K_M",
+        "--device",
+        "CUDA0",
+    ]);
+    let config = plugin::MeshConfig::default();
+    assert_eq!(config.gpu.assignment, plugin::GpuAssignment::Auto);
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("CUDA0"));
+
+    let mut plans = vec![StartupModelPlan {
+        declared_ref: "Qwen3-8B-Q4_K_M".into(),
+        resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
+        mmproj_path: None,
+        ctx_size: None,
+        gpu_id: specs[0].gpu_id.clone(),
+        pinned_gpu: None,
+        parallel: None,
+        cache_type_k: None,
+        cache_type_v: None,
+        n_batch: None,
+        n_ubatch: None,
+        flash_attention: FlashAttentionType::Auto,
+        profile: String::new(),
+    }];
+    let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
+
+    preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+        .unwrap();
+
+    assert_eq!(
+        plans[0]
+            .pinned_gpu
+            .as_ref()
+            .map(|gpu| gpu.backend_device.as_str()),
+        Some("CUDA0")
+    );
+}
+
+#[test]
+fn cli_device_auto_is_not_treated_as_an_override() {
+    // `--device auto` (case-insensitive) must fall through to whatever is
+    // persisted, exactly like not passing `--device` at all, rather than
+    // being treated as a literal (unresolvable) device selector.
+    let options =
+        runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M", "--device", "Auto"]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        models: vec![plugin::ModelConfigEntry {
+            model: "Qwen3-8B-Q4_K_M".into(),
+            gpu_id: Some("pci:0000:65:00.0".into()),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
+}
+
+#[test]
+fn pinned_gpu_startup_preflight_unresolvable_device_names_available_devices() {
+    let config = plugin::MeshConfig::default();
+    let specs = vec![StartupModelSpec {
+        model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
+        declared_ref: None,
+        mmproj_ref: None,
+        ctx_size: None,
+        gpu_id: Some("CUDA9".into()),
+        config_owned: false,
+        parallel: None,
+        cache_type_k: None,
+        cache_type_v: None,
+        n_batch: None,
+        n_ubatch: None,
+        flash_attention: FlashAttentionType::Auto,
+        profile: String::new(),
+    }];
+    let mut plans = vec![StartupModelPlan {
+        declared_ref: "Qwen3-8B-Q4_K_M".into(),
+        resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
+        mmproj_path: None,
+        ctx_size: None,
+        gpu_id: Some("CUDA9".into()),
+        pinned_gpu: None,
+        parallel: None,
+        cache_type_k: None,
+        cache_type_v: None,
+        n_batch: None,
+        n_ubatch: None,
+        flash_attention: FlashAttentionType::Auto,
+        profile: String::new(),
+    }];
+    let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
+
+    let err =
+        preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+            .unwrap_err();
+    let message = format!("{err:#}");
+
+    assert!(message.contains("failed pinned GPU preflight"));
+    assert!(message.contains("did not match any detected GPU backend device"));
+    assert!(message.contains("Available devices: CUDA0"));
 }
 
 #[test]
