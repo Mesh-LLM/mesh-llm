@@ -1,3 +1,4 @@
+pub mod collaboration;
 pub mod compact;
 pub mod content;
 pub mod policy;
@@ -5,6 +6,11 @@ pub mod request_contract;
 pub mod structured;
 pub mod tools;
 
+pub use collaboration::{
+    CollaborationContract, CollaborationContractError, CollaborationOutputError,
+    MESH_COLLABORATION_FIELD, ReportRequired, collaboration_calls_output_tool,
+    finalize_openai_response_value,
+};
 pub use compact::{
     CompactionConfig, CompactionDecision, CompactionOverride, CompactionReport, CompactionRequest,
     MESH_COMPACT_FIELD, compact_messages, estimate_message_tokens,

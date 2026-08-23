@@ -52,7 +52,7 @@ pub async fn handle_turn(config: &GatewayConfig, body: &Value) -> TurnResult {
 
     let allowed_tools = session.tool_names();
 
-    match turn_type {
+    let mut result = match turn_type {
         session::TurnType::ToolResult => {
             handle_tool_result(config, &session, has_tools, &allowed_tools, start).await
         }
@@ -67,7 +67,28 @@ pub async fn handle_turn(config: &GatewayConfig, body: &Value) -> TurnResult {
             )
             .await
         }
+    };
+    if let Some(raw_contract) = body.get(mesh_llm_guardrails::MESH_COLLABORATION_FIELD) {
+        match mesh_llm_guardrails::CollaborationContract::parse(raw_contract, tools.as_ref())
+            .and_then(|contract| {
+                mesh_llm_guardrails::finalize_openai_response_value(
+                    &mut result.response_body,
+                    &contract,
+                )
+                .map(|_| ())
+                .map_err(|error| {
+                    mesh_llm_guardrails::CollaborationContractError::Invalid(error.to_string())
+                })
+            }) {
+            Ok(()) => {}
+            Err(error) => {
+                result.response_body =
+                    error_response(&error.to_string(), "mesh_collaboration_invalid");
+                result.turn_kind = TurnKind::Failed;
+            }
+        }
     }
+    result
 }
 
 // ─── Query handling ──────────────────────────────────────────────────

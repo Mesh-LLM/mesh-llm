@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde_json::{Value, json};
 
 use crate::{
     backend::{
@@ -70,6 +71,34 @@ impl GuardedOpenAiBackend {
     pub fn with_telemetry(mut self, telemetry: Arc<dyn GuardrailTelemetrySink>) -> Self {
         self.telemetry = Some(telemetry);
         self
+    }
+
+    async fn collaborative_chat_completion(
+        &self,
+        mut request: ChatCompletionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<ChatCompletionResponse> {
+        let Some(raw_contract) = request
+            .extra
+            .remove(mesh_llm_guardrails::MESH_COLLABORATION_FIELD)
+        else {
+            return self.guarded_chat_completion(request, context).await;
+        };
+        if request.stream {
+            return Err(crate::errors::OpenAiError::unsupported(
+                "mesh_collaboration does not support streaming",
+            ));
+        }
+        let contract = mesh_llm_guardrails::CollaborationContract::parse(
+            &raw_contract,
+            request.tools.as_ref(),
+        )
+        .map_err(|error| crate::errors::OpenAiError::invalid_request(error.to_string()))?;
+        let response = self
+            .backend
+            .chat_completion_with_context(request, context)
+            .await?;
+        finalize_collaboration_response(response, &contract)
     }
 
     async fn guarded_chat_completion(
@@ -300,6 +329,39 @@ fn telemetry_attempt_bucket(attempts: u8) -> GuardrailTelemetryAttemptBucket {
     }
 }
 
+fn finalize_collaboration_response(
+    mut response: ChatCompletionResponse,
+    contract: &mesh_llm_guardrails::CollaborationContract,
+) -> OpenAiResult<ChatCompletionResponse> {
+    let choice = response
+        .choices
+        .first_mut()
+        .ok_or_else(|| crate::errors::OpenAiError::backend("backend returned no choices"))?;
+    if let Some(tool_calls) = choice.message.tool_calls.as_ref()
+        && !mesh_llm_guardrails::collaboration_calls_output_tool(tool_calls, contract)
+    {
+        return Ok(response);
+    }
+    let arguments = contract
+        .final_arguments(
+            choice.message.content.as_deref(),
+            choice.message.tool_calls.as_ref(),
+        )
+        .map_err(|error| crate::errors::OpenAiError::backend(error.to_string()))?;
+    let tool = &contract.report_required().tool;
+    choice.message.content = None;
+    choice.message.tool_calls = Some(json!([{
+        "id": "call_mesh_collaboration",
+        "type": "function",
+        "function": {
+            "name": tool,
+            "arguments": Value::Object(arguments).to_string(),
+        }
+    }]));
+    choice.finish_reason = Some(crate::common::FinishReason::ToolCalls);
+    Ok(response)
+}
+
 #[async_trait]
 impl OpenAiBackend for GuardedOpenAiBackend {
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
@@ -310,7 +372,7 @@ impl OpenAiBackend for GuardedOpenAiBackend {
         &self,
         request: ChatCompletionRequest,
     ) -> OpenAiResult<ChatCompletionResponse> {
-        self.guarded_chat_completion(request, OpenAiRequestContext::new())
+        self.collaborative_chat_completion(request, OpenAiRequestContext::new())
             .await
     }
 
@@ -319,7 +381,7 @@ impl OpenAiBackend for GuardedOpenAiBackend {
         request: ChatCompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
-        self.guarded_chat_completion(request, context).await
+        self.collaborative_chat_completion(request, context).await
     }
 
     async fn chat_completion_stream(
@@ -327,6 +389,14 @@ impl OpenAiBackend for GuardedOpenAiBackend {
         request: ChatCompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionStream> {
+        if request
+            .extra
+            .contains_key(mesh_llm_guardrails::MESH_COLLABORATION_FIELD)
+        {
+            return Err(crate::errors::OpenAiError::unsupported(
+                "mesh_collaboration does not support streaming",
+            ));
+        }
         self.backend.chat_completion_stream(request, context).await
     }
 

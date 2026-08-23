@@ -1422,3 +1422,103 @@ fn supported_json_schema_response_format() -> serde_json::Value {
         }
     })
 }
+
+#[tokio::test]
+async fn report_required_wraps_prose_and_locks_routing() {
+    let backend = Arc::new(SequencedBackend::new(vec![Ok(response_with_content(
+        "small-model",
+        "Tests pass.",
+    ))]));
+    let guarded = GuardedOpenAiBackend::new(backend, enforce_policy());
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "small-model",
+        "messages": [{"role":"user","content":"Report the result"}],
+        "tools": [{"type":"function","function":{
+            "name":"buzz_send",
+            "parameters":{
+                "type":"object",
+                "properties":{
+                    "content":{"type":"string"},
+                    "channel":{"type":"string"},
+                    "reply_to":{"type":"string"}
+                },
+                "required":["content","channel","reply_to"],
+                "additionalProperties":false
+            }
+        }}],
+        "mesh_collaboration": {
+            "mode":"report_required",
+            "version":1,
+            "tool":"buzz_send",
+            "body_argument":"content",
+            "locked_arguments":{"channel":"channel-1","reply_to":"event-1"}
+        }
+    }))
+    .expect("request");
+
+    let response = guarded.chat_completion(request).await.expect("response");
+    let choice = &response.choices[0];
+    assert_eq!(choice.message.content, None);
+    assert_eq!(
+        choice.finish_reason,
+        Some(crate::common::FinishReason::ToolCalls)
+    );
+    let call = &choice.message.tool_calls.as_ref().expect("call")[0];
+    assert_eq!(call["function"]["name"], "buzz_send");
+    let arguments: serde_json::Value = serde_json::from_str(
+        call["function"]["arguments"]
+            .as_str()
+            .expect("arguments string"),
+    )
+    .expect("arguments json");
+    assert_eq!(
+        arguments,
+        json!({
+            "content":"Tests pass.", "channel":"channel-1", "reply_to":"event-1"
+        })
+    );
+}
+
+#[tokio::test]
+async fn absent_collaboration_contract_preserves_ordinary_response() {
+    let backend = Arc::new(SequencedBackend::new(vec![Ok(response_with_content(
+        "small-model",
+        "ordinary",
+    ))]));
+    let guarded = GuardedOpenAiBackend::new(backend, enforce_policy());
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model":"small-model",
+        "messages":[{"role":"user","content":"hello"}]
+    }))
+    .expect("request");
+
+    let response = guarded.chat_completion(request).await.expect("response");
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("ordinary")
+    );
+    assert!(response.choices[0].message.tool_calls.is_none());
+}
+
+#[tokio::test]
+async fn report_required_passes_intermediate_tool_call_through() {
+    let intermediate = response_with_tool_calls(
+        "small-model",
+        json!([{"type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]),
+        None,
+    );
+    let backend = Arc::new(SequencedBackend::new(vec![Ok(intermediate.clone())]));
+    let guarded = GuardedOpenAiBackend::new(backend, enforce_policy());
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model":"small-model",
+        "messages":[{"role":"user","content":"Inspect then report"}],
+        "tools":[
+            {"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+            {"type":"function","function":{"name":"buzz_send","parameters":{"type":"object","properties":{"content":{"type":"string"},"channel":{"type":"string"}},"required":["content","channel"],"additionalProperties":false}}}
+        ],
+        "mesh_collaboration":{"mode":"report_required","version":1,"tool":"buzz_send","body_argument":"content","locked_arguments":{"channel":"locked"}}
+    })).expect("request");
+
+    let response = guarded.chat_completion(request).await.expect("response");
+    assert_eq!(response, intermediate);
+}
