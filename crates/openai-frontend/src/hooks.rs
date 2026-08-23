@@ -8,7 +8,7 @@ use crate::{
         ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext, OpenAiResult,
     },
     chat::{
-        ChatCompletionRequest, ChatCompletionResponse, ChatMessage, MessageContent,
+        CapsuleMarker, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, MessageContent,
         MessageContentPart,
     },
     completions::{CompletionRequest, CompletionResponse},
@@ -133,6 +133,26 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
         _outcome: &ChatCompletionOutcome<'_>,
     ) {
     }
+
+    /// Mint an optional rung-ladder response-leg marker for a successful
+    /// non-streaming chat completion.
+    ///
+    /// Fires once, after the backend has returned a response and before
+    /// [`Self::on_chat_completion_terminal`] and the HTTP response are
+    /// produced. A `Some` return is attached to
+    /// [`ChatCompletionResponse::capsule_marker`], which the router turns
+    /// into an `X-Capsule-Id` response header (see
+    /// `frontend_lifecycle_middleware` in `router.rs`) — the write-capable
+    /// half of the response leg that a plain observer method cannot provide,
+    /// since every other hook method here takes `&ChatCompletionResponse`.
+    /// Default: no marker (unchanged behavior for existing implementors).
+    async fn capsule_marker_for_response(
+        &self,
+        _request: &ChatCompletionRequest,
+        _response: &ChatCompletionResponse,
+    ) -> Option<CapsuleMarker> {
+        None
+    }
 }
 
 /// The route information available to a hook at dispatch time.
@@ -156,7 +176,9 @@ impl ChatExchangeRoute {
 #[derive(Debug, Clone, Copy)]
 pub enum ChatCompletionOutcome<'a> {
     /// The backend returned a response.
-    Success { response: &'a ChatCompletionResponse },
+    Success {
+        response: &'a ChatCompletionResponse,
+    },
     /// The backend call failed or timed out.
     Error { status: u16, message: &'a str },
     /// An earlier hook (`before_chat_completion`) denied the request before
@@ -213,10 +235,18 @@ impl OpenAiBackend for HookedOpenAiBackend {
         self.hooks
             .on_effective_chat_completion(&request, &route)
             .await;
-        let result = self
+        let mut result = self
             .backend
             .chat_completion_with_context(request.clone(), context)
             .await;
+        if let Ok(response) = &mut result
+            && let Some(marker) = self
+                .hooks
+                .capsule_marker_for_response(&request, &*response)
+                .await
+        {
+            response.capsule_marker = Some(marker);
+        }
         let error_message;
         let terminal = match &result {
             Ok(response) => ChatCompletionOutcome::Success { response },
@@ -976,6 +1006,110 @@ mod tests {
             TerminalRecord::Error { status: 502, message }
                 if message.contains("upstream exploded")
         ));
+    }
+
+    struct CapsuleMintingPolicy;
+
+    #[async_trait]
+    impl OpenAiHookPolicy for CapsuleMintingPolicy {
+        async fn capsule_marker_for_response(
+            &self,
+            _request: &ChatCompletionRequest,
+            response: &ChatCompletionResponse,
+        ) -> Option<CapsuleMarker> {
+            Some(CapsuleMarker {
+                capsule_id: format!("capsule-{}", response.id),
+                nonce: "test-nonce".to_string(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn capsule_marker_from_hook_is_attached_to_response_before_terminal_fires() {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let hooked = HookedOpenAiBackend::new(backend, Arc::new(CapsuleMintingPolicy));
+
+        let response = hooked
+            .chat_completion(request_for("gpt-mesh"))
+            .await
+            .expect("backend call succeeds");
+
+        // The response returned to the router carries the marker (this is
+        // what lets router.rs promote it to an `X-Capsule-Id` header).
+        let marker = response.capsule_marker.expect("marker attached");
+        assert_eq!(marker.capsule_id, format!("capsule-{}", response.id));
+        assert_eq!(marker.nonce, "test-nonce");
+    }
+
+    #[derive(Default)]
+    struct TerminalSnapshotPolicy {
+        marker_seen_at_terminal: Mutex<Option<Option<CapsuleMarker>>>,
+    }
+
+    #[async_trait]
+    impl OpenAiHookPolicy for TerminalSnapshotPolicy {
+        async fn capsule_marker_for_response(
+            &self,
+            _request: &ChatCompletionRequest,
+            _response: &ChatCompletionResponse,
+        ) -> Option<CapsuleMarker> {
+            Some(CapsuleMarker {
+                capsule_id: "capsule-fixed".to_string(),
+                nonce: "n".to_string(),
+            })
+        }
+
+        async fn on_chat_completion_terminal(
+            &self,
+            _request: &ChatCompletionRequest,
+            outcome: &ChatCompletionOutcome<'_>,
+        ) {
+            let marker = match outcome {
+                ChatCompletionOutcome::Success { response } => response.capsule_marker.clone(),
+                _ => None,
+            };
+            *self.marker_seen_at_terminal.lock().unwrap() = Some(marker);
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_hook_observes_the_minted_marker_so_a_plugin_can_correlate_the_ack() {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let policy = Arc::new(TerminalSnapshotPolicy::default());
+        let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+
+        hooked
+            .chat_completion(request_for("gpt-mesh"))
+            .await
+            .expect("backend call succeeds");
+
+        let seen = policy
+            .marker_seen_at_terminal
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("terminal fired");
+        let marker = seen.expect("marker visible inside on_chat_completion_terminal");
+        assert_eq!(marker.capsule_id, "capsule-fixed");
+    }
+
+    #[tokio::test]
+    async fn default_hook_policy_mints_no_capsule_marker() {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let hooked = HookedOpenAiBackend::new(backend, Arc::new(RecordingPolicy::default()));
+
+        let response = hooked
+            .chat_completion(request_for("gpt-mesh"))
+            .await
+            .expect("backend call succeeds");
+
+        assert!(response.capsule_marker.is_none());
     }
 
     #[tokio::test]

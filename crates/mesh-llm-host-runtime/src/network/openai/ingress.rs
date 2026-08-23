@@ -6,9 +6,24 @@ use crate::network::openai::auto_route;
 use crate::network::openai::automatic;
 use crate::network::openai::transport as proxy;
 use crate::network::router;
+use crate::plugin::openai_exchange::{
+    OpenAiExchangeChannel, OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope,
+};
 use mesh_llm_events::audit::{audit_events, emit_audit};
 use mesh_llm_events::{OutputEvent, emit_event};
 use mesh_mixture_of_agents as moa;
+
+/// The status code an out-of-process plugin sees for path 2's terminal
+/// event, best-effort from [`proxy::RouteDispatchOutcome`] — `None` when the
+/// outcome carries no HTTP status at all (a dropped/failed connection).
+fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Option<u16> {
+    match *outcome {
+        proxy::RouteDispatchOutcome::Responded(status) => Some(status),
+        proxy::RouteDispatchOutcome::RespondedWithUsage { status_code, .. } => Some(status_code),
+        proxy::RouteDispatchOutcome::FailedWithStatus { status_code, .. } => Some(status_code),
+        proxy::RouteDispatchOutcome::Failed(_) | proxy::RouteDispatchOutcome::Dropped(_) => None,
+    }
+}
 
 enum AutoRouteResolution {
     Continue {
@@ -583,6 +598,17 @@ async fn try_route_plugin_model(
         .await
     {
         Ok(Some(endpoint)) => {
+            // Path 2's own "effective request" moment: the plugin/endpoint
+            // is resolved and dispatch is about to happen. There is no typed
+            // `ChatCompletionRequest` on this path (see the #1331 design
+            // note), so the envelope carries only the model — the same
+            // narrow route fact path 1's `ChatExchangeRoute` carries.
+            plugin_manager
+                .publish(&OpenAiExchangeEnvelope::effective(
+                    OpenAiExchangeDispatchPath::RawProxy,
+                    model_name,
+                ))
+                .await;
             let outcome = proxy::route_http_endpoint_request(
                 ctx.node,
                 Some(model_name),
@@ -596,7 +622,7 @@ async fn try_route_plugin_model(
                 route_observer,
             )
             .await;
-            if !outcome.response_written()
+            let final_outcome = if !outcome.response_written()
                 && !matches!(outcome, proxy::RouteDispatchOutcome::Dropped(_))
             {
                 response_outcome(
@@ -610,7 +636,19 @@ async fn try_route_plugin_model(
                 )
             } else {
                 outcome
-            }
+            };
+            plugin_manager
+                .publish(&OpenAiExchangeEnvelope::terminal(
+                    OpenAiExchangeDispatchPath::RawProxy,
+                    model_name,
+                    plugin_route_status(&final_outcome),
+                    // No X-Capsule-Id marker on this path: it never runs
+                    // through `openai-frontend`'s `OpenAiHookPolicy`, the
+                    // only place a marker is minted (see the design note).
+                    None,
+                ))
+                .await;
+            final_outcome
         }
         Ok(None) => {
             route_observer.route_selected_with_metadata(

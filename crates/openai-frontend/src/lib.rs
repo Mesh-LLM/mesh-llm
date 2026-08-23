@@ -19,9 +19,9 @@ pub use backend::{
     OpenAiResult,
 };
 pub use chat::{
-    AssistantMessage, ChatCompletionChoice, ChatCompletionChunk, ChatCompletionChunkChoice,
-    ChatCompletionDelta, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
-    MessageContent, MessageContentPart, ensure_tool_call_ids, message_content_to_text,
+    AssistantMessage, CapsuleMarker, ChatCompletionChoice, ChatCompletionChunk,
+    ChatCompletionChunkChoice, ChatCompletionDelta, ChatCompletionRequest, ChatCompletionResponse,
+    ChatMessage, MessageContent, MessageContentPart, ensure_tool_call_ids, message_content_to_text,
     messages_to_plain_prompt,
 };
 pub use common::{

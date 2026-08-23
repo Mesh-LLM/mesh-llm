@@ -276,6 +276,26 @@ pub struct ChatCompletionResponse {
     pub usage: Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<BTreeMap<String, Value>>,
+    /// Rung-ladder response-leg marker, minted by
+    /// [`crate::hooks::OpenAiHookPolicy::capsule_marker_for_response`]. Never
+    /// serialized into the OpenAI-shaped JSON body — a real `X-Capsule-Id`
+    /// rides as an HTTP response header, set from this field by the router's
+    /// `frontend_lifecycle_middleware`, the same layer that already sets
+    /// `x-request-id`.
+    #[serde(skip)]
+    pub capsule_marker: Option<CapsuleMarker>,
+}
+
+/// A rung-ladder response-leg marker: the `capsule_id` written into the
+/// response as `X-Capsule-Id`, and the `nonce` the marker is correlated
+/// against, so an out-of-process plugin observing the terminal event (which
+/// carries this marker) knows what a later client ack must sign over to lift
+/// `acknowledged_receipt` -> `full_bilateral` (see
+/// `capsule-emit-mesh/README.md` "Bilateral attestation demo", move 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapsuleMarker {
+    pub capsule_id: String,
+    pub nonce: String,
 }
 
 impl ChatCompletionResponse {
@@ -307,6 +327,7 @@ impl ChatCompletionResponse {
             }],
             usage,
             timings: None,
+            capsule_marker: None,
         }
     }
 

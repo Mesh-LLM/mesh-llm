@@ -59,6 +59,7 @@ impl OpenAiBackend for StructuredGuardrailRecordingBackend {
             }],
             usage: Usage::new(1, 1),
             timings: None,
+            capsule_marker: None,
         })
     }
 

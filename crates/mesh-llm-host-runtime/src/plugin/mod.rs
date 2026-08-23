@@ -2,6 +2,7 @@ mod config;
 mod health;
 mod installed;
 pub(crate) mod mcp;
+pub mod openai_exchange;
 mod runtime;
 mod schema_validation;
 pub(crate) mod stapler;
@@ -1192,6 +1193,39 @@ impl PluginManager {
         Ok(())
     }
 
+    /// Deliver a host-originated channel message to every loaded plugin that
+    /// declares `channel` in its manifest — the mirror of
+    /// [`Self::broadcast_mesh_event`] for `PluginMeshEvent::Channel`, needed
+    /// because [`Self::dispatch_channel_message`] is addressed to one
+    /// already-known `plugin_id` (its normal caller is a mesh-relayed message
+    /// that already names its target), not a broadcast from inside the host
+    /// runtime itself.
+    pub async fn broadcast_channel_message(
+        &self,
+        channel: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<()> {
+        for (plugin_id, plugin) in &self.inner.plugins {
+            if !self.plugin_declares_mesh_channel(plugin_id, channel).await {
+                continue;
+            }
+            plugin
+                .send_channel_message(proto::ChannelMessage {
+                    channel: channel.to_string(),
+                    source_peer_id: String::new(),
+                    target_peer_id: plugin_id.clone(),
+                    content_type: content_type.to_string(),
+                    body: body.clone(),
+                    message_kind: String::new(),
+                    correlation_id: String::new(),
+                    metadata_json: String::new(),
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn plugin_declares_mesh_channel(&self, plugin_name: &str, channel: &str) -> bool {
         self.manifest(plugin_name)
             .await
@@ -1536,6 +1570,41 @@ mod tests {
         let web_ui = overview.web_ui.expect("web UI overview should be present");
         assert_eq!(web_ui.pages[0].id, "home");
         assert_eq!(web_ui.config_sections[0].id, "settings");
+    }
+
+    #[test]
+    fn manifest_declares_mesh_channel_matches_exact_name_only() {
+        let manifest = proto::PluginManifest {
+            mesh_channels: vec![proto::MeshChannelManifest {
+                name: "openai.exchange.v1".into(),
+            }],
+            ..proto::PluginManifest::default()
+        };
+
+        assert!(manifest_declares_mesh_channel(
+            &manifest,
+            "openai.exchange.v1"
+        ));
+        assert!(!manifest_declares_mesh_channel(&manifest, "other.channel"));
+    }
+
+    #[tokio::test]
+    async fn broadcast_channel_message_is_a_no_op_with_no_plugins_loaded() {
+        let specs = ResolvedPlugins {
+            externals: Vec::new(),
+            inactive: Vec::new(),
+        };
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
+            .await
+            .expect("empty plugin set starts cleanly");
+
+        manager
+            .broadcast_channel_message("openai.exchange.v1", "application/json", b"{}".to_vec())
+            .await
+            .expect("broadcasting with no plugins loaded is a no-op, not an error");
+
+        manager.shutdown().await;
     }
 
     #[test]

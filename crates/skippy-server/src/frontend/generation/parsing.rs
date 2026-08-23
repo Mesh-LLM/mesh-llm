@@ -231,6 +231,7 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
             }],
             usage: output.usage(),
             timings: output.timings(),
+            capsule_marker: None,
         };
     }
 
