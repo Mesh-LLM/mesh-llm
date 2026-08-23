@@ -1482,7 +1482,7 @@ index c4670da85..e1790ecce 100644
                  "</tool_call>\n";
  
              bool got_runtime_error = false;
-@@ -6815,6 +7003,63 @@ static void test_template_generation_prompt() {
+@@ -6815,6 +7003,65 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
@@ -1542,11 +1542,13 @@ index c4670da85..e1790ecce 100644
 +        assert_contains(qwen, "<think>\n\n</think>\n\n");
 +        const auto gpt_oss = render_disabled("models/templates/openai-gpt-oss-120b.jinja");
 +        assert_contains(gpt_oss, "Reasoning: 0");
++        const auto inkling = render_disabled("models/templates/Inkling.jinja");
++        assert_contains(inkling, "Thinking effort level: 0");
 +    }
  }
  
  // Test the developer role to system workaround with a simple mock template
-@@ -7157,6 +7402,7 @@ static void test_msg_diffs_compute() {
+@@ -7157,6 +7404,7 @@ static void test_msg_diffs_compute() {
  int main(int argc, char ** argv) {
      bool detailed_debug    = false;
      bool only_run_filtered = false;
@@ -1554,7 +1556,7 @@ index c4670da85..e1790ecce 100644
  
      // Check for --template and --detailed flags
      for (int i = 1; i < argc; i++) {
-@@ -7174,9 +7420,19 @@ int main(int argc, char ** argv) {
+@@ -7174,9 +7422,19 @@ int main(int argc, char ** argv) {
              g_force_reconstruction_test = true;
              only_run_filtered          = true;
          }
