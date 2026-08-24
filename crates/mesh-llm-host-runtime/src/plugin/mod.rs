@@ -583,6 +583,11 @@ impl PluginManager {
     }
 
     #[cfg(test)]
+    pub fn set_test_capability_providers(&self, providers: Vec<PluginCapabilityProvider>) {
+        self.publish_plugin_providers("__test__", providers);
+    }
+
+    #[cfg(test)]
     pub async fn set_test_inference_endpoints(&self, endpoints: Vec<InferenceEndpointRoute>) {
         *self.inner.test_inference_endpoints.lock().await = endpoints;
     }
