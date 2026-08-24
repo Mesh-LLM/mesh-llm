@@ -48,6 +48,10 @@ jobs:
       NEW_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       LLAMA_STAGE_BACKEND: cuda
       LLAMA_STAGE_LINK_MODE: static
+      # The benchmark artifact never leaves this ephemeral GPU runner. Avoid
+      # compiling llama.cpp's broad release architecture matrix; target the
+      # accelerator that will execute the measurements.
+      LLAMA_STAGE_CUDA_ARCHITECTURES: native
       LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-build/build-stage-abi-static-cuda
       # nvcc's cicc frontend is memory-spiky across the full template matrix.
       # Bound native fan-out instead of inheriting every logical CPU on the
