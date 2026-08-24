@@ -154,12 +154,12 @@ class RadixCacheAbTest(unittest.TestCase):
         }
         self.assertEqual(BENCH.evaluate_gate(case_result), {"passed": True, "failures": []})
 
-    def test_recurrent_gate_requires_exact_and_growing_hits_not_divergent_hit(self) -> None:
+    def test_recurrent_gate_requires_only_exact_checkpoint_hits(self) -> None:
         cells = []
         for version in ("old", "new"):
             for cache in ("cold", "warm"):
                 for scenario in ("exact", "divergent", "coding"):
-                    hits = int(cache == "warm" and scenario != "divergent")
+                    hits = int(cache == "warm" and scenario == "exact")
                     cells.append(
                         cell(
                             version,

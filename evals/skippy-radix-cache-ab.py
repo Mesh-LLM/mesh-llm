@@ -693,13 +693,16 @@ def evaluate_gate(case_result: dict[str, Any]) -> dict[str, Any]:
     rows = case_result["aggregate"]
     payload = case_result["case"]["payload"]
     # Resident KV can borrow the matched portion of a longer native sequence.
-    # Recurrent/full-state components are atomic checkpoints, so they can hit
-    # exact prompts and true transcript extensions but cannot restore a state
-    # captured after a branch that diverges earlier in the token path.
+    # Recurrent/full-state components are atomic checkpoints. OpenAI chat
+    # templating also moves the generation marker when a transcript grows, so
+    # neither a divergent user tail nor a later turn is token-prefix-identical
+    # to the checkpoint captured for the earlier request. Require exact replay
+    # hits; keep the other scenarios visible as measured misses until serving
+    # records explicit message-boundary recurrent checkpoints.
     required_hit_scenarios = (
         {"exact", "divergent", "coding"}
         if payload == "resident-kv"
-        else {"exact", "coding"}
+        else {"exact"}
     )
     for cell in cells:
         if cell["suspect_log_lines"]:
