@@ -94,12 +94,39 @@ def require_release_base(origin_main: str, tag: str, tag_sha: str) -> str:
     return release_base
 
 
+def canonical_candidate_tag(origin_main: str, head_ref: str, head_sha: str) -> str | None:
+    """Resolve the tag that names an off-main release-prepare commit."""
+    if git("merge-base", origin_main, head_sha) == head_sha:
+        return None
+
+    explicit_tag = head_ref.removeprefix("refs/tags/")
+    try:
+        explicit_tag_sha = git("rev-parse", "--verify", f"refs/tags/{explicit_tag}^{{commit}}")
+    except RuntimeError:
+        explicit_tag_sha = None
+    if explicit_tag_sha == head_sha:
+        return explicit_tag
+
+    tags = [tag for tag in git("tag", "--points-at", head_sha).splitlines() if tag]
+    if len(tags) != 1:
+        detail = ", ".join(repr(tag) for tag in tags) or "none"
+        raise RuntimeError(
+            f"candidate {head_ref!r} ({head_sha}) is off origin/main and must be named "
+            "by an explicit release tag or have exactly one tag pointing at it; "
+            f"found: {detail}"
+        )
+    return tags[0]
+
+
 def require_release_provenance(
     base_tag: str, base_sha: str, head_ref: str, head_sha: str
-) -> None:
+) -> str | None:
     origin_main = git("rev-parse", "--verify", "origin/main^{commit}")
     base_release_base = require_release_base(origin_main, base_tag, base_sha)
-    head_release_base = require_release_base(origin_main, head_ref, head_sha)
+    candidate_tag = canonical_candidate_tag(origin_main, head_ref, head_sha)
+    head_release_base = require_release_base(
+        origin_main, candidate_tag or head_ref, head_sha
+    )
     if subprocess.run(
         ["git", "merge-base", "--is-ancestor", base_release_base, head_release_base],
         check=False,
@@ -108,6 +135,7 @@ def require_release_provenance(
             f"previous release commit {base_sha} (base {base_release_base}) is not an "
             f"ancestor of candidate {head_sha} (base {head_release_base})"
         )
+    return candidate_tag
 
 
 def collect_commits(base: str, head: str) -> list[dict]:
@@ -221,7 +249,9 @@ def main() -> int:
         release = latest_release(args.repo, args.release_tag)
         base_sha = require_local_tag(release["tagName"])
         head_sha = git("rev-parse", f"{args.head}^{{commit}}")
-        require_release_provenance(release["tagName"], base_sha, args.head, head_sha)
+        candidate_tag = require_release_provenance(
+            release["tagName"], base_sha, args.head, head_sha
+        )
         manifest = {
             "schema_version": 1,
             "collected_at": datetime.now(timezone.utc).isoformat(),
@@ -229,6 +259,7 @@ def main() -> int:
             "remote_urls": git("remote", "-v").splitlines(),
             "candidate": {
                 "ref": args.head,
+                "tag": candidate_tag,
                 "sha": head_sha,
                 "branch": git("branch", "--show-current"),
                 "dirty": dirty_state(),

@@ -51,11 +51,13 @@ Never infer authorization to use a lab, cloud, rented, or production host.
    checksums, publication metadata, and applicable release workflow result.
 3. Before collecting inventory, resolve the candidate SHA and previous-release
    tag commit and derive each release base from its merge-base with
-   `origin/main`. Allow zero commits above a release base, or exactly one commit
-   whose subject is the tag-specific `<tag>: prepare release source`. Require
-   the previous-release base to be an ancestor of the candidate base. Stop if
-   `origin/main` is unavailable or any subject, commit-count, or base-ordering
-   check fails.
+   `origin/main`. An off-main candidate must be passed as its explicit release
+   tag or have exactly one local tag pointing at its SHA; use that canonical tag
+   for the subject check and stop if it is absent or ambiguous. Allow zero
+   commits above a release base, or exactly one commit whose subject is the
+   tag-specific `<tag>: prepare release source`. Require the previous-release
+   base to be an ancestor of the candidate base. Stop if `origin/main` is
+   unavailable or any tag, subject, commit-count, or base-ordering check fails.
 4. Reconcile GitHub compare data, merged pull requests, commits, linked issues,
    changed files, tests, docs, migrations, generated artifacts, and implemented
    user-visible or operational behavior.
