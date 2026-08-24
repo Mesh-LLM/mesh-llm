@@ -109,39 +109,17 @@ fn extract_enable_thinking_override(body: &serde_json::Value) -> Option<bool> {
     result
 }
 
-/// Build a MoA gateway config from this node's mesh-wide view.
+/// Build the admitted worker configuration, including the single-worker case.
 ///
-/// Every distinct model in the mesh becomes a worker:
-/// - Models served by this node → `LocalModelBackend` (direct skippy port)
-/// - Models served by a peer → `RemoteModelBackend` (QUIC tunnel)
-///
-/// Models are deduplicated by canonical base name so e.g.
-/// `unsloth/Qwen3-8B-GGUF:Q4_K_M` and `Qwen3-8B-Q4_K_M` (different naming
-/// conventions for the same model from different peers) only show up once.
-///
-/// Returns `None` if fewer than 2 distinct models exist — MoA needs at
-/// least two workers to be meaningfully different from a single call.
-///
-/// `targets` is the runtime's local routing table, used to discover the
-/// skippy port for locally-served models. In passive (`--client`) mode
-/// this is `None` — every backend goes over QUIC. In `serve` mode it's
-/// `Some`, so locally-served models bypass the tunnel.
-pub async fn build_moa_config(
+/// Committee admission and deterministic rescue policy are decided by the
+/// caller after this function has assembled the eligible workers.
+pub(super) async fn build_moa_candidate_config(
     node: &mesh::Node,
     targets: Option<&election::ModelTargets>,
     required_tokens: Option<u32>,
-) -> Option<moa::GatewayConfig> {
+) -> moa::GatewayConfig {
     let http = reqwest::Client::new();
     let (backends, models) = assemble_worker_pool(node, targets, required_tokens, &http).await;
-
-    if models.len() < 2 {
-        tracing::warn!(
-            "MoA: only {} qualified model(s) after admission, need ≥2 (models={:?})",
-            models.len(),
-            models.iter().map(|m| &m.name).collect::<Vec<_>>()
-        );
-        return None;
-    }
 
     // Actor priority for the asymmetric tool path: best tool-caller first.
     // The actor is the one model that actually emits the tool call, so it must
@@ -160,7 +138,7 @@ pub async fn build_moa_config(
         models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
     );
 
-    Some(moa::GatewayConfig {
+    moa::GatewayConfig {
         backends,
         models,
         // Bumped from 15s → 60s. 15s was tight for big-context interactive
@@ -222,7 +200,7 @@ pub async fn build_moa_config(
         // and cost a strong one (evals/moa-openrouter/RESULTS.md).
         reference_policy: moa::ReferencePolicy::Auto,
         refinement_policy: Default::default(),
-    })
+    }
 }
 
 /// How long a turn waits for better answers before shipping what it has.
