@@ -839,6 +839,9 @@ impl StageOpenAiBackend {
             return Ok(None);
         };
         if restore.restored_tokens < request.prompt_token_ids.len() {
+            // A partial restore leaves the session holding a lane; drop it so
+            // retries do not exhaust the execution lanes (502 cascade).
+            self.drop_embedded_split_restore(request, session_key, downstream);
             return Ok(None);
         }
         let mut attrs = self.openai_attrs(request.ids);
@@ -1053,11 +1056,16 @@ impl StageOpenAiBackend {
                         &scheduler_prefill_tokens,
                     )
                     .map_err(openai_backend_error)?;
-                let Some(local_restore) = local_restore
-                    .filter(|restored| restored.token_count >= scheduler_prefill_tokens.len())
-                else {
+                let Some(local_restore) = local_restore else {
                     return Ok(None);
                 };
+                if local_restore.token_count < scheduler_prefill_tokens.len() {
+                    // A partial local restore must not keep a lane resident.
+                    // Keep the cleanup on the scheduler owner alongside the
+                    // restore so no second runtime-locking path is introduced.
+                    let _ = runtime.drop_session_timed(&scheduler_session_key);
+                    return Ok(None);
+                }
                 if let Some(metadata) = scheduler_metadata.as_deref() {
                     runtime
                         .configure_chat_sampling(
