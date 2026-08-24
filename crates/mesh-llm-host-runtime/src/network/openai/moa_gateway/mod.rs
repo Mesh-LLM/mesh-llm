@@ -11,7 +11,7 @@
 //! and the rest go over QUIC.
 
 use self::streaming::write_moa_response;
-use self::workers::effective_enable_thinking_for_moa;
+use self::workers::{build_moa_candidate_config, effective_enable_thinking_for_moa};
 use crate::inference::election;
 use crate::logging::OpenAiRouteObserver;
 use crate::mesh;
@@ -20,8 +20,6 @@ use crate::network::openai::transport as proxy;
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_mixture_of_agents as moa;
 use tokio::net::TcpStream;
-
-pub use self::workers::build_moa_config;
 
 pub(crate) enum MoaDispatchResult {
     Passthrough(TcpStream),
@@ -37,7 +35,7 @@ pub(crate) enum MoaDispatchResult {
     Dropped(&'static str),
 }
 
-/// Fall back to serving a single real model when MoA cannot form a committee.
+/// Fall back to ordinary model selection when the Mesh gateway has no worker.
 ///
 /// Picks any model advertised in the mesh (local or peer), rewrites the
 /// request's `model` from the virtual `"mesh"` name to it, and hands the stream
@@ -46,6 +44,7 @@ pub(crate) enum MoaDispatchResult {
 async fn degrade_to_single_model(
     node: &mesh::Node,
     targets: Option<&election::ModelTargets>,
+    required_tokens: Option<u32>,
     tcp_stream: TcpStream,
     request: &mut proxy::BufferedHttpRequest,
     route_observer: OpenAiRouteObserver<'_>,
@@ -67,9 +66,9 @@ async fn degrade_to_single_model(
     if candidates.is_empty() {
         candidates = node.serving_models().await;
     }
-    let Some(target) = candidates
-        .into_iter()
-        .find(|m| m != moa::VIRTUAL_MODEL_NAME)
+    let runtimes = node.all_model_runtime_descriptors().await;
+    let Some(target) =
+        context_selection::select_degrade_model(candidates, &runtimes, required_tokens)
     else {
         return match proxy::send_503_observed(
             tcp_stream,
@@ -83,7 +82,7 @@ async fn degrade_to_single_model(
         };
     };
 
-    tracing::info!("MoA: <2 workers, degrading model=mesh to single model {target}");
+    tracing::info!("MoA: no admitted workers, degrading model=mesh to selected model {target}");
 
     // Rewrite every surface the downstream router reads. The forwarded request
     // is driven by `request.raw` (the raw HTTP bytes), so `rewrite_model_field`
@@ -159,9 +158,9 @@ fn committee_admission(
 ///   and the caller should fall through to normal routing.
 ///
 /// * `None` — MoA owns the response. The stream has been consumed: a
-///   successful MoA response, a 503 (when fewer than 2 models are
-///   reachable), or a 400 (when the request body wasn't JSON) was
-///   already written. The caller must *not* attempt to respond again.
+///   successful Mesh gateway response, a 503 (when no worker is admitted), or
+///   a 400 (when the request body wasn't JSON) was already written. The caller
+///   must *not* attempt to respond again.
 pub async fn try_handle_moa(
     node: &mesh::Node,
     tcp_stream: TcpStream,
@@ -215,14 +214,18 @@ pub async fn try_handle_moa(
 
     let enable_thinking = effective_enable_thinking_for_moa(&body_json);
 
-    let Some(mut config) = build_moa_config(node, targets, required_tokens).await else {
-        // Graceful degradation: MoA needs ≥2 workers, but a lone node (or a
-        // mesh with a single model) should still answer a `model=mesh`
-        // request rather than 503. Rewrite the virtual model to a real served
-        // model and fall through to normal single-model routing by handing the
-        // stream back. `mesh` thus works everywhere: passthrough on one node,
-        // committee once a second worker joins.
-        return degrade_to_single_model(node, targets, tcp_stream, request, route_observer).await;
+    let Some(mut config) = admitted_gateway_config(node, targets, required_tokens).await else {
+        // Zero admitted workers cannot produce a turn, so degrade through the
+        // ordinary selector (which returns 503 if no model exists).
+        return degrade_to_single_model(
+            node,
+            targets,
+            required_tokens,
+            tcp_stream,
+            request,
+            route_observer,
+        )
+        .await;
     };
     config.enable_thinking = enable_thinking;
 
@@ -241,6 +244,29 @@ mod pool;
 mod progress;
 mod streaming;
 mod workers;
+
+async fn admitted_gateway_config(
+    node: &mesh::Node,
+    targets: Option<&election::ModelTargets>,
+    required_tokens: Option<u32>,
+) -> Option<moa::GatewayConfig> {
+    let config = build_moa_candidate_config(node, targets, required_tokens).await;
+    let worker_count = config.models.len();
+    if gateway_required(worker_count) {
+        return Some(config);
+    }
+
+    tracing::warn!(
+        worker_count,
+        models = ?config.models.iter().map(|model| &model.name).collect::<Vec<_>>(),
+        "MoA gateway has no admitted workers"
+    );
+    None
+}
+
+fn gateway_required(worker_count: usize) -> bool {
+    worker_count >= 1
+}
 
 /// Run a turn through the gateway and write the response with x-moa-* headers.
 ///
@@ -361,6 +387,13 @@ fn build_moa_headers(result: &moa::TurnResult) -> Vec<(&'static str, String)> {
 #[cfg(test)]
 mod usage_tests {
     use super::*;
+
+    #[test]
+    fn any_admitted_worker_keeps_model_mesh_in_the_gateway() {
+        assert!(!gateway_required(0));
+        assert!(gateway_required(1));
+        assert!(gateway_required(2));
+    }
 
     #[test]
     fn moa_usage_is_authoritative_and_complete() {

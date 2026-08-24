@@ -306,8 +306,8 @@ pub(super) async fn assemble_worker_pool(
     // has a stronger one. Aggregation is sensitive to proposal quality
     // (Self-MoA, arXiv:2502.00674), so an 8B draft added to a 24-32B pool is
     // expected noise-to-harm. When tiers are mixed, keep only big-tier workers;
-    // an all-small or all-big pool is untouched. A lone big model then serves
-    // solo (fails the caller's <2 check), the safe outcome.
+    // an all-small or all-big pool is untouched. A lone big model then remains
+    // a one-worker Mesh gateway.
     apply_admission_control(&mut backends, &mut models, &sizes);
 
     // Same-model fill: if only one model resolved but it is served by >=2
@@ -340,9 +340,9 @@ pub(super) async fn assemble_worker_pool(
     // The untested cell is small peers with a strong reducer; if a mesh gains a
     // big-tier model the pool stops being all-small and MoA engages again.
     //
-    // So: fall back to best-member routing rather than ship a measured
-    // regression. Keeping the strongest worker means `build_moa_config` sees a
-    // single model and the caller degrades to serving it directly.
+    // So: keep only the best member rather than ship a measured committee
+    // regression. The Mesh gateway still owns `model=mesh` with this single
+    // worker, including gateway-only rescue semantics.
     if !models.is_empty()
         && models
             .iter()
@@ -378,9 +378,8 @@ pub(super) async fn assemble_worker_pool(
 const COMMITTEE_CAP_SMALL: usize = 6;
 const COMMITTEE_CAP_BIG: usize = 4;
 
-/// Reduce an all-small pool to its single strongest member, so the caller
-/// degrades to serving that model directly instead of convening a committee
-/// that measured worse than the member alone.
+/// Reduce an all-small pool to its single strongest member so the Mesh gateway
+/// avoids a committee that measured worse than the member alone.
 fn keep_best_member_only(
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
@@ -505,8 +504,8 @@ async fn self_fill_from_extra_instances(
     // endpoint can appear twice.
     //
     // Iron law: a single physical endpoint must NEVER become a fake 2-worker
-    // committee. If fewer than two distinct endpoints serve the model we leave
-    // the pool as the single worker and MoA degrades to single-model serving.
+    // committee. If fewer than two distinct endpoints serve the model, leave
+    // the pool as a genuine one-worker Mesh gateway.
     let mut endpoints: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
 
     if let Some(port) = targets.and_then(|t| {
@@ -746,8 +745,7 @@ mod tests {
     fn all_small_pool_keeps_only_the_best_member() {
         // Measured: an all-small committee never beat its best member and lost
         // ~a third of decided trials (2x8B 0W/37L; 6x8B 5W/23L p=0.0009). So an
-        // all-small pool collapses to the single strongest member and the
-        // caller degrades to serving it directly.
+        // all-small pool collapses to the single strongest gateway worker.
         let (mut b, mut m) = pool(&["Qwen3-8B", "Llama-3.1-8B", "Qwen3.5-9B"]);
         let sizes = sizes_of(&[
             ("Qwen3-8B", 8.0),
