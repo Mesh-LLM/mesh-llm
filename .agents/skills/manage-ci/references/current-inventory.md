@@ -31,6 +31,15 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
+`llama-upstream-canary.yml` runs trusted default-branch content only on the
+persistent self-hosted `family-certify` runner group (tools and the pre-warmed
+`HF_CACHE` come from the runner image; no GitHub Actions model caching). On a
+patch-apply failure it hands the queue to a non-interactive `opencode` agent
+(`LLAMA_CANARY_AGENT_MODEL`, default `Nemotron 3 Ultra Free`) which rebases
+`third_party/llama.cpp/patches`, runs the tiered family battery
+(`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR on
+`llama-canary/patch-queue-fix`. The upstream pin commit to `main` is gated on
+the battery passing.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the

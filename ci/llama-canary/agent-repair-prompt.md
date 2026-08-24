@@ -1,0 +1,36 @@
+# llama.cpp canary patch-queue repair runbook (agent instructions)
+
+You are running on the `family-certify` self-hosted runner inside a mesh-llm
+checkout. The nightly llama-upstream canary failed to apply our patch queue in
+`third_party/llama.cpp/patches/` onto the new upstream pin. Your job:
+
+1. **Reproduce.** Run `scripts/prepare-llama.sh "$(cat .deps/llama-canary-target-sha)"`
+   and capture which patch fails to apply (`git -C .deps/llama.cpp am --3way ...`).
+   A `.git/rebase-apply` state may be left behind; use `git am --show-current-patch`
+   and `git am --3way --continue`/`--abort` to inspect the conflict.
+
+2. **Fix the queue.** Rebase the offending patches in
+   `third_party/llama.cpp/patches/` onto the new upstream. Keep the series
+   ordered, keep every patch that still applies unchanged, and make the
+   minimal semantic fix in the broken ones. Regenerate the series so
+   `scripts/prepare-llama.sh` runs clean end to end.
+
+3. **Build.** `scripts/build-llama.sh` then
+   `cargo check -p skippy-ffi -p skippy-runtime -p skippy-server`.
+
+4. **Certify.** `scripts/skippy-family-battery.sh --tier1 --tier2 --skip-build`.
+   All lanes must pass. Do not weaken a failing lane; if a model is genuinely
+   broken by upstream, revert to fixing our patches or flag it in the PR body.
+
+5. **Commit & PR.** Work on branch `llama-canary/patch-queue-fix`. Commit the
+   patch-queue changes with a `fix(llama): rebase patch queue onto upstream
+   <short-sha>` message. If a PR already exists for that branch, push to it;
+   otherwise open one titled `fix(llama): rebase patch queue onto upstream
+   <short-sha>` describing the conflicts hit and the resolution per patch.
+
+Notes:
+- Models come from the runner's pre-warmed HF cache (`HF_CACHE`); `hf download`
+  is only a miss backstop. Never add GitHub Actions model caching.
+- Do not modify files outside `third_party/llama.cpp/patches/` unless the
+  Rust ABI mirrors in `crates/` genuinely need to track a patch ABI change
+  (bump `PREPARE_SCHEMA`/ABI version together in that case).
