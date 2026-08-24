@@ -31,6 +31,11 @@ pub struct RuntimeState {
     layer_start: u32,
     layer_end: u32,
     lane_count: u32,
+    /// Size of the context's KV cell pool, in tokens (llama.cpp `n_ctx`). In
+    /// unified-KV mode every lane draws decode/prefill cells from this single
+    /// shared pool, so it is the real ceiling for scheduler admission — see
+    /// [`Self::kv_pool_tokens`].
+    ctx_size: u32,
     /// High-water mark of lane indices ever handed out. Combined with
     /// [`Self::free_lane_indices`], the count of live lanes equals
     /// `next_lane_index - free_lane_indices.len()`.
@@ -133,6 +138,7 @@ impl RuntimeState {
             layer_start: 0,
             layer_end: 1,
             lane_count,
+            ctx_size: 0,
             next_lane_index: 0,
             free_lane_indices: Vec::new(),
             sessions: BTreeMap::new(),
@@ -144,6 +150,16 @@ impl RuntimeState {
 
     pub fn lane_count(&self) -> u32 {
         self.lane_count
+    }
+
+    /// Total KV cell pool available to this context, in tokens (`n_ctx`).
+    ///
+    /// In unified-KV mode all lanes share this single pool, so it is the real
+    /// token budget the iteration scheduler must admit against. Returns 0 for
+    /// the modelless test runtime, in which case callers should fall back to a
+    /// configured default.
+    pub fn kv_pool_tokens(&self) -> u32 {
+        self.ctx_size
     }
 }
 
@@ -192,6 +208,7 @@ pub fn load_runtime_with_overrides(
         layer_start: config.layer_start,
         layer_end: config.layer_end,
         lane_count: config.lane_count,
+        ctx_size: config.ctx_size,
         next_lane_index: 0,
         free_lane_indices: Vec::new(),
         sessions: BTreeMap::new(),
@@ -240,6 +257,7 @@ pub fn load_runtime_with_overrides_and_open_events(
         layer_start: config.layer_start,
         layer_end: config.layer_end,
         lane_count: config.lane_count,
+        ctx_size: config.ctx_size,
         next_lane_index: 0,
         free_lane_indices: Vec::new(),
         sessions: BTreeMap::new(),
@@ -353,9 +371,20 @@ mod tests {
     };
 
     use super::{
-        RuntimeLaunchOverrides, load_runtime_with_overrides, runtime_config_from_stage_config,
-        should_attach_package_projector,
+        RuntimeLaunchOverrides, RuntimeState, load_runtime_with_overrides,
+        runtime_config_from_stage_config, should_attach_package_projector,
     };
+
+    #[test]
+    fn modelless_runtime_reports_zero_kv_pool_so_scheduler_uses_fallback() {
+        // The scheduler derives its admission budget from `kv_pool_tokens()` and
+        // keeps its configured default when the runtime reports 0. The modelless
+        // test runtime carries no context, so it must report 0 (not panic or
+        // report a stale non-zero pool).
+        let rt = RuntimeState::new_modelless_for_test(4);
+        assert_eq!(rt.kv_pool_tokens(), 0);
+        assert_eq!(rt.lane_count(), 4);
+    }
 
     #[test]
     fn runtime_config_preserves_selected_backend_device_and_thread_overrides() {

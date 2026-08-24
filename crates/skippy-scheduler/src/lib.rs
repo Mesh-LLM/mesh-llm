@@ -175,11 +175,18 @@ impl Scheduler {
     pub fn new(runtime: Arc<Mutex<RuntimeState>>, mut config: SchedulerConfig) -> Result<Self> {
         let (step_tx, step_rx) = mpsc::unbounded_channel();
         let (telemetry_tx, _telemetry_rx) = mpsc::unbounded_channel();
-        let lane_count = {
+        let (lane_count, kv_pool_tokens) = {
             let rt = runtime.lock();
-            rt.lane_count() as usize
+            (rt.lane_count() as usize, rt.kv_pool_tokens() as usize)
         };
         config.max_seq = config.max_seq.min(lane_count);
+        // Derive the admission budget from the runtime's real KV pool (`n_ctx`)
+        // rather than a hardcoded default. In unified-KV mode every lane draws
+        // from this single shared pool, so it is the true ceiling. The modelless
+        // test runtime reports 0, in which case we keep the configured fallback.
+        if kv_pool_tokens > 0 {
+            config.kv_budget_tokens = kv_pool_tokens;
+        }
 
         Ok(Self {
             runtime,
@@ -282,6 +289,22 @@ impl Scheduler {
         let prefill_tokens = step_batch.prefill_tokens;
         let decode_count = step_batch.decode_requests.len();
 
+        // Capture, in submission order, how far each prefill sequence advances
+        // and which sequences own each decode slot. `decode_batch_sampled`
+        // returns predictions in request order, so `predicted[i]` belongs to
+        // `decode_ids[i]`; advancing prefill by the exact submitted chunk length
+        // keeps the cursor from over-running when a chunk was budget-clamped.
+        let prefill_advances: Vec<(String, usize)> = step_batch
+            .prefill_requests
+            .iter()
+            .map(|(id, tokens)| (id.clone(), tokens.len()))
+            .collect();
+        let decode_ids: Vec<String> = step_batch
+            .decode_requests
+            .iter()
+            .map(|(id, _, _)| id.clone())
+            .collect();
+
         let mut preempted_this_step = 0;
         let mut finished_this_step = 0;
 
@@ -296,7 +319,13 @@ impl Scheduler {
         match decode_result {
             Ok(predicted) => {
                 let (preempted, finished) = self
-                    .post_process(predicted, prefill_tokens, decode_count)
+                    .post_process(
+                        &prefill_advances,
+                        &decode_ids,
+                        predicted,
+                        prefill_tokens,
+                        decode_count,
+                    )
                     .await;
                 preempted_this_step = preempted;
                 finished_this_step = finished;
@@ -474,38 +503,18 @@ impl Scheduler {
 
     async fn post_process(
         &self,
+        prefill_advances: &[(String, usize)],
+        decode_ids: &[String],
         predicted: Vec<i32>,
         prefill_tokens: usize,
         decode_count: usize,
     ) -> (usize, usize) {
-        let mut finished = Vec::new();
         let mut preempted = Vec::new();
 
-        let mut pred_idx = 0;
-        {
+        let finished = {
             let mut state = self.state.lock();
-            for (id, seq) in &mut state.running_set {
-                if seq.status != SequenceStatus::Running {
-                    continue;
-                }
-
-                if !seq.is_prefill_done() {
-                    seq.prompt_pos += seq.remaining_prefill().min(self.config.prefill_chunk_size);
-                } else if pred_idx < predicted.len() {
-                    let token = predicted[pred_idx];
-                    pred_idx += 1;
-                    seq.generated_tokens += 1;
-
-                    if token < 0 || seq.generated_tokens >= seq.max_tokens as usize {
-                        seq.status = SequenceStatus::Finished;
-                        finished.push(id.clone());
-                    } else {
-                        // Feed the sampled token back as the next decode input.
-                        seq.last_sampled_token = Some(token);
-                    }
-                }
-            }
-        }
+            Self::apply_step_results(&mut state, prefill_advances, decode_ids, &predicted)
+        };
 
         let finished_count = finished.len();
         for id in finished {
@@ -525,9 +534,50 @@ impl Scheduler {
         metrics.prefill_tokens_total += prefill_tokens as u64;
         metrics.decode_tokens_total += decode_count as u64;
         metrics.sequences_preempted += preempted.len() as u64;
-        metrics.sequences_finished += finished_count as u64;
+        // `sequences_finished` is bumped in `finish_sequence`; don't double-count.
 
         (preempted.len(), finished_count)
+    }
+
+    /// Apply the results of one executed step to the scheduler state: advance
+    /// prefill cursors by the exact number of tokens submitted, and map each
+    /// predicted token back to the decode sequence that produced it (predictions
+    /// arrive in the same order the decode requests were issued). Sequences that
+    /// hit a stop token or their `max_tokens` cap are marked `Finished` and their
+    /// ids returned. Pure over `SchedulerState` so it can be unit-tested without
+    /// a live runtime.
+    fn apply_step_results(
+        state: &mut SchedulerState,
+        prefill_advances: &[(String, usize)],
+        decode_ids: &[String],
+        predicted: &[i32],
+    ) -> Vec<String> {
+        let mut finished = Vec::new();
+
+        for (id, advanced) in prefill_advances {
+            if let Some(seq) = state.running_set.get_mut(id) {
+                seq.prompt_pos = (seq.prompt_pos + advanced).min(seq.prompt_tokens.len());
+            }
+        }
+
+        for (i, id) in decode_ids.iter().enumerate() {
+            let Some(seq) = state.running_set.get_mut(id) else {
+                continue;
+            };
+            // A missing prediction (short/empty result) is treated as a stop.
+            let token = predicted.get(i).copied().unwrap_or(-1);
+            seq.generated_tokens += 1;
+
+            if token < 0 || seq.generated_tokens >= seq.max_tokens as usize {
+                seq.status = SequenceStatus::Finished;
+                finished.push(id.clone());
+            } else {
+                // Feed the sampled token back as the next decode input.
+                seq.last_sampled_token = Some(token);
+            }
+        }
+
+        finished
     }
 
     fn check_kv_pressure(&self) -> bool {
@@ -640,6 +690,81 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn running(id: &str, prompt: Vec<i32>, max_tokens: u32, prompt_pos: usize) -> Sequence {
+        let mut seq = Sequence::new(id.to_string(), prompt, max_tokens, None, 1);
+        seq.status = SequenceStatus::Running;
+        seq.prompt_pos = prompt_pos;
+        seq
+    }
+
+    fn state_with(running: Vec<Sequence>) -> SchedulerState {
+        let mut running_set = BTreeMap::new();
+        for seq in running {
+            running_set.insert(seq.id.clone(), seq);
+        }
+        SchedulerState {
+            waiting_queue: VecDeque::new(),
+            running_set,
+            next_seq_id: 0,
+            free_seq_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn apply_step_results_maps_predictions_by_request_index() {
+        // Two decode sequences; predictions arrive in the same order the decode
+        // requests were issued, so predicted[i] must land on decode_ids[i].
+        let mut state = state_with(vec![
+            running("a", vec![1, 2, 3], 100, 3),
+            running("b", vec![9, 9], 100, 2),
+        ]);
+        // Issue order [b, a] with predictions [11, 22]: b<-11, a<-22.
+        let finished =
+            Scheduler::apply_step_results(&mut state, &[], &["b".into(), "a".into()], &[11, 22]);
+        assert!(finished.is_empty());
+        assert_eq!(state.running_set["b"].last_sampled_token, Some(11));
+        assert_eq!(state.running_set["a"].last_sampled_token, Some(22));
+        assert_eq!(state.running_set["a"].generated_tokens, 1);
+        assert_eq!(state.running_set["b"].generated_tokens, 1);
+    }
+
+    #[test]
+    fn apply_step_results_advances_prefill_by_submitted_chunk() {
+        // prompt_pos starts at 0 (fresh prefill); a budget-clamped chunk of 3
+        // must advance the cursor by exactly 3, not by prefill_chunk_size.
+        let mut state = state_with(vec![running("a", vec![1, 2, 3, 4, 5, 6, 7, 8], 100, 0)]);
+        Scheduler::apply_step_results(&mut state, &[("a".into(), 3)], &[], &[]);
+        assert_eq!(state.running_set["a"].prompt_pos, 3);
+        // A subsequent over-large advance clamps to the prompt length.
+        Scheduler::apply_step_results(&mut state, &[("a".into(), 100)], &[], &[]);
+        assert_eq!(state.running_set["a"].prompt_pos, 8);
+        assert!(state.running_set["a"].is_prefill_done());
+    }
+
+    #[test]
+    fn apply_step_results_finishes_on_stop_token_and_cap() {
+        let mut state = state_with(vec![
+            running("a", vec![1, 2], 1, 2), // max_tokens = 1 -> finishes after one
+            running("b", vec![1, 2], 100, 2),
+        ]);
+        // "a" hits its cap; "b" receives a negative (stop) token.
+        let mut finished =
+            Scheduler::apply_step_results(&mut state, &[], &["a".into(), "b".into()], &[5, -1]);
+        finished.sort();
+        assert_eq!(finished, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(state.running_set["a"].status, SequenceStatus::Finished);
+        assert_eq!(state.running_set["b"].status, SequenceStatus::Finished);
+    }
+
+    #[test]
+    fn apply_step_results_missing_prediction_is_a_stop() {
+        // A decode slot with no corresponding prediction (short result) stops.
+        let mut state = state_with(vec![running("a", vec![1, 2], 100, 2)]);
+        let finished = Scheduler::apply_step_results(&mut state, &[], &["a".into()], &[]);
+        assert_eq!(finished, vec!["a".to_string()]);
+        assert_eq!(state.running_set["a"].status, SequenceStatus::Finished);
+    }
 
     #[test]
     fn sequence_creation() {
