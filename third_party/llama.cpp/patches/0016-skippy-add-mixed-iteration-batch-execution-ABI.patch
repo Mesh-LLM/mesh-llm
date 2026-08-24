@@ -132,7 +132,7 @@ diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 index a8694dbed..efb51f5fd 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
-@@ -23,6 +23,312 @@
+@@ -23,6 +23,326 @@
  
  
  extern "C" {
@@ -376,6 +376,32 @@ index a8694dbed..efb51f5fd 100644
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +
++    std::vector<uint32_t> request_output_top_k(request_count, 0);
++    if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0 &&
++        embeddings != nullptr && output_payloads != nullptr) {
++        if (top_k == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "iteration GLM-DSA output was not available");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        for (size_t request_index = 0; request_index < request_count; ++request_index) {
++            if (output_payloads[request_index] == nullptr) {
++                continue;
++            }
++            const skippy_iteration_request & request = requests[request_index];
++            const uint64_t future_n_past = static_cast<uint64_t>(std::max<int32_t>(request.session->n_past, 0)) +
++                    static_cast<uint64_t>(request.token_count);
++            const uint32_t visible_top_k = skippy_glm_dsa_sideband_top_k_count_for_n_kv(
++                    request.session,
++                    future_n_past);
++            request_output_top_k[request_index] = static_cast<uint32_t>(
++                    std::min<int64_t>(top_k->ne[0], visible_top_k));
++            if (request_output_top_k[request_index] == 0) {
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "iteration GLM-DSA output has no visible entries");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++        }
++    }
++
 +    for (size_t request_index = 0; request_index < request_count; ++request_index) {
 +        const skippy_iteration_request & request = requests[request_index];
 +        const size_t offset = request_offsets[request_index];
@@ -400,19 +426,7 @@ index a8694dbed..efb51f5fd 100644
 +                    hidden_bytes);
 +            size_t actual_output_bytes = hidden_bytes;
 +            if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
-+                if (top_k == nullptr) {
-+                    skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "iteration GLM-DSA output was not available");
-+                    return SKIPPY_STATUS_RUNTIME_ERROR;
-+                }
-+                const uint32_t visible_top_k = skippy_glm_dsa_sideband_top_k_count_for_n_kv(
-+                        request.session,
-+                        static_cast<uint64_t>(std::max<int32_t>(request.session->n_past, 0)));
-+                const uint32_t output_top_k = static_cast<uint32_t>(
-+                        std::min<int64_t>(top_k->ne[0], visible_top_k));
-+                if (output_top_k == 0) {
-+                    skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "iteration GLM-DSA output has no visible entries");
-+                    return SKIPPY_STATUS_RUNTIME_ERROR;
-+                }
++                const uint32_t output_top_k = request_output_top_k[request_index];
 +                const size_t row_bytes = static_cast<size_t>(output_top_k) * sizeof(int32_t);
 +                for (size_t token_index = 0; token_index < request.token_count; ++token_index) {
 +                    const size_t row = offset + token_index;
@@ -447,4 +461,3 @@ index a8694dbed..efb51f5fd 100644
          const llama_token * token_ids,
 -- 
 2.54.0 (Apple Git-157)
-

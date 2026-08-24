@@ -58,6 +58,7 @@ WORKSPACE_MEMBERS=(
   "openai-frontend"
   "skippy-ffi"
   "skippy-runtime"
+  "skippy-scheduler"
   "skippy-server"
   "metrics-server"
   "skippy-model-package"
@@ -146,6 +147,7 @@ weights = {
     "mesh-llm-ffi": 5,
     "skippy-server": 5,
     "skippy-runtime": 5,
+    "skippy-scheduler": 2,
     "skippy-correctness": 5,
     "model-package": 5,
     "skippy-bench": 4,

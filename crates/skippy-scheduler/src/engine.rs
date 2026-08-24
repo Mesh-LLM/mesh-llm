@@ -122,6 +122,10 @@ impl Scheduler {
                     phase: IterationPhase::Decode,
                     sampling: sequence.sampling.clone(),
                 });
+                // The token scheduled for decode occupies the next position.
+                // Keep the replay cursor aligned so uninterrupted sequences do
+                // not replay that token as recompute work on the next step.
+                sequence.prefill_cursor = replay.len().saturating_add(1);
                 plan.token_count += 1;
                 budget -= 1;
             }
@@ -135,7 +139,7 @@ impl Scheduler {
         plan: &IterationPlan,
         predicted_tokens: &[i32],
     ) -> IterationTelemetry {
-        let mut finished = Vec::new();
+        let mut terminal = Vec::new();
         let mut prefill_tokens = 0usize;
         let mut recompute_tokens = 0usize;
         let mut decode_tokens = 0usize;
@@ -152,22 +156,30 @@ impl Scheduler {
             let Some(sequence) = self.active.get_mut(&work.sequence_id) else {
                 continue;
             };
-            let predicted = predicted_tokens.get(index).copied().unwrap_or(-1);
+            let Some(predicted) = predicted_tokens.get(index).copied() else {
+                sequence.status = SequenceStatus::Failed;
+                terminal.push((work.sequence_id.clone(), true));
+                continue;
+            };
             if predicted < 0 {
                 sequence.status = SequenceStatus::Finished;
-                finished.push(work.sequence_id.clone());
+                terminal.push((work.sequence_id.clone(), false));
                 continue;
             }
             sequence.generated_tokens.push(predicted);
             if sequence.generated_tokens.len() >= sequence.max_tokens as usize {
                 sequence.status = SequenceStatus::Finished;
-                finished.push(work.sequence_id.clone());
+                terminal.push((work.sequence_id.clone(), false));
             }
         }
 
-        for id in finished {
+        for (id, failed) in terminal {
             self.remove_active(&id);
-            self.metrics.finished = self.metrics.finished.saturating_add(1);
+            if failed {
+                self.metrics.failed = self.metrics.failed.saturating_add(1);
+            } else {
+                self.metrics.finished = self.metrics.finished.saturating_add(1);
+            }
         }
         self.metrics.iterations = self.metrics.iterations.saturating_add(1);
         self.metrics.admitted = self.metrics.admitted.saturating_add(plan.admitted as u64);
@@ -392,6 +404,22 @@ mod tests {
             .unwrap();
         assert_eq!(decode.tokens, vec![42]);
         assert_eq!(decode.positions, vec![2]);
+
+        scheduler.complete_iteration(&mixed, &[43, -1]);
+        let next = scheduler.plan_iteration();
+        let decode = next
+            .work
+            .iter()
+            .find(|work| work.sequence_id == "decode")
+            .unwrap();
+        assert_eq!(decode.phase, IterationPhase::Decode);
+        assert_eq!(decode.tokens, vec![43]);
+        assert_eq!(decode.positions, vec![3]);
+        assert!(
+            next.work
+                .iter()
+                .all(|work| work.sequence_id != "decode" || work.phase != IterationPhase::Recompute)
+        );
     }
 
     #[test]
@@ -449,5 +477,18 @@ mod tests {
             Err(AdmissionError::QueueFull { capacity: 1 })
         );
         assert_eq!(scheduler.metrics().rejected_overload, 1);
+    }
+
+    #[test]
+    fn missing_sample_prediction_fails_instead_of_finishing_sequence() {
+        let mut scheduler = Scheduler::new(SchedulerConfig::default());
+        scheduler.submit(sequence("a", 2, 4)).unwrap();
+        let plan = scheduler.plan_iteration();
+
+        scheduler.complete_iteration(&plan, &[]);
+
+        assert!(scheduler.sequence("a").is_none());
+        assert_eq!(scheduler.metrics().failed, 1);
+        assert_eq!(scheduler.metrics().finished, 0);
     }
 }

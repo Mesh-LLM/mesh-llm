@@ -4,6 +4,7 @@ pub struct SchedulerMetrics {
     pub admitted: u64,
     pub preempted: u64,
     pub finished: u64,
+    pub failed: u64,
     pub rejected_overload: u64,
     pub prefill_tokens: u64,
     pub recompute_tokens: u64,

@@ -18,6 +18,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
+const MAX_ITERATION_TOKENS: usize = 2048;
+
 pub(super) struct DecodeBatcher {
     shared: Arc<DecodeBatcherShared>,
 }
@@ -105,11 +107,7 @@ impl DecodeBatcher {
         sampling: Option<&SamplingConfig>,
         sample_last: bool,
     ) -> OpenAiResult<DecodeBatchOutcome> {
-        if token_ids.is_empty() {
-            return Err(OpenAiError::invalid_request(
-                "scheduler iteration requires at least one token",
-            ));
-        }
+        validate_iteration_token_count(token_ids.len())?;
         let (reply, receiver) = std_mpsc::sync_channel(1);
         self.shared.enqueue(PendingDecode {
             session_id: session_id.to_string(),
@@ -124,6 +122,20 @@ impl DecodeBatcher {
             .recv()
             .map_err(|error| OpenAiError::backend(format!("iteration batcher stopped: {error}")))?
     }
+}
+
+fn validate_iteration_token_count(token_count: usize) -> OpenAiResult<()> {
+    if token_count == 0 {
+        return Err(OpenAiError::invalid_request(
+            "scheduler iteration requires at least one token",
+        ));
+    }
+    if token_count > MAX_ITERATION_TOKENS {
+        return Err(OpenAiError::invalid_request(format!(
+            "scheduler iteration exceeds the {MAX_ITERATION_TOKENS}-token limit"
+        )));
+    }
+    Ok(())
 }
 
 impl Clone for DecodeBatcher {
@@ -186,10 +198,10 @@ impl DecodeBatcherShared {
             return None;
         }
         state = self.collect_until_deadline(state);
-        let mut token_budget = 2048usize;
+        let mut token_budget = MAX_ITERATION_TOKENS;
         let mut batch_size = 0usize;
         for pending in state.pending.iter().take(self.max_batch_size) {
-            if pending.token_ids.len() > token_budget && batch_size > 0 {
+            if pending.token_ids.len() > token_budget {
                 break;
             }
             token_budget = token_budget.saturating_sub(pending.token_ids.len());
@@ -198,7 +210,8 @@ impl DecodeBatcherShared {
                 break;
             }
         }
-        Some(state.pending.drain(..batch_size.max(1)).collect())
+        debug_assert!(batch_size > 0, "queued iteration must fit the token budget");
+        Some(state.pending.drain(..batch_size).collect())
     }
 
     fn collect_until_deadline<'a>(
@@ -295,5 +308,17 @@ impl DecodeBatcherShared {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iteration_token_count_rejects_empty_and_oversized_requests() {
+        assert!(validate_iteration_token_count(0).is_err());
+        assert!(validate_iteration_token_count(MAX_ITERATION_TOKENS).is_ok());
+        assert!(validate_iteration_token_count(MAX_ITERATION_TOKENS + 1).is_err());
     }
 }

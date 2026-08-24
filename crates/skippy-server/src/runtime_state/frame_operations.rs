@@ -312,6 +312,14 @@ impl RuntimeState {
                     request.session_id
                 );
             }
+        }
+        let new_session_count = unique
+            .iter()
+            .filter(|session_id| !self.sessions.contains_key(**session_id))
+            .count();
+        let available_lanes = (self.lane_count as usize).saturating_sub(self.sessions.len());
+        ensure_iteration_session_capacity(new_session_count, available_lanes)?;
+        for request in requests {
             self.session(request.session_id)?;
         }
 
@@ -564,6 +572,18 @@ impl RuntimeState {
     }
 }
 
+fn ensure_iteration_session_capacity(
+    new_session_count: usize,
+    available_lanes: usize,
+) -> Result<()> {
+    if new_session_count > available_lanes {
+        bail!(
+            "iteration requires {new_session_count} new sessions but only {available_lanes} execution lanes are available"
+        );
+    }
+    Ok(())
+}
+
 fn split_activation_frame(
     input: Option<&ActivationFrame>,
     token_count: usize,
@@ -632,4 +652,15 @@ fn combine_activation_frames(frames: &[ActivationFrame]) -> Result<ActivationFra
     desc.token_count = token_count;
     desc.payload_bytes = payload.len() as u64;
     Ok(ActivationFrame { desc, payload })
+}
+
+#[cfg(test)]
+mod iteration_admission_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_batch_before_partial_session_admission() {
+        assert!(ensure_iteration_session_capacity(3, 2).is_err());
+        assert!(ensure_iteration_session_capacity(2, 2).is_ok());
+    }
 }

@@ -9,6 +9,7 @@ performance target.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import socket
@@ -458,107 +459,116 @@ def run_llama_server(case: Case, prompt: str, args: argparse.Namespace, case_dir
 
 
 def run_concurrent_requests(
-    case: Case,
     prompt: str,
     concurrency: int,
     num_requests: int,
     port: int,
     args: argparse.Namespace,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], float]:
     """Run multiple concurrent requests and measure per-request timings."""
-    import threading
-    import queue
+    if concurrency <= 0:
+        raise ValueError("concurrency must be positive")
+    if num_requests < concurrency:
+        raise ValueError(
+            f"num_requests ({num_requests}) must be at least concurrency ({concurrency})"
+        )
 
-    results_queue = queue.Queue()
-
-    def make_request(request_id: int) -> None:
+    def make_request(request_id: int) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
             "n_predict": 128,
             "temperature": 0,
             "top_k": 1,
             "cache_prompt": True,
-            "stream": False,
+            "stream": True,
         }
         started = time.monotonic()
         first_token_time = None
+        generated_chunks = 0
+        timings: dict[str, Any] = {}
+        conn = None
         try:
-            # Use streaming to measure TTFT
-            import urllib.request
-            import json
             import http.client
 
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=args.request_timeout_secs)
             conn.request("POST", "/completion", json.dumps(payload), {"Content-Type": "application/json"})
             response = conn.getresponse()
-            
+
             if response.status != 200:
-                results_queue.put({
+                return {
                     "request_id": request_id,
                     "error": f"HTTP {response.status}",
                     "elapsed_ms": (time.monotonic() - started) * 1000,
-                })
-                return
-            
-            # Read streaming response to measure TTFT
-            content_length = response.getheader("Content-Length")
-            if content_length:
-                # Non-streaming
-                body = response.read().decode("utf-8")
-                data = json.loads(body)
-                elapsed_ms = (time.monotonic() - started) * 1000
-                timings = data.get("timings", {})
-                results_queue.put({
+                }
+
+            for raw_line in response:
+                line = raw_line.strip()
+                if not line.startswith(b"data: "):
+                    continue
+                payload_bytes = line[6:]
+                if payload_bytes == b"[DONE]":
+                    break
+                try:
+                    event = json.loads(payload_bytes)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event.get("timings"), dict):
+                    timings = event["timings"]
+                delta = event.get("choices", [{}])[0].get("delta", {})
+                content = (
+                    event.get("content")
+                    or event.get("reasoning_content")
+                    or delta.get("content")
+                    or delta.get("reasoning_content")
+                )
+                if content:
+                    if first_token_time is None:
+                        first_token_time = time.monotonic()
+                    generated_chunks += 1
+
+            completed = time.monotonic()
+            elapsed_ms = (completed - started) * 1000
+            if first_token_time is None:
+                return {
                     "request_id": request_id,
+                    "error": "stream completed without generated content",
                     "elapsed_ms": elapsed_ms,
-                    "ttft_ms": timings.get("prompt_ms"),
-                    "tpot_ms": timings.get("predicted_ms"),
-                    "tokens_predicted": timings.get("tokens_predicted"),
-                    "prompt_n": timings.get("prompt_n"),
-                    "cache_n": timings.get("cache_n"),
-                    "content": data.get("content"),
-                })
-            else:
-                # Streaming - measure TTFT from first chunk
-                first_chunk = True
-                for line in response:
-                    if line:
-                        if first_chunk:
-                            first_token_time = time.monotonic()
-                            first_chunk = False
-                elapsed_ms = (time.monotonic() - started) * 1000
-                ttft_ms = (first_token_time - started) * 1000 if first_token_time else elapsed_ms
-                results_queue.put({
-                    "request_id": request_id,
-                    "elapsed_ms": elapsed_ms,
-                    "ttft_ms": ttft_ms,
-                })
+                }
+            tokens_predicted = timings.get("tokens_predicted")
+            if not isinstance(tokens_predicted, int) or tokens_predicted <= 0:
+                tokens_predicted = generated_chunks
+            generation_intervals = max(tokens_predicted - 1, 1)
+            tpot_ms = (completed - first_token_time) * 1000 / generation_intervals
+            return {
+                "request_id": request_id,
+                "elapsed_ms": elapsed_ms,
+                "ttft_ms": (first_token_time - started) * 1000,
+                "tpot_ms": tpot_ms,
+                "tokens_predicted": tokens_predicted,
+                "prompt_n": timings.get("prompt_n"),
+                "cache_n": timings.get("cache_n"),
+            }
         except Exception as exc:
-            elapsed_ms = (time.monotonic() - started) * 1000
-            results_queue.put({
+            return {
                 "request_id": request_id,
                 "error": str(exc),
-                "elapsed_ms": elapsed_ms,
-            })
+                "elapsed_ms": (time.monotonic() - started) * 1000,
+            }
+        finally:
+            if conn is not None:
+                conn.close()
 
-    threads = []
-    for i in range(num_requests):
-        t = threading.Thread(target=make_request, args=(i,))
-        threads.append(t)
-
-    # Stagger start slightly to simulate arrival
-    for t in threads:
-        t.start()
-        time.sleep(0.01)
-
-    for t in threads:
-        t.join(timeout=args.request_timeout_secs + 5)
-
-    results = []
-    while not results_queue.empty():
-        results.append(results_queue.get())
-
-    return results
+    workload_started = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = []
+        for request_id in range(num_requests):
+            futures.append(executor.submit(make_request, request_id))
+            if request_id + 1 < num_requests:
+                time.sleep(0.01)
+        results = [future.result() for future in concurrent.futures.as_completed(futures)]
+    makespan_ms = (time.monotonic() - workload_started) * 1000
+    results.sort(key=lambda result: result["request_id"])
+    return results, makespan_ms
 
 
 def format_ms(value: Any) -> str:
@@ -671,14 +681,18 @@ def parse_prefix_sweep(value: str | None) -> list[int | None]:
     return sizes
 
 
-def run_case(case: Case, args: argparse.Namespace, use_case: UseCase | None = None) -> dict[str, Any]:
+def resolve_case(case: Case, args: argparse.Namespace, use_case: UseCase | None = None) -> Case:
     cache_hit_repeats = args.cache_hit_repeats or case.cache_hit_repeats
     prefix_tokens = args.prefix_tokens
     if prefix_tokens is None and use_case is not None:
         prefix_tokens = use_case.prefix_tokens
     n_gpu_layers = args.n_gpu_layers if args.n_gpu_layers is not None else case.n_gpu_layers
-    if prefix_tokens is not None or n_gpu_layers != case.n_gpu_layers or cache_hit_repeats != case.cache_hit_repeats:
-        case = Case(
+    if (
+        prefix_tokens is not None
+        or n_gpu_layers != case.n_gpu_layers
+        or cache_hit_repeats != case.cache_hit_repeats
+    ):
+        return Case(
             key=case.key,
             family=case.family,
             model_id=case.model_id,
@@ -697,6 +711,10 @@ def run_case(case: Case, args: argparse.Namespace, use_case: UseCase | None = No
             resident_kv_bytes_per_token=case.resident_kv_bytes_per_token,
             skip_llama_server_reason=case.skip_llama_server_reason,
         )
+    return case
+
+
+def run_case(case: Case, args: argparse.Namespace, use_case: UseCase | None = None) -> dict[str, Any]:
     case_dir = args.output_dir / f"{case.key}-p{case.prefix_tokens}"
     if use_case is not None:
         case_dir = args.output_dir / use_case.key / f"{case.key}-p{case.prefix_tokens}"
@@ -785,7 +803,12 @@ def parse_concurrency_sweep(value: str) -> list[int]:
     return levels
 
 
-def calculate_goodput(results: list[dict[str, Any]], ttft_slo_ms: float, tpot_slo_ms: float) -> dict[str, Any]:
+def calculate_goodput(
+    results: list[dict[str, Any]],
+    makespan_ms: float,
+    ttft_slo_ms: float,
+    tpot_slo_ms: float,
+) -> dict[str, Any]:
     """Calculate goodput metrics from per-request results."""
     if not results:
         return {"goodput_rps": 0.0, "ttft_p50": None, "ttft_p99": None, "tpot_p50": None, "tpot_p99": None}
@@ -796,15 +819,14 @@ def calculate_goodput(results: list[dict[str, Any]], ttft_slo_ms: float, tpot_sl
     
     ttfts = [r.get("ttft_ms") for r in successful if r.get("ttft_ms") is not None]
     tpots = [r.get("tpot_ms") for r in successful if r.get("tpot_ms") is not None]
-    elapsed = [r.get("elapsed_ms") for r in successful if r.get("elapsed_ms") is not None]
-    
+    workload_seconds = makespan_ms / 1000.0
+
     # Goodput: requests/sec that meet SLO
     if ttfts and tpots:
         good = sum(1 for r in successful 
                    if r.get("ttft_ms", float("inf")) <= ttft_slo_ms 
                    and r.get("tpot_ms", float("inf")) <= tpot_slo_ms)
-        total_time = max(elapsed) / 1000.0 if elapsed else 1.0
-        goodput_rps = good / total_time if total_time > 0 else 0.0
+        goodput_rps = good / workload_seconds if workload_seconds > 0 else 0.0
     else:
         goodput_rps = 0.0
     
@@ -822,7 +844,7 @@ def calculate_goodput(results: list[dict[str, Any]], ttft_slo_ms: float, tpot_sl
         "ttft_p99": percentile(ttfts, 99),
         "tpot_p50": percentile(tpots, 50),
         "tpot_p99": percentile(tpots, 99),
-        "throughput_rps": len(successful) / (max(elapsed) / 1000.0) if elapsed else 0.0,
+        "throughput_rps": len(successful) / workload_seconds if workload_seconds > 0 else 0.0,
     }
 
 
@@ -878,7 +900,7 @@ def main() -> int:
     parser.add_argument(
         "--concurrent-requests",
         type=int,
-        default=10,
+        default=64,
         help="Number of requests per concurrency level.",
     )
     parser.add_argument(
@@ -923,75 +945,103 @@ def main() -> int:
     concurrency_sweep = parse_concurrency_sweep(args.concurrency_sweep)
     
     results = []
+    benchmark_inputs: list[tuple[Case, UseCase | None, dict[str, Any]]] = []
     for prefix_tokens in prefix_sweep:
         args.prefix_tokens = prefix_tokens
         for use_case in selected_use_cases:
             for case in selected:
-                row = run_case(case, args, use_case)
+                effective_case = resolve_case(case, args, use_case)
+                row = run_case(effective_case, args, use_case)
                 results.append(row)
+                benchmark_inputs.append((effective_case, use_case, row))
                 (args.output_dir / "production-cache-bench.json").write_text(json.dumps(results, indent=2))
                 (args.output_dir / "production-cache-bench.md").write_text(markdown_table(results))
     
     # Run concurrency sweep for each case
     concurrency_results = []
-    for prefix_tokens in prefix_sweep:
-        args.prefix_tokens = prefix_tokens
-        for use_case in selected_use_cases:
-            for case in selected:
-                if case.model_path is None or not case.model_path.exists():
-                    continue
-                if case.stage_load_mode != "runtime-slice":
-                    continue
-                
-                # Start server for this case
-                port = free_port()
-                log_path = args.output_dir / f"concurrency-{case.key}-p{prefix_tokens}.log"
-                with log_path.open("w") as log:
-                    cmd = [
-                        str(args.llama_server_bin),
-                        "--model", str(case.model_path),
-                        "--ctx-size", str(max(case.ctx_size, case.prefix_tokens + 128)),
-                        "--n-gpu-layers", str(case.n_gpu_layers),
-                        "--host", "127.0.0.1",
-                        "--port", str(port),
-                        "--parallel", str(args.llama_parallel),
-                        "--no-webui",
-                    ]
-                    proc = subprocess.Popen(cmd, cwd=REPO, text=True, stdout=log, stderr=subprocess.STDOUT)
-                    try:
-                        wait_ready(port, proc, args.server_startup_timeout_secs)
-                        
-                        prompt = skippy["benchmark_prompt_text"] if "skippy" in locals() else "Hello"
-                        # We need to run Skippy correctness first to get the prompt
-                        # For now, use a default prompt
-                        prompt = "Hello from the Skippy llama parity harness."
-                        
-                        case_concurrency_results = []
-                        for concurrency in concurrency_sweep:
-                            print(f"==> {case.key}: concurrency={concurrency}", flush=True)
-                            concurrent_results = run_concurrent_requests(
-                                case, prompt, concurrency, args.concurrent_requests, port, args
-                            )
-                            goodput = calculate_goodput(concurrent_results, args.ttft_slo_ms, args.tpot_slo_ms)
-                            case_concurrency_results.append({
-                                "concurrency": concurrency,
-                                "requests": args.concurrent_requests,
-                                "per_request": concurrent_results,
-                                "goodput": goodput,
-                            })
-                        
-                        concurrency_results.append({
-                            "case": case.key,
-                            "prefix_tokens": prefix_tokens,
-                            "concurrency_sweep": case_concurrency_results,
-                        })
-                    finally:
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
-                            proc.wait(timeout=5)
+    for case, use_case, row in benchmark_inputs:
+        if case.model_path is None or not case.model_path.exists():
+            continue
+        if case.stage_load_mode != "runtime-slice":
+            continue
+        prompt = row.get("skippy", {}).get("benchmark_prompt_text")
+        if not isinstance(prompt, str) or not prompt:
+            continue
+
+        port = free_port()
+        use_case_suffix = f"-{use_case.key}" if use_case is not None else ""
+        log_path = (
+            args.output_dir
+            / f"concurrency-{case.key}-p{case.prefix_tokens}{use_case_suffix}.log"
+        )
+        with log_path.open("w") as log:
+            cmd = [
+                str(args.llama_server_bin),
+                "--model",
+                str(case.model_path),
+                "--ctx-size",
+                str(case.ctx_size),
+                "--n-gpu-layers",
+                str(case.n_gpu_layers),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--parallel",
+                str(args.llama_parallel),
+                "--no-webui",
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                cwd=REPO,
+                text=True,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+            try:
+                wait_ready(port, proc, args.server_startup_timeout_secs)
+
+                case_concurrency_results = []
+                for concurrency in concurrency_sweep:
+                    print(f"==> {case.key}: concurrency={concurrency}", flush=True)
+                    concurrent_results, makespan_ms = run_concurrent_requests(
+                        prompt,
+                        concurrency,
+                        args.concurrent_requests,
+                        port,
+                        args,
+                    )
+                    goodput = calculate_goodput(
+                        concurrent_results,
+                        makespan_ms,
+                        args.ttft_slo_ms,
+                        args.tpot_slo_ms,
+                    )
+                    case_concurrency_results.append(
+                        {
+                            "concurrency": concurrency,
+                            "requests": args.concurrent_requests,
+                            "makespan_ms": makespan_ms,
+                            "per_request": concurrent_results,
+                            "goodput": goodput,
+                        }
+                    )
+
+                concurrency_results.append(
+                    {
+                        "case": case.key,
+                        "prefix_tokens": case.prefix_tokens,
+                        "use_case": use_case.key if use_case is not None else None,
+                        "concurrency_sweep": case_concurrency_results,
+                    }
+                )
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
 
     print(markdown_table(results))
     print(f"Wrote {args.output_dir / 'production-cache-bench.json'}")
