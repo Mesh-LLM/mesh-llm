@@ -457,6 +457,110 @@ def run_llama_server(case: Case, prompt: str, args: argparse.Namespace, case_dir
                 proc.wait(timeout=5)
 
 
+def run_concurrent_requests(
+    case: Case,
+    prompt: str,
+    concurrency: int,
+    num_requests: int,
+    port: int,
+    args: argparse.Namespace,
+) -> list[dict[str, Any]]:
+    """Run multiple concurrent requests and measure per-request timings."""
+    import threading
+    import queue
+
+    results_queue = queue.Queue()
+
+    def make_request(request_id: int) -> None:
+        payload = {
+            "prompt": prompt,
+            "n_predict": 128,
+            "temperature": 0,
+            "top_k": 1,
+            "cache_prompt": True,
+            "stream": False,
+        }
+        started = time.monotonic()
+        first_token_time = None
+        try:
+            # Use streaming to measure TTFT
+            import urllib.request
+            import json
+            import http.client
+
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=args.request_timeout_secs)
+            conn.request("POST", "/completion", json.dumps(payload), {"Content-Type": "application/json"})
+            response = conn.getresponse()
+
+            if response.status != 200:
+                results_queue.put({
+                    "request_id": request_id,
+                    "error": f"HTTP {response.status}",
+                    "elapsed_ms": (time.monotonic() - started) * 1000,
+                })
+                return
+
+            # Read streaming response to measure TTFT
+            content_length = response.getheader("Content-Length")
+            if content_length:
+                # Non-streaming
+                body = response.read().decode("utf-8")
+                data = json.loads(body)
+                elapsed_ms = (time.monotonic() - started) * 1000
+                timings = data.get("timings", {})
+                results_queue.put({
+                    "request_id": request_id,
+                    "elapsed_ms": elapsed_ms,
+                    "ttft_ms": timings.get("prompt_ms"),
+                    "tpot_ms": timings.get("predicted_ms"),
+                    "tokens_predicted": timings.get("tokens_predicted"),
+                    "prompt_n": timings.get("prompt_n"),
+                    "cache_n": timings.get("cache_n"),
+                    "content": data.get("content"),
+                })
+            else:
+                # Streaming - measure TTFT from first chunk
+                first_chunk = True
+                for line in response:
+                    if line:
+                        if first_chunk:
+                            first_token_time = time.monotonic()
+                            first_chunk = False
+                elapsed_ms = (time.monotonic() - started) * 1000
+                ttft_ms = (first_token_time - started) * 1000 if first_token_time else elapsed_ms
+                results_queue.put({
+                    "request_id": request_id,
+                    "elapsed_ms": elapsed_ms,
+                    "ttft_ms": ttft_ms,
+                })
+        except Exception as exc:
+            elapsed_ms = (time.monotonic() - started) * 1000
+            results_queue.put({
+                "request_id": request_id,
+                "error": str(exc),
+                "elapsed_ms": elapsed_ms,
+            })
+
+    threads = []
+    for i in range(num_requests):
+        t = threading.Thread(target=make_request, args=(i,))
+        threads.append(t)
+
+    # Stagger start slightly to simulate arrival
+    for t in threads:
+        t.start()
+        time.sleep(0.01)
+
+    for t in threads:
+        t.join(timeout=args.request_timeout_secs + 5)
+
+    results = []
+    while not results_queue.empty():
+        results.append(results_queue.get())
+
+    return results
+
+
 def format_ms(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{value:.1f}"
@@ -664,6 +768,78 @@ def run_case(case: Case, args: argparse.Namespace, use_case: UseCase | None = No
     return row
 
 
+def parse_concurrency_sweep(value: str) -> list[int]:
+    if not value:
+        return [1, 2, 4, 8, 16, 32, 64]
+    levels = []
+    for raw in value.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        level = int(raw)
+        if level <= 0:
+            raise SystemExit("--concurrency-sweep values must be positive")
+        levels.append(level)
+    if not levels:
+        raise SystemExit("--concurrency-sweep did not contain any levels")
+    return levels
+
+
+def calculate_goodput(results: list[dict[str, Any]], ttft_slo_ms: float, tpot_slo_ms: float) -> dict[str, Any]:
+    """Calculate goodput metrics from per-request results."""
+    if not results:
+        return {"goodput_rps": 0.0, "ttft_p50": None, "ttft_p99": None, "tpot_p50": None, "tpot_p99": None}
+
+    successful = [r for r in results if "error" not in r]
+    if not successful:
+        return {"goodput_rps": 0.0, "ttft_p50": None, "ttft_p99": None, "tpot_p50": None, "tpot_p99": None}
+
+    ttfts = [r.get("ttft_ms") for r in successful if r.get("ttft_ms") is not None]
+    tpots = [r.get("tpot_ms") for r in successful if r.get("tpot_ms") is not None]
+    elapsed = [r.get("elapsed_ms") for r in successful if r.get("elapsed_ms") is not None]
+
+    # Goodput: requests/sec that meet SLO
+    if ttfts and tpots:
+        good = sum(1 for r in successful
+                   if r.get("ttft_ms", float("inf")) <= ttft_slo_ms
+                   and r.get("tpot_ms", float("inf")) <= tpot_slo_ms)
+        total_time = max(elapsed) / 1000.0 if elapsed else 1.0
+        goodput_rps = good / total_time if total_time > 0 else 0.0
+    else:
+        goodput_rps = 0.0
+
+    def percentile(values: list[float], p: float) -> float | None:
+        if not values:
+            return None
+        sorted_vals = sorted(values)
+        idx = int(len(sorted_vals) * p / 100)
+        idx = min(idx, len(sorted_vals) - 1)
+        return sorted_vals[idx]
+
+    return {
+        "goodput_rps": goodput_rps,
+        "ttft_p50": percentile(ttfts, 50),
+        "ttft_p99": percentile(ttfts, 99),
+        "tpot_p50": percentile(tpots, 50),
+        "tpot_p99": percentile(tpots, 99),
+        "throughput_rps": len(successful) / (max(elapsed) / 1000.0) if elapsed else 0.0,
+    }
+
+
+def run_concurrent_benchmark(
+    case: Case,
+    prompt: str,
+    concurrency: int,
+    num_requests: int,
+    port: int,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """Run concurrent benchmark at a specific concurrency level."""
+    # Start server if not already running
+    # For now, we assume the server is started by the caller
+    pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/skippy-cache-production-bench"))
@@ -694,6 +870,29 @@ def main() -> int:
         "--prefix-token-sweep",
         help="Comma-separated prefix-token sizes to run as one benchmark sweep, for example 512,2048,8192.",
     )
+    parser.add_argument(
+        "--concurrency-sweep",
+        help="Comma-separated concurrency levels for sweep, e.g., 1,2,4,8,16,32,64. Default: 1,2,4,8,16,32,64.",
+        default="1,2,4,8,16,32,64",
+    )
+    parser.add_argument(
+        "--concurrent-requests",
+        type=int,
+        default=10,
+        help="Number of requests per concurrency level.",
+    )
+    parser.add_argument(
+        "--ttft-slo-ms",
+        type=int,
+        default=2000,
+        help="TTFT SLO in ms for goodput calculation.",
+    )
+    parser.add_argument(
+        "--tpot-slo-ms",
+        type=int,
+        default=100,
+        help="TPOT SLO in ms for goodput calculation.",
+    )
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -720,6 +919,9 @@ def main() -> int:
     prefix_sweep = parse_prefix_sweep(args.prefix_token_sweep)
     if args.prefix_tokens is not None:
         prefix_sweep = [args.prefix_tokens]
+
+    concurrency_sweep = parse_concurrency_sweep(args.concurrency_sweep)
+
     results = []
     for prefix_tokens in prefix_sweep:
         args.prefix_tokens = prefix_tokens
@@ -730,9 +932,75 @@ def main() -> int:
                 (args.output_dir / "production-cache-bench.json").write_text(json.dumps(results, indent=2))
                 (args.output_dir / "production-cache-bench.md").write_text(markdown_table(results))
 
+    # Run concurrency sweep for each case
+    concurrency_results = []
+    for prefix_tokens in prefix_sweep:
+        args.prefix_tokens = prefix_tokens
+        for use_case in selected_use_cases:
+            for case in selected:
+                if case.model_path is None or not case.model_path.exists():
+                    continue
+                if case.stage_load_mode != "runtime-slice":
+                    continue
+
+                # Start server for this case
+                port = free_port()
+                log_path = args.output_dir / f"concurrency-{case.key}-p{prefix_tokens}.log"
+                with log_path.open("w") as log:
+                    cmd = [
+                        str(args.llama_server_bin),
+                        "--model", str(case.model_path),
+                        "--ctx-size", str(max(case.ctx_size, case.prefix_tokens + 128)),
+                        "--n-gpu-layers", str(case.n_gpu_layers),
+                        "--host", "127.0.0.1",
+                        "--port", str(port),
+                        "--parallel", str(args.llama_parallel),
+                        "--no-webui",
+                    ]
+                    proc = subprocess.Popen(cmd, cwd=REPO, text=True, stdout=log, stderr=subprocess.STDOUT)
+                    try:
+                        wait_ready(port, proc, args.server_startup_timeout_secs)
+
+                        prompt = skippy["benchmark_prompt_text"] if "skippy" in locals() else "Hello"
+                        # We need to run Skippy correctness first to get the prompt
+                        # For now, use a default prompt
+                        prompt = "Hello from the Skippy llama parity harness."
+
+                        case_concurrency_results = []
+                        for concurrency in concurrency_sweep:
+                            print(f"==> {case.key}: concurrency={concurrency}", flush=True)
+                            concurrent_results = run_concurrent_requests(
+                                case, prompt, concurrency, args.concurrent_requests, port, args
+                            )
+                            goodput = calculate_goodput(concurrent_results, args.ttft_slo_ms, args.tpot_slo_ms)
+                            case_concurrency_results.append({
+                                "concurrency": concurrency,
+                                "requests": args.concurrent_requests,
+                                "per_request": concurrent_results,
+                                "goodput": goodput,
+                            })
+
+                        concurrency_results.append({
+                            "case": case.key,
+                            "prefix_tokens": prefix_tokens,
+                            "concurrency_sweep": case_concurrency_results,
+                        })
+                    finally:
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait(timeout=5)
+
     print(markdown_table(results))
     print(f"Wrote {args.output_dir / 'production-cache-bench.json'}")
     print(f"Wrote {args.output_dir / 'production-cache-bench.md'}")
+
+    if concurrency_results:
+        (args.output_dir / "concurrency-sweep.json").write_text(json.dumps(concurrency_results, indent=2))
+        print(f"Wrote {args.output_dir / 'concurrency-sweep.json'}")
+
     return 0
 
 

@@ -49,6 +49,7 @@ members = [
     "crates/openai-frontend",
     "crates/skippy-ffi",
     "crates/skippy-runtime",
+    "crates/skippy-scheduler",
     "crates/skippy-server",
     "crates/metrics-server",
     "crates/skippy-model-package",

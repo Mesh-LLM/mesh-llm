@@ -7510,6 +7510,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "skippy-scheduler"
+version = "0.76.0-rc6"
+dependencies = [
+ "anyhow",
+ "parking_lot",
+ "skippy-runtime",
+ "skippy-server",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "skippy-server"
 version = "0.76.0-rc6"
 dependencies = [

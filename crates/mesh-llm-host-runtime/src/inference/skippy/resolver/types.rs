@@ -10,7 +10,7 @@ use crate::plugin::{MeshConfig, ReasoningBudget, ReasoningEnabled, RequestDefaul
 pub(super) const BUILTIN_CTX_SIZE: u32 = 4096;
 pub(super) const BUILTIN_BATCH: u32 = 512;
 pub(super) const BUILTIN_UBATCH: u32 = 128;
-pub(super) const BUILTIN_PARALLEL: usize = 1;
+pub(super) const BUILTIN_PARALLEL: usize = 32;
 pub(super) const BUILTIN_PREFILL_CHUNK_SIZE: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_START: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_STEP: usize = 64;
