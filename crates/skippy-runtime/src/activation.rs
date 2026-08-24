@@ -132,14 +132,24 @@ impl StageSession {
             return Self::iteration_batch_sampled_raw(requests, &output_bytes);
         }
         ensure_ok(status, error)?;
-        for request in requests.iter_mut() {
-            request.session.token_count = request
-                .session
-                .token_count
-                .checked_add(
-                    u64::try_from(request.token_ids.len()).context("token count exceeds u64")?,
-                )
-                .context("session token count overflow")?;
+        // The native call has already advanced every session, so compute all
+        // new counts before storing any: a mid-loop overflow error must not
+        // leave a subset of sessions updated and the rest desynced.
+        let updated_counts = requests
+            .iter()
+            .map(|request| {
+                request
+                    .session
+                    .token_count
+                    .checked_add(
+                        u64::try_from(request.token_ids.len())
+                            .context("token count exceeds u64")?,
+                    )
+                    .context("session token count overflow")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (request, updated) in requests.iter_mut().zip(updated_counts) {
+            request.session.token_count = updated;
         }
         Ok(output_payloads
             .into_iter()
@@ -655,12 +665,21 @@ impl StageSession {
             return Self::decode_step_frame_batch_sampled_serial(requests);
         }
         ensure_ok(status, error)?;
-        for request in requests.iter_mut() {
-            request.session.token_count = request
-                .session
-                .token_count
-                .checked_add(1)
-                .context("session token count overflow")?;
+        // The native call has already advanced every session, so compute all
+        // new counts before storing any: a mid-loop overflow error must not
+        // leave a subset of sessions updated and the rest desynced.
+        let updated_counts = requests
+            .iter()
+            .map(|request| {
+                request
+                    .session
+                    .token_count
+                    .checked_add(1)
+                    .context("session token count overflow")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (request, updated) in requests.iter_mut().zip(updated_counts) {
+            request.session.token_count = updated;
         }
         Ok(output_payloads
             .into_iter()

@@ -11,7 +11,7 @@ Subject: [PATCH] skippy: add mixed iteration batch execution ABI
  4 files changed, 371 insertions(+), 6 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 012aceb9a..cb225768a 100644
+index 012aceb9a..e7f322abf 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -34,7 +34,15 @@ extern "C" {
@@ -19,7 +19,7 @@ index 012aceb9a..cb225768a 100644
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 39
-+#define SKIPPY_ABI_VERSION_PATCH 40
++#define SKIPPY_ABI_VERSION_PATCH 41
 +
 +#if defined(_MSC_VER)
 +#define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -129,10 +129,10 @@ index 0ec72958e..f48e56cb5 100644
  
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index a8694dbed..efb51f5fd 100644
+index a8694dbed..2d771832a 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
-@@ -23,6 +23,326 @@
+@@ -23,6 +23,332 @@
  
  
  extern "C" {
@@ -167,6 +167,12 @@ index a8694dbed..efb51f5fd 100644
 +    if (n_pos_per_embd <= 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model position sideband width must be positive");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (n_embd <= 0 || n_embd_inp < n_embd) {
++        // wider upstream activations than the input embedding width have no
++        // defined gather semantics and would overflow the batch row write
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "activation input width exceeds the stage model input embedding width");
++        return SKIPPY_STATUS_UNSUPPORTED;
 +    }
 +
 +    const bool activation_input = skippy_is_filtered(first) && first->stage_model->config.layer_start > 0;
@@ -459,5 +465,3 @@ index a8694dbed..efb51f5fd 100644
  enum skippy_status skippy_decode_step_frame_batch_sampled(
          struct skippy_session * const * sessions,
          const llama_token * token_ids,
--- 
-2.54.0 (Apple Git-157)
