@@ -177,18 +177,32 @@ pub fn sanitize_lifecycle_event(event: LifecycleEvent) -> LifecycleEvent {
 /// let such an address bypass credential redaction, so every redaction gate
 /// must use this helper rather than a bare `starts_with("http://")`.
 pub(crate) fn is_http_url(value: &str) -> bool {
+    http_url_start(value) == Some(0)
+}
+
+fn http_url_start(value: &str) -> Option<usize> {
     let bytes = value.as_bytes();
     let starts_ci = |prefix: &[u8]| {
         bytes.len() >= prefix.len() && bytes[..prefix.len()].eq_ignore_ascii_case(prefix)
     };
-    starts_ci(b"http://") || starts_ci(b"https://")
+    if starts_ci(b"http://") || starts_ci(b"https://") {
+        return Some(0);
+    }
+    (1..bytes.len()).find(|&index| {
+        let suffix = &bytes[index..];
+        (suffix.len() >= b"http://".len()
+            && suffix[..b"http://".len()].eq_ignore_ascii_case(b"http://"))
+            || (suffix.len() >= b"https://".len()
+                && suffix[..b"https://".len()].eq_ignore_ascii_case(b"https://"))
+    })
 }
 
 pub(crate) fn redact_urls_in_text(text: &str) -> String {
     text.split_whitespace()
         .map(|word| {
-            if is_http_url(word) {
-                redact_url_query(word)
+            if let Some(url_start) = http_url_start(word) {
+                let (prefix, url) = word.split_at(url_start);
+                format!("{prefix}{}", redact_url_query(url))
             } else {
                 word.to_string()
             }

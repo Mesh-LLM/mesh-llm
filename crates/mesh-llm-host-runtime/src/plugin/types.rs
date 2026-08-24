@@ -290,4 +290,26 @@ mod tests {
         assert!(!detail.contains("abc123"), "api_key leaked: {detail}");
         assert!(detail.contains("host"), "host lost: {detail}");
     }
+
+    #[test]
+    fn punctuation_delimited_detail_url_credentials_are_redacted_for_network() {
+        let provider = PluginCapabilityProvider {
+            capability: "chat".into(),
+            plugin_name: "demo".into(),
+            plugin_status: "running".into(),
+            endpoint_id: Some("chat".into()),
+            available: true,
+            detail: Some("GET (https://alice:s3cret@host/v1) -> 200 OK".into()),
+        }
+        .redacted_for_network();
+        let detail = provider.detail.expect("detail present");
+        assert!(
+            !detail.contains("alice:s3cret"),
+            "userinfo leaked: {detail}"
+        );
+        assert!(
+            detail.contains("(https://[REDACTED]@host/v1)"),
+            "URL punctuation lost: {detail}"
+        );
+    }
 }
