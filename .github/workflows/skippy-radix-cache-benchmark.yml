@@ -121,8 +121,11 @@ jobs:
           old_worktree="$RUNNER_TEMP/skippy-radix-old-worktree"
           mkdir -p "$RUNNER_TEMP/skippy-radix-bin"
 
-          just with-lld env \
-            CARGO_TARGET_DIR="$new_target" \
+          # Keep the host linker at the Rust toolchain default here. The
+          # runner's lld cannot link proc-macro dylibs from the isolated OLD
+          # target reliably (undefined hidden proc_macro symbols), while the
+          # native CUDA ABI above is unaffected by this Rust linker choice.
+          env CARGO_TARGET_DIR="$new_target" \
             LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
             cargo build --release --locked -p skippy-server
           cp "$new_target/release/skippy-server" "$RUNNER_TEMP/skippy-radix-bin/new-skippy-server"
@@ -130,8 +133,7 @@ jobs:
           git worktree add --detach "$old_worktree" "$BASELINE_SHA"
           (
             cd "$old_worktree"
-            just with-lld env \
-              CARGO_TARGET_DIR="$old_target" \
+            env CARGO_TARGET_DIR="$old_target" \
               LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
               cargo build --release --locked -p skippy-server
           )

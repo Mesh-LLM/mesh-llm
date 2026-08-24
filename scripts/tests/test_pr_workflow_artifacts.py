@@ -129,6 +129,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertIn('CMAKE_BUILD_PARALLEL_LEVEL: "4"', workflow)
         self.assertIn("LLAMA_STAGE_CUDA_ARCHITECTURES: native", workflow)
+        self.assertNotIn("just with-lld env", workflow)
         self.assertIn("if-no-files-found: warn", workflow)
 
     def test_main_validation_has_exactly_five_focused_entrypoints(self):
