@@ -89,28 +89,33 @@ pub(super) fn compose_target_predictions(
     traversal_predictions: &[i32],
 ) -> OpenAiResult<Vec<i32>> {
     let required = proposal_count.saturating_add(1);
+    // Stateful chat sampling stops verifying at the first mismatched row and
+    // returns only the rows it sampled, so a shorter prediction array is a
+    // legitimate early rejection — pass through what arrived and let window
+    // classification reject at the divergence. An empty reply is still a
+    // protocol error.
     if starts_epoch {
-        if traversal_predictions.len() < required {
-            return Err(OpenAiError::backend(format!(
-                "epoch-start verify window returned {} predictions; expected {required}",
-                traversal_predictions.len()
-            )));
+        if traversal_predictions.is_empty() {
+            return Err(OpenAiError::backend(
+                "epoch-start verify window returned no predictions",
+            ));
         }
-        return Ok(traversal_predictions[..required].to_vec());
+        let available = required.min(traversal_predictions.len());
+        return Ok(traversal_predictions[..available].to_vec());
     }
 
     let boundary = prior_boundary_prediction.ok_or_else(|| {
         OpenAiError::backend("continuation verify window has no prior boundary prediction")
     })?;
-    if traversal_predictions.len() < proposal_count {
-        return Err(OpenAiError::backend(format!(
-            "continuation verify window returned {} predictions; expected {proposal_count}",
-            traversal_predictions.len()
-        )));
+    if traversal_predictions.is_empty() {
+        return Err(OpenAiError::backend(
+            "continuation verify window returned no predictions",
+        ));
     }
-    let mut predictions = Vec::with_capacity(required);
+    let available = proposal_count.min(traversal_predictions.len());
+    let mut predictions = Vec::with_capacity(available.saturating_add(1));
     predictions.push(boundary);
-    predictions.extend_from_slice(&traversal_predictions[..proposal_count]);
+    predictions.extend_from_slice(&traversal_predictions[..available]);
     Ok(predictions)
 }
 
@@ -220,6 +225,19 @@ mod prediction_tests {
         let predictions = compose_target_predictions(false, 2, Some(11), &[12, 13]).unwrap();
 
         assert_eq!(predictions, [11, 12, 13]);
+    }
+
+    #[test]
+    fn early_stopped_replies_pass_through_short_prediction_arrays() {
+        let predictions = compose_target_predictions(false, 3, Some(11), &[12]).unwrap();
+
+        assert_eq!(predictions, [11, 12]);
+    }
+
+    #[test]
+    fn empty_replies_are_protocol_errors_on_both_paths() {
+        assert!(compose_target_predictions(true, 2, None, &[]).is_err());
+        assert!(compose_target_predictions(false, 2, Some(11), &[]).is_err());
     }
 
     #[test]

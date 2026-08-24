@@ -1494,3 +1494,101 @@ fn integrated_invalid_fixture_fails_closed_for_request_defaults_and_single_stage
         .to_string();
     assert!(staged_only_error.contains("prefill chunk controls require staged serving"));
 }
+
+#[test]
+fn explicit_ngram_suffix_strategy_resolves_a_suffix_proposer() {
+    use crate::plugin::SpeculativeConfig;
+    let model_config: SpeculativeConfig = toml::from_str(
+        r#"
+strategy = "ngram-suffix"
+ngram_proposer = "suffix"
+ngram_min = 5
+ngram_max = 32
+ngram_max_proposal_tokens = 48
+verify_window_min_tokens = 1
+verify_window_max_tokens = 32
+verify_window_pipeline_depth = 2
+"#,
+    )
+    .expect("parse speculative config");
+    let resolved = super::speculative::resolve_speculative_config(
+        Some(&model_config),
+        None,
+        "meshllm/test-model",
+        std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
+    )
+    .expect("explicit ngram-suffix must resolve");
+    let decode = resolved.decode;
+    assert_eq!(
+        decode.effective_strategy, "ngram-suffix",
+        "effective strategy"
+    );
+    let ngram = decode.ngram.expect("suffix proposer must be present");
+    assert_eq!(ngram.kind, skippy_server::NgramProposerKind::Suffix);
+    assert_eq!(ngram.min_ngram, 5);
+    assert_eq!(ngram.max_ngram, 32);
+    assert_eq!(ngram.max_proposal_tokens, 48);
+    assert_eq!(decode.verify_window.pipeline_depth, 2);
+    assert_eq!(
+        resolved.mode, "ngram",
+        "resolved mode drives the embedded frontend"
+    );
+}
+
+#[test]
+fn explicit_ngram_suffix_survives_staged_openai_translation() {
+    use crate::plugin::SpeculativeConfig;
+    let model_config: SpeculativeConfig = toml::from_str(
+        r#"
+strategy = "ngram-suffix"
+ngram_proposer = "suffix"
+ngram_min = 5
+ngram_max = 32
+ngram_max_proposal_tokens = 48
+verify_window_min_tokens = 1
+verify_window_max_tokens = 32
+verify_window_pipeline_depth = 2
+"#,
+    )
+    .expect("parse speculative config");
+    let mesh_config = crate::plugin::MeshConfig {
+        defaults: Some(crate::plugin::ModelConfigDefaults {
+            speculative: Some(model_config),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let resolved = super::resolve_skippy_config(super::SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/Qwen3-8B-Q4_K_M-layers",
+        model_path: std::path::Path::new("/nonexistent/model.gguf"),
+        model_bytes: 8_000_000_000,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("resolve skippy config");
+    let ngram = resolved
+        .speculative
+        .decode
+        .ngram
+        .as_ref()
+        .expect("resolved decode plan must keep the suffix proposer");
+    assert_eq!(ngram.kind, skippy_server::NgramProposerKind::Suffix);
+    assert_eq!(ngram.min_ngram, 5);
+    assert_eq!(ngram.max_proposal_tokens, 48);
+    let args = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("staged translation");
+    let translated = args
+        .speculative
+        .ngram
+        .as_ref()
+        .expect("staged embedded args must keep the suffix proposer");
+    assert_eq!(translated.kind, skippy_server::NgramProposerKind::Suffix);
+    assert_eq!(translated.min_ngram, 5);
+    assert_eq!(translated.max_ngram, 32);
+    assert_eq!(translated.max_proposal_tokens, 48);
+    assert_eq!(args.speculative.verify_window.pipeline_depth, 2);
+}

@@ -2,6 +2,7 @@
 
 use crate::arbiter;
 use crate::backend::{SamplingParams, call_backend};
+use crate::buzz_reply::BuzzReplyRescue;
 use crate::config::GatewayConfig;
 use crate::context;
 use crate::fanout::{self, GraceMode, gather_workers_incremental};
@@ -25,6 +26,7 @@ use std::time::Instant;
 /// which sends the full conversation on each request.
 pub async fn handle_turn(config: &GatewayConfig, body: &Value) -> TurnResult {
     let start = Instant::now();
+    let rescue = BuzzReplyRescue::detect(body);
 
     let mut session = Session::new();
     let incoming_messages = body
@@ -52,7 +54,7 @@ pub async fn handle_turn(config: &GatewayConfig, body: &Value) -> TurnResult {
 
     let allowed_tools = session.tool_names();
 
-    match turn_type {
+    let mut result = match turn_type {
         session::TurnType::ToolResult => {
             handle_tool_result(config, &session, has_tools, &allowed_tools, start).await
         }
@@ -67,7 +69,11 @@ pub async fn handle_turn(config: &GatewayConfig, body: &Value) -> TurnResult {
             )
             .await
         }
+    };
+    if let Some(rescue) = rescue {
+        rescue.wrap_terminal_prose(&mut result.response_body);
     }
+    result
 }
 
 // ─── Query handling ──────────────────────────────────────────────────

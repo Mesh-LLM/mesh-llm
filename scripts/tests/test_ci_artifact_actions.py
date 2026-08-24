@@ -1198,6 +1198,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "libggml.a",
             "libggml-base.a",
             "libggml-cpu.a",
+            "libvendor-hash.a",
         ):
             self.assertIn(archive, producer_action)
         self.assertIn(

@@ -1805,7 +1805,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 1342,
+      "line": 1376,
       "macro_name": "eprintln!"
     }
   ],
@@ -4287,7 +4287,7 @@
   ],
   "crates/skippy-server/src/frontend/embedded_generation/lifecycle.rs": [
     {
-      "line": 155,
+      "line": 160,
       "macro_name": "eprintln!"
     }
   ],

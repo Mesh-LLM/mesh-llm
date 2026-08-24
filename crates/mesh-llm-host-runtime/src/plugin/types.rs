@@ -1,6 +1,7 @@
 use super::proto;
 use super::startup::PluginStartupSummary;
 use super::{PluginWebUiManifestOverview, PluginWebUiState};
+use crate::logging::policy::is_http_url;
 use serde::Serialize;
 use std::future::Future;
 use std::pin::Pin;
@@ -129,6 +130,32 @@ pub struct PluginEndpointSummary {
     pub models: Vec<String>,
 }
 
+impl PluginEndpointSummary {
+    /// Return a copy safe to serialize across a network boundary.
+    ///
+    /// A plugin endpoint `address` can embed credentials directly in an HTTP
+    /// URL (`https://user:pass@host/...` userinfo, or `?api_key=...` query),
+    /// and the health `detail` string echoes the probed URL. These summaries
+    /// are served by the management API, which can be bound to a non-loopback
+    /// interface, so any credential in the address would be an unauthenticated
+    /// network read. Redact userinfo and sensitive query params from HTTP(S)
+    /// addresses and from any URL embedded in the detail before the summary
+    /// leaves the box. Non-HTTP addresses (stdio commands, unix sockets, named
+    /// pipes) are left untouched — they carry no URL credentials and must stay
+    /// verbatim for local consumers that reconstruct the transport.
+    pub(crate) fn redacted_for_network(mut self) -> Self {
+        if let Some(address) = self.address.as_deref()
+            && is_http_url(address)
+        {
+            self.address = Some(crate::logging::policy::redact_url_query(address));
+        }
+        if let Some(detail) = self.detail.as_deref() {
+            self.detail = Some(crate::logging::policy::redact_urls_in_text(detail));
+        }
+        self
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginCapabilityProvider {
     pub capability: String,
@@ -147,4 +174,85 @@ pub struct InferenceEndpointRoute {
     pub endpoint_id: String,
     pub address: String,
     pub models: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary_with(address: Option<&str>, detail: Option<&str>) -> PluginEndpointSummary {
+        PluginEndpointSummary {
+            plugin_name: "demo".into(),
+            plugin_status: "running".into(),
+            endpoint_id: "embed".into(),
+            state: "healthy".into(),
+            available: true,
+            kind: "openai".into(),
+            transport_kind: "http".into(),
+            protocol: None,
+            address: address.map(str::to_string),
+            args: Vec::new(),
+            namespace: None,
+            supports_streaming: false,
+            managed_by_plugin: false,
+            detail: detail.map(str::to_string),
+            models: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn http_address_userinfo_and_query_are_redacted_for_network() {
+        let redacted = summary_with(
+            Some("https://alice:s3cret@host:8000/v1?api_key=abc123"),
+            None,
+        )
+        .redacted_for_network();
+        let address = redacted.address.expect("address present");
+        assert!(
+            !address.contains("alice:s3cret"),
+            "userinfo leaked: {address}"
+        );
+        assert!(!address.contains("abc123"), "api_key leaked: {address}");
+        assert!(address.contains("host:8000"), "host lost: {address}");
+    }
+
+    #[test]
+    fn health_detail_url_credentials_are_redacted_for_network() {
+        let redacted = summary_with(None, Some("GET https://bob:pw@host/v1/models -> 200 OK"))
+            .redacted_for_network();
+        let detail = redacted.detail.expect("detail present");
+        assert!(
+            !detail.contains("bob:pw"),
+            "detail userinfo leaked: {detail}"
+        );
+    }
+
+    #[test]
+    fn uppercase_scheme_address_is_still_redacted_for_network() {
+        // URL schemes are case-insensitive (RFC 3986); an uppercase scheme
+        // must not bypass credential redaction.
+        let redacted = summary_with(
+            Some("HTTPS://alice:s3cret@host:8000/v1?api_key=abc123"),
+            None,
+        )
+        .redacted_for_network();
+        let address = redacted.address.expect("address present");
+        assert!(
+            !address.contains("alice:s3cret"),
+            "userinfo leaked for uppercase scheme: {address}"
+        );
+        assert!(
+            !address.contains("abc123"),
+            "api_key leaked for uppercase scheme: {address}"
+        );
+    }
+
+    #[test]
+    fn non_http_address_is_left_verbatim_for_local_transport() {
+        // stdio command addresses must survive intact so MCP transports can be
+        // reconstructed locally; there is no URL credential to redact.
+        let address = "/usr/local/bin/my-mcp-server --flag value";
+        let redacted = summary_with(Some(address), None).redacted_for_network();
+        assert_eq!(redacted.address.as_deref(), Some(address));
+    }
 }
