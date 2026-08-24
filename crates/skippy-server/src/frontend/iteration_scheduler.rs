@@ -135,6 +135,7 @@ struct SchedulerWorker {
     max_commands_per_turn: usize,
     iteration_interval: Duration,
     telemetry: Option<Telemetry>,
+    last_served_direct: bool,
 }
 
 impl IterationScheduler {
@@ -202,6 +203,7 @@ impl IterationScheduler {
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
                     telemetry: Some(telemetry),
+                    last_served_direct: false,
                 }
                 .run();
             })
@@ -611,15 +613,27 @@ impl SchedulerWorker {
 
     fn run_iteration(&mut self) {
         self.apply_pending_controls();
-        if !self.direct_iterations.is_empty() {
+        let has_direct = !self.direct_iterations.is_empty();
+        let has_planned = !self.requests.is_empty();
+
+        // Decide which queue owns this turn before planning scheduler work:
+        // plan_iteration mutates sequence cursors and must only be called when
+        // the resulting plan will actually execute.
+        let serve_direct = should_serve_direct(has_direct, has_planned, self.last_served_direct);
+
+        if serve_direct {
+            self.last_served_direct = true;
             self.run_direct_iteration_batch();
             return;
         }
+
         let iteration_started = Instant::now();
         let mut plan = self.scheduler.plan_iteration();
         if plan.work.is_empty() {
             return;
         }
+
+        self.last_served_direct = false;
         let mut setup_ids = BTreeSet::new();
         let mut setup = Vec::new();
         for work in &plan.work {
@@ -1046,6 +1060,14 @@ impl SchedulerWorker {
     }
 }
 
+fn should_serve_direct(has_direct: bool, has_planned: bool, last_served_direct: bool) -> bool {
+    if has_direct && has_planned {
+        !last_served_direct
+    } else {
+        has_direct
+    }
+}
+
 fn scheduler_safe_mode_from_value(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         matches!(
@@ -1239,6 +1261,7 @@ mod tests {
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             telemetry: None,
+            last_served_direct: false,
         };
         let (reply_a, events_a) = std_mpsc::channel();
         let (reply_b, events_b) = std_mpsc::channel();
@@ -1339,6 +1362,7 @@ mod tests {
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             telemetry: None,
+            last_served_direct: false,
         };
         let (reply, events) = std_mpsc::channel();
         worker.submit(ScheduledRequest {
@@ -1379,6 +1403,7 @@ mod tests {
                 max_commands_per_turn: 8,
                 iteration_interval: Duration::ZERO,
                 telemetry: None,
+                last_served_direct: false,
             }
             .run();
         });
@@ -1408,6 +1433,15 @@ mod tests {
             assert!(!scheduler_safe_mode_from_value(Some(disabled)));
         }
         assert!(!scheduler_safe_mode_from_value(None));
+    }
+
+    #[test]
+    fn direct_and_planned_work_alternate_without_starvation() {
+        assert!(should_serve_direct(true, true, false));
+        assert!(!should_serve_direct(true, true, true));
+        assert!(should_serve_direct(true, false, true));
+        assert!(!should_serve_direct(false, true, false));
+        assert!(!should_serve_direct(false, false, false));
     }
 
     #[test]
@@ -1453,6 +1487,7 @@ mod tests {
                 max_commands_per_turn: 8,
                 iteration_interval: Duration::ZERO,
                 telemetry: None,
+                last_served_direct: false,
             }
             .run();
         });
