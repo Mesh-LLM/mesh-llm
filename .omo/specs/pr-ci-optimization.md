@@ -107,7 +107,9 @@ scripts/plan-ci.py is the only eligibility implementation. It reads the
 JSON-compatible manifests and validates their schema and dependency graph.
 Unknown paths and malformed inputs fail closed. CI-control and
 runner-infrastructure changes fail open to control rows and all supported
-product rows.
+product rows. Paths that map only to documentation plus `ci-control` are the
+exception. They keep the profile base and add only `runner-contract`, without
+forcing product rows.
 
 Each plan contains:
 
@@ -129,8 +131,10 @@ Profiles are closed and event-derived:
 | manual-full | Main-equivalent non-publishing dispatch |
 
 The selected ready-PR row is semantically identical to main. Draft PRs select
-no build row. Only plan membership, trust-derived cache mode, short-lived
-artifact namespace, provider label and optional trusted credentials may differ.
+no build row. Only plan membership, bounded parallelism, worker budgets
+(`total_max_workers` is 10 for `pr-ready` and 18 for `main`), trust-derived
+cache mode, short-lived artifact namespace, provider label and optional trusted
+credentials may differ.
 
 ## Slice catalog
 

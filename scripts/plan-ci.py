@@ -624,7 +624,9 @@ def _select_slices(
         slice_id: ["profile:base"] for slice_id in selected
     }
     domain_rules = {rule["domain"]: rule["slices"] for rule in slices["domain_rules"]}
-    if profile != "pr-draft":
+    if profile != "pr-draft" or (
+        "ci-control" in domains and documentation_only
+    ):
         for domain in domains:
             for slice_id in domain_rules[domain]:
                 selected.add(slice_id)
