@@ -98,7 +98,8 @@ callable in the mesh.
 
 | Callable models | Workers fanned out | Roles assigned |
 |---:|:---:|:---|
-| 0 or 1 | — | degrades to serving that model directly (no 503) |
+| 0 | — | degrades to ordinary model selection; 503 if none exists |
+| 1 | 1 | one-worker Mesh gateway |
 | 2 | 2 | fast + strong |
 | 3 | 3 | fast + specialist + strong |
 | 4 | 4 | fast + specialist + specialist + strong |
@@ -127,10 +128,10 @@ Pool shaping, in order (all measured; see
   shipped path, an 8B-class pool with an 8B reducer never beat its best
   member and lost about a third of decided trials (2×8B 0W/37L; 6×8B
   5W/23L, p=0.0009). Such a pool collapses to its strongest member and
-  the request degrades to serving that model directly. This is a
-  statement about a weak reducer synthesizing weak drafts — a capable
-  pool is the opposite (71W/8T/1L, p<0.0001) — so as soon as a mesh gains
-  a big-tier model the pool is no longer all-small and MoA engages.
+  runs as a one-worker Mesh gateway. This is a statement about a weak
+  reducer synthesizing weak drafts; a capable pool is the opposite
+  (71W/8T/1L, p<0.0001). As soon as a mesh gains a big-tier model, the
+  pool is no longer all-small and MoA engages.
 - **Committee cap**: 6 for all-small, 4 once a verified big is present.
   Fan-out costs ~2N+1 calls per turn and quality is flat past ~4.
 
@@ -295,10 +296,23 @@ The MoA intercept lives in `ingress.rs` (~line 234). When `model == "mesh"`:
 2. `handle_turn()` runs the stateless MoA pipeline
 3. Response is sent as SSE (streaming clients) or plain JSON
 
-Activation: requires ≥2 committee-eligible models in the mesh. If fewer (a
-single model, or an all-small pool collapsed to its best member), the request
-degrades: the virtual `mesh` name is rewritten to a real served model and routed
-normally. Only a node serving nothing at all returns 503.
+Activation: `model=mesh` enters the Mesh gateway whenever at least one worker
+is admitted. With two or more eligible workers it can form a committee; with one,
+the gateway runs that worker without rewriting the virtual model. Only a
+zero-worker request degrades to ordinary real-model selection (and returns 503
+if no model is available).
+
+### Buzz terminal-reply rescue
+
+For Buzz agent requests, the gateway recognizes the trusted `[Context]` frame,
+its validated channel/reply IDs, and the declared Buzz shell tool. Successful
+terminal prose is converted into one deterministic `buzz messages send` tool
+call so small models cannot silently finish without publishing their answer.
+Intermediate tool calls remain untouched, and the rescue imposes no generic
+tool-count limit; the existing repeated-identical-call detector handles actual
+loops. Error responses are never converted into channel posts. This behavior is
+restricted to the virtual `model=mesh`; pinned concrete-model requests pass
+through unchanged.
 
 ---
 
@@ -326,7 +340,7 @@ never re-enters a worker call.
 cargo test -p mesh-mixture-of-agents --lib
 ```
 
-Currently 86 unit tests across the crate. Coverage areas:
+Currently 210 unit tests across the crate. Coverage areas:
 
 * `arbiter` voting and decision rules.
 * `normalize` parsing across JSON, KV, and heuristic strategies
@@ -413,7 +427,8 @@ client, no recursive hook loops.
 | Remote peer timeout (60s worker / 60s reducer) | Grace ships what arrived at the 10s window; a dead peer costs 10s, not 60s |
 | First reducer candidate slow / cold KV | Hedges to second candidate after 5s, races for first OK |
 | First reducer candidate broken (502s) | Fast-fails to next candidate immediately, no hedge wait |
-| Only 1 model available | Degrades to serving that model directly |
+| Only 1 model available | Runs that worker inside the Mesh gateway |
+| No workers admitted | Degrades to ordinary real-model selection; 503 if none exists |
 | All workers fail | Returns error response |
 
 ### What to watch for

@@ -178,13 +178,12 @@ fn parse_model_with_profile_multiple_hashes_uses_last() {
     assert_eq!(profile, "profile");
 }
 
-/// Regression: the MoA intercept must surface a single-model degradation.
+/// Regression: `model=mesh` stays in the Mesh gateway with one admitted worker.
 ///
-/// This helper-level test verifies that the gateway rewrites the request
-/// and returns the resolved model to its caller. The separate pipeline
-/// regression below verifies that the caller actually consumes that model.
+/// Prompt heuristics may activate deterministic rescue inside the gateway, but
+/// they must never decide whether the virtual Mesh model enters the gateway.
 #[tokio::test]
-async fn moa_single_model_degrade_rewrites_routing_model() {
+async fn moa_single_worker_stays_in_gateway() {
     let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
         .await
         .expect("test node");
@@ -197,8 +196,9 @@ async fn moa_single_model_degrade_rewrites_routing_model() {
     );
     let affinity = affinity::AffinityRouter::new();
 
-    // The helper returns the connected stream; this test only inspects the
-    // degradation result and intentionally does not dispatch it.
+    // The helper owns the connected stream while the gateway runs. With the
+    // fake worker endpoint unreachable, the turn may fail, but it must be
+    // handled by the gateway rather than rewritten into direct routing.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -259,26 +259,18 @@ async fn moa_single_model_degrade_rewrites_routing_model() {
     .await;
 
     match result {
-        MoaInterceptResult::Degraded { model, .. } => {
-            assert_eq!(
-                model.as_deref(),
-                Some("local/only-model:Q4_K_M"),
-                "degrade must carry the rewritten real model for routing"
-            );
+        MoaInterceptResult::Handled(_) => {
             assert_eq!(
                 request.model_name.as_deref(),
-                Some("local/only-model:Q4_K_M"),
-                "request must be rewritten in place"
+                Some("mesh"),
+                "the gateway must preserve the virtual routing model"
             );
         }
         MoaInterceptResult::NotMoa(_) => {
-            panic!(
-                "single-model model=mesh fell through as NotMoa — routing would use the stale \
-                     'mesh' model and 404 (#1175 regression)"
-            );
+            panic!("model=mesh fell through without entering the Mesh gateway");
         }
-        MoaInterceptResult::Handled(outcome) => {
-            panic!("expected degrade passthrough, got handled outcome: {outcome:?}");
+        MoaInterceptResult::Degraded { model, .. } => {
+            panic!("one-worker model=mesh degraded to direct routing as {model:?}");
         }
     }
 }

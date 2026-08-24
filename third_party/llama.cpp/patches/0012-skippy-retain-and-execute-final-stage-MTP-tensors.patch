@@ -114,9 +114,9 @@ index dd21a313f..4a2c64239 100644
      }
  
      llama_model_params model_params = llama_model_default_params();
-+    // The explicitly external model backs an LLAMA_CONTEXT_TYPE_MTP draft
-+    // context, so retain its optional NextN/MTP tensors.
-+    model_params.load_mtp = config->mtp_source == SKIPPY_MTP_SOURCE_EXTERNAL;
++    // The guard above already established an external MTP source, so this model
++    // backs an LLAMA_CONTEXT_TYPE_MTP draft context and must retain MTP tensors.
++    model_params.load_mtp = true;
      if (config != nullptr) {
          model_params.n_gpu_layers = config->n_gpu_layers;
          skippy_apply_model_load_memory_config(config, model_params);

@@ -672,12 +672,16 @@ pub fn pack_for_tool_result_turn_selected(
     has_tools: bool,
     selected_tool_names: &[String],
 ) -> (Vec<Value>, Option<Value>) {
-    let system = augmented_system_prompt_for_mode(session, has_tools);
-
-    let mut messages = vec![json!({"role": "system", "content": system})];
-    if let Some(evidence) = tool_evidence_message(session) {
-        messages.push(evidence);
+    let mut system = augmented_system_prompt_for_mode(session, has_tools);
+    if let Some(evidence) = tool_evidence_text(session) {
+        system.push_str("\n\n");
+        system.push_str(&evidence);
     }
+
+    // Qwen3.5 and other strict chat templates allow a system message only in
+    // the first position. Keep deterministic tool evidence inside that first
+    // system message instead of emitting a second adjacent system message.
+    let mut messages = vec![json!({"role": "system", "content": system})];
 
     // Forward the tail of the conversation that includes the current user turn,
     // assistant tool_call messages, and their tool results. Tool-call chains
@@ -735,7 +739,7 @@ pub fn pack_for_tool_result_turn_selected(
     (messages, tools)
 }
 
-fn tool_evidence_message(session: &Session) -> Option<Value> {
+fn tool_evidence_text(session: &Session) -> Option<String> {
     let results = session.recent_tool_results();
     if results.is_empty() {
         return None;
@@ -763,7 +767,7 @@ fn tool_evidence_message(session: &Session) -> Option<Value> {
         lines.push(format!("{}. {name}: {result}", idx + 1));
     }
 
-    Some(json!({"role": "system", "content": lines.join("\n")}))
+    Some(lines.join("\n"))
 }
 
 fn compact_tool_message(msg: &Value) -> Value {
@@ -1422,33 +1426,72 @@ mod tests {
 
         assert_eq!(
             roles,
-            vec![
-                "system",
-                "system",
-                "user",
-                "assistant",
-                "tool",
-                "assistant",
-                "tool"
-            ],
-            "tool-result reducer context must not start with a bare tool message",
+            vec!["system", "user", "assistant", "tool", "assistant", "tool"],
+            "tool-result reducer context must have one leading system message and must not start with a bare tool message",
         );
         assert_eq!(
-            messages[2].get("content").and_then(|c| c.as_str()),
+            messages[1].get("content").and_then(|c| c.as_str()),
             Some("What is the weather today?"),
         );
         assert!(
-            messages[3].get("tool_calls").is_some(),
+            messages[0]
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|content| content.contains("Completed tool results.")),
+            "tool evidence must be merged into the first system message",
+        );
+        assert!(
+            messages[2].get("tool_calls").is_some(),
             "first tool result must retain its preceding assistant tool_call",
         );
         assert!(
-            messages[5].get("tool_calls").is_some(),
+            messages[4].get("tool_calls").is_some(),
             "latest tool result must retain its preceding assistant tool_call",
         );
         assert!(
             tools.is_some(),
             "tool-result reducer should still receive native tool schemas",
         );
+    }
+
+    #[test]
+    fn strict_tool_result_reducer_uses_single_leading_system_message() {
+        let s = session_with(
+            &[
+                system_msg("You are an agent. Use tools and return the result."),
+                user_msg("Inspect the current task and report the result."),
+                assistant_tool_msg(
+                    "call_inspect",
+                    "shell",
+                    json!({"command": "inspect-task --current"}),
+                ),
+                tool_result_msg("call_inspect", "{\"status\":\"ready\"}"),
+            ],
+            Some(json!([{
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "description": "Run a shell command",
+                    "parameters": {"type": "object"}
+                }
+            }])),
+        );
+
+        let (messages, tools) = pack_for_tool_result_turn(&s, true);
+        let roles: Vec<&str> = messages
+            .iter()
+            .filter_map(|message| message.get("role").and_then(Value::as_str))
+            .collect();
+
+        assert_eq!(roles, vec!["system", "user", "assistant", "tool"]);
+        assert_eq!(roles.iter().filter(|role| **role == "system").count(), 1);
+        assert!(
+            messages[0]
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|content| content.contains("Completed tool results.")),
+        );
+        assert!(tools.is_some());
     }
 
     #[test]
@@ -1614,16 +1657,16 @@ mod tests {
             "packed context should keep the MoA system preamble",
         );
         assert_eq!(
-            roles[2], "user",
+            roles[1], "user",
             "long bounded context should still include the original user query",
         );
         assert!(
-            packed.len() <= TOOL_RESULT_CONTEXT_WINDOW + 3,
-            "expected system + evidence + user prefix + bounded recent tail, got {} messages",
+            packed.len() <= TOOL_RESULT_CONTEXT_WINDOW + 2,
+            "expected one system message + user prefix + bounded recent tail, got {} messages",
             packed.len(),
         );
         assert_ne!(
-            roles[3], "tool",
+            roles[2], "tool",
             "bounded recent tail must not start with a bare tool message",
         );
     }

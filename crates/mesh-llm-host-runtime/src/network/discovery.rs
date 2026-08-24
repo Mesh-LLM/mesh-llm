@@ -651,6 +651,13 @@ pub(crate) fn verify_lan_details_token_proof(
     proof: &str,
     now_secs: u64,
 ) -> bool {
+    // An empty invite token makes the whole proof predictable: the fingerprint,
+    // challenge, and proof all derive solely from the (empty) token, so any LAN
+    // caller can reproduce them and pass this gate. Fail closed rather than open
+    // when the node has no invite token configured.
+    if expected_invite_token.trim().is_empty() {
+        return false;
+    }
     let token_fingerprint = token_fingerprint.trim();
     if lan_token_fingerprint(expected_invite_token) != token_fingerprint {
         return false;
@@ -1299,6 +1306,33 @@ mod tests {
             &token_fingerprint,
             &challenge,
             &attacker_proof,
+            current_unix_secs(),
+        ));
+    }
+
+    #[test]
+    fn lan_details_proof_rejects_empty_invite_token_fails_closed() {
+        // With an empty configured token the fingerprint, challenge, and proof
+        // are all derivable by any LAN caller, so the gate must reject rather
+        // than fail open.
+        let empty_token = "";
+        let token_fingerprint = lan_token_fingerprint(empty_token);
+        let challenge = lan_details_challenge(&token_fingerprint, current_unix_secs());
+        let proof = lan_details_token_proof(empty_token, &challenge);
+
+        assert!(!verify_lan_details_token_proof(
+            empty_token,
+            &token_fingerprint,
+            &challenge,
+            &proof,
+            current_unix_secs(),
+        ));
+        // Whitespace-only tokens are treated as empty after trimming.
+        assert!(!verify_lan_details_token_proof(
+            "   ",
+            &token_fingerprint,
+            &challenge,
+            &proof,
             current_unix_secs(),
         ));
     }
