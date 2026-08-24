@@ -11,6 +11,40 @@ use startup::{
 };
 pub(crate) use startup::{default_plugin_event_source, hardware_snapshot_for_start};
 
+/// Upper bound on how long shutdown waits for one iroh endpoint to close.
+///
+/// `Endpoint::close` queues connection-close frames and then waits for peers to
+/// acknowledge them, which iroh documents as up to roughly 3s when connectivity
+/// is bad or a peer has already gone away; it then waits for the endpoint and
+/// connection drivers to stop. Shutdown must stay bounded, so an unresponsive
+/// peer costs this budget and nothing more.
+const ENDPOINT_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Await `Endpoint::close` under [`ENDPOINT_CLOSE_TIMEOUT`].
+///
+/// Returning early on an already-closed endpoint keeps this idempotent, so a
+/// shutdown path may call it without tracking whether an earlier one did.
+///
+/// On timeout iroh has still *started* closing, which downgrades the drop-time
+/// `abort()` to a no-op, but the endpoint is not marked closed and the
+/// ungraceful-drop ERROR can still be logged. The warning is what tells those
+/// two cases apart in a log.
+async fn close_endpoint_gracefully(endpoint: &Endpoint, label: &str) {
+    if endpoint.is_closed() {
+        return;
+    }
+    if tokio::time::timeout(ENDPOINT_CLOSE_TIMEOUT, endpoint.close())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            endpoint = label,
+            timeout_secs = ENDPOINT_CLOSE_TIMEOUT.as_secs(),
+            "iroh endpoint did not finish closing within the shutdown budget; peers may time its connections out instead of seeing them close"
+        );
+    }
+}
+
 /// Lightweight routing table for passive nodes (clients + standby GPU).
 /// Contains just enough info to route requests to the right host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -656,8 +690,29 @@ impl Node {
                 .store(true, std::sync::atomic::Ordering::Release);
             lifecycle.shutdown.notify_waiters();
             let _ = lifecycle.task.await;
-            lifecycle.endpoint.close().await;
+            close_endpoint_gracefully(&lifecycle.endpoint, "owner-control").await;
         }
+    }
+
+    /// Close the main mesh QUIC endpoint as the last step of runtime shutdown.
+    ///
+    /// iroh only releases an endpoint gracefully when `Endpoint::close` is
+    /// awaited. Dropping it instead makes `EndpointInner::drop` log
+    ///
+    /// ```text
+    /// ERROR iroh::socket: Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+    /// ```
+    ///
+    /// and abort the socket, which also denies peers the connection-close
+    /// frames — they are left to time the connections out and report this node
+    /// as failed rather than as cleanly departed.
+    ///
+    /// Call this only after every subsystem that speaks over the mesh endpoint
+    /// (control listener, plugins, loaded models and their stage connections,
+    /// the final gossip updates) has finished. `accept_loop` observes the close
+    /// as `Endpoint::accept` returning `None` and exits on its own.
+    pub async fn close_endpoint(&self) {
+        close_endpoint_gracefully(&self.endpoint, "mesh").await;
     }
 
     #[expect(
