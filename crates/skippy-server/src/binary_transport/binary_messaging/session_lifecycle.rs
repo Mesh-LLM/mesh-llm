@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageWireMessage;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[derive(Default)]
@@ -17,7 +16,7 @@ pub(super) struct SessionAutoAlignObservation {
 
 pub(super) fn align_session_to_message(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    runtime: &mut RuntimeState,
     telemetry: &Telemetry,
     session_key: &str,
     session_id: u64,
@@ -28,8 +27,6 @@ pub(super) fn align_session_to_message(
     };
     let started = Instant::now();
     let align = runtime
-        .lock()
-        .expect("runtime lock poisoned")
         .align_session_to_token_count_if_ahead(session_key, target_token_count)
         .context("auto-align binary stage session")?;
     let Some(align) = align else {

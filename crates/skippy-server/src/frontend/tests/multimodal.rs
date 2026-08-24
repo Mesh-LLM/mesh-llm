@@ -181,16 +181,17 @@ fn multimodal_stage_config(
 fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
     let runtime = load_runtime(&config)?.context("load smoke runtime")?;
     let ctx_size = usize::try_from(config.ctx_size).unwrap_or(usize::MAX);
-    let decode_batcher = DecodeBatcher::new(runtime.clone(), 1);
-    let decode_frame_batcher = DecodeFrameBatcher::new(runtime.clone(), 1);
+    let telemetry = Telemetry::new(
+        None,
+        1,
+        config.clone(),
+        crate::telemetry::TelemetryLevel::Off,
+    );
+    let iteration_scheduler =
+        IterationScheduler::new(runtime.clone(), &config, 1, telemetry.clone())?;
     Ok(StageOpenAiBackend {
         runtime,
-        telemetry: Telemetry::new(
-            None,
-            1,
-            config.clone(),
-            crate::telemetry::TelemetryLevel::Off,
-        ),
+        telemetry,
         config,
         model_id: "mm-smoke".to_string(),
         default_max_tokens: 16,
@@ -211,8 +212,7 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         generation_receipt: None,
         linear_proposal_ingress: None,
         kv: None,
-        decode_batcher,
-        decode_frame_batcher,
+        iteration_scheduler,
     })
 }
 
@@ -371,8 +371,8 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         .context("create split smoke lane pool")?;
     let runtime = load_runtime(&stage0_config)?.context("load stage-0 smoke runtime")?;
     let ctx_size = usize::try_from(stage0_config.ctx_size).unwrap_or(usize::MAX);
-    let decode_batcher = DecodeBatcher::new(runtime.clone(), 1);
-    let decode_frame_batcher = DecodeFrameBatcher::new(runtime.clone(), 1);
+    let iteration_scheduler =
+        IterationScheduler::new(runtime.clone(), &stage0_config, 1, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime,
         telemetry,
@@ -416,8 +416,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         generation_receipt: None,
         linear_proposal_ingress: None,
         kv: None,
-        decode_batcher,
-        decode_frame_batcher,
+        iteration_scheduler,
     };
     let response = backend
         .chat_completion(multimodal_chat_request(&fixture)?)

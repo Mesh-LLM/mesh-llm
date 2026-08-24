@@ -64,18 +64,17 @@ impl StageOpenAiBackend {
         session_key: &str,
         retirement: VerifyRetirement,
     ) -> OpenAiResult<()> {
-        {
-            let mut runtime = self.runtime.lock().map_err(|_| {
-                OpenAiError::backend("runtime lock poisoned during verify retirement")
+        let scheduler_session_key = session_key.to_string();
+        self.iteration_scheduler
+            .execute_runtime("embedded-verify-retire", move |runtime| {
+                runtime
+                    .retire_verify_checkpoint(
+                        &scheduler_session_key,
+                        retirement.token_start as u64,
+                        retirement.token_count as u64,
+                    )
+                    .map_err(openai_backend_error)
             })?;
-            runtime
-                .retire_verify_checkpoint(
-                    session_key,
-                    retirement.token_start as u64,
-                    retirement.token_count as u64,
-                )
-                .map_err(openai_backend_error)?;
-        }
         let message = retire_verify_window_message(
             request.wire_dtype,
             retirement.request_id,
@@ -138,57 +137,64 @@ impl StageOpenAiBackend {
         let started = Instant::now();
         let stats = StageReplyStats::default();
         let stage0_timer = PhaseTimer::start();
-        let output = {
-            let lock_timer = PhaseTimer::start();
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            let lock_wait_ms = lock_timer.elapsed_ms();
-            let hold_timer = PhaseTimer::start();
-            if let Some(target_token_count) = message.authoritative_session_position()
-                && let Some(align) = runtime
-                    .align_session_to_token_count_if_ahead(session_key, target_token_count)
-                    .map_err(openai_backend_error)?
-            {
-                let mut attrs = self.openai_attrs(request.ids);
-                attrs.insert(
-                    "llama_stage.session_auto_align_before_tokens".to_string(),
-                    json!(align.before_token_count),
-                );
-                attrs.insert(
-                    "llama_stage.session_auto_align_after_tokens".to_string(),
-                    json!(align.after_token_count),
-                );
-                self.telemetry
-                    .emit_debug("stage.openai_session_auto_align", attrs);
-            }
-            let output = run_binary_stage_message(
-                &mut runtime,
-                session_key,
-                message,
-                token_ids,
-                None,
-                BinaryStageExecutionOptions::new(
-                    false,
-                    stage_output_activation_capacity(
-                        request.config,
-                        message.token_count,
-                        request.activation_width,
-                    )
-                    .map_err(openai_backend_error)?,
-                    request.native_mtp_enabled,
+        let target_token_count = message.authoritative_session_position();
+        let output_capacity = stage_output_activation_capacity(
+            request.config,
+            message.token_count,
+            request.activation_width,
+        )
+        .map_err(openai_backend_error)?;
+        let scheduler_session_key = session_key.to_string();
+        let scheduler_message = message.clone();
+        let scheduler_token_ids = token_ids.to_vec();
+        let native_mtp_enabled = request.native_mtp_enabled;
+        let native_mtp_max_tokens = request.speculative.native_mtp.max_draft_tokens;
+        let scheduler_outcome = self.iteration_scheduler.execute_runtime_timed(
+            "embedded-stage-execute",
+            move |runtime| {
+                let align = target_token_count
+                    .map(|target_token_count| {
+                        runtime
+                            .align_session_to_token_count_if_ahead(
+                                &scheduler_session_key,
+                                target_token_count,
+                            )
+                            .map_err(openai_backend_error)
+                    })
+                    .transpose()?
+                    .flatten();
+                let output = run_binary_stage_message(
+                    runtime,
+                    &scheduler_session_key,
+                    &scheduler_message,
+                    &scheduler_token_ids,
+                    None,
+                    BinaryStageExecutionOptions::new(false, output_capacity, native_mtp_enabled)
+                        .with_native_mtp_max_tokens(native_mtp_max_tokens),
                 )
-                .with_native_mtp_max_tokens(request.speculative.native_mtp.max_draft_tokens),
-            )
-            .map_err(openai_backend_error)?
-            .2;
-            let hold_ms = hold_timer.elapsed_ms();
-            EmbeddedLocalOutput {
-                output,
-                runtime_lock_wait_ms: lock_wait_ms,
-                runtime_lock_hold_ms: hold_ms,
-            }
+                .map_err(openai_backend_error)?
+                .2;
+                Ok((align, output))
+            },
+        )?;
+        let (align, stage_output) = scheduler_outcome.value;
+        if let Some(align) = align {
+            let mut attrs = self.openai_attrs(request.ids);
+            attrs.insert(
+                "llama_stage.session_auto_align_before_tokens".to_string(),
+                json!(align.before_token_count),
+            );
+            attrs.insert(
+                "llama_stage.session_auto_align_after_tokens".to_string(),
+                json!(align.after_token_count),
+            );
+            self.telemetry
+                .emit_debug("stage.openai_session_auto_align", attrs);
+        }
+        let output = EmbeddedLocalOutput {
+            output: stage_output,
+            runtime_lock_wait_ms: scheduler_outcome.runtime_lock_wait_ms,
+            runtime_lock_hold_ms: scheduler_outcome.runtime_lock_hold_ms,
         };
         let stage0_compute_ms = stage0_timer.elapsed_ms();
         if self.telemetry.is_debug_enabled() {

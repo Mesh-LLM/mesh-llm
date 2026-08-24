@@ -9,13 +9,9 @@ pub const GGML_TYPE_Q4_0: u32 = 2;
 pub const GGML_TYPE_Q8_0: u32 = 8;
 pub const LLAMA_SERVER_DEFAULT_N_BATCH: u32 = 2048;
 pub const LLAMA_SERVER_DEFAULT_N_UBATCH: u32 = 512;
-/// Smaller default prefill batch for multi-lane skippy serving.
-///
-/// When `lane_count > 1`, skippy enables llama.cpp unified KV mode: every
-/// lane shares one `n_ctx` cell pool. A smaller default batch reduces the
-/// amount of KV space each prefill asks the shared pool to reserve at once
-/// after other lanes reset or preserve resident prefixes.
-pub const SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH: u32 = 1024;
+/// Unified-KV prefill batch default. Keep llama-server's 2048-token batch so
+/// the always-unified serving cutover does not regress the N=1 baseline.
+pub const SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH: u32 = LLAMA_SERVER_DEFAULT_N_BATCH;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(i32)]

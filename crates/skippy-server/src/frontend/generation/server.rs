@@ -1,4 +1,3 @@
-use crate::binary_transport::DecodeFrameBatcher;
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
 use crate::cli::ServeOpenAiArgs;
@@ -9,7 +8,6 @@ use crate::frontend::LinearProposalIngressConfig;
 use crate::frontend::OpenAiGuardrailsConfig;
 use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
-use crate::frontend::decode_batcher::DecodeBatcher;
 use crate::frontend::generation::OpenAiBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
@@ -18,6 +16,7 @@ use crate::frontend::generation::attach_native_mtp_draft_model;
 use crate::frontend::generation::ensure_generation_concurrency_fits_lanes;
 use crate::frontend::generation::open_draft_runner;
 use crate::frontend::generation::prewarm_generation_sessions;
+use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::frontend::prefill::PrefillChunkPolicyArgs;
 use crate::frontend::speculative::{
@@ -119,9 +118,12 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     }
     let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
     let ctx_size = usize::try_from(config.ctx_size).unwrap_or(usize::MAX);
-    let decode_batcher = DecodeBatcher::new(runtime.clone(), args.generation_concurrency);
-    let decode_frame_batcher =
-        DecodeFrameBatcher::new(runtime.clone(), args.generation_concurrency);
+    let iteration_scheduler = IterationScheduler::new(
+        runtime.clone(),
+        &config,
+        args.generation_concurrency,
+        telemetry.clone(),
+    )?;
     let tokenizer = TokenizerCapability::from_stage_zero(&config, runtime.clone())
         .context("construct stage-0 tokenizer capability for OpenAI serving")?;
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
@@ -147,8 +149,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         generation_receipt: None,
         linear_proposal_ingress: None,
         kv,
-        decode_batcher,
-        decode_frame_batcher,
+        iteration_scheduler,
     });
     let backend = OpenAiGuardrailsConfig::for_standalone_mode(args.openai_guardrails)
         .wrap_backend_with_context_limit(backend, Some(ctx_size));
@@ -377,9 +378,12 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
     .context("prewarm embedded OpenAI runtime sessions")?;
     let kv = KvStageIntegration::from_config(&args.config)?.map(Arc::new);
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
-    let decode_batcher = DecodeBatcher::new(args.runtime.clone(), args.generation_concurrency);
-    let decode_frame_batcher =
-        DecodeFrameBatcher::new(args.runtime.clone(), args.generation_concurrency);
+    let iteration_scheduler = IterationScheduler::new(
+        args.runtime.clone(),
+        &args.config,
+        args.generation_concurrency,
+        args.telemetry.clone(),
+    )?;
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         config: args.config.clone(),
@@ -403,8 +407,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         generation_receipt: args.generation_receipt,
         linear_proposal_ingress: args.linear_proposal_ingress,
         kv,
-        decode_batcher,
-        decode_frame_batcher,
+        iteration_scheduler,
     });
     let openai_guardrails = args
         .openai_guardrails

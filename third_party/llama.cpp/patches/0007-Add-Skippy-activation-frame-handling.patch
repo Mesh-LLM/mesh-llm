@@ -59,7 +59,7 @@ new file mode 100644
 index 000000000..1f8ac850a
 --- /dev/null
 +++ b/src/skippy/activation.cpp
-@@ -0,0 +1,957 @@
+@@ -0,0 +1,964 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/activation_scopes.h"
@@ -828,6 +828,13 @@ index 000000000..1f8ac850a
 +    if (status == SKIPPY_STATUS_OK && (token_ids != nullptr || mtp_input_embeddings != nullptr)) {
 +        status = skippy_mtp_sync_target_inputs(
 +                session, token_ids, mtp_input_embeddings, token_count, token_start, out_error);
++    }
++    if (status == SKIPPY_STATUS_OK && token_ids != nullptr) {
++        // Sampled verification rewinds the eagerly decoded suffix before it
++        // exposes inputs causally to the sampler. Keep activation-input stages
++        // aligned with the token-input verification path by recording that
++        // suffix here first.
++        skippy_record_tokens(session, token_ids, token_count);
 +    }
 +    return status;
 +}
@@ -2709,4 +2716,3 @@ index 000000000..581be3ffd
 +
 -- 
 2.54.0 (Apple Git-157)
-

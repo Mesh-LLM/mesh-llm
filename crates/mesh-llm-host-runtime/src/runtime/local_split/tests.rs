@@ -167,6 +167,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
         SplitTopologyResourceInputs {
             native_context_length: 65_536,
             kv_bytes_per_token: 64 * 1024,
+            recurrent_bytes_per_sequence_by_layer: Vec::new(),
             ctx_size_override: Some(65_536),
             parallel_override: Some(1),
         },

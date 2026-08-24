@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 import socket
@@ -268,19 +269,25 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def wait_ready(port: int, proc: subprocess.Popen[str], timeout: float) -> None:
+def wait_ready(
+    port: int,
+    proc: subprocess.Popen[str],
+    timeout: float,
+    path: str = "/health",
+    server_name: str = "llama-server",
+) -> None:
     deadline = time.monotonic() + timeout
     last_error = None
     while time.monotonic() < deadline:
         if proc.poll() is not None:
-            raise RuntimeError(f"llama-server exited early with code {proc.returncode}")
+            raise RuntimeError(f"{server_name} exited early with code {proc.returncode}")
         try:
-            http_json(f"http://127.0.0.1:{port}/health", timeout=2.0)
+            http_json(f"http://127.0.0.1:{port}{path}", timeout=2.0)
             return
         except Exception as exc:  # noqa: BLE001 - readiness loop keeps last error.
             last_error = exc
             time.sleep(0.5)
-    raise TimeoutError(f"llama-server did not become ready: {last_error}")
+    raise TimeoutError(f"{server_name} did not become ready: {last_error}")
 
 
 def warm_mean_ms(runs: list[dict[str, Any]]) -> float | None:
@@ -571,6 +578,318 @@ def run_concurrent_requests(
     return results, makespan_ms
 
 
+def run_openai_concurrent_requests(
+    prompt: str,
+    model_id: str,
+    concurrency: int,
+    num_requests: int,
+    output_tokens: int,
+    port: int,
+    args: argparse.Namespace,
+) -> tuple[list[dict[str, Any]], float]:
+    """Run a closed-loop fixed-concurrency sweep against Skippy's OpenAI SSE API."""
+    if concurrency <= 0:
+        raise ValueError("concurrency must be positive")
+    if num_requests < concurrency:
+        raise ValueError(
+            f"num_requests ({num_requests}) must be at least concurrency ({concurrency})"
+        )
+
+    def make_request(request_id: int) -> dict[str, Any]:
+        request_payload = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": output_tokens,
+            "temperature": 0,
+            "seed": 0,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        started = time.monotonic()
+        first_token_at = None
+        content_events = 0
+        completion_tokens = 0
+        content_parts: list[str] = []
+        conn = None
+        try:
+            import http.client
+
+            conn = http.client.HTTPConnection(
+                "127.0.0.1",
+                port,
+                timeout=args.request_timeout_secs,
+            )
+            conn.request(
+                "POST",
+                "/v1/chat/completions",
+                json.dumps(request_payload),
+                {"Content-Type": "application/json"},
+            )
+            response = conn.getresponse()
+            if response.status != 200:
+                body = response.read(4096).decode("utf-8", errors="replace")
+                return {
+                    "request_id": request_id,
+                    "error": f"HTTP {response.status}: {body}",
+                    "elapsed_ms": (time.monotonic() - started) * 1000,
+                }
+
+            for raw_line in response:
+                line = raw_line.strip()
+                if not line.startswith(b"data: "):
+                    continue
+                payload_bytes = line[6:]
+                if payload_bytes == b"[DONE]":
+                    break
+                try:
+                    event = json.loads(payload_bytes)
+                except json.JSONDecodeError:
+                    continue
+                usage = event.get("usage")
+                if isinstance(usage, dict) and isinstance(usage.get("completion_tokens"), int):
+                    completion_tokens = usage["completion_tokens"]
+                choices = event.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                delta = choices[0].get("delta")
+                if not isinstance(delta, dict):
+                    continue
+                content = delta.get("content") or delta.get("reasoning_content")
+                if content:
+                    if first_token_at is None:
+                        first_token_at = time.monotonic()
+                    content_events += 1
+                    content_parts.append(content)
+
+            completed = time.monotonic()
+            elapsed_ms = (completed - started) * 1000
+            if first_token_at is None:
+                return {
+                    "request_id": request_id,
+                    "error": "stream completed without generated content",
+                    "elapsed_ms": elapsed_ms,
+                }
+            tokens_predicted = completion_tokens or content_events
+            generation_intervals = max(tokens_predicted - 1, 1)
+            return {
+                "request_id": request_id,
+                "elapsed_ms": elapsed_ms,
+                "ttft_ms": (first_token_at - started) * 1000,
+                "tpot_ms": (completed - first_token_at) * 1000 / generation_intervals,
+                "tokens_predicted": tokens_predicted,
+                "content": "".join(content_parts),
+                "first_content": content_parts[0],
+            }
+        except Exception as exc:  # noqa: BLE001 - retain per-request failures in the report.
+            return {
+                "request_id": request_id,
+                "error": str(exc),
+                "elapsed_ms": (time.monotonic() - started) * 1000,
+            }
+        finally:
+            if conn is not None:
+                conn.close()
+
+    workload_started = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [executor.submit(make_request, request_id) for request_id in range(num_requests)]
+        results = [future.result() for future in concurrent.futures.as_completed(futures)]
+    makespan_ms = (time.monotonic() - workload_started) * 1000
+    results.sort(key=lambda result: result["request_id"])
+    return results, makespan_ms
+
+
+def serving_path_output_parity(
+    old: dict[str, Any], new: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Compare deterministic response text at each concurrency point."""
+    old_by_concurrency = {
+        row["concurrency"]: row for row in old.get("concurrency_sweep", [])
+    }
+    new_by_concurrency = {
+        row["concurrency"]: row for row in new.get("concurrency_sweep", [])
+    }
+    parity = []
+    for concurrency in sorted(old_by_concurrency.keys() & new_by_concurrency.keys()):
+        old_requests = {
+            row["request_id"]: row
+            for row in old_by_concurrency[concurrency].get("per_request", [])
+            if "error" not in row
+        }
+        new_requests = {
+            row["request_id"]: row
+            for row in new_by_concurrency[concurrency].get("per_request", [])
+            if "error" not in row
+        }
+        comparable_ids = sorted(old_requests.keys() & new_requests.keys())
+        mismatches = [
+            request_id
+            for request_id in comparable_ids
+            if old_requests[request_id].get("content")
+            != new_requests[request_id].get("content")
+        ]
+        first_content_mismatches = [
+            request_id
+            for request_id in comparable_ids
+            if old_requests[request_id].get("first_content")
+            != new_requests[request_id].get("first_content")
+        ]
+        parity.append(
+            {
+                "concurrency": concurrency,
+                "comparable_requests": len(comparable_ids),
+                "exact_matches": len(comparable_ids) - len(mismatches),
+                "mismatch_request_ids": mismatches,
+                "first_content_matches": len(comparable_ids)
+                - len(first_content_mismatches),
+                "first_content_mismatch_request_ids": first_content_mismatches,
+            }
+        )
+    return parity
+
+
+_MODEL_SHA256: dict[Path, str] = {}
+
+
+def model_sha256(path: Path) -> str:
+    cached = _MODEL_SHA256.get(path)
+    if cached is not None:
+        return cached
+    digest = hashlib.sha256()
+    with path.open("rb") as model_file:
+        for chunk in iter(lambda: model_file.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    value = digest.hexdigest()
+    _MODEL_SHA256[path] = value
+    return value
+
+
+def write_skippy_benchmark_config(
+    case: Case,
+    path: Path,
+    ctx_size: int,
+    lane_count: int,
+) -> None:
+    if case.model_path is None:
+        raise ValueError("Skippy serving benchmark requires a model path")
+    config = {
+        "run_id": "serving-path-benchmark",
+        "topology_id": "serving-path-benchmark-single-stage",
+        "model_id": case.model_id,
+        "model_path": str(case.model_path),
+        "source_model_sha256": model_sha256(case.model_path),
+        "stage_id": "stage-0",
+        "stage_index": 0,
+        "layer_start": 0,
+        "layer_end": case.layer_end,
+        "ctx_size": ctx_size,
+        "lane_count": lane_count,
+        "n_gpu_layers": case.n_gpu_layers,
+        "filter_tensors_on_load": False,
+        "load_mode": "runtime-slice",
+        "bind_addr": "127.0.0.1:0",
+        "upstream": None,
+        "downstream": None,
+        "kv_server": None,
+    }
+    path.write_text(json.dumps(config, indent=2) + "\n")
+
+
+def run_skippy_serving_path_sweep(
+    label: str,
+    server_bin: Path,
+    case: Case,
+    prompt: str,
+    concurrency_sweep: list[int],
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Start one Skippy binary and collect the full fixed-N scaling curve."""
+    lane_count = args.runtime_lane_count or max(concurrency_sweep)
+    ctx_size = args.serving_ctx_size or max(case.ctx_size, case.ctx_size * lane_count)
+    config_path = output_dir / f"{label}-stage.json"
+    log_path = output_dir / f"{label}-server.log"
+    write_skippy_benchmark_config(case, config_path, ctx_size, lane_count)
+    port = free_port()
+    cmd = [
+        str(server_bin),
+        "serve-openai",
+        "--config",
+        str(config_path),
+        "--bind-addr",
+        f"127.0.0.1:{port}",
+        "--generation-concurrency",
+        str(lane_count),
+        "--telemetry-level",
+        "debug",
+    ]
+    env = os.environ.copy()
+    env["LLAMA_STAGE_BUILD_DIR"] = str(args.llama_stage_build_dir)
+    env["SKIPPY_TELEMETRY_STDERR"] = "1"
+    # Exact parity needs a true argmax path; otherwise llama's stateful sampler
+    # may seed each concurrent session independently even at temperature 0.
+    env["SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH"] = "1"
+    with log_path.open("w") as log:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=REPO,
+            env=env,
+            text=True,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            wait_ready(
+                port,
+                proc,
+                args.server_startup_timeout_secs,
+                path="/v1/models",
+                server_name=f"Skippy {label}",
+            )
+            curve = []
+            for concurrency in concurrency_sweep:
+                print(f"==> {case.key}: {label} serving path concurrency={concurrency}", flush=True)
+                per_request, makespan_ms = run_openai_concurrent_requests(
+                    prompt,
+                    case.model_id,
+                    concurrency,
+                    max(args.concurrent_requests, concurrency),
+                    args.concurrent_output_tokens,
+                    port,
+                    args,
+                )
+                curve.append(
+                    {
+                        "concurrency": concurrency,
+                        "requests": len(per_request),
+                        "makespan_ms": makespan_ms,
+                        "metrics": calculate_goodput(
+                            per_request,
+                            makespan_ms,
+                            args.ttft_slo_ms,
+                            args.tpot_slo_ms,
+                        ),
+                        "per_request": per_request,
+                    }
+                )
+            return {
+                "label": label,
+                "binary": str(server_bin),
+                "config": str(config_path),
+                "log": str(log_path),
+                "ctx_size": ctx_size,
+                "lane_count": lane_count,
+                "concurrency_sweep": curve,
+            }
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+
+
 def format_ms(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{value:.1f}"
@@ -811,25 +1130,43 @@ def calculate_goodput(
 ) -> dict[str, Any]:
     """Calculate goodput metrics from per-request results."""
     if not results:
-        return {"goodput_rps": 0.0, "ttft_p50": None, "ttft_p99": None, "tpot_p50": None, "tpot_p99": None}
-    
+        return {
+            "goodput_rps": 0.0,
+            "throughput_rps": 0.0,
+            "output_tokens_per_second": 0.0,
+            "successful_requests": 0,
+            "failed_requests": 0,
+            "ttft_p50": None,
+            "ttft_p99": None,
+            "tpot_p50": None,
+            "tpot_p99": None,
+            "latency_p50": None,
+            "latency_p99": None,
+        }
+
     successful = [r for r in results if "error" not in r]
     if not successful:
-        return {"goodput_rps": 0.0, "ttft_p50": None, "ttft_p99": None, "tpot_p50": None, "tpot_p99": None}
-    
+        empty = calculate_goodput([], makespan_ms, ttft_slo_ms, tpot_slo_ms)
+        empty["failed_requests"] = len(results)
+        return empty
+
     ttfts = [r.get("ttft_ms") for r in successful if r.get("ttft_ms") is not None]
     tpots = [r.get("tpot_ms") for r in successful if r.get("tpot_ms") is not None]
+    latencies = [r["elapsed_ms"] for r in successful if isinstance(r.get("elapsed_ms"), (int, float))]
     workload_seconds = makespan_ms / 1000.0
 
     # Goodput: requests/sec that meet SLO
     if ttfts and tpots:
-        good = sum(1 for r in successful 
-                   if r.get("ttft_ms", float("inf")) <= ttft_slo_ms 
-                   and r.get("tpot_ms", float("inf")) <= tpot_slo_ms)
+        good = sum(
+            1
+            for r in successful
+            if r.get("ttft_ms", float("inf")) <= ttft_slo_ms
+            and r.get("tpot_ms", float("inf")) <= tpot_slo_ms
+        )
         goodput_rps = good / workload_seconds if workload_seconds > 0 else 0.0
     else:
         goodput_rps = 0.0
-    
+
     def percentile(values: list[float], p: float) -> float | None:
         if not values:
             return None
@@ -838,13 +1175,23 @@ def calculate_goodput(
         idx = min(idx, len(sorted_vals) - 1)
         return sorted_vals[idx]
     
+    output_tokens = sum(
+        int(r.get("tokens_predicted", 0))
+        for r in successful
+        if isinstance(r.get("tokens_predicted"), int)
+    )
     return {
         "goodput_rps": goodput_rps,
         "ttft_p50": percentile(ttfts, 50),
         "ttft_p99": percentile(ttfts, 99),
         "tpot_p50": percentile(tpots, 50),
         "tpot_p99": percentile(tpots, 99),
+        "latency_p50": percentile(latencies, 50),
+        "latency_p99": percentile(latencies, 99),
         "throughput_rps": len(successful) / workload_seconds if workload_seconds > 0 else 0.0,
+        "output_tokens_per_second": output_tokens / workload_seconds if workload_seconds > 0 else 0.0,
+        "successful_requests": len(successful),
+        "failed_requests": len(results) - len(successful),
     }
 
 
@@ -857,9 +1204,26 @@ def run_concurrent_benchmark(
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     """Run concurrent benchmark at a specific concurrency level."""
-    # Start server if not already running
-    # For now, we assume the server is started by the caller
-    pass
+    results, makespan_ms = run_concurrent_requests(
+        prompt,
+        concurrency,
+        num_requests,
+        port,
+        args,
+    )
+    return {
+        "case": case.key,
+        "concurrency": concurrency,
+        "requests": num_requests,
+        "makespan_ms": makespan_ms,
+        "per_request": results,
+        "metrics": calculate_goodput(
+            results,
+            makespan_ms,
+            args.ttft_slo_ms,
+            args.tpot_slo_ms,
+        ),
+    }
 
 
 def main() -> int:
@@ -868,6 +1232,16 @@ def main() -> int:
     parser.add_argument("--case", action="append", help="Run only the named case; may be repeated.")
     parser.add_argument("--skip-llama-server", action="store_true")
     parser.add_argument("--llama-server-bin", type=Path, default=REPO / ".deps/llama-build/build-stage-abi-cpu/bin/llama-server")
+    parser.add_argument(
+        "--old-skippy-server-bin",
+        type=Path,
+        help="Old-serving-path skippy-server binary used for the cutover comparison.",
+    )
+    parser.add_argument(
+        "--new-skippy-server-bin",
+        type=Path,
+        help="New scheduler-serving-path skippy-server binary used for the cutover comparison.",
+    )
     parser.add_argument("--skippy-correctness-bin", type=Path, default=REPO / "target/debug/skippy-correctness")
     parser.add_argument("--llama-stage-build-dir", type=Path, default=REPO / ".deps/llama-build/build-stage-abi-cpu")
     parser.add_argument("--correctness-timeout-secs", type=int, default=900)
@@ -904,6 +1278,17 @@ def main() -> int:
         help="Number of requests per concurrency level.",
     )
     parser.add_argument(
+        "--concurrent-output-tokens",
+        type=int,
+        default=32,
+        help="Generated tokens requested from each old/new Skippy benchmark request.",
+    )
+    parser.add_argument(
+        "--serving-ctx-size",
+        type=int,
+        help="Shared native context size for old/new Skippy sweeps; defaults to case ctx_size multiplied by the lane ceiling.",
+    )
+    parser.add_argument(
         "--ttft-slo-ms",
         type=int,
         default=2000,
@@ -916,6 +1301,17 @@ def main() -> int:
         help="TPOT SLO in ms for goodput calculation.",
     )
     args = parser.parse_args()
+
+    if (args.old_skippy_server_bin is None) != (args.new_skippy_server_bin is None):
+        raise SystemExit(
+            "--old-skippy-server-bin and --new-skippy-server-bin must be provided together"
+        )
+    for label, binary in (
+        ("old", args.old_skippy_server_bin),
+        ("new", args.new_skippy_server_bin),
+    ):
+        if binary is not None and not binary.is_file():
+            raise SystemExit(f"{label} Skippy server binary does not exist: {binary}")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     selected = CASES
@@ -1043,6 +1439,55 @@ def main() -> int:
                     proc.kill()
                     proc.wait(timeout=5)
 
+    serving_path_results = []
+    if args.old_skippy_server_bin is not None and args.new_skippy_server_bin is not None:
+        for case, use_case, row in benchmark_inputs:
+            if case.model_path is None or not case.model_path.exists():
+                continue
+            if case.stage_load_mode != "runtime-slice":
+                continue
+            prompt = row.get("skippy", {}).get("benchmark_prompt_text")
+            if not isinstance(prompt, str) or not prompt:
+                continue
+            suffix = f"-{use_case.key}" if use_case is not None else ""
+            comparison_dir = (
+                args.output_dir
+                / f"serving-path-{case.key}-p{case.prefix_tokens}{suffix}"
+            )
+            comparison_dir.mkdir(parents=True, exist_ok=True)
+            old_sweep = run_skippy_serving_path_sweep(
+                "old",
+                args.old_skippy_server_bin,
+                case,
+                prompt,
+                concurrency_sweep,
+                args,
+                comparison_dir,
+            )
+            new_sweep = run_skippy_serving_path_sweep(
+                "new",
+                args.new_skippy_server_bin,
+                case,
+                prompt,
+                concurrency_sweep,
+                args,
+                comparison_dir,
+            )
+            comparison = {
+                "case": case.key,
+                "family": case.family,
+                "model_id": case.model_id,
+                "prefix_tokens": case.prefix_tokens,
+                "use_case": use_case.key if use_case is not None else None,
+                "old": old_sweep,
+                "new": new_sweep,
+                "output_parity": serving_path_output_parity(old_sweep, new_sweep),
+            }
+            serving_path_results.append(comparison)
+            (args.output_dir / "serving-path-comparison.json").write_text(
+                json.dumps(serving_path_results, indent=2)
+            )
+
     print(markdown_table(results))
     print(f"Wrote {args.output_dir / 'production-cache-bench.json'}")
     print(f"Wrote {args.output_dir / 'production-cache-bench.md'}")
@@ -1050,6 +1495,8 @@ def main() -> int:
     if concurrency_results:
         (args.output_dir / "concurrency-sweep.json").write_text(json.dumps(concurrency_results, indent=2))
         print(f"Wrote {args.output_dir / 'concurrency-sweep.json'}")
+    if serving_path_results:
+        print(f"Wrote {args.output_dir / 'serving-path-comparison.json'}")
     
     return 0
 

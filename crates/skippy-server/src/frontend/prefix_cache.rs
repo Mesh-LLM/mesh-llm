@@ -24,7 +24,6 @@ use crate::kv_integration::KvStageIntegration;
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
 use anyhow::Context;
-use anyhow::anyhow;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde_json::Value;
@@ -45,6 +44,7 @@ use skippy_runtime::ActivationFrame;
 use skippy_runtime::SamplingConfig;
 use std::collections::BTreeMap;
 use std::net::TcpStream;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct ChainPrefixCacheSavings {
@@ -209,20 +209,31 @@ impl StageOpenAiBackend {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(());
         };
-        let eviction = (|| {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| anyhow!("runtime lock poisoned"))?;
-            runtime
-                .ensure_session_active(session_id)
-                .context("activate embedded stage-0 session before resident-prefix eviction")?;
-            if let Some(target_tokens) = target_tokens {
-                kv.evict_resident_prefix_for_tokens(&mut runtime, session_id, target_tokens)
-            } else {
-                kv.evict_resident_prefix_for_decode_batch(&mut runtime, session_id)
-            }
-        })();
+        let scheduler_kv = Arc::clone(kv);
+        let scheduler_session_id = session_id.to_string();
+        let eviction =
+            self.iteration_scheduler
+                .execute_runtime("embedded-prefix-evict", move |runtime| {
+                    Ok((|| {
+                        runtime
+                            .ensure_session_active(&scheduler_session_id)
+                            .context(
+                                "activate embedded stage-0 session before resident-prefix eviction",
+                            )?;
+                        if let Some(target_tokens) = target_tokens {
+                            scheduler_kv.evict_resident_prefix_for_tokens(
+                                runtime,
+                                &scheduler_session_id,
+                                target_tokens,
+                            )
+                        } else {
+                            scheduler_kv.evict_resident_prefix_for_decode_batch(
+                                runtime,
+                                &scheduler_session_id,
+                            )
+                        }
+                    })())
+                })?;
         let (status, error_kind, target_tokens, evicted_entries, evicted_tokens) = match &eviction {
             Ok(eviction) => (
                 if eviction.evicted_entries > 0 {
@@ -296,19 +307,23 @@ impl StageOpenAiBackend {
                 .emit("stage.openai_kv_lookup_decision", attrs);
             return Ok(None);
         };
-        let restored = {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            kv.restore_resident_prefix(
-                &mut runtime,
-                session_id,
-                std::slice::from_ref(&activation.identity),
-                token_ids,
-            )
-            .map_err(openai_backend_error)?
-        };
+        let scheduler_kv = Arc::clone(kv);
+        let scheduler_session_id = session_id.to_string();
+        let scheduler_identity = activation.identity.clone();
+        let scheduler_token_ids = token_ids.to_vec();
+        let restored = self.iteration_scheduler.execute_runtime(
+            "embedded-prefix-restore",
+            move |runtime| {
+                scheduler_kv
+                    .restore_resident_prefix(
+                        runtime,
+                        &scheduler_session_id,
+                        std::slice::from_ref(&scheduler_identity),
+                        &scheduler_token_ids,
+                    )
+                    .map_err(openai_backend_error)
+            },
+        )?;
         let Some(restored) = restored else {
             let mut attrs = self.openai_attrs(ids);
             attrs.insert(
@@ -382,30 +397,33 @@ impl StageOpenAiBackend {
         let identities =
             stage0_prefill_record_identities(kv, &self.config, &base, token_start, token_ids);
         let record_candidate_count = identities.len();
-        let resident_records = {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            identities
-                .iter()
-                .map(|identity| {
-                    let token_count = identity
-                        .identity
-                        .token_count
-                        .try_into()
-                        .unwrap_or(usize::MAX)
-                        .min(token_ids.len());
-                    kv.record_resident_prefix(
-                        &mut runtime,
-                        session_id,
-                        identity,
-                        &token_ids[..token_count],
-                    )
-                    .map_err(openai_backend_error)
-                })
-                .collect::<OpenAiResult<Vec<_>>>()?
-        };
+        let scheduler_kv = Arc::clone(kv);
+        let scheduler_session_id = session_id.to_string();
+        let scheduler_identities = identities.clone();
+        let scheduler_token_ids = token_ids.to_vec();
+        let resident_records =
+            self.iteration_scheduler
+                .execute_runtime("embedded-prefix-record", move |runtime| {
+                    scheduler_identities
+                        .iter()
+                        .map(|identity| {
+                            let token_count = identity
+                                .identity
+                                .token_count
+                                .try_into()
+                                .unwrap_or(usize::MAX)
+                                .min(scheduler_token_ids.len());
+                            scheduler_kv
+                                .record_resident_prefix(
+                                    runtime,
+                                    &scheduler_session_id,
+                                    identity,
+                                    &scheduler_token_ids[..token_count],
+                                )
+                                .map_err(openai_backend_error)
+                        })
+                        .collect::<OpenAiResult<Vec<_>>>()
+                })?;
         let activation_records = kv.record_resident_activation(
             &self.config,
             &base,
@@ -492,33 +510,40 @@ impl StageOpenAiBackend {
         let base = self.local_kv_message_base(session_id, ids);
         let identities = stage0_full_prefill_record_identities(kv, &self.config, &base, token_ids);
         let record_candidate_count = identities.len();
-        let records = {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            identities
-                .iter()
-                .map(|identity| {
-                    let token_count = identity
-                        .identity
-                        .token_count
-                        .try_into()
-                        .unwrap_or(usize::MAX)
-                        .min(token_ids.len());
-                    if token_count == token_ids.len() {
-                        let _ = kv.record_exact_state(&mut runtime, session_id, identity);
-                    }
-                    kv.record_resident_prefix(
-                        &mut runtime,
-                        session_id,
-                        identity,
-                        &token_ids[..token_count],
-                    )
-                    .map_err(openai_backend_error)
-                })
-                .collect::<OpenAiResult<Vec<_>>>()?
-        };
+        let scheduler_kv = Arc::clone(kv);
+        let scheduler_session_id = session_id.to_string();
+        let scheduler_token_ids = token_ids.to_vec();
+        let records = self.iteration_scheduler.execute_runtime(
+            "embedded-full-prefill-record",
+            move |runtime| {
+                identities
+                    .iter()
+                    .map(|identity| {
+                        let token_count = identity
+                            .identity
+                            .token_count
+                            .try_into()
+                            .unwrap_or(usize::MAX)
+                            .min(scheduler_token_ids.len());
+                        if token_count == scheduler_token_ids.len() {
+                            let _ = scheduler_kv.record_exact_state(
+                                runtime,
+                                &scheduler_session_id,
+                                identity,
+                            );
+                        }
+                        scheduler_kv
+                            .record_resident_prefix(
+                                runtime,
+                                &scheduler_session_id,
+                                identity,
+                                &scheduler_token_ids[..token_count],
+                            )
+                            .map_err(openai_backend_error)
+                    })
+                    .collect::<OpenAiResult<Vec<_>>>()
+            },
+        )?;
         let mut recorded_any = false;
         for record in records.into_iter().flatten() {
             recorded_any = true;
@@ -874,22 +899,27 @@ impl StageOpenAiBackend {
         let base = self.local_kv_message_base(session_key, request.ids);
         let identities = kv.lookup_identities(request.config, &base, 0, prefill_tokens);
         let mut restore_stats = StageReplyStats::default();
-        let local_restore = {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            match kv
-                .restore_exact_state(&mut runtime, session_key, &identities)
+        let scheduler_kv = Arc::clone(kv);
+        let scheduler_session_key = session_key.to_string();
+        let scheduler_prefill_tokens = prefill_tokens.to_vec();
+        let local_restore = self.iteration_scheduler.execute_runtime(
+            "embedded-split-prefix-restore",
+            move |runtime| match scheduler_kv
+                .restore_exact_state(runtime, &scheduler_session_key, &identities)
                 .map_err(openai_backend_error)?
             {
-                Some(restored) => Some(restored.token_count),
-                None => kv
-                    .restore_resident_prefix(&mut runtime, session_key, &identities, prefill_tokens)
-                    .map_err(openai_backend_error)?
-                    .map(|restored| restored.token_count),
-            }
-        };
+                Some(restored) => Ok(Some(restored.token_count)),
+                None => scheduler_kv
+                    .restore_resident_prefix(
+                        runtime,
+                        &scheduler_session_key,
+                        &identities,
+                        &scheduler_prefill_tokens,
+                    )
+                    .map_err(openai_backend_error)
+                    .map(|restored| restored.map(|restored| restored.token_count)),
+            },
+        )?;
         let Some(local_restore) = local_restore else {
             return Ok(None);
         };
@@ -984,86 +1014,83 @@ impl StageOpenAiBackend {
         let base = self.local_kv_message_base(session_key, request.ids);
         let identity = kv.prefill_identity(request.config, &base, 0, prefill_tokens);
         let mut reply_stats = StageReplyStats::default();
-        let local_restore = {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            kv.restore_resident_prefix(
-                &mut runtime,
-                session_key,
-                std::slice::from_ref(&identity),
-                prefill_tokens,
-            )
-            .map_err(openai_backend_error)?
-        };
-        let Some(local_restore) = local_restore else {
-            return Ok(None);
-        };
-        if local_restore.token_count < prefill_tokens.len() {
-            return Ok(None);
-        }
-        reply_stats.kv_lookup_hits += 1;
-        reply_stats.kv_imported_pages += 1;
-        reply_stats.kv_imported_tokens += local_restore.token_count as i64;
-        reply_stats.kv_hit_stage_mask |= openai_stage_mask(request.config.stage_index);
-
         let stage0_timer = PhaseTimer::start();
-        let token_runtime_lock_wait_ms;
-        let token_runtime_lock_hold_ms;
-        let output = {
-            let lock_timer = PhaseTimer::start();
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            token_runtime_lock_wait_ms = lock_timer.elapsed_ms();
-            let lock_hold_timer = PhaseTimer::start();
-            if let Some(metadata) = request.chat_sampling_metadata {
-                runtime
-                    .configure_chat_sampling(
-                        session_key,
-                        metadata,
-                        request.prompt_token_ids.len() as u64,
-                        request.sampling.enabled.then_some(request.sampling),
+        let decode_message = embedded_decode_message(
+            request.wire_dtype,
+            DecodeMessageArgs {
+                request_id: request.ids.request_id,
+                session_id: request.ids.session_id,
+                prompt_token_count: request.prompt_token_ids.len(),
+                pos_start: prefill_tokens.len(),
+                decode_step: 0,
+                current,
+                sampling: wire_sampling.clone(),
+            },
+        )?;
+        let output_capacity = stage_output_activation_capacity(
+            request.config,
+            decode_message.token_count,
+            request.activation_width,
+        )
+        .map_err(openai_backend_error)?;
+        let scheduler_kv = Arc::clone(kv);
+        let scheduler_session_key = session_key.to_string();
+        let scheduler_prefill_tokens = prefill_tokens.to_vec();
+        let scheduler_sampling = request.sampling.clone();
+        let scheduler_metadata = request.chat_sampling_metadata.map(str::to_string);
+        let prompt_token_count = request.prompt_token_ids.len();
+        let native_mtp_enabled = request.native_mtp_enabled;
+        let native_mtp_max_tokens = request.speculative.native_mtp.max_draft_tokens;
+        let scheduler_decode_message = decode_message.clone();
+        let outcome = self.iteration_scheduler.execute_runtime_timed(
+            "embedded-fused-prefix-decode",
+            move |runtime| {
+                let local_restore = scheduler_kv
+                    .restore_resident_prefix(
+                        runtime,
+                        &scheduler_session_key,
+                        std::slice::from_ref(&identity),
+                        &scheduler_prefill_tokens,
                     )
                     .map_err(openai_backend_error)?;
-            }
-            let decode_message = embedded_decode_message(
-                request.wire_dtype,
-                DecodeMessageArgs {
-                    request_id: request.ids.request_id,
-                    session_id: request.ids.session_id,
-                    prompt_token_count: request.prompt_token_ids.len(),
-                    pos_start: prefill_tokens.len(),
-                    decode_step: 0,
-                    current,
-                    sampling: wire_sampling.clone(),
-                },
-            )?;
-            let output = run_binary_stage_message(
-                &mut runtime,
-                session_key,
-                &decode_message,
-                &[current],
-                None,
-                BinaryStageExecutionOptions::new(
-                    false,
-                    stage_output_activation_capacity(
-                        request.config,
-                        decode_message.token_count,
-                        request.activation_width,
-                    )
-                    .map_err(openai_backend_error)?,
-                    request.native_mtp_enabled,
+                let Some(local_restore) = local_restore
+                    .filter(|restored| restored.token_count >= scheduler_prefill_tokens.len())
+                else {
+                    return Ok(None);
+                };
+                if let Some(metadata) = scheduler_metadata.as_deref() {
+                    runtime
+                        .configure_chat_sampling(
+                            &scheduler_session_key,
+                            metadata,
+                            prompt_token_count as u64,
+                            scheduler_sampling.enabled.then_some(&scheduler_sampling),
+                        )
+                        .map_err(openai_backend_error)?;
+                }
+                let output = run_binary_stage_message(
+                    runtime,
+                    &scheduler_session_key,
+                    &scheduler_decode_message,
+                    &[current],
+                    None,
+                    BinaryStageExecutionOptions::new(false, output_capacity, native_mtp_enabled)
+                        .with_native_mtp_max_tokens(native_mtp_max_tokens),
                 )
-                .with_native_mtp_max_tokens(request.speculative.native_mtp.max_draft_tokens),
-            )
-            .map_err(openai_backend_error)?
-            .2;
-            token_runtime_lock_hold_ms = lock_hold_timer.elapsed_ms();
-            output
+                .map_err(openai_backend_error)?
+                .2;
+                Ok(Some((local_restore.token_count, output)))
+            },
+        )?;
+        let token_runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+        let token_runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+        let Some((restored_token_count, output)) = outcome.value else {
+            return Ok(None);
         };
+        reply_stats.kv_lookup_hits += 1;
+        reply_stats.kv_imported_pages += 1;
+        reply_stats.kv_imported_tokens += restored_token_count as i64;
+        reply_stats.kv_hit_stage_mask |= openai_stage_mask(request.config.stage_index);
         let stage0_compute_ms = stage0_timer.elapsed_ms();
 
         let fused_message = embedded_restore_prefill_decode_message(
@@ -1177,9 +1204,16 @@ impl StageOpenAiBackend {
         session_key: &str,
         downstream: &mut TcpStream,
     ) {
-        if let Ok(mut runtime) = self.runtime.lock() {
-            let _ = runtime.drop_session_timed(session_key);
-        }
+        let scheduler_session_key = session_key.to_string();
+        let _ = self.iteration_scheduler.execute_runtime(
+            "embedded-split-restore-drop",
+            move |runtime| {
+                runtime
+                    .drop_session_timed(&scheduler_session_key)
+                    .map(|_| ())
+                    .map_err(openai_backend_error)
+            },
+        );
         let stop = StageWireMessage::stop_with_identity(
             request.wire_dtype,
             request.ids.request_id,

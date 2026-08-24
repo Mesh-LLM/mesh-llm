@@ -146,7 +146,7 @@ pub(super) fn binary_message_kv_attrs(
 
 pub(in crate::binary_transport) fn maybe_prefix_cache_control(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    runtime: &mut RuntimeState,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_id: &str,
@@ -220,16 +220,13 @@ pub(in crate::binary_transport) fn maybe_prefix_cache_control(
         WireMessageKind::RestorePrefill
         | WireMessageKind::TryRestorePrefill
         | WireMessageKind::TryRestorePrefillDecode => {
-            let restore = {
-                let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                restore_binary_prefix(
-                    kv,
-                    &mut runtime,
-                    session_id,
-                    std::slice::from_ref(&identity),
-                    token_ids,
-                )
-            };
+            let restore = restore_binary_prefix(
+                kv,
+                runtime,
+                session_id,
+                std::slice::from_ref(&identity),
+                token_ids,
+            );
             match restore {
                 Ok(Some(restored)) if restored.token_count >= token_ids.len() => {
                     result.hit = true;
@@ -337,7 +334,7 @@ pub(in crate::binary_transport) fn emit_binary_proactive_eviction(
 #[allow(clippy::too_many_arguments)]
 pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    runtime: &mut RuntimeState,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_id: &str,
@@ -394,16 +391,13 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
             telemetry.emit("stage.binary_kv_lookup_decision", attrs);
             return result;
         };
-        let prefix_restore = {
-            let mut runtime = runtime.lock().expect("runtime lock poisoned");
-            restore_binary_prefix(
-                kv,
-                &mut runtime,
-                session_id,
-                std::slice::from_ref(&activation.identity),
-                token_ids,
-            )
-        };
+        let prefix_restore = restore_binary_prefix(
+            kv,
+            runtime,
+            session_id,
+            std::slice::from_ref(&activation.identity),
+            token_ids,
+        );
         match prefix_restore {
             Ok(Some(restored)) if restored.token_count >= token_ids.len() => {
                 result.restored_tokens = restored.token_count;
@@ -493,10 +487,7 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
             }
         }
     }
-    let prefix_restore = {
-        let mut runtime = runtime.lock().expect("runtime lock poisoned");
-        restore_binary_prefix(kv, &mut runtime, session_id, &identities, token_ids)
-    };
+    let prefix_restore = restore_binary_prefix(kv, runtime, session_id, &identities, token_ids);
     match prefix_restore {
         Ok(Some(restored)) => {
             result.restored_tokens = restored.token_count;
@@ -558,7 +549,7 @@ fn candidate_already_resident(token_count: u64, min_record_tokens: u64) -> bool 
 #[allow(clippy::too_many_arguments)]
 pub(in crate::binary_transport) fn maybe_record_binary_prefill(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    runtime: &mut RuntimeState,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_id: &str,
@@ -601,7 +592,6 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
         return result;
     }
     {
-        let mut runtime = runtime.lock().expect("runtime lock poisoned");
         for identity in identities {
             let token_count = identity.identity.token_count;
             let token_count_usize = usize::try_from(token_count)
@@ -611,7 +601,7 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
                 continue;
             }
             if token_count_usize == token_ids.len() {
-                match kv.record_exact_state(&mut runtime, session_id, &identity) {
+                match kv.record_exact_state(runtime, session_id, &identity) {
                     Ok(Some(record)) => {
                         result.recorded_pages = result.recorded_pages.saturating_add(1);
                         result.recorded_tokens = result
@@ -659,7 +649,7 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
                 }
             }
             match kv.record_resident_prefix(
-                &mut runtime,
+                runtime,
                 session_id,
                 &identity,
                 &token_ids[..token_count_usize],

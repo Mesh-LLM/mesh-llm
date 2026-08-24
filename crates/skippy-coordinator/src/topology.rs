@@ -11,6 +11,11 @@ const CONTEXT_STEPS: &[u32] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_
 /// This is the floor_ctx_per_session from the design.
 const FLOOR_CTX_PER_SESSION: u32 = 4096;
 const LLAMA_MAX_SEQ: usize = 256;
+// Active lanes occupy one sequence id each. The native serving/cache layout
+// reserves a second id range for auxiliary recurrent/speculative work and
+// resident prefixes begin after `lane_count * 2`, so a lane ceiling must leave
+// room for all three co-tenants under LLAMA_MAX_SEQ.
+const SEQUENCE_IDS_PER_LANE_WITH_RESIDENT_CACHE: usize = 3;
 
 /// Compute-buffer reserve applied to the KV term of each layer's placement
 /// cost. Charging KV at 100/85 holds back 15% of a node's post-weight space for
@@ -248,7 +253,10 @@ fn parallel_lane_candidates(
     _kv_bytes_per_token: u64,
     reserved_sequence_ids: usize,
 ) -> Result<Vec<usize>, TopologyPlanError> {
-    let sequence_capacity = LLAMA_MAX_SEQ.saturating_sub(reserved_sequence_ids);
+    let sequence_capacity = LLAMA_MAX_SEQ
+        .saturating_sub(reserved_sequence_ids)
+        .checked_div(SEQUENCE_IDS_PER_LANE_WITH_RESIDENT_CACHE)
+        .unwrap_or(0);
     if let Some(lanes) = override_lanes {
         if lanes == 0 {
             return Err(TopologyPlanError::ZeroParallelLanes);

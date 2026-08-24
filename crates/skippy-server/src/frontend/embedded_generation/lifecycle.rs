@@ -14,7 +14,7 @@ use crate::frontend::{
         PersistentStageLanePool, PhaseTimer, StageOpenAiBackend, TokenControl,
     },
     speculative::{OpenAiSpeculativeStats, SpeculativeDecodeConfig},
-    util::openai_io_error,
+    util::{openai_backend_error, openai_io_error},
 };
 
 /// Keeps the configured speculative plan unless a distributed prefix restore
@@ -449,18 +449,22 @@ impl StageOpenAiBackend {
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
     ) {
-        let lock_timer = PhaseTimer::start();
-        let Ok(mut runtime) = self.runtime.lock() else {
+        let scheduler_session_key = session_key.to_string();
+        let Ok(outcome) = self.iteration_scheduler.execute_runtime_timed(
+            "embedded-session-drop",
+            move |runtime| {
+                runtime
+                    .drop_session_timed(&scheduler_session_key)
+                    .map_err(openai_backend_error)
+            },
+        ) else {
             return;
         };
-        let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-        let Ok(drop_stats) = runtime.drop_session_timed(session_key) else {
-            return;
-        };
+        let drop_stats = outcome.value;
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert(
             "llama_stage.runtime_lock_wait_ms".to_string(),
-            json!(runtime_lock_wait_ms),
+            json!(outcome.runtime_lock_wait_ms),
         );
         attrs.insert(
             "llama_stage.session_reset_ms".to_string(),

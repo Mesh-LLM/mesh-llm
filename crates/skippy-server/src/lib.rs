@@ -6,7 +6,6 @@
 pub mod binary_transport;
 pub mod cli;
 pub mod config;
-mod decode_batch_policy;
 pub mod embedded;
 pub mod frontend;
 pub mod http;

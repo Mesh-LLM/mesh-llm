@@ -15,7 +15,6 @@ use super::stage_execution::{
     warm_downstream_preconnect_enabled,
 };
 use super::{
-    decode_batcher::DecodeFrameBatcher,
     direct_return::{PredictionReturnHub, PredictionReturnSinks},
     options::BinaryStageOptions,
     preconnect::spawn_downstream_preconnector,
@@ -23,7 +22,7 @@ use super::{
 use crate::{
     cli::ServeBinaryArgs,
     config::validate_config,
-    frontend::{self, EmbeddedOpenAiArgs},
+    frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
     runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides},
     telemetry::{Telemetry, lifecycle_attrs},
@@ -111,7 +110,6 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         },
     )?
     .context("binary stage server requires model_path")?;
-    let decode_frame_batcher = DecodeFrameBatcher::new(runtime.clone(), max_inflight);
     if max_inflight > 0 {
         let timer = Instant::now();
         let sessions = runtime
@@ -139,6 +137,13 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         );
         telemetry.emit("stage.binary_runtime_prewarm", attrs);
     }
+    let iteration_scheduler = IterationScheduler::new(
+        runtime.clone(),
+        &config,
+        max_inflight.max(1),
+        telemetry.clone(),
+    )
+    .map_err(|error| anyhow!("create binary iteration scheduler: {error}"))?;
     let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
     let prediction_returns = Arc::new(PredictionReturnHub::default());
     let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
@@ -222,8 +227,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         );
         let config = config.clone();
         let topology = topology.clone();
-        let runtime = runtime.clone();
-        let decode_frame_batcher = decode_frame_batcher.clone();
+        let iteration_scheduler = iteration_scheduler.clone();
         let kv = kv.clone();
         let telemetry = telemetry.clone();
         let warm_downstream = warm_downstream.clone();
@@ -263,8 +267,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 handle_binary_connection(
                     &config,
                     topology.as_ref(),
-                    &runtime,
-                    &decode_frame_batcher,
+                    &iteration_scheduler,
                     kv.as_ref(),
                     &telemetry,
                     &mut upstream,

@@ -23,6 +23,13 @@ impl MemoryComponent {
         self.bytes_per_sequence
             .saturating_add(self.bytes_per_token.saturating_mul(token_count))
     }
+
+    pub fn reservation_bytes(&self, admission_tokens: usize) -> u64 {
+        self.bytes_per_sequence.saturating_add(
+            self.bytes_per_token
+                .saturating_mul(u64::try_from(admission_tokens).unwrap_or(u64::MAX)),
+        )
+    }
 }
 
 #[derive(Debug, Clone)]

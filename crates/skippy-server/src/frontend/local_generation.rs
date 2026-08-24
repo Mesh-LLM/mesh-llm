@@ -10,11 +10,11 @@ pub(super) use token_generation::{
     linear_proposal_allowed, native_mtp_dispatch_counts_for_test, post_decode_checkpoint_tokens,
 };
 
-use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation_receipt::{
     GenerationReceiptObservation, LocalGenerationReceiptDelivery,
 };
+use crate::frontend::util::openai_backend_error;
 use openai_frontend::OpenAiResult;
 use serde_json::json;
 use std::sync::Arc;
@@ -87,38 +87,43 @@ impl StageOpenAiBackend {
         session_id: &str,
         ids: &crate::frontend::generation::OpenAiGenerationIds,
     ) {
-        let lock_timer = PhaseTimer::start();
-        if let Ok(mut runtime) = self.runtime.lock() {
-            let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-            if let Ok(drop_stats) = runtime.drop_session_timed(session_id) {
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert(
-                    "llama_stage.runtime_lock_wait_ms".to_string(),
-                    json!(runtime_lock_wait_ms),
-                );
-                attrs.insert(
-                    "llama_stage.session_reset_ms".to_string(),
-                    json!(drop_stats.reset_ms),
-                );
-                attrs.insert(
-                    "llama_stage.session_reset".to_string(),
-                    json!(drop_stats.reset_session),
-                );
-                attrs.insert(
-                    "llama_stage.lane_discarded".to_string(),
-                    json!(drop_stats.lane_discarded),
-                );
-                if let Some(reason) = drop_stats.lane_discard_reason.as_deref() {
-                    attrs.insert("llama_stage.lane_discard_reason".to_string(), json!(reason));
-                }
-                Self::insert_runtime_session_stats(
-                    &mut attrs,
-                    "llama_stage.runtime_sessions_after",
-                    &drop_stats.stats_after,
-                );
-                self.telemetry
-                    .emit_debug("stage.openai_session_stop", attrs);
+        let scheduler_session_id = session_id.to_string();
+        if let Ok(outcome) =
+            self.iteration_scheduler
+                .execute_runtime_timed("local-session-drop", move |runtime| {
+                    runtime
+                        .drop_session_timed(&scheduler_session_id)
+                        .map_err(openai_backend_error)
+                })
+        {
+            let drop_stats = outcome.value;
+            let mut attrs = self.openai_attrs(ids);
+            attrs.insert(
+                "llama_stage.runtime_lock_wait_ms".to_string(),
+                json!(outcome.runtime_lock_wait_ms),
+            );
+            attrs.insert(
+                "llama_stage.session_reset_ms".to_string(),
+                json!(drop_stats.reset_ms),
+            );
+            attrs.insert(
+                "llama_stage.session_reset".to_string(),
+                json!(drop_stats.reset_session),
+            );
+            attrs.insert(
+                "llama_stage.lane_discarded".to_string(),
+                json!(drop_stats.lane_discarded),
+            );
+            if let Some(reason) = drop_stats.lane_discard_reason.as_deref() {
+                attrs.insert("llama_stage.lane_discard_reason".to_string(), json!(reason));
             }
+            Self::insert_runtime_session_stats(
+                &mut attrs,
+                "llama_stage.runtime_sessions_after",
+                &drop_stats.stats_after,
+            );
+            self.telemetry
+                .emit_debug("stage.openai_session_stop", attrs);
         }
     }
 }

@@ -1,4 +1,3 @@
-use crate::binary_transport::DecodeFrameBatcher;
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::PredictionReturnReceiver;
 use crate::binary_transport::WireCondition;
@@ -9,13 +8,13 @@ use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpStats;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
-use crate::frontend::decode_batcher::DecodeBatcher;
 use crate::frontend::decode_scheduler::VerifyWindowPipelineStats;
 use crate::frontend::generation::DraftRunner;
 use crate::frontend::generation::GenerationTokenLimit;
 use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PreparedGenerationPrompt;
+use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::native_mtp::NativeMtpDecodeTelemetry;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::frontend::speculative::OpenAiSpeculativeStats;
@@ -71,8 +70,7 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) generation_receipt: Option<GenerationReceiptConfig>,
     pub(in crate::frontend) linear_proposal_ingress: Option<LinearProposalIngressConfig>,
     pub(in crate::frontend) kv: Option<Arc<KvStageIntegration>>,
-    pub(in crate::frontend) decode_batcher: DecodeBatcher,
-    pub(in crate::frontend) decode_frame_batcher: DecodeFrameBatcher,
+    pub(in crate::frontend) iteration_scheduler: IterationScheduler,
 }
 
 #[derive(Clone)]

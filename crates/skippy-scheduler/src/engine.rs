@@ -76,6 +76,15 @@ impl Scheduler {
         };
         let mut budget = self.config.max_tokens_per_iteration;
         let ids = self.active.keys().cloned().collect::<Vec<_>>();
+        // llama's mixed-token ABI can batch many prefills or many decode rows,
+        // but combining a long prefill with live decode rows changes dense
+        // model outputs. Give chunked prefill/recompute one iteration, then
+        // resume decode for all active sequences on the next iteration.
+        let run_prefill_phase = ids.iter().any(|id| {
+            self.active
+                .get(id)
+                .is_some_and(|sequence| sequence.prefill_cursor < sequence.recompute_tokens().len())
+        });
 
         for id in ids {
             if budget == 0 {
@@ -110,6 +119,10 @@ impl Scheduler {
                 sequence.prefill_cursor = end;
                 plan.token_count += count;
                 budget -= count;
+                continue;
+            }
+
+            if run_prefill_phase {
                 continue;
             }
 
@@ -207,6 +220,14 @@ impl Scheduler {
             recompute_tokens,
             decode_tokens,
             component_used_bytes: self.component_usage(),
+            component_available_bytes: self
+                .config
+                .memory_components
+                .iter()
+                .map(|component| (component.name.clone(), component.available_bytes()))
+                .collect(),
+            prefix_hits: self.metrics.prefix_hits,
+            prefix_misses: self.metrics.prefix_misses,
         }
     }
 
@@ -258,6 +279,22 @@ impl Scheduler {
             .or_else(|| self.waiting.iter().find(|sequence| sequence.id == id))
     }
 
+    pub fn cancel(&mut self, id: &str) -> bool {
+        if self.active.contains_key(id) {
+            self.remove_active(id);
+            self.metrics.cancelled = self.metrics.cancelled.saturating_add(1);
+            self.refresh_counts();
+            return true;
+        }
+        if let Some(index) = self.waiting.iter().position(|sequence| sequence.id == id) {
+            self.waiting.remove(index);
+            self.metrics.cancelled = self.metrics.cancelled.saturating_add(1);
+            self.refresh_counts();
+            return true;
+        }
+        false
+    }
+
     fn admit_waiting(&mut self) -> usize {
         let mut admitted = 0;
         let mut deferred = VecDeque::new();
@@ -285,25 +322,22 @@ impl Scheduler {
             .iter()
             .zip(self.component_used_bytes.iter().copied())
             .all(|(component, used)| {
-                used.saturating_add(
-                    component.request_bytes(sequence.prompt_tokens.len(), sequence.max_tokens),
-                ) <= component.available_bytes()
+                used.saturating_add(component.reservation_bytes(sequence.admission_tokens))
+                    <= component.available_bytes()
             })
     }
 
     fn reserve_memory(&mut self, sequence: &Sequence) {
         for (index, component) in self.config.memory_components.iter().enumerate() {
-            self.component_used_bytes[index] = self.component_used_bytes[index].saturating_add(
-                component.request_bytes(sequence.prompt_tokens.len(), sequence.max_tokens),
-            );
+            self.component_used_bytes[index] = self.component_used_bytes[index]
+                .saturating_add(component.reservation_bytes(sequence.admission_tokens));
         }
     }
 
     fn release_memory(&mut self, sequence: &Sequence) {
         for (index, component) in self.config.memory_components.iter().enumerate() {
-            self.component_used_bytes[index] = self.component_used_bytes[index].saturating_sub(
-                component.request_bytes(sequence.prompt_tokens.len(), sequence.max_tokens),
-            );
+            self.component_used_bytes[index] = self.component_used_bytes[index]
+                .saturating_sub(component.reservation_bytes(sequence.admission_tokens));
         }
     }
 
@@ -372,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn iteration_mixes_prefill_and_decode_without_replaying_final_prompt_token() {
+    fn iteration_separates_prefill_and_decode_without_replaying_final_prompt_token() {
         let mut scheduler = Scheduler::new(SchedulerConfig {
             max_tokens_per_iteration: 8,
             prefill_chunk_tokens: 4,
@@ -384,28 +418,20 @@ mod tests {
         scheduler.complete_iteration(&first, &[42]);
         scheduler.submit(sequence("prefill", 8, 4)).unwrap();
 
-        let mixed = scheduler.plan_iteration();
-        assert!(
-            mixed
-                .work
-                .iter()
-                .any(|work| work.phase == IterationPhase::Decode)
-        );
-        assert!(
-            mixed
-                .work
-                .iter()
-                .any(|work| work.phase == IterationPhase::Prefill)
-        );
-        let decode = mixed
-            .work
-            .iter()
-            .find(|work| work.sequence_id == "decode")
-            .unwrap();
-        assert_eq!(decode.tokens, vec![42]);
-        assert_eq!(decode.positions, vec![2]);
+        let prefill_chunk = scheduler.plan_iteration();
+        assert_eq!(prefill_chunk.work.len(), 1);
+        assert_eq!(prefill_chunk.work[0].sequence_id, "prefill");
+        assert_eq!(prefill_chunk.work[0].phase, IterationPhase::Prefill);
+        assert!(!prefill_chunk.work[0].sample_last);
+        scheduler.complete_iteration(&prefill_chunk, &[-1]);
 
-        scheduler.complete_iteration(&mixed, &[43, -1]);
+        let final_prefill = scheduler.plan_iteration();
+        assert_eq!(final_prefill.work.len(), 1);
+        assert_eq!(final_prefill.work[0].sequence_id, "prefill");
+        assert_eq!(final_prefill.work[0].phase, IterationPhase::Prefill);
+        assert!(final_prefill.work[0].sample_last);
+        scheduler.complete_iteration(&final_prefill, &[100]);
+
         let next = scheduler.plan_iteration();
         let decode = next
             .work
@@ -413,8 +439,13 @@ mod tests {
             .find(|work| work.sequence_id == "decode")
             .unwrap();
         assert_eq!(decode.phase, IterationPhase::Decode);
-        assert_eq!(decode.tokens, vec![43]);
-        assert_eq!(decode.positions, vec![3]);
+        assert_eq!(decode.tokens, vec![42]);
+        assert_eq!(decode.positions, vec![2]);
+        assert!(
+            next.work
+                .iter()
+                .all(|work| work.phase == IterationPhase::Decode)
+        );
         assert!(
             next.work
                 .iter()
@@ -490,5 +521,36 @@ mod tests {
         assert!(scheduler.sequence("a").is_none());
         assert_eq!(scheduler.metrics().failed, 1);
         assert_eq!(scheduler.metrics().finished, 0);
+    }
+
+    #[test]
+    fn cancellation_releases_memory_and_removes_waiting_or_active_sequence() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            memory_components: vec![MemoryComponent {
+                name: "kv".into(),
+                capacity_bytes: 16,
+                resident_bytes: 0,
+                bytes_per_token: 1,
+                bytes_per_sequence: 0,
+            }],
+            ..SchedulerConfig::default()
+        });
+        scheduler
+            .submit(sequence("active", 2, 4).with_admission_tokens(8))
+            .unwrap();
+        scheduler
+            .submit(sequence("waiting", 2, 4).with_admission_tokens(16))
+            .unwrap();
+        scheduler.plan_iteration();
+
+        assert!(scheduler.cancel("active"));
+        assert!(scheduler.cancel("waiting"));
+        assert!(scheduler.snapshot().active_ids.is_empty());
+        assert!(scheduler.snapshot().waiting_ids.is_empty());
+        assert_eq!(scheduler.metrics().cancelled, 2);
+        assert_eq!(
+            scheduler.snapshot().component_used_bytes,
+            vec![("kv".into(), 0)]
+        );
     }
 }

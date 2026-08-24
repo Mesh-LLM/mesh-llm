@@ -84,10 +84,11 @@ pub(super) struct RuntimeSliceStagePlan {
     pub(super) parameter_bytes: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyResourceInputs {
     pub(super) native_context_length: u32,
     pub(super) kv_bytes_per_token: u64,
+    pub(super) recurrent_bytes_per_sequence_by_layer: Vec<u64>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) parallel_override: Option<usize>,
 }
@@ -212,7 +213,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     );
 
     let participant_by_id = participant_index_by_id(participants);
-    let plan_input = runtime_slice_plan_input(package, participants, resources);
+    let plan_input = runtime_slice_plan_input(package, participants, resources.clone());
     let plan = plan_runtime_slice_topology_result(
         SplitPlanAttempt {
             topology_id,
@@ -357,8 +358,8 @@ fn runtime_slice_plan_input(
         model_weight_bytes: package.source_model_bytes,
         layer_weight_bytes: package_layer_weight_bytes(package),
         kv_bytes_per_token: resources.kv_bytes_per_token,
-        recurrent_bytes_per_sequence_by_layer: Vec::new(),
-        reserved_sequence_ids: 16,
+        recurrent_bytes_per_sequence_by_layer: resources.recurrent_bytes_per_sequence_by_layer,
+        reserved_sequence_ids: 0,
         context_length_override: resources.ctx_size_override,
         parallel_lanes_override: resources.parallel_override,
         target_decode_tpot_ms: Some(DEFAULT_TARGET_DECODE_TPOT_MS),
@@ -795,6 +796,7 @@ mod tests {
             SplitTopologyResourceInputs {
                 native_context_length: 65_536,
                 kv_bytes_per_token: 16 * 1024,
+                recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
             },
@@ -824,6 +826,7 @@ mod tests {
             SplitTopologyResourceInputs {
                 native_context_length: 1,
                 kv_bytes_per_token: 1,
+                recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
             },
@@ -858,6 +861,7 @@ mod tests {
             SplitTopologyResourceInputs {
                 native_context_length: 1,
                 kv_bytes_per_token: 1,
+                recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
             },
@@ -900,6 +904,7 @@ mod tests {
             SplitTopologyResourceInputs {
                 native_context_length: 262_144,
                 kv_bytes_per_token: 64 * 1024,
+                recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
             },
@@ -952,6 +957,7 @@ mod tests {
             SplitTopologyResourceInputs {
                 native_context_length: 131_072,
                 kv_bytes_per_token: 1024,
+                recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
             },

@@ -12,14 +12,13 @@ use skippy_protocol::{
 use skippy_runtime::SamplingConfig;
 use tokio::sync::Semaphore;
 
-use crate::binary_transport::DecodeFrameBatcher;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
-use crate::frontend::decode_batcher::DecodeBatcher;
 use crate::frontend::generation::{
     LocalGeneration, OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds, StageOpenAiBackend,
     TokenControl,
 };
+use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::local_generation::{
     linear_proposal_allowed, native_mtp_dispatch_counts_for_test, post_decode_checkpoint_tokens,
     prompt_fits_single_prefill_sample,
@@ -155,6 +154,8 @@ fn recurrent_test_backend(
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
+    let iteration_scheduler =
+        IterationScheduler::new(runtime.clone(), &config, 1, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         config,
@@ -178,8 +179,7 @@ fn recurrent_test_backend(
         generation_receipt: None,
         linear_proposal_ingress: None,
         kv: Some(kv),
-        decode_batcher: DecodeBatcher::new(runtime.clone(), 1),
-        decode_frame_batcher: DecodeFrameBatcher::new(runtime, 1),
+        iteration_scheduler,
     };
     Ok((backend, speculative))
 }
@@ -498,8 +498,8 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     let sink = Arc::new(RecordingReceiptSink::default());
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
-    let decode_batcher = DecodeBatcher::new(runtime.clone(), 1);
-    let decode_frame_batcher = DecodeFrameBatcher::new(runtime.clone(), 1);
+    let iteration_scheduler =
+        IterationScheduler::new(runtime.clone(), &config, 1, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         config,
@@ -523,8 +523,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         generation_receipt: Some(GenerationReceiptConfig::new(sink.clone())),
         linear_proposal_ingress: None,
         kv: None,
-        decode_batcher,
-        decode_frame_batcher,
+        iteration_scheduler,
     };
     let sampling = SamplingConfig::default();
     // A multi-token prompt takes the whole-prompt prefill path. Keep this

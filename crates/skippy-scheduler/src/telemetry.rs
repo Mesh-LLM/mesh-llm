@@ -5,6 +5,7 @@ pub struct SchedulerMetrics {
     pub preempted: u64,
     pub finished: u64,
     pub failed: u64,
+    pub cancelled: u64,
     pub rejected_overload: u64,
     pub prefill_tokens: u64,
     pub recompute_tokens: u64,
@@ -26,4 +27,7 @@ pub struct IterationTelemetry {
     pub recompute_tokens: usize,
     pub decode_tokens: usize,
     pub component_used_bytes: Vec<(String, u64)>,
+    pub component_available_bytes: Vec<(String, u64)>,
+    pub prefix_hits: u64,
+    pub prefix_misses: u64,
 }

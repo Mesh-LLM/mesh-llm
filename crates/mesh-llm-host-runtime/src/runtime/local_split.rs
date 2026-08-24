@@ -257,6 +257,8 @@ pub(super) async fn start_runtime_split_model(
         topology_resources: SplitTopologyResourceInputs {
             native_context_length: compact_meta.context_length,
             kv_bytes_per_token,
+            recurrent_bytes_per_sequence_by_layer: compact_meta
+                .recurrent_bytes_per_configured_lane_by_layer(),
             ctx_size_override: spec.ctx_size_override,
             parallel_override: spec.parallel_override,
         },
@@ -317,6 +319,8 @@ async fn prepare_split_runtime_start(
     let resources = SplitTopologyResourceInputs {
         native_context_length: compact_meta.context_length,
         kv_bytes_per_token,
+        recurrent_bytes_per_sequence_by_layer: compact_meta
+            .recurrent_bytes_per_configured_lane_by_layer(),
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
     };

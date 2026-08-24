@@ -546,8 +546,12 @@ mod tests {
             projector_path: None,
             stage_id: "stage-final".to_string(),
             stage_index: 1,
-            layer_start: 78,
-            layer_end: 79,
+            // GLM-DSA stages must begin on a full-indexer layer. Layer 78 is
+            // the auxiliary next-token head rather than a base transformer
+            // layer, so the smallest valid final-stage fixture is 74..78;
+            // native MTP loading retains layer 78's nextn tensors alongside it.
+            layer_start: 74,
+            layer_end: 78,
             ctx_size: 128,
             lane_count: 1,
             n_batch: Some(1),
@@ -579,8 +583,8 @@ mod tests {
         Some((package_path, config))
     }
 
-    fn glm52_mtp_input() -> ActivationFrame {
-        let hidden_bytes = 6144 * std::mem::size_of::<f32>();
+    fn glm52_mtp_input(token_count: u32) -> ActivationFrame {
+        let hidden_bytes = 6144 * token_count as usize * std::mem::size_of::<f32>();
         ActivationFrame {
             desc: ActivationDesc {
                 version: 1,
@@ -588,8 +592,8 @@ mod tests {
                 layout: RuntimeActivationLayout::TokenMajor,
                 producer_stage_index: 0,
                 layer_start: 0,
-                layer_end: 78,
-                token_count: 1,
+                layer_end: 74,
+                token_count,
                 sequence_count: 1,
                 payload_bytes: hidden_bytes as u64,
                 flags: 0,
@@ -614,7 +618,7 @@ mod tests {
         )?
         .expect("GLM final stage should load from the package");
         let mut runtime = runtime.lock().expect("runtime mutex poisoned");
-        let input = glm52_mtp_input();
+        let input = glm52_mtp_input(1);
         let sampling = SamplingConfig {
             temperature: 0.0,
             ..SamplingConfig::default()
@@ -626,6 +630,17 @@ mod tests {
         assert!(predicted >= 0);
         assert_eq!(draft.token_ids.len(), 1);
         assert!(draft.token_ids[0] >= 0);
+        let verify_inputs = [predicted, draft.token_ids[0]];
+        let (verified, _next_draft, _output) = runtime.verify_frame_sampled(
+            "smoke",
+            &verify_inputs,
+            Some(&sampling),
+            Some(&glm52_mtp_input(2)),
+            0,
+            1,
+        )?;
+        assert!(!verified.is_empty());
+        runtime.retire_verify_checkpoint("smoke", 1, 2)?;
         Ok(())
     }
 
@@ -652,7 +667,7 @@ mod tests {
             "disabled-mtp",
             1,
             Some(&sampling),
-            Some(&glm52_mtp_input()),
+            Some(&glm52_mtp_input(1)),
             0,
             1,
         )?;
@@ -717,7 +732,7 @@ mod tests {
             "external-mtp",
             1,
             Some(&sampling),
-            Some(&glm52_mtp_input()),
+            Some(&glm52_mtp_input(1)),
             0,
             1,
         )?;

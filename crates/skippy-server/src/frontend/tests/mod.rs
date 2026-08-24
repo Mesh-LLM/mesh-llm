@@ -2,12 +2,12 @@ use super::*;
 
 pub(super) use super::{
     admission::GenerationTokenBudget,
-    decode_batcher::DecodeBatcher,
+    iteration_scheduler::IterationScheduler,
     prefill::{
         PrefillChunkObservation, PrefillChunkPolicy, PrefillChunkPolicyArgs, PrefillChunkSchedule,
     },
 };
-pub(super) use crate::binary_transport::{DecodeFrameBatcher, WireCondition};
+pub(super) use crate::binary_transport::WireCondition;
 pub(super) use crate::kv_integration::PrefillKvIdentity;
 pub(super) use crate::kv_integration::{KvStageIntegration, proactive_eviction_attrs};
 pub(super) use crate::runtime_state::load_runtime;

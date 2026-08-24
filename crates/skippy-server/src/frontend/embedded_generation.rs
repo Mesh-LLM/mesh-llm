@@ -14,9 +14,7 @@ use crate::frontend::speculative::{
     OpenAiSpeculativeStats, classify_verify_window, propose_configured_ngram_tokens,
     verify_checkpoint_no_longer_needed, verify_inputs_for_proposals,
 };
-use crate::frontend::util::{
-    ms_to_us, openai_backend_error, openai_io_error, saturating_u32, token_is_eog_with_runtime,
-};
+use crate::frontend::util::{ms_to_us, openai_backend_error, openai_io_error, saturating_u32};
 use crate::frontend::wire_messages::{
     OpenAiPrefillChunk, ReusableDecodeMessage, ReusableDecodeMessageArgs, VerifyWindowMessageArgs,
     embedded_prefill_message, embedded_verify_window_message, generation_config_message,
@@ -274,41 +272,45 @@ impl StageOpenAiBackend {
                                         .unwrap_or(u64::MAX),
                                 ),
                             )?;
-                            let lock_timer = PhaseTimer::start();
-                            let mut runtime = self
-                                .runtime
-                                .lock()
-                                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-                            let lock_wait_ms = lock_timer.elapsed_ms();
-                            prefill_runtime_lock_wait_ms += lock_wait_ms;
+                            let scheduler_session_key = session_key.clone();
+                            let scheduler_message = message.clone();
+                            let scheduler_chunk = chunk.to_vec();
+                            let native_mtp_enabled = request.native_mtp_enabled;
+                            let native_mtp_max_tokens =
+                                request.speculative.native_mtp.max_draft_tokens;
+                            let outcome = self.iteration_scheduler.execute_runtime_timed(
+                                "embedded-prefill",
+                                move |runtime| {
+                                    let sessions_before = runtime.session_stats();
+                                    let output = run_binary_stage_message(
+                                        runtime,
+                                        &scheduler_session_key,
+                                        &scheduler_message,
+                                        &scheduler_chunk,
+                                        None,
+                                        BinaryStageExecutionOptions::new(
+                                            false,
+                                            0,
+                                            native_mtp_enabled,
+                                        )
+                                        .with_native_mtp_max_tokens(native_mtp_max_tokens),
+                                    )
+                                    .map_err(openai_backend_error)?
+                                    .2;
+                                    let sessions_after = runtime.session_stats();
+                                    Ok((sessions_before, sessions_after, output))
+                                },
+                            )?;
+                            let (sessions_before, sessions_after, output) = outcome.value;
+                            prefill_runtime_lock_wait_ms += outcome.runtime_lock_wait_ms;
                             prefill_runtime_lock_wait_max_ms =
-                                prefill_runtime_lock_wait_max_ms.max(lock_wait_ms);
+                                prefill_runtime_lock_wait_max_ms.max(outcome.runtime_lock_wait_ms);
                             prefill_runtime_lock_acquires += 1;
-                            let lock_hold_timer = PhaseTimer::start();
-                            prefill_runtime_sessions_before
-                                .get_or_insert_with(|| runtime.session_stats());
-                            let output = run_binary_stage_message(
-                                &mut runtime,
-                                &session_key,
-                                &message,
-                                chunk,
-                                None,
-                                BinaryStageExecutionOptions::new(
-                                    false,
-                                    0,
-                                    request.native_mtp_enabled,
-                                )
-                                .with_native_mtp_max_tokens(
-                                    request.speculative.native_mtp.max_draft_tokens,
-                                ),
-                            )
-                            .map_err(openai_backend_error)?
-                            .2;
-                            prefill_runtime_sessions_after = Some(runtime.session_stats());
-                            let lock_hold_ms = lock_hold_timer.elapsed_ms();
-                            prefill_runtime_lock_hold_ms += lock_hold_ms;
+                            prefill_runtime_sessions_before.get_or_insert(sessions_before);
+                            prefill_runtime_sessions_after = Some(sessions_after);
+                            prefill_runtime_lock_hold_ms += outcome.runtime_lock_hold_ms;
                             prefill_runtime_lock_hold_max_ms =
-                                prefill_runtime_lock_hold_max_ms.max(lock_hold_ms);
+                                prefill_runtime_lock_hold_max_ms.max(outcome.runtime_lock_hold_ms);
                             output
                         }
                     };
@@ -1118,7 +1120,17 @@ impl StageOpenAiBackend {
                             &target_predictions,
                             decoded_tokens,
                             request.max_tokens as usize,
-                            |token| token_is_eog_with_runtime(&self.runtime, token),
+                            |token| {
+                                self.iteration_scheduler.execute_runtime(
+                                    "embedded-token-eog",
+                                    move |runtime| {
+                                        runtime
+                                            .model
+                                            .token_is_eog(token)
+                                            .map_err(openai_backend_error)
+                                    },
+                                )
+                            },
                         )?;
                         let fully_accepted_window = !native_mtp_verify_decision.rejected
                             && native_mtp_verify_decision.accepted_proposal_tokens
@@ -1454,7 +1466,17 @@ impl StageOpenAiBackend {
                             &verify.reply.predicted_tokens,
                             decoded_tokens,
                             request.max_tokens as usize,
-                            |token| token_is_eog_with_runtime(&self.runtime, token),
+                            |token| {
+                                self.iteration_scheduler.execute_runtime(
+                                    "embedded-token-eog",
+                                    move |runtime| {
+                                        runtime
+                                            .model
+                                            .token_is_eog(token)
+                                            .map_err(openai_backend_error)
+                                    },
+                                )
+                            },
                         )?;
                         let checkpoint_no_longer_needed = verify_checkpoint_no_longer_needed(
                             decision.commit_count,
@@ -1604,18 +1626,17 @@ impl StageOpenAiBackend {
                     decode_message.update(decode_step_index, current)?
                 };
                 let stage0_timer = PhaseTimer::start();
-                let batch_outcome = self
-                    .decode_frame_batcher
-                    .decode(
-                        &session_key,
-                        u64::try_from(message.pos_start).map_err(|_| {
-                            OpenAiError::backend("negative authoritative decode position")
-                        })?,
-                        current,
-                        request.sampling.enabled.then_some(request.sampling),
-                        None,
-                    )
-                    .map_err(openai_backend_error)?;
+                let batch_outcome = self.iteration_scheduler.execute_frame_iteration(
+                    &session_key,
+                    u64::try_from(message.pos_start).map_err(|_| {
+                        OpenAiError::backend("negative authoritative decode position")
+                    })?,
+                    &[current],
+                    &[],
+                    request.sampling.enabled.then_some(request.sampling),
+                    None,
+                    true,
+                )?;
                 if let Some(align) = batch_outcome.session_alignment {
                     let mut attrs = self.openai_attrs(request.ids);
                     attrs.insert(

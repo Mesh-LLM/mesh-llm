@@ -2,7 +2,6 @@ use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
 
 mod admission;
 mod backend;
-mod decode_batcher;
 mod decode_scheduler;
 mod embedded_execution;
 mod embedded_generation;
@@ -10,6 +9,7 @@ mod generation;
 mod generation_flow;
 mod generation_receipt;
 mod guardrails;
+pub(crate) mod iteration_scheduler;
 mod linear_proposal;
 mod local_generation;
 mod native_mtp;

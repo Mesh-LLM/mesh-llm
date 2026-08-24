@@ -27,7 +27,6 @@ use crate::frontend::wire_messages::generation_config_message;
 use crate::frontend::wire_messages::multimodal_prefill_message;
 use crate::frontend::{GenerationCommit, GenerationStart};
 use crate::kv_integration::proactive_eviction_attrs;
-use crate::kv_integration::proactive_eviction_error_kind;
 use anyhow::anyhow;
 use openai_frontend::ChatCompletionRequest;
 use openai_frontend::OpenAiError;
@@ -123,31 +122,47 @@ impl StageOpenAiBackend {
         let session_id = ids.session_label.clone();
         let prefill_timer = PhaseTimer::start();
         let (prefill, mut token_signal, mut signal_window) = {
-            let lock_timer = PhaseTimer::start();
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            let lock_wait_ms = lock_timer.elapsed_ms();
-            if !runtime.has_media_projector() {
-                return Err(OpenAiError::invalid_request(
-                    "multimodal request requires a configured projector",
-                ));
-            }
-            let runtime_sessions_before = runtime.session_stats();
-            let lock_hold_timer = PhaseTimer::start();
-            let prefill = runtime
-                .prefill_media(
-                    &session_id,
-                    &prompt.text,
-                    &prompt.media,
-                    sampling.enabled.then_some(&sampling),
-                )
-                .map_err(openai_backend_error)?;
-            let token_signal = runtime.last_token_signal(&session_id).ok();
-            let signal_window = runtime.signal_window(&session_id, 16).ok();
-            let runtime_sessions_after = runtime.session_stats();
-            let runtime_lock_hold_ms = lock_hold_timer.elapsed_ms();
+            let scheduler_session_id = session_id.clone();
+            let scheduler_prompt = prompt.clone();
+            let scheduler_sampling = sampling.clone();
+            let outcome = self.iteration_scheduler.execute_runtime_timed(
+                "openai-media-prefill",
+                move |runtime| {
+                    if !runtime.has_media_projector() {
+                        return Err(OpenAiError::invalid_request(
+                            "multimodal request requires a configured projector",
+                        ));
+                    }
+                    let runtime_sessions_before = runtime.session_stats();
+                    let prefill = runtime
+                        .prefill_media(
+                            &scheduler_session_id,
+                            &scheduler_prompt.text,
+                            &scheduler_prompt.media,
+                            scheduler_sampling.enabled.then_some(&scheduler_sampling),
+                        )
+                        .map_err(openai_backend_error)?;
+                    let token_signal = runtime.last_token_signal(&scheduler_session_id).ok();
+                    let signal_window = runtime.signal_window(&scheduler_session_id, 16).ok();
+                    let runtime_sessions_after = runtime.session_stats();
+                    Ok((
+                        prefill,
+                        token_signal,
+                        signal_window,
+                        runtime_sessions_before,
+                        runtime_sessions_after,
+                    ))
+                },
+            )?;
+            let lock_wait_ms = outcome.runtime_lock_wait_ms;
+            let runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+            let (
+                prefill,
+                token_signal,
+                signal_window,
+                runtime_sessions_before,
+                runtime_sessions_after,
+            ) = outcome.value;
             let mut attrs = self.openai_attrs(&ids);
             attrs.insert(
                 "llama_stage.prefill_token_count".to_string(),
@@ -203,33 +218,33 @@ impl StageOpenAiBackend {
         let mut proactive_evicted_tokens = 0_u64;
         let mut proactive_eviction_error = None;
         if let Some(kv) = self.kv.as_ref() {
-            match self.runtime.lock() {
-                Ok(mut runtime) => {
-                    match kv.evict_resident_prefix_for_decode_batch(&mut runtime, &session_id) {
-                        Ok(eviction) => {
-                            proactive_eviction_status = if eviction.evicted_entries > 0 {
-                                "evicted"
-                            } else {
-                                "noop"
-                            };
-                            proactive_eviction_target_tokens = eviction.target_tokens;
-                            proactive_evicted_entries = eviction.evicted_entries;
-                            proactive_evicted_tokens = eviction.evicted_tokens;
-                        }
-                        Err(error) => {
-                            proactive_eviction_status = "error";
-                            proactive_eviction_error_kind_attr =
-                                Some(proactive_eviction_error_kind(&error));
-                            proactive_eviction_error = Some(error.context(
-                                "evict resident-prefix KV before multimodal OpenAI decode",
-                            ));
-                        }
-                    }
+            let scheduler_kv = Arc::clone(kv);
+            let scheduler_session_id = session_id.clone();
+            match self.iteration_scheduler.execute_runtime(
+                "openai-proactive-eviction",
+                move |runtime| {
+                    scheduler_kv
+                        .evict_resident_prefix_for_decode_batch(runtime, &scheduler_session_id)
+                        .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))
+                },
+            ) {
+                Ok(eviction) => {
+                    proactive_eviction_status = if eviction.evicted_entries > 0 {
+                        "evicted"
+                    } else {
+                        "noop"
+                    };
+                    proactive_eviction_target_tokens = eviction.target_tokens;
+                    proactive_evicted_entries = eviction.evicted_entries;
+                    proactive_evicted_tokens = eviction.evicted_tokens;
                 }
-                Err(_) => {
+                Err(error) => {
                     proactive_eviction_status = "error";
-                    proactive_eviction_error_kind_attr = Some("runtime_lock_poisoned");
-                    proactive_eviction_error = Some(anyhow!("runtime lock poisoned"));
+                    proactive_eviction_error_kind_attr = Some("scheduler_runtime_error");
+                    proactive_eviction_error = Some(
+                        anyhow!(error.to_string())
+                            .context("evict resident-prefix KV before multimodal OpenAI decode"),
+                    );
                 }
             }
         }
@@ -326,28 +341,48 @@ impl StageOpenAiBackend {
                 let signal_window_next;
                 let decode_step = decoded_tokens;
                 current = {
-                    let lock_timer = PhaseTimer::start();
-                    let mut runtime = self
-                        .runtime
-                        .lock()
-                        .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-                    let lock_wait_ms = lock_timer.elapsed_ms();
-                    token_runtime_lock_wait_ms = lock_wait_ms;
-                    runtime_lock_wait_ms += lock_wait_ms;
-                    runtime_lock_wait_max_ms = runtime_lock_wait_max_ms.max(lock_wait_ms);
+                    let scheduler_session_id = session_id.clone();
+                    let scheduler_sampling = sampling.clone();
+                    let outcome = self.iteration_scheduler.execute_runtime_timed(
+                        "openai-media-decode",
+                        move |runtime| {
+                            let sessions_before = runtime.session_stats();
+                            let predicted = runtime
+                                .decode_sampled(
+                                    &scheduler_session_id,
+                                    current,
+                                    scheduler_sampling.enabled.then_some(&scheduler_sampling),
+                                )
+                                .map_err(openai_backend_error)?;
+                            let token_signal =
+                                runtime.last_token_signal(&scheduler_session_id).ok();
+                            let signal_window =
+                                runtime.signal_window(&scheduler_session_id, 16).ok();
+                            let sessions_after = runtime.session_stats();
+                            Ok((
+                                predicted,
+                                token_signal,
+                                signal_window,
+                                sessions_before,
+                                sessions_after,
+                            ))
+                        },
+                    )?;
+                    token_runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+                    runtime_lock_wait_ms += token_runtime_lock_wait_ms;
+                    runtime_lock_wait_max_ms =
+                        runtime_lock_wait_max_ms.max(token_runtime_lock_wait_ms);
                     runtime_lock_acquires += 1;
-                    let hold_timer = PhaseTimer::start();
-                    runtime_sessions_before.get_or_insert_with(|| runtime.session_stats());
-                    let predicted = runtime
-                        .decode_sampled(&session_id, current, sampling.enabled.then_some(&sampling))
-                        .map_err(openai_backend_error)?;
-                    token_signal_next = runtime.last_token_signal(&session_id).ok();
-                    signal_window_next = runtime.signal_window(&session_id, 16).ok();
-                    runtime_sessions_after = Some(runtime.session_stats());
-                    token_runtime_lock_hold_ms = hold_timer.elapsed_ms();
+                    token_runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
                     runtime_lock_hold_ms += token_runtime_lock_hold_ms;
                     runtime_lock_hold_max_ms =
                         runtime_lock_hold_max_ms.max(token_runtime_lock_hold_ms);
+                    let (predicted, next_signal, next_window, sessions_before, sessions_after) =
+                        outcome.value;
+                    runtime_sessions_before.get_or_insert(sessions_before);
+                    runtime_sessions_after = Some(sessions_after);
+                    token_signal_next = next_signal;
+                    signal_window_next = next_window;
                     predicted
                 };
                 token_signal = token_signal_next;
@@ -480,24 +515,31 @@ impl StageOpenAiBackend {
         let result = (|| {
             let prefill_timer = PhaseTimer::start();
             let prefill = {
-                let lock_timer = PhaseTimer::start();
-                let mut runtime = self
-                    .runtime
-                    .lock()
-                    .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-                let lock_wait_ms = lock_timer.elapsed_ms();
-                if !runtime.has_media_projector() {
-                    return Err(OpenAiError::invalid_request(
-                        "multimodal request requires a configured projector",
-                    ));
-                }
-                let runtime_sessions_before = runtime.session_stats();
-                let lock_hold_timer = PhaseTimer::start();
-                let prefill = runtime
-                    .prefill_media_frame(&session_key, &request.prompt.text, &request.prompt.media)
-                    .map_err(openai_backend_error)?;
-                let runtime_sessions_after = runtime.session_stats();
-                let runtime_lock_hold_ms = lock_hold_timer.elapsed_ms();
+                let scheduler_session_key = session_key.clone();
+                let scheduler_prompt = request.prompt.clone();
+                let outcome = self.iteration_scheduler.execute_runtime_timed(
+                    "embedded-media-prefill",
+                    move |runtime| {
+                        if !runtime.has_media_projector() {
+                            return Err(OpenAiError::invalid_request(
+                                "multimodal request requires a configured projector",
+                            ));
+                        }
+                        let runtime_sessions_before = runtime.session_stats();
+                        let prefill = runtime
+                            .prefill_media_frame(
+                                &scheduler_session_key,
+                                &scheduler_prompt.text,
+                                &scheduler_prompt.media,
+                            )
+                            .map_err(openai_backend_error)?;
+                        let runtime_sessions_after = runtime.session_stats();
+                        Ok((prefill, runtime_sessions_before, runtime_sessions_after))
+                    },
+                )?;
+                let lock_wait_ms = outcome.runtime_lock_wait_ms;
+                let runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+                let (prefill, runtime_sessions_before, runtime_sessions_after) = outcome.value;
                 let mut attrs = self.openai_attrs(&request.ids);
                 attrs.insert(
                     "llama_stage.prefill_token_count".to_string(),
@@ -729,18 +771,17 @@ impl StageOpenAiBackend {
                 let message = decode_message.update(decode_input_index, current)?;
                 let token_timer = PhaseTimer::start();
                 let stage0_timer = PhaseTimer::start();
-                let batch_outcome = self
-                    .decode_frame_batcher
-                    .decode(
-                        &session_key,
-                        u64::try_from(message.pos_start).map_err(|_| {
-                            OpenAiError::backend("negative authoritative decode position")
-                        })?,
-                        current,
-                        request.sampling.enabled.then_some(&request.sampling),
-                        None,
-                    )
-                    .map_err(openai_backend_error)?;
+                let batch_outcome = self.iteration_scheduler.execute_frame_iteration(
+                    &session_key,
+                    u64::try_from(message.pos_start).map_err(|_| {
+                        OpenAiError::backend("negative authoritative decode position")
+                    })?,
+                    &[current],
+                    &[],
+                    request.sampling.enabled.then_some(&request.sampling),
+                    None,
+                    true,
+                )?;
                 if let Some(alignment) = batch_outcome.session_alignment {
                     let mut attrs = self.openai_attrs(&request.ids);
                     attrs.insert(
@@ -906,38 +947,44 @@ impl StageOpenAiBackend {
                 ))
             }
         });
-        let lock_timer = PhaseTimer::start();
-        if let Ok(mut runtime) = self.runtime.lock() {
-            let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-            if let Ok(drop_stats) = runtime.drop_session_timed(&session_key) {
-                let mut attrs = self.openai_attrs(&request.ids);
-                attrs.insert(
-                    "llama_stage.runtime_lock_wait_ms".to_string(),
-                    json!(runtime_lock_wait_ms),
-                );
-                attrs.insert(
-                    "llama_stage.session_reset_ms".to_string(),
-                    json!(drop_stats.reset_ms),
-                );
-                attrs.insert(
-                    "llama_stage.session_reset".to_string(),
-                    json!(drop_stats.reset_session),
-                );
-                attrs.insert(
-                    "llama_stage.lane_discarded".to_string(),
-                    json!(drop_stats.lane_discarded),
-                );
-                if let Some(reason) = drop_stats.lane_discard_reason.as_deref() {
-                    attrs.insert("llama_stage.lane_discard_reason".to_string(), json!(reason));
-                }
-                Self::insert_runtime_session_stats(
-                    &mut attrs,
-                    "llama_stage.runtime_sessions_after",
-                    &drop_stats.stats_after,
-                );
-                self.telemetry
-                    .emit_debug("stage.openai_session_stop", attrs);
+        let scheduler_session_key = session_key.clone();
+        if let Ok(outcome) = self.iteration_scheduler.execute_runtime_timed(
+            "openai-embedded-session-stop",
+            move |runtime| {
+                runtime
+                    .drop_session_timed(&scheduler_session_key)
+                    .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))
+            },
+        ) {
+            let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+            let drop_stats = outcome.value;
+            let mut attrs = self.openai_attrs(&request.ids);
+            attrs.insert(
+                "llama_stage.runtime_lock_wait_ms".to_string(),
+                json!(runtime_lock_wait_ms),
+            );
+            attrs.insert(
+                "llama_stage.session_reset_ms".to_string(),
+                json!(drop_stats.reset_ms),
+            );
+            attrs.insert(
+                "llama_stage.session_reset".to_string(),
+                json!(drop_stats.reset_session),
+            );
+            attrs.insert(
+                "llama_stage.lane_discarded".to_string(),
+                json!(drop_stats.lane_discarded),
+            );
+            if let Some(reason) = drop_stats.lane_discard_reason.as_deref() {
+                attrs.insert("llama_stage.lane_discard_reason".to_string(), json!(reason));
             }
+            Self::insert_runtime_session_stats(
+                &mut attrs,
+                "llama_stage.runtime_sessions_after",
+                &drop_stats.stats_after,
+            );
+            self.telemetry
+                .emit_debug("stage.openai_session_stop", attrs);
         }
         let lane_id = lane.id;
         let stop_result = stop_result.map_err(openai_io_error);

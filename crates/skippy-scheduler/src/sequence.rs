@@ -33,6 +33,11 @@ pub struct Sequence {
     pub max_tokens: u32,
     pub sampling: Option<SamplingConfig>,
     pub priority: u64,
+    /// Admission reservation for this request across scheduler memory
+    /// components. This is deliberately separate from `max_tokens`: the
+    /// client value is a generation ceiling, while serving admission reserves
+    /// bounded decode headroom plus the concrete prompt.
+    pub admission_tokens: usize,
     pub status: SequenceStatus,
     pub prefix_restore: Option<PrefixRestore>,
     pub admitted_at: Option<Instant>,
@@ -47,6 +52,9 @@ impl Sequence {
         sampling: Option<SamplingConfig>,
         priority: u64,
     ) -> Self {
+        let admission_tokens = prompt_tokens
+            .len()
+            .saturating_add(usize::try_from(max_tokens).unwrap_or(usize::MAX));
         Self {
             id,
             prompt_tokens,
@@ -54,11 +62,17 @@ impl Sequence {
             max_tokens,
             sampling,
             priority,
+            admission_tokens,
             status: SequenceStatus::Waiting,
             prefix_restore: None,
             admitted_at: None,
             prefill_cursor: 0,
         }
+    }
+
+    pub fn with_admission_tokens(mut self, admission_tokens: usize) -> Self {
+        self.admission_tokens = admission_tokens.max(self.prompt_tokens.len());
+        self
     }
 
     pub fn with_prefix_restore(mut self, restore: PrefixRestore) -> Self {
