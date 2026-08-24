@@ -507,6 +507,7 @@ impl Scheduler {
             }
         }
 
+        let finished_count = finished.len();
         for id in finished {
             self.finish_sequence(id).await;
         }
@@ -524,9 +525,9 @@ impl Scheduler {
         metrics.prefill_tokens_total += prefill_tokens as u64;
         metrics.decode_tokens_total += decode_count as u64;
         metrics.sequences_preempted += preempted.len() as u64;
-        metrics.sequences_finished += finished.len() as u64;
+        metrics.sequences_finished += finished_count as u64;
 
-        (preempted.len(), finished.len())
+        (preempted.len(), finished_count)
     }
 
     fn check_kv_pressure(&self) -> bool {
