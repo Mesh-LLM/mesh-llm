@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 40;
+pub const ABI_VERSION_PATCH: u32 = 41;
 
 mod abi;
 mod activation;
@@ -50,7 +50,8 @@ pub use sampling::{
     TokenSignal,
 };
 pub use state::{
-    KV_PAGE_CODEC_ISWA_COMPOSITE_V1, KV_PAGE_CODEC_SINGLE_V1, KvPageComponentDesc, KvPageDesc,
+    KV_PAGE_CODEC_ISWA_COMPOSITE_V1, KV_PAGE_CODEC_SINGLE_V1, KV_PAGE_FLAG_HAS_K_IDX,
+    KV_PAGE_FLAG_V_TRANSPOSED, KvPageComponentDesc, KvPageDesc,
 };
 
 #[cfg(not(feature = "dynamic-runtime"))]

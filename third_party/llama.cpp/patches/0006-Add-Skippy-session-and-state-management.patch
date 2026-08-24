@@ -56,10 +56,10 @@ index 000000000..22b8e3590
 +#endif // SKIPPY_SIGNALS_H
 diff --git a/include/skippy/state.h b/include/skippy/state.h
 new file mode 100644
-index 000000000..9556bfd84
+index 000000000..fa5ca80be
 --- /dev/null
 +++ b/include/skippy/state.h
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,131 @@
 +#ifndef SKIPPY_STATE_H
 +#define SKIPPY_STATE_H
 +
@@ -71,6 +71,7 @@ index 000000000..9556bfd84
 +
 +enum skippy_kv_page_flag {
 +    SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
++    SKIPPY_KV_PAGE_FLAG_HAS_K_IDX         = 1 << 1,
 +};
 +
 +struct skippy_kv_page_desc {
@@ -85,6 +86,7 @@ index 000000000..9556bfd84
 +    uint32_t k_row_bytes;
 +    uint32_t v_row_bytes;
 +    uint32_t v_element_bytes;
++    uint32_t k_idx_row_bytes;
 +    uint64_t payload_bytes;
 +    uint64_t flags;
 +};
@@ -1920,6 +1922,3 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
--- 
-2.54.0 (Apple Git-157)
-
