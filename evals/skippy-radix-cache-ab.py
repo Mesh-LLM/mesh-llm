@@ -295,6 +295,7 @@ def write_config(
     cache_enabled: bool,
     ctx_size: int,
     lanes: int,
+    n_gpu_layers: int,
 ) -> None:
     config: dict[str, Any] = {
         "run_id": "skippy-radix-cache-ab",
@@ -308,7 +309,7 @@ def write_config(
         "layer_end": case.layer_end,
         "ctx_size": ctx_size,
         "lane_count": lanes,
-        "n_gpu_layers": 0,
+        "n_gpu_layers": n_gpu_layers,
         "filter_tensors_on_load": False,
         "load_mode": "runtime-slice",
         "bind_addr": "127.0.0.1:0",
@@ -418,6 +419,7 @@ def run_server_cell(
     blocks: int,
     ctx_size: int,
     lanes: int,
+    n_gpu_layers: int,
     native_build: Path,
     output_dir: Path,
 ) -> dict[str, Any]:
@@ -427,7 +429,15 @@ def run_server_cell(
     cell_dir.mkdir(parents=True, exist_ok=True)
     config_path = cell_dir / "stage.json"
     log_path = cell_dir / "server.log"
-    write_config(harness, config_path, case, cache_enabled, ctx_size, lanes)
+    write_config(
+        harness,
+        config_path,
+        case,
+        cache_enabled,
+        ctx_size,
+        lanes,
+        n_gpu_layers,
+    )
     port = harness.free_port()
     cmd = [
         str(binary),
@@ -813,6 +823,12 @@ def main() -> int:
     parser.add_argument("--ctx-size", type=int, default=32768)
     parser.add_argument("--lanes", type=int, default=4)
     parser.add_argument(
+        "--n-gpu-layers",
+        type=int,
+        default=999,
+        help="model layers to offload to the selected accelerator (default: all)",
+    )
+    parser.add_argument(
         "--require-gates",
         action="store_true",
         help="exit non-zero unless correctness, hit, and divergent-prefix gates pass",
@@ -839,6 +855,7 @@ def main() -> int:
         "prefix_blocks": args.prefix_blocks,
         "ctx_size": args.ctx_size,
         "lanes": args.lanes,
+        "n_gpu_layers": args.n_gpu_layers,
     }
     all_results = []
     for case in cases:
@@ -863,6 +880,7 @@ def main() -> int:
                             args.prefix_blocks,
                             args.ctx_size,
                             args.lanes,
+                            args.n_gpu_layers,
                             args.native_build.resolve(),
                             case_dir,
                         )

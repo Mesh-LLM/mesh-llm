@@ -190,6 +190,7 @@ jobs:
             --prefix-blocks "$prefix_blocks" \
             --ctx-size 32768 \
             --lanes 4 \
+            --n-gpu-layers 999 \
             --require-gates
 
       - name: Publish benchmark summary

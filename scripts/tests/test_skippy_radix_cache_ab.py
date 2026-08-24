@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -59,6 +61,27 @@ def cell(version: str, cache: str, output: str, ttft: float) -> dict:
 
 
 class RadixCacheAbTest(unittest.TestCase):
+    def test_stage_config_offloads_model_layers_explicitly(self) -> None:
+        case = BENCH.ModelCase(
+            key="test",
+            family="test",
+            model_id="local/test",
+            model_path=Path("/tmp/test.gguf"),
+            layer_end=8,
+            payload="resident-kv",
+        )
+
+        class Harness:
+            @staticmethod
+            def model_sha256(_path: Path) -> str:
+                return "sha256"
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stage.json"
+            BENCH.write_config(Harness(), path, case, False, 4096, 2, 999)
+            config = json.loads(path.read_text())
+        self.assertEqual(config["n_gpu_layers"], 999)
+
     def test_divergent_prompts_are_unique_and_nonempty(self) -> None:
         first = BENCH.divergent_prompt("stable", 1, 0)
         second = BENCH.divergent_prompt("stable", 1, 1)
