@@ -206,8 +206,7 @@ pub(crate) fn redact_urls_in_text(text: &str) -> String {
                 let url_start = cursor + relative_start;
                 redacted.push_str(&word[cursor..url_start]);
 
-                let scheme_len = if word[url_start..]
-                    .as_bytes()
+                let scheme_len = if word.as_bytes()[url_start..]
                     .get(..b"https://".len())
                     .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"https://"))
                 {
