@@ -113,7 +113,8 @@
       "family": "llama",
       "status": "certified",
       "repo": "hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF",
-      "include": "*.gguf"
+      "include": "*.gguf",
+      "splits": "5,11"
     },
     {
       "llama_model": "qwen2",
@@ -136,7 +137,8 @@
       "status": "certified",
       "repo": "bartowski/Qwen_Qwen3-Coder-Next-GGUF",
       "include": "*IQ2_XS.gguf",
-      "recurrent": "all"
+      "recurrent": "all",
+      "splits": "16,32"
     },
     {
       "llama_model": "qwen35moe",
@@ -247,7 +249,8 @@
       "family": "gemma2",
       "status": "certified",
       "repo": "bartowski/gemma-2-2b-it-GGUF",
-      "include": "*Q4_K_M.gguf"
+      "include": "*Q4_K_M.gguf",
+      "splits": "9,17"
     },
     {
       "llama_model": "gemma3",
@@ -297,7 +300,8 @@
       "family": "deepseek2",
       "status": "certified",
       "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
-      "include": "*Q4_K_M.gguf"
+      "include": "*Q4_K_M.gguf",
+      "splits": "9,18"
     },
     {
       "llama_model": "deepseek2",
@@ -455,7 +459,8 @@
       "status": "certified",
       "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
       "include": "*Q4_K_M.gguf",
-      "recurrent": "all"
+      "recurrent": "all",
+      "splits": "8,16"
     },
     {
       "llama_model": "falcon",
