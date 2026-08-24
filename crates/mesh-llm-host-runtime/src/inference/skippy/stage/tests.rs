@@ -408,10 +408,45 @@ async fn binary_stage_ready_probe_waits_for_wire_handshake() {
     });
 
     let started = Instant::now();
-    wait_for_binary_stage_ready(bind_addr, Duration::from_secs(2))
+    let mut probe = start_binary_stage_ready_probe(bind_addr, Duration::from_secs(2));
+    (&mut probe.handle)
         .await
+        .expect("join readiness probe")
         .unwrap();
     assert!(started.elapsed() >= Duration::from_millis(50));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind_addr = listener.local_addr().unwrap();
+    let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+        accepted_tx.send(()).unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+    });
+
+    let state = StageControlState {
+        readiness_probe: Some(start_binary_stage_ready_probe(
+            bind_addr,
+            Duration::from_secs(900),
+        )),
+        ..Default::default()
+    };
+    let handle = spawn_stage_control_loop_with_state(state);
+    accepted_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("readiness probe connected to silent stage");
+
+    tokio::time::timeout(Duration::from_secs(3), handle.shutdown())
+        .await
+        .expect("shutdown must not wait for the readiness deadline")
+        .expect("stage control shutdown should succeed");
+
+    release_tx.send(()).unwrap();
     server.join().unwrap();
 }
 
