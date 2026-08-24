@@ -18,11 +18,11 @@ index 0911776cd..012aceb9a 100644
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/include/skippy/state.h b/include/skippy/state.h
-index 446da8dad..890fa5ae5 100644
+index 74f9ac52a..1c77c5450 100644
 --- a/include/skippy/state.h
 +++ b/include/skippy/state.h
-@@ -16,6 +16,33 @@ enum skippy_kv_page_flag {
-     SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
+@@ -17,6 +17,34 @@ enum skippy_kv_page_flag {
+     SKIPPY_KV_PAGE_FLAG_HAS_K_IDX         = 1 << 1,
  };
  
 +enum skippy_kv_page_codec {
@@ -47,6 +47,7 @@ index 446da8dad..890fa5ae5 100644
 +    uint32_t k_row_bytes;
 +    uint32_t v_row_bytes;
 +    uint32_t v_element_bytes;
++    uint32_t k_idx_row_bytes;
 +    uint64_t payload_offset;
 +    uint64_t payload_bytes;
 +    uint64_t flags;
@@ -55,8 +56,8 @@ index 446da8dad..890fa5ae5 100644
  /** @brief Describes the layout and ownership of an exported KV page payload. */
  struct skippy_kv_page_desc {
      uint32_t version;
-@@ -31,6 +58,9 @@ struct skippy_kv_page_desc {
-     uint32_t v_element_bytes;
+@@ -33,6 +61,9 @@ struct skippy_kv_page_desc {
+     uint32_t k_idx_row_bytes;
      uint64_t payload_bytes;
      uint64_t flags;
 +    uint32_t codec;
@@ -65,7 +66,7 @@ index 446da8dad..890fa5ae5 100644
  };
  
  /** @brief Exports the selected layer-range state for staged transfer. */
-@@ -112,7 +142,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
+@@ -114,7 +145,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
          size_t * out_bytes,
          struct skippy_error ** out_error);
  
@@ -75,7 +76,7 @@ index 446da8dad..890fa5ae5 100644
          struct skippy_session * session,
          const struct skippy_kv_page_desc * desc,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 117de97f9..8a3b72f4c 100644
+index fdbd1b518..3bc5ea5c5 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1447,6 +1447,26 @@ const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
@@ -105,7 +106,7 @@ index 117de97f9..8a3b72f4c 100644
  bool llama_kv_cache::stage_export_kv_page(
          llama_seq_id seq_id,
          int32_t layer_start,
-@@ -1607,12 +1627,14 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1620,12 +1640,14 @@ bool llama_kv_cache::stage_export_kv_page(
          return false;
      }
  
@@ -123,7 +124,7 @@ index 117de97f9..8a3b72f4c 100644
          }
      }
  
-@@ -1622,9 +1644,10 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1635,9 +1657,10 @@ bool llama_kv_cache::stage_export_kv_page(
                  continue;
              }
              auto * v = layer->v_stream[strm];
@@ -137,7 +138,7 @@ index 117de97f9..8a3b72f4c 100644
              }
          }
      } else {
-@@ -1635,10 +1658,11 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1648,10 +1671,11 @@ bool llama_kv_cache::stage_export_kv_page(
              auto * v = layer->v_stream[strm];
              const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
              for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
@@ -153,7 +154,7 @@ index 117de97f9..8a3b72f4c 100644
                  }
              }
          }
-@@ -1652,7 +1676,8 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1678,7 +1702,8 @@ bool llama_kv_cache::stage_import_kv_page(
          const skippy_kv_page_desc & desc,
          const void * input,
          size_t input_bytes,
@@ -163,7 +164,7 @@ index 117de97f9..8a3b72f4c 100644
      if (input == nullptr) {
          error = "input payload is required";
          return false;
-@@ -1663,7 +1688,7 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1689,7 +1714,7 @@ bool llama_kv_cache::stage_import_kv_page(
      }
      if (desc.layer_start < 0 ||
              desc.layer_end <= desc.layer_start ||
@@ -172,7 +173,7 @@ index 117de97f9..8a3b72f4c 100644
              desc.token_count == 0) {
          error = "invalid native KV page descriptor";
          return false;
-@@ -1748,6 +1773,9 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1778,6 +1803,9 @@ bool llama_kv_cache::stage_import_kv_page(
          error = "native KV page descriptor payload size is inconsistent";
          return false;
      }
@@ -182,7 +183,7 @@ index 117de97f9..8a3b72f4c 100644
  
      llama_ubatch ubatch = {};
      auto udata = std::make_shared<llama_ubatch::data_t>();
-@@ -1813,12 +1841,14 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1843,12 +1871,14 @@ bool llama_kv_cache::stage_import_kv_page(
      }
      apply_ubatch(sinfo, ubatch);
  
@@ -200,7 +201,7 @@ index 117de97f9..8a3b72f4c 100644
          }
      }
  
-@@ -1829,9 +1859,10 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1859,9 +1889,10 @@ bool llama_kv_cache::stage_import_kv_page(
                  continue;
              }
              auto * v = layer->v_stream[strm];
@@ -214,7 +215,7 @@ index 117de97f9..8a3b72f4c 100644
              }
          }
      } else {
-@@ -1842,10 +1873,11 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1872,10 +1903,11 @@ bool llama_kv_cache::stage_import_kv_page(
              auto * v = layer->v_stream[strm];
              const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
              for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
@@ -253,7 +254,7 @@ index 274ef4492..98dbcb198 100644
      //
      // graph_build API
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 2bfd88523..a5ab006aa 100644
+index 2bfd88523..5b64b97a9 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
 @@ -356,24 +356,14 @@ enum skippy_status skippy_import_recurrent_state(
@@ -284,7 +285,7 @@ index 2bfd88523..a5ab006aa 100644
          skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to import recurrent state");
          return SKIPPY_STATUS_RUNTIME_ERROR;
      }
-@@ -397,27 +387,140 @@ static llama_kv_cache * skippy_get_kv_cache(
+@@ -397,27 +387,142 @@ static llama_kv_cache * skippy_get_kv_cache(
      }
  
      if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
@@ -339,6 +340,7 @@ index 2bfd88523..a5ab006aa 100644
 +    component.k_row_bytes = page.k_row_bytes;
 +    component.v_row_bytes = page.v_row_bytes;
 +    component.v_element_bytes = page.v_element_bytes;
++    component.k_idx_row_bytes = page.k_idx_row_bytes;
 +    component.payload_offset = payload_offset;
 +    component.payload_bytes = page.payload_bytes;
 +    component.flags = page.flags;
@@ -360,6 +362,7 @@ index 2bfd88523..a5ab006aa 100644
 +    page.k_row_bytes = component.k_row_bytes;
 +    page.v_row_bytes = component.v_row_bytes;
 +    page.v_element_bytes = component.v_element_bytes;
++    page.k_idx_row_bytes = component.k_idx_row_bytes;
 +    page.payload_bytes = component.payload_bytes;
 +    page.flags = component.flags;
 +    page.codec = SKIPPY_KV_PAGE_CODEC_SINGLE_V1;
@@ -436,7 +439,7 @@ index 2bfd88523..a5ab006aa 100644
  enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -429,24 +532,24 @@ enum skippy_status skippy_export_kv_page(
+@@ -429,24 +534,24 @@ enum skippy_status skippy_export_kv_page(
          size_t output_capacity,
          size_t * out_bytes,
          struct skippy_error ** out_error) {
@@ -476,7 +479,7 @@ index 2bfd88523..a5ab006aa 100644
      if (!ok) {
          const bool too_small = out_bytes != nullptr && *out_bytes > output_capacity;
          const enum skippy_status status = too_small ? SKIPPY_STATUS_BUFFER_TOO_SMALL : SKIPPY_STATUS_RUNTIME_ERROR;
-@@ -457,46 +560,83 @@ enum skippy_status skippy_export_kv_page(
+@@ -457,46 +562,83 @@ enum skippy_status skippy_export_kv_page(
          skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "native KV page output buffer is too small");
          return SKIPPY_STATUS_BUFFER_TOO_SMALL;
      }
@@ -795,6 +798,3 @@ index 000000000..9ef80a6ce
 +
 +    return 0;
 +}
--- 
-2.54.0 (Apple Git-157)
-
