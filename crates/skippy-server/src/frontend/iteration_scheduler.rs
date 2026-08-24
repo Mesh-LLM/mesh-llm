@@ -136,6 +136,7 @@ struct SchedulerWorker {
     iteration_interval: Duration,
     telemetry: Option<Telemetry>,
     last_served_direct: bool,
+    last_emitted_lifecycle_counters: (u64, u64, u64, u64),
 }
 
 impl IterationScheduler {
@@ -204,6 +205,7 @@ impl IterationScheduler {
                     iteration_interval,
                     telemetry: Some(telemetry),
                     last_served_direct: false,
+                    last_emitted_lifecycle_counters: (0, 0, 0, 0),
                 }
                 .run();
             })
@@ -864,10 +866,28 @@ impl SchedulerWorker {
         }
     }
 
-    fn emit_step_telemetry(&self, step: &skippy_scheduler::IterationTelemetry, elapsed: Duration) {
-        let Some(telemetry) = self.telemetry.as_ref() else {
+    fn emit_step_telemetry(
+        &mut self,
+        step: &skippy_scheduler::IterationTelemetry,
+        elapsed: Duration,
+    ) {
+        if self.telemetry.is_none() {
             return;
-        };
+        }
+        let lifecycle_counters = (
+            step.finished,
+            step.failed,
+            step.cancelled,
+            step.rejected_overload,
+        );
+        let lifecycle_changed = lifecycle_counters != self.last_emitted_lifecycle_counters;
+        if lifecycle_changed {
+            self.last_emitted_lifecycle_counters = lifecycle_counters;
+        }
+        let telemetry = self
+            .telemetry
+            .as_ref()
+            .expect("telemetry presence checked above");
         let mut attrs = BTreeMap::from([
             (
                 "skippy.scheduler.iteration".to_string(),
@@ -910,23 +930,27 @@ impl SchedulerWorker {
                 json!(step.prefix_misses),
             ),
             (
-                "skippy.scheduler.finished".to_string(),
-                json!(step.finished),
-            ),
-            ("skippy.scheduler.failed".to_string(), json!(step.failed)),
-            (
-                "skippy.scheduler.cancelled".to_string(),
-                json!(step.cancelled),
-            ),
-            (
-                "skippy.scheduler.rejected_overload".to_string(),
-                json!(step.rejected_overload),
-            ),
-            (
                 "skippy.scheduler.step_ms".to_string(),
                 json!(elapsed.as_secs_f64() * 1_000.0),
             ),
         ]);
+        if lifecycle_changed {
+            attrs.extend([
+                (
+                    "skippy.scheduler.finished".to_string(),
+                    json!(step.finished),
+                ),
+                ("skippy.scheduler.failed".to_string(), json!(step.failed)),
+                (
+                    "skippy.scheduler.cancelled".to_string(),
+                    json!(step.cancelled),
+                ),
+                (
+                    "skippy.scheduler.rejected_overload".to_string(),
+                    json!(step.rejected_overload),
+                ),
+            ]);
+        }
         for (name, used) in &step.component_used_bytes {
             attrs.insert(
                 format!("skippy.scheduler.component.{name}.used_bytes"),
@@ -1262,6 +1286,7 @@ mod tests {
             iteration_interval: Duration::ZERO,
             telemetry: None,
             last_served_direct: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
         };
         let (reply_a, events_a) = std_mpsc::channel();
         let (reply_b, events_b) = std_mpsc::channel();
@@ -1363,6 +1388,7 @@ mod tests {
             iteration_interval: Duration::ZERO,
             telemetry: None,
             last_served_direct: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
         };
         let (reply, events) = std_mpsc::channel();
         worker.submit(ScheduledRequest {
@@ -1404,6 +1430,7 @@ mod tests {
                 iteration_interval: Duration::ZERO,
                 telemetry: None,
                 last_served_direct: false,
+                last_emitted_lifecycle_counters: (0, 0, 0, 0),
             }
             .run();
         });
@@ -1488,6 +1515,7 @@ mod tests {
                 iteration_interval: Duration::ZERO,
                 telemetry: None,
                 last_served_direct: false,
+                last_emitted_lifecycle_counters: (0, 0, 0, 0),
             }
             .run();
         });
