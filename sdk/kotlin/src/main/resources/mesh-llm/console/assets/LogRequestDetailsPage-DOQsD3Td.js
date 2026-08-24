@@ -1,0 +1,1 @@
+import{t as e}from"./jsx-runtime-BpzPEenQ.js";import{O as t,n,r}from"./log-search-hiEDDqzF.js";import{X as i,Y as a,q as o}from"./index-CsF5Z8OT.js";var s=e();function c(){let{requestId:e}=i({from:`/logs/$requestId`}),c=a({from:`/logs/$requestId`}),l=t.tryParse(e),u=l?r(l.toString(),c):n(c);return(0,s.jsx)(o,{replace:!0,search:u,to:`/logs`})}export{c as LogRequestDetailsPage};
