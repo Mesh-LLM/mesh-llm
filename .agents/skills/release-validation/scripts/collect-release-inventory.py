@@ -64,17 +64,48 @@ def require_local_tag(tag: str) -> str:
         ) from error
 
 
+# scripts/release.sh and RELEASE.md's manual publish path both write this exact
+# subject for the commit that bakes built/generated release artifacts (console
+# dist, SwiftPM manifest, version bump) onto the tag. The workflow_dispatch path
+# tags that prepared-source commit directly without pushing it to origin/main, so
+# every release tag -- prerelease or stable -- sits one documented commit ahead
+# of its main-line ancestor by design.
+RELEASE_PREPARE_SUBJECT_SUFFIX = ": prepare release source"
+
+
+def require_release_base(origin_main: str, tag_sha: str) -> str:
+    """Return the main-line commit a release tag was prepared from.
+
+    Fails closed unless every commit between that point and the tag itself is
+    the documented release-prepare commit.
+    """
+    release_base = git("merge-base", origin_main, tag_sha)
+    if release_base != tag_sha:
+        unexpected = [
+            commit
+            for commit in collect_commits(release_base, tag_sha)
+            if not commit["subject"].endswith(RELEASE_PREPARE_SUBJECT_SUFFIX)
+        ]
+        if unexpected:
+            detail = "; ".join(f"{c['sha'][:12]} {c['subject']!r}" for c in unexpected)
+            raise RuntimeError(
+                f"{tag_sha} diverges from origin/main (base {release_base}) with commits "
+                f"beyond the documented release-prepare step: {detail}"
+            )
+    return release_base
+
+
 def require_release_provenance(base_sha: str, head_sha: str) -> None:
     origin_main = git("rev-parse", "--verify", "origin/main^{commit}")
+    base_release_base = require_release_base(origin_main, base_sha)
+    head_release_base = require_release_base(origin_main, head_sha)
     if subprocess.run(
-        ["git", "merge-base", "--is-ancestor", head_sha, origin_main], check=False
-    ).returncode != 0:
-        raise RuntimeError(f"candidate {head_sha} is not reachable from origin/main")
-    if subprocess.run(
-        ["git", "merge-base", "--is-ancestor", base_sha, head_sha], check=False
+        ["git", "merge-base", "--is-ancestor", base_release_base, head_release_base],
+        check=False,
     ).returncode != 0:
         raise RuntimeError(
-            f"previous release commit {base_sha} is not an ancestor of candidate {head_sha}"
+            f"previous release commit {base_sha} (base {base_release_base}) is not an "
+            f"ancestor of candidate {head_sha} (base {head_release_base})"
         )
 
 
