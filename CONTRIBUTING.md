@@ -207,9 +207,9 @@ new jobs.
 | Manual dispatch | `manual-full` when invoked from the PR entrypoint | `main`-equivalent full validation from `ci.yml` |
 
 For `pr-ready`, docs-only changes select the quality contract slice. Regular
-`pr-draft` docs-only changes stop at the stable planner/gate results. UI,
-website, Rust, protocol, split-serving, model, backend, platform and SDK
-ownership selects the corresponding typed rows. CI-control and
+`pr-draft` docs-only changes stop at the stable planner/gate results. For
+`pr-ready`, UI, website, Rust, protocol, split-serving, model, backend, platform
+and SDK ownership selects the corresponding typed rows. CI-control and
 runner-infrastructure changes fail open to the control rows and supported
 product rows. Paths mapping only to documentation plus `ci-control` retain
 limited documentation routing instead of forcing all product rows. Unknown
