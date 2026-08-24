@@ -129,14 +129,23 @@ fn main() {
         println!("cargo:rustc-link-lib=static=mtmd");
         // Upstream links mtmd against vendor::hash PRIVATE, so the archive is
         // not propagated to consumers. It must follow libmtmd.a on the link
-        // line or hash_sha256_hex stays undefined.
-        if static_archive_exists(
+        // line or hash_sha256_hex stays undefined. mtmd without vendor-hash is
+        // not a degraded configuration to link anyway -- it is a guaranteed
+        // undefined symbol, so fail here with the cause rather than emitting a
+        // link line we know cannot resolve.
+        if !static_archive_exists(
             &build_dir,
             "vendor/hash/libvendor-hash.a",
             "vendor/hash/vendor-hash.lib",
         ) {
-            println!("cargo:rustc-link-lib=static=vendor-hash");
+            panic!(
+                "libmtmd is present in {} but vendor/hash/libvendor-hash.a is not; \
+                 mtmd requires vendor::hash for hash_sha256_hex. The llama.cpp \
+                 build or the restored static ABI artifact is incomplete.",
+                build_dir.display()
+            );
         }
+        println!("cargo:rustc-link-lib=static=vendor-hash");
     }
     println!("cargo:rustc-link-lib=static=llama-common");
     println!("cargo:rustc-link-lib=static=llama-common-base");
