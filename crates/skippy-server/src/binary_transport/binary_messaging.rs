@@ -97,18 +97,19 @@ impl ConnectionWorkers {
         self.0.push(worker);
     }
 
-    fn reap_finished(&mut self) {
+    fn reap_finished(&mut self) -> Result<()> {
         let mut index = 0;
         while index < self.0.len() {
             if self.0[index].task.is_finished() {
                 let worker = self.0.swap_remove(index);
                 if worker.task.join().is_err() {
-                    eprintln!("binary stage connection worker panicked");
+                    bail!("binary stage connection worker panicked");
                 }
             } else {
                 index += 1;
             }
         }
+        Ok(())
     }
 
     fn shutdown(mut self) -> Result<()> {
@@ -303,7 +304,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
 
     let accept_result = (|| -> Result<()> {
         while !shutdown.load(Ordering::SeqCst) {
-            connection_workers.reap_finished();
+            connection_workers.reap_finished()?;
             let (mut upstream, _) = match listener.accept() {
                 Ok(conn) => conn,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
