@@ -217,7 +217,13 @@ pub(crate) fn redact_urls_in_text(text: &str) -> String {
                 let after_scheme = url_start + scheme_len;
                 let url_end = http_url_start(&word[after_scheme..])
                     .map_or(word.len(), |next_start| after_scheme + next_start);
-                redacted.push_str(&redact_url_query(&word[url_start..url_end]));
+                let url_with_separator = &word[url_start..url_end];
+                let url_len = url_with_separator
+                    .trim_end_matches(['(', ')', '[', ']', '{', '}', ',', ';'])
+                    .len();
+                let (url, separator) = url_with_separator.split_at(url_len);
+                redacted.push_str(&redact_url_query(url));
+                redacted.push_str(separator);
                 cursor = url_end;
             }
             redacted.push_str(&word[cursor..]);
@@ -753,6 +759,18 @@ mod redaction_corpus_tests {
         );
         assert!(!cleaned.contains("alice:first"));
         assert!(!cleaned.contains("bob:second"));
+    }
+
+    #[test]
+    fn punctuation_between_query_bearing_urls_is_preserved() {
+        let text = "(https://host/v1?token=first),(https://host/v2?token=second)";
+        let cleaned = redact_urls_in_text(text);
+        assert_eq!(
+            cleaned,
+            "(https://host/v1?token=[REDACTED]),(https://host/v2?token=[REDACTED])"
+        );
+        assert!(!cleaned.contains("first"));
+        assert!(!cleaned.contains("second"));
     }
 
     #[test]
