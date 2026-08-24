@@ -35,6 +35,33 @@ async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
     );
 }
 
+#[tokio::test]
+async fn stage_control_shutdown_interrupts_an_active_request() {
+    let state = StageControlState::default();
+    let preparations = Arc::clone(&state.preparations);
+    let preparations_guard = preparations.lock().await;
+    let handle = spawn_stage_control_loop_with_state(state);
+    let (resp, _rx) = oneshot::channel();
+    handle
+        .sender()
+        .send(StageControlCommand {
+            request: StageControlRequest::StatusUpdate(preparation_status_from_load(
+                &load_request(),
+                StagePreparationState::Assigned,
+                None,
+            )),
+            resp,
+        })
+        .expect("control command accepted");
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    tokio::time::timeout(Duration::from_secs(1), handle.shutdown())
+        .await
+        .expect("shutdown must interrupt the active request")
+        .expect("stage control shutdown should succeed");
+    drop(preparations_guard);
+}
+
 fn load_request() -> StageLoadRequest {
     StageLoadRequest {
         topology_id: "topology-a".to_string(),

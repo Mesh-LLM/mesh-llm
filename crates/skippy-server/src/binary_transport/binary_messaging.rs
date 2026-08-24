@@ -126,6 +126,20 @@ impl ConnectionWorkers {
     }
 }
 
+fn finish_connection_workers(
+    accept_result: Result<()>,
+    connection_workers: ConnectionWorkers,
+) -> Result<()> {
+    let shutdown_result = connection_workers.shutdown();
+    match (accept_result, shutdown_result) {
+        (Ok(()), result) => result,
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(shutdown_error)) => Err(error.context(format!(
+            "connection worker shutdown also failed: {shutdown_error:#}"
+        ))),
+    }
+}
+
 pub async fn serve_binary(args: ServeBinaryArgs) -> Result<()> {
     serve_binary_stage(BinaryStageOptions::from_cli_args(args)?).await
 }
@@ -287,120 +301,129 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         wire_dtype,
     );
 
-    while !shutdown.load(Ordering::SeqCst) {
-        connection_workers.reap_finished();
-        let (mut upstream, _) = match listener.accept() {
-            Ok(conn) => conn,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(50));
-                continue;
-            }
-            Err(error) => return Err(error).context("accept binary stage connection"),
-        };
-        prepare_binary_stage_connection(&upstream)?;
-        let peer_addr = upstream.peer_addr().ok();
-        eprintln!(
-            "binary accepted connection: stage_id={} peer={peer_addr:?}",
-            config.stage_id
-        );
-        let config = config.clone();
-        let topology = topology.clone();
-        let runtime = runtime.clone();
-        let decode_frame_batcher = decode_frame_batcher.clone();
-        let kv = kv.clone();
-        let telemetry = telemetry.clone();
-        let warm_downstream = warm_downstream.clone();
-        let prediction_returns = prediction_returns.clone();
-        let prediction_return_sinks = prediction_return_sinks.clone();
-        let worker_control = Arc::new(ConnectionWorkerControl::default());
-        worker_control
-            .track(&upstream)
-            .context("track upstream binary stage connection")?;
-        let task_control = worker_control.clone();
-        let task = thread::spawn(move || {
-            let connection_result = (|| -> Result<()> {
-                eprintln!(
-                    "binary sending ready: stage_id={} peer={peer_addr:?}",
-                    config.stage_id
-                );
-                consume_optional_client_ready_hello(&mut upstream)
-                    .context("consume optional client ready hello")?;
-                send_ready(&mut upstream).context("failed to send binary ready")?;
-                upstream.flush().ok();
-                eprintln!(
-                    "binary sent ready: stage_id={} peer={peer_addr:?}",
-                    config.stage_id
-                );
-                let first_message = match read_stage_message(&mut upstream, activation_width) {
-                    Ok(message) => message,
-                    Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
-                    Err(error) => return Err(error.into()),
-                };
-                if first_message.kind == WireMessageKind::PredictionReturnOpen {
-                    if config.stage_index == 0 {
-                        return prediction_returns
-                            .handle_return_connection(first_message, upstream);
+    let accept_result = (|| -> Result<()> {
+        while !shutdown.load(Ordering::SeqCst) {
+            connection_workers.reap_finished();
+            let (mut upstream, _) = match listener.accept() {
+                Ok(conn) => conn,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                Err(error) => return Err(error).context("accept binary stage connection"),
+            };
+            prepare_binary_stage_connection(&upstream)?;
+            let peer_addr = upstream.peer_addr().ok();
+            eprintln!(
+                "binary accepted connection: stage_id={} peer={peer_addr:?}",
+                config.stage_id
+            );
+            let config = config.clone();
+            let topology = topology.clone();
+            let runtime = runtime.clone();
+            let decode_frame_batcher = decode_frame_batcher.clone();
+            let kv = kv.clone();
+            let telemetry = telemetry.clone();
+            let warm_downstream = warm_downstream.clone();
+            let prediction_returns = prediction_returns.clone();
+            let prediction_return_sinks = prediction_return_sinks.clone();
+            let worker_control = Arc::new(ConnectionWorkerControl::default());
+            worker_control
+                .track(&upstream)
+                .context("track upstream binary stage connection")?;
+            let task_control = worker_control.clone();
+            let task = thread::spawn(move || {
+                let connection_result = (|| -> Result<()> {
+                    eprintln!(
+                        "binary sending ready: stage_id={} peer={peer_addr:?}",
+                        config.stage_id
+                    );
+                    consume_optional_client_ready_hello(&mut upstream)
+                        .context("consume optional client ready hello")?;
+                    send_ready(&mut upstream).context("failed to send binary ready")?;
+                    upstream.flush().ok();
+                    eprintln!(
+                        "binary sent ready: stage_id={} peer={peer_addr:?}",
+                        config.stage_id
+                    );
+                    let first_message = match read_stage_message(&mut upstream, activation_width) {
+                        Ok(message) => message,
+                        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
+                        Err(error) => return Err(error.into()),
+                    };
+                    if first_message.kind == WireMessageKind::PredictionReturnOpen {
+                        if config.stage_index == 0 {
+                            return prediction_returns
+                                .handle_return_connection(first_message, upstream);
+                        }
+                        return prediction_return_sinks.insert_opened_sink(first_message, upstream);
                     }
-                    return prediction_return_sinks.insert_opened_sink(first_message, upstream);
+                    let downstream = take_ready_downstream(
+                        &config,
+                        &warm_downstream,
+                        downstream_connect_timeout_secs,
+                    )?;
+                    if let Some(stream) = downstream.as_ref() {
+                        task_control
+                            .track(stream)
+                            .context("track downstream binary stage connection")?;
+                    }
+                    handle_binary_connection(
+                        &config,
+                        topology.as_ref(),
+                        &runtime,
+                        &decode_frame_batcher,
+                        kv.as_ref(),
+                        &telemetry,
+                        &mut upstream,
+                        downstream,
+                        activation_width,
+                        wire_dtype,
+                        max_inflight,
+                        reply_credit_limit,
+                        async_prefill_forward,
+                        downstream_wire_condition,
+                        downstream_connect_timeout_secs,
+                        native_mtp_enabled,
+                        &prediction_return_sinks,
+                        first_message,
+                    )
+                })()
+                .context("binary stage connection failed");
+                if let Err(error) = connection_result {
+                    let mut attrs = lifecycle_attrs(&config);
+                    if let Some(peer_addr) = peer_addr {
+                        attrs.insert("llama_stage.peer_addr".to_string(), json!(peer_addr));
+                    }
+                    attrs.insert("llama_stage.error".to_string(), json!(error.to_string()));
+                    eprintln!("{error:#}");
+                    telemetry.emit("stage.binary_connection_error", attrs);
                 }
-                let downstream = take_ready_downstream(
-                    &config,
-                    &warm_downstream,
-                    downstream_connect_timeout_secs,
-                )?;
-                if let Some(stream) = downstream.as_ref() {
-                    task_control
-                        .track(stream)
-                        .context("track downstream binary stage connection")?;
-                }
-                handle_binary_connection(
-                    &config,
-                    topology.as_ref(),
-                    &runtime,
-                    &decode_frame_batcher,
-                    kv.as_ref(),
-                    &telemetry,
-                    &mut upstream,
-                    downstream,
-                    activation_width,
-                    wire_dtype,
-                    max_inflight,
-                    reply_credit_limit,
-                    async_prefill_forward,
-                    downstream_wire_condition,
-                    downstream_connect_timeout_secs,
-                    native_mtp_enabled,
-                    &prediction_return_sinks,
-                    first_message,
-                )
-            })()
-            .context("binary stage connection failed");
-            if let Err(error) = connection_result {
-                let mut attrs = lifecycle_attrs(&config);
-                if let Some(peer_addr) = peer_addr {
-                    attrs.insert("llama_stage.peer_addr".to_string(), json!(peer_addr));
-                }
-                attrs.insert("llama_stage.error".to_string(), json!(error.to_string()));
-                eprintln!("{error:#}");
-                telemetry.emit("stage.binary_connection_error", attrs);
-            }
-            task_control.clear();
-        });
-        connection_workers.push(ConnectionWorker {
-            control: worker_control,
-            task,
-        });
-    }
-    connection_workers.shutdown()
+                task_control.clear();
+            });
+            connection_workers.push(ConnectionWorker {
+                control: worker_control,
+                task,
+            });
+        }
+        Ok(())
+    })();
+    finish_connection_workers(accept_result, connection_workers)
 }
 
 #[cfg(test)]
 mod shutdown_tests {
-    use super::{ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers};
+    use super::{
+        ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers, finish_connection_workers,
+    };
+    use anyhow::anyhow;
     use std::{
         io::Read,
         net::{TcpListener, TcpStream},
-        sync::Arc,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
         thread,
         time::Duration,
     };
@@ -424,6 +447,32 @@ mod shutdown_tests {
         let started = std::time::Instant::now();
         workers.shutdown().unwrap();
         assert!(started.elapsed() < Duration::from_secs(1));
+        drop(client);
+    }
+
+    #[test]
+    fn accept_error_still_closes_and_joins_active_connection_worker() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let control = Arc::new(ConnectionWorkerControl::default());
+        control.track(&server).unwrap();
+        let task_control = control.clone();
+        let finished = Arc::new(AtomicBool::new(false));
+        let task_finished = finished.clone();
+        let task = thread::spawn(move || {
+            let mut byte = [0u8; 1];
+            let _ = server.read(&mut byte);
+            task_control.clear();
+            task_finished.store(true, Ordering::Release);
+        });
+        let mut workers = ConnectionWorkers::default();
+        workers.push(ConnectionWorker { control, task });
+
+        let error = finish_connection_workers(Err(anyhow!("accept failed")), workers)
+            .expect_err("accept failure must be returned after worker cleanup");
+        assert!(finished.load(Ordering::Acquire));
+        assert!(format!("{error:#}").contains("accept failed"));
         drop(client);
     }
 }

@@ -77,22 +77,30 @@ pub(crate) fn spawn_stage_control_loop(
     package_prefetcher: Option<Arc<dyn StagePackagePrefetcher>>,
     telemetry: super::SkippyTelemetryOptions,
 ) -> StageControlHandle {
+    spawn_stage_control_loop_with_state(StageControlState {
+        package_prefetcher,
+        telemetry,
+        ..Default::default()
+    })
+}
+
+fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageControlHandle {
     let (tx, mut rx) = mpsc::unbounded_channel::<StageControlCommand>();
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
     let task = tokio::spawn(async move {
-        let mut state = StageControlState {
-            package_prefetcher,
-            telemetry,
-            ..Default::default()
-        };
         loop {
             tokio::select! {
                 biased;
                 _ = &mut shutdown_rx => break,
                 command = rx.recv() => {
                     let Some(command) = command else { break };
-                    let result = state.handle(command.request).await;
-                    let _ = command.resp.send(result);
+                    tokio::select! {
+                        biased;
+                        _ = &mut shutdown_rx => break,
+                        result = state.handle(command.request) => {
+                            let _ = command.resp.send(result);
+                        }
+                    }
                 }
             }
         }
@@ -432,21 +440,8 @@ impl StageControlState {
             native_mtp_enabled: effective_load.native_mtp_enabled,
             openai: None,
         });
-        if let Err(error) =
-            wait_for_binary_stage_ready(bind_addr, stage_load_timeout(&effective_load)).await
-        {
-            let last_error = server.status().last_error;
-            let context = stage_load_failure_context(
-                &effective_load,
-                "binary stage did not become ready",
-                last_error.as_deref(),
-            );
-            let _ = server.shutdown().await;
-            return Err(error.context(context));
-        }
-
         self.stages.insert(
-            key,
+            key.clone(),
             RunningStage {
                 load: effective_load.clone(),
                 server,
@@ -455,6 +450,23 @@ impl StageControlState {
                 _materialized_pin: None,
             },
         );
+        if let Err(error) =
+            wait_for_binary_stage_ready(bind_addr, stage_load_timeout(&effective_load)).await
+        {
+            let stage = self
+                .stages
+                .remove(&key)
+                .expect("newly started stage must remain registered while readiness is pending");
+            let last_error = stage.server.status().last_error;
+            let context = stage_load_failure_context(
+                &effective_load,
+                "binary stage did not become ready",
+                last_error.as_deref(),
+            );
+            let _ = stage.server.shutdown().await;
+            return Err(error.context(context));
+        }
+
         let status = self
             .statuses(&StageStatusFilter {
                 topology_id: Some(effective_load.topology_id.clone()),
