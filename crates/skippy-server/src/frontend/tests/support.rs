@@ -77,17 +77,26 @@ pub(super) fn prefix_cache_base_with_request(request_id: &str, session_id: &str)
 
 pub(super) fn seed_resident_prefix(kv: &KvStageIntegration, identity: &PrefillKvIdentity) {
     let token_count = identity.identity.token_count;
-    let mut cache = kv.resident.lock().expect("resident cache lock poisoned");
-    let allocation = cache
-        .allocate_for_record(&identity.page_id, token_count, token_count, |_| Ok(()))
+    let seq_id = kv
+        .resident_sequences
+        .lock()
+        .expect("resident sequence pool lock poisoned")
+        .allocate()
         .expect("synthetic resident prefix should allocate");
-    assert!(allocation.should_retain);
-    cache.commit_record(
-        identity.page_id.clone(),
-        allocation.seq_id,
-        token_count,
-        token_count,
-    );
+    kv.radix
+        .lock()
+        .expect("radix cache lock poisoned")
+        .insert_resident(
+            identity.namespace.clone(),
+            &identity.token_ids,
+            token_count,
+            crate::kv_integration::RadixResidentEntry {
+                page_id: identity.page_id.clone(),
+                seq_id,
+                token_count,
+            },
+        )
+        .expect("synthetic radix prefix should record");
 }
 
 pub(super) fn unsupported_code(error: OpenAiError) -> Option<String> {

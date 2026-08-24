@@ -362,10 +362,6 @@ impl StageOpenAiBackend {
             json!(restored.token_count),
         );
         attrs.insert(
-            "skippy.kv.resident_lane_hit".to_string(),
-            json!(restored.borrowed),
-        );
-        attrs.insert(
             "skippy.activation_cache.hit_page_id".to_string(),
             json!(activation.page_id),
         );

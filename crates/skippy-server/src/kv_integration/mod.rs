@@ -11,8 +11,8 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use skippy_cache::{
-    ExactStateCache, ExactStatePayload, PrefixCandidatePolicy, ResidentActivationCache,
-    ResidentPrefixCache,
+    CacheBlobStore, ExactStatePayload, ResidentActivationCache, ResidentCacheConfig,
+    SparseCheckpointPolicy, UnifiedRadixCache,
 };
 use skippy_metrics::attr as attr_key;
 use skippy_runtime::{ActivationFrame, RuntimeKvPageDesc};
@@ -132,11 +132,15 @@ pub struct KvStageIntegration {
     pub(crate) payload: StagePrefixCachePayload,
     pub(crate) correctness_mode: bool,
     pub(crate) trust_local_writes: bool,
-    pub(crate) candidate_policy: PrefixCandidatePolicy,
+    pub(crate) checkpoint_policy: SparseCheckpointPolicy,
     pub(crate) inflight_records: Arc<Mutex<BTreeSet<String>>>,
-    pub(crate) resident: Arc<Mutex<ResidentPrefixCache>>,
+    pub(crate) resident_config: ResidentCacheConfig,
+    pub(crate) resident_sequences: Arc<Mutex<ResidentSequencePool>>,
     pub(crate) activations: Arc<Mutex<ResidentActivationCache<ActivationFrame>>>,
-    pub(crate) exact_states: Arc<Mutex<ExactStateCache<ExactStateExtra>>>,
+    pub(crate) radix: Arc<Mutex<UnifiedRadixCache<RadixResidentEntry, RadixExactEntry>>>,
+    pub(crate) exact_blobs: Arc<Mutex<CacheBlobStore>>,
+    pub(crate) exact_max_entries: usize,
+    pub(crate) exact_max_bytes: u64,
     pub(crate) exact_state_record_tx: SyncSender<PendingExactStateRecord>,
     pub(crate) exact_state_records_queued: Arc<AtomicU64>,
     pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
@@ -159,9 +163,63 @@ pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 1;
 #[derive(Debug)]
 pub(crate) struct PendingExactStateRecord {
     pub(crate) page_id: String,
-    pub(crate) token_count: u64,
     pub(crate) payload: ExactStatePayload,
     pub(crate) extra: ExactStateExtra,
+    pub(crate) namespace: String,
+    pub(crate) token_ids: Vec<i32>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RadixResidentEntry {
+    pub(crate) page_id: String,
+    pub(crate) seq_id: i32,
+    pub(crate) token_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RadixExactEntry {
+    pub(crate) page_id: String,
+    pub(crate) payload: ExactStatePayload,
+    pub(crate) extra: ExactStateExtra,
+}
+
+#[derive(Debug)]
+pub(crate) struct ResidentSequencePool {
+    reserved_seq_count: i32,
+    next_seq_id: i32,
+    free_seq_ids: Vec<i32>,
+}
+
+impl ResidentSequencePool {
+    fn new(reserved_seq_count: i32) -> Self {
+        Self {
+            reserved_seq_count,
+            next_seq_id: reserved_seq_count,
+            free_seq_ids: Vec::new(),
+        }
+    }
+
+    pub(crate) fn allocate(&mut self) -> Result<i32> {
+        if let Some(seq_id) = self.free_seq_ids.pop() {
+            return Ok(seq_id);
+        }
+        let seq_id = self.next_seq_id;
+        self.next_seq_id = self
+            .next_seq_id
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("resident prefix sequence id overflow"))?;
+        if seq_id < self.reserved_seq_count || seq_id >= skippy_cache::LLAMA_MAX_SEQ {
+            bail!("resident prefix sequence id capacity exhausted");
+        }
+        Ok(seq_id)
+    }
+
+    fn release(&mut self, seq_id: i32) {
+        debug_assert!(seq_id >= self.reserved_seq_count);
+        debug_assert!(seq_id < skippy_cache::LLAMA_MAX_SEQ);
+        debug_assert!(!self.free_seq_ids.contains(&seq_id));
+        self.free_seq_ids.push(seq_id);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,38 +400,69 @@ impl KvStageIntegration {
     }
 
     pub fn attrs(&self) -> Vec<(&'static str, Value)> {
-        let resident = self
-            .resident
+        let radix = self
+            .radix
             .lock()
-            .expect("resident prefix cache lock poisoned");
-        let resident = resident.stats();
+            .expect("radix cache lock poisoned")
+            .stats();
         let activations = self
             .activations
             .lock()
             .expect("resident activation cache lock poisoned");
         let activations = activations.stats();
-        let exact_state_stats = self
-            .exact_states
+        let exact_blob_stats = self
+            .exact_blobs
             .try_lock()
             .ok()
-            .map(|states| states.stats());
-        let exact_state_stats_busy = exact_state_stats.is_none();
-        let exact_state_stats = exact_state_stats.unwrap_or_default();
+            .map(|blobs| (blobs.physical_bytes(), blobs.block_count()));
+        let exact_state_stats_busy = exact_blob_stats.is_none();
+        let (exact_physical_bytes, _) = exact_blob_stats.unwrap_or_default();
         vec![
             ("skippy.kv.mode", json!(format!("{:?}", self.mode))),
             ("skippy.kv.payload", json!(format!("{:?}", self.payload))),
             (
                 "skippy.kv.page_size_tokens",
-                json!(self.candidate_policy.page_size_tokens),
+                json!(self.checkpoint_policy.page_size_tokens),
             ),
-            ("skippy.kv.resident_entries", json!(resident.entries)),
-            ("skippy.kv.resident_tokens", json!(resident.resident_tokens)),
+            ("skippy.kv.resident_entries", json!(radix.resident_entries)),
+            ("skippy.kv.resident_tokens", json!(radix.resident_tokens)),
+            ("skippy.kv.radix.namespaces", json!(radix.namespaces)),
+            ("skippy.kv.radix.nodes", json!(radix.nodes)),
+            ("skippy.kv.radix.token_edges", json!(radix.token_edges)),
+            ("skippy.kv.radix.splits", json!(radix.splits)),
+            (
+                "skippy.kv.radix.resident_entries",
+                json!(radix.resident_entries),
+            ),
+            (
+                "skippy.kv.radix.resident_active_refs",
+                json!(radix.resident_active_refs),
+            ),
+            (
+                "skippy.kv.radix.recurrent_entries",
+                json!(radix.recurrent_entries),
+            ),
+            (
+                "skippy.kv.radix.recurrent_active_refs",
+                json!(radix.recurrent_active_refs),
+            ),
+            (
+                "skippy.kv.radix.resident_evictions",
+                json!(radix.resident_evictions),
+            ),
+            (
+                "skippy.kv.radix.recurrent_evictions",
+                json!(radix.recurrent_evictions),
+            ),
             (
                 "skippy.kv.resident_estimated_bytes",
-                json!(resident.estimated_bytes),
+                json!(radix.resident_logical_bytes),
             ),
-            ("skippy.kv.max_entries", json!(resident.max_entries)),
-            ("skippy.kv.max_bytes", json!(resident.max_bytes)),
+            (
+                "skippy.kv.max_entries",
+                json!(self.resident_config.max_entries),
+            ),
+            ("skippy.kv.max_bytes", json!(self.resident_config.max_bytes)),
             (
                 "skippy.activation_cache.entries",
                 json!(activations.entries),
@@ -382,17 +471,14 @@ impl KvStageIntegration {
                 "skippy.activation_cache.resident_bytes",
                 json!(activations.resident_bytes),
             ),
-            (
-                "skippy.exact_cache.entries",
-                json!(exact_state_stats.entries),
-            ),
+            ("skippy.exact_cache.entries", json!(radix.recurrent_entries)),
             (
                 "skippy.exact_cache.logical_bytes",
-                json!(exact_state_stats.logical_bytes),
+                json!(radix.recurrent_logical_bytes),
             ),
             (
                 "skippy.exact_cache.physical_bytes",
-                json!(exact_state_stats.physical_bytes),
+                json!(exact_physical_bytes),
             ),
             (
                 "skippy.exact_cache.stats_busy",
@@ -419,9 +505,10 @@ impl KvStageIntegration {
                         .load(std::sync::atomic::Ordering::Relaxed)
                 ),
             ),
+            ("skippy.exact_cache.max_bytes", json!(self.exact_max_bytes)),
             (
-                "skippy.exact_cache.max_bytes",
-                json!(exact_state_stats.max_bytes),
+                "skippy.exact_cache.max_entries",
+                json!(self.exact_max_entries),
             ),
             ("skippy.kv.correctness_mode", json!(self.correctness_mode)),
             (
@@ -430,32 +517,24 @@ impl KvStageIntegration {
             ),
             (
                 "skippy.kv.shared_prefix_min_tokens",
-                json!(self.candidate_policy.min_tokens),
+                json!(self.checkpoint_policy.min_tokens),
             ),
             (
                 "skippy.kv.shared_prefix_stride_tokens",
-                json!(self.candidate_policy.stride_tokens),
+                json!(self.checkpoint_policy.stride_tokens),
             ),
             (
                 "skippy.kv.shared_prefix_record_limit",
-                json!(self.candidate_policy.record_limit),
+                json!(self.checkpoint_policy.record_limit),
             ),
         ]
         .into_iter()
         .collect()
     }
 
-    fn record_candidate_token_counts(&self, token_count: u64) -> Vec<u64> {
-        self.candidate_policy
-            .record_candidate_token_counts(token_count)
-    }
-
-    fn lookup_candidate_token_counts(&self, token_count: u64) -> Vec<u64> {
-        self.candidate_policy.candidate_token_counts(token_count)
-    }
-
     pub fn record_cached_first_token(&self, identity: &PrefillKvIdentity, predicted: i32) -> bool {
-        if !self.should_record() || identity.identity.token_count < self.candidate_policy.min_tokens
+        if !self.should_record()
+            || identity.identity.token_count < self.checkpoint_policy.min_tokens
         {
             return false;
         }
@@ -488,7 +567,7 @@ impl KvStageIntegration {
         if !self.should_record()
             || max_replay_tokens == 0
             || previous.len() >= max_replay_tokens
-            || identity.identity.token_count < self.candidate_policy.min_tokens
+            || identity.identity.token_count < self.checkpoint_policy.min_tokens
         {
             return None;
         }
@@ -548,9 +627,10 @@ mod exact_state_record_queue_tests {
     fn pending(page_id: &str) -> PendingExactStateRecord {
         PendingExactStateRecord {
             page_id: page_id.to_string(),
-            token_count: 1,
             payload: ExactStatePayload::full_state(vec![1]),
             extra: ExactStateExtra::default(),
+            namespace: "test".to_string(),
+            token_ids: vec![1],
         }
     }
 

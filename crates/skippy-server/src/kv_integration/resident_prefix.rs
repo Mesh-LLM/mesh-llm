@@ -1,10 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::runtime_state::RuntimeState;
 
 use super::{
-    KvStageIntegration, PrefillKvIdentity, ResidentPrefixRecord, ResidentPrefixRestore,
-    StagePrefixCachePayload,
+    KvStageIntegration, PrefillKvIdentity, RadixResidentEntry, ResidentPrefixRecord,
+    ResidentPrefixRestore, ResidentSequencePool, StagePrefixCachePayload,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -22,18 +22,14 @@ impl KvStageIntegration {
         if !self.should_lookup() || self.payload != StagePrefixCachePayload::ResidentKv {
             return None;
         }
-        let lookup = {
-            self.resident
-                .lock()
-                .expect("resident prefix cache lock poisoned")
-                .lookup(&identity.page_id)
-        }?;
+        let mut radix = self.radix.lock().expect("radix cache lock poisoned");
+        let radix_hit = radix.lookup_resident(&identity.namespace, &identity.token_ids)?;
+        let entries = radix.stats().resident_entries;
         Some(ResidentPrefixRestore {
-            page_id: identity.page_id.clone(),
-            token_count: identity.identity.token_count as usize,
-            seq_id: lookup.seq_id,
-            entries: lookup.entries,
-            borrowed: false,
+            page_id: radix_hit.value.page_id,
+            token_count: radix_hit.matched_tokens,
+            seq_id: radix_hit.value.seq_id,
+            entries,
         })
     }
 
@@ -48,102 +44,37 @@ impl KvStageIntegration {
             return Ok(None);
         }
         for identity in identities {
-            let token_count = identity
-                .identity
-                .token_count
-                .try_into()
-                .unwrap_or(usize::MAX)
-                .min(token_ids.len());
+            let radix_hit = self
+                .radix
+                .lock()
+                .expect("radix cache lock poisoned")
+                .acquire_resident(&identity.namespace, &identity.token_ids);
+            let Some(radix_hit) = radix_hit else {
+                continue;
+            };
+            let page_id = radix_hit.value.page_id.as_str();
+            let token_count = radix_hit.matched_tokens.min(token_ids.len());
             if token_count == 0 {
+                self.release_resident_radix_entry(&identity.namespace, &radix_hit.stored_tokens);
                 continue;
             }
-            if runtime.acquire_resident_prefix_lane(
+            let restore = runtime.restore_resident_prefix(
                 session_id,
-                &identity.page_id,
-                token_count as u64,
-            )? {
-                let entries = self
-                    .resident
+                radix_hit.value.seq_id,
+                &token_ids[..token_count],
+            );
+            self.release_resident_radix_entry(&identity.namespace, &radix_hit.stored_tokens);
+            restore?;
+            return Ok(Some(ResidentPrefixRestore {
+                page_id: page_id.to_string(),
+                token_count,
+                seq_id: radix_hit.value.seq_id,
+                entries: self
+                    .radix
                     .lock()
-                    .expect("resident prefix cache lock poisoned")
+                    .expect("radix cache lock poisoned")
                     .stats()
-                    .entries;
-                return Ok(Some(ResidentPrefixRestore {
-                    page_id: identity.page_id.clone(),
-                    token_count,
-                    seq_id: -1,
-                    entries,
-                    borrowed: true,
-                }));
-            }
-            let lookup = {
-                self.resident
-                    .lock()
-                    .expect("resident prefix cache lock poisoned")
-                    .lookup(&identity.page_id)
-            };
-            let Some(lookup) = lookup else {
-                continue;
-            };
-            runtime.restore_resident_prefix(
-                session_id,
-                lookup.seq_id,
-                &token_ids[..token_count],
-            )?;
-            return Ok(Some(ResidentPrefixRestore {
-                page_id: identity.page_id.clone(),
-                token_count,
-                seq_id: lookup.seq_id,
-                entries: lookup.entries,
-                borrowed: false,
-            }));
-        }
-        Ok(None)
-    }
-
-    pub fn borrow_resident_prefix(
-        &self,
-        runtime: &mut RuntimeState,
-        session_id: &str,
-        identities: &[PrefillKvIdentity],
-        token_ids: &[i32],
-    ) -> Result<Option<ResidentPrefixRestore>> {
-        if !self.should_lookup() || self.payload != StagePrefixCachePayload::ResidentKv {
-            return Ok(None);
-        }
-        for identity in identities {
-            let token_count = identity
-                .identity
-                .token_count
-                .try_into()
-                .unwrap_or(usize::MAX)
-                .min(token_ids.len());
-            if token_count == 0 {
-                continue;
-            }
-            let lookup = {
-                self.resident
-                    .lock()
-                    .expect("resident prefix cache lock poisoned")
-                    .acquire(&identity.page_id)
-            };
-            let Some(lookup) = lookup else {
-                continue;
-            };
-            if let Err(error) = runtime.borrow_resident_prefix_session(
-                session_id,
-                lookup.seq_id,
-                &token_ids[..token_count],
-            ) {
-                self.release_resident_prefix(&identity.page_id);
-                return Err(error);
-            }
-            return Ok(Some(ResidentPrefixRestore {
-                page_id: identity.page_id.clone(),
-                token_count,
-                seq_id: lookup.seq_id,
-                entries: lookup.entries,
-                borrowed: true,
+                    .resident_entries,
             }));
         }
         Ok(None)
@@ -160,16 +91,26 @@ impl KvStageIntegration {
         if self.payload != StagePrefixCachePayload::ResidentKv {
             return Ok(ResidentPrefixEviction::default());
         }
-        let mut cache = self
-            .resident
+        let mut radix = self.radix.lock().expect("radix cache lock poisoned");
+        let mut sequences = self
+            .resident_sequences
             .lock()
-            .expect("resident prefix cache lock poisoned");
-        let mut drop_fn = |seq_id: i32| runtime.drop_resident_prefix_sequence(session_id, seq_id);
-        let evictions = cache.evict_lru_until_tokens(target_tokens, &mut drop_fn)?;
-        let evicted_tokens = evictions.iter().map(|eviction| eviction.token_count).sum();
+            .expect("resident sequence pool lock poisoned");
+        let mut evicted_entries = 0usize;
+        let mut evicted_tokens = 0u64;
+        while evicted_tokens < target_tokens {
+            let Some(removed) = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
+                runtime.drop_resident_prefix_sequence(session_id, seq_id)
+            })?
+            else {
+                break;
+            };
+            evicted_entries = evicted_entries.saturating_add(1);
+            evicted_tokens = evicted_tokens.saturating_add(removed.value.token_count);
+        }
         Ok(ResidentPrefixEviction {
             target_tokens,
-            evicted_entries: evictions.len(),
+            evicted_entries,
             evicted_tokens,
         })
     }
@@ -192,9 +133,9 @@ impl KvStageIntegration {
         let decode_batch_tokens = runtime.active_session_batch_size(session_id)? as u64;
         let active_session_tokens = runtime.session_stats().total_session_tokens;
         let resident_tokens = self
-            .resident
+            .radix
             .lock()
-            .expect("resident prefix cache lock poisoned")
+            .expect("radix cache lock poisoned")
             .stats()
             .resident_tokens;
         let target_tokens = proactive_resident_eviction_target(
@@ -206,11 +147,13 @@ impl KvStageIntegration {
         self.evict_resident_prefix_for_tokens(runtime, session_id, target_tokens)
     }
 
-    pub fn release_resident_prefix(&self, page_id: &str) {
-        self.resident
+    fn release_resident_radix_entry(&self, namespace: &str, stored_tokens: &[i32]) {
+        let released = self
+            .radix
             .lock()
-            .expect("resident prefix cache lock poisoned")
-            .release(page_id);
+            .expect("radix cache lock poisoned")
+            .release_resident(namespace, stored_tokens);
+        debug_assert!(released, "resident radix acquire/release must balance");
     }
 
     pub fn record_resident_prefix(
@@ -229,7 +172,7 @@ impl KvStageIntegration {
             .try_into()
             .unwrap_or(usize::MAX)
             .min(token_ids.len());
-        if token_count == 0 || (token_count as u64) < self.candidate_policy.min_tokens {
+        if token_count == 0 || (token_count as u64) < self.checkpoint_policy.min_tokens {
             return Ok(None);
         }
         let layer_count = identity
@@ -238,48 +181,134 @@ impl KvStageIntegration {
             .saturating_sub(identity.identity.layer_start)
             .max(1);
         let estimated_bytes = resident_estimated_bytes(token_count as u64, layer_count);
-        let mut cache = self
-            .resident
-            .lock()
-            .expect("resident prefix cache lock poisoned");
-        let allocation = cache.allocate_for_record(
-            &identity.page_id,
-            token_count as u64,
-            estimated_bytes,
-            |seq_id| runtime.drop_resident_prefix_sequence(session_id, seq_id),
-        )?;
-        if !allocation.should_retain {
+        if (self.resident_config.max_bytes > 0 && estimated_bytes > self.resident_config.max_bytes)
+            || (self.resident_config.max_resident_tokens > 0
+                && token_count as u64 > self.resident_config.max_resident_tokens)
+        {
             return Ok(None);
         }
-        if allocation.should_save {
-            runtime.save_resident_prefix(session_id, allocation.seq_id, token_count as u64)?;
-            cache.commit_record(
-                identity.page_id.clone(),
-                allocation.seq_id,
-                token_count as u64,
-                estimated_bytes,
-            );
+        let mut radix = self.radix.lock().expect("radix cache lock poisoned");
+        let mut sequences = self
+            .resident_sequences
+            .lock()
+            .expect("resident sequence pool lock poisoned");
+        if let Some(existing) =
+            radix.resident_exact(&identity.namespace, &identity.token_ids[..token_count])
+        {
+            let stats = radix.stats();
+            return Ok(Some(ResidentPrefixRecord {
+                page_id: existing.value.page_id,
+                token_count,
+                seq_id: existing.value.seq_id,
+                stored: false,
+                evicted_entries: 0,
+                evicted_tokens: 0,
+                entries: stats.resident_entries,
+                resident_tokens: stats.resident_tokens,
+            }));
         }
-        runtime.retain_resident_prefix_on_drop(
-            session_id,
-            identity.page_id.clone(),
-            token_count as u64,
+
+        let mut evicted_entries = 0usize;
+        let mut evicted_tokens = 0u64;
+        loop {
+            let stats = radix.stats();
+            let over_entries =
+                stats.resident_entries.saturating_add(1) > self.resident_config.max_entries;
+            let over_bytes = self.resident_config.max_bytes > 0
+                && stats.resident_logical_bytes.saturating_add(estimated_bytes)
+                    > self.resident_config.max_bytes;
+            let over_tokens = self.resident_config.max_resident_tokens > 0
+                && stats.resident_tokens.saturating_add(token_count as u64)
+                    > self.resident_config.max_resident_tokens;
+            if !over_entries && !over_bytes && !over_tokens {
+                break;
+            }
+            let removed = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
+                runtime.drop_resident_prefix_sequence(session_id, seq_id)
+            })?
+            .ok_or_else(|| anyhow::anyhow!("resident radix cache has no releasable entries"))?;
+            evicted_entries = evicted_entries.saturating_add(1);
+            evicted_tokens = evicted_tokens.saturating_add(removed.value.token_count);
+        }
+
+        let seq_id = sequences.allocate()?;
+        if let Err(error) = runtime.save_resident_prefix(session_id, seq_id, token_count as u64) {
+            sequences.release(seq_id);
+            return Err(error);
+        }
+        insert_saved_resident(
+            &mut radix,
+            &mut sequences,
+            identity.namespace.clone(),
+            &identity.token_ids[..token_count],
+            estimated_bytes,
+            RadixResidentEntry {
+                page_id: identity.page_id.clone(),
+                seq_id,
+                token_count: token_count as u64,
+            },
+            |seq_id| runtime.drop_resident_prefix_sequence(session_id, seq_id),
         )?;
-        let stats = cache.stats();
+        let stats = radix.stats();
         Ok(Some(ResidentPrefixRecord {
             page_id: identity.page_id.clone(),
             token_count,
-            seq_id: allocation.seq_id,
-            stored: allocation.should_save,
-            evicted_entries: allocation.evictions.len(),
-            evicted_tokens: allocation
-                .evictions
-                .iter()
-                .map(|eviction| eviction.token_count)
-                .sum(),
-            entries: stats.entries,
+            seq_id,
+            stored: true,
+            evicted_entries,
+            evicted_tokens,
+            entries: stats.resident_entries,
             resident_tokens: stats.resident_tokens,
         }))
+    }
+}
+
+fn evict_one_resident(
+    radix: &mut skippy_cache::UnifiedRadixCache<RadixResidentEntry, super::RadixExactEntry>,
+    sequences: &mut ResidentSequencePool,
+    mut drop_native: impl FnMut(i32) -> Result<()>,
+) -> Result<Option<skippy_cache::RadixEviction<RadixResidentEntry>>> {
+    let Some(victim) = radix.lru_resident_candidate() else {
+        return Ok(None);
+    };
+    drop_native(victim.value.seq_id)?;
+    let removed = radix
+        .evict_lru_resident()
+        .expect("selected radix resident victim should exist");
+    debug_assert_eq!(removed.value.page_id, victim.value.page_id);
+    sequences.release(removed.value.seq_id);
+    Ok(Some(removed))
+}
+
+fn insert_saved_resident(
+    radix: &mut skippy_cache::UnifiedRadixCache<RadixResidentEntry, super::RadixExactEntry>,
+    sequences: &mut ResidentSequencePool,
+    namespace: String,
+    tokens: &[i32],
+    logical_bytes: u64,
+    entry: RadixResidentEntry,
+    mut drop_native: impl FnMut(i32) -> Result<()>,
+) -> Result<()> {
+    let seq_id = entry.seq_id;
+    match radix.insert_resident(namespace, tokens, logical_bytes, entry) {
+        Ok(replaced) => {
+            debug_assert!(
+                replaced.is_none(),
+                "exact radix entry was checked under lock"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            if let Err(native_error) = drop_native(seq_id) {
+                return Err(native_error).with_context(|| {
+                    format!(
+                        "roll back native resident sequence {seq_id} after radix insert failed: {error:#}"
+                    )
+                });
+            }
+            sequences.release(seq_id);
+            Err(error)
+        }
     }
 }
 
@@ -306,7 +335,7 @@ fn resident_estimated_bytes(token_count: u64, layer_count: u32) -> u64 {
 
 #[cfg(test)]
 mod proactive_eviction_tests {
-    use super::proactive_resident_eviction_target;
+    use super::*;
 
     #[test]
     fn keeps_resident_prefixes_when_unified_pool_already_has_batch_headroom() {
@@ -330,5 +359,67 @@ mod proactive_eviction_tests {
             proactive_resident_eviction_target(0, 776, 1_992, 2_048),
             2_048
         );
+    }
+
+    #[test]
+    fn native_drop_failure_preserves_the_radix_entry_and_sequence_id() {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(4);
+        let seq_id = sequences.allocate().unwrap();
+        radix
+            .insert_resident(
+                "stage",
+                &[1, 2, 3],
+                3,
+                RadixResidentEntry {
+                    page_id: "page".to_string(),
+                    seq_id,
+                    token_count: 3,
+                },
+            )
+            .unwrap();
+
+        let error = evict_one_resident(&mut radix, &mut sequences, |_| {
+            anyhow::bail!("native drop failed")
+        })
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "native drop failed");
+        assert!(radix.resident_exact("stage", &[1, 2, 3]).is_some());
+        assert_eq!(sequences.allocate().unwrap(), seq_id + 1);
+    }
+
+    #[test]
+    fn radix_insert_failure_rolls_back_native_state_and_recycles_sequence_id() {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(4);
+        let seq_id = sequences.allocate().unwrap();
+        let mut dropped = None;
+
+        let error = insert_saved_resident(
+            &mut radix,
+            &mut sequences,
+            "stage".to_string(),
+            &[],
+            0,
+            RadixResidentEntry {
+                page_id: "page".to_string(),
+                seq_id,
+                token_count: 0,
+            },
+            |seq_id| {
+                dropped = Some(seq_id);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "radix cache key must contain at least one token"
+        );
+        assert_eq!(dropped, Some(seq_id));
+        assert_eq!(sequences.allocate().unwrap(), seq_id);
+        assert_eq!(radix.stats().resident_entries, 0);
     }
 }

@@ -145,6 +145,30 @@ pub fn prefix_hash_with_namespace(
     token_ids: &[i32],
     cache_namespace: Option<&str>,
 ) -> String {
+    let mut hasher = prefix_namespace_hasher(config, token_start, cache_namespace);
+    for token_id in token_ids {
+        hasher.update(token_id.to_le_bytes().as_slice());
+    }
+    format!("blake3:{}", hasher.finalize().to_hex())
+}
+
+/// Stable namespace for one radix tree. It binds every non-token input that
+/// changes native cache bytes while leaving the token sequence as the radix
+/// path itself.
+pub fn prefix_namespace_hash(
+    config: &StageConfig,
+    token_start: u64,
+    cache_namespace: Option<&str>,
+) -> String {
+    let hasher = prefix_namespace_hasher(config, token_start, cache_namespace);
+    format!("blake3:{}", hasher.finalize().to_hex())
+}
+
+fn prefix_namespace_hasher(
+    config: &StageConfig,
+    token_start: u64,
+    cache_namespace: Option<&str>,
+) -> blake3::Hasher {
     let mut hasher = blake3::Hasher::new();
     update_weight_identity(&mut hasher, config);
     // `topology_id` is deliberately **not** hashed. It is an instance
@@ -171,10 +195,7 @@ pub fn prefix_hash_with_namespace(
         hasher.update(cache_namespace.as_bytes());
     }
     hasher.update(&token_start.to_le_bytes());
-    for token_id in token_ids {
-        hasher.update(token_id.to_le_bytes().as_slice());
-    }
-    format!("blake3:{}", hasher.finalize().to_hex())
+    hasher
 }
 
 pub fn page_id(

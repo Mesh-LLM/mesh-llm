@@ -116,7 +116,7 @@ mod resident_cache_config_tests {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PrefixCandidatePolicy {
+pub struct SparseCheckpointPolicy {
     pub min_tokens: u64,
     pub stride_tokens: u64,
     pub record_limit: u64,
@@ -131,7 +131,7 @@ pub struct PrefixCandidatePolicy {
     pub max_resident_tokens_hint: u64,
 }
 
-impl PrefixCandidatePolicy {
+impl SparseCheckpointPolicy {
     pub fn from_cache(cache: &StageKvCacheConfig) -> Self {
         Self {
             min_tokens: cache.min_tokens,
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn lookup_candidates_prefer_longest_prefix_first() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 64,
             stride_tokens: 32,
             record_limit: 2,
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn record_candidates_are_limited_but_keep_current_and_shared_prefix() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 64,
             stride_tokens: 32,
             record_limit: 2,
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn candidates_below_min_only_use_exact_request() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 64,
             stride_tokens: 32,
             record_limit: 2,
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn unlimited_record_candidates_keep_shared_prefix_grid() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 64,
             stride_tokens: 32,
             record_limit: 0,
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn same_prefix_different_tail_prompts_share_near_tail_candidate() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit: 2,
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn non_aligned_min_tokens_still_provides_shared_floor_candidate() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 300,
             stride_tokens: 128,
             record_limit: 2,
@@ -431,12 +431,12 @@ mod tests {
 }
 
 #[cfg(test)]
-mod record_ladder_tests {
+mod cache_checkpoint_tests {
     use super::*;
 
     /// The shipped agentic policy: 128-token stride, 256-token floor.
-    fn agentic_policy(record_limit: u64) -> PrefixCandidatePolicy {
-        PrefixCandidatePolicy {
+    fn agentic_policy(record_limit: u64) -> SparseCheckpointPolicy {
+        SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit,
@@ -556,7 +556,7 @@ mod record_ladder_tests {
     /// what is still optional.
     #[test]
     fn ladder_budget_bounds_the_shared_rungs_not_the_mandatory_slots() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit: 6,
@@ -588,7 +588,7 @@ mod record_ladder_tests {
     /// With a generous budget the deeper ladder is admitted in full.
     #[test]
     fn generous_budget_admits_the_full_ladder() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit: 6,
@@ -631,7 +631,7 @@ mod shipped_default_ladder_tests {
         for ctx in [8192u64, 16384, 32768, 131072] {
             let max_entries = ((ctx / 2 / 256) as usize).clamp(1, 16);
             let record_limit = ((max_entries as u64) / 4).clamp(2, 6);
-            let policy = PrefixCandidatePolicy {
+            let policy = SparseCheckpointPolicy {
                 min_tokens: 256,
                 stride_tokens: 128,
                 record_limit,
@@ -659,7 +659,7 @@ mod shipped_default_ladder_tests {
     /// raising the floor changes default behaviour and is a separate decision.
     #[test]
     fn small_contexts_still_record_only_the_tail() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit: 2,

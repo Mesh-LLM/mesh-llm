@@ -7,6 +7,8 @@ use skippy_cache::{CacheBytesReconstructStats, CacheDedupeStats, ExactStatePaylo
 pub struct PrefillKvIdentity {
     pub identity: PageIdentity,
     pub page_id: String,
+    pub namespace: String,
+    pub token_ids: Vec<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -34,7 +36,6 @@ pub struct ResidentPrefixRestore {
     pub token_count: usize,
     pub seq_id: i32,
     pub entries: usize,
-    pub borrowed: bool,
 }
 
 #[derive(Debug, Clone)]

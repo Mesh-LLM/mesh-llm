@@ -814,10 +814,6 @@ impl StageOpenAiBackend {
                             "skippy.kv.resident_seq_id".to_string(),
                             json!(restored.seq_id),
                         );
-                        attrs.insert(
-                            "skippy.kv.resident_lane_hit".to_string(),
-                            json!(restored.borrowed),
-                        );
                         self.telemetry
                             .emit("stage.openai_kv_lookup_decision", attrs);
                     }

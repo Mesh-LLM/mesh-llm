@@ -130,7 +130,7 @@ fn cold_resident_prefix_lookup_misses_before_recording() {
 }
 
 #[test]
-fn resident_prefix_cache_hits_shared_prefix_grid() {
+fn resident_prefix_cache_hits_radix_common_prefix_without_a_record_ladder() {
     let config = prefix_cache_test_config();
     let kv = KvStageIntegration::from_config(&config)
         .unwrap()
@@ -138,7 +138,8 @@ fn resident_prefix_cache_hits_shared_prefix_grid() {
     let base = prefix_cache_test_base();
     let recorded_tokens = (0..2214).collect::<Vec<_>>();
     let mut lookup_tokens = recorded_tokens.clone();
-    lookup_tokens.extend(100_000..100_017);
+    lookup_tokens[2176] = 100_000;
+    lookup_tokens.extend(100_001..100_017);
     let record_plan = crate::frontend::prefix_cache::stage0_full_prefill_record_identities(
         &kv,
         &config,
@@ -146,26 +147,22 @@ fn resident_prefix_cache_hits_shared_prefix_grid() {
         &recorded_tokens,
     );
     let lookup_plan = kv.lookup_identities(&config, &base, 0, &lookup_tokens);
-    let recorded_shared = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("record plan should include shared grid prefix");
-    let lookup_shared = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("lookup plan should probe shared grid prefix");
+    assert_eq!(record_plan.len(), 1);
+    assert_eq!(lookup_plan.len(), 1);
+    let recorded = &record_plan[0];
+    let lookup = &lookup_plan[0];
 
-    seed_resident_prefix(&kv, recorded_shared);
+    seed_resident_prefix(&kv, recorded);
     let hit = kv
-        .probe_resident_prefix(lookup_shared)
-        .expect("different-tail prompt should hit shared prefix grid");
+        .probe_resident_prefix(lookup)
+        .expect("different-tail prompt should hit the radix common prefix");
 
-    assert_eq!(hit.page_id, recorded_shared.page_id);
+    assert_eq!(hit.page_id, recorded.page_id);
     assert_eq!(hit.token_count, 2176);
 }
 
 #[test]
-fn stage0_full_prefill_record_plan_includes_shared_prefix_candidate() {
+fn stage0_full_prefill_uses_one_radix_path_per_request() {
     let config = prefix_cache_test_config();
     let kv = KvStageIntegration::from_config(&config)
         .unwrap()
@@ -192,32 +189,14 @@ fn stage0_full_prefill_record_plan_includes_shared_prefix_candidate() {
         .map(|identity| identity.identity.token_count)
         .collect::<Vec<_>>();
 
-    assert_eq!(record_counts, vec![2214, 2176]);
-    assert!(lookup_counts.contains(&2176));
-
-    let recorded_shared = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("record plan should include shared grid prefix");
-    let lookup_shared = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("lookup plan should probe shared grid prefix");
-    let recorded_exact = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2214)
-        .expect("record plan should keep exact first prompt");
-    let lookup_exact = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2231)
-        .expect("lookup plan should probe exact second prompt");
-
-    assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
-    assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+    assert_eq!(record_counts, vec![2214]);
+    assert_eq!(lookup_counts, vec![2231]);
+    assert_eq!(record_plan[0].namespace, lookup_plan[0].namespace);
+    assert_ne!(record_plan[0].page_id, lookup_plan[0].page_id);
 }
 
 #[test]
-fn stage0_chunked_prefill_record_plan_includes_shared_prefix_candidate() {
+fn stage0_chunked_prefill_uses_one_radix_path_per_request() {
     let config = prefix_cache_test_config();
     let kv = KvStageIntegration::from_config(&config)
         .unwrap()
@@ -245,26 +224,8 @@ fn stage0_chunked_prefill_record_plan_includes_shared_prefix_candidate() {
         .map(|identity| identity.identity.token_count)
         .collect::<Vec<_>>();
 
-    assert_eq!(record_counts, vec![2214, 2176]);
-    assert!(lookup_counts.contains(&2176));
-
-    let recorded_shared = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("chunked record plan should include shared grid prefix");
-    let lookup_shared = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("lookup plan should probe shared grid prefix");
-    let recorded_exact = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2214)
-        .expect("chunked record plan should keep exact first prompt");
-    let lookup_exact = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2231)
-        .expect("lookup plan should probe exact second prompt");
-
-    assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
-    assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+    assert_eq!(record_counts, vec![2214]);
+    assert_eq!(lookup_counts, vec![2231]);
+    assert_eq!(record_plan[0].namespace, lookup_plan[0].namespace);
+    assert_ne!(record_plan[0].page_id, lookup_plan[0].page_id);
 }

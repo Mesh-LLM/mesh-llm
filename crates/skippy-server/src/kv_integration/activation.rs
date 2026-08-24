@@ -18,7 +18,7 @@ impl KvStageIntegration {
         }
         // Walk lookup candidates longest-prefix-first; the first validated
         // cache hit is the longest activation frame reachable from this prompt.
-        for identity in self.lookup_identities(config, base, token_start, token_ids) {
+        for identity in self.activation_lookup_identities(config, base, token_start, token_ids) {
             let page_id = activation_page_id(&identity.page_id, activation_width);
             let Some(lookup) = self
                 .activations
@@ -61,7 +61,7 @@ impl KvStageIntegration {
             return Vec::new();
         }
         let token_count = token_ids.len() as u64;
-        if token_count < self.candidate_policy.min_tokens || frame.payload.is_empty() {
+        if token_count < self.checkpoint_policy.min_tokens || frame.payload.is_empty() {
             return Vec::new();
         }
         if u64::from(frame.desc.token_count) != token_count
@@ -69,7 +69,7 @@ impl KvStageIntegration {
         {
             return Vec::new();
         }
-        let identities = self.record_identities(config, base, token_start, token_ids);
+        let identities = self.activation_record_identities(config, base, token_start, token_ids);
         let mut cache = self
             .activations
             .lock()
