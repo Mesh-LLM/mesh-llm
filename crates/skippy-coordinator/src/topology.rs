@@ -728,6 +728,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn recurrent_pricing_rejects_plan_that_old_zero_cost_model_admitted() {
+        // Falcon-H1 1.5B metadata: conv=4, inner=3072, state=256,
+        // groups=1, 24 recurrent layers. Three state planes and two native
+        // sequence slots per configured lane cost 19,132,416 bytes per layer.
+        const FALCON_RECURRENT_BYTES_PER_LANE_PER_LAYER: u64 = 19_132_416;
+        const LAYERS: u32 = 24;
+        const LANES: usize = 64;
+
+        let mut request = TopologyPlanningInput {
+            native_context_length: 65_536,
+            layer_count: LAYERS,
+            model_weight_bytes: GIB,
+            layer_weight_bytes: Vec::new(),
+            kv_bytes_per_token: 24 * 1024,
+            recurrent_bytes_per_sequence_by_layer: Vec::new(),
+            reserved_sequence_ids: 0,
+            minimum_nodes: 1,
+            nodes: vec![node("falcon-node", 1)],
+            context_length_override: Some(65_536),
+            parallel_lanes_override: Some(LANES),
+            target_decode_tpot_ms: None,
+        };
+        let layer_weights = layer_weight_bytes(&request);
+        let kv_per_layer = request.kv_bytes_per_token.div_ceil(u64::from(LAYERS));
+        let old_required = sum_u64(
+            &layer_required_bytes(
+                &layer_weights,
+                &vec![0; LAYERS as usize],
+                kv_per_layer,
+                request.native_context_length,
+                LANES,
+            )
+            .unwrap(),
+        );
+        let recurrent_required =
+            FALCON_RECURRENT_BYTES_PER_LANE_PER_LAYER * u64::from(LAYERS) * LANES as u64;
+
+        // The old planner charged zero for recurrent state, so this budget
+        // appears sufficient even though it covers only half of the real
+        // fixed recurrent allocation.
+        request.nodes[0].detected_vram_bytes = old_required + recurrent_required / 2;
+        assert!(plan_topology(&request).is_ok());
+
+        // The new planner rejects the same unsafe budget and accepts the
+        // exact boundary once the complete recurrent allocation is present.
+        request.recurrent_bytes_per_sequence_by_layer =
+            vec![FALCON_RECURRENT_BYTES_PER_LANE_PER_LAYER; LAYERS as usize];
+        assert_eq!(
+            plan_topology(&request),
+            Err(TopologyPlanError::NoValidTopology {
+                minimum_context: 65_536,
+            })
+        );
+        request.nodes[0].detected_vram_bytes = old_required + recurrent_required;
+        assert!(plan_topology(&request).is_ok());
+        assert_eq!(recurrent_required, 29_387_390_976);
+    }
+
     fn metal_node(id: &str, metal_recommended_bytes: u64) -> TopologyNode {
         TopologyNode {
             node_id: id.to_string(),

@@ -174,19 +174,35 @@ impl KvStageIntegration {
         })
     }
 
-    /// Evict enough resident-prefix entries to free at least one native
-    /// decode batch worth of KV cells, or all currently releasable entries.
+    /// Evict only the resident-prefix cells needed to leave one native decode
+    /// batch of headroom in the unified KV pool.
     ///
-    /// The single-entry eviction path is not enough when the LRU entry is
-    /// smaller than `n_batch`; tool/grammar retries need a contiguous decode
-    /// batch, so the proactive path uses the active session batch size as its
-    /// concrete budget.
+    /// The resident cache and active lanes share `n_ctx`. Treating `n_batch`
+    /// as an unconditional eviction amount drains a healthy cache even when
+    /// the pool already has ample room (and can erase every prefix when
+    /// `n_batch` is larger than the resident working set). Account for both
+    /// active-lane and resident-prefix occupancy first, then evict only the
+    /// actual deficit. A zero pool size is the modelless/unknown-capacity
+    /// fallback and preserves the legacy fixed-batch behaviour.
     pub fn evict_resident_prefix_for_decode_batch(
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
     ) -> Result<ResidentPrefixEviction> {
-        let target_tokens = runtime.active_session_batch_size(session_id)? as u64;
+        let decode_batch_tokens = runtime.active_session_batch_size(session_id)? as u64;
+        let active_session_tokens = runtime.session_stats().total_session_tokens;
+        let resident_tokens = self
+            .resident
+            .lock()
+            .expect("resident prefix cache lock poisoned")
+            .stats()
+            .resident_tokens;
+        let target_tokens = proactive_resident_eviction_target(
+            u64::from(runtime.kv_pool_tokens()),
+            active_session_tokens,
+            resident_tokens,
+            decode_batch_tokens,
+        );
         self.evict_resident_prefix_for_tokens(runtime, session_id, target_tokens)
     }
 
@@ -267,8 +283,52 @@ impl KvStageIntegration {
     }
 }
 
+fn proactive_resident_eviction_target(
+    kv_pool_tokens: u64,
+    active_session_tokens: u64,
+    resident_tokens: u64,
+    decode_batch_tokens: u64,
+) -> u64 {
+    if kv_pool_tokens == 0 {
+        return decode_batch_tokens;
+    }
+    active_session_tokens
+        .saturating_add(resident_tokens)
+        .saturating_add(decode_batch_tokens)
+        .saturating_sub(kv_pool_tokens)
+}
+
 fn resident_estimated_bytes(token_count: u64, layer_count: u32) -> u64 {
     token_count
         .saturating_mul(u64::from(layer_count))
         .saturating_mul(2)
+}
+
+#[cfg(test)]
+mod proactive_eviction_tests {
+    use super::proactive_resident_eviction_target;
+
+    #[test]
+    fn keeps_resident_prefixes_when_unified_pool_already_has_batch_headroom() {
+        assert_eq!(
+            proactive_resident_eviction_target(32_768, 776, 1_992, 2_048),
+            0
+        );
+    }
+
+    #[test]
+    fn evicts_only_the_unified_pool_deficit() {
+        assert_eq!(
+            proactive_resident_eviction_target(8_192, 6_500, 1_500, 2_048),
+            1_856
+        );
+    }
+
+    #[test]
+    fn unknown_pool_preserves_fixed_batch_fallback() {
+        assert_eq!(
+            proactive_resident_eviction_target(0, 776, 1_992, 2_048),
+            2_048
+        );
+    }
 }
