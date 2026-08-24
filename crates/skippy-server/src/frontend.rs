@@ -30,6 +30,7 @@ use self::{
 };
 
 pub use self::admission::DECODE_BATCH_HEADROOM_TOKENS;
+pub(crate) use self::generation::serve_embedded_openai_with_scheduler;
 use self::generation::*;
 pub use self::generation::{
     CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs,

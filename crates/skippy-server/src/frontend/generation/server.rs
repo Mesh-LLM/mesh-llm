@@ -246,12 +246,32 @@ pub async fn serve_embedded_openai(args: EmbeddedOpenAiArgs) -> Result<()> {
     serve_embedded_openai_with_shutdown(args, std::future::pending::<()>()).await
 }
 
+pub(crate) async fn serve_embedded_openai_with_scheduler(
+    args: EmbeddedOpenAiArgs,
+    iteration_scheduler: IterationScheduler,
+) -> Result<()> {
+    serve_embedded_openai_with_shutdown_and_scheduler(
+        args,
+        std::future::pending::<()>(),
+        Some(iteration_scheduler),
+    )
+    .await
+}
+
 pub async fn serve_embedded_openai_with_shutdown(
     args: EmbeddedOpenAiArgs,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
+    serve_embedded_openai_with_shutdown_and_scheduler(args, shutdown, None).await
+}
+
+async fn serve_embedded_openai_with_shutdown_and_scheduler(
+    args: EmbeddedOpenAiArgs,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    iteration_scheduler: Option<IterationScheduler>,
+) -> Result<()> {
     let bind_addr = args.bind_addr;
-    let binding = embedded_openai_router(args)?;
+    let binding = embedded_openai_router_with_scheduler(args, iteration_scheduler)?;
 
     println!(
         "skippy-server listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={}",
@@ -279,10 +299,17 @@ pub struct EmbeddedOpenAiBackend {
 }
 
 pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiRouter> {
+    embedded_openai_router_with_scheduler(args, None)
+}
+
+fn embedded_openai_router_with_scheduler(
+    args: EmbeddedOpenAiArgs,
+    iteration_scheduler: Option<IterationScheduler>,
+) -> Result<EmbeddedOpenAiRouter> {
     let telemetry = args.telemetry.clone();
     let tokenizer = TokenizerCapability::from_stage_zero(&args.config, args.runtime.clone())
         .context("construct stage-0 tokenizer capability for embedded OpenAI serving")?;
-    let binding = embedded_openai_backend(args)?;
+    let binding = embedded_openai_backend_with_scheduler(args, iteration_scheduler)?;
     let router = instrumented_openai_router(binding.backend.clone(), tokenizer, telemetry);
 
     Ok(EmbeddedOpenAiRouter {
@@ -293,6 +320,13 @@ pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAi
 }
 
 pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiBackend> {
+    embedded_openai_backend_with_scheduler(args, None)
+}
+
+fn embedded_openai_backend_with_scheduler(
+    args: EmbeddedOpenAiArgs,
+    iteration_scheduler: Option<IterationScheduler>,
+) -> Result<EmbeddedOpenAiBackend> {
     if args.prefill_chunk_size == 0 {
         bail!("--openai-prefill-chunk-size must be greater than zero");
     }
@@ -378,12 +412,15 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
     .context("prewarm embedded OpenAI runtime sessions")?;
     let kv = KvStageIntegration::from_config(&args.config)?.map(Arc::new);
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
-    let iteration_scheduler = IterationScheduler::new(
-        args.runtime.clone(),
-        &args.config,
-        args.generation_concurrency,
-        args.telemetry.clone(),
-    )?;
+    let iteration_scheduler = match iteration_scheduler {
+        Some(iteration_scheduler) => iteration_scheduler,
+        None => IterationScheduler::new(
+            args.runtime.clone(),
+            &args.config,
+            args.generation_concurrency,
+            args.telemetry.clone(),
+        )?,
+    };
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         config: args.config.clone(),

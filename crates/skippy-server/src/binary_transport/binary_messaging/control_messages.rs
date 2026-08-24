@@ -100,10 +100,10 @@ pub(super) fn handle_stop(
             });
             let drop_stats = runtime
                 .drop_session_timed(&scheduler_session_key)
-                .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))?;
+                .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
             Ok((record, drop_stats))
         })
-        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
         .context("reset binary stage session")?;
     let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
     let (record, drop_stats) = outcome.value;
@@ -179,9 +179,9 @@ pub(super) fn handle_verify_retirement(
         .execute_runtime("binary-verify-retire", move |runtime| {
             runtime
                 .retire_verify_checkpoint(&scheduler_session_key, token_start, token_count)
-                .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))
+                .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))
         })
-        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
         .context("retire binary stage verify checkpoint")?;
     if let Some(downstream) = downstream.as_mut() {
         write_stage_message_conditioned(
@@ -228,9 +228,11 @@ pub(super) fn handle_session_control(
                 .execute_runtime("binary-session-trim", move |runtime| {
                     runtime
                         .trim_session(&scheduler_session_key, token_count)
-                        .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))
+                        .map_err(|error| {
+                            openai_frontend::OpenAiError::backend(format!("{error:#}"))
+                        })
                 })
-                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
                 .context("trim binary stage session")?;
         }
         _ => unreachable!("session control checked above"),
@@ -310,9 +312,11 @@ pub(super) fn handle_generation_control(
                             prompt_token_count,
                             sampling.as_ref(),
                         )
-                        .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))
+                        .map_err(|error| {
+                            openai_frontend::OpenAiError::backend(format!("{error:#}"))
+                        })
                 })
-                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
                 .context("configure binary stage generation")?;
         }
         configure_prediction_return_stream(
@@ -407,7 +411,7 @@ pub(super) fn handle_prefix_cache_control(
                 &token_ids,
             ))
         })
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
     control_stats.merge(local.stats);
     if local.hit
         && let Some(downstream) = downstream.as_mut()
@@ -432,7 +436,7 @@ pub(super) fn handle_prefix_cache_control(
                 runtime
                     .drop_session_timed(&scheduler_session_key)
                     .map(|_| ())
-                    .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))
+                    .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))
             });
         }
     }

@@ -11,6 +11,7 @@ mod tool_call_stream;
 mod types;
 
 pub use cache_hints::{CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS};
+pub(crate) use server::serve_embedded_openai_with_scheduler;
 pub use server::{
     EmbeddedOpenAiArgs, EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults, EmbeddedOpenAiRouter,
     EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,

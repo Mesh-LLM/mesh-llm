@@ -329,9 +329,9 @@ fn handle_binary_connection_messages(
                     session_id,
                     &align_message,
                 )
-                .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))
+                .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))
             })
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
         let session_auto_align_count = auto_align.count;
         let session_auto_align_ms = auto_align.elapsed_ms;
         let session_auto_align_trimmed_tokens = auto_align.trimmed_tokens;
@@ -365,7 +365,7 @@ fn handle_binary_connection_messages(
                     activation_width,
                 ))
             })
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
         message_reply_stats.merge(lookup_result.stats);
         let restored_prefill =
             lookup_result.restored_tokens >= token_ids.len() && !token_ids.is_empty();
@@ -390,7 +390,7 @@ fn handle_binary_connection_messages(
         let mut decode_batch_wait_ms = 0.0;
         let input_activation_bytes = message.activation.len();
         let mut proactive_eviction = None;
-        let (predicted_token, mut predicted_tokens, output, native_mtp_draft, compute_ms) =
+        let (predicted_token, mut predicted_tokens, mut output, native_mtp_draft, compute_ms) =
             if restored_prefill {
                 let now = now_unix_nanos() as u64;
                 compute_start_unix_nanos = now;
@@ -438,7 +438,7 @@ fn handle_binary_connection_messages(
                             input,
                             true,
                         )
-                        .map_err(|error| anyhow::anyhow!(error.to_string()))
+                        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
                         .context("execute batched binary decode frame")?;
                     runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
                     runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
@@ -477,7 +477,7 @@ fn handle_binary_connection_messages(
                                         eviction_plan,
                                     )
                                     .map_err(|error| {
-                                        openai_frontend::OpenAiError::backend(error.to_string())
+                                        openai_frontend::OpenAiError::backend(format!("{error:#}"))
                                     })?,
                                 )
                             } else {
@@ -496,12 +496,12 @@ fn handle_binary_connection_messages(
                                 ),
                             )
                             .map_err(|error| {
-                                openai_frontend::OpenAiError::backend(error.to_string())
+                                openai_frontend::OpenAiError::backend(format!("{error:#}"))
                             })?;
                             let sessions_after = runtime.session_stats();
                             Ok((sessions_before, sessions_after, eviction, result))
                         })
-                        .map_err(|error| anyhow::anyhow!(error.to_string()))
+                        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
                         .context("execute scheduler-owned binary stage message")?;
                     runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
                     runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
@@ -603,11 +603,10 @@ fn handle_binary_connection_messages(
             let record_message = message.clone();
             let record_accumulated_prefill_tokens = accumulated_prefill_tokens.clone();
             let record_token_ids = token_ids.clone();
-            let record_output = output.clone();
             let restored_tokens = lookup_result.restored_tokens as u64;
-            let record = iteration_scheduler
+            let (record, returned_output) = iteration_scheduler
                 .execute_runtime("binary-prefill-record", move |runtime| {
-                    Ok(super::prefill_recording::record_completed_prefill(
+                    let record = super::prefill_recording::record_completed_prefill(
                         &record_config,
                         runtime,
                         record_kv.as_ref(),
@@ -618,10 +617,12 @@ fn handle_binary_connection_messages(
                         &record_token_ids,
                         restored_tokens,
                         activation_width,
-                        &record_output,
-                    ))
+                        &output,
+                    );
+                    Ok((record, output))
                 })
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
+            output = returned_output;
             if record.recorded_pages > 0 {
                 message_reply_stats.kv_recorded_pages += record.recorded_pages as i64;
                 message_reply_stats.kv_record_stage_mask |= stage_mask(config.stage_index);
@@ -659,7 +660,7 @@ fn handle_binary_connection_messages(
                         &record_tokens,
                     ))
                 })
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
             add_binary_record_stats(&mut message_reply_stats, config, &record);
         }
 

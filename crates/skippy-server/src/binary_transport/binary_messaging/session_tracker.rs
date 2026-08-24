@@ -75,7 +75,7 @@ pub(super) fn release_tracked_connection_sessions(
             }
             Ok(failures)
         })
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
     if !failures.is_empty() {
         bail!(
             "failed to reclaim {}/{} orphaned binary stage session(s): {}",

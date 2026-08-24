@@ -155,46 +155,53 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         }
         let openai_config = config.clone();
         let openai_runtime = runtime.clone();
+        let openai_iteration_scheduler = iteration_scheduler.clone();
         let openai_telemetry = telemetry.clone();
         let openai_prediction_returns = prediction_returns.clone();
         tokio::spawn(async move {
-            if let Err(error) = frontend::serve_embedded_openai(EmbeddedOpenAiArgs {
-                bind_addr: openai_options.bind_addr,
-                config: openai_config,
-                runtime: openai_runtime,
-                model_id: openai_options.model_id,
-                default_max_tokens: openai_options.default_max_tokens,
-                request_defaults: frontend::EmbeddedOpenAiRequestDefaults::default(),
-                generation_concurrency: openai_options.generation_concurrency,
-                prefill_chunk_size: openai_options.prefill_chunk_size,
-                prefill_chunk_policy: openai_options.prefill_chunk_policy,
-                prefill_chunk_schedule: openai_options.prefill_chunk_schedule,
-                prefill_adaptive_start: openai_options.prefill_adaptive_start,
-                prefill_adaptive_step: openai_options.prefill_adaptive_step,
-                prefill_adaptive_max: openai_options.prefill_adaptive_max,
-                draft_model_path: openai_options.draft_model_path,
-                speculative_window: openai_options.speculative_window,
-                adaptive_speculative_window: openai_options.adaptive_speculative_window,
-                draft_n_gpu_layers: openai_options.draft_n_gpu_layers,
-                speculative: openai_options.speculative.clone(),
-                native_mtp_enabled: native_mtp_enabled
-                    && openai_options.speculative.native_mtp.enabled,
-                native_mtp_draft_model_path: openai_options.native_mtp_draft_model_path,
-                native_mtp_max_tokens: openai_options.native_mtp_max_tokens,
-                native_mtp_min_tokens: openai_options.native_mtp_min_tokens,
-                activation_width,
-                wire_dtype,
-                reply_credit_limit,
-                downstream_connect_timeout_secs,
-                downstream_wire_condition,
-                prediction_returns: Some(openai_prediction_returns),
-                telemetry: openai_telemetry,
-                hook_policy: None,
-                generation_receipt: None,
-                linear_proposal_ingress: None,
-                openai_guardrails: Some(frontend::OpenAiGuardrailsConfig::disabled_for_skippy()),
-            })
-            .await
+            if let Err(error) =
+                frontend::serve_embedded_openai_with_scheduler(
+                    EmbeddedOpenAiArgs {
+                        bind_addr: openai_options.bind_addr,
+                        config: openai_config,
+                        runtime: openai_runtime,
+                        model_id: openai_options.model_id,
+                        default_max_tokens: openai_options.default_max_tokens,
+                        request_defaults: frontend::EmbeddedOpenAiRequestDefaults::default(),
+                        generation_concurrency: openai_options.generation_concurrency,
+                        prefill_chunk_size: openai_options.prefill_chunk_size,
+                        prefill_chunk_policy: openai_options.prefill_chunk_policy,
+                        prefill_chunk_schedule: openai_options.prefill_chunk_schedule,
+                        prefill_adaptive_start: openai_options.prefill_adaptive_start,
+                        prefill_adaptive_step: openai_options.prefill_adaptive_step,
+                        prefill_adaptive_max: openai_options.prefill_adaptive_max,
+                        draft_model_path: openai_options.draft_model_path,
+                        speculative_window: openai_options.speculative_window,
+                        adaptive_speculative_window: openai_options.adaptive_speculative_window,
+                        draft_n_gpu_layers: openai_options.draft_n_gpu_layers,
+                        speculative: openai_options.speculative.clone(),
+                        native_mtp_enabled: native_mtp_enabled
+                            && openai_options.speculative.native_mtp.enabled,
+                        native_mtp_draft_model_path: openai_options.native_mtp_draft_model_path,
+                        native_mtp_max_tokens: openai_options.native_mtp_max_tokens,
+                        native_mtp_min_tokens: openai_options.native_mtp_min_tokens,
+                        activation_width,
+                        wire_dtype,
+                        reply_credit_limit,
+                        downstream_connect_timeout_secs,
+                        downstream_wire_condition,
+                        prediction_returns: Some(openai_prediction_returns),
+                        telemetry: openai_telemetry,
+                        hook_policy: None,
+                        generation_receipt: None,
+                        linear_proposal_ingress: None,
+                        openai_guardrails: Some(
+                            frontend::OpenAiGuardrailsConfig::disabled_for_skippy(),
+                        ),
+                    },
+                    openai_iteration_scheduler,
+                )
+                .await
             {
                 eprintln!("embedded OpenAI server failed: {error:#}");
             }

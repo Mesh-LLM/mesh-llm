@@ -6,8 +6,8 @@ license = { workspace = true }
 description = "Iteration-level scheduler for concurrent staged serving with unified KV"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
-categories = ["concurrency", "machine-learning"]
+categories = ["concurrency", "artificial-intelligence"]
 
 [dependencies]
-skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc6" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc7" }
 thiserror = "2"

@@ -45,6 +45,9 @@ impl KvStageIntegration {
         }
         let mut candidate_policy = PrefixCandidatePolicy::from_cache(&cache_config);
         let resident_config = ResidentCacheConfig::from_stage(config, &cache_config);
+        if resident_config.max_entries == 0 {
+            return Ok(None);
+        }
         // Bound the record ladder by the same token budget the resident cache
         // enforces, so a single request cannot record more than it can hold.
         candidate_policy.max_resident_tokens_hint = resident_config.max_resident_tokens;

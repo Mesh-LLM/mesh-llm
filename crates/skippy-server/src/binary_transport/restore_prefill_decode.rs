@@ -108,7 +108,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 &lookup_tokens,
             ))
         })
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
     control_stats.merge(local.stats);
     let route = restore_prefill_decode_route(local.hit, has_downstream);
     if route == RestorePrefillDecodeRoute::DirectMiss {
@@ -162,7 +162,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                         scheduler_message.state.prompt_token_count.max(0) as u64,
                         sampling.as_ref(),
                     )
-                    .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))?;
+                    .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
             }
             let proactive_eviction = evict_binary_resident_prefix_for_decode(
                 runtime,
@@ -174,7 +174,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                     target_tokens: None,
                 },
             )
-            .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))?;
+            .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
             let (predicted, _, output, _) = run_binary_stage_message(
                 runtime,
                 &scheduler_session_id,
@@ -183,10 +183,10 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 input.as_ref(),
                 BinaryStageExecutionOptions::new(sample, output_capacity, native_mtp_enabled),
             )
-            .map_err(|error| openai_frontend::OpenAiError::backend(error.to_string()))?;
+            .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
             Ok((predicted, output, proactive_eviction))
         })
-        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
         .context("execute scheduler-owned restore-decode stage message")?;
     let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
     let runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
@@ -241,7 +241,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 record_message.tokens.as_slice(),
             ))
         })
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
     add_binary_record_stats(&mut control_stats, config, &record);
     emit_restore_decode_control(
         config,

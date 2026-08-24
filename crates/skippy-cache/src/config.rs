@@ -42,9 +42,10 @@ impl ResidentCacheConfig {
 }
 
 fn cap_resident_entries(configured_entries: usize, reserved_seq_count: i32) -> usize {
-    let available_sequence_ids = crate::LLAMA_MAX_SEQ
-        .saturating_sub(reserved_seq_count)
-        .max(1) as usize;
+    let available_sequence_ids = crate::LLAMA_MAX_SEQ.saturating_sub(reserved_seq_count) as usize;
+    if available_sequence_ids == 0 {
+        return 0;
+    }
     configured_entries.clamp(1, 512).min(available_sequence_ids)
 }
 
@@ -110,6 +111,7 @@ mod resident_cache_config_tests {
     fn resident_entry_cap_fits_available_sequence_ids() {
         assert_eq!(cap_resident_entries(512, 8), 248);
         assert_eq!(cap_resident_entries(64, 8), 64);
+        assert_eq!(cap_resident_entries(64, crate::LLAMA_MAX_SEQ), 0);
     }
 }
 

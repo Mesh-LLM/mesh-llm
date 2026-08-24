@@ -160,37 +160,39 @@ impl StageOpenAiBackend {
         let base_position = params.base_position;
         let generated_len = params.generated_len;
         let max_new_tokens = params.max_new_tokens;
-        let execution =
-            self.iteration_scheduler
-                .execute_runtime("linear-proposal-verify", move |runtime| {
-                    let observed_position =
-                        runtime.session_token_count(&session_id).ok_or_else(|| {
-                            OpenAiError::backend("linear proposal session is not active")
-                        })?;
-                    if observed_position != base_position {
-                        return Ok(None);
-                    }
-                    let predictions = runtime
-                        .verify_tokens_sampled(&session_id, &owned_verify_inputs, sampling.as_ref())
-                        .map_err(openai_backend_error)?;
-                    let decision = classify_native_mtp_verify_window(
-                        &owned_proposal_tokens,
-                        &predictions,
-                        generated_len,
-                        max_new_tokens,
-                        |token| {
-                            runtime
-                                .model
-                                .token_is_eog(token)
-                                .map_err(openai_backend_error)
-                        },
-                    )?;
-                    let position_after_verification =
-                        runtime.session_token_count(&session_id).ok_or_else(|| {
-                            OpenAiError::backend("linear proposal session disappeared")
-                        })?;
-                    Ok(Some((predictions, decision, position_after_verification)))
-                })?;
+        let verification = self.iteration_scheduler.execute_runtime_timed(
+            "linear-proposal-verify",
+            move |runtime| {
+                let observed_position = runtime
+                    .session_token_count(&session_id)
+                    .ok_or_else(|| OpenAiError::backend("linear proposal session is not active"))?;
+                if observed_position != base_position {
+                    return Ok(None);
+                }
+                let predictions = runtime
+                    .verify_tokens_sampled(&session_id, &owned_verify_inputs, sampling.as_ref())
+                    .map_err(openai_backend_error)?;
+                let decision = classify_native_mtp_verify_window(
+                    &owned_proposal_tokens,
+                    &predictions,
+                    generated_len,
+                    max_new_tokens,
+                    |token| {
+                        runtime
+                            .model
+                            .token_is_eog(token)
+                            .map_err(openai_backend_error)
+                    },
+                )?;
+                let position_after_verification = runtime
+                    .session_token_count(&session_id)
+                    .ok_or_else(|| OpenAiError::backend("linear proposal session disappeared"))?;
+                Ok(Some((predictions, decision, position_after_verification)))
+            },
+        )?;
+        let verification_lock_wait_us = millis_to_micros(verification.runtime_lock_wait_ms);
+        let verification_lock_hold_us = millis_to_micros(verification.runtime_lock_hold_ms);
+        let execution = verification.value;
         let Some((predictions, decision, position_after_verification)) = execution else {
             return Ok(None);
         };
@@ -264,8 +266,9 @@ impl StageOpenAiBackend {
             canonical_position,
             verification_elapsed_us,
             repair_elapsed_us: repair.elapsed_us,
-            runtime_lock_wait_us: repair.runtime_lock_wait_us,
-            runtime_lock_hold_us: verification_elapsed_us
+            runtime_lock_wait_us: verification_lock_wait_us
+                .saturating_add(repair.runtime_lock_wait_us),
+            runtime_lock_hold_us: verification_lock_hold_us
                 .saturating_add(repair.runtime_lock_hold_us),
             runtime_lock_acquires: 1usize.saturating_add(repair.runtime_lock_acquires),
         }))
@@ -290,8 +293,9 @@ impl StageOpenAiBackend {
         let chat_sampling_metadata = chat_sampling_metadata.map(str::to_string);
         if canonical_position >= position_after_verification {
             let retire_timer = Instant::now();
-            self.iteration_scheduler
-                .execute_runtime("linear-proposal-retire", move |runtime| {
+            let outcome = self.iteration_scheduler.execute_runtime_timed(
+                "linear-proposal-retire",
+                move |runtime| {
                     runtime
                         .retire_verify_checkpoint(
                             &session_id,
@@ -299,51 +303,55 @@ impl StageOpenAiBackend {
                             checkpoint_count as u64,
                         )
                         .map_err(openai_backend_error)
-                })?;
+                },
+            )?;
             let elapsed_us = elapsed_us(retire_timer);
             return Ok(LinearProposalRepairTiming {
                 elapsed_us,
-                runtime_lock_wait_us: 0,
-                runtime_lock_hold_us: elapsed_us,
+                runtime_lock_wait_us: millis_to_micros(outcome.runtime_lock_wait_ms),
+                runtime_lock_hold_us: millis_to_micros(outcome.runtime_lock_hold_ms),
                 runtime_lock_acquires: 1,
             });
         }
 
         let repair_timer = Instant::now();
-        self.iteration_scheduler
-            .execute_runtime("linear-proposal-repair", move |runtime| {
-            if let Err(error) = runtime.trim_session(&session_id, canonical_position) {
-                let _ = runtime.drop_session_timed(&session_id);
-                return Err(OpenAiError::backend(format!(
-                    "linear proposal repair failed and the session was retired: {error:#}"
-                )));
-            }
-            if let Some(metadata) = chat_sampling_metadata.as_deref() {
-                runtime
-                    .configure_chat_sampling(
-                        &session_id,
-                        metadata,
-                        u64::try_from(prompt_token_count).unwrap_or(u64::MAX),
-                        sampling.enabled.then_some(&sampling),
-                    )
-                    .map_err(openai_backend_error)?;
-            }
-            let repaired_position = runtime.session_token_count(&session_id).ok_or_else(|| {
-                OpenAiError::backend("repaired linear proposal session disappeared")
-            })?;
-            if repaired_position != canonical_position {
-                let _ = runtime.drop_session_timed(&session_id);
-                return Err(OpenAiError::backend(format!(
-                    "linear proposal repair position mismatch: observed {repaired_position}, expected {canonical_position}"
-                )));
-            }
-            Ok(())
-            })?;
+        let outcome = self.iteration_scheduler.execute_runtime_timed(
+            "linear-proposal-repair",
+            move |runtime| {
+                if let Err(error) = runtime.trim_session(&session_id, canonical_position) {
+                    let _ = runtime.drop_session_timed(&session_id);
+                    return Err(OpenAiError::backend(format!(
+                        "linear proposal repair failed and the session was retired: {error:#}"
+                    )));
+                }
+                if let Some(metadata) = chat_sampling_metadata.as_deref() {
+                    runtime
+                        .configure_chat_sampling(
+                            &session_id,
+                            metadata,
+                            u64::try_from(prompt_token_count).unwrap_or(u64::MAX),
+                            sampling.enabled.then_some(&sampling),
+                        )
+                        .map_err(openai_backend_error)?;
+                }
+                let repaired_position =
+                    runtime.session_token_count(&session_id).ok_or_else(|| {
+                        OpenAiError::backend("repaired linear proposal session disappeared")
+                    })?;
+                if repaired_position != canonical_position {
+                    let _ = runtime.drop_session_timed(&session_id);
+                    return Err(OpenAiError::backend(format!(
+                        "linear proposal repair position mismatch: observed {repaired_position}, expected {canonical_position}"
+                    )));
+                }
+                Ok(())
+            },
+        )?;
         let repair_elapsed_us = elapsed_us(repair_timer);
         Ok(LinearProposalRepairTiming {
             elapsed_us: repair_elapsed_us,
-            runtime_lock_wait_us: 0,
-            runtime_lock_hold_us: repair_elapsed_us,
+            runtime_lock_wait_us: millis_to_micros(outcome.runtime_lock_wait_ms),
+            runtime_lock_hold_us: millis_to_micros(outcome.runtime_lock_hold_ms),
             runtime_lock_acquires: 1,
         })
     }
@@ -361,6 +369,14 @@ fn ensure_request_active(
 
 pub(crate) fn elapsed_us(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+fn millis_to_micros(value: f64) -> u64 {
+    if value.is_finite() && value > 0.0 {
+        (value * 1_000.0).round() as u64
+    } else {
+        0
+    }
 }
 
 fn linear_proposal_disposition(

@@ -95,6 +95,8 @@ pub enum TopologyPlanError {
     ContextExceedsNative { requested: u32, native: u32 },
     #[error("requested parallel lanes must be greater than zero")]
     ZeroParallelLanes,
+    #[error("no native sequence IDs remain after reservations")]
+    NoSequenceIdCapacity,
     #[error("requested parallel lanes {requested} exceed sequence-id capacity {capacity}")]
     ParallelLanesExceedSequenceCapacity { requested: usize, capacity: usize },
     #[error("no topology can distribute all layers and keep context >= {minimum_context}")]
@@ -257,6 +259,9 @@ fn parallel_lane_candidates(
         .saturating_sub(reserved_sequence_ids)
         .checked_div(SEQUENCE_IDS_PER_LANE_WITH_RESIDENT_CACHE)
         .unwrap_or(0);
+    if sequence_capacity == 0 {
+        return Err(TopologyPlanError::NoSequenceIdCapacity);
+    }
     if let Some(lanes) = override_lanes {
         if lanes == 0 {
             return Err(TopologyPlanError::ZeroParallelLanes);
@@ -274,7 +279,7 @@ fn parallel_lane_candidates(
     // floor_ctx_per_session = minimum context needed per session
     let pool_cells = context_length as usize;
     let max_seq = pool_cells / FLOOR_CTX_PER_SESSION as usize;
-    let max_seq = max_seq.clamp(1, sequence_capacity.max(1));
+    let max_seq = max_seq.clamp(1, sequence_capacity);
     Ok((1..=max_seq).rev().collect())
 }
 
@@ -709,6 +714,18 @@ mod tests {
 
     fn qwen_nodes(count: usize, gib: u64) -> Vec<TopologyNode> {
         (0..count).map(|index| qwen_node(index, gib)).collect()
+    }
+
+    #[test]
+    fn lane_planning_rejects_exhausted_sequence_ids() {
+        assert_eq!(
+            parallel_lane_candidates(None, 65_536, 1, LLAMA_MAX_SEQ),
+            Err(TopologyPlanError::NoSequenceIdCapacity)
+        );
+        assert_eq!(
+            parallel_lane_candidates(Some(1), 65_536, 1, LLAMA_MAX_SEQ),
+            Err(TopologyPlanError::NoSequenceIdCapacity)
+        );
     }
 
     fn metal_node(id: &str, metal_recommended_bytes: u64) -> TopologyNode {

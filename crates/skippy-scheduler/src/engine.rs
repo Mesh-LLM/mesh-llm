@@ -75,6 +75,7 @@ impl Scheduler {
             ..IterationPlan::default()
         };
         let mut budget = self.config.max_tokens_per_iteration;
+        let mut prefill_sequences = 0usize;
         let ids = self.active.keys().cloned().collect::<Vec<_>>();
         // llama's mixed-token ABI can batch many prefills or many decode rows,
         // but combining a long prefill with live decode rows changes dense
@@ -95,6 +96,9 @@ impl Scheduler {
             };
             let replay = sequence.recompute_tokens();
             if sequence.prefill_cursor < replay.len() {
+                if prefill_sequences >= self.config.max_prefill_sequences_per_iteration {
+                    continue;
+                }
                 let count = self
                     .config
                     .prefill_chunk_tokens
@@ -117,6 +121,7 @@ impl Scheduler {
                     sampling: sequence.sampling.clone(),
                 });
                 sequence.prefill_cursor = end;
+                prefill_sequences += 1;
                 plan.token_count += count;
                 budget -= count;
                 continue;
@@ -483,6 +488,26 @@ mod tests {
     }
 
     #[test]
+    fn prefill_sequence_limit_serializes_recurrent_prefills() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 2,
+            max_prefill_sequences_per_iteration: 1,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("a", 2, 1)).unwrap();
+        scheduler.submit(sequence("b", 2, 1)).unwrap();
+
+        let first = scheduler.plan_iteration();
+        assert_eq!(first.work.len(), 1);
+        assert_eq!(first.work[0].sequence_id, "a");
+        scheduler.complete_iteration(&first, &[10]);
+
+        let second = scheduler.plan_iteration();
+        assert_eq!(second.work.len(), 1);
+        assert_eq!(second.work[0].sequence_id, "b");
+    }
+
+    #[test]
     fn prefix_restore_skips_only_the_restored_token_span() {
         let mut scheduler = Scheduler::new(SchedulerConfig::default());
         let restored = sequence("a", 8, 4).with_prefix_restore(PrefixRestore {
@@ -494,6 +519,24 @@ mod tests {
         let plan = scheduler.plan_iteration();
         assert_eq!(plan.work[0].tokens, vec![6, 7]);
         assert_eq!(plan.work[0].positions, vec![6, 7]);
+    }
+
+    #[test]
+    fn full_prefix_restore_replays_the_final_token_for_logits() {
+        let mut scheduler = Scheduler::new(SchedulerConfig::default());
+        let restored = sequence("a", 8, 4).with_prefix_restore(PrefixRestore {
+            page_id: "page".into(),
+            token_count: 8,
+            kind: PrefixRestoreKind::ResidentKv,
+        });
+        scheduler.submit(restored).unwrap();
+
+        let plan = scheduler.plan_iteration();
+
+        assert_eq!(plan.work.len(), 1);
+        assert_eq!(plan.work[0].tokens, vec![7]);
+        assert_eq!(plan.work[0].positions, vec![7]);
+        assert!(plan.work[0].sample_last);
     }
 
     #[test]

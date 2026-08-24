@@ -76,7 +76,11 @@ impl Sequence {
     }
 
     pub fn with_prefix_restore(mut self, restore: PrefixRestore) -> Self {
-        self.prefill_cursor = restore.token_count.min(self.recompute_tokens().len());
+        // A restored prefix does not carry a sampled next token. Keep one
+        // replay token runnable so the native runtime produces logits even
+        // when the cache covers the complete prompt.
+        let replay_len = self.recompute_tokens().len();
+        self.prefill_cursor = restore.token_count.min(replay_len.saturating_sub(1));
         self.prefix_restore = Some(restore);
         self
     }

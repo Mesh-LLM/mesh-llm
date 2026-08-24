@@ -567,11 +567,7 @@ def run_concurrent_requests(
 
     workload_started = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = []
-        for request_id in range(num_requests):
-            futures.append(executor.submit(make_request, request_id))
-            if request_id + 1 < num_requests:
-                time.sleep(0.01)
+        futures = [executor.submit(make_request, request_id) for request_id in range(num_requests)]
         results = [future.result() for future in concurrent.futures.as_completed(futures)]
     makespan_ms = (time.monotonic() - workload_started) * 1000
     results.sort(key=lambda result: result["request_id"])
@@ -1400,10 +1396,11 @@ def main() -> int:
                 case_concurrency_results = []
                 for concurrency in concurrency_sweep:
                     print(f"==> {case.key}: concurrency={concurrency}", flush=True)
+                    request_count = max(args.concurrent_requests, concurrency)
                     concurrent_results, makespan_ms = run_concurrent_requests(
                         prompt,
                         concurrency,
-                        args.concurrent_requests,
+                        request_count,
                         port,
                         args,
                     )
@@ -1416,7 +1413,7 @@ def main() -> int:
                     case_concurrency_results.append(
                         {
                             "concurrency": concurrency,
-                            "requests": args.concurrent_requests,
+                            "requests": request_count,
                             "makespan_ms": makespan_ms,
                             "per_request": concurrent_results,
                             "goodput": goodput,

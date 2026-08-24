@@ -39,6 +39,7 @@ pub struct SchedulerConfig {
     pub max_waiting_sequences: usize,
     pub max_tokens_per_iteration: usize,
     pub prefill_chunk_tokens: usize,
+    pub max_prefill_sequences_per_iteration: usize,
     pub iteration_interval: Duration,
     pub memory_components: Vec<MemoryComponent>,
 }
@@ -52,6 +53,7 @@ impl SchedulerConfig {
         self.prefill_chunk_tokens = self
             .prefill_chunk_tokens
             .clamp(1, self.max_tokens_per_iteration);
+        self.max_prefill_sequences_per_iteration = self.max_prefill_sequences_per_iteration.max(1);
         self
     }
 }
@@ -64,6 +66,7 @@ impl Default for SchedulerConfig {
             max_waiting_sequences: 256,
             max_tokens_per_iteration: 2048,
             prefill_chunk_tokens: 256,
+            max_prefill_sequences_per_iteration: usize::MAX,
             iteration_interval: Duration::from_millis(2),
             memory_components: Vec::new(),
         }

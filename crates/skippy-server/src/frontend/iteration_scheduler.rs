@@ -17,7 +17,6 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const MAX_NATIVE_ITERATION_TOKENS: usize = 2048;
-const TOKEN_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -86,6 +85,7 @@ struct DirectIteration {
 }
 
 type RuntimeOperationFn = Box<dyn FnOnce(&Arc<Mutex<RuntimeState>>) + Send>;
+type RuntimeSetupOutcome = (Vec<String>, Vec<(String, OpenAiError)>);
 
 struct RuntimeOperation {
     label: &'static str,
@@ -111,6 +111,7 @@ enum SchedulerEvent {
 
 struct RequestState {
     reply: std_mpsc::Sender<SchedulerEvent>,
+    pending_controls: VecDeque<std_mpsc::Receiver<TokenControl>>,
     sampling: Option<SamplingConfig>,
     chat_sampling_metadata: Option<String>,
     prompt_token_count: usize,
@@ -512,6 +513,7 @@ impl SchedulerWorker {
             request.id,
             RequestState {
                 reply: request.reply,
+                pending_controls: VecDeque::new(),
                 sampling: request.sampling,
                 chat_sampling_metadata: request.chat_sampling_metadata,
                 prompt_token_count: request.prompt_tokens.len(),
@@ -526,20 +528,54 @@ impl SchedulerWorker {
         self.requests.remove(id);
     }
 
+    fn fail_request(&mut self, id: &str, error: OpenAiError) {
+        self.scheduler.cancel(id);
+        self.drop_runtime_sessions([id]);
+        if let Some(request) = self.requests.remove(id) {
+            let _ = request.reply.send(SchedulerEvent::Error(error));
+        }
+    }
+
+    fn apply_pending_controls(&mut self) {
+        let mut stopped = Vec::new();
+        for (id, request) in &mut self.requests {
+            while let Some(control) = request.pending_controls.front() {
+                match control.try_recv() {
+                    Ok(TokenControl::Continue) => {
+                        request.pending_controls.pop_front();
+                    }
+                    Ok(TokenControl::Stop) | Err(std_mpsc::TryRecvError::Disconnected) => {
+                        stopped.push(id.clone());
+                        break;
+                    }
+                    Err(std_mpsc::TryRecvError::Empty) => break,
+                }
+            }
+        }
+        for id in stopped {
+            self.scheduler.cancel(&id);
+            self.drop_runtime_sessions([id.as_str()]);
+            if let Some(request) = self.requests.remove(&id) {
+                let _ = request.reply.send(SchedulerEvent::Complete);
+            }
+        }
+    }
+
     fn run_iteration(&mut self) {
+        self.apply_pending_controls();
         if !self.direct_iterations.is_empty() {
             self.run_direct_iteration_batch();
             return;
         }
         let iteration_started = Instant::now();
-        let plan = self.scheduler.plan_iteration();
+        let mut plan = self.scheduler.plan_iteration();
         if plan.work.is_empty() {
             return;
         }
         let mut setup_ids = BTreeSet::new();
         let mut setup = Vec::new();
         for work in &plan.work {
-            let Some(request) = self.requests.get(&work.sequence_id) else {
+            let Some(request) = self.requests.get_mut(&work.sequence_id) else {
                 continue;
             };
             if !request.runtime_configured && setup_ids.insert(work.sequence_id.clone()) {
@@ -551,7 +587,29 @@ impl SchedulerWorker {
                 ));
             }
         }
-        let result = self.execute_plan(&plan, &setup);
+        let (configured, setup_failures) = match self.prepare_runtime_sessions(&setup) {
+            Ok(result) => result,
+            Err(error) => {
+                self.fail_all(error);
+                return;
+            }
+        };
+        for id in configured {
+            if let Some(request) = self.requests.get_mut(&id) {
+                request.runtime_configured = true;
+            }
+        }
+        for (id, error) in setup_failures {
+            self.fail_request(&id, error);
+        }
+        plan.work
+            .retain(|work| self.requests.contains_key(&work.sequence_id));
+        plan.token_count = plan.work.iter().map(|work| work.tokens.len()).sum();
+        if plan.work.is_empty() {
+            return;
+        }
+
+        let result = self.execute_plan(&plan);
         let predicted = match result {
             Ok(predicted) => predicted,
             Err(error) => {
@@ -559,51 +617,19 @@ impl SchedulerWorker {
                 return;
             }
         };
-        for (id, _, _, _) in &setup {
-            if let Some(request) = self.requests.get_mut(id) {
-                request.runtime_configured = true;
-            }
-        }
-
         let step = self.scheduler.complete_iteration(&plan, &predicted);
         self.finish_iteration(&plan, &predicted);
         self.emit_step_telemetry(&step, iteration_started.elapsed());
     }
 
     fn run_direct_iteration_batch(&mut self) {
-        let mut token_budget = MAX_NATIVE_ITERATION_TOKENS;
-        let mut batch = Vec::new();
-        while batch.len() < self.max_direct_batch_size {
-            let Some(next) = self.direct_iterations.front() else {
-                break;
-            };
-            if next.token_ids.len() > token_budget {
-                break;
-            }
-            token_budget = token_budget.saturating_sub(next.token_ids.len());
-            batch.push(
-                self.direct_iterations
-                    .pop_front()
-                    .expect("checked direct iteration queue"),
-            );
-            if token_budget == 0 {
-                break;
-            }
-        }
-        if batch.is_empty() {
-            if let Some(request) = self.direct_iterations.pop_front() {
-                let _ = request.reply.send(Err(OpenAiError::invalid_request(
-                    "scheduler iteration exceeds the native token budget",
-                )));
-            }
-            return;
-        }
+        let batch = take_direct_iteration_batch(
+            &mut self.direct_iterations,
+            self.max_direct_batch_size,
+            MAX_NATIVE_ITERATION_TOKENS,
+        );
+        debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
 
-        let batch_size = batch.len();
-        let batch_wait_ms = batch
-            .iter()
-            .map(|request| request.enqueued_at.elapsed().as_secs_f64() * 1_000.0)
-            .collect::<Vec<_>>();
         let lock_started = Instant::now();
         let mut runtime = match self.runtime.lock() {
             Ok(runtime) => runtime,
@@ -618,17 +644,35 @@ impl SchedulerWorker {
         };
         let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
         let hold_started = Instant::now();
-        let alignments = batch
-            .iter()
-            .map(|request| match request.target_token_count {
+        let mut runnable = Vec::with_capacity(batch.len());
+        for request in batch {
+            let alignment = match request.target_token_count {
                 Some(target_token_count) => runtime
                     .align_session_to_token_count_if_ahead(&request.session_id, target_token_count),
                 None => Ok(None),
-            })
-            .collect::<anyhow::Result<Vec<_>>>();
-        let requests = batch
+            };
+            match alignment {
+                Ok(alignment) => runnable.push((request, alignment)),
+                Err(error) => {
+                    let _ = request.reply.send(Err(openai_backend_error(error)));
+                }
+            }
+        }
+        if runnable.is_empty() {
+            return;
+        }
+        let batch_size = runnable.len();
+        let token_count = runnable
             .iter()
-            .map(|request| RuntimeIterationBatchRequest {
+            .map(|(request, _)| request.token_ids.len())
+            .sum::<usize>();
+        let batch_wait_ms = runnable
+            .iter()
+            .map(|(request, _)| request.enqueued_at.elapsed().as_secs_f64() * 1_000.0)
+            .collect::<Vec<_>>();
+        let requests = runnable
+            .iter()
+            .map(|(request, _)| RuntimeIterationBatchRequest {
                 session_id: &request.session_id,
                 token_ids: &request.token_ids,
                 positions: &request.positions,
@@ -637,12 +681,8 @@ impl SchedulerWorker {
                 sample_last: request.sample_last,
             })
             .collect::<Vec<_>>();
-        let result = alignments
-            .and_then(|alignments| {
-                runtime
-                    .iteration_batch_sampled(&requests)
-                    .map(|outputs| (outputs, alignments))
-            })
+        let result = runtime
+            .iteration_batch_sampled(&requests)
             .map_err(openai_backend_error);
         let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
         drop(runtime);
@@ -653,7 +693,7 @@ impl SchedulerWorker {
                     ("skippy.scheduler.batch_size".to_string(), json!(batch_size)),
                     (
                         "skippy.scheduler.token_count".to_string(),
-                        json!(MAX_NATIVE_ITERATION_TOKENS.saturating_sub(token_budget)),
+                        json!(token_count),
                     ),
                     (
                         "skippy.scheduler.batch_wait_max_ms".to_string(),
@@ -672,23 +712,20 @@ impl SchedulerWorker {
         }
 
         match result {
-            Ok((outputs, alignments)) => {
-                if outputs.len() != batch.len() {
+            Ok(outputs) => {
+                if outputs.len() != runnable.len() {
                     let error = OpenAiError::backend(format!(
                         "scheduler iteration returned {} outputs for {} requests",
                         outputs.len(),
-                        batch.len()
+                        runnable.len()
                     ));
-                    for request in batch {
+                    for (request, _) in runnable {
                         let _ = request.reply.send(Err(error.clone()));
                     }
                     return;
                 }
-                for (((request, output), session_alignment), batch_wait_ms) in batch
-                    .into_iter()
-                    .zip(outputs)
-                    .zip(alignments)
-                    .zip(batch_wait_ms)
+                for (((request, session_alignment), output), batch_wait_ms) in
+                    runnable.into_iter().zip(outputs).zip(batch_wait_ms)
                 {
                     let _ = request.reply.send(Ok(SchedulerIterationOutcome {
                         predicted: output.predicted_token,
@@ -702,7 +739,7 @@ impl SchedulerWorker {
                 }
             }
             Err(error) => {
-                for request in batch {
+                for (request, _) in runnable {
                     let _ = request.reply.send(Err(error.clone()));
                 }
             }
@@ -723,7 +760,7 @@ impl SchedulerWorker {
             if token < 0 {
                 continue;
             }
-            let Some(request) = self.requests.get(&work.sequence_id) else {
+            let Some(request) = self.requests.get_mut(&work.sequence_id) else {
                 continue;
             };
             let (ack, control) = std_mpsc::sync_channel(1);
@@ -735,12 +772,16 @@ impl SchedulerWorker {
                 stopped.insert(work.sequence_id.clone());
                 continue;
             }
-            match control.recv_timeout(TOKEN_ACK_TIMEOUT) {
-                Ok(TokenControl::Continue) => {}
-                Ok(TokenControl::Stop) | Err(_) => {
-                    stopped.insert(work.sequence_id.clone());
-                }
-            }
+            request.pending_controls.push_back(control);
+        }
+
+        for id in &missing_predictions {
+            self.fail_request(
+                id,
+                OpenAiError::backend(format!(
+                    "scheduler iteration returned no prediction for {id}"
+                )),
+            );
         }
 
         for id in &stopped {
@@ -756,14 +797,7 @@ impl SchedulerWorker {
         self.drop_runtime_sessions(terminal.iter().map(String::as_str));
         for id in terminal {
             if let Some(request) = self.requests.remove(&id) {
-                let event = if missing_predictions.contains(&id) {
-                    SchedulerEvent::Error(OpenAiError::backend(format!(
-                        "scheduler iteration returned no prediction for {id}"
-                    )))
-                } else {
-                    SchedulerEvent::Complete
-                };
-                let _ = request.reply.send(event);
+                let _ = request.reply.send(SchedulerEvent::Complete);
             }
         }
     }
@@ -842,30 +876,48 @@ impl SchedulerWorker {
         telemetry.emit_debug("stage.scheduler_iteration", attrs);
     }
 
-    fn execute_plan(
+    fn prepare_runtime_sessions(
         &self,
-        plan: &skippy_scheduler::IterationPlan,
         setup: &[(String, Option<String>, Option<SamplingConfig>, usize)],
-    ) -> OpenAiResult<Vec<i32>> {
+    ) -> OpenAiResult<RuntimeSetupOutcome> {
         let mut runtime = self
             .runtime
             .lock()
             .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+        let mut configured = Vec::new();
+        let mut failures = Vec::new();
         for (id, metadata, sampling, prompt_token_count) in setup {
-            runtime
-                .ensure_session_active(id)
-                .map_err(openai_backend_error)?;
-            if let Some(metadata) = metadata {
-                runtime
-                    .configure_chat_sampling(
+            let result = runtime.ensure_session_active(id).and_then(|_| {
+                if let Some(metadata) = metadata {
+                    runtime.configure_chat_sampling(
                         id,
                         metadata,
                         *prompt_token_count as u64,
                         sampling.as_ref(),
                     )
-                    .map_err(openai_backend_error)?;
+                } else {
+                    Ok(())
+                }
+            });
+            match result {
+                Ok(()) => configured.push(id.clone()),
+                Err(error) => {
+                    let _ = runtime.drop_session_timed(id);
+                    failures.push((
+                        id.clone(),
+                        OpenAiError::backend(format!("prepare scheduler session {id}: {error:#}")),
+                    ));
+                }
             }
         }
+        Ok((configured, failures))
+    }
+
+    fn execute_plan(&self, plan: &skippy_scheduler::IterationPlan) -> OpenAiResult<Vec<i32>> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
         let requests = plan
             .work
             .iter()
@@ -915,6 +967,42 @@ impl SchedulerWorker {
             }
         }
     }
+}
+
+fn take_direct_iteration_batch(
+    queue: &mut VecDeque<DirectIteration>,
+    max_batch_size: usize,
+    mut token_budget: usize,
+) -> Vec<DirectIteration> {
+    let mut batch = Vec::new();
+    let mut batched_sessions = BTreeSet::new();
+    let mut deferred = VecDeque::new();
+    let queued = queue.len();
+    for _ in 0..queued {
+        if batch.len() >= max_batch_size {
+            break;
+        }
+        let Some(request) = queue.pop_front() else {
+            break;
+        };
+        if batched_sessions.contains(&request.session_id) {
+            deferred.push_back(request);
+            continue;
+        }
+        if request.token_ids.len() > token_budget {
+            deferred.push_back(request);
+            break;
+        }
+        token_budget = token_budget.saturating_sub(request.token_ids.len());
+        batched_sessions.insert(request.session_id.clone());
+        batch.push(request);
+        if token_budget == 0 {
+            break;
+        }
+    }
+    deferred.append(queue);
+    *queue = deferred;
+    batch
 }
 
 fn validate_direct_iteration(token_ids: &[i32], positions: &[i32]) -> OpenAiResult<()> {
@@ -979,6 +1067,15 @@ fn build_scheduler_config(
         max_waiting_sequences: queue_capacity.max(1),
         max_tokens_per_iteration,
         prefill_chunk_tokens,
+        // Recurrent models can become substantially slower when several
+        // independent prompt rows share one native prefill call. Preserve
+        // decode batching, but serialize recurrent prefills through the same
+        // scheduler worker.
+        max_prefill_sequences_per_iteration: if recurrent_bytes_per_sequence > 0 {
+            1
+        } else {
+            usize::MAX
+        },
         // Native execution already provides a collection window: requests
         // submitted while one mixed batch is running are drained before the
         // next plan. An additional fixed sleep is pure N=1 latency and makes
@@ -1013,6 +1110,21 @@ fn stage_recurrent_bytes_per_native_sequence(config: &StageConfig) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
+        let (reply, _result) = std_mpsc::sync_channel(1);
+        DirectIteration {
+            session_id: session_id.to_string(),
+            target_token_count: None,
+            token_ids: vec![1; token_count],
+            positions: Vec::new(),
+            sampling: None,
+            input: None,
+            sample_last: true,
+            enqueued_at: Instant::now(),
+            reply,
+        }
+    }
 
     #[test]
     fn server_scheduler_config_uses_runtime_lanes_and_native_batch_limits() {
@@ -1098,6 +1210,65 @@ mod tests {
         assert!(validate_direct_iteration(&[], &[]).is_err());
         assert!(validate_direct_iteration(&[1, 2], &[0, 1, 2]).is_err());
         assert!(validate_direct_iteration(&vec![1; MAX_NATIVE_ITERATION_TOKENS + 1], &[]).is_err());
+    }
+
+    #[test]
+    fn direct_iteration_batch_defers_duplicate_sessions() {
+        let mut queue = VecDeque::from([
+            direct_iteration("same", 1),
+            direct_iteration("same", 1),
+            direct_iteration("other", 1),
+        ]);
+
+        let batch = take_direct_iteration_batch(&mut queue, 3, 8);
+
+        assert_eq!(
+            batch
+                .iter()
+                .map(|request| request.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["same", "other"]
+        );
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.front().unwrap().session_id, "same");
+    }
+
+    #[test]
+    fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let (_commands, receiver) = std_mpsc::channel();
+        let mut worker = SchedulerWorker {
+            runtime,
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            iteration_interval: Duration::ZERO,
+            telemetry: None,
+        };
+        let (reply, events) = std_mpsc::channel();
+        worker.submit(ScheduledRequest {
+            id: "slow-consumer".into(),
+            prompt_tokens: vec![1],
+            max_tokens: 2,
+            sampling: None,
+            chat_sampling_metadata: None,
+            reply,
+        });
+        let plan = worker.scheduler.plan_iteration();
+        worker.scheduler.complete_iteration(&plan, &[10]);
+
+        worker.finish_iteration(&plan, &[10]);
+
+        let SchedulerEvent::Token { ack, .. } = events.recv().unwrap() else {
+            panic!("expected token event");
+        };
+        assert!(worker.requests.contains_key("slow-consumer"));
+        ack.send(TokenControl::Stop).unwrap();
+        worker.apply_pending_controls();
+        assert!(!worker.requests.contains_key("slow-consumer"));
     }
 
     #[test]

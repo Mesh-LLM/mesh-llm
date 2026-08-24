@@ -1,24 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1600" viewBox="0 0 1600 1600" role="img" aria-labelledby="title desc">
-<title id="title">Old to new scheduler comparison across six architecture and strategy workloads</title>
-<desc id="desc">Two line charts compare new scheduler throughput and end-to-end p99 latency as ratios to the old scheduler across concurrency one to sixty-four. Five generation families improve broadly; the native MTP control-heavy fixture is exact but shows overhead.</desc>
+<title id="title">Old to new scheduler comparison across seven architecture and strategy workloads</title>
+<desc id="desc">Two line charts compare new scheduler throughput and end-to-end p99 latency as ratios to the old scheduler across concurrency one to sixty-four. Six generation families improve broadly; the native MTP lifecycle fixture is exact but shows control-path overhead.</desc>
 <style>
 :root{color-scheme:light dark} .bg{fill:#ffffff}.fg{fill:#111827}.muted{fill:#4b5563}.grid{stroke:#d1d5db}.frame{stroke:#9ca3af}.baseline{stroke:#111827}.label{font:500 25px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.small{font:400 20px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.title{font:500 38px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.subtitle{font:400 22px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.axis{font:400 18px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.line{fill:none;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}.point{stroke:#fff;stroke-width:2}@media(prefers-color-scheme:dark){.bg{fill:#0b1020}.fg{fill:#f3f4f6}.muted{fill:#cbd5e1}.grid{stroke:#334155}.frame{stroke:#64748b}.baseline{stroke:#f3f4f6}.point{stroke:#0b1020}}
 </style>
 <rect class="bg" width="1600" height="1600"/>
 <text id="title-text" class="title fg" x="70" y="62">Old → new scheduler: family-wide change</text>
-<text class="subtitle muted" x="70" y="100">Five generation families + native MTP verification · old and new serving paths</text>
+<text class="subtitle muted" x="70" y="100">Six generation families + native MTP verification · old and new serving paths</text>
 <line x1="70" y1="145" x2="104" y2="145" stroke="#2563eb" stroke-width="5" stroke-linecap="round"/>
 <text class="small fg" x="114" y="152">Llama 3.2</text>
 <line x1="315" y1="145" x2="349" y2="145" stroke="#16a34a" stroke-width="5" stroke-linecap="round"/>
 <text class="small fg" x="359" y="152">Gemma 2</text>
 <line x1="560" y1="145" x2="594" y2="145" stroke="#9333ea" stroke-width="5" stroke-linecap="round"/>
 <text class="small fg" x="604" y="152">Qwen 3.5</text>
+<line x1="560" y1="178" x2="594" y2="178" stroke="#9333ea" stroke-width="5" stroke-dasharray="10 7" stroke-linecap="round"/>
+<text class="small fg" x="604" y="185">Qwen3-Next</text>
 <line x1="805" y1="145" x2="839" y2="145" stroke="#ea580c" stroke-width="5" stroke-linecap="round"/>
 <text class="small fg" x="849" y="152">Falcon-H1</text>
 <line x1="1050" y1="145" x2="1084" y2="145" stroke="#0891b2" stroke-width="5" stroke-linecap="round"/>
 <text class="small fg" x="1094" y="152">DeepSeek2</text>
-<line x1="1295" y1="145" x2="1329" y2="145" stroke="#dc2626" stroke-width="5" stroke-linecap="round"/>
-<text class="small fg" x="1339" y="152">GLM-4.7 MTP</text>
+<line x1="1295" y1="145" x2="1329" y2="145" stroke="#dc2626" stroke-width="5" stroke-dasharray="5 7" stroke-linecap="round"/>
+<text class="small fg" x="1339" y="152">GLM MTP lifecycle</text>
 <text class="label fg" x="120" y="252">Throughput</text>
 <text class="small muted" x="1535" y="252" text-anchor="end">Higher is better; 1.00× = unchanged</text>
 <line class="grid" x1="120" y1="760.0" x2="1535" y2="760.0" stroke-width="1"/>
@@ -73,6 +75,10 @@
 <circle class="point" cx="1063.3" cy="330.6" r="6" fill="#9333ea"><title>Qwen 3.5 · N=16 · 1.734×</title></circle>
 <circle class="point" cx="1299.2" cy="633.0" r="6" fill="#9333ea"><title>Qwen 3.5 · N=32 · 1.076×</title></circle>
 <circle class="point" cx="1535.0" cy="602.7" r="6" fill="#9333ea"><title>Qwen 3.5 · N=64 · 1.142×</title></circle>
+<path class="line" d="M 120.0 631.2 L 355.8 681.3 L 591.7 555.8" stroke="#9333ea" stroke-dasharray="10 7"/>
+<circle class="point" cx="120.0" cy="631.2" r="6" fill="#9333ea"><title>Qwen3-Next · N=1 · 1.080×</title></circle>
+<circle class="point" cx="355.8" cy="681.3" r="6" fill="#9333ea"><title>Qwen3-Next · N=2 · 0.971×</title></circle>
+<circle class="point" cx="591.7" cy="555.8" r="6" fill="#9333ea"><title>Qwen3-Next · N=4 · 1.244×</title></circle>
 <path class="line" d="M 120.0 612.8 L 355.8 604.2 L 591.7 524.6 L 827.5 459.2 L 1063.3 488.0 L 1299.2 487.7 L 1535.0 511.0" stroke="#ea580c"/>
 <circle class="point" cx="120.0" cy="612.8" r="6" fill="#ea580c"><title>Falcon-H1 · N=1 · 1.120×</title></circle>
 <circle class="point" cx="355.8" cy="604.2" r="6" fill="#ea580c"><title>Falcon-H1 · N=2 · 1.139×</title></circle>
@@ -89,7 +95,7 @@
 <circle class="point" cx="1063.3" cy="406.2" r="6" fill="#0891b2"><title>DeepSeek2 · N=16 · 1.569×</title></circle>
 <circle class="point" cx="1299.2" cy="412.8" r="6" fill="#0891b2"><title>DeepSeek2 · N=32 · 1.555×</title></circle>
 <circle class="point" cx="1535.0" cy="464.7" r="6" fill="#0891b2"><title>DeepSeek2 · N=64 · 1.442×</title></circle>
-<path class="line" d="M 120.0 670.0 L 355.8 722.6 L 591.7 686.5 L 827.5 728.6" stroke="#dc2626"/>
+<path class="line" d="M 120.0 670.0 L 355.8 722.6 L 591.7 686.5 L 827.5 728.6" stroke="#dc2626" stroke-dasharray="5 7"/>
 <circle class="point" cx="120.0" cy="670.0" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=1 · 0.996×</title></circle>
 <circle class="point" cx="355.8" cy="722.6" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=2 · 0.881×</title></circle>
 <circle class="point" cx="591.7" cy="686.5" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=4 · 0.960×</title></circle>
@@ -148,6 +154,10 @@
 <circle class="point" cx="1063.3" cy="1265.9" r="6" fill="#9333ea"><title>Qwen 3.5 · N=16 · 0.506×</title></circle>
 <circle class="point" cx="1299.2" cy="1179.9" r="6" fill="#9333ea"><title>Qwen 3.5 · N=32 · 0.684×</title></circle>
 <circle class="point" cx="1535.0" cy="1086.8" r="6" fill="#9333ea"><title>Qwen 3.5 · N=64 · 0.876×</title></circle>
+<path class="line" d="M 120.0 974.0 L 355.8 993.9 L 591.7 1169.6" stroke="#9333ea" stroke-dasharray="10 7"/>
+<circle class="point" cx="120.0" cy="974.0" r="6" fill="#9333ea"><title>Qwen3-Next · N=1 · 1.109×</title></circle>
+<circle class="point" cx="355.8" cy="993.9" r="6" fill="#9333ea"><title>Qwen3-Next · N=2 · 1.068×</title></circle>
+<circle class="point" cx="591.7" cy="1169.6" r="6" fill="#9333ea"><title>Qwen3-Next · N=4 · 0.705×</title></circle>
 <path class="line" d="M 120.0 1349.6 L 355.8 1083.5 L 591.7 1164.8 L 827.5 1228.3 L 1063.3 1254.7 L 1299.2 1261.6 L 1535.0 1150.0" stroke="#ea580c"/>
 <circle class="point" cx="120.0" cy="1349.6" r="6" fill="#ea580c"><title>Falcon-H1 · N=1 · 0.333×</title></circle>
 <circle class="point" cx="355.8" cy="1083.5" r="6" fill="#ea580c"><title>Falcon-H1 · N=2 · 0.883×</title></circle>
@@ -164,11 +174,11 @@
 <circle class="point" cx="1063.3" cy="1265.3" r="6" fill="#0891b2"><title>DeepSeek2 · N=16 · 0.508×</title></circle>
 <circle class="point" cx="1299.2" cy="1275.0" r="6" fill="#0891b2"><title>DeepSeek2 · N=32 · 0.487×</title></circle>
 <circle class="point" cx="1535.0" cy="1175.2" r="6" fill="#0891b2"><title>DeepSeek2 · N=64 · 0.694×</title></circle>
-<path class="line" d="M 120.0 960.8 L 355.8 1000.7 L 591.7 1038.8 L 827.5 977.4" stroke="#dc2626"/>
+<path class="line" d="M 120.0 960.8 L 355.8 1000.7 L 591.7 1038.8 L 827.5 977.4" stroke="#dc2626" stroke-dasharray="5 7"/>
 <circle class="point" cx="120.0" cy="960.8" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=1 · 1.136×</title></circle>
 <circle class="point" cx="355.8" cy="1000.7" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=2 · 1.054×</title></circle>
 <circle class="point" cx="591.7" cy="1038.8" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=4 · 0.975×</title></circle>
 <circle class="point" cx="827.5" cy="977.4" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=8 · 1.102×</title></circle>
-<text class="small fg" x="70" y="1505">Generation: broad throughput and p99 wins. Native MTP: 256/256 successful and exact; short control-heavy requests expose queue overhead.</text>
-<text class="axis muted" x="70" y="1545">MTP uses N=1…8 and synthetic zero activations: correctness/transport evidence, not draft-quality evidence. Qwen3-Next pending.</text>
+<text class="small fg" x="70" y="1505">Generation: broad throughput and p99 wins. Model-backed native MTP: 15/15 drafts accepted on both; NEW median generation +13.4%.</text>
+<text class="axis muted" x="70" y="1545">Dotted MTP line: 256/256 exact lifecycle requests with zero activations; correctness/transport evidence, not draft-quality evidence.</text>
 </svg>
