@@ -200,12 +200,29 @@ fn http_url_start(value: &str) -> Option<usize> {
 pub(crate) fn redact_urls_in_text(text: &str) -> String {
     text.split_whitespace()
         .map(|word| {
-            if let Some(url_start) = http_url_start(word) {
-                let (prefix, url) = word.split_at(url_start);
-                format!("{prefix}{}", redact_url_query(url))
-            } else {
-                word.to_string()
+            let mut redacted = String::with_capacity(word.len());
+            let mut cursor = 0;
+            while let Some(relative_start) = http_url_start(&word[cursor..]) {
+                let url_start = cursor + relative_start;
+                redacted.push_str(&word[cursor..url_start]);
+
+                let scheme_len = if word[url_start..]
+                    .as_bytes()
+                    .get(..b"https://".len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"https://"))
+                {
+                    b"https://".len()
+                } else {
+                    b"http://".len()
+                };
+                let after_scheme = url_start + scheme_len;
+                let url_end = http_url_start(&word[after_scheme..])
+                    .map_or(word.len(), |next_start| after_scheme + next_start);
+                redacted.push_str(&redact_url_query(&word[url_start..url_end]));
+                cursor = url_end;
             }
+            redacted.push_str(&word[cursor..]);
+            redacted
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -725,6 +742,18 @@ mod redaction_corpus_tests {
     fn url_without_query_passes_through() {
         let url = "https://example.com/path/to/resource";
         assert_eq!(redact_url_query(url), url);
+    }
+
+    #[test]
+    fn every_punctuation_adjacent_url_is_redacted() {
+        let text = "(https://alice:first@host/v1),(https://bob:second@host/v2)";
+        let cleaned = redact_urls_in_text(text);
+        assert_eq!(
+            cleaned,
+            "(https://[REDACTED]@host/v1),(https://[REDACTED]@host/v2)"
+        );
+        assert!(!cleaned.contains("alice:first"));
+        assert!(!cleaned.contains("bob:second"));
     }
 
     #[test]
