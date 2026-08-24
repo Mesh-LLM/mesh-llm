@@ -48,6 +48,12 @@ pub enum OpenAiExchangePhase {
 /// either being forced into the other's type.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OpenAiExchangeEnvelope {
+    /// Stable per-exchange id, minted when the dispatch path admits the
+    /// request. Shared by an exchange's `EffectiveRequest` and `Terminal`
+    /// envelopes (and mirrored into the transport `correlation_id`), so a
+    /// plugin can pair the two events for one exchange even when concurrent
+    /// requests on the same model are in flight.
+    pub exchange_id: String,
     pub dispatch_path: OpenAiExchangeDispatchPath,
     pub phase: OpenAiExchangePhase,
     pub model: String,
@@ -65,8 +71,13 @@ pub struct OpenAiExchangeEnvelope {
 }
 
 impl OpenAiExchangeEnvelope {
-    pub fn effective(dispatch_path: OpenAiExchangeDispatchPath, model: impl Into<String>) -> Self {
+    pub fn effective(
+        exchange_id: impl Into<String>,
+        dispatch_path: OpenAiExchangeDispatchPath,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
+            exchange_id: exchange_id.into(),
             dispatch_path,
             phase: OpenAiExchangePhase::EffectiveRequest,
             model: model.into(),
@@ -77,12 +88,14 @@ impl OpenAiExchangeEnvelope {
     }
 
     pub fn terminal(
+        exchange_id: impl Into<String>,
         dispatch_path: OpenAiExchangeDispatchPath,
         model: impl Into<String>,
         status: Option<u16>,
         marker: Option<CapsuleMarker>,
     ) -> Self {
         Self {
+            exchange_id: exchange_id.into(),
             dispatch_path,
             phase: OpenAiExchangePhase::Terminal,
             model: model.into(),
@@ -114,7 +127,12 @@ impl OpenAiExchangeChannel for PluginManager {
             }
         };
         if let Err(error) = self
-            .broadcast_channel_message(OPENAI_EXCHANGE_CHANNEL, "application/json", body)
+            .broadcast_channel_message(
+                OPENAI_EXCHANGE_CHANNEL,
+                "application/json",
+                body,
+                &event.exchange_id,
+            )
             .await
         {
             tracing::warn!(%error, "failed to publish openai exchange event to plugins");
@@ -147,6 +165,7 @@ impl OpenAiHookPolicy for OpenAiExchangeHookBridge {
     ) {
         self.channel
             .publish(&OpenAiExchangeEnvelope::effective(
+                route.exchange_id.clone(),
                 OpenAiExchangeDispatchPath::TypedFrontend,
                 route.model.clone(),
             ))
@@ -156,6 +175,7 @@ impl OpenAiHookPolicy for OpenAiExchangeHookBridge {
     async fn on_chat_completion_terminal(
         &self,
         request: &ChatCompletionRequest,
+        exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
         let (status, marker) = match outcome {
@@ -165,6 +185,7 @@ impl OpenAiHookPolicy for OpenAiExchangeHookBridge {
         };
         self.channel
             .publish(&OpenAiExchangeEnvelope::terminal(
+                exchange_id,
                 OpenAiExchangeDispatchPath::TypedFrontend,
                 request.model.clone(),
                 Some(status),
@@ -283,6 +304,8 @@ mod tests {
 
         assert_eq!(events[1].phase, OpenAiExchangePhase::Terminal);
         assert_eq!(events[1].status, Some(200));
+        assert!(!events[0].exchange_id.is_empty());
+        assert_eq!(events[0].exchange_id, events[1].exchange_id);
         let capsule_id = events[1]
             .capsule_id
             .as_deref()
@@ -330,12 +353,101 @@ mod tests {
             reason: "denied by policy",
         };
 
-        bridge.on_chat_completion_terminal(&request, &denial).await;
+        bridge
+            .on_chat_completion_terminal(&request, "exchange-1", &denial)
+            .await;
 
         let events = channel.events.lock().unwrap();
         assert_eq!(events.len(), 1);
+        assert_eq!(events[0].exchange_id, "exchange-1");
         assert_eq!(events[0].status, Some(400));
         assert!(events[0].capsule_id.is_none());
         assert!(events[0].nonce.is_none());
+    }
+
+    struct DelayedBackend {
+        delay: std::time::Duration,
+    }
+
+    #[async_trait]
+    impl OpenAiBackend for DelayedBackend {
+        async fn models(&self) -> openai_frontend::OpenAiResult<Vec<openai_frontend::ModelObject>> {
+            Ok(Vec::new())
+        }
+
+        async fn chat_completion(
+            &self,
+            request: ChatCompletionRequest,
+        ) -> openai_frontend::OpenAiResult<ChatCompletionResponse> {
+            tokio::time::sleep(self.delay).await;
+            Ok(ChatCompletionResponse::new(
+                request.model,
+                "ok",
+                Usage::new(1, 1),
+            ))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: openai_frontend::OpenAiRequestContext,
+        ) -> openai_frontend::OpenAiResult<openai_frontend::ChatCompletionStream> {
+            Ok(Box::pin(futures_util::stream::empty()))
+        }
+    }
+
+    /// Two concurrent exchanges on the same model must not be pairable by
+    /// mere arrival order — the terminal event for the exchange with the
+    /// shorter backend delay lands before the effective event of neither
+    /// exchange lines up with it positionally. Only matching `exchange_id`
+    /// correctly recovers each exchange's own effective/terminal pair.
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_exchanges_on_the_same_model_pair_by_exchange_id_not_by_arrival_order() {
+        let channel = Arc::new(RecordingChannel::default());
+        let bridge = Arc::new(OpenAiExchangeHookBridge::new(channel.clone()));
+        let slow = HookedOpenAiBackend::new(
+            Arc::new(DelayedBackend {
+                delay: std::time::Duration::from_millis(50),
+            }),
+            bridge.clone(),
+        );
+        let fast = HookedOpenAiBackend::new(
+            Arc::new(DelayedBackend {
+                delay: std::time::Duration::from_millis(1),
+            }),
+            bridge,
+        );
+
+        let (slow_result, fast_result) = tokio::join!(
+            slow.chat_completion(chat_request("gpt-mesh")),
+            fast.chat_completion(chat_request("gpt-mesh")),
+        );
+        slow_result.expect("slow exchange succeeds");
+        fast_result.expect("fast exchange succeeds");
+
+        let events = channel.events.lock().unwrap();
+        assert_eq!(events.len(), 4, "two effective + two terminal events");
+        assert_eq!(events[0].phase, OpenAiExchangePhase::EffectiveRequest);
+        assert_eq!(events[1].phase, OpenAiExchangePhase::EffectiveRequest);
+        assert_eq!(events[2].phase, OpenAiExchangePhase::Terminal);
+        assert_eq!(events[3].phase, OpenAiExchangePhase::Terminal);
+        assert_ne!(
+            events[0].exchange_id, events[1].exchange_id,
+            "each exchange mints its own id"
+        );
+
+        // The fast exchange finishes first, so its terminal event (index 2)
+        // is adjacent to the slow exchange's effective event (index 0) by
+        // position — but it must still pair with the fast effective event
+        // (index 1) by id, and the slow terminal (index 3) with the slow
+        // effective (index 0).
+        assert_eq!(
+            events[2].exchange_id, events[1].exchange_id,
+            "fast exchange's terminal event pairs with its own effective event"
+        );
+        assert_eq!(
+            events[3].exchange_id, events[0].exchange_id,
+            "slow exchange's terminal event pairs with its own effective event"
+        );
     }
 }

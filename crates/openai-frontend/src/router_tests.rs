@@ -908,6 +908,45 @@ async fn hook_minted_capsule_marker_is_exposed_as_x_capsule_id_response_header()
     assert!(header.starts_with("capsule-chatcmpl"));
 }
 
+/// The same rung-ladder marker must ride out of the non-streaming
+/// `/v1/responses` leg too: it calls the same `chat_completion_with_context`
+/// hook path as `/v1/chat/completions`, but translates the response into a
+/// new `Response` on its way out, which previously dropped the marker
+/// extension before `frontend_lifecycle_middleware` could read it.
+#[tokio::test]
+async fn hook_minted_capsule_marker_is_exposed_on_non_streaming_responses() {
+    let backend =
+        crate::hooks::HookedOpenAiBackend::new(Arc::new(FakeBackend), Arc::new(CapsuleMintingHook));
+    let app = router_for(Arc::new(backend));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-mesh",
+                        "input": "hi"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let header = response
+        .headers()
+        .get("x-capsule-id")
+        .expect("X-Capsule-Id header present")
+        .to_str()
+        .unwrap();
+    assert!(header.starts_with("capsule-chatcmpl"));
+}
+
 /// A policy that never mints a marker must never produce the header — proves
 /// the wiring is conditional on the hook's own decision, not unconditional.
 #[tokio::test]

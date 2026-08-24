@@ -602,9 +602,14 @@ async fn try_route_plugin_model(
             // is resolved and dispatch is about to happen. There is no typed
             // `ChatCompletionRequest` on this path (see the #1331 design
             // note), so the envelope carries only the model — the same
-            // narrow route fact path 1's `ChatExchangeRoute` carries.
+            // narrow route fact path 1's `ChatExchangeRoute` carries. Mint
+            // the exchange id here, at admission, so it can pair this
+            // effective event with its terminal event below even when
+            // concurrent raw-proxy requests share the same model.
+            let exchange_id = uuid::Uuid::new_v4().to_string();
             plugin_manager
                 .publish(&OpenAiExchangeEnvelope::effective(
+                    exchange_id.clone(),
                     OpenAiExchangeDispatchPath::RawProxy,
                     model_name,
                 ))
@@ -639,6 +644,7 @@ async fn try_route_plugin_model(
             };
             plugin_manager
                 .publish(&OpenAiExchangeEnvelope::terminal(
+                    exchange_id,
                     OpenAiExchangeDispatchPath::RawProxy,
                     model_name,
                     plugin_route_status(&final_outcome),

@@ -127,9 +127,17 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
 
     /// Observe the terminal outcome of a non-streaming chat completion:
     /// success, a backend error, or denial by an earlier hook.
+    ///
+    /// `exchange_id` is the same value [`ChatExchangeRoute::exchange_id`]
+    /// carried on this exchange's [`Self::on_effective_chat_completion`]
+    /// call (or, for a denied request, the id minted for an exchange that
+    /// never reached admission) — a plugin observing both events can pair
+    /// them without guessing from timing on a model shared by concurrent
+    /// requests.
     async fn on_chat_completion_terminal(
         &self,
         _request: &ChatCompletionRequest,
+        _exchange_id: &str,
         _outcome: &ChatCompletionOutcome<'_>,
     ) {
     }
@@ -161,12 +169,16 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatExchangeRoute {
     pub model: String,
+    /// Stable id for this exchange, shared with the terminal event's
+    /// `exchange_id` — see [`OpenAiHookPolicy::on_chat_completion_terminal`].
+    pub exchange_id: String,
 }
 
 impl ChatExchangeRoute {
-    pub fn for_request(request: &ChatCompletionRequest) -> Self {
+    pub fn for_request(request: &ChatCompletionRequest, exchange_id: impl Into<String>) -> Self {
         Self {
             model: request.model.clone(),
+            exchange_id: exchange_id.into(),
         }
     }
 }
@@ -216,6 +228,7 @@ impl OpenAiBackend for HookedOpenAiBackend {
         mut request: ChatCompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
+        let exchange_id = uuid::Uuid::new_v4().to_string();
         let outcome = match self.hooks.before_chat_completion(&mut request).await {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -225,13 +238,13 @@ impl OpenAiBackend for HookedOpenAiBackend {
                     reason: &reason,
                 };
                 self.hooks
-                    .on_chat_completion_terminal(&request, &denial)
+                    .on_chat_completion_terminal(&request, &exchange_id, &denial)
                     .await;
                 return Err(error);
             }
         };
         apply_chat_hook_outcome(&mut request, &outcome);
-        let route = ChatExchangeRoute::for_request(&request);
+        let route = ChatExchangeRoute::for_request(&request, exchange_id.clone());
         self.hooks
             .on_effective_chat_completion(&request, &route)
             .await;
@@ -259,7 +272,7 @@ impl OpenAiBackend for HookedOpenAiBackend {
             }
         };
         self.hooks
-            .on_chat_completion_terminal(&request, &terminal)
+            .on_chat_completion_terminal(&request, &exchange_id, &terminal)
             .await;
         result
     }
@@ -654,6 +667,7 @@ mod tests {
         async fn on_chat_completion_terminal(
             &self,
             _request: &ChatCompletionRequest,
+            _exchange_id: &str,
             outcome: &ChatCompletionOutcome<'_>,
         ) {
             let record = match outcome {
@@ -1064,6 +1078,7 @@ mod tests {
         async fn on_chat_completion_terminal(
             &self,
             _request: &ChatCompletionRequest,
+            _exchange_id: &str,
             outcome: &ChatCompletionOutcome<'_>,
         ) {
             let marker = match outcome {

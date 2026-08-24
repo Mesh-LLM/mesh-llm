@@ -492,8 +492,15 @@ async fn non_streaming_responses(
     .await?;
     state.response_completed(context, OpenAiBackendOperation::Responses, &response.usage);
     let usage = response.usage.clone();
+    let capsule_marker = response.capsule_marker.clone();
     let translated = translate_chat_completion_response_to_responses(&response)?;
-    Ok(json_response_with_usage(translated, &usage))
+    let mut http_response = json_response_with_usage(translated, &usage);
+    if let Some(marker) = capsule_marker {
+        http_response
+            .extensions_mut()
+            .insert(CapsuleMarkerExtension(marker));
+    }
+    Ok(http_response)
 }
 
 fn responses_stream_body_events(
