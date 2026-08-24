@@ -70,6 +70,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             "libggml.a",
             "libggml-base.a",
             "libggml-cpu.a",
+            "libvendor-hash.a",
         ):
             self.assertIn(archive, build_script)
         self.assertIn("--require-prebuilt-llama", package_script)
@@ -131,6 +132,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             "ggml/src/libggml-base.a",
             "ggml/src/ggml-cpu/libggml-cpu.a",
             "tools/mtmd/libmtmd.a",
+            "vendor/hash/libvendor-hash.a",
         ):
             if relative == omit_archive:
                 continue

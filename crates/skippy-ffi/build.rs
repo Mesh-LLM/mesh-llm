@@ -56,6 +56,7 @@ fn main() {
 
     let search_dirs = [
         build_dir.join("tools/mtmd"),
+        build_dir.join("vendor/hash"),
         build_dir.join("common"),
         build_dir.join("src"),
         build_dir.join("ggml/src"),
@@ -78,6 +79,10 @@ fn main() {
     for (unix_archive, msvc_archive) in [
         ("src/libllama.a", "src/llama.lib"),
         ("tools/mtmd/libmtmd.a", "tools/mtmd/mtmd.lib"),
+        (
+            "vendor/hash/libvendor-hash.a",
+            "vendor/hash/vendor-hash.lib",
+        ),
         ("common/libllama-common.a", "common/llama-common.lib"),
         (
             "common/libllama-common-base.a",
@@ -122,6 +127,16 @@ fn main() {
 
     if static_archive_exists(&build_dir, "tools/mtmd/libmtmd.a", "tools/mtmd/mtmd.lib") {
         println!("cargo:rustc-link-lib=static=mtmd");
+        // Upstream links mtmd against vendor::hash PRIVATE, so the archive is
+        // not propagated to consumers. It must follow libmtmd.a on the link
+        // line or hash_sha256_hex stays undefined.
+        if static_archive_exists(
+            &build_dir,
+            "vendor/hash/libvendor-hash.a",
+            "vendor/hash/vendor-hash.lib",
+        ) {
+            println!("cargo:rustc-link-lib=static=vendor-hash");
+        }
     }
     println!("cargo:rustc-link-lib=static=llama-common");
     println!("cargo:rustc-link-lib=static=llama-common-base");
