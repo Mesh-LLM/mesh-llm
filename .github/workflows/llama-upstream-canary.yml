@@ -3,44 +3,75 @@ name: llama.cpp Upstream Canary
 on:
   schedule:
     - cron: "47 3 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "third_party/llama.cpp/patches/**"
+      - "third_party/llama.cpp/upstream.txt"
+      - "ci/llama-canary/**"
+      - "scripts/skippy-family-battery.sh"
+      - "scripts/llama-canary-agent-repair.sh"
+      - ".github/workflows/llama-upstream-canary.yml"
   workflow_dispatch:
     inputs:
       upstream_sha:
         description: "Optional llama.cpp upstream SHA to validate instead of origin/master"
         required: false
 
+# This workflow checks out and executes trusted default-branch content only
+# (schedule/dispatch/main push). It must never be triggered from a PR ref: it
+# runs on the persistent `family-certify` self-hosted runner.
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   latest-upstream:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, family-certify]
+    timeout-minutes: 360
     env:
       LLAMA_UPSTREAM_CANARY_SMOKE: ${{ vars.LLAMA_UPSTREAM_CANARY_SMOKE || '1' }}
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      # Models are never cached through GitHub Actions cache. The
+      # family-certify runner ships a large pre-warmed HF cache exported as
+      # HF_CACHE; scripts/skippy-family-battery.sh normalizes it into
+      # HF_HOME/HF_HUB_CACHE so `hf download` is only a cache-miss backstop.
+      CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'Nemotron 3 Ultra Free' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
-
-      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
+      - name: Verify runner toolchain
+        run: |
+          set -euo pipefail
+          missing=0
+          for cmd in cargo just sccache jq python3 cmake ninja hf opencode gh; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "missing on family-certify image: $cmd" >&2
+              missing=1
+            fi
+          done
+          if [[ -z "${HF_CACHE:-}" ]]; then
+            echo "HF_CACHE is not exported on this runner" >&2
+            missing=1
+          fi
+          if (( missing == 1 )); then
+            echo "bake the missing tools into the family-certify runner image; this job installs nothing" >&2
+            exit 1
+          fi
 
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
-      - name: Install Hugging Face CLI
-        run: python -m pip install --upgrade "huggingface_hub[cli]"
-
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build build-essential pkg-config libssl-dev libdbus-1-dev libcurl4-openssl-dev curl jq lsof
-
       - name: Prepare requested llama.cpp upstream
+        id: prepare
+        continue-on-error: true
         env:
           UPSTREAM_SHA: ${{ github.event.inputs.upstream_sha || 'latest' }}
         run: scripts/prepare-llama.sh "$UPSTREAM_SHA"
 
       - name: Capture upstream SHAs
         id: sha
+        if: steps.prepare.outcome == 'success'
         run: |
           old_sha="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
           new_sha="$(tr -d '[:space:]' < .deps/llama.cpp/.mesh-llm-upstream-sha)"
@@ -53,44 +84,31 @@ jobs:
           fi
 
       - name: Build patched llama.cpp ABI
-        if: steps.sha.outputs.changed == 'true'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true'
         run: scripts/build-llama.sh
 
       - name: Build stage runtime crates
-        if: steps.sha.outputs.changed == 'true'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true'
         run: cargo check -p skippy-ffi -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p llama-spec-bench
 
-      - name: Restore Skippy smoke model cache
-        if: steps.sha.outputs.changed == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
-        id: skippy_smoke_model_cache
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ${{ runner.temp }}/skippy-ci-smoke-models
-          key: mesh-llm-${{ runner.os }}-skippy-ci-smoke-models-SmolLM2-135M-Instruct.Q4_K_M.gguf-Falcon-H1-0.5B-Instruct-Q4_K_M.gguf-${{ hashFiles('.github/cache-version.txt') }}
-          restore-keys: |
-            mesh-llm-${{ runner.os }}-skippy-ci-smoke-models-
-
       - name: Skippy smoke tests
-        if: steps.sha.outputs.changed == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
         timeout-minutes: 45
         env:
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
-          MODEL_DIR: ${{ runner.temp }}/skippy-ci-smoke-models
-        run: scripts/skippy-ci-smoke.sh
+        run: |
+          set -euo pipefail
+          export MODEL_DIR="${HF_CACHE:?HF_CACHE not exported}/skippy-ci-smoke-models"
+          scripts/skippy-ci-smoke.sh
 
-      - name: Save Skippy smoke model cache
-        if: steps.sha.outputs.changed == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false' && github.ref == 'refs/heads/main' && steps.skippy_smoke_model_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ${{ runner.temp }}/skippy-ci-smoke-models
-          key: ${{ steps.skippy_smoke_model_cache.outputs.cache-primary-key }}
-
-      - name: Update llama.cpp upstream pin
-        if: steps.sha.outputs.changed == 'true'
-        run: scripts/update-llama-pin.sh
+      - name: Tiered family battery (parity gate)
+        id: battery
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true'
+        timeout-minutes: 300
+        run: scripts/skippy-family-battery.sh --tier1 --tier2 --skip-build
 
       - name: Generate summary
-        if: steps.sha.outputs.changed == 'true'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true'
         env:
           SKIPPY_CI_SMOKE: ${{ env.LLAMA_UPSTREAM_CANARY_SMOKE }}
         run: |
@@ -100,8 +118,10 @@ jobs:
             .deps/llama.cpp \
             > /tmp/llama-upstream-pr.md
 
+      # The pin commit is gated on the full family battery passing: parity is
+      # the certification, cargo check alone is not.
       - name: Commit upstream pin to main
-        if: steps.sha.outputs.changed == 'true'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -114,15 +134,43 @@ jobs:
           git push origin HEAD:refs/heads/main
 
       - name: Report upstream pin update
-        if: steps.sha.outputs.changed == 'true'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success'
         run: |
           {
             echo "## llama.cpp upstream pin update"
             echo
-            echo "Pushed the validated upstream pin to \`main\`."
+            echo "Pushed the validated upstream pin to \`main\` after the tiered family battery passed."
             echo
             cat /tmp/llama-upstream-pr.md
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Patch queue failed to apply onto the new upstream: hand the queue to
+      # the opencode agent (default model: Nemotron 3 Ultra Free) to rebase
+      # the patches, run the family battery, and open or reuse a repair PR.
+      - name: Agent repair of the patch queue
+        id: agent_repair
+        if: steps.prepare.outcome == 'failure'
+        timeout-minutes: 300
+        env:
+          DISPATCH_UPSTREAM_SHA: ${{ github.event.inputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          new_sha="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | cut -f1)"
+          if [[ -n "${DISPATCH_UPSTREAM_SHA:-}" ]]; then
+            new_sha="$DISPATCH_UPSTREAM_SHA"
+          fi
+          scripts/llama-canary-agent-repair.sh "$new_sha"
+
+      - name: Report patch-queue failure
+        if: steps.prepare.outcome == 'failure' && steps.agent_repair.outcome == 'failure'
+        run: |
+          {
+            echo "## llama.cpp patch queue failed to apply"
+            echo
+            echo "The automated opencode repair (\`$CANARY_AGENT_MODEL\`) did not produce a green family battery."
+            echo "Inspect the run logs and the repair PR on \`llama-canary/patch-queue-fix\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
       - name: Show sccache stats
         if: ${{ !cancelled() }}

@@ -1,0 +1,29 @@
+# Tier 1 family battery manifest — full certification on every llama bump.
+# Columns (pipe-separated):
+#   family         | skippy family label used by scripts/family-certify.sh
+#   repo           | Hugging Face repo for the cert artifact
+#   file           | GGUF file (or first shard) inside the repo
+#   selector       | quant selector for model-id bookkeeping
+#   sweep_period   | hybrid/recurrent interleaving period; 0 = dense (no boundary sweep)
+#   layer_end      | final layer for staged correctness lanes
+#   notes          | free-form, not parsed
+#
+# Sizes and rationale live in https://github.com/Mesh-LLM/mesh-llm/issues/1434
+# family|repo|file|selector|sweep_period|layer_end|notes
+qwen3-dense|Qwen/Qwen3-0.6B-GGUF|Qwen3-0.6B-Q8_0.gguf|Q8_0|0|28|core prod dense baseline
+qwen2|Qwen/Qwen2.5-0.5B-Instruct-GGUF|qwen2.5-0.5b-instruct-q8_0.gguf|Q8_0|0|24|prod dense lineage
+llama|bartowski/Llama-3.2-1B-Instruct-GGUF|Llama-3.2-1B-Instruct-Q4_K_M.gguf|Q4_K_M|0|16|prod dense
+glm47-flash|zai-org/GLM-4.7-Flash-GGUF|GLM-4.7-Flash-Q4_K_M-00001-of-00002.gguf|Q4_K_M|0|46|prod MLA path shared with deepseek2
+glm4|zai-org/glm-4-9b-chat-GGUF|glm-4-9b-chat-Q4_K_M.gguf|Q4_K_M|0|40|prod dense
+deepseek2|bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF|DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf|Q4_K_M|0|26|prod MLA path
+qwen3-moe|Qwen/Qwen3-4x0.6B-2507-GGUF|Qwen3-4x0.6B-Q4_K_M.gguf|Q4_K_M|0|36|prod MoE; graph_max_nodes budget lane
+falcon-h1|tiiuae/Falcon-H1-1.5B-Instruct-GGUF|Falcon-H1-1.5B-Instruct-Q4_K_M.gguf|Q4_K_M|4|24|hybrid boundary sweep
+jamba2|ai21-labs/Jamba2-3B-Instruct-GGUF|jamba2-3b-instruct.q4_k_m-00001-of-00003.gguf|Q4_K_M|6|28|hybrid boundary sweep
+kimi-linear|moonshotai/Kimi-Linear-48B-A3B-GGUF|Kimi-Linear-48B-A3B-IQ2_XXS-00001-of-00003.gguf|IQ2_XXS|4|40|hybrid 3:1 interleave; B1 canonical
+qwen3-next|Qwen/Qwen3-Coder-Next-80B-A3B-Thinking-GGUF|Qwen3-Coder-Next-80B-A3B-Thinking IQ2_XS-00001-of-00004.gguf|IQ2_XS|4|48|hybrid 3 linear:1 attention
+mamba|Felladrin/gguf-shuffled-Qwen15m-mamba-130m|mamba-130m.Q4_K_M.gguf|Q4_K_M|2|24|recurrent cheap sweep
+mamba2|state-spaces/mamba-2.8b-gguf|mamba-2.8b-Q4_K_M.gguf|Q4_K_M|2|32|recurrent sweep
+rwkv6|Recursal/Finch-1.6B-HW-Pile-GGUF|Finch-1.6B-HW-Pile-Q4_0.gguf|Q4_0|1|24|recurrent; v_first sideband crossing
+rwkv7|RWKV/v6-Finch-191M-Hex.png-rwkv7-world3-gguf|rwkv7-191m-world3-q4k.gguf|Q4_K|1|12|recurrent cheap
+granite-hybrid|ibm-granite/granite-4.0-h-350m-GGUF|granite-4.0-h-350m-Q4_K_M.gguf|Q4_K_M|3|32|hybrid cheap sweep
+lfm2|bartowski/LFM2-350M-GGUF|LFM2-350M-Q4_K_M.gguf|Q4_K_M|2|16|hybrid cheap sweep
