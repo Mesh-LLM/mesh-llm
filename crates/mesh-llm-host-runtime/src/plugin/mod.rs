@@ -51,15 +51,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, mpsc};
 
-#[allow(unused_imports)]
 pub use self::config::ExternalPluginSpec;
-#[allow(unused_imports)]
 pub(crate) use self::config::{
     BoolOrAuto, HardwareConfig, IntegerOrString, ModelConfigDefaults, ModelFitConfig,
-    MultimodalConfig, ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig, SkippyConfig,
-    StringOrStringList, ThroughputConfig,
+    ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig, SkippyConfig, StringOrStringList,
+    ThroughputConfig,
 };
-#[allow(unused_imports)]
 pub use self::config::{
     ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig, MeshConfig,
     MeshRequirementsConfig, ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor,

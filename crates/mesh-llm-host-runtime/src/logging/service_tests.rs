@@ -4,7 +4,9 @@ use crate::logging::{
     BusEntry, Clock, FailOpenWriter, LoggingDynamicLimits, PersistSink, RegistryConfig,
     TerminalOutcome,
 };
-use crate::logging::{OperationalAuditRecord, ReplayBus, RequestRegistry, RequestSummaryEntry};
+use crate::logging::{
+    OperationalAuditRecord, ReplayBus, RequestRegistry, RequestSummaryEntry, RequestSummaryMetadata,
+};
 use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_events::logging::identifiers::{AttemptId, EventId, RequestId};
 use mesh_llm_events::logging::proxy::ProxyRecord;
@@ -12,8 +14,7 @@ use mesh_llm_events::logging::replay::ReplayChannel;
 use mesh_llm_events::{OutputEvent, OutputSink, clear_output_sink, set_output_sink};
 
 // Re-import service.rs types. These are private to the logging module but accessible via super.
-#[allow(unused_imports)]
-use crate::logging::service::{BusEnqueueError, LoggingService, ServiceConfig, SystemClock};
+use crate::logging::service::{LoggingService, ServiceConfig, SystemClock};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
@@ -23,395 +24,8 @@ use tokio::sync::{Notify, mpsc};
 mod configuration;
 mod delivery_shutdown;
 mod lifecycle_registry;
-
-#[derive(Default)]
-struct RecordingOutputSink {
-    events: std::sync::Mutex<Vec<OutputEvent>>,
-}
-
-impl RecordingOutputSink {
-    fn take_events(&self) -> Vec<OutputEvent> {
-        std::mem::take(
-            &mut *self
-                .events
-                .lock()
-                .expect("recording output sink mutex poisoned"),
-        )
-    }
-}
-
-impl OutputSink for RecordingOutputSink {
-    fn emit_event(&self, event: OutputEvent) -> std::io::Result<()> {
-        self.events
-            .lock()
-            .expect("recording output sink mutex poisoned")
-            .push(event);
-        Ok(())
-    }
-}
-
-struct OutputSinkResetGuard;
-
-impl Drop for OutputSinkResetGuard {
-    fn drop(&mut self) {
-        clear_output_sink();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Test infrastructure: Vec-backed sink + deterministic clock
-// ---------------------------------------------------------------------------
-
-/// Record type for the test Vec-backed persistence sink. Captures all persisted data deterministically without I/O.
-#[derive(Clone, Debug)]
-enum TestRecord {
-    Summary(RequestSummaryEntry),
-    Event {
-        request_id: String,
-        event_id: String,
-        channel: ReplayChannel,
-        sequence: u64,
-        occurred_at: String,
-        payload_json: String,
-    },
-    ArtifactPointer(String, serde_json::Value), // (request_id, data)
-    ProxyRecord(String),                        // JSON string
-    AuditEntry {
-        level: String,
-        message: String,
-        entry_id: Option<String>,
-        occurred_at: Option<String>,
-    },
-    WebhookDelivery {
-        request_id: Option<String>,
-        status_code: u16,
-        error: Option<String>,
-    },
-    CleanupRun(u64), // deleted_count
-}
-
-/// Vec-backed persistence sink for deterministic testing. All writes are recorded in a shared Mutex<Vec<TestRecord>> — no I/O, no sleeps.
-struct TestSink {
-    records: std::sync::Mutex<Vec<TestRecord>>,
-    fail_flag: Arc<AtomicU64>, // if > 0, all operations return Err
-    audit_notifications: Option<mpsc::UnboundedSender<(String, String)>>,
-    audit_attempt_notifications: Option<mpsc::UnboundedSender<()>>,
-}
-
-impl TestSink {
-    fn new() -> Self {
-        Self {
-            records: std::sync::Mutex::new(Vec::new()),
-            fail_flag: Arc::new(AtomicU64::new(0)),
-            audit_notifications: None,
-            audit_attempt_notifications: None,
-        }
-    }
-
-    fn recording() -> (Self, mpsc::UnboundedReceiver<(String, String)>) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let mut sink = Self::new();
-        sink.audit_notifications = Some(tx);
-        (sink, rx)
-    }
-
-    fn failing_with_attempt_notifications() -> (Self, mpsc::UnboundedReceiver<()>) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let mut sink = Self::new();
-        sink.set_failing();
-        sink.audit_attempt_notifications = Some(tx);
-        (sink, rx)
-    }
-
-    /// Set the sink to return Err on all subsequent operations (simulates store failure).
-    fn set_failing(&self) {
-        self.fail_flag.store(1, AtomicOrdering::Release);
-    }
-
-    /// Clear the failing flag.
-    #[allow(dead_code)]
-    fn clear_fail(&self) {
-        self.fail_flag.store(0, AtomicOrdering::Release);
-    }
-
-    /// Get all records captured so far (for test assertions).
-    #[allow(dead_code)]
-    fn records(&self) -> Vec<TestRecord> {
-        self.records.lock().unwrap().clone()
-    }
-
-    /// Count of audit entries with a specific level.
-    #[allow(dead_code)]
-    fn audit_count_by_level(&self, level: &str) -> usize {
-        self.records()
-            .iter()
-            .filter(|r| matches!(r, TestRecord::AuditEntry { level: lvl, .. } if lvl == level))
-            .count()
-    }
-
-    /// Reset records to empty (for multi-phase tests).
-    #[allow(dead_code)]
-    fn clear(&self) {
-        self.records.lock().unwrap().clear();
-    }
-}
-
-#[async_trait::async_trait]
-impl PersistSink for TestSink {
-    async fn persist_summary(&self, entry: RequestSummaryEntry) -> Result<(), String> {
-        if self.fail_flag.load(AtomicOrdering::Acquire) > 0 {
-            return Err("sink failing".into());
-        }
-        let mut records = self.records.lock().unwrap();
-        if let Some(TestRecord::Summary(existing)) = records.iter_mut().find(|record| {
-            matches!(record, TestRecord::Summary(existing) if existing.request_id == entry.request_id)
-        }) {
-            *existing = entry;
-        } else {
-            records.push(TestRecord::Summary(entry));
-        }
-        Ok(())
-    }
-
-    async fn persist_event(
-        &self,
-        request_id: String,
-        event_id: String,
-        channel: ReplayChannel,
-        sequence: u64,
-        occurred_at: String,
-        payload_json: String,
-    ) -> Result<(), String> {
-        if let Some(tx) = &self.audit_attempt_notifications {
-            let _ = tx.send(());
-        }
-        if self.fail_flag.load(AtomicOrdering::Acquire) > 0 {
-            return Err("sink failing".into());
-        }
-        self.records.lock().unwrap().push(TestRecord::Event {
-            request_id,
-            event_id,
-            channel,
-            sequence,
-            occurred_at,
-            payload_json,
-        });
-        Ok(())
-    }
-
-    async fn persist_artifact_pointer(
-        &self,
-        request_id: String,
-        artifact_data: serde_json::Value,
-    ) -> Result<(), String> {
-        if self.fail_flag.load(AtomicOrdering::Acquire) > 0 {
-            return Err("sink failing".into());
-        }
-        self.records
-            .lock()
-            .unwrap()
-            .push(TestRecord::ArtifactPointer(request_id, artifact_data));
-        Ok(())
-    }
-
-    async fn persist_proxy_record(&self, proxy_json: String) -> Result<(), String> {
-        if let Some(tx) = &self.audit_attempt_notifications {
-            let _ = tx.send(());
-        }
-        if self.fail_flag.load(AtomicOrdering::Acquire) > 0 {
-            return Err("sink failing".into());
-        }
-        self.records
-            .lock()
-            .unwrap()
-            .push(TestRecord::ProxyRecord(proxy_json));
-        Ok(())
-    }
-
-    async fn persist_audit_entry(&self, record: OperationalAuditRecord) -> Result<(), String> {
-        if let Some(tx) = &self.audit_attempt_notifications {
-            let _ = tx.send(());
-        }
-        if self.fail_flag.load(AtomicOrdering::Acquire) > 0 {
-            return Err("sink failing".into());
-        }
-        if let Some(tx) = &self.audit_notifications {
-            let _ = tx.send((
-                record
-                    .severity()
-                    .map_or("none", crate::logging::OperationalAuditSeverity::as_str)
-                    .to_string(),
-                record
-                    .detail_json()
-                    .unwrap_or_else(|| record.code())
-                    .to_string(),
-            ));
-        }
-        self.records.lock().unwrap().push(TestRecord::AuditEntry {
-            level: record
-                .severity()
-                .map_or("none", crate::logging::OperationalAuditSeverity::as_str)
-                .to_string(),
-            message: record
-                .detail_json()
-                .unwrap_or_else(|| record.code())
-                .to_string(),
-            entry_id: record.entry_id().map(str::to_owned),
-            occurred_at: record.occurred_at().map(str::to_owned),
-        });
-        Ok(())
-    }
-
-    async fn persist_webhook_delivery(
-        &self,
-        request_id: Option<String>,
-        status_code: u16,
-        error: Option<String>,
-    ) -> Result<(), String> {
-        if self.fail_flag.load(AtomicOrdering::Acquire) > 0 {
-            return Err("sink failing".into());
-        }
-        self.records
-            .lock()
-            .unwrap()
-            .push(TestRecord::WebhookDelivery {
-                request_id,
-                status_code,
-                error,
-            });
-        Ok(())
-    }
-
-    async fn persist_cleanup_run(&self, deleted_count: u64) -> Result<(), String> {
-        if self.fail_flag.load(AtomicOrdering::Acquire) > 0 {
-            return Err("sink failing".into());
-        }
-        self.records
-            .lock()
-            .unwrap()
-            .push(TestRecord::CleanupRun(deleted_count));
-        Ok(())
-    }
-}
-
-/// A sink that blocks only its first audit persistence until the test releases
-/// it. This deterministically fills the service's bounded worker channel
-/// without sleeps or unobserved background work.
-struct BlockingAuditSink {
-    first_write: AtomicBool,
-    started: mpsc::UnboundedSender<()>,
-    completed: mpsc::UnboundedSender<String>,
-    release: Arc<Notify>,
-}
-
-impl BlockingAuditSink {
-    fn new() -> (
-        Self,
-        mpsc::UnboundedReceiver<()>,
-        mpsc::UnboundedReceiver<String>,
-        Arc<Notify>,
-    ) {
-        let (started_tx, started_rx) = mpsc::unbounded_channel();
-        let (completed_tx, completed_rx) = mpsc::unbounded_channel();
-        let release = Arc::new(Notify::new());
-        (
-            Self {
-                first_write: AtomicBool::new(true),
-                started: started_tx,
-                completed: completed_tx,
-                release: Arc::clone(&release),
-            },
-            started_rx,
-            completed_rx,
-            release,
-        )
-    }
-}
-
-#[async_trait::async_trait]
-impl PersistSink for BlockingAuditSink {
-    async fn persist_summary(&self, _entry: RequestSummaryEntry) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn persist_event(
-        &self,
-        _request_id: String,
-        _event_id: String,
-        _channel: ReplayChannel,
-        _sequence: u64,
-        _occurred_at: String,
-        _payload_json: String,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn persist_artifact_pointer(
-        &self,
-        _request_id: String,
-        _artifact_data: serde_json::Value,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn persist_proxy_record(&self, _proxy_json: String) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn persist_audit_entry(&self, record: OperationalAuditRecord) -> Result<(), String> {
-        if self.first_write.swap(false, AtomicOrdering::AcqRel) {
-            let _ = self.started.send(());
-            self.release.notified().await;
-        }
-        let _ = self.completed.send(
-            record
-                .detail_json()
-                .unwrap_or_else(|| record.code())
-                .to_string(),
-        );
-        Ok(())
-    }
-
-    async fn persist_webhook_delivery(
-        &self,
-        _request_id: Option<String>,
-        _status_code: u16,
-        _error: Option<String>,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn persist_cleanup_run(&self, _deleted_count: u64) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-/// Deterministic counter clock for tests. Each call increments a counter, producing unique timestamps without wall-clock dependency.
-struct TestClock {
-    counter: AtomicU64,
-}
-
-impl TestClock {
-    fn new() -> Self {
-        Self {
-            counter: AtomicU64::new(0),
-        }
-    }
-}
-
-impl Clock for TestClock {
-    fn now(&self) -> String {
-        let n = self
-            .counter
-            .fetch_update(
-                AtomicOrdering::Relaxed,
-                AtomicOrdering::Relaxed,
-                |current| current.checked_add(1),
-            )
-            .expect("test clock counter overflow");
-        format!("2025-01-01T00:00:00.{n:09}Z")
-    }
-}
+mod support;
+pub(super) use support::*;
 
 #[test]
 fn test_clock_timestamps_remain_unique_past_a_minute() {
@@ -564,6 +178,129 @@ fn canonical_events_reach_the_output_sink_once_with_safe_local_projection() {
     );
 }
 
+#[test]
+#[serial_test::serial]
+fn canonical_projection_uses_request_summary_context_for_probe_and_terminal_lines() {
+    let sink = Arc::new(RecordingOutputSink::default());
+    let _reset_guard = OutputSinkResetGuard;
+    set_output_sink(sink.clone());
+
+    let service = make_service();
+    let request_id = RequestId::new();
+    let metadata = RequestSummaryMetadata::from_parts(
+        Some("healthz"),
+        None,
+        Some("openai_frontend"),
+        Some("healthz"),
+    )
+    .with_source(Some("direct_http"))
+    .with_method(Some("GET"));
+    let (guard, _) = service.register_request_with_metadata(request_id, metadata);
+
+    let admitted = sink
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            OutputEvent::CanonicalLog(envelope)
+                if envelope.request_id == request_id
+                    && matches!(envelope.event, LifecycleEvent::Admitted { .. }) =>
+            {
+                Some(envelope)
+            }
+            _ => None,
+        })
+        .expect("admitted projection");
+    assert_eq!(
+        admitted.presentation_message(),
+        "probe admitted route=healthz source=direct_http provider=openai_frontend engine=healthz method=GET"
+    );
+    assert!(matches!(
+        admitted.event,
+        LifecycleEvent::Admitted {
+            model: None,
+            method: Some(ref method)
+        } if method == "GET"
+    ));
+
+    service
+        .transition_terminal(
+            request_id,
+            &guard,
+            TerminalOutcome::CompletedWithStatus(200),
+        )
+        .expect("probe terminal transition");
+    let completed = sink
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            OutputEvent::CanonicalLog(envelope)
+                if envelope.request_id == request_id
+                    && matches!(envelope.event, LifecycleEvent::Completed { .. }) =>
+            {
+                Some(envelope)
+            }
+            _ => None,
+        })
+        .expect("completed projection");
+    assert_eq!(
+        completed.presentation_message(),
+        "probe request completed route=healthz source=direct_http provider=openai_frontend engine=healthz method=GET status=200"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn canonical_projection_classifies_management_polling_without_guessing_the_client() {
+    let sink = Arc::new(RecordingOutputSink::default());
+    let _reset_guard = OutputSinkResetGuard;
+    set_output_sink(sink.clone());
+
+    let service = Arc::new(make_service());
+    let request_id = RequestId::new();
+    let lifecycle = crate::logging::ManagementRequestLifecycle::register(
+        Arc::clone(&service),
+        request_id,
+        "management_get_status",
+    );
+
+    let admitted = sink
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            OutputEvent::CanonicalLog(envelope)
+                if envelope.request_id == request_id
+                    && matches!(envelope.event, LifecycleEvent::Admitted { .. }) =>
+            {
+                Some(envelope)
+            }
+            _ => None,
+        })
+        .expect("management admitted projection");
+    assert_eq!(
+        admitted.presentation_message(),
+        "management admitted route=management_get_status source=direct_http provider=management_api engine=management_get_status method=GET"
+    );
+
+    lifecycle.finish_status(200);
+    let completed = sink
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            OutputEvent::CanonicalLog(envelope)
+                if envelope.request_id == request_id
+                    && matches!(envelope.event, LifecycleEvent::Completed { .. }) =>
+            {
+                Some(envelope)
+            }
+            _ => None,
+        })
+        .expect("management completed projection");
+    assert_eq!(
+        completed.presentation_message(),
+        "management request completed route=management_get_status source=direct_http provider=management_api engine=management_get_status method=GET status=200"
+    );
+}
+
 #[tokio::test]
 async fn attempt_records_are_delivered_under_the_parent_request() {
     let sink = Arc::new(TestSink::new());
@@ -634,6 +371,52 @@ async fn attempt_records_are_delivered_under_the_parent_request() {
             .count(),
         1,
         "the parent request owns one summary despite multiple attempts"
+    );
+}
+
+/// A freshly-registered request has no truthful metadata yet: `register_request`
+/// stores `RequestSummaryMetadata::default()` in the active registry, and the
+/// admitted event's own registry-entry fallback must not treat that empty
+/// placeholder as real metadata. Doing so previously fabricated a presentation
+/// context whose absent route/model/method still stamped `kind=unknown` onto
+/// every message for the request, exactly like the two other empty-metadata
+/// fallbacks already guard against.
+///
+/// `CanonicalEnvelope::presentation_context` is deliberately skipped by serde
+/// (durable/replay truth is the canonical event plus summary metadata), so
+/// this reads the live replay-bus entry's rendered `presentation_summary`
+/// text directly rather than round-tripping the envelope through JSON, which
+/// would silently strip the very field this test guards.
+#[tokio::test]
+async fn newly_registered_request_with_no_metadata_omits_presentation_context() {
+    let svc = LoggingService::new(
+        ServiceConfig::default(),
+        Arc::new(TestSink::new()),
+        Box::new(TestClock::new()),
+    );
+    let request_id = RequestId::new();
+    let (_guard, admitted_event_id) = svc.register_request(request_id);
+
+    let window = svc.bus_ref().replay_window();
+    let live_payload: serde_json::Value = window
+        .records
+        .iter()
+        .find_map(|record| {
+            let payload: serde_json::Value =
+                serde_json::from_str(&record.entry.payload).expect("parse live bus payload");
+            (payload.get("event_id").and_then(serde_json::Value::as_str)
+                == Some(&admitted_event_id.as_uuid().to_string()))
+            .then_some(payload)
+        })
+        .expect("admitted event reached the replay bus");
+
+    let presentation_summary = live_payload
+        .get("presentation_summary")
+        .and_then(serde_json::Value::as_str)
+        .expect("canonical events carry a rendered presentation summary");
+    assert!(
+        !presentation_summary.contains("kind=unknown"),
+        "empty registry metadata must not stamp kind=unknown onto every message for the request: {presentation_summary}"
     );
 }
 

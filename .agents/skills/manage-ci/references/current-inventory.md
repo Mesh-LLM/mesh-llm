@@ -13,6 +13,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `pr_linux.yml` (`PR · Linux`) | PR lifecycle | Canonical PR planning plus the protected reusable Linux lane |
 | `pr_macos.yml` (`PR · macOS`) | PR lifecycle | Canonical PR planning plus the protected reusable macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | PR lifecycle | Canonical PR planning plus the protected reusable Windows lane |
+| `pr-cancel-sibling-runs.yml` (`PR · Cancel sibling lanes`) | protected `workflow_run` on `PR · Quality` entering progress | No-PR-checkout monitor that cancels other exact-revision PR validation lanes after the first definitive job failure |
 | `pr_builds.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger |
 | `ci-orchestrator.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger or lane calls |
 | `main_quality.yml` (`Main · Quality`) | push to `main` | Exhaustive main planning plus the same-commit reusable Quality lane |
@@ -26,6 +27,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
+| `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
@@ -44,8 +46,10 @@ target; prerelease tags are excluded so RC and final notes use the same stable
 baseline.
 
 The five PR lifecycle rows and five main push rows above are the complete
-allowed routine validation entry sets. Their separation and direct GitHub log
-visibility are contractual, not a presentation preference. `pr_builds.yml`,
+allowed routine validation entry sets. The protected sibling monitor is
+metadata/control infrastructure, not a sixth validation entrypoint or required
+check. Their separation and direct GitHub log visibility are contractual, not
+a presentation preference. `pr_builds.yml`,
 `ci-orchestrator.yml`, and `ci.yml` are reusable-only migration scaffolding;
 they must never regain event triggers or call the five lanes. They are
 removable after this branch's runner contract is active on protected main.
@@ -60,7 +64,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows host/runtime/product/platform graph with one platform-local UI producer |
 | `ci-quality-slice.yml` | Contracts, format, Clippy and CLI/docs guard; additive protected authority sentinel |
-| `ci-web-slice.yml` | Console quality and public website build |
+| `ci-web-slice.yml` | Console quality, console Playwright E2E, and public website build |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch |
@@ -82,6 +86,246 @@ All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
 workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no
 repository secrets. The trusted main entrypoint may pass the optional
 `HF_TOKEN` for public-fixture rate-limit resilience.
+
+## Prebuilt runner-image containerization
+
+Some CI jobs run inside a `container:` pinned to a digest from the
+`mesh-llm-runner-images` repo instead of installing tooling per-run with
+`actions/setup-*`. There is no separate sister repo: the `public web`
+backend (baked Chromium/Playwright) lives on `mesh-llm-runner-images` main
+alongside every other family, added by `17283ab` (#20, the `public web`
+backend) and `5ea673b` (#21, the Playwright version assert). The GHCR
+package name
+`ghcr.io/mesh-llm/mesh-llm-cuda-runner` is legacy: it hosts every backend
+family (`public cpu`, `public cuda`, `public rocm`, `public vulkan`,
+`public web`, `self-hosted`), not only CUDA. Each image bakes
+`cargo cmake docker git jq just lld node ninja npm pnpm python rustc sccache`
+(asserted by `verify-runner-image`, see below) plus a Python venv on `PATH`
+(`VIRTUAL_ENV=/opt/mesh-llm/venv`), pinned pnpm/node (`PNPM_HOME`,
+`CARGO_HOME`, `RUSTUP_HOME` baked as ENV so they resolve the same regardless
+of the container's `HOME`), and, for the `public` stage only, runs as
+**root** (`USER root`, never dropped back) rather than `runner` --
+`self-hosted` is the only stage that ends `USER runner`.
+
+Reusable slices/workflows with a `container:` job, and what backs it:
+
+| Workflow | Job(s) | Image family |
+| --- | --- | --- |
+| `ci-{linux}-host-slice.yml`, `ci-linux-runtime-slice.yml`, `ci-linux-product-slice.yml`, `ci-rust-tests-slice.yml`, `ci-quality-slice.yml` (Clippy batches) | matrix-selected | `public cpu` (pre-existing, predates this containerization pass) |
+| `native-sdk-artifact.yml`, `node-sdk-addon-artifact.yml`, `static-abi-artifact.yml`, `swift-sdk-artifact.yml` | producer job | `public cpu` (pre-existing) |
+| `hf-download-smoke.yml`, `scripted-binary-smoke.yml` | their single job | `public cpu`, sha256:8d93de6b... -- unconditional, no bare-metal row |
+| `smoke.yml` | `smoke_tests` | `public cpu` when `inputs.runner != 'gpu-nvidia'`, else uncontainerized (see opt-out below) |
+| `sdk-smoke.yml` | its job | `public cpu` when `inputs.sdk_kind != 'swift'`, else uncontainerized |
+| `ci-ui-artifact-slice.yml` | `ui_artifact` | `public web`, sha256:1c73f0f2... |
+| `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `website` | `public web` |
+| `website-pages.yml` | `build` | `public web` |
+| `nightly-stability-run.yml` | `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
+| `release.yml` (several CUDA/ROCm/Vulkan build/compose rows) | per-backend `public` digests | pre-existing, unrelated to this containerization work; each row pins its own backend digest via `ci/slices.yml` / job matrix, not a shared convention |
+
+`public cpu` and `public web` are separate image builds (the latter adds
+`PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`,
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, and a stamped
+`/etc/mesh-runner-playwright-version`); do not assume one digest covers both.
+
+### `image: ''` opt-out rows
+
+`smoke.yml`'s `gpu-nvidia` row (the approved uncredentialed self-hosted CUDA
+smoke exception) and `sdk-smoke.yml`'s `swift` row (host-only macOS SDK
+build, `macos-15`, never container-capable) opt out per-run with
+`image: ''` rather than being a separate job, so the rest of the job body
+(steps, `if: job.container.id == ''` gates) stays shared. This is proven to
+actually opt a job out of containerization by two runs on the temporary
+branch-head harness used to validate #1380 (run 32349670919, jobs
+96370649138 `CUDA inference smoke` and 96375145155 `swift SDK Smoke`): no
+`Initialize containers` log group, no `docker create`, and the gated
+`actions/setup-python`/`pnpm/action-setup` steps ran. There is no other
+empty-image job anywhere in this repo's workflow history.
+
+The ternary that selects `image: ''` must put the **non-empty** value in the
+`&&` branch: `cond && url || ''`, never `cond && '' || url`. GitHub Actions
+expressions are JS-style short-circuit and `''` is falsy, so
+`cond && '' || url` always evaluates to `url` regardless of `cond` -- the
+opt-out branch becomes unreachable. `scripts/tests/test_ci_workflow_ternary_contract.py`
+fails any `${{ }}` ternary whose `&&` branch is a falsy literal (`''`, `""`,
+`0`, `false`) across every workflow; it exists specifically because this bug
+class is invisible to `actionlint`.
+
+### `job.container.id == ''` gating
+
+When a job has both a containerized and a bare-metal row (the two rows
+above), `actions/setup-python`, `actions/setup-node`, and
+`pnpm/action-setup` steps are gated `if: job.container.id == ''` rather than
+deleted, because the bare-metal row still needs them -- the image is not
+present there. **Deliberate exception: `actions/setup-java` in
+`sdk-smoke.yml` is never gated.** `verify-runner-image`'s asserted tool list
+has no JDK, so the image provides nothing for it to shadow; gating it would
+break the Kotlin SDK smoke on the containerized row instead of protecting it.
+Jobs with no bare-metal row at all (the `ci-web-slice.yml` / `website-pages.yml`
+/ `ci-ui-artifact-slice.yml` / `nightly-stability-run.yml` set) delete the
+now-redundant setup actions outright instead of gating them -- there is
+nothing for the `if:` to select between.
+
+`npm install --global openai` in `smoke.yml` is **not** gated on
+`job.container.id`, even though `install-core-tools.sh:83` bakes an
+exact-pinned `openai` into the image on `mesh-llm-runner-images` main. The
+`public cpu` digest pinned in `ci/slices.yml` predates that bake (see
+"A pinned digest is a frozen artifact" below), so the containerized row needs
+the install too, and the step runs unconditionally for both it and the
+bare-metal `gpu-nvidia` row. Re-gate it only once the CPU digest is promoted
+past `mesh-llm-runner-images` #20 and that is confirmed from a green run.
+
+Both call sites install `openai@7.5.0`, not floating `openai`. The step runs
+with the full job environment (`HF_TOKEN` included) and npm lifecycle scripts
+inherit it, so an unreviewed upstream release must not be able to execute
+there; `zizmor`'s `adhoc-packages` rule flags the floating form. The version
+deliberately tracks the image's own `ARG OPENAI_NPM_VERSION`
+(`mesh-llm-runner-images` `Dockerfile:25`) so that re-gating the step later is
+a no-op rather than a version swap -- bump both sides together.
+
+### Container jobs default `run:` to `sh`, not `bash`
+
+Jobs with a `container:` block resolve the default `run:` shell to
+`sh -e {0}`, not `bash -e {0}` (bare-metal Linux/macOS runners default to
+bash; this only changes inside a container). Composite actions are
+unaffected -- they declare their own shell. Any `run:` step in a
+containerized job that uses a bashism (`<<<`, `set -o pipefail`, `[[`,
+array assignment, `${v//}`/`${v^^}`/`${v,,}`, `&>`, `source`, `+=(`, ...)
+must declare `shell: bash` explicitly or it fails at runtime with a
+`dash`/`sh` syntax error that `actionlint` cannot catch -- its shellcheck
+integration assumes bash. Two sites hit this in the same PR:
+`ci-web-slice.yml`'s `ui_e2e` preflight (`<<<`) and
+`website-pages.yml`'s `Stage Pages artifact` (`set -euo pipefail`); both now
+declare `shell: bash`.
+
+`$(( ))` arithmetic expansion is **not** on that list and must not be added.
+It is POSIX (Shell Command Language 2.6.4) and `dash` evaluates it correctly;
+flagging it would reject valid `sh` steps and force a spurious `shell: bash`.
+`scripts/tests/test_ci_workflow_container_shell_contract.py` carries the
+pattern list and an inline note saying so.
+
+### Reusable-workflow permission chain
+
+A called reusable workflow may not request a permission scope its caller job
+does not grant; GitHub rejects at run creation with a **zero-job
+`startup_failure`** -- no jobs, no logs, no check run on the commit, and
+`actionlint` cannot see it. Containerizing surfaced this because
+`packages: read` (needed to pull the private GHCR runner images) has to be
+granted at *every* hop, and
+`ci-linux-product-smoke-slice.yml` / `ci-macos-product-smoke-slice.yml` sat at
+`contents: read` between granted parents and requesting children.
+`scripts/tests/test_ci_workflow_permission_contract.py` walks every local
+`uses: ./.github/workflows/X.yml` edge and asserts the caller's effective
+permissions (job-level, else workflow-level) cover what `X.yml` requests.
+
+Two properties make that assertion real rather than decorative, and both were
+absent when the test was first written:
+
+1. **The callee's requested set is the workflow-level block merged with every
+   explicit job-level block.** Five reusable workflows here
+   (`native-sdk-artifact.yml`, `node-sdk-addon-artifact.yml`, `sdk-smoke.yml`,
+   `static-abi-artifact.yml`, `swift-sdk-artifact.yml`) declare permissions
+   only at job level, so reading the workflow-level block alone returns `None`
+   for them and skips their caller edges entirely -- including the
+   `packages: read` edges this test exists to cover.
+2. **Scope levels are compared, not scope names.** `contents: read` does not
+   satisfy a callee's `contents: write`; GitHub rejects that downgrade at run
+   creation exactly like a missing scope. The comparison ranks
+   `none < read < write`, and where a scope is declared in more than one block
+   the strictest level wins. A name-only set comparison silently passes the
+   downgrade.
+
+3. **`read-all`/`write-all` are modelled on the granting side, not skipped.**
+   As a *grant* they are perfectly enumerable -- `write-all` satisfies any
+   request, `read-all` satisfies a `read` request but not a `write` one -- so
+   returning "unknown" and skipping the edge would hide the same
+   run-creation failure. As a *request* they stay opaque: a callee asking
+   `write-all` names no scopes to hold its caller to, and asserting there
+   would be invention rather than checking.
+4. **Both workflow extensions are read.** Globbing `*.yml` alone would skip a
+   `*.yaml` callee entirely; the repo has none today, which is exactly when
+   that gap is cheapest to close.
+
+None of these were breakages -- the repo satisfies the contract at every edge
+under the strict check, and it has no `.yaml` workflows or all-scope grants at
+all. That is the point: a permission test that under-reads its inputs reports
+green for edges it never examined, and each of these was found by tightening
+the test rather than by anything failing.
+
+### `verify-runner-image` preflight
+
+Containerized jobs run `verify-runner-image <environment> <backend> ...`
+(positional args: environment, backend, mesh-llm revision, CUDA series, ROCm
+version, runner-images revision, and -- `public web` only -- expected
+Playwright version, added in `mesh-llm-runner-images`#21) before doing real
+work, asserting `/etc/mesh-runner-*` files match what the job expects rather
+than trusting the digest pin alone. `ci-web-slice.yml`'s `ui_e2e` job
+resolves the installed `@playwright/test` version with
+`pnpm exec playwright --version | head -n1 | awk '{print $NF}'` (guarded by a
+`^[0-9]+\.[0-9]+\.[0-9]+$` shape assertion -- `playwright --version` can share
+stdout with an npm warning) and passes it as the seventh argument; a mismatch
+against the image's own build-time `playwright --version` fails fast instead
+of surfacing as a confusing Playwright/Chromium error deep in the E2E run.
+
+`crates/mesh-llm-ui/package.json`'s `@playwright/test` and
+`mesh-llm-runner-images`' `config/playwright-pin.txt` are now a matched pair
+(both `1.62.1` as of 2026-08-20; re-check the two sources rather than
+trusting this line). Bumping the mesh-llm side alone fails `ui_e2e` on
+**every** PR at this preflight, not just locally. The bump is a four-step
+cross-repo sequence, in order: bump `config/playwright-pin.txt` in
+`mesh-llm-runner-images`, rebuild and promote the `public web` image, re-pin
+the new digest in `ci-web-slice.yml` (and `ci-ui-artifact-slice.yml` /
+`website-pages.yml` / `nightly-stability-run.yml`, which share it), then
+bump `@playwright/test` in `crates/mesh-llm-ui/package.json`.
+
+### `setup-macos-lld` composite
+
+`.github/actions/setup-macos-lld` replaces per-callsite
+`brew install lld` plus a hand-rolled `PATH`/`RUSTFLAGS` export with one
+composite: install lld via brew, resolve `$(brew --prefix lld)/bin`, link a
+real `edition = "2024"` probe binary with `-Clink-arg=-fuse-ld=lld`, then
+export `CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld` and the resolved bin
+directory. `CARGO_ENCODED_RUSTFLAGS` **replaces** any
+`target.<triple>.rustflags` from a checked-in `.cargo/config.toml` rather
+than merging with it -- confirmed safe here because every call site is
+macOS-gated and no call site touches an `android` target (the repo's
+`.cargo/config.toml` android entries carry a `-Wl,-z,max-page-size=16384`
+flag that would otherwise silently stop applying). Seven call sites:
+`ci-platform-checks-slice.yml`, `ci-macos-host-slice.yml`,
+`swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
+`node-sdk-addon-artifact.yml`, and two in `release.yml`. Only the first
+three were reachable by the temporary branch-head harness used to validate
+PR #1380 (no macOS row in
+`native-sdk-artifact.yml`/`node-sdk-addon-artifact.yml` ran there, and
+`release.yml` only runs on an actual release cut) -- the other four are
+statically cleared (macOS-gated, no android target on any of them) rather
+than proven by a real run. `node-sdk-addon-artifact.yml`'s own
+`Validate macOS x64 cross-linker` step is a deliberate near-duplicate of the
+composite's probe, not dead code: it passes `--target x86_64-apple-darwin`
+where the composite only probes the host target.
+
+### A pinned digest is a frozen artifact
+
+`mesh-llm-runner-images` HEAD says nothing about what is inside the digest a
+workflow pins -- the `public cpu` digest pinned in `ci/slices.yml` was built
+2026-07-22 and does not contain changes merged to that repo afterwards
+(the `smoke.yml` openai bake landed a week later, in #20). Before deleting or
+gating a dependency install on the grounds that "the image bakes it,"
+confirm the capability exists **in the pinned digest**, and confirm it from a
+green run of the job that needs it. `verify-runner-image`'s JSON is the
+cheap probe: `mesh_llm_revision` dates the build, and missing keys (added to
+the asserted object in later `mesh-llm-runner-images` commits) date the
+baked verify script itself.
+
+### Digest promotion
+
+`build-and-push.yml` (in `mesh-llm-runner-images`) runs `stage_families` for
+both `operation=stage` and `operation=promote`; `promote_versioned` reads the
+candidate descriptor artifact from that **same run**, not from an earlier
+stage run. A `promote` dispatch therefore re-stages and promotes its own
+build. Read the digest to pin from the promote job's own `digest=` output
+(e.g. `promoted ghcr.io/... -> sha256:...` in its log) -- never carry forward
+a digest observed from an earlier stage-only run, even one at the same
+source commit.
 
 ## Planner contract
 
@@ -126,6 +370,9 @@ from that same catalog.
   cache remains disabled. Hosted PR, release, and cache-warmer selections
   retain native GitHub cache behavior.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup.
+- `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
+  central runner policy permits it only for GitHub-hosted selections, and
+  runtime rows must match the seed's container image and toolchain epoch.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
 `scripts/collect-ci-metrics.py` is the read-only timing evidence collector. Its
@@ -142,17 +389,29 @@ PR artifacts generally retain for one day. Fork lanes cannot publish shared
 trusted-main caches. Same-repository PRs normally use GitHub's ref-scoped cache;
 an exact approved revision may temporarily use Depot's shared cross-branch
 namespace under `ci/DEPOT_PR_RISK_EXCEPTION.md`. That namespace is treated as
-untrusted input, not an authority or correctness boundary. Large Cargo target caches restore trusted-main entries but remain
-restore-only on PRs. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
+untrusted input, not an authority or correctness boundary. Linux Clippy,
+Rust-test, host, and runtime jobs restore one bounded trusted sccache seed
+instead of per-row Cargo target archives. Depot selections cannot restore that
+seed through their cross-trust cache proxy. Its exact key fingerprints the
+warmer image and toolchain epoch, so mismatched native-runtime rows are cold and
+do not restore it. These four high-fanout families disable per-object GHA
+publication on every provider. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
 and Windows native ABI caches may publish into GitHub's isolated PR merge-ref
-scope for same-PR reruns. The Website slice is the sole publisher for the
-shared pnpm key and owns the website npm cache; platform UI producers restore
-the pnpm store without racing to save it. Trusted main owns shared publication.
+scope for same-PR reruns. UI installs (`ui_quality`, `ui_e2e`, `ui_artifact`) point pnpm at the runner
+image's baked store instead of an Actions cache — there is no shared pnpm
+key or publisher to race. Trusted main owns shared publication.
 
 PR Rust-test, host, native-runtime, product, and platform-check matrices receive
 `fail_fast: true`; main/manual pass `false`. Quality matrices remain
-non-fail-fast, failed producers suppress only declared consumers through
-`needs`, and focused PR workflows never cancel one another.
+non-fail-fast and failed producers suppress impossible consumers through
+`needs`. One protected, default-branch `workflow_run` monitor starts with
+`PR · Quality`, polls the five exact-PR/exact-SHA validation runs, preserves the
+run containing the first definitive failed job, and cancels its queued or
+in-progress siblings. It checks out only the default branch, owns the sole
+`actions: write` token for this operation, and never targets main, manual,
+release, deployment, cleanup, cache-warming, another PR event epoch, or a newer
+revision. PR-controlled workflows and executor jobs retain no Actions-write
+permission.
 
 ## Providers and variables
 

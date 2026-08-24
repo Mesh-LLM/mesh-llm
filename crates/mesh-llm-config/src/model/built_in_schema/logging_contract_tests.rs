@@ -55,23 +55,56 @@ fn logging_capacity_descriptions_are_stable_and_truthful() {
     for (path, expected) in [
         (
             "logging.summary_line_limit",
-            "Maximum Unicode characters in each payload-free local presentation summary line; changes require a process restart.",
+            "Maximum number of Unicode characters in each generated request summary.",
         ),
         (
             "logging.event_buffer_size",
-            "Process-restart hard ceiling on entries held by the in-memory replay buffer.",
+            "Maximum number of event entries held in memory for replay.",
         ),
         (
             "logging.replay_capacity",
-            "Initial and live current replay target in entries; it applies dynamically and must not exceed logging.event_buffer_size.",
+            "Number of recent events available to reconnecting console clients.",
         ),
         (
             "logging.queue_capacity",
-            "Process-restart capacity of the persistence/dispatch queue; it does not control replay retention.",
+            "Maximum number of pending log entries waiting for persistence and webhook dispatch.",
         ),
     ] {
         assert_eq!(schema_setting(path).description.as_deref(), Some(expected));
     }
+}
+
+#[test]
+fn logging_presentation_exposes_friendly_choices_and_byte_units() {
+    let capture = schema_setting("logging.artifact.capture_mode");
+    let capture_presentation = capture.presentation.expect("capture presentation");
+    assert_eq!(
+        capture_presentation.label.as_deref(),
+        Some("Captured content")
+    );
+    assert_eq!(capture_presentation.choices[0].label, "Metadata only");
+    assert_eq!(capture_presentation.choices[1].label, "Redacted payloads");
+
+    let byte_limit = schema_setting("logging.artifact.byte_limit_bytes");
+    let byte_presentation = byte_limit.presentation.expect("byte presentation");
+    assert_eq!(byte_presentation.renderer_id.as_deref(), Some("byte-size"));
+    assert_eq!(
+        byte_presentation
+            .display_units
+            .iter()
+            .map(|unit| unit.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["B", "KB", "MB", "GB"]
+    );
+
+    assert_eq!(
+        schema_setting("logging.audit.enabled").visibility,
+        ConfigVisibility::Advanced
+    );
+    assert_eq!(
+        schema_setting("logging.enabled").visibility,
+        ConfigVisibility::User
+    );
 }
 
 #[test]

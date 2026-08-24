@@ -9,7 +9,9 @@ This file covers local build and development workflows for this repository.
 - `just`
 - `cmake`
 - Rust toolchain (`cargo`)
-- Node.js 24 + npm (for UI development)
+- Node.js 24 + pnpm 10 or newer (for UI development). The UI lockfile keeps
+  `overrides` in `pnpm-workspace.yaml`, which pnpm 9 does not read, so pnpm 9
+  cannot install it. `corepack pnpm@10` is enough if your host pnpm is older.
 
 **macOS**: Apple Silicon. Metal is used automatically.
 
@@ -133,6 +135,30 @@ just check-release    # release-target/docs/workflow parity check
 just compat-smoke ~/.cache/huggingface/hub/<model>.gguf   # optional 2-node + 1-client Python/Node/LiteLLM smoke
 just --list           # list all recipes
 ```
+
+On macOS and Linux, local Cargo artifacts are bounded independently from the sccache
+compiler-object cache, which here keeps sccache's own 10 GiB local default. That default is
+a developer-machine limit only -- CI does not use it, and pins a 2 GiB trusted seed instead
+(`SCCACHE_CACHE_SIZE=2G`, see `.github/actions/restore-sccache-seed`). Inspect and prune the
+local Cargo artifacts with:
+
+```bash
+just cache-status
+just cache-prune-dry-run max_size=80GiB max_age=14
+just cache-prune max_size=80GiB max_age=14
+```
+
+Pruning evicts the oldest incremental sessions first, then uses
+`cargo clean -p` for old or size-dominant workspace packages. It is scoped to
+this worktree's `target/` and reports before/after bytes. On macOS and Linux,
+`just build` and `just build-dev` hold a shared lock for their full build while
+cache status and dry-run pruning take the same lock in shared mode. Executed
+pruning requires the corresponding exclusive lock before measuring or deleting
+artifacts. Direct Cargo and lower-level build commands do not share that lock,
+so pruning also refuses to run when it detects an active Cargo or Rust compiler
+process as a best-effort safeguard. Cargo configurations that separate
+`build.build-dir` from `target-dir` are rejected because the cache manager does
+not report, lock, or clean a second artifact tree.
 
 On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks. Run it on macOS or Linux when you need full shell parity coverage.
 

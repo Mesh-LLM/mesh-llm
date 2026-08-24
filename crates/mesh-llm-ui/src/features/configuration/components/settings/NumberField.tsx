@@ -1,5 +1,6 @@
 import type { InputHTMLAttributes, ReactNode } from 'react'
 import { cn } from '@/lib/cn'
+import { TEXT_FIELD_BASE_CLASS } from '@/features/configuration/components/settings/schema-control-utils'
 
 type NumberFieldProps = InputHTMLAttributes<HTMLInputElement> & {
   readonly inputClassName?: string
@@ -21,7 +22,8 @@ export function NumberField({
         {...props}
         aria-invalid={invalid ? 'true' : props['aria-invalid']}
         className={cn(
-          'ui-control h-[32px] w-[108px] rounded-[var(--radius)] border bg-surface px-2.5 font-mono text-[length:var(--density-type-control)] text-foreground outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent',
+          TEXT_FIELD_BASE_CLASS,
+          'w-[108px]',
           disabled && 'cursor-not-allowed opacity-60',
           invalid && 'border-bad shadow-[var(--shadow-surface-error-inset)]',
           inputClassName

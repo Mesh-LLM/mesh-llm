@@ -263,7 +263,11 @@ jobs:
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install cmake ninja lld
+        run: brew install cmake ninja
+
+      - name: Install macOS linker
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/setup-macos-lld
 
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
@@ -509,7 +513,12 @@ jobs:
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install cmake ninja lld
+        run: brew install cmake ninja
+
+      - name: Install macOS linker
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/setup-macos-lld
+
       - name: Resolve hosted native toolchain epoch
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:

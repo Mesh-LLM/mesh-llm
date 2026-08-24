@@ -12,3 +12,4 @@ categories = ["network-programming"]
 
 [dependencies]
 iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
+serde_json.workspace = true

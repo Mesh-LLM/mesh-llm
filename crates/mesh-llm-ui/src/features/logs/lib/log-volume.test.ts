@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { LogRequestId } from '@/features/logs/api/ids'
 import type { LogRequest } from '@/features/logs/api/schemas'
 import {
+  LOG_EVENT_CATEGORIES,
+  type LogEventCategory,
+  type LogEventLedgerRow
+} from '@/features/logs/lib/log-event-ledger'
+import {
   MAX_VOLUME_BUCKETS,
-  buildRequestVolumeBuckets,
-  effectiveRequestVolumeIntervalMs,
+  buildEventVolumeBuckets,
+  effectiveEventVolumeIntervalMs,
   formatBucketRange,
   formatBucketTick,
   formatClock
@@ -30,25 +35,55 @@ function requestAt(createdAt: string): LogRequest {
   }
 }
 
+function eventAt(category: LogEventCategory, occurredAt: string, index = 1): LogEventLedgerRow {
+  if (category === 'requests') {
+    return {
+      type: 'request',
+      id: `request:${index}`,
+      occurredAt,
+      category,
+      request: requestAt(occurredAt)
+    }
+  }
+  return {
+    type: 'audit',
+    id: `audit:${index}`,
+    occurredAt,
+    category,
+    audit: {
+      entryId: `audit-${index}`,
+      occurredAt,
+      source: 'runtime',
+      code: `${category}_event`,
+      sequence: index
+    }
+  }
+}
+
 function iso(ms: number): string {
   return new Date(ms).toISOString()
 }
 
 const FIVE_MINUTES = 300_000
 const TWELVE_HOURS = 43_200_000
+const ALL_CATEGORIES = new Set<LogEventCategory>(LOG_EVENT_CATEGORIES)
 
-describe('buildRequestVolumeBuckets', () => {
-  it('buckets requests into 5m buckets across a 12h window ending at now', () => {
+describe('buildEventVolumeBuckets', () => {
+  it('buckets selected event categories into 5m stacks across a 12h window ending at now', () => {
     const now = utc(12, 10)
     const rows = [
-      requestAt(iso(utc(12, 0))),
-      requestAt(iso(utc(12, 1))),
-      requestAt(iso(utc(12, 5))),
-      requestAt(iso(utc(12, 9, 59))),
-      requestAt(iso(utc(12, 10)))
+      eventAt('requests', iso(utc(12, 0)), 1),
+      eventAt('system', iso(utc(12, 1)), 2),
+      eventAt('quic', iso(utc(12, 5)), 3),
+      eventAt('gossip', iso(utc(12, 9, 59)), 4),
+      eventAt('requests', iso(utc(12, 10)), 5)
     ]
 
-    const buckets = buildRequestVolumeBuckets(rows, { intervalMs: FIVE_MINUTES, rangeMs: TWELVE_HOURS, now })
+    const buckets = buildEventVolumeBuckets(rows, ALL_CATEGORIES, {
+      intervalMs: FIVE_MINUTES,
+      rangeMs: TWELVE_HOURS,
+      now
+    })
 
     expect(buckets).toHaveLength(TWELVE_HOURS / FIVE_MINUTES + 1)
     expect(buckets[0].bucketStart).toBe(now - TWELVE_HOURS)
@@ -56,15 +91,27 @@ describe('buildRequestVolumeBuckets', () => {
     expect(buckets.reduce((sum, bucket) => sum + bucket.total, 0)).toBe(5)
 
     const byStart = new Map(buckets.map((bucket) => [bucket.bucketStart, bucket]))
-    expect(byStart.get(utc(12, 0))?.total).toBe(2) // 12:00:00 + 12:01:00
-    expect(byStart.get(utc(12, 5))?.total).toBe(2) // 12:05:00 + 12:09:59
+    expect(byStart.get(utc(12, 0))).toMatchObject({ requests: 1, system: 1, total: 2 })
+    expect(byStart.get(utc(12, 5))).toMatchObject({ quic: 1, gossip: 1, total: 2 })
     expect(byStart.get(utc(12, 10))?.total).toBe(1) // 12:10:00
     expect(byStart.get(utc(0, 15))?.total).toBe(0) // zero-count bucket preserved
   })
 
-  it('spans earliest to latest request for the all-time range', () => {
-    const rows = [requestAt(iso(utc(9, 0))), requestAt(iso(utc(21, 0)))]
-    const buckets = buildRequestVolumeBuckets(rows, {
+  it('removes filtered categories from bucket totals', () => {
+    const rows = [eventAt('requests', iso(utc(12, 0)), 1), eventAt('system', iso(utc(12, 0)), 2)]
+
+    const buckets = buildEventVolumeBuckets(rows, new Set<LogEventCategory>(['system']), {
+      intervalMs: FIVE_MINUTES,
+      rangeMs: TWELVE_HOURS,
+      now: utc(12, 0)
+    })
+
+    expect(buckets.at(-1)).toMatchObject({ requests: 0, system: 1, total: 1 })
+  })
+
+  it('spans earliest to latest selected event for the all-time range', () => {
+    const rows = [eventAt('requests', iso(utc(9, 0)), 1), eventAt('system', iso(utc(21, 0)), 2)]
+    const buckets = buildEventVolumeBuckets(rows, ALL_CATEGORIES, {
       intervalMs: 3_600_000,
       rangeMs: Number.POSITIVE_INFINITY,
       now: utc(12, 0)
@@ -81,20 +128,24 @@ describe('buildRequestVolumeBuckets', () => {
     const minute = 60_000
     const start = Date.UTC(2026, 4, 1, 0, 0, 0)
     const end = start + 90 * 24 * 60 * minute
-    const buckets = buildRequestVolumeBuckets([requestAt(iso(start)), requestAt(iso(end))], {
-      intervalMs: minute,
-      rangeMs: Number.POSITIVE_INFINITY,
-      now: end
-    })
+    const buckets = buildEventVolumeBuckets(
+      [eventAt('requests', iso(start), 1), eventAt('requests', iso(end), 2)],
+      ALL_CATEGORIES,
+      {
+        intervalMs: minute,
+        rangeMs: Number.POSITIVE_INFINITY,
+        now: end
+      }
+    )
 
     expect(buckets.length).toBeLessThanOrEqual(MAX_VOLUME_BUCKETS)
     expect(buckets.reduce((sum, bucket) => sum + bucket.total, 0)).toBe(2)
-    expect(effectiveRequestVolumeIntervalMs(buckets, minute)).toBeGreaterThan(minute)
+    expect(effectiveEventVolumeIntervalMs(buckets, minute)).toBeGreaterThan(minute)
   })
 
-  it('collapses requests sharing one bucket in all-time mode', () => {
-    const rows = [requestAt(iso(utc(12, 0))), requestAt(iso(utc(12, 30)))]
-    const buckets = buildRequestVolumeBuckets(rows, {
+  it('collapses events sharing one bucket in all-time mode', () => {
+    const rows = [eventAt('requests', iso(utc(12, 0)), 1), eventAt('system', iso(utc(12, 30)), 2)]
+    const buckets = buildEventVolumeBuckets(rows, ALL_CATEGORIES, {
       intervalMs: 3_600_000,
       rangeMs: Number.POSITIVE_INFINITY,
       now: utc(12, 0)
@@ -106,8 +157,12 @@ describe('buildRequestVolumeBuckets', () => {
 
   it('includes requests exactly on the range boundaries', () => {
     const now = utc(12, 0)
-    const rows = [requestAt(iso(now - TWELVE_HOURS)), requestAt(iso(now))]
-    const buckets = buildRequestVolumeBuckets(rows, { intervalMs: FIVE_MINUTES, rangeMs: TWELVE_HOURS, now })
+    const rows = [eventAt('requests', iso(now - TWELVE_HOURS), 1), eventAt('requests', iso(now), 2)]
+    const buckets = buildEventVolumeBuckets(rows, ALL_CATEGORIES, {
+      intervalMs: FIVE_MINUTES,
+      rangeMs: TWELVE_HOURS,
+      now
+    })
 
     expect(buckets[0].total).toBe(1)
     expect(buckets.at(-1)?.total).toBe(1)
@@ -115,27 +170,37 @@ describe('buildRequestVolumeBuckets', () => {
 
   it('excludes requests outside the window while preserving the frame', () => {
     const now = utc(12, 0)
-    const rows = [requestAt(iso(now - TWELVE_HOURS - FIVE_MINUTES))]
-    const buckets = buildRequestVolumeBuckets(rows, { intervalMs: FIVE_MINUTES, rangeMs: TWELVE_HOURS, now })
+    const rows = [eventAt('requests', iso(now - TWELVE_HOURS - FIVE_MINUTES))]
+    const buckets = buildEventVolumeBuckets(rows, ALL_CATEGORIES, {
+      intervalMs: FIVE_MINUTES,
+      rangeMs: TWELVE_HOURS,
+      now
+    })
 
     expect(buckets).toHaveLength(TWELVE_HOURS / FIVE_MINUTES + 1)
     expect(buckets.reduce((sum, bucket) => sum + bucket.total, 0)).toBe(0)
   })
 
   it('returns no buckets for empty rows', () => {
-    expect(buildRequestVolumeBuckets([], { intervalMs: FIVE_MINUTES, rangeMs: TWELVE_HOURS, now: utc(12, 0) })).toEqual(
-      []
-    )
+    expect(
+      buildEventVolumeBuckets([], ALL_CATEGORIES, {
+        intervalMs: FIVE_MINUTES,
+        rangeMs: TWELVE_HOURS,
+        now: utc(12, 0)
+      })
+    ).toEqual([])
   })
 
   it('returns no buckets for a non-positive interval', () => {
-    const rows = [requestAt(iso(utc(12, 0)))]
-    expect(buildRequestVolumeBuckets(rows, { intervalMs: 0, rangeMs: TWELVE_HOURS, now: utc(12, 0) })).toEqual([])
+    const rows = [eventAt('requests', iso(utc(12, 0)))]
+    expect(
+      buildEventVolumeBuckets(rows, ALL_CATEGORIES, { intervalMs: 0, rangeMs: TWELVE_HOURS, now: utc(12, 0) })
+    ).toEqual([])
   })
 
   it('ignores unparseable timestamps', () => {
-    const rows = [requestAt('not-a-date'), requestAt(iso(utc(12, 0)))]
-    const buckets = buildRequestVolumeBuckets(rows, {
+    const rows = [eventAt('requests', 'not-a-date', 1), eventAt('requests', iso(utc(12, 0)), 2)]
+    const buckets = buildEventVolumeBuckets(rows, ALL_CATEGORIES, {
       intervalMs: 3_600_000,
       rangeMs: Number.POSITIVE_INFINITY,
       now: utc(12, 0)

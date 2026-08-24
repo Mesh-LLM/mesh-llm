@@ -14,6 +14,7 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `pr_linux.yml` (`PR · Linux`) | `pull_request` | Plans and calls the protected Linux lane |
 | `pr_macos.yml` (`PR · macOS`) | `pull_request` | Plans and calls the protected macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | `pull_request` | Plans and calls the protected Windows lane |
+| `pr-cancel-sibling-runs.yml` (`PR · Cancel sibling lanes`) | protected `workflow_run` for `PR · Quality` | Watches one exact PR revision and cancels its other validation lanes after the first job failure |
 | `pr_builds.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
 | `ci-orchestrator.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
 | `main_quality.yml` (`Main · Quality`) | push to `main` | Plans and calls the same-commit Quality lane |
@@ -36,8 +37,9 @@ trusted-main caches, and independently cancel superseded synchronizations.
 
 The five-way split is a hard CI architecture invariant. Keep exactly these PR
 validation entry workflows: Quality, Website, Linux, macOS, and Windows. PR
-metadata, cleanup, and auto-assignment workflows such as `pr_cleanup.yml` and
-`pr_auto_assign.yml` are outside this validation census. Every validation
+metadata, cleanup, auto-assignment, and sibling-cancellation workflows such as
+`pr_cleanup.yml`, `pr_auto_assign.yml`, and `pr-cancel-sibling-runs.yml` are
+outside this validation census. Every validation
 workflow must call only its matching protected reusable lane and finish with
 its own stable `PR / <lane>` result. Add or refactor jobs inside the owning
 reusable lane; do not move multiple lanes into a shared PR entrypoint.
@@ -135,6 +137,7 @@ flowchart TD
     MAIN["five focused main entry workflows"] --> MAINPLAN["same-commit exhaustive planning"]
     MANUAL["explicit manual-full"] --> CONTROL["protected manual dispatcher"]
     PRPLAN --> PLAN["compute changes + plan-ci per focused entry"]
+    PR --> MONITOR["protected exact-revision failure monitor"]
     MAINPLAN --> PLAN
     CONTROL --> PLAN
     PLAN --> QUALITY["Quality graph"]
@@ -152,6 +155,11 @@ flowchart TD
     LC --> LINUXGATE["PR / Linux"]
     MC --> MACGATE["PR / macOS"]
     XC --> WINGATE["PR / Windows"]
+    MONITOR -. "first definitive job failure" .-> QUALITY
+    MONITOR -. "cancel remaining siblings" .-> WEB
+    MONITOR -. "cancel remaining siblings" .-> LINUX
+    MONITOR -. "cancel remaining siblings" .-> MAC
+    MONITOR -. "cancel remaining siblings" .-> WIN
     QC --> MQ["Main / Quality"]
     WC --> MW["Main / Website"]
     LC --> ML["Main / Linux"]
@@ -208,7 +216,8 @@ runtime producers are not duplicated.
 
 - `ci-quality-slice.yml` — action/packaging/consistency contracts, format,
   bounded Clippy batches and CLI documentation synchronization.
-- `ci-web-slice.yml` — console lint/type/test and public website build.
+- `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, and
+  public website build.
 - `ci-ui-artifact-slice.yml` — one immutable console `dist` producer.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.
@@ -273,10 +282,24 @@ raw inputs and dated reports under `/tmp` or a tracking artifact, never in
 
 ### PR failure domains
 
-The five PR workflows are independent failure domains. Quality and Website
-continue when a platform compile or functional test fails, and platform lanes
-do not cancel one another. This preserves useful, directly visible diagnostics
-and prevents one topic from hiding another topic's result.
+The five PR workflows remain separate visible checks, but they share a PR-only
+failure budget. A protected `workflow_run` monitor starts when `PR · Quality`
+enters progress and polls the five validation runs associated with the same PR
+number, exact head SHA, and two-minute event epoch. When it observes the first
+definitive failed, timed-out, startup-failed, stale, or action-required job, it
+preserves that workflow as the root diagnostic and cancels the other queued or
+in-progress lane runs. Each triggering Quality run owns a distinct monitor, so
+a newer synchronization cannot prevent an older exact-revision monitor from
+finishing its bounded cleanup.
+
+The monitor executes only the default-branch implementation, checks out only
+the default branch, and owns the narrowly scoped `actions: write` token.
+PR-controlled entrypoints, reusable executors, and checked-out source never
+receive that permission. Main, manual-full, release, deployment, cleanup,
+cache-warming, unrelated workflows, other PRs, and a different event epoch are
+not cancellation targets. The monitor costs one GitHub-hosted Linux slot while
+the PR runs; this bounded overhead replaces five per-lane polling jobs and is
+expected to recover more capacity whenever a lane fails early.
 
 Inside Linux, macOS, and Windows, PR-only `fail_fast` inputs are enabled for
 Rust-test, host, native-runtime, product, and platform-check matrices. The
@@ -288,10 +311,10 @@ unusable.
 
 Producer/consumer `needs` edges are the second cancellation layer. A failed UI,
 ABI, host, or runtime producer prevents its product and smoke consumers from
-starting. Do not add an Actions-API watcher that cancels the whole workflow on
-first failure. Whole-run cancellation would also cancel the stable lane
-summary, leaving reviewers with a cancelled required result instead of a
-precise terminal failure.
+starting. Only the protected monitor may use the Actions API for cross-workflow
+cancellation. The failed workflow is never cancelled, so its stable summary
+can report the precise terminal failure; cancelled siblings are expected
+terminal results that release their runner capacity.
 
 ## Artifact contract
 
@@ -445,12 +468,12 @@ The implemented policy uses that isolation selectively:
 
 | Cache class | PR publication | Effective rerun behavior |
 | --- | --- | --- |
-| sccache compiler objects | Job-local disk only | Helps repeated compilation inside one job; no reuse by another job or rerun |
-| Cargo `target` directories | Restore trusted main, never save from PR | A rerun reuses the latest compatible main cache, but not objects compiled by the earlier PR run |
+| Linux sccache compiler objects | Exact trusted 2 GiB seed plus job-local writes on GitHub-hosted jobs | Main Quality completion owns publication; PRs mutate only their ephemeral copy |
+| Linux Cargo `target` directories | Disabled for Clippy, Rust tests, host, and runtime | Avoids sharded multi-GiB generations and their restore/upload latency |
 | Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged |
 | macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
-| Console pnpm store | Website is the sole publisher; platform UI jobs restore only | Avoids four platform workflows racing to upload the same entry; later same-PR runs reuse a lockfile-keyed store |
-| Website npm store | Website-only lockfile-keyed cache | Later same-PR website runs avoid downloading the unchanged dependency store |
+| Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |
+| Website npm store | None -- the `website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
 Outside the bounded exception, a Depot-selected run emits
@@ -472,10 +495,16 @@ sentinel evidence and rollback procedure, is documented in
 `ci/DEPOT_PR_RISK_EXCEPTION.md`; the exact-SHA canary, metrics, and hosted
 rollback evidence are recorded in `.omo/specs/depot-pr-rollout-evidence.md`.
 
-This is intentionally not a universal PR write-through policy. Cargo target
-caches are commonly hundreds of megabytes to several gigabytes per row; making
-every PR matrix row publish one would multiply storage, increase upload time,
-and evict the trusted main caches available to every PR. Small exact native
+This is intentionally not a universal PR write-through policy. One protected
+GitHub-hosted warmer publishes an exact-key compiler seed capped at 2 GiB after
+successful Main Quality. Central runner policy denies that seed to every Depot
+selection because Depot's Actions-cache proxy crosses trust scopes. Seeded
+jobs enforce measured hit-rate floors only after an exact warm restore; a
+missing seed is explicitly cold and does not fail. The seed key fingerprints
+the warmer container image and toolchain epoch; runtime rows whose image or
+epoch differs from the warmer are explicitly cold and skip seed restoration.
+These four high-fanout job families also disable the per-object GHA backend on
+every provider. Small exact native
 caches have substantially better reuse-to-storage value. Cache hits are always
 an optimization: native stamps/manifests/checksums are verified, and every job
 must still regenerate successfully after a miss.

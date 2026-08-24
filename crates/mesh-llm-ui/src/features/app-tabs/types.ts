@@ -312,6 +312,7 @@ export type ConfigurationDefaultsCategory = {
   order?: number
 }
 export type ConfigurationDefaultsChoice = { value: string; label: string; description?: string }
+export type ConfigurationDisplayUnit = { value: string; label: string; multiplier: number }
 export type ConfigurationControlTextFormat =
   'plain' | 'path' | 'url' | 'socket_addr' | 'semver' | 'ed25519_key' | 'csv_positive_ints'
 export type ConfigurationControlOptionsSource =
@@ -442,6 +443,7 @@ export type ConfigurationDefaultsSetting = {
   tomlKey?: string
   rendererId?: string
   controlHint?: string
+  displayUnits?: readonly ConfigurationDisplayUnit[]
   categoryOrder?: number
   settingOrder?: number
   icon: ConfigurationDefaultsSettingIcon

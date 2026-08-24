@@ -67,6 +67,7 @@ jobs:
     permissions:
       checks: write
       contents: read
+      packages: read
     uses: Mesh-LLM/mesh-llm/.github/workflows/ci-website-lane.yml@main
     with:
       lane_plan_json: ${{ needs.plan.outputs.lane_plan }}

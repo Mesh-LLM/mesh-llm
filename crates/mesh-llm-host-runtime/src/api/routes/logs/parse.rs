@@ -381,7 +381,7 @@ pub(super) fn audit_query(path: &str) -> Result<AuditListQuery, LogsError> {
     })
 }
 
-fn audit_source(value: &str) -> Result<AuditEntrySource, LogsError> {
+pub(super) fn audit_source(value: &str) -> Result<AuditEntrySource, LogsError> {
     match value {
         "logging_service" => Ok(AuditEntrySource::LoggingService),
         "runtime" => Ok(AuditEntrySource::Runtime),
@@ -392,7 +392,7 @@ fn audit_source(value: &str) -> Result<AuditEntrySource, LogsError> {
     }
 }
 
-fn audit_severity(value: &str) -> Result<AuditEntrySeverity, LogsError> {
+pub(super) fn audit_severity(value: &str) -> Result<AuditEntrySeverity, LogsError> {
     match value {
         "info" => Ok(AuditEntrySeverity::Info),
         "warning" => Ok(AuditEntrySeverity::Warning),

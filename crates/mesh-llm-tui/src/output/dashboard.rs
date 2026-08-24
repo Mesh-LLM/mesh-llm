@@ -39,6 +39,7 @@ pub(super) enum DashboardAction {
         selected_row: Option<usize>,
     },
     Resize(DashboardLayoutState),
+    RequestFullRepaint,
 }
 
 impl DashboardState {
@@ -241,6 +242,7 @@ impl DashboardState {
 
     pub(in crate::output) fn reduce(&mut self, action: DashboardAction) {
         match action {
+            DashboardAction::RequestFullRepaint => self.pending_full_repaint = true,
             DashboardAction::OutputEvent(event) => self.apply_output_event(&event),
             DashboardAction::SnapshotUpdated(snapshot) => self.apply_snapshot(&snapshot),
             DashboardAction::FocusNextPanel => {
@@ -1639,6 +1641,14 @@ impl DashboardState {
             }
             TuiEvent::Key(TuiKeyEvent::Char('f')) if !self.events_filter.editing => {
                 self.reduce(DashboardAction::ToggleEventsFollow);
+                Some(TuiControlFlow::Continue)
+            }
+            // The status bar has advertised `R Refresh` since the dashboard
+            // shipped without anything behind it. This is the repair path for
+            // corruption that capture cannot intercept — anything written to
+            // the tty by a process that did not inherit our descriptors.
+            TuiEvent::Key(TuiKeyEvent::Char('r' | 'R')) if !self.events_filter.editing => {
+                self.reduce(DashboardAction::RequestFullRepaint);
                 Some(TuiControlFlow::Continue)
             }
             _ => None,

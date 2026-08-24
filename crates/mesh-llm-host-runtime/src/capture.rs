@@ -251,9 +251,11 @@ mod tests {
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             match &self.previous {
-                // TODO: Audit that the environment access only happens in single-threaded code.
+                // SAFETY: the enclosing test contract is `#[serial]`, so this process
+                // environment mutation cannot race another test.
                 Some(value) => unsafe { std::env::set_var(self.key, value) },
-                // TODO: Audit that the environment access only happens in single-threaded code.
+                // SAFETY: the enclosing test contract is `#[serial]`, so this process
+                // environment mutation cannot race another test.
                 None => unsafe { std::env::remove_var(self.key) },
             }
         }
@@ -296,7 +298,8 @@ mod tests {
     #[serial]
     fn empty_env_disables_capture() {
         let _env_guard = EnvVarGuard::capture(SWARM_CAPTURE_ENV);
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var(SWARM_CAPTURE_ENV, "") };
 
         let recorder = SwarmCaptureRecorder::from_cli_or_env(None).expect("env resolution");
@@ -346,7 +349,8 @@ mod tests {
         let env_dir = temp.path().join("env_dir");
         let cli_dir = temp.path().join("cli_dir");
         let _env_guard = EnvVarGuard::capture(SWARM_CAPTURE_ENV);
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var(SWARM_CAPTURE_ENV, env_dir.to_str().unwrap()) };
 
         let recorder =

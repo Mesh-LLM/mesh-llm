@@ -1210,13 +1210,16 @@ mod tests {
     #[serial]
     fn stale_check_returns_true_for_nonexistent() {
         let prev = std::env::var_os("HF_HOME");
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HOME", "/tmp/meshllm-test-nonexistent-dir-xyz") };
         let result = is_catalog_stale();
         match prev {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             Some(val) => unsafe { std::env::set_var("HF_HOME", val) },
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             None => unsafe { std::env::remove_var("HF_HOME") },
         }
         assert!(result);
@@ -1233,7 +1236,8 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HOME", &temp) };
 
         let entries_dir = catalog_cache_dir().join("entries");
@@ -1245,9 +1249,11 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp);
         match prev {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             Some(val) => unsafe { std::env::set_var("HF_HOME", val) },
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             None => unsafe { std::env::remove_var("HF_HOME") },
         }
     }

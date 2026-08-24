@@ -1,0 +1,237 @@
+//! Stage configuration, topology, and activation contracts.
+
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StageIdentity {
+    pub run_id: String,
+    pub request_id: String,
+    pub session_id: String,
+    pub topology_id: String,
+    pub stage_id: String,
+    pub stage_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LoadMode {
+    RuntimeSlice,
+    LayerPackage,
+    ArtifactSlice,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlashAttentionType {
+    #[default]
+    Auto,
+    Disabled,
+    Enabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StageConfig {
+    pub run_id: String,
+    pub topology_id: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub package_ref: Option<String>,
+    #[serde(default)]
+    pub manifest_sha256: Option<String>,
+    #[serde(default)]
+    pub source_model_path: Option<String>,
+    #[serde(default)]
+    pub source_model_sha256: Option<String>,
+    #[serde(default)]
+    pub source_model_bytes: Option<u64>,
+    #[serde(default)]
+    pub materialized_path: Option<String>,
+    #[serde(default)]
+    pub materialized_pinned: bool,
+    #[serde(default)]
+    pub model_path: Option<String>,
+    #[serde(default)]
+    pub projector_path: Option<String>,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub layer_start: u32,
+    pub layer_end: u32,
+    #[serde(default = "default_ctx_size")]
+    pub ctx_size: u32,
+    #[serde(default = "default_lane_count")]
+    pub lane_count: u32,
+    #[serde(default)]
+    pub n_batch: Option<u32>,
+    #[serde(default)]
+    pub n_ubatch: Option<u32>,
+    #[serde(default)]
+    pub n_gpu_layers: i32,
+    #[serde(default)]
+    pub mmap: Option<bool>,
+    #[serde(default)]
+    pub mlock: bool,
+    #[serde(default = "default_cache_type")]
+    pub cache_type_k: String,
+    #[serde(default = "default_cache_type")]
+    pub cache_type_v: String,
+    #[serde(default)]
+    pub flash_attn_type: FlashAttentionType,
+    #[serde(default)]
+    pub filter_tensors_on_load: bool,
+    #[serde(default)]
+    pub selected_device: Option<StageDevice>,
+    #[serde(default)]
+    pub kv_cache: Option<StageKvCacheConfig>,
+    #[serde(default = "default_native_mtp_enabled")]
+    pub native_mtp_enabled: bool,
+    pub load_mode: LoadMode,
+    pub bind_addr: String,
+    #[serde(default)]
+    pub upstream: Option<PeerConfig>,
+    #[serde(default)]
+    pub downstream: Option<PeerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StageDevice {
+    pub backend_device: String,
+    #[serde(default)]
+    pub stable_id: Option<String>,
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub vram_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageKvCacheMode {
+    Disabled,
+    Auto,
+    Record,
+    LookupRecord,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageKvCachePayload {
+    Auto,
+    ResidentKv,
+    KvRecurrent,
+    FullState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StageKvCacheConfig {
+    #[serde(default = "default_kv_cache_mode")]
+    pub mode: StageKvCacheMode,
+    #[serde(default = "default_kv_cache_payload")]
+    pub payload: StageKvCachePayload,
+    #[serde(default = "default_kv_cache_max_entries")]
+    pub max_entries: usize,
+    #[serde(default)]
+    pub max_bytes: u64,
+    #[serde(default = "default_kv_cache_min_tokens")]
+    pub min_tokens: u64,
+    #[serde(default = "default_kv_cache_shared_stride_tokens")]
+    pub shared_prefix_stride_tokens: u64,
+    #[serde(default = "default_kv_cache_shared_record_limit")]
+    pub shared_prefix_record_limit: u64,
+}
+
+fn default_kv_cache_mode() -> StageKvCacheMode {
+    StageKvCacheMode::Auto
+}
+
+fn default_kv_cache_payload() -> StageKvCachePayload {
+    StageKvCachePayload::Auto
+}
+
+fn default_kv_cache_max_entries() -> usize {
+    64
+}
+
+fn default_kv_cache_min_tokens() -> u64 {
+    64
+}
+
+fn default_kv_cache_shared_stride_tokens() -> u64 {
+    128
+}
+
+fn default_kv_cache_shared_record_limit() -> u64 {
+    2
+}
+
+fn default_ctx_size() -> u32 {
+    512
+}
+
+fn default_lane_count() -> u32 {
+    4
+}
+
+fn default_cache_type() -> String {
+    "f16".to_string()
+}
+
+fn default_native_mtp_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PeerConfig {
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub endpoint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StageTopology {
+    pub topology_id: String,
+    pub model_id: String,
+    pub stages: Vec<StageTopologyEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StageTopologyEntry {
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub host: Option<String>,
+    pub endpoint: String,
+    pub layer_start: u32,
+    pub layer_end: u32,
+    pub load_mode: LoadMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivationDType {
+    Unknown,
+    F32,
+    F16,
+    Bf16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivationLayout {
+    Opaque,
+    TokenMajor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ActivationDescriptor {
+    pub version: u32,
+    pub dtype: ActivationDType,
+    pub layout: ActivationLayout,
+    pub producer_stage_index: i32,
+    pub layer_start: i32,
+    pub layer_end: i32,
+    pub token_count: u32,
+    pub sequence_count: u32,
+    pub payload_bytes: u64,
+    #[serde(default)]
+    pub flags: u64,
+    #[serde(default)]
+    pub payload_sha256: Option<String>,
+}

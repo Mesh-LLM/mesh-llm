@@ -126,7 +126,7 @@ async fn transport_attempt_records_reuse_lifecycle_ids_and_keep_one_parent_termi
     let service = Arc::new(LoggingService::new(
         Default::default(),
         Arc::clone(&sink) as Arc<dyn PersistSink>,
-        Box::new(crate::logging::SystemClock),
+        Box::new(DeterministicClock::default()),
     ));
     let parent = RawMeshRequestLifecycle::register(
         Arc::clone(&service),
@@ -249,7 +249,21 @@ async fn transport_attempt_records_reuse_lifecycle_ids_and_keep_one_parent_termi
         ]
     );
     for record in records {
-        let serialized = serde_json::to_string(&record).expect("serialize bounded record");
+        // attempt_id/request_id are random UUIDs and the timestamps are clock output,
+        // so they carry arbitrary hex and digits that collide with short numeric
+        // tokens like the port below. Scan every other field — including any added
+        // later — for leaked request data.
+        let mut scanned = serde_json::to_value(&record).expect("serialize bounded record");
+        let fields = scanned
+            .as_object_mut()
+            .expect("proxy record serializes to a JSON object");
+        for generated in ["attempt_id", "request_id", "started_at", "completed_at"] {
+            assert!(
+                fields.remove(generated).is_some(),
+                "expected generated field {generated} on the bounded record"
+            );
+        }
+        let serialized = serde_json::to_string(&scanned).expect("serialize scanned fields");
         for forbidden in [
             "9337",
             "peer-id",

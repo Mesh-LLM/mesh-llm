@@ -649,8 +649,10 @@ mod tests {
         fn save_and_remove(key: &str) -> Self {
             let original = std::env::var(key).ok();
             #[allow(deprecated)]
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             unsafe {
+                // SAFETY: every caller is an enclosing `#[serial]` test.
                 std::env::remove_var(key)
             };
             Self {
@@ -662,8 +664,10 @@ mod tests {
         fn save_and_set(key: &str, value: &str) -> Self {
             let original = std::env::var(key).ok();
             #[allow(deprecated)]
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             unsafe {
+                // SAFETY: every caller is an enclosing `#[serial]` test.
                 std::env::set_var(key, value)
             };
             Self {
@@ -677,10 +681,12 @@ mod tests {
         fn drop(&mut self) {
             match &self.original {
                 #[allow(deprecated)]
-                // TODO: Audit that the environment access only happens in single-threaded code.
+                // SAFETY: the enclosing test contract is `#[serial]`, so this process
+                // environment mutation cannot race another test.
                 Some(v) => unsafe { std::env::set_var(&self.key, v) },
                 #[allow(deprecated)]
-                // TODO: Audit that the environment access only happens in single-threaded code.
+                // SAFETY: the enclosing test contract is `#[serial]`, so this process
+                // environment mutation cannot race another test.
                 None => unsafe { std::env::remove_var(&self.key) },
             }
         }

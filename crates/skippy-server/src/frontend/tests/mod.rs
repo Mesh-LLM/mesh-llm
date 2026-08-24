@@ -49,6 +49,7 @@ pub(super) use std::{
 };
 pub(super) use tokio::sync::Semaphore;
 
+mod chat_stream_deltas;
 mod generation;
 mod guardrails;
 mod multimodal;

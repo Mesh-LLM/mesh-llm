@@ -2224,6 +2224,10 @@ class CiArtifactActionTests(unittest.TestCase):
                     outputs["allow_native_github_cache"],
                     expected_native_cache,
                 )
+                self.assertEqual(
+                    outputs["allow_trusted_sccache_seed"],
+                    "false" if enabled == "true" else "true",
+                )
                 self.assertEqual(outputs["runner"], runner)
                 expected_arm = (
                     "depot-ubuntu-24.04-arm"
@@ -2352,6 +2356,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertEqual(canary_pr["runner"], "depot-ubuntu-24.04")
         self.assertEqual(canary_pr["allow_depot_remote_cache"], "false")
         self.assertEqual(canary_pr["allow_native_github_cache"], "false")
+        self.assertEqual(canary_pr["allow_trusted_sccache_seed"], "false")
 
         unapproved_pr = self.run_runner_selector(
             event_name="pull_request",
@@ -2418,6 +2423,10 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertEqual(
             trusted_main_cross_branch_cache["allow_native_github_cache"],
             "true",
+        )
+        self.assertEqual(
+            trusted_main_cross_branch_cache["allow_trusted_sccache_seed"],
+            "false",
         )
 
         for name, kwargs in (
@@ -2528,10 +2537,15 @@ class CiArtifactActionTests(unittest.TestCase):
                 self.assertIn("CACHE_NAMESPACE: mesh-llm", workflow)
                 self.assertNotIn("CACHE_NAMESPACE: mesh-llm-pr", workflow)
                 self.assertNotIn("'mesh-llm-pr'", workflow)
-                self.assertNotIn(
-                    'SCCACHE_GHA_ENABLED: "false"',
-                    workflow,
-                )
+                if workflow_name in {
+                    "ci-quality-slice.yml",
+                    "ci-rust-tests-slice.yml",
+                    "ci-linux-host-slice.yml",
+                    "ci-linux-runtime-slice.yml",
+                }:
+                    self.assertIn('SCCACHE_GHA_ENABLED: "false"', workflow)
+                else:
+                    self.assertNotIn('SCCACHE_GHA_ENABLED: "false"', workflow)
                 if "uses: Swatinem/rust-cache@" in workflow:
                     self.assertIn(
                         "save-if: ${{ github.ref == 'refs/heads/main' && ",
@@ -2551,15 +2565,16 @@ class CiArtifactActionTests(unittest.TestCase):
 
     def test_depot_pr_native_cache_consumers_obey_central_policy(self) -> None:
         eligible_consumers = {
-            "ci-quality-slice.yml": ("Swatinem/rust-cache@",),
-            "ci-web-slice.yml": (
-                "uses: actions/cache/restore@",
-                "uses: actions/cache/save@",
-            ),
-            "ci-ui-artifact-slice.yml": ("uses: actions/cache/restore@",),
-            "ci-linux-host-slice.yml": ("Swatinem/rust-cache@",),
-            "ci-linux-runtime-slice.yml": ("Swatinem/rust-cache@",),
-            "ci-rust-tests-slice.yml": ("Swatinem/rust-cache@",),
+            "ci-quality-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
+            # ci-web-slice.yml and ci-ui-artifact-slice.yml have no native
+            # GitHub cache consumers left: their pnpm jobs (ui_quality,
+            # ui_e2e, ui_artifact) point store-dir at the runner image's
+            # baked store instead of the Actions cache (#1392), and
+            # `website` was already deleted-outright rather than gated (see
+            # the comment on that job's entry below).
+            "ci-linux-host-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
+            "ci-linux-runtime-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
+            "ci-rust-tests-slice.yml": ("uses: ./.github/actions/restore-sccache-seed",),
             "ci-macos-host-slice.yml": ("Swatinem/rust-cache@",),
             "ci-platform-checks-slice.yml": (
                 "uses: actions/cache/restore@",
@@ -2584,7 +2599,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "ci-quality-slice.yml": {
                 "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync", "authority_sentinel",
             },
-            "ci-web-slice.yml": {"runner_policy", "ui_quality", "website"},
+            "ci-web-slice.yml": {"runner_policy", "ui_quality", "ui_e2e", "website"},
             "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},
             "ci-linux-host-slice.yml": {"runner_policy", "linux_host"},
             "ci-linux-runtime-slice.yml": {"runner_policy", "linux_runtime"},
@@ -2636,7 +2651,10 @@ class CiArtifactActionTests(unittest.TestCase):
                 for marker in markers:
                     block = step_block(workflow, marker)
                     with self.subTest(consumer=marker):
-                        self.assertIn("allow_native_github_cache", block)
+                        if "restore-sccache-seed" in marker:
+                            self.assertIn("allow_trusted_sccache_seed", block)
+                        else:
+                            self.assertIn("allow_native_github_cache", block)
 
         for filename, jobs in expected_jobs.items():
             workflow = (
@@ -2651,9 +2669,6 @@ class CiArtifactActionTests(unittest.TestCase):
                     r"^  [A-Za-z0-9_]+:\n(?:    [^\n]*\n){0,4}    if:.*allow_native_github_cache",
                 )
 
-        website = (
-            ROOT / ".github" / "workflows" / "ci-web-slice.yml"
-        ).read_text(encoding="utf-8")
         swift = (
             ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml"
         ).read_text(encoding="utf-8")
@@ -2669,14 +2684,15 @@ class CiArtifactActionTests(unittest.TestCase):
         native_cache_expression = (
             "needs.runner_policy.outputs.allow_native_github_cache == 'true'"
         )
-        self.assertIn(
-            f"cache: ${{{{ {native_cache_expression} && 'npm' || '' }}}}",
-            website,
-        )
-        self.assertIn(
-            f"package-manager-cache: ${{{{ {native_cache_expression} }}}}",
-            website,
-        )
+        # ci-web-slice.yml's `website` job runs in the prebuilt public-web
+        # image (no bare-metal row), so its setup-node native-cache
+        # consumer was deleted outright rather than gated -- there is
+        # nothing left in that job for the depot/native cache policy to
+        # govern. The other jobs in that file (ui_quality, ui_e2e) and in
+        # ci-ui-artifact-slice.yml (ui_artifact) have no native-cache
+        # consumer left either now that they point at the runner image's
+        # baked pnpm store instead (#1392); see the comment on
+        # `eligible_consumers` above.
         self.assertIn(
             f"cache: ${{{{ {native_cache_expression} && 'pnpm' || '' }}}}",
             swift,

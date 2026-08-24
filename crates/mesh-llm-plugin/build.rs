@@ -25,7 +25,8 @@ fn watch_path(path: &Path) {
 
 fn compile_proto() {
     let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: Cargo runs this build script in its own process before crate code
+    // starts; no application threads can observe this environment mutation.
     unsafe { std::env::set_var("PROTOC", protoc) };
 
     let mut config = prost_build::Config::new();

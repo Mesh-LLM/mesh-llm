@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
-#[cfg(unix)]
-use std::ffi::CString;
 use std::io;
 #[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use crate::backend;
@@ -951,25 +949,19 @@ fn rollback_bundle_replace(
 }
 
 #[cfg(unix)]
-pub(super) fn exec_current_binary(exe: &Path) -> Result<()> {
-    let exe_c = CString::new(exe.as_os_str().as_bytes())
-        .context("Executable path contains an unexpected NUL byte")?;
-    let args: Vec<CString> = std::env::args_os()
-        .map(|arg| {
-            CString::new(arg.as_os_str().as_bytes())
-                .context("Argument contains an unexpected NUL byte")
-        })
-        .collect::<Result<_>>()?;
-    let mut argv: Vec<*const libc::c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
-    argv.push(std::ptr::null());
-    let rc = unsafe { libc::execv(exe_c.as_ptr(), argv.as_ptr()) };
-    let errno = std::io::Error::last_os_error();
-    anyhow::ensure!(rc != 0, "execv unexpectedly returned success");
-    Err(errno).context("Failed to restart updated mesh-llm")
+pub(super) fn exec_current_binary(exe: &Path, env_key: &str, env_value: &str) -> Result<()> {
+    let mut args = std::env::args_os();
+    let arg0 = args.next().unwrap_or_else(|| exe.as_os_str().to_owned());
+    let error = std::process::Command::new(exe)
+        .arg0(arg0)
+        .args(args)
+        .env(env_key, env_value)
+        .exec();
+    Err(error).context("Failed to restart updated mesh-llm")
 }
 
 #[cfg(not(unix))]
-pub(super) fn exec_current_binary(_exe: &Path) -> Result<()> {
+pub(super) fn exec_current_binary(_exe: &Path, _env_key: &str, _env_value: &str) -> Result<()> {
     anyhow::bail!("Self-update restart is only supported on Unix")
 }
 
@@ -1023,7 +1015,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_release_asset_url() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(SELF_UPDATE_REPO_ENV) };
         assert_eq!(
             release_asset_url("v0.60.0", "mesh-llm-aarch64-apple-darwin.tar.gz"),
@@ -1034,7 +1027,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_release_repo_defaults_to_main_repo() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(SELF_UPDATE_REPO_ENV) };
         assert_eq!(release_repo(), "Mesh-LLM/mesh-llm");
         assert_eq!(
@@ -1046,7 +1040,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_release_repo_can_be_overridden_for_testing() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var(SELF_UPDATE_REPO_ENV, "jdumay/mesh-llm") };
         assert_eq!(release_repo(), "jdumay/mesh-llm");
         assert_eq!(
@@ -1061,7 +1056,8 @@ mod tests {
             release_asset_url("v0.60.0", "mesh-llm-x86_64-unknown-linux-gnu.tar.gz"),
             "https://github.com/jdumay/mesh-llm/releases/download/v0.60.0/mesh-llm-x86_64-unknown-linux-gnu.tar.gz"
         );
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(SELF_UPDATE_REPO_ENV) };
     }
 

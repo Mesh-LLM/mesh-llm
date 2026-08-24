@@ -705,12 +705,18 @@ pub fn restore_native_logs() {
 /// Enable verbose llama.cpp logging. Call before `llama_backend_init()` / model loading.
 /// Sets GGML_LLAMA_LOG_LEVEL=4 so LLAMA_LOG_DEBUG macros produce output.
 pub fn enable_verbose_native_logs() {
+    // SAFETY: UNSAFE CONTRACT — callers must invoke this before concurrent
+    // runtime work can access the process environment. The API does not yet
+    // enforce that startup boundary; retain the audit TODO below.
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var("GGML_LLAMA_LOG_LEVEL", LLAMA_LOG_LEVEL_DEBUG) };
 }
 
 /// Disable verbose llama.cpp logging (restore default level).
 pub fn disable_verbose_native_logs() {
+    // SAFETY: UNSAFE CONTRACT — callers must invoke this before concurrent
+    // runtime work can access the process environment. The API does not yet
+    // enforce that startup boundary; retain the audit TODO below.
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("GGML_LLAMA_LOG_LEVEL") };
 }

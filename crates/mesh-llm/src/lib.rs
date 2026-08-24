@@ -62,6 +62,11 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     );
     let explicit_surface = normalized_args.explicit_surface.map(map_runtime_surface);
 
+    // Command lifecycle events are terminal noise for one-shot commands unless
+    // the user asked for verbose output with --debug. The durable audit bridge
+    // installed below is unaffected by this toggle.
+    mesh_llm_events::set_cli_command_event_verbose(cli.debug);
+
     if cli.command.is_some() {
         // Install the durable audit bridge before command dispatch. This
         // performs only config-backed logging setup; one-shot commands do not
@@ -109,6 +114,9 @@ async fn emit_early_cli_process_event(
     family: mesh_llm_events::CliCommandFamily,
     outcome: mesh_llm_events::CliCommandOutcome,
 ) {
+    // Parse has not succeeded yet, so read --debug straight from argv to keep
+    // early process events consistent with the --debug presentation toggle.
+    mesh_llm_events::set_cli_command_event_verbose(args.iter().any(|arg| arg == "--debug"));
     let config_path = config_path_from_args(args);
     let logging_initialized =
         mesh_llm_host_runtime::initialize_logging_for_cli(config_path.as_deref())
@@ -386,8 +394,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         split_topology_lock: cli.split_topology_lock,
         ctx_size: cli.ctx_size,
         max_vram: cli.max_vram,
-        kv_cache_disk: cli.kv_cache_disk,
-        kv_cache_disk_dir: cli.kv_cache_disk_dir,
         no_enumerate_host: cli.no_enumerate_host,
         bin_dir: cli.bin_dir,
         llama_flavor: cli.llama_flavor.map(map_binary_flavor),

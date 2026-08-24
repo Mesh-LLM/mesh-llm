@@ -25,6 +25,35 @@ function contextSetting(): ConfigurationDefaultsSetting {
   }
 }
 
+function byteSetting(): ConfigurationDefaultsSetting {
+  return {
+    id: 'logging.artifact.byte_limit_bytes',
+    categoryId: 'logs-artifacts',
+    icon: 'folder',
+    label: 'Payload size limit',
+    description: 'Maximum retained size of an individual request or response payload.',
+    inheritedLabel: 'Written to the local mesh-llm config file',
+    canonicalPath: 'logging.artifact.byte_limit_bytes',
+    rendererId: 'byte-size',
+    displayUnits: [
+      { value: 'bytes', label: 'B', multiplier: 1 },
+      { value: 'kilobytes', label: 'KB', multiplier: 1024 },
+      { value: 'megabytes', label: 'MB', multiplier: 1048576 },
+      { value: 'gigabytes', label: 'GB', multiplier: 1073741824 }
+    ],
+    valueSchema: { kind: 'integer' },
+    control: {
+      kind: 'range',
+      name: 'byte_limit_bytes',
+      value: '8388608',
+      min: 1024,
+      max: 16777216,
+      step: 1,
+      unit: 'bytes'
+    }
+  }
+}
+
 describe('SchemaNumberControl', () => {
   it('uses the common context slider for context window settings', () => {
     const handleChange = vi.fn()
@@ -47,5 +76,19 @@ describe('SchemaNumberControl', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '64K' }))
     expect(handleChange).toHaveBeenCalledWith('65536')
+  })
+
+  it('edits byte limits with a unit-aware stepper while preserving canonical bytes', () => {
+    const handleChange = vi.fn()
+
+    render(<SchemaNumberControl onChange={handleChange} setting={byteSetting()} value="8388608" />)
+
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Payload size limit value' })).toHaveValue('8')
+    expect(screen.getByRole('combobox', { name: 'Payload size limit unit' })).toHaveTextContent('MB')
+    expect(screen.getByText('1 KB–16 MB')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Payload size limit' }))
+    expect(handleChange).toHaveBeenCalledWith('9437184')
   })
 })

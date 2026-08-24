@@ -43,22 +43,11 @@ pub fn prefix_hash(config: &StageConfig, token_start: u64, token_ids: &[i32]) ->
 
 /// Hash the identity of the *machine* the page bytes were produced on.
 ///
-/// Page files are raw runtime memory. Their interpretation depends on the CPU
-/// architecture, the native byte order, and the pointer width of the process
-/// that exported them, and none of those appear anywhere else in the identity.
-/// In the default machine-local cache directory that is harmless. It stops
-/// being harmless the moment a directory is shared or copied:
-/// `SKIPPY_KV_DISK_TIER_DIR` accepts any path, the stage directory key holds
-/// only model and stage shape, and `backend_device` does not separate an
-/// x86_64 CUDA host from an aarch64 CUDA host, nor two CPU-only hosts that
-/// both record `<no-selected-device>`. The checksums would confirm the copied
-/// bytes arrived intact and the runtime would then import them as native — a
-/// silent misread, not a detected error.
-///
-/// Note that the identity hash deliberately encodes its own integers as
-/// little-endian, so two hosts of *different* native endianness otherwise
-/// compute the *same* page id. That is correct for a portable identifier and
-/// exactly why the byte order has to be named explicitly here.
+/// Exported KV state is raw runtime memory whose interpretation depends on the
+/// CPU architecture, native byte order, and pointer width. A stage key alone
+/// does not distinguish an x86_64 CUDA host from an aarch64 CUDA host, nor two
+/// CPU-only hosts that both record `<no-selected-device>`. Including these
+/// properties prevents incompatible state from sharing a page id.
 fn update_platform_identity(hasher: &mut blake3::Hasher) {
     hasher.update(b"kv-platform-identity-v1");
     hasher.update(std::env::consts::ARCH.as_bytes());
@@ -74,13 +63,9 @@ fn update_platform_identity(hasher: &mut blake3::Hasher) {
 /// exported KV page without changing the token sequence.
 ///
 /// Identity must cover every input that alters the serialized layout or the
-/// numerical content of a page. In-process this is nearly free to get wrong —
-/// a single running stage has one configuration, so a collision cannot occur.
-/// It becomes **silent numerical corruption** the moment a page outlives the
-/// process that wrote it (the mmap tier) or crosses a node boundary: flipping
-/// `kv_cache_policy` from `quality` to `saver` rewrites `cache_type_k`/`_v`
-/// from `f16` to `q8_0`, and without these fields in the hash the stale q8_0
-/// bytes collide with an f16 `page_id` and get imported as f16.
+/// numerical content of exported state. Flipping `kv_cache_policy` from
+/// `quality` to `saver` rewrites `cache_type_k`/`_v` from `f16` to `q8_0`;
+/// without these fields in the hash, incompatible state would share a page id.
 ///
 /// `NATIVE_KV_DTYPE` is a fixed layout tag and does **not** vary with the
 /// configured cache types, so it cannot stand in for them.
@@ -115,9 +100,8 @@ fn update_layout_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
 /// importing one under the other is silent numerical corruption.
 ///
 /// While `topology_id` was in the hash this was masked: it is derived from
-/// `unix_nanos` per process, so every restart produced fresh page ids and no
-/// stale page could ever be read back. Removing it to make the disk tier work
-/// across restarts removes that accidental protection, so weight identity now
+/// `unix_nanos` per process, so every restart produced fresh page ids. Stable
+/// identities remove that accidental protection, so weight identity now
 /// has to be explicit.
 ///
 /// `manifest_sha256` and `source_model_sha256` are content-derived and stable
@@ -166,16 +150,12 @@ pub fn prefix_hash_with_namespace(
     // `topology_id` is deliberately **not** hashed. It is an instance
     // identifier, not a description of the work a stage does: local serving
     // derives it as `topology-mesh-skippy-{unix_nanos}`, so it is unique per
-    // process. Hashing it would make every page id change on restart and
-    // silently reduce any persistent tier to dead weight — the bytes survive
-    // and can never be found again.
+    // process and would prevent otherwise compatible cache identities from
+    // agreeing across runs.
     //
-    // What actually has to match for a page to be reusable is the *shape* of
-    // the stage: the model, which layers this stage owns, and its position in
-    // the pipeline. Those are hashed below, along with the runtime layout
-    // fields in `update_layout_identity`. Two stages that agree on all of
-    // them produce byte-compatible KV pages regardless of which run created
-    // them, which is exactly the reuse a persistent tier exists to provide.
+    // Reuse depends on the *shape* of the stage: the model, owned layers, and
+    // pipeline position. Those are hashed below with the runtime layout fields
+    // in `update_layout_identity`.
     hasher.update(config.stage_id.as_bytes());
     hasher.update(&config.stage_index.to_le_bytes());
     hasher.update(&config.layer_start.to_le_bytes());
@@ -267,9 +247,9 @@ mod identity_completeness_tests {
         prefix_hash(config, 0, &[1, 2, 3, 4])
     }
 
-    /// The motivating W0 corruption case: `kv_cache_policy: saver` rewrites
-    /// `cache_type_k`/`_v` to `q8_0`. Before this was hashed, the q8_0 bytes
-    /// on disk collided with an f16 `page_id` and were imported as f16.
+    /// Changing the KV cache policy rewrites `cache_type_k`/`_v`. These
+    /// formats must produce distinct page identities to prevent importing
+    /// cached q8_0 state as f16.
     #[test]
     fn kv_cache_dtype_changes_page_identity() {
         let quality = test_config();
@@ -474,8 +454,7 @@ mod identity_stability_tests {
     /// Weight identity is the protection that replaced `topology_id`.
     ///
     /// Two runs can share a `model_id` while serving different tensors — a
-    /// different quant, a re-published layer package, a swapped GGUF. Before
-    /// the disk tier this was masked by the per-process `topology_id`; now it
+    /// different quant, a re-published layer package, a swapped GGUF. This
     /// must be caught explicitly, because a false hit here imports the wrong
     /// weights' KV and silently corrupts output.
     #[test]

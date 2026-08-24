@@ -16,7 +16,5 @@ mod tests;
 
 pub(crate) use resolution::resolve_skippy_config;
 pub(crate) use types::{
-    ResolvedEmbeddedOpenAiArgs, ResolvedHardwareConfig, ResolvedModelFitConfig,
-    ResolvedRequestDefaultsConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
-    ResolvedSpeculativeConfig, ResolvedThroughputConfig, SkippyConfigResolveRequest,
+    ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
 };

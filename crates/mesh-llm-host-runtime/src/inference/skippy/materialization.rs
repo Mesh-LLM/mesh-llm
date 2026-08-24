@@ -22,6 +22,9 @@ pub use package_download::{StagePackageRef, is_layer_package_ref, resolve_hf_pac
 
 pub fn configure_materialized_stage_cache() {
     if std::env::var_os("SKIPPY_MATERIALIZED_DIR").is_none() {
+        // SAFETY: UNSAFE CONTRACT — callers must invoke this before concurrent
+        // runtime work can access the process environment. The current call
+        // graph does not enforce that startup boundary; retain the audit TODO.
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { std::env::set_var("SKIPPY_MATERIALIZED_DIR", materialized_stage_cache_dir()) };
     }

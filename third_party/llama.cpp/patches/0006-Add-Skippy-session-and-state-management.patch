@@ -1,4 +1,4 @@
-From 664aefb2c946825ca397c10897482070336c9082 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
 Subject: [PATCH 06/15] Add Skippy session and state management
@@ -1920,3 +1920,6 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
+-- 
+2.54.0 (Apple Git-157)
+

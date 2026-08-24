@@ -679,16 +679,11 @@ fn request_id_from_headers(headers: &[httparse::Header<'_>]) -> RequestId {
 }
 
 fn canonical_request_id_from_headers(headers: &[httparse::Header<'_>]) -> Option<RequestId> {
-    let mut request_id_headers = headers
+    let request_id_values = headers
         .iter()
-        .filter(|header| header.name.eq_ignore_ascii_case("x-request-id"));
-    let header = request_id_headers.next()?;
-    if request_id_headers.next().is_some() {
-        return None;
-    }
-    std::str::from_utf8(header.value)
-        .ok()
-        .and_then(openai_frontend::parse_request_id)
+        .filter(|header| header.name.eq_ignore_ascii_case("x-request-id"))
+        .map(|header| std::str::from_utf8(header.value).ok());
+    openai_frontend::parse_single_request_id(request_id_values)
 }
 
 async fn read_more(stream: &mut TcpStream, buf: &mut Vec<u8>) -> Result<()> {
@@ -750,41 +745,16 @@ fn try_decode_chunked_body(buf: &[u8], max_body_bytes: usize) -> Result<Option<(
 }
 
 fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_present: bool) -> bool {
-    let path_only = path.split('?').next().unwrap_or(path);
-    if body.is_empty() {
-        return false;
-    }
-    if path_only == "/v1/responses" {
-        return true;
-    }
-    if path_only != "/v1/chat/completions" {
-        return false;
-    }
-
-    let body_text = match std::str::from_utf8(body) {
-        Ok(text) => text,
-        Err(_) => return false,
-    };
-
-    body_text.contains("\"max_completion_tokens\"")
-        || body_text.contains("\"max_output_tokens\"")
-        || body_text_contains_chat_reasoning_template_options(body_text)
+    openai_frontend::request_body_requires_json_normalization(path, body)
         || (plugin_manager_present
-            && (body_text.contains("mesh://blob/")
-                || body_text.contains("\"blob_token\"")
-                || body_text.contains("\"mesh_token\"")
-                || body_text.contains("\"input_audio\"")
-                || body_text.contains("\"input_image\"")))
-}
-
-fn body_text_contains_chat_reasoning_template_options(body_text: &str) -> bool {
-    body_text.contains("\"reasoning\"")
-        || body_text.contains("\"reasoning_effort\"")
-        || body_text.contains("\"thinking_budget\"")
-        || body_text.contains("\"chat_template_kwargs\"")
-        || openai_frontend::THINKING_BOOLEAN_ALIASES
-            .iter()
-            .any(|field| body_text.contains(&format!("\"{field}\"")))
+            && path.split('?').next().unwrap_or(path) == "/v1/chat/completions"
+            && std::str::from_utf8(body).ok().is_some_and(|body_text| {
+                body_text.contains("mesh://blob/")
+                    || body_text.contains("\"blob_token\"")
+                    || body_text.contains("\"mesh_token\"")
+                    || body_text.contains("\"input_audio\"")
+                    || body_text.contains("\"input_image\"")
+            }))
 }
 
 pub(super) fn parse_json_body_from_http_request(raw: &[u8]) -> Option<serde_json::Value> {

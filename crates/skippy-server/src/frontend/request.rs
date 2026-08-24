@@ -117,39 +117,11 @@ pub(super) fn media_bytes_from_part(part: &MessageContentPart) -> OpenAiResult<O
 }
 
 pub(super) fn media_url(part: &MessageContentPart) -> Option<String> {
-    for key in [
-        "image_url",
-        "input_image",
-        "image",
-        "input_audio",
-        "audio",
-        "audio_url",
-        "url",
-    ] {
-        if let Some(value) = part.extra.get(key) {
-            if let Some(url) = value.as_str() {
-                return Some(url.to_string());
-            }
-            if let Some(url) = value.get("url").and_then(Value::as_str) {
-                return Some(url.to_string());
-            }
-        }
-    }
-    None
+    part.media_url()
 }
 
 pub(super) fn media_data(part: &MessageContentPart) -> Option<String> {
-    for key in ["input_audio", "audio", "image", "input_image", "image_url"] {
-        if let Some(data) = part
-            .extra
-            .get(key)
-            .and_then(|value| value.get("data"))
-            .and_then(Value::as_str)
-        {
-            return Some(data.to_string());
-        }
-    }
-    None
+    part.media_data()
 }
 
 pub(super) fn decode_media_url(url: &str) -> OpenAiResult<Vec<u8>> {
@@ -210,7 +182,7 @@ fn apply_shared_request_defaults(
         *stop = defaults
             .stop
             .as_ref()
-            .map(|values| stop_sequence_from_defaults(values.clone()));
+            .map(|values| openai_frontend::StopSequence::from_values(values.clone()));
     }
     if let (true, Some(value)) = (extra_value_is_omitted(extra, "top_k"), defaults.top_k) {
         extra.insert("top_k".to_string(), serde_json::json!(value));
@@ -238,14 +210,6 @@ fn extra_value_is_omitted(
     field: &str,
 ) -> bool {
     extra.get(field).is_none_or(Value::is_null)
-}
-
-fn stop_sequence_from_defaults(values: Vec<String>) -> openai_frontend::StopSequence {
-    if values.len() == 1 {
-        openai_frontend::StopSequence::One(values.into_iter().next().unwrap_or_default())
-    } else {
-        openai_frontend::StopSequence::Many(values)
-    }
 }
 
 pub(super) fn chat_sampling_config(

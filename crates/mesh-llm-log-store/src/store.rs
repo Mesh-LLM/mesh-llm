@@ -75,6 +75,11 @@ impl LogStore {
         ";
         conn.execute_batch(pragmas).map_err(LogStoreError::Sqlite)?;
 
+        if let Some((found, supported)) = crate::migrations::incompatible_schema(&conn)
+            .map_err(|error| LogStoreError::MigrationFailed(error.to_string()))?
+        {
+            return Err(LogStoreError::SchemaIncompatible { found, supported });
+        }
         crate::migrations::apply_migrations(&conn)
             .map_err(|e| LogStoreError::MigrationFailed(e.to_string()))?;
         prepare_private_database_files(&db_path)?;
@@ -260,6 +265,48 @@ mod tests {
 
     use super::{LogStore, SystemClock};
     use crate::LogStoreError;
+
+    #[test]
+    fn incompatible_schema_is_typed_and_left_unchanged() {
+        let root = tempfile::tempdir().expect("temporary log store root");
+        let database = root.path().join("log_store.db");
+        let connection = rusqlite::Connection::open(&database).expect("open fixture database");
+        connection
+            .execute_batch(
+                "CREATE TABLE sentinel (value TEXT); \
+                 INSERT INTO sentinel VALUES ('unchanged'); \
+                 PRAGMA user_version = 99;",
+            )
+            .expect("seed incompatible schema");
+        drop(connection);
+
+        let error = match LogStore::open(root.path(), Arc::new(SystemClock)) {
+            Ok(_) => panic!("future schema must not open"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            LogStoreError::SchemaIncompatible {
+                found: 99,
+                supported: crate::migrations::CURRENT_VERSION
+            }
+        ));
+
+        let connection = rusqlite::Connection::open(database).expect("reopen fixture database");
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .expect("read schema version"),
+            99
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT value FROM sentinel", [], |row| row
+                    .get::<_, String>(0))
+                .expect("read sentinel"),
+            "unchanged"
+        );
+    }
 
     #[test]
     fn poisoned_connection_returns_typed_transaction_error_without_panicking_reads() {

@@ -277,8 +277,15 @@ pub(super) async fn run_runtime_cli(
     .await?;
 
     // Finish the release check before startup continues.
-    if !checked_updates && !options.command_is_update && !options.command_uses_machine_output {
-        autoupdate::check_for_update(crate::BUILD_VERSION).await;
+    if !checked_updates
+        && !options.command_is_update
+        && !options.command_uses_machine_output
+        && let Some(notice) = autoupdate::check_for_update(crate::BUILD_VERSION).await
+    {
+        let _ = emit_event(OutputEvent::Info {
+            message: notice.message,
+            context: None,
+        });
     }
 
     let mut config = plugin::load_config(options.config.as_deref())?;
@@ -580,11 +587,18 @@ pub(super) fn configure_run_auto_process_state(
     options: &RuntimeOptions,
     runtime: Option<&std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
 ) {
+    // SAFETY: UNSAFE CONTRACT — callers must invoke this before concurrent
+    // runtime work can access the process environment. The current runtime
+    // startup path does not enforce that boundary; retain the audit TODO.
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe {
         if options.local_model_only {
+            // SAFETY: UNSAFE CONTRACT — callers must establish the startup ordering above.
+            // TODO: Audit that the environment access only happens in single-threaded code.
             std::env::remove_var("MESH_API_PORT");
         } else {
+            // SAFETY: UNSAFE CONTRACT — callers must establish the startup ordering above.
+            // TODO: Audit that the environment access only happens in single-threaded code.
             std::env::set_var("MESH_API_PORT", options.console.to_string());
         }
     }
@@ -604,53 +618,7 @@ pub(super) fn configure_run_auto_process_state(
     skippy_runtime::set_filtered_native_logs_enabled(true);
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
-    configure_kv_disk_cache(options);
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));
-}
-
-/// Propagate CLI policy through a typed process-local configuration. This does
-/// not mutate process environment; lower-level legacy environment variables
-/// remain available when skippy-server is used without this host configuration.
-fn configure_kv_disk_cache(options: &RuntimeOptions) {
-    let budget = parse_kv_cache_disk(&options.kv_cache_disk)
-        .expect("CLI validates --kv-cache-disk before runtime startup");
-    let budget = match budget {
-        KvDiskBudget::Off => skippy_server::KvDiskCacheBudget::Off,
-        KvDiskBudget::Auto => skippy_server::KvDiskCacheBudget::Auto,
-        KvDiskBudget::Mib(mib) => {
-            skippy_server::KvDiskCacheBudget::Bytes(mib.saturating_mul(1024 * 1024))
-        }
-    };
-    let config = skippy_server::KvDiskCacheConfig {
-        budget,
-        directory: options.kv_cache_disk_dir.clone(),
-    };
-    if skippy_server::configure_kv_disk_cache(config).is_err() {
-        tracing::debug!("KV disk cache policy was already configured");
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum KvDiskBudget {
-    Off,
-    Auto,
-    Mib(u64),
-}
-
-fn parse_kv_cache_disk(raw: &str) -> Option<KvDiskBudget> {
-    let value = raw.trim();
-    if value.eq_ignore_ascii_case("off") {
-        return Some(KvDiskBudget::Off);
-    }
-    if value.eq_ignore_ascii_case("auto") {
-        return Some(KvDiskBudget::Auto);
-    }
-    match value.parse::<f64>() {
-        Ok(gb) if gb.is_finite() && gb > 0.0 && gb * 1024.0 >= 1.0 => {
-            Some(KvDiskBudget::Mib((gb * 1024.0).round() as u64))
-        }
-        _ => None,
-    }
 }
 
 pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
@@ -1566,31 +1534,4 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         anyhow::bail!("{summary}");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod kv_cache_disk_tests {
-    use super::{KvDiskBudget, parse_kv_cache_disk};
-
-    #[test]
-    fn sizes_are_read_as_gigabytes() {
-        assert_eq!(parse_kv_cache_disk("8"), Some(KvDiskBudget::Mib(8192)));
-        assert_eq!(parse_kv_cache_disk(" 0.5 "), Some(KvDiskBudget::Mib(512)));
-    }
-
-    #[test]
-    fn auto_defers_to_the_free_space_policy() {
-        assert_eq!(parse_kv_cache_disk("auto"), Some(KvDiskBudget::Auto));
-        assert_eq!(parse_kv_cache_disk("AUTO"), Some(KvDiskBudget::Auto));
-        assert_eq!(parse_kv_cache_disk("off"), Some(KvDiskBudget::Off));
-    }
-
-    /// Each of these would otherwise disable the tier while looking like the
-    /// user had enabled it, which is the one outcome worth being loud about.
-    #[test]
-    fn unusable_budgets_are_rejected_rather_than_silently_ignored() {
-        for raw in ["0", "-4", "", "lots", "0.0001", "nan", "inf"] {
-            assert_eq!(parse_kv_cache_disk(raw), None, "should reject {raw:?}");
-        }
-    }
 }

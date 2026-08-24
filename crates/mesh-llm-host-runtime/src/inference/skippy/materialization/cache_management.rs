@@ -262,10 +262,12 @@ mod tests {
 
     fn restore_env(key: &str, previous: Option<OsString>) {
         if let Some(value) = previous {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             unsafe { std::env::set_var(key, value) };
         } else {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             unsafe { std::env::remove_var(key) };
         }
     }
@@ -291,7 +293,8 @@ mod tests {
         };
 
         let temp = tempfile::tempdir().unwrap();
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path()) };
 
         let root = materialized_stage_cache_dir();

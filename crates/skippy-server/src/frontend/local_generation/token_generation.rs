@@ -1,3 +1,4 @@
+use super::native_mtp_decode::NativeMtpSpanProgress;
 use crate::frontend::NativeMtpDecodeOptions;
 use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpVerifier;
@@ -21,7 +22,6 @@ use openai_frontend::ChatCompletionRequest;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde_json::json;
-use skippy_runtime::ActivationFrame;
 use skippy_runtime::NativeMtpDraft as RuntimeNativeMtpDraft;
 use skippy_runtime::SamplingConfig;
 use std::cell::RefCell;
@@ -90,6 +90,9 @@ pub(super) struct DecodeState {
     pub(super) emit_token_debug: bool,
     pub(super) native_mtp_options: NativeMtpDecodeOptions,
     pub(super) native_mtp: NativeMtpVerifier,
+    /// Whether batched native-MTP spans may commit for this request. Token
+    /// equality is only a valid acceptance test under greedy sampling.
+    pub(super) native_mtp_span_admitted: bool,
     pub(super) post_prefill_hook_checked: bool,
     pub(super) last_mid_generation_hook_at: Option<usize>,
 }
@@ -554,14 +557,6 @@ impl StageOpenAiBackend {
                     "skippy.exact_cache.payload_kind".to_string(),
                     json!(restored.payload_kind.to_string()),
                 );
-                // Which tier served it. A RAM hit and a disk hit cost
-                // different amounts and fail for different reasons; without
-                // this the disk tier's effect is unmeasurable from the hit
-                // stream alone.
-                attrs.insert(
-                    "skippy.exact_cache.hit_source".to_string(),
-                    json!(restored.source.as_str()),
-                );
                 attrs.insert(
                     "skippy.exact_cache.restored_tokens".to_string(),
                     json!(restored.token_count),
@@ -595,6 +590,18 @@ impl StageOpenAiBackend {
                 attrs.insert(
                     "skippy.exact_cache.reconstruct_blocks".to_string(),
                     json!(restored.reconstruct_blocks),
+                );
+                attrs.insert(
+                    "skippy.exact_cache.lookup_ms".to_string(),
+                    json!(restored.lookup_ms),
+                );
+                attrs.insert(
+                    "skippy.exact_cache.kv_import_ms".to_string(),
+                    json!(restored.kv_import_ms),
+                );
+                attrs.insert(
+                    "skippy.exact_cache.recurrent_import_ms".to_string(),
+                    json!(restored.recurrent_import_ms),
                 );
                 self.telemetry
                     .emit("stage.openai_kv_lookup_decision", attrs);
@@ -634,88 +641,10 @@ impl StageOpenAiBackend {
                             .emit("stage.openai_kv_lookup_decision", attrs);
                     }
                     Ok(None) => {
-                        // Resident RAM miss. For dense families the prefix may
-                        // still exist in the disk tier, having outlived either
-                        // eviction or a restart. Restoring it here is what
-                        // turns a cold quadratic prefill into a linear read.
-                        match kv.restore_dense_prefix_from_disk(runtime, session_id, &identities) {
-                            Ok(Some(restored)) => {
-                                let restored_tokens =
-                                    (restored.token_count as usize).min(prefill_tokens.len());
-                                restored_prefill = true;
-                                restored_prefill_tokens = restored_tokens;
-                                cache_stats.status = "hit";
-                                cache_stats.hit_kind = Some("disk_prefix");
-                                cache_stats.cached_prompt_tokens = saturating_u32(restored_tokens);
-                                let mut attrs = self.openai_attrs(ids);
-                                attrs.insert("skippy.kv.decision".to_string(), json!("disk_hit"));
-                                attrs.insert(
-                                    "skippy.kv.hit_page_id".to_string(),
-                                    json!(restored.page_id),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.restored_tokens".to_string(),
-                                    json!(restored_tokens),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.matched_prefix_tokens".to_string(),
-                                    json!(restored_tokens),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.suffix_prefill_tokens".to_string(),
-                                    json!(prefill_tokens.len().saturating_sub(restored_tokens)),
-                                );
-                                // Split the restore cost so a slow restore can
-                                // be attributed to verification or to the
-                                // native import without guessing.
-                                attrs.insert(
-                                    "skippy.kv.disk_verify_ms".to_string(),
-                                    json!(restored.verify_ms),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.disk_import_ms".to_string(),
-                                    json!(restored.import_ms),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.disk_payload_bytes".to_string(),
-                                    json!(restored.payload_bytes),
-                                );
-                                // A dense disk hit is by definition served
-                                // from disk; state it explicitly so the hit
-                                // stream is attributable without knowing
-                                // which decision label implies which tier.
-                                attrs.insert(
-                                    "skippy.exact_cache.hit_source".to_string(),
-                                    json!("disk"),
-                                );
-                                kv.insert_disk_tier_attrs(&mut attrs);
-                                self.telemetry
-                                    .emit("stage.openai_kv_lookup_decision", attrs);
-                            }
-                            Ok(None) => {
-                                // Use the same attribute base as every other
-                                // branch. A bare map here produced a `miss`
-                                // event that could not be joined with the hit
-                                // and error events on session or model, which
-                                // is exactly the attribution the disk tier
-                                // needs to show a hit rate.
-                                let mut attrs = self.openai_attrs(ids);
-                                attrs.insert("skippy.kv.decision".to_string(), json!("miss"));
-                                kv.insert_disk_tier_attrs(&mut attrs);
-                                self.telemetry
-                                    .emit("stage.openai_kv_lookup_decision", attrs);
-                            }
-                            Err(error) => {
-                                let mut attrs = self.openai_attrs(ids);
-                                attrs.insert("skippy.kv.decision".to_string(), json!("disk_error"));
-                                attrs.insert(
-                                    "skippy.kv.error_class".to_string(),
-                                    json!(crate::kv_integration::telemetry_error_class(&error)),
-                                );
-                                self.telemetry
-                                    .emit("stage.openai_kv_lookup_decision", attrs);
-                            }
-                        }
+                        let mut attrs = self.openai_attrs(ids);
+                        attrs.insert("skippy.kv.decision".to_string(), json!("miss"));
+                        self.telemetry
+                            .emit("stage.openai_kv_lookup_decision", attrs);
                     }
                     Err(error) => {
                         let mut attrs = self.openai_attrs(ids);
@@ -828,33 +757,7 @@ impl StageOpenAiBackend {
                 self.telemetry
                     .emit("stage.openai_kv_record_decision", attrs);
             }
-            // At most one archive per request. Each archive is a full
-            // `export_kv_page` into a fresh buffer plus a synced file write,
-            // all under the runtime lock on the prefill path; doing that once
-            // per ladder candidate would mean several hundred-MB exports for a
-            // single large prompt.
-            let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
             for identity in kv.record_identities(&self.config, &base, 0, prefill_tokens) {
-                // Offer to the archive before the resident cache decides.
-                // The two tiers have different cost models -- KV cells versus
-                // bytes-and-a-write -- and must not share a veto. A large
-                // agentic prefix is exactly the case where they disagree:
-                // `max_resident_tokens` is half the context window, so on a
-                // 32k-context node every candidate for a 25k prompt is
-                // declined as uncacheable, and gating archival on that
-                // decision meant the node persisted nothing at precisely the
-                // prompt sizes the disk tier exists for.
-                //
-                // `ArchiveCandidate` still applies the selection policy and
-                // `archive_dense_prefix` still applies the size floor and
-                // dedupe check, so this remains at most one archive per
-                // request. See `ArchiveCandidate` for which candidate is
-                // chosen and why the obvious choices are both wrong.
-                crate::kv_integration::offer_archive_candidate(
-                    &mut archive_candidate,
-                    &identity,
-                    prefill_tokens.len(),
-                );
                 if let Ok(Some(record)) =
                     kv.record_resident_prefix(runtime, session_id, &identity, prefill_tokens)
                 {
@@ -883,30 +786,6 @@ impl StageOpenAiBackend {
                     self.telemetry
                         .emit("stage.openai_kv_record_decision", attrs);
                 }
-            }
-            // Archive dense prefixes so they outlive resident eviction and
-            // process restart. Done here, after recording, rather than on
-            // eviction: eviction runs on the decode hot path and a
-            // multi-hundred-MB export there would spike TTFT.
-            if let Some(identity) = archive_candidate.take() {
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert("skippy.kv.decision".to_string(), json!("disk_archive"));
-                kv.insert_disk_tier_attrs(&mut attrs);
-                match kv.archive_dense_prefix(runtime, session_id, &identity) {
-                    Ok(outcome) => outcome.insert_attrs(&identity, &mut attrs),
-                    Err(error) => {
-                        attrs.insert(
-                            "skippy.kv.archive_status".to_string(),
-                            json!("failed_error"),
-                        );
-                        attrs.insert(
-                            "skippy.kv.archive_error_class".to_string(),
-                            json!(crate::kv_integration::telemetry_error_class(&error)),
-                        );
-                    }
-                }
-                self.telemetry
-                    .emit("stage.openai_kv_record_decision", attrs);
             }
         }
         // Proactive eviction: after prefill recording, evict enough
@@ -1084,13 +963,10 @@ impl StageOpenAiBackend {
                     "skippy.exact_cache.recorded_tokens".to_string(),
                     json!(record.token_count),
                 );
-                attrs.insert(
-                    "skippy.exact_cache.stored".to_string(),
-                    json!(record.stored),
-                );
+                attrs.insert("skippy.exact_cache.queued".to_string(), json!(true));
                 self.telemetry
                     .emit("stage.openai_kv_record_decision", attrs);
-                record.stored
+                true
             }
             Ok(None) => false,
             Err(error) => {
@@ -1222,6 +1098,12 @@ impl StageOpenAiBackend {
             emit_token_debug: self.telemetry.is_debug_enabled(),
             native_mtp_options: NativeMtpDecodeOptions::from_config(request.speculative),
             native_mtp: NativeMtpVerifier::default(),
+            native_mtp_span_admitted: request.native_mtp_enabled
+                && !generation_hooks_active
+                && greedy_linear_proposal_admitted(
+                    request.sampling,
+                    request.chat_sampling_metadata,
+                ),
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
         })
@@ -1275,6 +1157,22 @@ impl StageOpenAiBackend {
                 LinearProposalProgress::Stop => break,
                 LinearProposalProgress::NotUsed => {}
             }
+            // A batched MTP span commits multiple tokens from one forward. It
+            // shares the recurrent-checkpoint gate with linear proposals for
+            // the same reason: it can advance the session past the prompt
+            // boundary before that boundary has been published.
+            if linear_proposal_allowed(
+                recurrent_checkpoint_required,
+                first_post_decode_checkpoint_attempted,
+            ) {
+                match self
+                    .try_execute_native_mtp_span(request, session_id, &mut state, emit_token)?
+                {
+                    NativeMtpSpanProgress::Continue => continue,
+                    NativeMtpSpanProgress::Stop => break,
+                    NativeMtpSpanProgress::NotUsed => {}
+                }
+            }
             let control = self.decode_one_token(request, session_id, &mut state, emit_token)?;
             if !first_post_decode_checkpoint_attempted && state.generated_token_ids.len() == 1 {
                 first_post_decode_checkpoint_attempted = true;
@@ -1307,17 +1205,6 @@ pub(super) trait NativeMtpRuntime {
         sampling: Option<&SamplingConfig>,
         max_draft_tokens: usize,
     ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>)>;
-
-    #[allow(dead_code)]
-    fn decode_frame_sampled_mtp(
-        &mut self,
-        session_id: &str,
-        token_id: i32,
-        sampling: Option<&SamplingConfig>,
-        input: Option<&ActivationFrame>,
-        output_capacity: usize,
-        max_draft_tokens: usize,
-    ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>, ActivationFrame)>;
 }
 
 impl NativeMtpRuntime for RuntimeState {
@@ -1329,26 +1216,6 @@ impl NativeMtpRuntime for RuntimeState {
         max_draft_tokens: usize,
     ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>)> {
         RuntimeState::decode_sampled_mtp(self, session_id, token_id, sampling, max_draft_tokens)
-    }
-
-    fn decode_frame_sampled_mtp(
-        &mut self,
-        session_id: &str,
-        token_id: i32,
-        sampling: Option<&SamplingConfig>,
-        input: Option<&ActivationFrame>,
-        output_capacity: usize,
-        max_draft_tokens: usize,
-    ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>, ActivationFrame)> {
-        RuntimeState::decode_frame_sampled_mtp(
-            self,
-            session_id,
-            token_id,
-            sampling,
-            input,
-            output_capacity,
-            max_draft_tokens,
-        )
     }
 }
 
@@ -1375,7 +1242,6 @@ pub(super) fn decode_native_mtp(
 pub(in crate::frontend) fn native_mtp_dispatch_counts_for_test() -> (usize, usize) {
     struct FakeNativeMtpRuntime {
         sampled_calls: usize,
-        frame_calls: usize,
     }
 
     impl NativeMtpRuntime for FakeNativeMtpRuntime {
@@ -1389,28 +1255,12 @@ pub(in crate::frontend) fn native_mtp_dispatch_counts_for_test() -> (usize, usiz
             self.sampled_calls += 1;
             Ok((7, None))
         }
-
-        fn decode_frame_sampled_mtp(
-            &mut self,
-            _session_id: &str,
-            _token_id: i32,
-            _sampling: Option<&SamplingConfig>,
-            _input: Option<&ActivationFrame>,
-            _output_capacity: usize,
-            _max_draft_tokens: usize,
-        ) -> anyhow::Result<(i32, Option<RuntimeNativeMtpDraft>, ActivationFrame)> {
-            self.frame_calls += 1;
-            anyhow::bail!("frame MTP API must not be used by local decode");
-        }
     }
 
-    let mut runtime = FakeNativeMtpRuntime {
-        sampled_calls: 0,
-        frame_calls: 0,
-    };
+    let mut runtime = FakeNativeMtpRuntime { sampled_calls: 0 };
     let (predicted, draft) =
         decode_native_mtp(&mut runtime, "test", 0, None, 1).expect("sampled MTP dispatch");
     assert_eq!(predicted, 7);
     assert!(draft.is_none());
-    (runtime.sampled_calls, runtime.frame_calls)
+    (runtime.sampled_calls, 0)
 }

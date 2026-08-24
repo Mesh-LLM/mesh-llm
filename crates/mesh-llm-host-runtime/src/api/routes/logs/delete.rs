@@ -143,7 +143,7 @@ async fn handle_with_time_caps(
     execution_time_cap: Duration,
 ) -> Result<(), LogsError> {
     let request = super::parse::delete_request(request_id, path, body)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = super::query_facade(state)?;
     let audit_facade = facade.clone();
     let reason = request.reason.as_str().to_owned();
     let started = Instant::now();

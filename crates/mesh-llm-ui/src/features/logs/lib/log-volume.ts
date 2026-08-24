@@ -1,4 +1,8 @@
-import type { LogRequest } from '@/features/logs/api/schemas'
+import {
+  LOG_EVENT_CATEGORIES,
+  type LogEventCategory,
+  type LogEventLedgerRow
+} from '@/features/logs/lib/log-event-ledger'
 
 export type BucketIntervalKey = '1m' | '5m' | '15m' | '30m' | '1h'
 export type VolumeTimeRangeKey = '1h' | '6h' | '12h' | '24h' | '7d' | 'selected' | 'all'
@@ -17,39 +21,46 @@ export const VOLUME_TIME_RANGES: readonly { value: VolumeTimeRangeKey; label: st
   { value: '12h', label: 'Last 12 hours', ms: 43_200_000 },
   { value: '24h', label: 'Last 24 hours', ms: 86_400_000 },
   { value: '7d', label: 'Last week', ms: 604_800_000 },
-  { value: 'all', label: 'All time', ms: Number.POSITIVE_INFINITY }
+  { value: 'all', label: 'Lifetime', ms: Number.POSITIVE_INFINITY }
 ]
 
 export const MAX_VOLUME_BUCKETS = 480
 
-export type RequestVolumeBucket = {
+export type EventVolumeBucket = {
   readonly bucketStart: number
   readonly bucketEnd: number
   readonly label: string
   readonly total: number
+  readonly requests: number
+  readonly system: number
+  readonly quic: number
+  readonly gossip: number
+  readonly iroh: number
 }
 
 /**
- * Bucket request-log entries by `createdAt` into fixed-width time buckets.
+ * Bucket loaded log events by category into fixed-width time buckets.
  *
  * `now` is injected so callers can render deterministically in tests. Finite
  * `rangeMs` windows are anchored to `[now - rangeMs, now]`; an infinite range
- * spans the earliest to the latest request. Buckets are emitted contiguously
+ * spans the earliest to the latest selected event. Buckets are emitted contiguously
  * (including zero-count buckets) so the bar chart renders a true timeline.
  */
-export function buildRequestVolumeBuckets(
-  rows: readonly LogRequest[],
+export function buildEventVolumeBuckets(
+  rows: readonly LogEventLedgerRow[],
+  categories: ReadonlySet<LogEventCategory>,
   options: { readonly intervalMs: number; readonly rangeMs: number; readonly now: number }
-): RequestVolumeBucket[] {
+): EventVolumeBucket[] {
   const { intervalMs, rangeMs, now } = options
   if (intervalMs <= 0) return []
 
-  const timestamps: number[] = []
+  const events: Array<{ readonly category: LogEventCategory; readonly timestamp: number }> = []
   for (const row of rows) {
-    const parsed = Date.parse(row.createdAt)
-    if (!Number.isNaN(parsed)) timestamps.push(parsed)
+    if (!categories.has(row.category)) continue
+    const parsed = Date.parse(row.occurredAt)
+    if (!Number.isNaN(parsed)) events.push({ category: row.category, timestamp: parsed })
   }
-  if (timestamps.length === 0) return []
+  if (events.length === 0) return []
 
   let startBoundary: number
   let endBoundary: number
@@ -57,9 +68,9 @@ export function buildRequestVolumeBuckets(
     startBoundary = now - rangeMs
     endBoundary = now
   } else {
-    startBoundary = timestamps[0]
-    endBoundary = timestamps[0]
-    for (const timestamp of timestamps) {
+    startBoundary = events[0].timestamp
+    endBoundary = events[0].timestamp
+    for (const { timestamp } of events) {
       if (timestamp < startBoundary) startBoundary = timestamp
       if (timestamp > endBoundary) endBoundary = timestamp
     }
@@ -69,22 +80,32 @@ export function buildRequestVolumeBuckets(
   const firstIndex = Math.floor(startBoundary / effectiveIntervalMs)
   const lastIndex = Math.floor(endBoundary / effectiveIntervalMs)
   const bucketCount = lastIndex - firstIndex + 1
-  const totals = new Array<number>(bucketCount).fill(0)
-
-  for (const timestamp of timestamps) {
-    if (timestamp < startBoundary || timestamp > endBoundary) continue
-    const index = Math.floor(timestamp / effectiveIntervalMs) - firstIndex
-    if (index >= 0 && index < bucketCount) totals[index] += 1
+  const categoryTotals: Record<LogEventCategory, number[]> = {
+    requests: new Array<number>(bucketCount).fill(0),
+    system: new Array<number>(bucketCount).fill(0),
+    quic: new Array<number>(bucketCount).fill(0),
+    gossip: new Array<number>(bucketCount).fill(0),
+    iroh: new Array<number>(bucketCount).fill(0)
   }
 
-  const buckets: RequestVolumeBucket[] = []
+  for (const { category, timestamp } of events) {
+    if (timestamp < startBoundary || timestamp > endBoundary) continue
+    const index = Math.floor(timestamp / effectiveIntervalMs) - firstIndex
+    if (index >= 0 && index < bucketCount) categoryTotals[category][index] += 1
+  }
+
+  const buckets: EventVolumeBucket[] = []
   for (let index = 0; index < bucketCount; index += 1) {
     const bucketStart = (firstIndex + index) * effectiveIntervalMs
+    const counts = Object.fromEntries(
+      LOG_EVENT_CATEGORIES.map((category) => [category, categoryTotals[category][index]])
+    ) as Record<LogEventCategory, number>
     buckets.push({
       bucketStart,
       bucketEnd: bucketStart + effectiveIntervalMs,
       label: formatBucketTick(bucketStart, effectiveIntervalMs),
-      total: totals[index]
+      total: LOG_EVENT_CATEGORIES.reduce((sum, category) => sum + counts[category], 0),
+      ...counts
     })
   }
   return buckets
@@ -99,7 +120,7 @@ function boundedIntervalMs(startBoundary: number, endBoundary: number, requested
   return intervalMs
 }
 
-export function effectiveRequestVolumeIntervalMs(buckets: readonly RequestVolumeBucket[], fallback: number): number {
+export function effectiveEventVolumeIntervalMs(buckets: readonly EventVolumeBucket[], fallback: number): number {
   const first = buckets[0]
   return first ? first.bucketEnd - first.bucketStart : fallback
 }

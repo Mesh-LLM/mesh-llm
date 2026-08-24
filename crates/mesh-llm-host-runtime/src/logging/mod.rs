@@ -24,6 +24,7 @@ mod request_metadata;
 mod runtime_state;
 mod sequences;
 mod service;
+mod service_errors;
 #[cfg(test)]
 mod service_tests;
 mod webhook_delivery;
@@ -59,7 +60,7 @@ pub(crate) use request_metadata::RequestSummaryMetadata;
 #[cfg(test)]
 pub use runtime_state::ArtifactCaptureRequest;
 pub(crate) use runtime_state::LoggingQueryFacade;
-pub(crate) use runtime_state::LoggingRuntimeStatus;
+pub(crate) use runtime_state::{LoggingMetadataState, LoggingRuntimeStatus};
 pub use runtime_state::{LoggingRuntimeApplyError, LoggingRuntimeHealth, LoggingRuntimeState};
 pub use sequences::SequenceGenerators;
 pub(crate) use service::ArtifactUnavailableReason;

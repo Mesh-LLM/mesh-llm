@@ -318,8 +318,11 @@ pub(super) fn init_runtime_tracing() -> Result<()> {
 pub(super) fn init_embedded_runtime_tracing() -> Result<()> {
     let subscriber = runtime_tracing_subscriber()?;
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
-        eprintln!(
-            "mesh-llm embedded runtime using existing tracing subscriber; could not install mesh-llm subscriber: {err}"
+        // The host already had a subscriber, so this warning has somewhere to
+        // go. Writing it raw would put it straight onto the dashboard frame.
+        tracing::warn!(
+            error = %err,
+            "mesh-llm embedded runtime using existing tracing subscriber"
         );
     }
     Ok(())

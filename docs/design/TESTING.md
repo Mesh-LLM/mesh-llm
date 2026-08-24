@@ -2,6 +2,32 @@
 
 ## Local inspection
 
+### Process-environment mutation contract
+
+Rust 2024 makes `std::env::set_var` and `std::env::remove_var` unsafe on
+platforms where another thread could read the process environment. Tests that
+need an environment override therefore follow one contract across the
+workspace:
+
+- mark the owning test `#[serial]` (from `serial_test`);
+- snapshot and restore each key with a semantically owned guard/helper in that
+  crate; and
+- keep a `// SAFETY:` comment beside every mutation explaining the serialized
+  scope.
+
+The crates intentionally do not share a Rust dev-dependency just for this
+test helper. Build scripts have an isolated process boundary; runtime startup
+code retains explicit safety notes and audit TODOs until its single-threaded
+ordering is proven. The repository-level census check covers
+all 17 files from the original 128-comment audit and rejects a test mutation
+that is not covered by `#[serial]`:
+
+```bash
+just check-env-mutation-contract
+```
+
+The same check runs through `scripts/tests` in the normal CI validation path.
+
 ### 0. Inspect local GPUs
 
 ```bash

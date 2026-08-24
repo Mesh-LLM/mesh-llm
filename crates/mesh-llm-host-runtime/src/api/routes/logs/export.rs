@@ -41,7 +41,7 @@ pub(super) async fn handle(
     body: &str,
 ) -> Result<(), LogsError> {
     let request = super::parse::export_request(path, body)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = super::query_facade(state)?;
     if request.include_artifacts && !facade.artifact_export_enabled() {
         return Err(LogsError::ArtifactExportForbidden);
     }

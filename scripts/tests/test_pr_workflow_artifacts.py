@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 import yaml
@@ -25,6 +26,18 @@ def workflow_triggers(path: Path) -> set[str]:
 class PrWorkflowArtifactTests(unittest.TestCase):
     def workflow(self, name: str) -> str:
         return (WORKFLOWS / name).read_text()
+
+    def job_blocks(self, workflow: str) -> dict[str, str]:
+        """Split a workflow's raw text into {job_name: block_text} by
+        top-level (2-space-indented) job keys under `jobs:`."""
+        pattern = re.compile(r"^  ([A-Za-z_][\w-]*):$", re.MULTILINE)
+        matches = list(pattern.finditer(workflow))
+        blocks = {}
+        for index, match in enumerate(matches):
+            start = match.end()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(workflow)
+            blocks[match.group(1)] = workflow[start:end]
+        return blocks
 
     def test_windows_log_store_privacy_checks_are_platform_owned(self):
         workflow = PLATFORM.read_text()
@@ -250,13 +263,32 @@ class PrWorkflowArtifactTests(unittest.TestCase):
     def test_pr_cache_publishers_are_exact_and_bounded(self):
         ui_artifact = self.workflow("ci-ui-artifact-slice.yml")
         website = self.workflow("ci-web-slice.yml")
+        # UI installs no longer round-trip through the Actions cache at all
+        # (#1392): the runner image bakes a warm pnpm store and every pnpm
+        # job in these two files points store-dir at it directly, so there
+        # is nothing here to save or restore.
         self.assertNotIn("name: Save pnpm store", ui_artifact)
-        self.assertEqual(1, website.count("name: Save pnpm store"))
-        self.assertIn(
-            "cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && 'npm' || '' }}",
-            website,
-        )
-        self.assertIn("website/package-lock.json", website)
+        self.assertNotIn("name: Restore pnpm store", ui_artifact)
+        self.assertNotIn("actions/cache", ui_artifact)
+        self.assertNotIn("name: Save pnpm store", website)
+        self.assertNotIn("name: Restore pnpm store", website)
+        self.assertNotIn("actions/cache", website)
+        # Every pnpm job in the two files points store-dir at the image's
+        # baked store directly: once for ui_artifact, and once each for
+        # ui_quality and ui_e2e.
+        store_dir_config = "run: pnpm config set store-dir /home/runner/.local/share/pnpm/store"
+        self.assertEqual(1, ui_artifact.count(store_dir_config))
+        website_jobs = self.job_blocks(website)
+        for job in ("ui_quality", "ui_e2e"):
+            self.assertEqual(
+                1,
+                website_jobs[job].count(store_dir_config),
+                f"expected exactly one baked-store config in {job}",
+            )
+        # The `website` job itself runs in the prebuilt public-web image with
+        # no bare-metal row, so it has no native-cache-gated npm consumer
+        # left to publish or bound -- setup-node's own cache was deleted
+        # outright, not gated.
 
         windows = self.workflow("ci-windows-runtime-slice.yml")
         self.assertIn("name: Save exact PR-scoped Windows ABI build", windows)
@@ -268,8 +300,9 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("key: ${{ steps.llama_cache.outputs.cache-primary-key }}", platform)
 
         rust_tests = self.workflow("ci-rust-tests-slice.yml")
-        self.assertIn("github.ref == 'refs/heads/main'", rust_tests)
-        self.assertIn("original_event_name != 'pull_request'", rust_tests)
+        self.assertNotIn("Swatinem/rust-cache@", rust_tests)
+        self.assertIn("uses: ./.github/actions/restore-sccache-seed", rust_tests)
+        self.assertIn("allow_trusted_sccache_seed", rust_tests)
 
 
 if __name__ == "__main__":

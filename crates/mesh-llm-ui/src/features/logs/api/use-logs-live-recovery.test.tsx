@@ -1,114 +1,20 @@
+// @vitest-environment jsdom
+
 import { act, renderHook } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { useLogsLiveRecovery, type LogsEventSourceFactory } from '@/features/logs/api/use-logs-live-recovery'
 import type { LogsLedgerSearch } from '@/features/logs/lib/log-search'
-
-const REQUEST_A = '00000000-0000-4000-8000-000000000001'
-const REQUEST_B = '00000000-0000-4000-8000-000000000002'
-const unsupportedEventSourceFactory: LogsEventSourceFactory = () => {
-  throw new Error('unsupported')
-}
-
-type Listener = (event: MessageEvent<string>) => void
-
-class FakeEventSource {
-  readonly listeners = new Map<string, Listener>()
-  readonly url: string
-  closed = false
-  onopen: ((event: Event) => void) | null = null
-  onerror: ((event: Event) => void) | null = null
-
-  constructor(url: string) {
-    this.url = url
-  }
-
-  addEventListener(type: string, listener: Listener) {
-    this.listeners.set(type, listener)
-  }
-
-  close() {
-    this.closed = true
-  }
-
-  open() {
-    this.onopen?.(new Event('open'))
-  }
-
-  error() {
-    this.onerror?.(new Event('error'))
-  }
-
-  emit(type: string, data: string, lastEventId: string) {
-    const event = new MessageEvent<string>(type, { data })
-    Object.defineProperty(event, 'lastEventId', { value: lastEventId })
-    this.listeners.get(type)?.(event)
-  }
-}
-
-function eventData(requestId: string, eventId: string, sequence: number, occurredAt = '2026-08-04T12:00:00Z') {
-  return JSON.stringify({
-    eventId,
-    requestId,
-    occurredAt,
-    channel: 'requests',
-    sequence,
-    kind: 'completed',
-    model: null,
-    provider: null,
-    engine: null,
-    attemptId: null,
-    statusCode: null,
-    durationMs: null,
-    tokens: null
-  })
-}
-
-function auditData(sequence: number) {
-  return JSON.stringify({
-    entryId: `audit-${sequence}`,
-    occurredAt: '2026-08-04T12:00:00Z',
-    source: 'logs_api',
-    code: 'logging_cleanup_completed',
-    severity: 'info',
-    sequence
-  })
-}
-
-function renderLive(options: Partial<Parameters<typeof useLogsLiveRecovery>[0]> = {}) {
-  const sources: FakeEventSource[] = []
-  const factory: LogsEventSourceFactory = (url) => {
-    const source = new FakeEventSource(url)
-    sources.push(source)
-    return source
-  }
-  const hydrate = vi.fn(async () => undefined)
-  const hydrateAudit = vi.fn(async () => undefined)
-  const search: LogsLedgerSearch = options.search ?? { model: 'Qwen3', provider: 'reserve-a' }
-  const result = renderHook(
-    (input: { search: LogsLedgerSearch }) =>
-      useLogsLiveRecovery({
-        enabled: options.enabled ?? true,
-        search: input.search,
-        hydrate,
-        auditEnabled: options.auditEnabled,
-        hydrateAudit: options.hydrateAudit ?? hydrateAudit,
-        eventSourceFactory: options.eventSourceFactory ?? factory,
-        channels: options.channels
-      }),
-    { initialProps: { search } }
-  )
-  return { ...result, hydrate, hydrateAudit, sources }
-}
-
-async function flush() {
-  await act(async () => {
-    await Promise.resolve()
-  })
-}
-
-afterEach(() => {
-  vi.useRealTimers()
-})
+import {
+  REQUEST_A,
+  REQUEST_B,
+  FakeEventSource,
+  auditData,
+  eventData,
+  flush,
+  projectedEventData,
+  renderLive,
+  unsupportedEventSourceFactory
+} from './use-logs-live-recovery.test-fixtures'
 
 describe('useLogsLiveRecovery', () => {
   it('preserves lifecycle gap recovery when the initial hydration is still in flight', async () => {
@@ -154,7 +60,7 @@ describe('useLogsLiveRecovery', () => {
     await flush()
     await flush()
 
-    expect(hydrate).toHaveBeenCalledTimes(2)
+    expect(hydrate).toHaveBeenCalledTimes(1)
     expect(result.current.state).toBe('connected')
   })
 
@@ -191,22 +97,23 @@ describe('useLogsLiveRecovery', () => {
     await flush()
     await flush()
 
-    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
     expect(result.current.state).toBe('connected')
   })
 
-  it('reconciles cross-process audit rows while SSE remains connected', async () => {
+  it('accepts server-reconciled cross-process audit rows without browser polling', async () => {
     vi.useFakeTimers()
     const { hydrateAudit, result, sources } = renderLive({ enabled: false, auditEnabled: true })
     await flush()
     act(() => sources[0]?.open())
     expect(result.current.state).toBe('connected')
-    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+    expect(hydrateAudit).not.toHaveBeenCalled()
 
-    act(() => vi.advanceTimersByTime(5_000))
+    act(() => sources[0]?.emit('audit_entry', auditData(1), 'a1:1'))
     await flush()
 
-    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+    expect(hydrateAudit).not.toHaveBeenCalled()
+    expect(result.current.auditEntries.map((entry) => entry.entryId)).toEqual(['audit-1'])
     expect(result.current.state).toBe('connected')
   })
 
@@ -233,7 +140,7 @@ describe('useLogsLiveRecovery', () => {
     expect(sources).toHaveLength(1)
     expect(sources[0]?.url).toBe('/api/logs/events?audit=1')
     expect(hydrate).not.toHaveBeenCalled()
-    expect(hydrateAudit).toHaveBeenCalledOnce()
+    expect(hydrateAudit).not.toHaveBeenCalled()
     act(() => sources[0]?.open())
     expect(result.current.state).toBe('connected')
   })
@@ -254,7 +161,7 @@ describe('useLogsLiveRecovery', () => {
     })
 
     await flush()
-    expect(hydrate).toHaveBeenCalledTimes(1)
+    expect(hydrate).not.toHaveBeenCalled()
     expect(sources[0]?.url).toBe(
       '/api/logs/events?channel=requests&channel=operations&filter=model%3AQwen3&filter=provider%3Areserve-a&filter=engine%3Askippy&filter=route%3Achat&filter=outcome%3Acompleted'
     )
@@ -275,13 +182,13 @@ describe('useLogsLiveRecovery', () => {
     await flush()
 
     expect(result.current.liveRequestIds).toEqual([REQUEST_A])
-    expect(hydrate).toHaveBeenCalledTimes(2)
+    expect(hydrate).toHaveBeenCalledTimes(1)
     expect(sources).toHaveLength(1)
     unmount()
     expect(sources[0]?.closed).toBe(true)
   })
 
-  it('uses an independent audit stream with entry, gap, error, cursor, and polling recovery', async () => {
+  it('uses an independent audit stream with entry, gap, error, cursor, and disconnected polling recovery', async () => {
     vi.useFakeTimers()
     const { hydrate, hydrateAudit, result, sources } = renderLive({ auditEnabled: true })
     await flush()
@@ -289,8 +196,8 @@ describe('useLogsLiveRecovery', () => {
     expect(sources).toHaveLength(2)
     expect(sources[0]?.url).toContain('channel=requests&channel=operations')
     expect(sources[1]?.url).toBe('/api/logs/events?audit=1')
-    expect(hydrate).toHaveBeenCalledTimes(1)
-    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+    expect(hydrate).not.toHaveBeenCalled()
+    expect(hydrateAudit).not.toHaveBeenCalled()
 
     act(() => {
       sources[0]?.open()
@@ -300,8 +207,9 @@ describe('useLogsLiveRecovery', () => {
 
     act(() => sources[1]?.emit('audit_entry', auditData(1), 'a1:1'))
     await flush()
-    expect(hydrateAudit).toHaveBeenCalledTimes(2)
-    expect(hydrate).toHaveBeenCalledTimes(1)
+    expect(hydrateAudit).not.toHaveBeenCalled()
+    expect(hydrate).not.toHaveBeenCalled()
+    expect(result.current.auditEntries.map((entry) => entry.entryId)).toEqual(['audit-1'])
 
     act(() =>
       sources[1]?.emit(
@@ -317,18 +225,48 @@ describe('useLogsLiveRecovery', () => {
     )
     expect(result.current.state).toBe('gap')
     await flush()
-    expect(hydrateAudit).toHaveBeenCalledTimes(3)
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
     expect(result.current.state).toBe('connected')
 
     act(() => sources[1]?.emit('stream_error', JSON.stringify({ code: 'invalid_event' }), 'a1:3'))
-    expect(result.current.state).toBe('reconnecting')
-    act(() => vi.advanceTimersByTime(1_000))
-    expect(result.current.state).toBe('polling')
+    expect(result.current.state).toBe('stale')
+    await flush()
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+    expect(result.current.state).toBe('connected')
     act(() => vi.advanceTimersByTime(5_000))
     await flush()
-    expect(hydrateAudit).toHaveBeenCalledTimes(4)
-    act(() => sources[1]?.open())
-    expect(result.current.state).toBe('connected')
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not re-hydrate when the audit stream fails to reconnect a second time while already polling', async () => {
+    vi.useFakeTimers()
+    const { hydrateAudit, result, sources } = renderLive({ enabled: false, auditEnabled: true })
+    await flush()
+    const source = sources[0]
+
+    act(() => source?.error())
+    expect(result.current.state).toBe('reconnecting')
+    act(() => vi.advanceTimersByTime(1_000))
+    await flush()
+    expect(result.current.state).toBe('polling')
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+
+    // Native EventSource retries on its own schedule and calls onerror again on
+    // every failed attempt. A second failure while already polling must not
+    // re-enter startPolling and fire a duplicate hydrate — the reconciliation
+    // interval from the first entry is still live and owns future refreshes.
+    act(() => source?.error())
+    act(() => vi.advanceTimersByTime(1_000))
+    await flush()
+    expect(result.current.state).toBe('polling')
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+
+    // The reconciliation interval from the first entry must still be the one
+    // driving refreshes — the second failure should not have restarted or
+    // dropped it.
+    act(() => vi.advanceTimersByTime(5_000))
+    await flush()
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
   })
 
   it('serializes route and reconnects while source remains unsupported', async () => {
@@ -409,7 +347,78 @@ describe('useLogsLiveRecovery', () => {
     )
 
     expect(result.current.liveRequestIds).toEqual([REQUEST_A, REQUEST_B])
-    expect(hydrate).toHaveBeenCalledTimes(3)
+    expect(hydrate).toHaveBeenCalledTimes(2)
+  })
+
+  it('merges projected request rows without refreshing the ledger and removes rows that leave the filter', async () => {
+    const search = { model: 'Qwen3', provider: 'reserve-a', outcome: 'active' } satisfies LogsLedgerSearch
+    const { hydrate, sources, result } = renderLive({ search })
+    const source = sources[0]
+
+    act(() =>
+      source?.emit(
+        'log_event',
+        projectedEventData(REQUEST_A, '00000000-0000-4000-8000-000000000003', 1, 'active'),
+        'v1:1.0.0'
+      )
+    )
+    expect(result.current.requestUpdates.map((request) => request.requestId.toString())).toEqual([REQUEST_A])
+    expect(result.current.excludedRequestIds).toEqual([])
+    expect(hydrate).not.toHaveBeenCalled()
+
+    act(() =>
+      source?.emit(
+        'log_event',
+        projectedEventData(REQUEST_A, '00000000-0000-4000-8000-000000000004', 2, 'completed'),
+        'v1:2.0.0'
+      )
+    )
+    expect(result.current.requestUpdates).toEqual([])
+    expect(result.current.excludedRequestIds).toEqual([REQUEST_A])
+    expect(hydrate).not.toHaveBeenCalled()
+  })
+
+  it('discards projected rows superseded by an authoritative recovery', async () => {
+    const { hydrate, sources, result } = renderLive()
+    const source = sources[0]
+    act(() =>
+      source?.emit('log_event', projectedEventData(REQUEST_A, '00000000-0000-4000-8000-000000000003', 1), 'v1:1.0.0')
+    )
+    expect(result.current.requestUpdates).toHaveLength(1)
+
+    act(() =>
+      source?.emit(
+        'replay_gap',
+        JSON.stringify({
+          channel: 'requests',
+          fromSequence: 2,
+          toSequence: 2,
+          recovery: { endpoint: '/api/logs/requests', cursor: null }
+        }),
+        'v1:2.0.0'
+      )
+    )
+    await flush()
+
+    expect(hydrate).toHaveBeenCalledTimes(1)
+    expect(result.current.requestUpdates).toEqual([])
+  })
+
+  it('discards projected rows when an external authoritative query is replaced', () => {
+    const initialSnapshot = { items: [] }
+    const { rerender, sources, result } = renderLive({ authoritativeSnapshot: initialSnapshot })
+    act(() =>
+      sources[0]?.emit(
+        'log_event',
+        projectedEventData(REQUEST_A, '00000000-0000-4000-8000-000000000003', 1),
+        'v1:1.0.0'
+      )
+    )
+    expect(result.current.requestUpdates).toHaveLength(1)
+
+    rerender({ search: { model: 'Qwen3', provider: 'reserve-a' }, authoritativeSnapshot: { items: [] } })
+
+    expect(result.current.requestUpdates).toEqual([])
   })
 
   it('orders retained request IDs oldest-first by instant across offsets', async () => {
@@ -476,7 +485,7 @@ describe('useLogsLiveRecovery', () => {
     await flush()
 
     expect(result.current.liveRequestIds).toEqual([REQUEST_A])
-    expect(hydrate).toHaveBeenCalledTimes(3)
+    expect(hydrate).toHaveBeenCalledTimes(2)
   })
 
   it('keeps the native EventSource instance for reconnect and falls back to bounded polling only while disconnected', async () => {
@@ -502,6 +511,9 @@ describe('useLogsLiveRecovery', () => {
     const source = sources[0]
     act(() => source?.error())
     act(() => vi.advanceTimersByTime(1_000))
+    await flush()
+    // Entering polling hydrates once immediately, before any interval tick.
+    expect(hydrate).toHaveBeenCalledTimes(1)
     const timerCount = vi.getTimerCount()
     const togglePolling = result.current.togglePolling
 
@@ -639,7 +651,7 @@ describe('useLogsLiveRecovery', () => {
     )
     expect(result.current.state).toBe('gap')
     await flush()
-    expect(hydrate).toHaveBeenCalledTimes(2)
+    expect(hydrate).toHaveBeenCalledTimes(1)
     expect(result.current.state).toBe('connected')
   })
 
@@ -661,6 +673,58 @@ describe('useLogsLiveRecovery', () => {
     )
     await flush()
     expect(result.current.liveRequestIds).toEqual([REQUEST_A])
-    expect(hydrate).toHaveBeenCalledTimes(4)
+    expect(hydrate).toHaveBeenCalledTimes(2)
+  })
+
+  /**
+   * Regression guard for the `/logs` render loop (React error #185).
+   *
+   * Every collection this hook returns must keep a stable reference across a
+   * render that changed nothing. `auditEntries` returned a fresh `[]` literal
+   * when audit was disabled, which invalidated the whole ledger memo chain
+   * (auditEntries -> filteredAuditEntries -> mergedRows -> categoryRows) on
+   * every render. That handed `<BarChart>` a new `data` array each render, so
+   * recharts' ChartDataContextProvider re-dispatched `setChartData`, and
+   * react-redux v9's synchronous `defaultNoopBatch` notified subscribers
+   * inline — re-rendering the tree that minted the next `[]`. Self-sustaining
+   * until React's 50-nested-update ceiling tripped the error boundary.
+   *
+   * This asserts the mechanism (referential stability), not the symptom, so it
+   * fails on the fresh-literal pattern regardless of which consumer breaks.
+   */
+  it('returns referentially stable collections across renders when audit is disabled', async () => {
+    const { rerender, result } = renderLive({ auditEnabled: false })
+    await flush()
+
+    const first = {
+      auditEntries: result.current.auditEntries,
+      liveRequestIds: result.current.liveRequestIds,
+      requestUpdates: result.current.requestUpdates,
+      excludedRequestIds: result.current.excludedRequestIds
+    }
+
+    // A no-op re-render with identical inputs must not mint new collections.
+    rerender({ search: { model: 'Qwen3', provider: 'reserve-a' } })
+    await flush()
+
+    expect(result.current.auditEntries).toBe(first.auditEntries)
+    expect(result.current.liveRequestIds).toBe(first.liveRequestIds)
+    expect(result.current.requestUpdates).toBe(first.requestUpdates)
+    expect(result.current.excludedRequestIds).toBe(first.excludedRequestIds)
+  })
+
+  it('keeps auditEntries referentially stable while live request events arrive', async () => {
+    const { result, sources } = renderLive({ auditEnabled: false })
+    await flush()
+    const initialAuditEntries = result.current.auditEntries
+
+    // Request traffic must not invalidate the (disabled) audit collection.
+    act(() =>
+      sources[0]?.emit('log_event', eventData(REQUEST_A, '00000000-0000-4000-8000-000000000003', 1), 'v1:1.0.0')
+    )
+    await flush()
+
+    expect(result.current.auditEntries).toBe(initialAuditEntries)
+    expect(result.current.auditEntries).toEqual([])
   })
 })

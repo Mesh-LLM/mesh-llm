@@ -113,7 +113,6 @@ pub async fn object_store_available(plugin_manager: &crate::plugin::PluginManage
         .await
 }
 
-#[allow(dead_code)]
 pub async fn put_request_object(
     plugin_manager: &crate::plugin::PluginManager,
     request: PutRequestObjectRequest,
@@ -121,7 +120,6 @@ pub async fn put_request_object(
     call_blobstore_tool(plugin_manager, PUT_REQUEST_OBJECT_TOOL, &request).await
 }
 
-#[allow(dead_code)]
 pub async fn get_request_object(
     plugin_manager: &crate::plugin::PluginManager,
     request: GetRequestObjectRequest,
@@ -129,7 +127,6 @@ pub async fn get_request_object(
     call_blobstore_tool(plugin_manager, GET_REQUEST_OBJECT_TOOL, &request).await
 }
 
-#[allow(dead_code)]
 pub async fn complete_request(
     plugin_manager: &crate::plugin::PluginManager,
     request: FinishRequestRequest,
@@ -137,7 +134,6 @@ pub async fn complete_request(
     call_blobstore_tool(plugin_manager, COMPLETE_REQUEST_TOOL, &request).await
 }
 
-#[allow(dead_code)]
 pub async fn abort_request(
     plugin_manager: &crate::plugin::PluginManager,
     request: FinishRequestRequest,

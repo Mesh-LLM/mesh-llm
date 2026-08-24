@@ -128,6 +128,16 @@ impl LoggingQueryFacade {
         self.store.list_audit_entries(limit, after_cursor, filters)
     }
 
+    pub(crate) fn audit_entries_after_sequence(
+        &self,
+        after_sequence: u64,
+        limit: usize,
+        filters: AuditEntryFilters,
+    ) -> Result<Vec<AuditEntryRow>, LogStoreError> {
+        self.store
+            .list_audit_entries_after_sequence(after_sequence, limit, filters)
+    }
+
     /// Read content only through the fail-open capture owner. The route core
     /// verifies `ArtifactRecord::redacted` before calling this method.
     pub(crate) fn read_artifact(

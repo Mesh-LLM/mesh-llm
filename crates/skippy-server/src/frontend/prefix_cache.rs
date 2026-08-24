@@ -406,52 +406,6 @@ impl StageOpenAiBackend {
                 })
                 .collect::<OpenAiResult<Vec<_>>>()?
         };
-        // Archive one candidate so a split stage 0's prefix survives restart,
-        // matching the binary recorders on the downstream stages. Without
-        // this, stage 0 is the only stage in the pipeline with no persistent
-        // tier, and the cross-stage agreement gate would veto every restore
-        // attempt on its miss -- wasting every downstream disk hit.
-        //
-        // Offered independently of the resident cache's admission decision,
-        // for the same reason as the dense recorder path: the resident tier
-        // measures KV cells and declines anything over half the context
-        // window, while the disk tier measures bytes and a write. Sharing a
-        // veto meant nothing was archived for large agentic prefixes.
-        let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
-        for identity in &identities {
-            crate::kv_integration::offer_archive_candidate(
-                &mut archive_candidate,
-                identity,
-                token_ids.len(),
-            );
-        }
-        if let Some(identity) = archive_candidate.take() {
-            let outcome = {
-                let mut runtime = self
-                    .runtime
-                    .lock()
-                    .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-                kv.archive_dense_prefix(&mut runtime, session_id, &identity)
-            };
-            let mut attrs = self.openai_attrs(ids);
-            attrs.insert("skippy.kv.decision".to_string(), json!("disk_archive"));
-            kv.insert_disk_tier_attrs(&mut attrs);
-            match outcome {
-                Ok(outcome) => outcome.insert_attrs(&identity, &mut attrs),
-                Err(error) => {
-                    attrs.insert(
-                        "skippy.kv.archive_status".to_string(),
-                        json!("failed_error"),
-                    );
-                    attrs.insert(
-                        "skippy.kv.archive_error_class".to_string(),
-                        json!(crate::kv_integration::telemetry_error_class(&error)),
-                    );
-                }
-            }
-            self.telemetry
-                .emit("stage.openai_kv_record_decision", attrs);
-        }
         let activation_records = kv.record_resident_activation(
             &self.config,
             &base,
@@ -565,57 +519,6 @@ impl StageOpenAiBackend {
                 })
                 .collect::<OpenAiResult<Vec<_>>>()?
         };
-        // Archive the longest candidate that excludes the request tail,
-        // independently of resident-cache admission -- the same rule as the
-        // chunked recorder above.
-        //
-        // Admission is not the safety condition. `archive_dense_prefix`
-        // exports from the *live session* via `export_kv_page(session_id, 0,
-        // token_count)`, which `validate_export_range` checks against the
-        // session's known token count -- not against any resident-prefix
-        // sequence. `offer_archive_candidate` already refuses a candidate
-        // claiming more tokens than this request carried, which is exactly
-        // that condition.
-        //
-        // Gating on admission is also the measured failure: the resident tier
-        // declines anything over `max_resident_tokens` (half the context
-        // window), so on a 32k-context node every rung of a 25k agentic prompt
-        // is declined and nothing reaches disk at all.
-        let mut archive_candidate = crate::kv_integration::ArchiveCandidate::default();
-        for identity in &identities {
-            crate::kv_integration::offer_archive_candidate(
-                &mut archive_candidate,
-                identity,
-                token_ids.len(),
-            );
-        }
-        if let Some(identity) = archive_candidate.take() {
-            let outcome = {
-                let mut runtime = self
-                    .runtime
-                    .lock()
-                    .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-                kv.archive_dense_prefix(&mut runtime, session_id, &identity)
-            };
-            let mut attrs = self.openai_attrs(ids);
-            attrs.insert("skippy.kv.decision".to_string(), json!("disk_archive"));
-            kv.insert_disk_tier_attrs(&mut attrs);
-            match outcome {
-                Ok(outcome) => outcome.insert_attrs(&identity, &mut attrs),
-                Err(error) => {
-                    attrs.insert(
-                        "skippy.kv.archive_status".to_string(),
-                        json!("failed_error"),
-                    );
-                    attrs.insert(
-                        "skippy.kv.archive_error_class".to_string(),
-                        json!(crate::kv_integration::telemetry_error_class(&error)),
-                    );
-                }
-            }
-            self.telemetry
-                .emit("stage.openai_kv_record_decision", attrs);
-        }
         let mut recorded_any = false;
         for record in records.into_iter().flatten() {
             recorded_any = true;
@@ -981,22 +884,10 @@ impl StageOpenAiBackend {
                 .map_err(openai_backend_error)?
             {
                 Some(restored) => Some(restored.token_count),
-                None => match kv
+                None => kv
                     .restore_resident_prefix(&mut runtime, session_key, &identities, prefill_tokens)
                     .map_err(openai_backend_error)?
-                {
-                    Some(restored) => Some(restored.token_count),
-                    // Third tier, matching the binary path on downstream
-                    // stages: a prefix this stage archived in an earlier
-                    // process. Without this, stage 0 is the only stage in a
-                    // split with no persistent tier, so after a restart it
-                    // always misses and the agreement gate below vetoes the
-                    // whole pipeline -- downstream disk hits would be wasted.
-                    None => kv
-                        .restore_dense_prefix_from_disk(&mut runtime, session_key, &identities)
-                        .map_err(openai_backend_error)?
-                        .map(|restored| (restored.token_count as usize).min(prefill_tokens.len())),
-                },
+                    .map(|restored| restored.token_count),
             }
         };
         let Some(local_restore) = local_restore else {

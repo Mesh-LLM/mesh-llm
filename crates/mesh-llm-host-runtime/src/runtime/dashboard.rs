@@ -345,7 +345,6 @@ impl DashboardSnapshotProvider for RuntimeDashboardSnapshotProvider {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn runtime_status_from_process_status(status: &str) -> RuntimeStatus {
     match status {
         "ready" => RuntimeStatus::Ready,
@@ -358,7 +357,6 @@ pub(crate) fn runtime_status_from_process_status(status: &str) -> RuntimeStatus 
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn runtime_status_from_plugin_status(status: &str) -> RuntimeStatus {
     match status {
         "running" | "ready" => RuntimeStatus::Ready,
@@ -370,7 +368,6 @@ pub(super) fn runtime_status_from_plugin_status(status: &str) -> RuntimeStatus {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn dashboard_role_for_local_process(
     _process: &api::RuntimeProcessPayload,
 ) -> Option<String> {
@@ -380,7 +377,6 @@ pub(super) fn dashboard_role_for_local_process(
     Some("host".to_string())
 }
 
-#[allow(dead_code)]
 pub(super) fn build_dashboard_endpoint_rows(
     api_port: u16,
     console_port: Option<u16>,
@@ -406,7 +402,6 @@ pub(super) fn build_dashboard_endpoint_rows(
     rows
 }
 
-#[allow(dead_code)]
 pub(super) async fn plugin_dashboard_endpoint_rows(
     plugin_manager: &plugin::PluginManager,
 ) -> Vec<DashboardEndpointRow> {

@@ -225,7 +225,6 @@ impl RuntimeState {
             .is_some_and(|known_tokens| token_end <= known_tokens)
     }
 
-    #[allow(dead_code)]
     pub fn export_kv_page(
         &mut self,
         session_id: &str,
@@ -239,7 +238,6 @@ impl RuntimeState {
         session.export_kv_page(layer_start, layer_end, token_start, token_count)
     }
 
-    #[allow(dead_code)]
     pub fn probe_kv_page(
         &mut self,
         session_id: &str,
@@ -273,7 +271,6 @@ impl RuntimeState {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn export_state(&mut self, session_id: &str) -> Result<Vec<u8>> {
         let layer_start = i32::try_from(self.model_layer_start())?;
         let layer_end = i32::try_from(self.model_layer_end())?;

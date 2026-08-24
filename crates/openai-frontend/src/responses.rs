@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     chat::{ChatCompletionChunk, ChatCompletionResponse},
-    common::{THINKING_BOOLEAN_ALIASES, Usage},
+    common::{THINKING_BOOLEAN_ALIASES, Usage, normalize_reasoning_compat_fields},
     errors::OpenAiError,
 };
 
@@ -114,153 +114,6 @@ fn alias_max_tokens(object: &mut Map<String, Value>) -> bool {
         object.entry("max_tokens".to_string()).or_insert(value);
     }
     changed
-}
-
-fn normalize_chat_reasoning_template_options(
-    object: &mut Map<String, Value>,
-) -> Result<bool, OpenAiError> {
-    let mut enable_thinking = reasoning_object_override(object.get("reasoning"))?;
-
-    if let Some(effort) = optional_string_field(object, "reasoning_effort")? {
-        enable_thinking = Some(match effort {
-            "none" => false,
-            "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => true,
-            _ => {
-                return Err(OpenAiError::invalid_request(
-                    "reasoning_effort must be one of none, minimal, low, medium, high, xhigh, max",
-                ));
-            }
-        });
-    }
-
-    for field in THINKING_BOOLEAN_ALIASES {
-        if let Some(enabled) = optional_bool_field(object, field)? {
-            enable_thinking = Some(enabled);
-        }
-    }
-    if optional_u32_field(object, "thinking_budget")? == Some(0) {
-        enable_thinking = Some(false);
-    }
-
-    if chat_template_kwargs_override(object)? {
-        return Ok(false);
-    }
-
-    let Some(enabled) = enable_thinking else {
-        return Ok(false);
-    };
-    let kwargs = ensure_chat_template_kwargs_object(object)?;
-    kwargs.insert("enable_thinking".to_string(), Value::Bool(enabled));
-    Ok(true)
-}
-
-fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, OpenAiError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value.is_null() {
-        return Ok(None);
-    }
-    let object = value
-        .as_object()
-        .ok_or_else(|| OpenAiError::invalid_request("reasoning must be an object"))?;
-    let enabled = optional_bool_field(object, "enabled")?;
-    let effort = optional_string_field(object, "effort")?;
-    let effort_is_valid = match effort {
-        Some("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | None => true,
-        Some(_) => false,
-    };
-    if !effort_is_valid {
-        return Err(OpenAiError::invalid_request(
-            "reasoning.effort must be one of none, minimal, low, medium, high, xhigh, max",
-        ));
-    }
-    let max_tokens = optional_u32_field(object, "max_tokens")?;
-
-    if enabled == Some(false) || effort == Some("none") || max_tokens == Some(0) {
-        Ok(Some(false))
-    } else if enabled == Some(true) || effort.is_some() || max_tokens.is_some() {
-        Ok(Some(true))
-    } else {
-        Ok(None)
-    }
-}
-
-fn chat_template_kwargs_override(object: &Map<String, Value>) -> Result<bool, OpenAiError> {
-    let Some(value) = object.get("chat_template_kwargs") else {
-        return Ok(false);
-    };
-    if value.is_null() {
-        return Ok(false);
-    }
-    let kwargs = value
-        .as_object()
-        .ok_or_else(|| OpenAiError::invalid_request("chat_template_kwargs must be an object"))?;
-    for field in THINKING_BOOLEAN_ALIASES {
-        if optional_bool_field(kwargs, field)?.is_some() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn ensure_chat_template_kwargs_object(
-    object: &mut Map<String, Value>,
-) -> Result<&mut Map<String, Value>, OpenAiError> {
-    if !object.contains_key("chat_template_kwargs") {
-        object.insert(
-            "chat_template_kwargs".to_string(),
-            Value::Object(Map::new()),
-        );
-    }
-    object
-        .get_mut("chat_template_kwargs")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| OpenAiError::invalid_request("chat_template_kwargs must be an object"))
-}
-
-fn optional_bool_field(
-    object: &Map<String, Value>,
-    field: &str,
-) -> Result<Option<bool>, OpenAiError> {
-    object
-        .get(field)
-        .filter(|value| !value.is_null())
-        .map(|value| {
-            value
-                .as_bool()
-                .ok_or_else(|| OpenAiError::invalid_request(format!("{field} must be a boolean")))
-        })
-        .transpose()
-}
-
-fn optional_string_field<'a>(
-    object: &'a Map<String, Value>,
-    field: &str,
-) -> Result<Option<&'a str>, OpenAiError> {
-    object
-        .get(field)
-        .filter(|value| !value.is_null())
-        .map(|value| {
-            value
-                .as_str()
-                .ok_or_else(|| OpenAiError::invalid_request(format!("{field} must be a string")))
-        })
-        .transpose()
-}
-
-fn optional_u32_field(
-    object: &Map<String, Value>,
-    field: &str,
-) -> Result<Option<u32>, OpenAiError> {
-    object
-        .get(field)
-        .filter(|value| !value.is_null())
-        .map(|value| {
-            serde_json::from_value::<u32>(value.clone())
-                .map_err(|_| OpenAiError::invalid_request(format!("{field} must be an integer")))
-        })
-        .transpose()
 }
 
 fn map_response_role(role: &str) -> String {
@@ -540,6 +393,36 @@ fn responses_conversation_id(value: &Value) -> Option<String> {
     None
 }
 
+/// Fast-path detection for request bodies that need OpenAI compatibility
+/// normalization before forwarding. This intentionally mirrors the ingress
+/// byte-level check: it avoids parsing ordinary chat bodies while retaining
+/// the exact accepted alias vocabulary and malformed-UTF-8 behavior.
+pub fn request_body_requires_json_normalization(path: &str, body: &[u8]) -> bool {
+    if body.is_empty() {
+        return false;
+    }
+    let path_only = path_only(path);
+    if path_only == "/v1/responses" {
+        return true;
+    }
+    if path_only != "/v1/chat/completions" {
+        return false;
+    }
+
+    let Ok(body_text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    body_text.contains("\"max_completion_tokens\"")
+        || body_text.contains("\"max_output_tokens\"")
+        || body_text.contains("\"reasoning\"")
+        || body_text.contains("\"reasoning_effort\"")
+        || body_text.contains("\"thinking_budget\"")
+        || body_text.contains("\"chat_template_kwargs\"")
+        || THINKING_BOOLEAN_ALIASES
+            .iter()
+            .any(|field| body_text.contains(&format!("\"{field}\"")))
+}
+
 pub fn normalize_openai_compat_request(
     path: &str,
     body: &mut Value,
@@ -576,7 +459,7 @@ pub fn normalize_openai_compat_request(
         };
     }
     if matches!(path_only, "/v1/chat/completions" | "/v1/responses") {
-        changed |= normalize_chat_reasoning_template_options(object)?;
+        changed |= normalize_reasoning_compat_fields(object)?;
     }
 
     Ok(NormalizationOutcome {
@@ -1408,6 +1291,33 @@ mod tests {
 
         assert_eq!(body["prompt_cache_key"], "caller-key");
         assert!(body.get("conversation").is_none());
+    }
+
+    #[test]
+    fn request_body_normalization_detection_golden_table() {
+        let cases = [
+            (
+                "/v1/chat/completions",
+                br#"{"model":"qwen"}"# as &[u8],
+                false,
+            ),
+            (
+                "/v1/chat/completions?stream=1",
+                br#"{"reasoning_effort":"low"}"#,
+                true,
+            ),
+            ("/v1/responses", br#"not-json"#, true),
+            ("/v1/models", br#"{"max_output_tokens":1}"#, false),
+            ("/v1/chat/completions", &[0xff, 0xfe], false),
+        ];
+
+        for (path, body, expected) in cases {
+            assert_eq!(
+                request_body_requires_json_normalization(path, body),
+                expected,
+                "unexpected detection for {path}"
+            );
+        }
     }
 
     #[test]

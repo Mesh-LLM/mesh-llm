@@ -1,5 +1,5 @@
 import { Route, Workflow } from 'lucide-react'
-import type { LogLifecycleEvent, LogProxyAttempt } from '@/features/logs/api/schemas'
+import type { LogEventKind, LogLifecycleEvent, LogProxyAttempt } from '@/features/logs/api/schemas'
 import { tokenUsageEntries } from '@/features/logs/lib/log-token-usage'
 import {
   attemptDurationMs,
@@ -10,11 +10,6 @@ import {
 } from '@/features/logs/components/LogRequestOverviewDerivations'
 import { LogRequestOverviewPanel } from '@/features/logs/components/LogRequestOverviewPanel'
 import { compareLogInstants } from '@/features/logs/lib/log-instant'
-
-type LogRequestOverviewEvidenceProps = {
-  readonly attempts: RetainedQueryState<LogProxyAttempt>
-  readonly events: RetainedQueryState<LogLifecycleEvent>
-}
 
 function EvidenceState({
   loading,
@@ -45,6 +40,64 @@ function EventDetail({ label, value }: { readonly label: string; readonly value:
   )
 }
 
+function lifecycleLabel(kind: LogLifecycleEvent['kind']): string {
+  return kind
+    .split('_')
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
+}
+
+function lifecycleElapsed(events: readonly LogLifecycleEvent[], index: number): string | undefined {
+  if (index === 0) return undefined
+  const previous = events[index - 1]
+  const current = events[index]
+  if (previous === undefined || current === undefined) return undefined
+  const elapsed = Date.parse(current.occurredAt) - Date.parse(previous.occurredAt)
+  return Number.isFinite(elapsed) && elapsed >= 0 ? `+${formatDurationMs(elapsed)}` : undefined
+}
+
+const LIFECYCLE_TONES: Readonly<Record<LogEventKind, 'accent' | 'bad' | 'good'>> = {
+  admitted: 'accent',
+  route_selected: 'accent',
+  attempt_started: 'accent',
+  attempt_completed: 'good',
+  attempt_failed: 'bad',
+  backend_stream_first_item: 'accent',
+  stream_started: 'accent',
+  stream_chunk: 'accent',
+  stream_completed: 'good',
+  usage_recorded: 'accent',
+  stream_error: 'bad',
+  audit_error: 'bad',
+  completed: 'good',
+  failed: 'bad',
+  rejected: 'bad',
+  cancelled: 'bad',
+  dropped: 'bad'
+}
+
+function lifecycleTone(kind: LogLifecycleEvent['kind']): 'accent' | 'bad' | 'good' {
+  return LIFECYCLE_TONES[kind]
+}
+
+const LIFECYCLE_NODE_CLASS = {
+  accent:
+    'border-[color:color-mix(in_oklab,var(--color-accent)_48%,var(--color-border))] bg-[color:color-mix(in_oklab,var(--color-accent)_16%,var(--color-panel))] text-accent',
+  bad: 'border-[color:color-mix(in_oklab,var(--color-bad)_48%,var(--color-border))] bg-[color:color-mix(in_oklab,var(--color-bad)_14%,var(--color-panel))] text-bad',
+  good: 'border-[color:color-mix(in_oklab,var(--color-good)_48%,var(--color-border))] bg-[color:color-mix(in_oklab,var(--color-good)_14%,var(--color-panel))] text-good'
+} as const
+
+function lifecycleEvidence(event: LogLifecycleEvent): string | undefined {
+  const tokenEvidence = tokenUsageEntries(event).at(-1)
+  const values = [
+    event.attemptId ? `attempt ${event.attemptId}` : undefined,
+    event.statusCode === undefined ? undefined : `HTTP ${event.statusCode}`,
+    event.durationMs === undefined ? undefined : formatDurationMs(event.durationMs),
+    tokenEvidence ? `${tokenEvidence.value} ${tokenEvidence.label.toLowerCase()}` : undefined
+  ].filter((value): value is string => value !== undefined)
+  return values.length === 0 ? undefined : values.join(' · ')
+}
+
 function LifecycleEvents({ query }: { readonly query: RetainedQueryState<LogLifecycleEvent> }) {
   if (query.items === undefined) {
     return (
@@ -73,32 +126,74 @@ function LifecycleEvents({ query }: { readonly query: RetainedQueryState<LogLife
     )
     .map(({ event }) => event)
   return (
-    <ol aria-label="Lifecycle events" className="divide-y divide-border-soft">
-      {events.map((event) => (
-        <li className="min-w-0 px-[var(--panel-x)] py-[var(--panel-y)]" key={event.eventId.toString()}>
-          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <code className="break-all font-mono type-caption text-foreground">{event.kind}</code>
-            <time className="font-mono tabular-nums type-caption text-fg-dim" dateTime={event.occurredAt}>
-              {formatTimestamp(event.occurredAt)}
-            </time>
-          </div>
-          <dl className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            <EventDetail label="Attempt ID" value={event.attemptId} />
-            <EventDetail label="Model" value={event.model} />
-            <EventDetail label="Provider" value={event.provider} />
-            <EventDetail label="Engine" value={event.engine} />
-            <EventDetail label="HTTP status" value={event.statusCode} />
-            <EventDetail
-              label="Duration"
-              value={event.durationMs === undefined ? undefined : formatDurationMs(event.durationMs)}
-            />
-            {tokenUsageEntries(event).map(({ label, value }) => (
-              <EventDetail key={label} label={label} value={value} />
-            ))}
-          </dl>
-        </li>
-      ))}
-    </ol>
+    <div className="overflow-x-auto">
+      <ol aria-label="Lifecycle events" className="flex w-max min-w-full px-[var(--panel-x)] py-5">
+        {events.map((event, index) => {
+          const tone = lifecycleTone(event.kind)
+          const elapsed = lifecycleElapsed(events, index)
+          const evidence = lifecycleEvidence(event)
+          return (
+            <li className="min-w-40 flex-1" key={event.eventId.toString()}>
+              <div className="flex items-center">
+                <span
+                  aria-hidden="true"
+                  className={`grid size-7 shrink-0 place-items-center rounded-full border ${LIFECYCLE_NODE_CLASS[tone]}`}
+                >
+                  <span className="size-1.5 rounded-full bg-current" />
+                </span>
+                {index < events.length - 1 ? (
+                  <span aria-hidden="true" className="relative h-px flex-1 bg-border">
+                    {events[index + 1] ? (
+                      <span className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 bg-panel px-1.5 font-mono tabular-nums type-micro text-fg-faint">
+                        {lifecycleElapsed(events, index + 1)}
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-3 min-w-0 pr-4">
+                <div className="type-panel-title text-foreground">{lifecycleLabel(event.kind)}</div>
+                <code className="mt-1 block break-all font-mono type-micro text-fg-faint">{event.kind}</code>
+                <time
+                  className="mt-2 block font-mono tabular-nums type-caption text-fg-dim"
+                  dateTime={event.occurredAt}
+                >
+                  {formatTimestamp(event.occurredAt)}
+                </time>
+                {evidence ? <p className="mt-1.5 break-words font-mono type-micro text-fg-faint">{evidence}</p> : null}
+                {elapsed === undefined ? null : <span className="sr-only">Elapsed {elapsed}</span>}
+              </div>
+            </li>
+          )
+        })}
+      </ol>
+    </div>
+  )
+}
+
+export function LogRequestLifecycleOverview({ events }: { readonly events: RetainedQueryState<LogLifecycleEvent> }) {
+  return (
+    <LogRequestOverviewPanel
+      ariaLabel="Request lifecycle"
+      description="Retained request events, ordered from first record to terminal state."
+      icon={Workflow}
+      title="Lifecycle timeline"
+    >
+      <LifecycleEvents query={events} />
+    </LogRequestOverviewPanel>
+  )
+}
+
+export function LogRequestRoutingOverview({ attempts }: { readonly attempts: RetainedQueryState<LogProxyAttempt> }) {
+  return (
+    <LogRequestOverviewPanel
+      ariaLabel="Request routing attempts"
+      description="Retained targets, providers, engines, statuses, and timing for each attempt."
+      icon={Route}
+      title="Routing attempts"
+    >
+      <RoutingAttempts query={attempts} />
+    </LogRequestOverviewPanel>
   )
 }
 
@@ -161,28 +256,5 @@ function RoutingAttempts({ query }: { readonly query: RetainedQueryState<LogProx
         </li>
       ))}
     </ol>
-  )
-}
-
-export function LogRequestOverviewEvidence({ attempts, events }: LogRequestOverviewEvidenceProps) {
-  return (
-    <>
-      <LogRequestOverviewPanel
-        ariaLabel="Request lifecycle"
-        description="Canonical retained event kinds and timestamps in chronological order."
-        icon={Workflow}
-        title="Lifecycle events"
-      >
-        <LifecycleEvents query={events} />
-      </LogRequestOverviewPanel>
-      <LogRequestOverviewPanel
-        ariaLabel="Request routing attempts"
-        description="Retained targets, providers, engines, statuses, and timing for each attempt."
-        icon={Route}
-        title="Routing attempts"
-      >
-        <RoutingAttempts query={attempts} />
-      </LogRequestOverviewPanel>
-    </>
   )
 }

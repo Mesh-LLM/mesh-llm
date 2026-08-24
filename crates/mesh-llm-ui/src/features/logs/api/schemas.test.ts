@@ -437,6 +437,39 @@ describe('dedicated logs SSE frame parser', () => {
     expect(error).toEqual({ type: 'stream_error', cursor: LogReplayCursor.parse('v1:2.0.0'), code: 'invalid_event' })
   })
 
+  it('parses the additive request summary carried by current lifecycle frames', () => {
+    const frame = parseLogsSseFrame({
+      event: 'log_event',
+      lastEventId: 'v1:3.0.0',
+      data: JSON.stringify({
+        eventId: EVENT_ID,
+        requestId: REQUEST_ID,
+        occurredAt: TIMESTAMP,
+        channel: 'requests',
+        sequence: 3,
+        kind: 'completed',
+        request: {
+          requestId: REQUEST_ID,
+          outcome: 'completed',
+          createdAt: TIMESTAMP,
+          terminalAt: TIMESTAMP,
+          route: 'chat_completions',
+          model: 'Qwen3',
+          provider: 'mesh',
+          engine: 'skippy',
+          statusCode: 200,
+          source: 'active'
+        }
+      })
+    })
+
+    expect(frame.type).toBe('log_event')
+    if (frame.type !== 'log_event') throw new Error('expected lifecycle frame')
+    expect(frame.event.request).toEqual(
+      expect.objectContaining({ outcome: 'completed', route: 'chat_completions', statusCode: 200 })
+    )
+  })
+
   it('parses audit stream errors with the audit cursor family', () => {
     expect(
       parseLogsSseFrame({

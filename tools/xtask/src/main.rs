@@ -1,6 +1,7 @@
 mod attestation;
 mod command;
 mod installer_fixtures;
+mod no_console_print;
 mod publish_consistency;
 mod release_targets;
 mod repo_consistency;
@@ -34,6 +35,11 @@ fn run() -> DynResult<()> {
             repo_consistency::check_test_all_coverage_command()
         }
         [command, scope, rest @ ..]
+            if command == "repo-consistency" && scope == "no-console-print" =>
+        {
+            no_console_print::check_no_console_print_command(rest)
+        }
+        [command, scope, rest @ ..]
             if command == "release-attestation" && scope == "generate-keypair" =>
         {
             attestation::generate_release_attestation_keypair(rest)
@@ -47,7 +53,7 @@ fn run() -> DynResult<()> {
             attestation::inspect_release_attestation(rest)
         }
         _ => Err(
-            "usage:\n  cargo run -p xtask -- repo-consistency release-targets\n  cargo run -p xtask -- repo-consistency ci-crate-lists\n  cargo run -p xtask -- repo-consistency publish-crates\n  cargo run -p xtask -- repo-consistency test-all-rust-crate-coverage\n  cargo run -p xtask -- release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo run -p xtask -- release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo run -p xtask -- release-attestation inspect --binary <path> [--public-key-file <path>] [--json]"
+            "usage:\n  cargo run -p xtask -- repo-consistency release-targets\n  cargo run -p xtask -- repo-consistency ci-crate-lists\n  cargo run -p xtask -- repo-consistency publish-crates\n  cargo run -p xtask -- repo-consistency test-all-rust-crate-coverage\n  cargo run -p xtask -- repo-consistency no-console-print [--regen]\n  cargo run -p xtask -- release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo run -p xtask -- release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo run -p xtask -- release-attestation inspect --binary <path> [--public-key-file <path>] [--json]"
                 .to_string()
                 .into(),
         ),

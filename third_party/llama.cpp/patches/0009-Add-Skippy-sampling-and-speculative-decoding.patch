@@ -1,4 +1,4 @@
-From ef39920bf718998d9a90602b0f238876fa89953d Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
 Subject: [PATCH 09/15] Add Skippy sampling and speculative decoding
@@ -1558,3 +1558,6 @@ index 000000000..db0055657
 +        size_t max_draft_tokens,
 +        skippy_native_mtp_draft * out_mtp_draft,
 +        skippy_error ** out_error);
+-- 
+2.54.0 (Apple Git-157)
+

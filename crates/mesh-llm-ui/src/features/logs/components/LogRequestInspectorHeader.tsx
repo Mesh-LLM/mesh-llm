@@ -32,10 +32,10 @@ export function LogRequestInspectorHeader({ requestId }: LogRequestInspectorHead
 
   return (
     <SharedModalHeader className="relative shrink-0">
-      <div className="flex min-w-0 flex-wrap items-center gap-2 pr-12">
-        <SharedModalTitle>Request Inspector</SharedModalTitle>
+      <div className="flex min-w-0 items-start gap-3 pr-16 lg:pr-12">
+        <SharedModalTitle className="min-w-0 flex-1 break-words">Request Inspector</SharedModalTitle>
         {outcome ? (
-          <StatusBadge dot size="caption" tone={outcome.tone}>
+          <StatusBadge className="shrink-0" dot size="caption" tone={outcome.tone}>
             {outcome.label}
           </StatusBadge>
         ) : null}

@@ -2,10 +2,10 @@
 
 use crate::inference::election;
 use iroh::EndpointId;
-use mesh_llm_routing::prefix_affinity::PrefixAffinity;
+use mesh_llm_routing::affinity as shared_affinity;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct AffinityStatsSnapshot {
@@ -25,70 +25,46 @@ pub struct AffinityStatsSnapshot {
 
 mesh_llm_routing::impl_prefix_affinity_stats_snapshot!(AffinityStatsSnapshot);
 
-fn prefix_only_enabled() -> bool {
-    std::env::var("MESH_LLM_PREFIX_ONLY")
-        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
-#[derive(Clone, Copy, Debug)]
-struct AffinityConfig {
-    prefix_enabled: bool,
-    sticky_enabled: bool,
-}
-
-impl AffinityConfig {
-    fn from_env() -> Self {
-        Self {
-            prefix_enabled: std::env::var_os("MESH_LLM_DISABLE_PREFIX_AFFINITY").is_none(),
-            sticky_enabled: std::env::var_os("MESH_LLM_DISABLE_STICKY_ROUTING").is_none(),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct AffinityRouter {
-    inner: Arc<Mutex<PrefixAffinity<election::InferenceTarget>>>,
-    config: Arc<AffinityConfig>,
+    inner: Arc<shared_affinity::AffinityRouter>,
 }
 
 impl AffinityRouter {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(PrefixAffinity::default())),
-            config: Arc::new(AffinityConfig::from_env()),
+            inner: Arc::new(shared_affinity::AffinityRouter::new()),
         }
     }
 
     #[cfg(test)]
     fn with_config(prefix_enabled: bool, sticky_enabled: bool) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(PrefixAffinity::default())),
-            config: Arc::new(AffinityConfig {
+            inner: Arc::new(shared_affinity::AffinityRouter::with_config(
                 prefix_enabled,
                 sticky_enabled,
-            }),
+            )),
         }
     }
 
     pub fn stats_snapshot(&self) -> AffinityStatsSnapshot {
         AffinityStatsSnapshot::from_prefix_affinity_stats(
-            self.inner.lock().unwrap().snapshot(),
-            self.config.prefix_enabled,
-            self.config.sticky_enabled,
+            self.inner.stats_snapshot(),
+            self.inner.prefix_enabled(),
+            self.inner.sticky_enabled(),
         )
     }
 
     pub fn sticky_enabled(&self) -> bool {
-        self.config.sticky_enabled
+        self.inner.sticky_enabled()
     }
 
     pub fn record_sticky_route(&self) {
-        self.inner.lock().unwrap().record_sticky_route();
+        self.inner.record_sticky_route();
     }
 
     pub fn record_session_route(&self) {
-        self.inner.lock().unwrap().record_session_route();
+        self.inner.record_session_route();
     }
 
     pub fn lookup_target(
@@ -97,31 +73,15 @@ impl AffinityRouter {
         prefix_hash: u64,
         candidates: &[election::InferenceTarget],
     ) -> Option<election::InferenceTarget> {
-        if !self.config.prefix_enabled {
-            return None;
-        }
-        self.inner
-            .lock()
-            .unwrap()
-            .lookup(model, prefix_hash, candidates)
+        self.inner.lookup_target(model, prefix_hash, candidates)
     }
 
     pub fn learn_target(&self, model: &str, prefix_hash: u64, target: &election::InferenceTarget) {
-        if !self.config.prefix_enabled || matches!(target, election::InferenceTarget::None) {
-            return;
-        }
-
-        self.inner.lock().unwrap().learn(model, prefix_hash, target);
+        self.inner.learn_target(model, prefix_hash, target);
     }
 
     pub fn forget_target(&self, model: &str, prefix_hash: u64, target: &election::InferenceTarget) {
-        if !self.config.prefix_enabled {
-            return;
-        }
-        self.inner
-            .lock()
-            .unwrap()
-            .forget(model, prefix_hash, target);
+        self.inner.forget_target(model, prefix_hash, target);
     }
 }
 
@@ -131,204 +91,21 @@ impl Default for AffinityRouter {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-struct RoutingKeys {
-    session_hash: Option<u64>,
-    prefix_hash: Option<u64>,
-    sticky_hash: Option<u64>,
-}
+type RoutingKeys = shared_affinity::RoutingKeys;
+pub use shared_affinity::{PreparedTargets, TargetSelection};
 
-pub struct TargetSelection {
-    pub target: election::InferenceTarget,
-    pub learn_prefix_hash: Option<u64>,
-    pub cached_target: Option<election::InferenceTarget>,
-}
-
-pub struct PreparedTargets {
-    pub ordered: Vec<election::InferenceTarget>,
-    pub learn_prefix_hash: Option<u64>,
-    pub cached_target: Option<election::InferenceTarget>,
-}
-
+#[cfg(test)]
 pub(crate) fn extract_session_hint_from_body(body: &Value) -> Option<String> {
-    top_level_string(body, "user").or_else(|| top_level_string(body, "session_id"))
-}
-
-fn top_level_string(body: &Value, key: &str) -> Option<String> {
-    body.get(key)
-        .and_then(|value| value.as_str())
-        .map(str::to_string)
-}
-
-fn message_text(msg: &Value) -> Option<String> {
-    if let Some(s) = msg.get("content").and_then(|c| c.as_str()) {
-        return Some(s.to_string());
-    }
-    if let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) {
-        let mut out = String::new();
-        for block in blocks {
-            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                out.push_str(text);
-                out.push('\n');
-            }
-        }
-        if !out.is_empty() {
-            return Some(out);
-        }
-    }
-    None
-}
-
-fn hash_bytes(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf29ce484222325u64, |acc, &b| {
-        (acc ^ b as u64).wrapping_mul(0x100000001b3)
-    })
-}
-
-fn hash_combine(a: u64, b: u64) -> u64 {
-    a.wrapping_mul(31).wrapping_add(b)
-}
-
-fn hash_tagged_text(mut acc: u64, tag: &str, text: &str) -> u64 {
-    acc = hash_combine(acc, hash_bytes(tag.as_bytes()));
-    hash_combine(acc, hash_bytes(text.as_bytes()))
-}
-
-fn hash_json_value(mut acc: u64, value: &Value) -> u64 {
-    match value {
-        Value::Null => hash_combine(acc, hash_bytes(b"null")),
-        Value::Bool(boolean) => {
-            acc = hash_combine(acc, hash_bytes(b"bool"));
-            hash_combine(acc, hash_bytes(boolean.to_string().as_bytes()))
-        }
-        Value::Number(number) => {
-            acc = hash_combine(acc, hash_bytes(b"number"));
-            hash_combine(acc, hash_bytes(number.to_string().as_bytes()))
-        }
-        Value::String(text) => {
-            acc = hash_combine(acc, hash_bytes(b"string"));
-            hash_combine(acc, hash_bytes(text.as_bytes()))
-        }
-        Value::Array(items) => {
-            acc = hash_combine(acc, hash_bytes(b"array"));
-            acc = hash_combine(acc, items.len() as u64);
-            for item in items {
-                acc = hash_json_value(acc, item);
-            }
-            acc
-        }
-        Value::Object(map) => {
-            acc = hash_combine(acc, hash_bytes(b"object"));
-            let mut keys: Vec<_> = map.keys().collect();
-            keys.sort_unstable();
-            for key in keys {
-                acc = hash_combine(acc, hash_bytes(key.as_bytes()));
-                acc = hash_json_value(acc, &map[key]);
-            }
-            acc
-        }
-    }
-}
-
-fn hash_tagged_json(mut acc: u64, tag: &str, value: &Value) -> u64 {
-    acc = hash_combine(acc, hash_bytes(tag.as_bytes()));
-    hash_json_value(acc, value)
-}
-
-fn scaffold_prefix_hash_from_body(body: &Value) -> Option<u64> {
-    let mut hash = 0u64;
-    let mut found = false;
-
-    for key in [
-        "tools",
-        "functions",
-        "response_format",
-        "tool_choice",
-        "parallel_tool_calls",
-    ] {
-        if let Some(value) = body.get(key) {
-            hash = hash_tagged_json(hash, key, value);
-            found = true;
-        }
-    }
-
-    if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
-        for msg in messages {
-            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            match role {
-                "system" | "developer" => {
-                    if let Some(text) = message_text(msg) {
-                        hash = hash_tagged_text(hash, role, &text);
-                        found = true;
-                    }
-                }
-                "user" => break,
-                _ => {}
-            }
-        }
-    }
-
-    found.then_some(hash)
-}
-
-fn first_user_hash_from_body(body: &Value) -> Option<u64> {
-    if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
-        for msg in messages {
-            if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
-                return message_text(msg).map(|text| hash_tagged_text(0, "user", &text));
-            }
-        }
-    }
-    body.get("prompt")
-        .and_then(|value| value.as_str())
-        .map(|prompt| hash_tagged_text(0, "prompt", prompt))
+    shared_affinity::extract_session_hint_from_body(body, &["user", "session_id"])
 }
 
 fn routing_keys(parsed_body: Option<&Value>) -> RoutingKeys {
-    let Some(body) = parsed_body else {
-        return RoutingKeys::default();
-    };
-
-    let session_hash = extract_session_hint_from_body(body).map(|hint| hash_bytes(hint.as_bytes()));
-    let prefix_hash = scaffold_prefix_hash_from_body(body);
-    let sticky_hash = session_hash.or_else(|| {
-        let mut hash = 0u64;
-        let mut found = false;
-        if let Some(prefix_hash) = prefix_hash {
-            hash = hash_combine(hash, prefix_hash);
-            found = true;
-        }
-        if let Some(user_hash) = first_user_hash_from_body(body) {
-            hash = hash_combine(hash, user_hash);
-            found = true;
-        }
-        found.then_some(hash)
-    });
-
-    RoutingKeys {
-        session_hash,
-        prefix_hash,
-        sticky_hash,
-    }
+    shared_affinity::routing_keys(parsed_body, &["user", "session_id"], false)
 }
 
-fn rotate_targets_by_hash(targets: &mut [election::InferenceTarget], key: u64) {
-    if !targets.is_empty() {
-        let idx = key as usize % targets.len();
-        targets.rotate_left(idx);
-    }
-}
-
-fn move_target_first(
-    targets: &mut [election::InferenceTarget],
-    target: &election::InferenceTarget,
-) -> bool {
-    if let Some(pos) = targets.iter().position(|candidate| candidate == target) {
-        targets[..=pos].rotate_right(1);
-        true
-    } else {
-        false
-    }
+#[cfg(test)]
+fn scaffold_prefix_hash_from_body(body: &Value) -> Option<u64> {
+    shared_affinity::scaffold_prefix_hash_from_body(body, false)
 }
 
 /// Select an inference target for a model request from a caller-supplied candidate
@@ -343,63 +120,13 @@ pub fn select_model_target_from_candidates(
     affinity: &AffinityRouter,
 ) -> TargetSelection {
     let routing = routing_keys(parsed_body);
-
-    if let Some(session_hash) = routing.session_hash.filter(|_| affinity.sticky_enabled()) {
-        affinity.record_session_route();
-        return TargetSelection {
-            target: election::ModelTargets::pick_sticky_from(candidates, session_hash),
-            learn_prefix_hash: None,
-            cached_target: None,
-        };
-    }
-
-    if let Some(prefix_hash) = routing.prefix_hash {
-        if let Some(target) = affinity.lookup_target(model, prefix_hash, candidates) {
-            return TargetSelection {
-                target: target.clone(),
-                learn_prefix_hash: Some(prefix_hash),
-                cached_target: Some(target),
-            };
-        }
-
-        if prefix_only_enabled() {
-            return TargetSelection {
-                target: election::ModelTargets::pick_sticky_from(candidates, prefix_hash),
-                learn_prefix_hash: Some(prefix_hash),
-                cached_target: None,
-            };
-        }
-
-        if let Some(sticky_hash) = routing.sticky_hash.filter(|_| affinity.sticky_enabled()) {
-            affinity.record_sticky_route();
-            return TargetSelection {
-                target: election::ModelTargets::pick_sticky_from(candidates, sticky_hash),
-                learn_prefix_hash: Some(prefix_hash),
-                cached_target: None,
-            };
-        }
-
-        return TargetSelection {
-            target: targets.pick_from(candidates),
-            learn_prefix_hash: Some(prefix_hash),
-            cached_target: None,
-        };
-    }
-
-    if let Some(sticky_hash) = routing.sticky_hash.filter(|_| affinity.sticky_enabled()) {
-        affinity.record_sticky_route();
-        return TargetSelection {
-            target: election::ModelTargets::pick_sticky_from(candidates, sticky_hash),
-            learn_prefix_hash: None,
-            cached_target: None,
-        };
-    }
-
-    TargetSelection {
-        target: targets.pick_from(candidates),
-        learn_prefix_hash: None,
-        cached_target: None,
-    }
+    shared_affinity::select_model_target_from_keys(
+        targets,
+        candidates,
+        model,
+        &routing,
+        &affinity.inner,
+    )
 }
 
 pub fn prepare_remote_targets_for_request(
@@ -409,46 +136,7 @@ pub fn prepare_remote_targets_for_request(
     affinity: &AffinityRouter,
 ) -> PreparedTargets {
     let routing = routing_keys(parsed_body);
-    let mut ordered: Vec<election::InferenceTarget> = hosts
-        .iter()
-        .copied()
-        .map(election::InferenceTarget::Remote)
-        .collect();
-    let mut cached_target = None;
-    let mut learn_prefix_hash = None;
-
-    if let Some(session_hash) = routing.session_hash.filter(|_| affinity.sticky_enabled()) {
-        affinity.record_session_route();
-        rotate_targets_by_hash(&mut ordered, session_hash);
-        return PreparedTargets {
-            ordered,
-            learn_prefix_hash: None,
-            cached_target: None,
-        };
-    }
-
-    if let Some(prefix_hash) = routing.prefix_hash {
-        learn_prefix_hash = Some(prefix_hash);
-        if let Some(target) = affinity.lookup_target(model, prefix_hash, &ordered) {
-            move_target_first(&mut ordered, &target);
-            cached_target = Some(target);
-        } else if prefix_only_enabled() {
-            rotate_targets_by_hash(&mut ordered, prefix_hash);
-        } else if let Some(sticky_hash) = routing.sticky_hash.filter(|_| affinity.sticky_enabled())
-        {
-            affinity.record_sticky_route();
-            rotate_targets_by_hash(&mut ordered, sticky_hash);
-        }
-    } else if let Some(sticky_hash) = routing.sticky_hash.filter(|_| affinity.sticky_enabled()) {
-        affinity.record_sticky_route();
-        rotate_targets_by_hash(&mut ordered, sticky_hash);
-    }
-
-    PreparedTargets {
-        ordered,
-        learn_prefix_hash,
-        cached_target,
-    }
+    shared_affinity::prepare_remote_targets_from_keys(model, hosts, &routing, &affinity.inner)
 }
 
 #[cfg(test)]
@@ -468,6 +156,22 @@ mod tests {
 
     fn parse_body(body: &str) -> Value {
         serde_json::from_str(body).unwrap()
+    }
+
+    #[test]
+    fn legacy_result_paths_reexport_shared_structs() {
+        let target = remote(1);
+        let selection: TargetSelection = TargetSelection {
+            target: target.clone(),
+            learn_prefix_hash: None,
+            cached_target: None,
+        };
+        let prepared: PreparedTargets = PreparedTargets {
+            ordered: vec![target],
+            learn_prefix_hash: selection.learn_prefix_hash,
+            cached_target: selection.cached_target,
+        };
+        assert_eq!(prepared.ordered.len(), 1);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use rmcp::model::ErrorCode;
 use std::collections::HashMap;
 use std::future::Future;
 #[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -382,9 +382,87 @@ pub(crate) fn make_instance_id() -> String {
     format!("p{pid}-{random:08x}")
 }
 
+/// `sockaddr_un::sun_path` capacity: 108 bytes on Linux, 104 on macOS and the
+/// BSDs. One byte of that is the NUL terminator, so a path may use one less.
+///
+/// `bind` does not truncate an over-long path, it refuses it -- and the error
+/// says nothing about lengths, so the failure reads as a permissions or
+/// plumbing problem rather than a path that is four bytes too long.
+#[cfg(unix)]
+const SUN_PATH_CAPACITY: usize = if cfg!(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)) {
+    104
+} else {
+    108
+};
+
+#[cfg(unix)]
+const MAX_UNIX_SOCKET_PATH_BYTES: usize = SUN_PATH_CAPACITY - 1;
+
+#[cfg(unix)]
+fn unix_socket_path_fits(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    path.as_os_str().as_bytes().len() <= MAX_UNIX_SOCKET_PATH_BYTES
+}
+
+/// Pick a bindable socket path, preferring the durable runtime directory.
+///
+/// The runtime directory is rooted at `$HOME`, so a deeply nested home is
+/// enough to push the path past the limit. Fall back to a short directory the
+/// way `mesh_llm_plugin::bind_side_stream` already does for side streams --
+/// the bound path is handed to the plugin process verbatim, so relocating it
+/// costs nothing as long as it stays unique per instance.
+///
+/// Note that the fallback directory is typically world-writable, and
+/// `bind_local_listener` unlinks the path before binding. That unlink is
+/// deliberate, and safe only because the file name is unguessable ahead of
+/// time: the `p{pid}-{random:08x}` instance id (`make_instance_id`) leaves
+/// nothing for another user to pre-place and have us remove on their behalf.
+#[cfg(unix)]
+fn unix_socket_path_within(
+    preferred_dir: &Path,
+    fallback_dir: &Path,
+    instance_id: &str,
+    name: &str,
+) -> Result<PathBuf> {
+    let file_name = format!("{instance_id}-{name}.sock");
+
+    let preferred = preferred_dir.join(&file_name);
+    if unix_socket_path_fits(&preferred) {
+        return Ok(preferred);
+    }
+
+    let fallback = fallback_dir.join(&file_name);
+    if unix_socket_path_fits(&fallback) {
+        tracing::debug!(
+            preferred = %preferred.display(),
+            fallback = %fallback.display(),
+            limit = MAX_UNIX_SOCKET_PATH_BYTES,
+            "plugin socket path is too long to bind; using a short path instead"
+        );
+        return Ok(fallback);
+    }
+
+    bail!(
+        "plugin socket path for '{name}' exceeds the {MAX_UNIX_SOCKET_PATH_BYTES}-byte \
+         AF_UNIX limit in both {} ({} bytes) and {} ({} bytes)",
+        preferred_dir.display(),
+        preferred.as_os_str().len(),
+        fallback_dir.display(),
+        fallback.as_os_str().len(),
+    )
+}
+
 #[cfg(unix)]
 pub(crate) fn unix_socket_path(instance_id: &str, name: &str) -> Result<PathBuf> {
-    Ok(runtime_dir()?.join(format!("{instance_id}-{name}.sock")))
+    unix_socket_path_within(&runtime_dir()?, &std::env::temp_dir(), instance_id, name)
 }
 
 #[cfg(windows)]
@@ -716,5 +794,87 @@ mod tests {
             panic!("expected timeout to map to an error response");
         };
         assert!(error.message.contains("Mesh stream broker timed out"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_socket_path_tests {
+    use super::*;
+    use std::path::Path;
+
+    const INSTANCE: &str = "p1234-deadbeef";
+    const PLUGIN: &str = "blobstore";
+
+    fn short_fallback() -> PathBuf {
+        PathBuf::from("/tmp")
+    }
+
+    #[test]
+    fn a_runtime_dir_that_fits_is_used_unchanged() {
+        let runtime_dir = Path::new("/home/nick/.mesh-llm/run/plugins");
+
+        let path =
+            unix_socket_path_within(runtime_dir, &short_fallback(), INSTANCE, PLUGIN).unwrap();
+
+        assert_eq!(path, runtime_dir.join("p1234-deadbeef-blobstore.sock"));
+    }
+
+    #[test]
+    fn an_over_long_runtime_dir_falls_back_instead_of_failing_to_bind() {
+        // A deeply nested $HOME is all it takes; the rc6 validation run hit
+        // this with an isolated HOME that pushed the socket path to 112 bytes.
+        let runtime_dir = PathBuf::from(format!(
+            "/home/{}/.mesh-llm/run/plugins",
+            "nested-dir/".repeat(12)
+        ));
+        assert!(runtime_dir.as_os_str().len() > MAX_UNIX_SOCKET_PATH_BYTES);
+
+        let path =
+            unix_socket_path_within(&runtime_dir, &short_fallback(), INSTANCE, PLUGIN).unwrap();
+
+        assert_eq!(path, short_fallback().join("p1234-deadbeef-blobstore.sock"));
+    }
+
+    #[test]
+    fn the_fallback_keeps_the_instance_namespacing_that_prevents_collisions() {
+        let runtime_dir = PathBuf::from("/".to_owned() + &"x".repeat(200));
+
+        let first =
+            unix_socket_path_within(&runtime_dir, &short_fallback(), "p1-aaaa", PLUGIN).unwrap();
+        let second =
+            unix_socket_path_within(&runtime_dir, &short_fallback(), "p2-bbbb", PLUGIN).unwrap();
+
+        assert_ne!(first, second);
+        assert!(first.to_str().unwrap().contains("p1-aaaa"));
+    }
+
+    #[test]
+    fn whatever_is_selected_always_fits_the_platform_limit() {
+        for depth in 0..40 {
+            let runtime_dir = PathBuf::from(format!("/home/{}/.mesh-llm", "deeper/".repeat(depth)));
+
+            let path = unix_socket_path_within(&runtime_dir, &short_fallback(), INSTANCE, PLUGIN)
+                .expect("a fallback should always be available for a short plugin name");
+
+            assert!(
+                path.as_os_str().len() <= MAX_UNIX_SOCKET_PATH_BYTES,
+                "depth {depth} produced an unbindable {} byte path",
+                path.as_os_str().len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_too_long_for_any_directory_is_a_clear_error_not_a_doomed_bind() {
+        let runtime_dir = PathBuf::from("/run");
+
+        let error =
+            unix_socket_path_within(&runtime_dir, &short_fallback(), INSTANCE, &"p".repeat(300))
+                .expect_err("an unbindable path must be reported, not returned");
+
+        assert!(
+            error.to_string().contains("exceeds"),
+            "unexpected message: {error}"
+        );
     }
 }

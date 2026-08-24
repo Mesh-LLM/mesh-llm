@@ -29,7 +29,9 @@ impl ManagementRequestLifecycle {
             None,
             Some("management_api"),
             Some(method_route),
-        );
+        )
+        .with_source(Some("direct_http"))
+        .with_method(Some(management_method_label(method_route)));
         let (guard, _) = service.register_request_with_metadata(request_id, metadata.clone());
         if let Ok(payload) = serde_json::to_string(&LifecycleEvent::RouteSelected {
             model: None,
@@ -81,6 +83,20 @@ impl ManagementRequestLifecycle {
     }
 }
 
+fn management_method_label(method_route: &str) -> &'static str {
+    if method_route.starts_with("management_get_") {
+        "GET"
+    } else if method_route == "management_post" {
+        "POST"
+    } else if method_route == "management_put" {
+        "PUT"
+    } else if method_route == "management_delete" {
+        "DELETE"
+    } else {
+        "OTHER"
+    }
+}
+
 impl Drop for ManagementRequestLifecycle {
     fn drop(&mut self) {
         // A connection task can be aborted while an SSE response owns the
@@ -114,6 +130,8 @@ mod tests {
             .get_recent(&request_id.as_uuid().to_string())
             .expect("terminal request summary");
         assert_eq!(summary.metadata.route(), Some("management_get_status"));
+        assert_eq!(summary.metadata.source(), Some("direct_http"));
+        assert_eq!(summary.metadata.method(), Some("GET"));
         assert!(summary.metadata.model().is_none());
         assert_eq!(summary.metadata.provider(), Some("management_api"));
         assert_eq!(summary.metadata.engine(), Some("management_get_status"));

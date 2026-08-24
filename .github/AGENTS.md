@@ -43,6 +43,14 @@ remain separate PR-associated workflows with directly drillable nested jobs
 and one stable `PR / <lane>` result each. Do not add path filters; planning owns
 skips so every stable result exists.
 
+The protected `workflow_run` sibling-failure monitor is control infrastructure,
+not a sixth PR validation entrypoint. It may cancel only queued or in-progress
+Quality, Website, Linux, macOS, and Windows runs for the same PR number, exact
+head SHA, and event epoch after preserving the workflow containing the first
+definitive job failure. Its Actions-write token must never enter a PR-controlled
+workflow, checkout, action, or process, and it must never target main or other
+workflow classes.
+
 Preserve the five-entry main shape as well. Routine pushes to `main` must use
 five focused native workflows with one stable `Main / <lane>` result each.
 They must not use path filters, cancel older main revisions, call detached

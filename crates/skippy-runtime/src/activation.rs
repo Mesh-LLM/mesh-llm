@@ -625,6 +625,29 @@ impl StageSession {
         ))
     }
 
+    /// Verifies a speculative span in one batched forward and returns both the
+    /// target predictions and the MTP draft produced at the final row.
+    ///
+    /// The draft describes the branch that was just verified, so it is only
+    /// meaningful when the caller accepts the whole span. Callers that trim
+    /// after a mismatch must discard it.
+    ///
+    /// Call [`crate::StageSession::retire_verify_checkpoint`] after full
+    /// acceptance, or [`crate::StageSession::trim_session`] after a rejection.
+    pub fn verify_tokens_sampled_mtp(
+        &mut self,
+        token_ids: &[i32],
+        sampling: Option<&SamplingConfig>,
+        max_draft_tokens: usize,
+    ) -> Result<(Vec<i32>, Option<NativeMtpDraft>)> {
+        if token_ids.is_empty() {
+            return Ok((Vec::new(), None));
+        }
+        let output =
+            self.verify_tokens_frame_raw(token_ids, sampling, None, 0, max_draft_tokens)?;
+        Ok((output.predicted_tokens, output.draft))
+    }
+
     pub(crate) fn verify_tokens_sampled_without_mtp(
         &mut self,
         token_ids: &[i32],

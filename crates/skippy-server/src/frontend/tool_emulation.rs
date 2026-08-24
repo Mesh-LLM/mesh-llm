@@ -90,18 +90,25 @@ const FORCE_EMULATION_ENV: &str = "MESH_FORCE_TOOL_EMULATION";
 /// the native template path. Emulation is used when the template does not
 /// natively support tool calling, or when the force-emulation override is set.
 pub(super) fn should_emulate_tool_calls(metadata_json: &str) -> bool {
-    force_emulation_enabled() || !template_supports_native_tool_calls(metadata_json)
+    should_emulate_tool_calls_with_override(metadata_json, force_emulation_enabled())
+}
+
+fn should_emulate_tool_calls_with_override(metadata_json: &str, force_emulation: bool) -> bool {
+    force_emulation || !template_supports_native_tool_calls(metadata_json)
 }
 
 fn force_emulation_enabled() -> bool {
-    std::env::var(FORCE_EMULATION_ENV)
-        .ok()
-        .is_some_and(|value| {
-            let value = value.trim();
-            !value.is_empty()
-                && !value.eq_ignore_ascii_case("0")
-                && !value.eq_ignore_ascii_case("false")
-        })
+    let value = std::env::var(FORCE_EMULATION_ENV).ok();
+    force_emulation_value_enabled(value.as_deref())
+}
+
+fn force_emulation_value_enabled(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty()
+            && !value.eq_ignore_ascii_case("0")
+            && !value.eq_ignore_ascii_case("false")
+    })
 }
 
 /// Extracts the function objects from an OpenAI `tools` array value.
@@ -590,24 +597,21 @@ mod tests {
         assert!(!template_supports_native_tool_calls("not json"));
     }
 
-    // Single test for the env-driven override so it cannot race another test
-    // mutating the same process-global env var under parallel execution.
     #[test]
     fn should_emulate_follows_native_support_and_force_override() {
         let native = r#"{"grammar_triggers": [{"type": 1, "value": "<tool_call>"}]}"#;
         let non_native = r#"{"grammar_triggers": []}"#;
-        // SAFETY: this is the only test that touches FORCE_EMULATION_ENV.
-        unsafe { std::env::remove_var(FORCE_EMULATION_ENV) };
         // Default: emulate iff the template lacks native support.
-        assert!(!should_emulate_tool_calls(native));
-        assert!(should_emulate_tool_calls(non_native));
+        assert!(!should_emulate_tool_calls_with_override(native, false));
+        assert!(should_emulate_tool_calls_with_override(non_native, false));
         // Force override makes even a native template emulate.
-        unsafe { std::env::set_var(FORCE_EMULATION_ENV, "1") };
-        assert!(should_emulate_tool_calls(native));
+        assert!(should_emulate_tool_calls_with_override(native, true));
         // Falsey values do not force emulation.
-        unsafe { std::env::set_var(FORCE_EMULATION_ENV, "0") };
-        assert!(!should_emulate_tool_calls(native));
-        unsafe { std::env::remove_var(FORCE_EMULATION_ENV) };
+        assert!(!force_emulation_value_enabled(None));
+        assert!(!force_emulation_value_enabled(Some("")));
+        assert!(!force_emulation_value_enabled(Some("0")));
+        assert!(!force_emulation_value_enabled(Some("false")));
+        assert!(force_emulation_value_enabled(Some("1")));
     }
 
     #[test]

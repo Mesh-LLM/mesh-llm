@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 import unittest
 
@@ -175,17 +176,32 @@ class CiWorkflowArtifactTests(unittest.TestCase):
     def test_ui_cache_and_website_dependencies_are_explicit(self):
         ui = (ROOT / ".github/workflows/ci-ui-artifact-slice.yml").read_text()
         web = (ROOT / ".github/workflows/ci-web-slice.yml").read_text()
-        self.assertIn("uses: actions/cache/restore@", ui)
-        self.assertNotIn("uses: actions/cache/save@", ui)
-        self.assertIn("uses: actions/cache/save@", web)
-        self.assertIn(
-            "cache: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && 'npm' || '' }}",
-            web,
+        # UI installs point at the runner image's baked pnpm store instead
+        # of the Actions cache (#1392) -- there is nothing left here to
+        # restore or save.
+        # Matches quoted or unquoted `cache: pnpm`/`cache: npm` -- a plain
+        # substring check would miss `cache: "pnpm"` / `cache: 'npm'`, which
+        # would still enable setup-node's own dependency cache.
+        cache_config = re.compile(
+            r"(?m)^[ \t]*cache:[ \t]*"
+            r"(?:pnpm|npm|'pnpm'|'npm'|\"pnpm\"|\"npm\")"
+            r"[ \t]*(?:#.*)?$"
         )
-        self.assertIn("website/package-lock.json", web)
+        self.assertIn("run: pnpm config set store-dir /home/runner/.local/share/pnpm/store", ui)
+        self.assertNotIn("uses: actions/cache", ui)
+        self.assertNotRegex(ui, cache_config)
+        self.assertNotIn("CACHE_NAMESPACE", ui)
+        self.assertIn("run: pnpm config set store-dir /home/runner/.local/share/pnpm/store", web)
+        self.assertNotIn("uses: actions/cache", web)
+        self.assertNotRegex(web, cache_config)
+        self.assertNotIn("CACHE_NAMESPACE", web)
+        # The `website` job runs in the prebuilt public-web image with no
+        # bare-metal row, so setup-node's own npm cache and the `just`
+        # install-action were deleted outright (both are baked in the
+        # image) rather than gated -- unlike ui_quality/ui_e2e above, this
+        # job has no native-cache consumer left to assert on.
         self.assertIn("working-directory: website", web)
         self.assertIn("run: npm ci", web)
-        self.assertIn("uses: taiki-e/install-action@", web)
 
 
 if __name__ == "__main__":

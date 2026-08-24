@@ -30,9 +30,7 @@ on:
 
 permissions:
   contents: read
-
-env:
-  CACHE_NAMESPACE: mesh-llm
+  packages: read
 
 jobs:
   runner_policy:
@@ -73,6 +71,8 @@ jobs:
     needs: runner_policy
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:1c73f0f2e4b2ce657cc9dc49c9c27374f3c364af19f884f1970331c3689da5d2
     defaults:
       run:
         working-directory: crates/mesh-llm-ui
@@ -87,24 +87,20 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-        with:
-          version: 10
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - name: Configure isolated pnpm store
-        run: pnpm config set store-dir ~/.pnpm-store
-      - name: Restore pnpm store
-        id: pnpm_cache
-        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/.pnpm-store
-          key: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
-          restore-keys: |
-            ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-
+      # The container image bakes a warm pnpm store at
+      # /home/runner/.local/share/pnpm/store (mesh-llm-runner-images
+      # scripts/warm-dependencies.sh). Point pnpm at it directly instead of
+      # the Actions cache: containerized jobs fix $HOME to /github/home, so
+      # neither pnpm's default store-dir resolution nor a plain HOME
+      # override can find the baked store from in here, and restoring
+      # ~/.pnpm-store from the Actions cache reported a hit but the files
+      # didn't land where pnpm looks for them (#1392). Using the image's
+      # own store sidesteps both and needs no cache round trip at all — this
+      # also removes the restore-with-no-publisher race this job used to
+      # have against ui_quality's save (three lanes restored a key only
+      # ui_quality ever saved).
+      - name: Point pnpm at the image's baked store
+        run: pnpm config set store-dir /home/runner/.local/share/pnpm/store
       - name: Install UI dependencies
         run: pnpm i --frozen-lockfile
       - name: Build console distribution

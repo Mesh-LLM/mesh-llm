@@ -461,6 +461,7 @@ mod tests {
             emit_token_debug: false,
             native_mtp_options: NativeMtpDecodeOptions::from_config(&speculative),
             native_mtp: NativeMtpVerifier::default(),
+            native_mtp_span_admitted: false,
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
         };

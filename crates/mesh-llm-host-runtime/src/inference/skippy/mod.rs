@@ -32,7 +32,7 @@ use openai_frontend::{
     OpenAiResult,
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, StageKvCacheConfig};
-use skippy_runtime::ModelInfo;
+use skippy_runtime::{ModelInfo, MtpSource};
 use skippy_server::serving_hooks::{ModelServingHooks, SharedModelServingHooksFactory};
 use skippy_server::{
     DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs, EmbeddedRuntimeOptions, EmbeddedRuntimeStatus,
@@ -61,11 +61,8 @@ pub(crate) use package::direct_gguf_source_paths;
 pub use package::{
     SkippyPackageIdentity, identity_from_layer_package, synthetic_direct_gguf_package,
 };
-#[allow(unused_imports)]
 pub(crate) use resolver::{
-    ResolvedEmbeddedOpenAiArgs, ResolvedHardwareConfig, ResolvedModelFitConfig,
-    ResolvedRequestDefaultsConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
-    ResolvedSpeculativeConfig, ResolvedThroughputConfig, SkippyConfigResolveRequest,
+    ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
     resolve_skippy_config,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
@@ -543,6 +540,19 @@ impl Drop for NativeSkippyStartupAudit {
 }
 
 impl SkippyModelHandle {
+    fn resolved_mtp_source(
+        native_mtp_enabled: bool,
+        native_mtp_draft_model_path: Option<&Path>,
+    ) -> MtpSource {
+        if !native_mtp_enabled {
+            MtpSource::Disabled
+        } else if native_mtp_draft_model_path.is_some() {
+            MtpSource::External
+        } else {
+            MtpSource::Integrated
+        }
+    }
+
     pub(crate) fn load(options: SkippyModelLoadOptions) -> Result<Self> {
         Self::load_with_hooks(options, None, survey::SurveyTelemetry::disabled())
     }
@@ -554,11 +564,19 @@ impl SkippyModelHandle {
     ) -> Result<Self> {
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         let stage_config = single_stage_config(&options)?;
+        let mtp_source = Self::resolved_mtp_source(
+            options.native_mtp_enabled,
+            options
+                .embedded_openai
+                .as_ref()
+                .and_then(|args| args.native_mtp_draft_model_path.as_deref()),
+        );
         let runtime = SkippyRuntimeHandle::load(EmbeddedRuntimeOptions {
             config: stage_config.clone(),
             topology: None,
             n_threads: options.n_threads,
             n_threads_batch: options.n_threads_batch,
+            mtp_source,
             metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: options.telemetry.queue_capacity,
             telemetry_level: options.telemetry.level,
@@ -630,12 +648,20 @@ impl SkippyModelHandle {
     ) -> Result<Self> {
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         let stage_config = single_stage_config(&options)?;
+        let mtp_source = Self::resolved_mtp_source(
+            options.native_mtp_enabled,
+            options
+                .embedded_openai
+                .as_ref()
+                .and_then(|args| args.native_mtp_draft_model_path.as_deref()),
+        );
         let runtime = SkippyRuntimeHandle::load_with_open_events(
             EmbeddedRuntimeOptions {
                 config: stage_config.clone(),
                 topology: None,
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
+                mtp_source,
                 metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
                 telemetry_queue_capacity: options.telemetry.queue_capacity,
                 telemetry_level: options.telemetry.level,
@@ -738,12 +764,17 @@ impl SkippyModelHandle {
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
     ) -> Result<Self> {
+        let mtp_source = Self::resolved_mtp_source(
+            config.native_mtp_enabled,
+            embedded_args.native_mtp_draft_model_path.as_deref(),
+        );
         Self::load_stage0_runtime_options_with_openai_args(
             EmbeddedRuntimeOptions {
                 config,
                 topology: None,
                 n_threads: None,
                 n_threads_batch: None,
+                mtp_source,
                 metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
                 telemetry_queue_capacity: telemetry.queue_capacity,
                 telemetry_level: telemetry.level,

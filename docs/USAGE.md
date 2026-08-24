@@ -477,7 +477,7 @@ spec_default               = "auto"          # bool or "auto"
 # Native MTP strategy override
 # strategy = "mtp"  # force native model MTP when available
 # strategy = "disabled"       # disable package/model native MTP
-# draft_max_tokens = 3        # MTP/draft max draft-token window
+# draft_max_tokens = 1        # MTP/draft max draft-token window (native MTP defaults to 1)
 # draft_min_tokens = 0        # MTP/draft min draft-token window
 
 # Draft hardware (leave unset to share host model's device)

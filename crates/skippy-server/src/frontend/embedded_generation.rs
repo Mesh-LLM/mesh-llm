@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+mod fused_decode;
 mod lifecycle;
 
 use super::*;
@@ -697,7 +698,6 @@ impl StageOpenAiBackend {
                     sideband_capacity: skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES,
                 },
             )?;
-            let mut fused_reached_stop = false;
             let mut native_mtp = NativeMtpVerifier::default();
             let effective_speculative =
                 speculation_after_prefix_restore(request.speculative, prefill_chain_cache_restored);
@@ -717,148 +717,29 @@ impl StageOpenAiBackend {
             let mut native_mtp_suppress_cooldown_drafts_remaining = 0usize;
             let mut ngram_sidecar_controller =
                 NgramSidecarController::new(native_mtp_options.ngram_max_proposal_tokens);
-            if let Some(mut fused) = fused_first_decode.take() {
-                current = fused.predicted;
-                let mut fused_native_mtp_draft = fused.native_mtp_draft.take();
-                decode_stage0_compute_ms += fused.execution.stage0_compute_ms;
-                decode_runtime_lock_wait_ms += fused.execution.runtime_lock_wait_ms;
-                decode_runtime_lock_wait_max_ms =
-                    decode_runtime_lock_wait_max_ms.max(fused.execution.runtime_lock_wait_ms);
-                decode_runtime_lock_hold_ms += fused.execution.runtime_lock_hold_ms;
-                decode_runtime_lock_hold_max_ms =
-                    decode_runtime_lock_hold_max_ms.max(fused.execution.runtime_lock_hold_ms);
-                decode_runtime_lock_acquires += 1;
-                decode_forward_activation_encode_ms += fused.execution.activation_encode_ms;
-                decode_output_activation_bytes = decode_output_activation_bytes
-                    .saturating_add(fused.execution.output_activation_bytes);
-                decode_forward_activation_bytes = decode_forward_activation_bytes
-                    .saturating_add(fused.execution.forward_activation_bytes);
-                decode_forward_write_ms += fused.execution.forward_write_ms;
-                decode_downstream_wait_ms += fused.execution.downstream_wait_ms;
-                for (index, token) in fused.predicted_tokens.iter().copied().enumerate() {
-                    if decoded_tokens >= request.max_tokens as usize {
-                        break;
-                    }
-                    current = token;
-                    exact_replay_tokens.push(current);
-                    context_tokens.push(current);
-                    let native_mtp_decision = native_mtp.observe_target_token(
-                        current,
-                        if index == 0 {
-                            ms_to_us(fused.execution.downstream_wait_ms)
-                        } else {
-                            0
-                        },
-                        if index == 0 {
-                            fused_native_mtp_draft.take()
-                        } else {
-                            None
-                        },
-                        NativeMtpDraftOrigin::InitialSerial,
-                    );
-                    decoded_tokens += 1;
-                    if self.telemetry.is_debug_enabled() {
-                        let mut token_attrs = self.openai_attrs(request.ids);
-                        token_attrs.insert("llama_stage.decode_step".to_string(), json!(index));
-                        token_attrs.insert(
-                            "llama_stage.decode_token_phase".to_string(),
-                            json!(fused.token_phase),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.message_kind".to_string(),
-                            json!(fused.message_kind),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.elapsed_ms".to_string(),
-                            json!(if index == 0 { fused.elapsed_ms } else { 0.0 }),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.cached_replay_token_index".to_string(),
-                            json!(index),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.cached_replay_token_count".to_string(),
-                            json!(fused.predicted_tokens.len()),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.stage0_compute_ms".to_string(),
-                            json!(if index == 0 {
-                                fused.execution.stage0_compute_ms
-                            } else {
-                                0.0
-                            }),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.runtime_lock_wait_ms".to_string(),
-                            json!(if index == 0 {
-                                fused.execution.runtime_lock_wait_ms
-                            } else {
-                                0.0
-                            }),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.runtime_lock_hold_ms".to_string(),
-                            json!(if index == 0 {
-                                fused.execution.runtime_lock_hold_ms
-                            } else {
-                                0.0
-                            }),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.output_activation_bytes".to_string(),
-                            json!(if index == 0 {
-                                fused.execution.output_activation_bytes
-                            } else {
-                                0
-                            }),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.forward_activation_bytes".to_string(),
-                            json!(if index == 0 {
-                                fused.execution.forward_activation_bytes
-                            } else {
-                                0
-                            }),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.activation_encode_ms".to_string(),
-                            json!(if index == 0 {
-                                fused.execution.activation_encode_ms
-                            } else {
-                                0.0
-                            }),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.forward_write_ms".to_string(),
-                            json!(if index == 0 {
-                                fused.execution.forward_write_ms
-                            } else {
-                                0.0
-                            }),
-                        );
-                        token_attrs.insert(
-                            "llama_stage.downstream_wait_ms".to_string(),
-                            json!(if index == 0 {
-                                fused.execution.downstream_wait_ms
-                            } else {
-                                0.0
-                            }),
-                        );
-                        token_attrs
-                            .insert("llama_stage.predicted_token".to_string(), json!(current));
-                        token_attrs.insert(
-                            "llama_stage.native_mtp.verification".to_string(),
-                            json!(native_mtp_decision.label()),
-                        );
-                        self.telemetry
-                            .emit_debug("stage.openai_decode_token", token_attrs);
-                    }
-                    if on_token(current)? == TokenControl::Stop {
-                        fused_reached_stop = true;
-                        break;
-                    }
-                }
-            }
+            let fused_reached_stop =
+                fused_decode::apply_fused_first_decode(fused_decode::FusedFirstDecodeContext {
+                    backend: self,
+                    request: &request,
+                    fused_first_decode: &mut fused_first_decode,
+                    native_mtp: &mut native_mtp,
+                    current: &mut current,
+                    decoded_tokens: &mut decoded_tokens,
+                    exact_replay_tokens: &mut exact_replay_tokens,
+                    context_tokens: &mut context_tokens,
+                    decode_stage0_compute_ms: &mut decode_stage0_compute_ms,
+                    decode_runtime_lock_wait_ms: &mut decode_runtime_lock_wait_ms,
+                    decode_runtime_lock_wait_max_ms: &mut decode_runtime_lock_wait_max_ms,
+                    decode_runtime_lock_hold_ms: &mut decode_runtime_lock_hold_ms,
+                    decode_runtime_lock_hold_max_ms: &mut decode_runtime_lock_hold_max_ms,
+                    decode_runtime_lock_acquires: &mut decode_runtime_lock_acquires,
+                    decode_forward_activation_encode_ms: &mut decode_forward_activation_encode_ms,
+                    decode_output_activation_bytes: &mut decode_output_activation_bytes,
+                    decode_forward_activation_bytes: &mut decode_forward_activation_bytes,
+                    decode_forward_write_ms: &mut decode_forward_write_ms,
+                    decode_downstream_wait_ms: &mut decode_downstream_wait_ms,
+                    on_token: &mut on_token,
+                })?;
             let mut cached_ngram_proposer =
                 HistoryNgramProposer::from_config(effective_speculative)?;
             let max_speculative_window = request.speculative_window.max(1);

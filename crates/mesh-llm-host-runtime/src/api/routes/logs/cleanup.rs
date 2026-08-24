@@ -163,7 +163,7 @@ pub(super) async fn preview(
     body: &str,
 ) -> Result<(), LogsError> {
     let request = super::parse::cleanup_preview_request(path, body)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = super::query_facade(state)?;
     let audit_facade = facade.clone();
     let reason = request.reason.as_str().to_owned();
     let control = MaintenanceDeadline::new(CLEANUP_TIME_CAP);
@@ -191,7 +191,7 @@ pub(super) async fn run(
     body: &str,
 ) -> Result<(), LogsError> {
     let request = super::parse::cleanup_run_request(path, body)?;
-    let facade = state.query_facade().ok_or(LogsError::ServiceUnavailable)?;
+    let facade = super::query_facade(state)?;
     let audit_facade = facade.clone();
     let reason = request.reason.as_str().to_owned();
     let control = MaintenanceDeadline::new(CLEANUP_TIME_CAP);

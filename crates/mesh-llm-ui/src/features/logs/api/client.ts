@@ -43,11 +43,18 @@ export type LogsCapability<T> = { readonly state: 'supported'; readonly value: T
 export class LogsApiError extends Error {
   constructor(
     readonly status: number,
-    readonly code: string | undefined
+    readonly code: string | undefined,
+    readonly details?: LogsApiErrorDetails,
+    message?: string
   ) {
-    super(`Logs API request failed with HTTP ${status}`)
+    super(message ?? `Logs API request failed with HTTP ${status}`)
     this.name = 'LogsApiError'
   }
+}
+
+export type LogsApiErrorDetails = {
+  readonly schemaVersion?: number
+  readonly supportedSchemaVersion?: number
 }
 
 export type LogsRequestQuery = {
@@ -181,12 +188,26 @@ async function responseJson(response: Response): Promise<unknown> {
   }
 }
 
-function errorCode(body: unknown) {
-  if (!isRecord(body)) return undefined
+function parsedErrorBody(body: unknown) {
+  if (!isRecord(body)) return {}
   const error = body['error']
-  if (!isRecord(error)) return undefined
+  if (!isRecord(error)) return {}
   const code = error['code']
-  return typeof code === 'string' ? code : undefined
+  const message = error['message']
+  const rawDetails = error['details']
+  const schemaVersion = isRecord(rawDetails) ? rawDetails['schema_version'] : undefined
+  const supportedSchemaVersion = isRecord(rawDetails) ? rawDetails['supported_schema_version'] : undefined
+  return {
+    code: typeof code === 'string' ? code : undefined,
+    message: typeof message === 'string' ? message : undefined,
+    details:
+      typeof schemaVersion === 'number' || typeof supportedSchemaVersion === 'number'
+        ? {
+            schemaVersion: typeof schemaVersion === 'number' ? schemaVersion : undefined,
+            supportedSchemaVersion: typeof supportedSchemaVersion === 'number' ? supportedSchemaVersion : undefined
+          }
+        : undefined
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -200,7 +221,8 @@ async function responseError(response: Response) {
   } catch {
     body = undefined
   }
-  return new LogsApiError(response.status, errorCode(body))
+  const error = parsedErrorBody(body)
+  return new LogsApiError(response.status, error.code, error.details, error.message)
 }
 
 function isUnsupportedResponse(response: Response, error: LogsApiError) {

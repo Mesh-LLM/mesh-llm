@@ -1,14 +1,14 @@
-From 66902b293dd126bd23ce266bd80c757ee74e0f71 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
 Subject: [PATCH 11/15] Wire staged runtime builds and tests
 
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3df1d82db..8e93a13ce 100644
+index 4caff55d1..f86033bd8 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -254,6 +254,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
+@@ -271,6 +271,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
  
  set(LLAMA_PUBLIC_HEADERS
      ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h
@@ -16,7 +16,7 @@ index 3df1d82db..8e93a13ce 100644
      ${CMAKE_CURRENT_SOURCE_DIR}/include/llama-cpp.h)
  
  set_target_properties(llama
-@@ -261,6 +262,10 @@ set_target_properties(llama
+@@ -278,6 +279,10 @@ set_target_properties(llama
          PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
  
  install(TARGETS llama LIBRARY PUBLIC_HEADER)
@@ -28,7 +28,7 @@ index 3df1d82db..8e93a13ce 100644
  if (LLAMA_BUILD_COMMON)
      install(TARGETS llama-common LIBRARY)
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 799d22751..a3cfaec11 100644
+index 54691da3f..f28f29139 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
 @@ -98,6 +98,7 @@ add_library(${TARGET}
@@ -39,11 +39,1342 @@ index 799d22751..a3cfaec11 100644
      speculative.cpp
      speculative.h
      subproc.cpp
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index 2c2968e6e..7fb07216b 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -937,23 +937,6 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_soft_max(ggml_me
+     return res;
+ }
+ 
+-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_lightning_indexer(
+-        ggml_metal_library_t lib,
+-        const ggml_tensor * op) {
+-    GGML_ASSERT(op->op == GGML_OP_LIGHTNING_INDEXER);
+-
+-    char name[256];
+-
+-    snprintf(name, 256, "kernel_lightning_indexer_%s", ggml_type_name(op->src[1]->type));
+-
+-    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+-    if (!res.pipeline) {
+-        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+-    }
+-
+-    return res;
+-}
+-
+ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_dsv4_hc(ggml_metal_library_t lib, ggml_op op) {
+     const char * name = nullptr;
+ 
+@@ -1335,11 +1318,6 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
+                 nsg = N_SG_Q2_0;
+                 nr0 = N_R0_Q2_0;
+             } break;
+-        case GGML_TYPE_TQ2_0:
+-            {
+-                nsg = N_SG_TQ2_0;
+-                nr0 = N_R0_TQ2_0;
+-            } break;
+         case GGML_TYPE_Q4_0:
+             {
+                 nsg = ggml_metal_glm_dsa_mul_mv_nsg_requested(
+@@ -1594,11 +1572,6 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
+                 nsg = N_SG_Q2_0;
+                 nr0 = N_R0_Q2_0;
+             } break;
+-        case GGML_TYPE_TQ2_0:
+-            {
+-                nsg = N_SG_TQ2_0;
+-                nr0 = N_R0_TQ2_0;
+-            } break;
+         case GGML_TYPE_Q4_0:
+             {
+                 nsg = N_SG_Q4_0;
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index fb2d881c5..852c47958 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -142,7 +142,6 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_cumsum_bl
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_cumsum_add        (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_tri               (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_soft_max          (ggml_metal_library_t lib, const struct ggml_tensor * op);
+-struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_lightning_indexer (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_dsv4_hc           (ggml_metal_library_t lib, enum ggml_op op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv          (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv_batched  (ggml_metal_library_t lib, const struct ggml_tensor * op, int ssm_conv_bs);
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index 984feb697..2c0505eaf 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -566,7 +566,32 @@ void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
+     dispatch_group_t d_group;
+ };
+ 
+-ggml_metal_rsets_t ggml_metal_rsets_init(void) {
++#if defined(GGML_METAL_HAS_RESIDENCY_SETS)
++static void ggml_metal_dummy_work(ggml_metal_device_t dev) {
++    if (dev->mtl_queue == nil) {
++        return;
++    }
++
++    @autoreleasepool {
++        // perform a minimal dummy operation on the GPU
++        id<MTLBuffer> buf = [dev->mtl_device newBufferWithLength:1 options:MTLResourceStorageModePrivate];
++        id<MTLCommandBuffer> cmd_buf = [dev->mtl_queue commandBuffer];
++
++        {
++            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
++
++            [encoder fillBuffer:buf range:NSMakeRange(0, 1) value:0];
++
++            [encoder endEncoding];
++        }
++
++        [cmd_buf commit];
++        [buf release];
++    }
++}
++#endif
++
++ggml_metal_rsets_t ggml_metal_rsets_init(ggml_metal_device_t dev) {
+     ggml_metal_rsets_t res = calloc(1, sizeof(struct ggml_metal_rsets));
+ 
+     res->lock = [[NSLock alloc] init];
+@@ -619,6 +644,15 @@ ggml_metal_rsets_t ggml_metal_rsets_init(void) {
+ #endif
+     });
+ 
++#if defined(GGML_METAL_HAS_RESIDENCY_SETS)
++    if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
++        // workaround for residency set memory not being released if no GPU operation occurs
++        // https://developer.apple.com/forums/thread/839089
++        // https://github.com/ggml-org/llama.cpp/issues/25937
++        ggml_metal_dummy_work(dev);
++    }
++#endif
++
+     return res;
+ }
+ 
+@@ -873,7 +907,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
+             }
+ 
+             if (dev->props.use_residency_sets) {
+-                dev->rsets = ggml_metal_rsets_init();
++                dev->rsets = ggml_metal_rsets_init(dev);
+             } else {
+                 dev->rsets = nil;
+             }
+diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
+index dbcd6abb8..f3a561641 100644
+--- a/ggml/src/ggml-metal/ggml-metal-impl.h
++++ b/ggml/src/ggml-metal/ggml-metal-impl.h
+@@ -23,8 +23,6 @@
+ 
+ #define N_R0_Q1_0 8
+ #define N_SG_Q1_0 2
+-#define N_R0_TQ2_0 8
+-#define N_SG_TQ2_0 4
+ 
+ #define N_R0_Q2_0 8
+ #define N_SG_Q2_0 2
+@@ -1087,49 +1085,6 @@ typedef struct {
+     uint64_t nb3;
+ } ggml_metal_kargs_gated_delta_net;
+ 
+-typedef struct {
+-    int32_t  ne00;
+-    int32_t  ne01;
+-    int32_t  ne02;
+-    int32_t  ne03;
+-    uint64_t nb00;
+-    uint64_t nb01;
+-    uint64_t nb02;
+-    uint64_t nb03;
+-    int32_t  ne10;
+-    int32_t  ne11;
+-    int32_t  ne12;
+-    int32_t  ne13;
+-    uint64_t nb10;
+-    uint64_t nb11;
+-    uint64_t nb12;
+-    uint64_t nb13;
+-    int32_t  ne20;
+-    int32_t  ne21;
+-    int32_t  ne22;
+-    int32_t  ne23;
+-    uint64_t nb20;
+-    uint64_t nb21;
+-    uint64_t nb22;
+-    uint64_t nb23;
+-    int32_t  ne30;
+-    int32_t  ne31;
+-    int32_t  ne32;
+-    int32_t  ne33;
+-    uint64_t nb30;
+-    uint64_t nb31;
+-    uint64_t nb32;
+-    uint64_t nb33;
+-    int32_t  ne0;
+-    int32_t  ne1;
+-    int32_t  ne2;
+-    int32_t  ne3;
+-    uint64_t nb0;
+-    uint64_t nb1;
+-    uint64_t nb2;
+-    uint64_t nb3;
+-} ggml_metal_kargs_lightning_indexer;
+-
+ typedef struct {
+     int32_t  ne00;
+     int32_t  ne01;
+@@ -1528,20 +1483,46 @@ typedef struct {
+ } ggml_metal_kargs_memset;
+ 
+ typedef struct {
+-    int32_t  n_kv;
+-    int32_t  n_batch;
+-    int32_t  mask_ne3;
++    int32_t  ne00;
++    int32_t  ne01;
++    int32_t  ne02;
++    int32_t  ne03;
++    uint64_t nb00;
++    uint64_t nb01;
++    uint64_t nb02;
++    uint64_t nb03;
++    int32_t  ne10;
++    int32_t  ne11;
++    int32_t  ne12;
++    int32_t  ne13;
++    uint64_t nb10;
++    uint64_t nb11;
++    uint64_t nb12;
++    uint64_t nb13;
++    int32_t  ne20;
++    int32_t  ne21;
++    int32_t  ne22;
++    int32_t  ne23;
++    uint64_t nb20;
++    uint64_t nb21;
++    uint64_t nb22;
++    uint64_t nb23;
++    int32_t  ne30;
++    int32_t  ne31;
++    int32_t  ne32;
++    int32_t  ne33;
++    uint64_t nb30;
++    uint64_t nb31;
++    uint64_t nb32;
++    uint64_t nb33;
++    int32_t  ne0;
++    int32_t  ne1;
++    int32_t  ne2;
++    int32_t  ne3;
++    uint64_t nb0;
+     uint64_t nb1;
++    uint64_t nb2;
+     uint64_t nb3;
+-    uint64_t nbq1;
+-    uint64_t nbq2;
+-    uint64_t nbq3;
+-    uint64_t nbk2;
+-    uint64_t nbk3;
+-    uint64_t nbw1;
+-    uint64_t nbw3;
+-    uint64_t nbm1;
+-    uint64_t nbm3;
+ } ggml_metal_kargs_lightning_indexer;
+ 
+ typedef struct {
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 297881a3a..abc532471 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -2711,6 +2711,7 @@ static int ggml_metal_op_glm_absorbed_q(ggml_metal_op_t ctx, int idx) {
+         /*.nb2  =*/ 64*sizeof(float), /*.nb3  =*/ 64*sizeof(float),
+         /*.n_past =*/ n_past,
+         /*.n_dims =*/ n_dims,
++        /*.n_offs =*/ 0,
+         /*.n_ctx_orig =*/ n_ctx_orig,
+         /*.freq_base =*/ freq_base,
+         /*.freq_scale =*/ freq_scale,
+@@ -2723,6 +2724,7 @@ static int ggml_metal_op_glm_absorbed_q(ggml_metal_op_t ctx, int idx) {
+         /*.sect_2 =*/ ((const int32_t *) q_rope->op_params)[13],
+         /*.sect_3 =*/ ((const int32_t *) q_rope->op_params)[14],
+         /*.src2 =*/ false,
++        /*.inplace =*/ false,
+     };
+ 
+     const char * kernel = "kernel_glm_absorbed_q_q8_q4";
+@@ -5729,10 +5731,6 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
+             {
+                 n_fuse = ggml_metal_op_gated_delta_net(ctx, idx);
+             } break;
+-        case GGML_OP_LIGHTNING_INDEXER:
+-            {
+-                n_fuse = ggml_metal_op_lightning_indexer(ctx, idx);
+-            } break;
+         case GGML_OP_DSA_SPARSE_MASK:
+             {
+                 n_fuse = ggml_metal_op_dsa_sparse_mask(ctx, idx);
+@@ -7010,72 +7008,6 @@ int ggml_metal_op_diag(ggml_metal_op_t ctx, int idx) {
+     return 1;
+ }
+ 
+-int ggml_metal_op_lightning_indexer(ggml_metal_op_t ctx, int idx) {
+-    ggml_tensor * op = ctx->node(idx);
+-
+-    ggml_metal_encoder_t enc = ctx->enc;
+-
+-    GGML_ASSERT(op->op == GGML_OP_LIGHTNING_INDEXER);
+-
+-    const ggml_tensor * q = op->src[0];
+-    const ggml_tensor * k = op->src[1];
+-    const ggml_tensor * w = op->src[2];
+-    const ggml_tensor * m = op->src[3];
+-
+-    GGML_ASSERT(q->type == GGML_TYPE_F32);
+-    GGML_ASSERT(k->type == GGML_TYPE_F32  ||
+-                k->type == GGML_TYPE_F16  ||
+-                k->type == GGML_TYPE_BF16 ||
+-                k->type == GGML_TYPE_Q4_0 ||
+-                k->type == GGML_TYPE_Q4_1 ||
+-                k->type == GGML_TYPE_Q5_0 ||
+-                k->type == GGML_TYPE_Q5_1 ||
+-                k->type == GGML_TYPE_Q8_0);
+-    GGML_ASSERT(w->type == GGML_TYPE_F32);
+-    GGML_ASSERT(m->type == GGML_TYPE_F16);
+-    GGML_ASSERT(op->type == GGML_TYPE_F32);
+-
+-    GGML_ASSERT(q->ne[0] == OP_LIGHTNING_INDEXER_DK);
+-    GGML_ASSERT(q->ne[1] == OP_LIGHTNING_INDEXER_NH);
+-
+-    ggml_metal_kargs_lightning_indexer args = {
+-        /*.n_kv      =*/ (int32_t) k->ne[2],
+-        /*.n_batch   =*/ (int32_t) q->ne[2],
+-        /*.mask_ne3  =*/ (int32_t) m->ne[3],
+-        /*.nb1       =*/ op->nb[1],
+-        /*.nb3       =*/ op->nb[3],
+-        /*.nbq1      =*/ q->nb[1],
+-        /*.nbq2      =*/ q->nb[2],
+-        /*.nbq3      =*/ q->nb[3],
+-        /*.nbk2      =*/ k->nb[2],
+-        /*.nbk3      =*/ k->nb[3],
+-        /*.nbw1      =*/ w->nb[1],
+-        /*.nbw3      =*/ w->nb[3],
+-        /*.nbm1      =*/ m->nb[1],
+-        /*.nbm3      =*/ m->nb[3],
+-    };
+-
+-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(q),  1);
+-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(k),  2);
+-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(w),  3);
+-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(m),  4);
+-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 5);
+-
+-    const int nsg   = OP_LIGHTNING_INDEXER_NSG;
+-    const int nkptg = OP_LIGHTNING_INDEXER_NKPSG*nsg;
+-    const int nbptg = OP_LIGHTNING_INDEXER_NBPTG;
+-
+-    auto pipeline = ggml_metal_library_get_pipeline_lightning_indexer(ctx->lib, op);
+-    ggml_metal_encoder_set_pipeline(enc, pipeline);
+-    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+-    ggml_metal_encoder_dispatch_threadgroups(enc,
+-            (k->ne[2] + nkptg - 1)/nkptg,
+-            (q->ne[2] + nbptg - 1)/nbptg,
+-            q->ne[3], 32, nsg, 1);
+-
+-    return 1;
+-}
+-
+ int ggml_metal_op_dsv4_hc(ggml_metal_op_t ctx, int idx) {
+     ggml_tensor * op = ctx->node(idx);
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.h b/ggml/src/ggml-metal/ggml-metal-ops.h
+index 02ac25571..6e9103448 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.h
++++ b/ggml/src/ggml-metal/ggml-metal-ops.h
+@@ -68,7 +68,6 @@ int ggml_metal_op_ssm_conv          (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_ssm_scan          (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_rwkv              (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_gated_delta_net   (ggml_metal_op_t ctx, int idx);
+-int ggml_metal_op_lightning_indexer (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_dsa_sparse_mask   (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_dsa_sparse_attn   (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_dsa_top1_attn     (ggml_metal_op_t ctx, int idx);
+diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
+index c51b34b3a..597a56fcb 100644
+--- a/ggml/src/ggml-metal/ggml-metal.metal
++++ b/ggml/src/ggml-metal/ggml-metal.metal
+@@ -18696,154 +18696,6 @@ typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;
+ 
+ template [[host_name("kernel_count_equal_i32")]] kernel kernel_count_equal_t kernel_count_equal<int32_t>;
+ 
+-template<
+-    typename kd4x4_t,
+-    short nl_k,
+-    void (*deq_k)(device const kd4x4_t *, short, thread half4x4 &)>
+-kernel void kernel_lightning_indexer(
+-        constant ggml_metal_kargs_lightning_indexer & args,
+-        device const char * q,
+-        device const char * k,
+-        device const char * w,
+-        device const char * m,
+-        device       char * dst,
+-        uint3  tgpig[[threadgroup_position_in_grid]],
+-        ushort tiitg[[thread_index_in_threadgroup]],
+-        ushort tiisg[[thread_index_in_simdgroup]],
+-        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+-    constexpr short DK    = OP_LIGHTNING_INDEXER_DK;
+-    constexpr short NH    = OP_LIGHTNING_INDEXER_NH;
+-    constexpr short NHPTG = OP_LIGHTNING_INDEXER_NHPTG;
+-    constexpr short NKPSG = OP_LIGHTNING_INDEXER_NKPSG;
+-    constexpr short NSG   = OP_LIGHTNING_INDEXER_NSG;
+-    constexpr short NBPTG = OP_LIGHTNING_INDEXER_NBPTG;
+-
+-    constexpr short DK4  = DK/4;
+-    constexpr short DK8  = DK/8;
+-    constexpr short DK16 = DK/16;
+-
+-    constexpr short NK  = NKPSG*NSG; // keys    per threadgroup
+-    constexpr short NTG = 32*NSG;    // threads per threadgroup
+-
+-    const int i_stream = tgpig.z;
+-    const int i_kv_0   = tgpig.x*NK;            // first key of this threadgroup
+-    const int i_kv     = i_kv_0 + sgitg*NKPSG;  // first key of this simdgroup
+-
+-    threadgroup half sk[NK * DK16 * 16];
+-    threadgroup half4x4 * sk4x4 = (threadgroup half4x4 *) sk;
+-
+-    for (short i = tiitg; i < NK*DK16; i += NTG) {
+-        const short ik  = i/DK16;
+-        const short i16 = i%DK16;
+-
+-        half4x4 tmp;
+-
+-        if (i_kv_0 + ik < args.n_kv) {
+-            device const kd4x4_t * kr = (device const kd4x4_t *) (k + (i_kv_0 + ik)*args.nbk2 + i_stream*args.nbk3);
+-
+-            deq_k(kr + i16/nl_k, i16%nl_k, tmp);
+-        } else {
+-            FOR_UNROLL (short j = 0; j < 4; ++j) {
+-                tmp[j] = half4(0.0h);
+-            }
+-        }
+-
+-        sk4x4[i] = tmp;
+-    }
+-
+-    threadgroup_barrier(mem_flags::mem_threadgroup);
+-
+-    // K tile of this simdgroup, transposed to [DK, NKPSG]
+-    simdgroup_half8x8 mk[DK8];
+-
+-    FOR_UNROLL (short i = 0; i < DK8; ++i) {
+-        simdgroup_load(mk[i], sk + sgitg*NKPSG*DK + 8*i, DK, 0, true);
+-    }
+-
+-    threadgroup half4   sq4[NHPTG*DK4];
+-    threadgroup half  * sq = (threadgroup half *) sq4;
+-
+-    threadgroup float sw [NHPTG];
+-    threadgroup float sqk[NSG*NHPTG*NKPSG];
+-
+-    const int i_batch_0 = tgpig.y*NBPTG;
+-    const int n_batch   = min((int) NBPTG, args.n_batch - i_batch_0);
+-
+-    for (short ib = 0; ib < n_batch; ++ib) {
+-        const int i_batch = i_batch_0 + ib;
+-
+-        device const char * pq = q + i_batch*args.nbq2 + i_stream*args.nbq3;
+-        device const char * pw = w + i_batch*args.nbw1 + i_stream*args.nbw3;
+-
+-        float score = 0.0f;
+-
+-        FOR_UNROLL (short i_head = 0; i_head < NH; i_head += NHPTG) {
+-            // stage the Q tile [DK, NHPTG] and the (prescaled) head weights
+-            for (short i = tiitg; i < NHPTG*DK4; i += NTG) {
+-                const short ih = i/DK4;
+-                const short i4 = i%DK4;
+-
+-                device const float4 * q4 = (device const float4 *) (pq + (i_head + ih)*args.nbq1);
+-
+-                sq4[ih*DK4 + i4] = half4(q4[i4]);
+-            }
+-
+-            if (tiitg < NHPTG) {
+-                sw[tiitg] = ((device const float *) pw)[i_head + tiitg];
+-            }
+-
+-            threadgroup_barrier(mem_flags::mem_threadgroup);
+-
+-            simdgroup_float8x8 mqk = make_filled_simdgroup_matrix<float, 8>(0.0f);
+-
+-            FOR_UNROLL (short i = 0; i < DK8; ++i) {
+-                simdgroup_half8x8 mq;
+-
+-                simdgroup_load(mq, sq + 8*i, DK, 0, false);
+-                simdgroup_multiply_accumulate(mqk, mq, mk[i], mqk);
+-            }
+-
+-            threadgroup float * pqk = sqk + sgitg*NHPTG*NKPSG;
+-
+-            simdgroup_store(mqk, pqk, NKPSG, 0, false);
+-            simdgroup_barrier(mem_flags::mem_threadgroup);
+-
+-            // one lane per key: ReLU, apply the head weight and accumulate over the head tile
+-            if (tiisg < NKPSG) {
+-                FOR_UNROLL (short ih = 0; ih < NHPTG; ++ih) {
+-                    score += max(pqk[ih*NKPSG + tiisg], 0.0f)*sw[ih];
+-                }
+-            }
+-
+-            threadgroup_barrier(mem_flags::mem_threadgroup);
+-        }
+-
+-        if (tiisg < NKPSG) {
+-            const int ik = i_kv + tiisg;
+-            if (ik < args.n_kv) {
+-                device const half  * pm = (device const half  *) (m   + i_batch*args.nbm1 + (i_stream % args.mask_ne3)*args.nbm3);
+-                device       float * pd = (device       float *) (dst + i_batch*args.nb1  + i_stream*args.nb3);
+-
+-                pd[ik] = score + (float) pm[ik];
+-            }
+-        }
+-    }
+-}
+-
+-typedef decltype(kernel_lightning_indexer<half4x4, 1, dequantize_f16>) kernel_lightning_indexer_t;
+-
+-template [[host_name("kernel_lightning_indexer_f32")]]  kernel kernel_lightning_indexer_t kernel_lightning_indexer<float4x4, 1, dequantize_f32>;
+-template [[host_name("kernel_lightning_indexer_f16")]]  kernel kernel_lightning_indexer_t kernel_lightning_indexer<half4x4,  1, dequantize_f16>;
+-
+-#if defined(GGML_METAL_HAS_BF16)
+-template [[host_name("kernel_lightning_indexer_bf16")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<bfloat4x4, 1, dequantize_bf16>;
+-#endif
+-
+-template [[host_name("kernel_lightning_indexer_q4_0")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q4_0, 2, dequantize_q4_0>;
+-template [[host_name("kernel_lightning_indexer_q4_1")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q4_1, 2, dequantize_q4_1>;
+-template [[host_name("kernel_lightning_indexer_q5_0")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q5_0, 2, dequantize_q5_0>;
+-template [[host_name("kernel_lightning_indexer_q5_1")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q5_1, 2, dequantize_q5_1>;
+-template [[host_name("kernel_lightning_indexer_q8_0")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q8_0, 2, dequantize_q8_0>;
+ 
+ kernel void kernel_dsv4_hc_comb_f32(
+         constant ggml_metal_kargs_dsv4_hc_comb & args,
+diff --git a/include/skippy.h b/include/skippy.h
+index 6ee2a9991..2d245cb54 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -1,6 +1,14 @@
+ #ifndef SKIPPY_H
+ #define SKIPPY_H
+ 
++/**
++ * @file skippy.h
++ * @brief Umbrella include for the capability-oriented Skippy C API.
++ *
++ * Include a narrower header when a consumer only needs one capability. This
++ * file exists for consumers that want the complete staged-runtime surface.
++ */
++
+ // Public umbrella for the capability-oriented Skippy C API.
+ #include "skippy/common.h"
+ #include "skippy/events.h"
+diff --git a/include/skippy/activation.h b/include/skippy/activation.h
+index 3611898ea..32d796c59 100644
+--- a/include/skippy/activation.h
++++ b/include/skippy/activation.h
+@@ -1,6 +1,14 @@
+ #ifndef SKIPPY_ACTIVATION_H
+ #define SKIPPY_ACTIVATION_H
+ 
++/**
++ * @file skippy/activation.h
++ * @brief Describes activation-frame payloads exchanged between stages.
++ *
++ * The descriptor carries the payload representation, layer range, token and
++ * sequence shape, and model-family sideband flags needed by downstream stages.
++ */
++
+ #include "common.h"
+ 
+ #ifdef __cplusplus
+@@ -24,6 +32,7 @@ enum skippy_activation_layout {
+ #define SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD (UINT64_C(1) << 2)
+ #define SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K     (UINT64_C(1) << 3)
+ 
++/** @brief Metadata for an activation payload passed between staged runtimes. */
+ struct skippy_activation_desc {
+     uint32_t version;
+     enum skippy_activation_dtype dtype;
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index ec9d59ec3..d43424f0d 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -1,6 +1,15 @@
+ #ifndef SKIPPY_COMMON_H
+ #define SKIPPY_COMMON_H
+ 
++/**
++ * @file skippy/common.h
++ * @brief ABI versioning, feature discovery, status codes, and errors.
++ *
++ * Every other public Skippy header depends on this capability boundary. The
++ * ABI is intentionally C-compatible so Rust and other native callers do not
++ * depend on private llama.cpp C++ layouts.
++ */
++
+ #include "../llama.h"
+ #include "stdbool.h"
+ #include "stddef.h"
+@@ -79,10 +88,13 @@ struct skippy_abi_version {
+     uint32_t patch;
+ };
+ 
++/** @brief Returns the native Skippy ABI version exported by this runtime. */
+ LLAMA_API struct skippy_abi_version skippy_abi_version(void);
+ 
++/** @brief Returns the bitmask of optional capabilities compiled into the runtime. */
+ LLAMA_API uint64_t skippy_abi_features(void);
+ 
++/** @brief Releases an error returned through an `out_error` parameter. */
+ LLAMA_API void skippy_error_free(struct skippy_error * error);
+ 
+ #ifdef __cplusplus
+diff --git a/include/skippy/devices.h b/include/skippy/devices.h
+index 382f1e699..36c6eb641 100644
+--- a/include/skippy/devices.h
++++ b/include/skippy/devices.h
+@@ -1,6 +1,11 @@
+ #ifndef SKIPPY_DEVICES_H
+ #define SKIPPY_DEVICES_H
+ 
++/**
++ * @file skippy/devices.h
++ * @brief Enumerates backend devices available to the staged runtime.
++ */
++
+ #include "common.h"
+ 
+ #ifdef __cplusplus
+@@ -33,10 +38,12 @@ struct skippy_backend_device {
+     uint64_t caps;
+ };
+ 
++/** @brief Returns the number of enumerated backend devices. */
+ LLAMA_API enum skippy_status skippy_backend_device_count(
+         size_t * out_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Copies the description of one backend device into `out_device`. */
+ LLAMA_API enum skippy_status skippy_backend_device_at(
+         size_t index,
+         struct skippy_backend_device * out_device,
+diff --git a/include/skippy/events.h b/include/skippy/events.h
+index 7b529254a..9fee2715f 100644
+--- a/include/skippy/events.h
++++ b/include/skippy/events.h
+@@ -1,6 +1,14 @@
+ #ifndef SKIPPY_EVENTS_H
+ #define SKIPPY_EVENTS_H
+ 
++/**
++ * @file skippy/events.h
++ * @brief Versioned callbacks for model-open and runtime lifecycle progress.
++ *
++ * Event reporters are optional and operation-scoped. A reporter must remain
++ * valid until the corresponding model-open call returns.
++ */
++
+ #include "common.h"
+ 
+ #ifdef __cplusplus
+@@ -55,6 +63,7 @@ enum {
+     SKIPPY_RUNTIME_EVENT_FAILURE_INTERNAL_ERROR   = 7,
+ };
+ 
++/** @brief Versioned event payload delivered to a runtime event callback. */
+ struct skippy_runtime_event_v1 {
+     uint32_t abi_version;
+     uint32_t struct_size;
+@@ -77,10 +86,12 @@ struct skippy_runtime_event_v1 {
+     uint64_t detail_len;
+ };
+ 
++/** @brief Callback type used by a runtime event reporter. */
+ typedef void (*skippy_runtime_event_callback)(
+         const struct skippy_runtime_event_v1 * event,
+         void * user_data);
+ 
++/** @brief Callback registration passed to model-open-with-events entrypoints. */
+ struct skippy_runtime_event_reporter_v1 {
+     uint32_t abi_version;
+     uint32_t struct_size;
+diff --git a/include/skippy/execution.h b/include/skippy/execution.h
+index 6a82de10b..83ea8ec1d 100644
+--- a/include/skippy/execution.h
++++ b/include/skippy/execution.h
+@@ -1,6 +1,11 @@
+ #ifndef SKIPPY_EXECUTION_H
+ #define SKIPPY_EXECUTION_H
+ 
++/**
++ * @file skippy/execution.h
++ * @brief Prefill, decode, verification, activation-frame, and batched execution.
++ */
++
+ #include "activation.h"
+ #include "runtime.h"
+ #include "sampling.h"
+@@ -10,6 +15,7 @@
+ extern "C" {
+ #endif
+ 
++/** @brief Prefills tokens and emits a raw activation payload for the next stage. */
+ LLAMA_API enum skippy_status skippy_prefill_chunk(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -21,6 +27,7 @@ LLAMA_API enum skippy_status skippy_prefill_chunk(
+         size_t * out_output_activation_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Verifies a proposed token sequence and returns accepted output tokens. */
+ LLAMA_API enum skippy_status skippy_verify_tokens(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -30,6 +37,7 @@ LLAMA_API enum skippy_status skippy_verify_tokens(
+         size_t * out_token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Decodes and samples one token using raw activation buffers. */
+ LLAMA_API enum skippy_status skippy_decode_step_sampled(
+         struct skippy_session * session,
+         llama_token token_id,
+@@ -42,6 +50,7 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled(
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
++/** @brief Decodes one token and returns a native MTP draft proposal. */
+ LLAMA_API enum skippy_status skippy_decode_step_sampled_mtp(
+         struct skippy_session * session,
+         llama_token token_id,
+@@ -51,6 +60,7 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled_mtp(
+         struct skippy_native_mtp_draft * out_mtp_draft,
+         struct skippy_error ** out_error);
+ 
++/** @brief Samples one predicted token for each session in a request batch. */
+ LLAMA_API enum skippy_status skippy_decode_batch_sampled(
+         struct skippy_session * const * sessions,
+         const llama_token * token_ids,
+@@ -60,6 +70,7 @@ LLAMA_API enum skippy_status skippy_decode_batch_sampled(
+         size_t predicted_token_capacity,
+         struct skippy_error ** out_error);
+ 
++/** @brief Prefills tokens using a described activation frame. */
+ LLAMA_API enum skippy_status skippy_prefill_chunk_frame(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -72,6 +83,7 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame(
+         size_t * out_output_payload_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Prefills an activation frame and samples the final-stage token. */
+ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_sampled(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -86,6 +98,7 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_sampled(
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
++/** @brief Prefills a positioned token chunk using activation-frame I/O. */
+ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_with_positions(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -100,6 +113,7 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_with_positions(
+         size_t * out_output_payload_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Prefills positioned tokens, then samples with activation-frame I/O. */
+ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_sampled_with_positions(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -116,6 +130,7 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_sampled_with_positions(
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
++/** @brief Decodes and samples one token using activation-frame I/O. */
+ LLAMA_API enum skippy_status skippy_decode_step_frame_sampled(
+         struct skippy_session * session,
+         llama_token token_id,
+@@ -129,6 +144,7 @@ LLAMA_API enum skippy_status skippy_decode_step_frame_sampled(
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
++/** @brief Decodes one framed token and returns a native MTP draft proposal. */
+ LLAMA_API enum skippy_status skippy_decode_step_frame_sampled_mtp(
+         struct skippy_session * session,
+         llama_token token_id,
+@@ -144,6 +160,7 @@ LLAMA_API enum skippy_status skippy_decode_step_frame_sampled_mtp(
+         struct skippy_native_mtp_draft * out_mtp_draft,
+         struct skippy_error ** out_error);
+ 
++/** @brief Runs framed sampled decode for multiple sessions in one batch. */
+ LLAMA_API enum skippy_status skippy_decode_step_frame_batch_sampled(
+         struct skippy_session * const * sessions,
+         const llama_token * token_ids,
+@@ -159,6 +176,7 @@ LLAMA_API enum skippy_status skippy_decode_step_frame_batch_sampled(
+         size_t request_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Verifies proposed tokens with framed activations and optional MTP drafting. */
+ LLAMA_API enum skippy_status skippy_verify_tokens_frame_sampled(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -177,6 +195,7 @@ LLAMA_API enum skippy_status skippy_verify_tokens_frame_sampled(
+         struct skippy_native_mtp_draft * out_mtp_draft,
+         struct skippy_error ** out_error);
+ 
++/** @brief Copies the session's pending output activation into a caller buffer. */
+ LLAMA_API enum skippy_status skippy_session_copy_output_activation_frame(
+         struct skippy_session * session,
+         size_t token_count,
+diff --git a/include/skippy/model_package.h b/include/skippy/model_package.h
+index 87a446178..e2e566a29 100644
+--- a/include/skippy/model_package.h
++++ b/include/skippy/model_package.h
+@@ -1,6 +1,11 @@
+ #ifndef SKIPPY_MODEL_PACKAGE_H
+ #define SKIPPY_MODEL_PACKAGE_H
+ 
++/**
++ * @file skippy/model_package.h
++ * @brief Inspects GGUF tensors and writes layer-range or multi-part packages.
++ */
++
+ #include "common.h"
+ 
+ #ifdef __cplusplus
+@@ -20,6 +25,7 @@ enum skippy_tensor_role {
+ struct skippy_model_info;
+ struct skippy_slice_plan;
+ 
++/** @brief Metadata for one tensor discovered in a GGUF model. */
+ struct skippy_tensor_info {
+     const char * name;
+     int32_t layer_index;
+@@ -29,35 +35,42 @@ struct skippy_tensor_info {
+     uint64_t element_count;
+ };
+ 
++/** @brief Opens a model for tensor-level inspection without creating a runtime. */
+ LLAMA_API enum skippy_status skippy_model_info_open(
+         const char * path,
+         struct skippy_model_info ** out_info,
+         struct skippy_error ** out_error);
+ 
++/** @brief Releases model-introspection state. */
+ LLAMA_API enum skippy_status skippy_model_info_free(
+         struct skippy_model_info * info,
+         struct skippy_error ** out_error);
+ 
++/** @brief Returns the number of tensors visible to model introspection. */
+ LLAMA_API enum skippy_status skippy_model_info_tensor_count(
+         struct skippy_model_info * info,
+         size_t * out_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Copies one tensor's metadata into `out_tensor`. */
+ LLAMA_API enum skippy_status skippy_model_info_tensor_at(
+         struct skippy_model_info * info,
+         size_t index,
+         struct skippy_tensor_info * out_tensor,
+         struct skippy_error ** out_error);
+ 
++/** @brief Creates an empty layer-range package-writing plan. */
+ LLAMA_API enum skippy_status skippy_slice_plan_create(
+         struct skippy_model_info * info,
+         struct skippy_slice_plan ** out_plan,
+         struct skippy_error ** out_error);
+ 
++/** @brief Releases a package-writing plan. */
+ LLAMA_API enum skippy_status skippy_slice_plan_free(
+         struct skippy_slice_plan * plan,
+         struct skippy_error ** out_error);
+ 
++/** @brief Adds a stage layer range and its embedding/output ownership to a plan. */
+ LLAMA_API enum skippy_status skippy_slice_plan_add_layer_range(
+         struct skippy_slice_plan * plan,
+         int32_t stage_index,
+@@ -67,6 +80,7 @@ LLAMA_API enum skippy_status skippy_slice_plan_add_layer_range(
+         bool include_output,
+         struct skippy_error ** out_error);
+ 
++/** @brief Writes one planned stage slice as a GGUF file. */
+ LLAMA_API enum skippy_status skippy_write_slice_gguf(
+         struct skippy_model_info * info,
+         const struct skippy_slice_plan * plan,
+@@ -74,6 +88,7 @@ LLAMA_API enum skippy_status skippy_write_slice_gguf(
+         const char * output_path,
+         struct skippy_error ** out_error);
+ 
++/** @brief Composes ordered GGUF parts into one output GGUF file. */
+ LLAMA_API enum skippy_status skippy_write_gguf_from_parts(
+         const char * const * input_paths,
+         size_t input_count,
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index 17fbd2a28..9aee298d3 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -1,6 +1,11 @@
+ #ifndef SKIPPY_RUNTIME_H
+ #define SKIPPY_RUNTIME_H
+ 
++/**
++ * @file skippy/runtime.h
++ * @brief Model loading, session lifecycle, and llama.cpp context access.
++ */
++
+ #include "common.h"
+ #include "events.h"
+ #include "sampling.h"
+@@ -26,6 +31,7 @@ enum skippy_load_mode {
+ struct skippy_model;
+ struct skippy_session;
+ 
++/** @brief Model, stage, memory, cache, device, and family-policy load options. */
+ struct skippy_runtime_config {
+     int32_t stage_index;
+     int32_t layer_start;
+@@ -68,12 +74,14 @@ struct skippy_runtime_config {
+     int32_t  glm_dsa_compact_flash_min_kv;
+ };
+ 
++/** @brief Opens a direct GGUF, runtime slice, layer package, or artifact slice. */
+ LLAMA_API enum skippy_status skippy_model_open(
+         const char * path,
+         const struct skippy_runtime_config * config,
+         struct skippy_model ** out_model,
+         struct skippy_error ** out_error);
+ 
++/** @brief Opens a model and reports operation-scoped lifecycle events. */
+ LLAMA_API enum skippy_status skippy_model_open_with_events(
+         const char * path,
+         const struct skippy_runtime_config * config,
+@@ -81,12 +89,14 @@ LLAMA_API enum skippy_status skippy_model_open_with_events(
+         struct skippy_model ** out_model,
+         struct skippy_error ** out_error);
+ 
++/** @brief Attaches a native MTP draft model to an opened target model. */
+ LLAMA_API enum skippy_status skippy_model_attach_mtp_draft_model(
+         struct skippy_model * target_model,
+         const char * path,
+         const struct skippy_runtime_config * config,
+         struct skippy_error ** out_error);
+ 
++/** @brief Opens an ordered set of GGUF package parts as one model. */
+ LLAMA_API enum skippy_status skippy_model_open_from_parts(
+         const char * const * paths,
+         size_t path_count,
+@@ -94,6 +104,7 @@ LLAMA_API enum skippy_status skippy_model_open_from_parts(
+         struct skippy_model ** out_model,
+         struct skippy_error ** out_error);
+ 
++/** @brief Opens ordered GGUF parts and reports lifecycle events. */
+ LLAMA_API enum skippy_status skippy_model_open_from_parts_with_events(
+         const char * const * paths,
+         size_t path_count,
+@@ -102,18 +113,22 @@ LLAMA_API enum skippy_status skippy_model_open_from_parts_with_events(
+         struct skippy_model ** out_model,
+         struct skippy_error ** out_error);
+ 
++/** @brief Releases an opened model handle. */
+ LLAMA_API enum skippy_status skippy_model_free(
+         struct skippy_model * model,
+         struct skippy_error ** out_error);
+ 
++/** @brief Returns the underlying llama.cpp model for native read-only integrations. */
+ LLAMA_API const struct llama_model * skippy_model_llama_model(
+         const struct skippy_model * model);
+ 
++/** @brief Creates a fresh inference session for an opened model. */
+ LLAMA_API enum skippy_status skippy_session_create(
+         struct skippy_model * model,
+         struct skippy_session ** out_session,
+         struct skippy_error ** out_error);
+ 
++/** @brief Creates a session restored from a resident prefix-cache sequence. */
+ LLAMA_API enum skippy_status skippy_session_create_from_resident_prefix(
+         struct skippy_model * model,
+         int32_t cache_seq_id,
+@@ -122,34 +137,42 @@ LLAMA_API enum skippy_status skippy_session_create_from_resident_prefix(
+         struct skippy_session ** out_session,
+         struct skippy_error ** out_error);
+ 
++/** @brief Returns the underlying llama.cpp context for native integrations. */
+ LLAMA_API struct llama_context * skippy_session_llama_context(
+         struct skippy_session * session);
+ 
++/** @brief Returns the session's current token position. */
+ LLAMA_API int32_t skippy_session_position(
+         const struct skippy_session * session);
+ 
++/** @brief Returns the native batch width currently configured for the session. */
+ LLAMA_API int32_t skippy_session_batch_size(
+         const struct skippy_session * session);
+ 
++/** @brief Begins a caller-managed external decode section. */
+ LLAMA_API enum skippy_status skippy_session_begin_external_decode(
+         struct skippy_session * session,
+         struct skippy_error ** out_error);
+ 
++/** @brief Ends a caller-managed external decode section. */
+ LLAMA_API enum skippy_status skippy_session_end_external_decode(
+         struct skippy_session * session,
+         struct skippy_error ** out_error);
+ 
++/** @brief Sets the session token position used by the next execution call. */
+ LLAMA_API enum skippy_status skippy_session_set_position(
+         struct skippy_session * session,
+         int32_t n_past,
+         struct skippy_error ** out_error);
+ 
++/** @brief Samples the current logits using the supplied sampling configuration. */
+ LLAMA_API enum skippy_status skippy_session_sample_current(
+         struct skippy_session * session,
+         const struct skippy_sampling_config * sampling,
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
++/** @brief Configures template-derived grammar and sampling metadata for a session. */
+ LLAMA_API enum skippy_status skippy_session_configure_chat_sampling(
+         struct skippy_session * session,
+         const struct skippy_sampling_config * sampling,
+@@ -157,10 +180,12 @@ LLAMA_API enum skippy_status skippy_session_configure_chat_sampling(
+         uint64_t prompt_token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Clears session state so the session can be reused. */
+ LLAMA_API enum skippy_status skippy_session_reset(
+         struct skippy_session * session,
+         struct skippy_error ** out_error);
+ 
++/** @brief Releases an inference session handle. */
+ LLAMA_API enum skippy_status skippy_session_free(
+         struct skippy_session * session,
+         struct skippy_error ** out_error);
+diff --git a/include/skippy/sampling.h b/include/skippy/sampling.h
+index d74b56c03..db1fdf570 100644
+--- a/include/skippy/sampling.h
++++ b/include/skippy/sampling.h
+@@ -1,6 +1,11 @@
+ #ifndef SKIPPY_SAMPLING_H
+ #define SKIPPY_SAMPLING_H
+ 
++/**
++ * @file skippy/sampling.h
++ * @brief Sampling parameters shared by single-token and batched decode calls.
++ */
++
+ #include "common.h"
+ 
+ #ifdef __cplusplus
+@@ -10,6 +15,7 @@ extern "C" {
+ #define SKIPPY_MAX_LOGIT_BIAS 256
+ 
+ 
++/** @brief Versioned sampling configuration consumed by Skippy decode entrypoints. */
+ struct skippy_sampling_config {
+     uint32_t version;
+     uint32_t flags;
+diff --git a/include/skippy/signals.h b/include/skippy/signals.h
+index 22b8e3590..c4d3d24d9 100644
+--- a/include/skippy/signals.h
++++ b/include/skippy/signals.h
+@@ -1,12 +1,18 @@
+ #ifndef SKIPPY_SIGNALS_H
+ #define SKIPPY_SIGNALS_H
+ 
++/**
++ * @file skippy/signals.h
++ * @brief Generation uncertainty and repetition signals for routing or policy.
++ */
++
+ #include "runtime.h"
+ 
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+ 
++/** @brief Statistics for the most recently sampled token. */
+ struct skippy_token_signal {
+     float entropy;
+     float top_logprob;
+@@ -16,6 +22,7 @@ struct skippy_token_signal {
+     int32_t second_token;
+ };
+ 
++/** @brief Aggregated uncertainty and repetition statistics over a token window. */
+ struct skippy_generation_signal_window {
+     uint32_t token_count;
+     float mean_entropy;
+@@ -26,11 +33,13 @@ struct skippy_generation_signal_window {
+     uint32_t repetition_count;
+ };
+ 
++/** @brief Returns signal statistics for the most recently sampled token. */
+ LLAMA_API enum skippy_status skippy_session_last_token_signal(
+         struct skippy_session * session,
+         struct skippy_token_signal * out_signal,
+         struct skippy_error ** out_error);
+ 
++/** @brief Computes signal statistics over the requested recent token window. */
+ LLAMA_API enum skippy_status skippy_session_signal_window(
+         struct skippy_session * session,
+         uint32_t window_tokens,
+diff --git a/include/skippy/speculative_decoding.h b/include/skippy/speculative_decoding.h
+index 67fc99716..3953ed990 100644
+--- a/include/skippy/speculative_decoding.h
++++ b/include/skippy/speculative_decoding.h
+@@ -1,6 +1,11 @@
+ #ifndef SKIPPY_SPECULATIVE_DECODING_H
+ #define SKIPPY_SPECULATIVE_DECODING_H
+ 
++/**
++ * @file skippy/speculative_decoding.h
++ * @brief Native MTP draft results and request-local n-gram drafting.
++ */
++
+ #include "common.h"
+ 
+ #ifdef __cplusplus
+@@ -11,6 +16,7 @@ struct skippy_ngram_cache;
+ 
+ #define SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS 8
+ 
++/** @brief A bounded native MTP proposal returned alongside target decoding. */
+ struct skippy_native_mtp_draft {
+     uint32_t version;
+     bool available;
+@@ -23,26 +29,31 @@ struct skippy_native_mtp_draft {
+ // The cache is updated only with committed history. `continuation_prefix`
+ // supplies optional provisional tokens (such as native MTP output) used only
+ // while drafting; it never mutates the cache.
++/** @brief Creates a request-local n-gram proposal cache. */
+ LLAMA_API enum skippy_status skippy_ngram_cache_create(
+         uint16_t ngram_min,
+         uint16_t ngram_max,
+         struct skippy_ngram_cache ** out_cache,
+         struct skippy_error ** out_error);
+ 
++/** @brief Releases an n-gram proposal cache. */
+ LLAMA_API void skippy_ngram_cache_free(struct skippy_ngram_cache * cache);
+ 
++/** @brief Replaces committed history in an n-gram proposal cache. */
+ LLAMA_API enum skippy_status skippy_ngram_cache_reset(
+         struct skippy_ngram_cache * cache,
+         const llama_token * token_ids,
+         size_t token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Appends newly committed tokens to an n-gram proposal cache. */
+ LLAMA_API enum skippy_status skippy_ngram_cache_append(
+         struct skippy_ngram_cache * cache,
+         const llama_token * token_ids,
+         size_t token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Drafts tokens from committed history plus an optional provisional prefix. */
+ LLAMA_API enum skippy_status skippy_ngram_cache_draft(
+         struct skippy_ngram_cache * cache,
+         const llama_token * continuation_prefix,
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index 9556bfd84..446da8dad 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -1,6 +1,11 @@
+ #ifndef SKIPPY_STATE_H
+ #define SKIPPY_STATE_H
+ 
++/**
++ * @file skippy/state.h
++ * @brief Moves KV, recurrent, checkpoint, and resident-prefix state.
++ */
++
+ #include "runtime.h"
+ 
+ #ifdef __cplusplus
+@@ -11,6 +16,7 @@ enum skippy_kv_page_flag {
+     SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
+ };
+ 
++/** @brief Describes the layout and ownership of an exported KV page payload. */
+ struct skippy_kv_page_desc {
+     uint32_t version;
+     int32_t layer_start;
+@@ -27,6 +33,7 @@ struct skippy_kv_page_desc {
+     uint64_t flags;
+ };
+ 
++/** @brief Exports the selected layer-range state for staged transfer. */
+ LLAMA_API enum skippy_status skippy_export_state(
+         struct skippy_session * session,
+         int32_t layer_start,
+@@ -36,6 +43,7 @@ LLAMA_API enum skippy_status skippy_export_state(
+         size_t * out_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Imports a layer-range state payload into a session. */
+ LLAMA_API enum skippy_status skippy_import_state(
+         struct skippy_session * session,
+         int32_t layer_start,
+@@ -44,6 +52,7 @@ LLAMA_API enum skippy_status skippy_import_state(
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Exports full KV state for the selected layer range. */
+ LLAMA_API enum skippy_status skippy_export_full_state(
+         struct skippy_session * session,
+         int32_t layer_start,
+@@ -53,6 +62,7 @@ LLAMA_API enum skippy_status skippy_export_full_state(
+         size_t * out_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Exports recurrent state for models that maintain recurrent memory. */
+ LLAMA_API enum skippy_status skippy_export_recurrent_state(
+         struct skippy_session * session,
+         void * output,
+@@ -60,6 +70,7 @@ LLAMA_API enum skippy_status skippy_export_recurrent_state(
+         size_t * out_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Imports full KV state for the selected layer range. */
+ LLAMA_API enum skippy_status skippy_import_full_state(
+         struct skippy_session * session,
+         int32_t layer_start,
+@@ -68,23 +79,27 @@ LLAMA_API enum skippy_status skippy_import_full_state(
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Imports recurrent state into a session. */
+ LLAMA_API enum skippy_status skippy_import_recurrent_state(
+         struct skippy_session * session,
+         const void * input,
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Trims the session's token history and associated state. */
+ LLAMA_API enum skippy_status skippy_trim_session(
+         struct skippy_session * session,
+         uint64_t token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Retires a verified checkpoint after its tokens are accepted. */
+ LLAMA_API enum skippy_status skippy_retire_verify_checkpoint(
+         struct skippy_session * session,
+         uint64_t token_start,
+         uint64_t token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Exports a token/layer KV page with an explicit layout descriptor. */
+ LLAMA_API enum skippy_status skippy_export_kv_page(
+         struct skippy_session * session,
+         int32_t layer_start,
+@@ -97,6 +112,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
+         size_t * out_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Imports a described KV page into a session. */
+ LLAMA_API enum skippy_status skippy_import_kv_page(
+         struct skippy_session * session,
+         const struct skippy_kv_page_desc * desc,
+@@ -104,12 +120,14 @@ LLAMA_API enum skippy_status skippy_import_kv_page(
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Saves a session prefix into a resident cache sequence. */
+ LLAMA_API enum skippy_status skippy_session_save_prefix(
+         struct skippy_session * session,
+         int32_t cache_seq_id,
+         uint64_t token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Restores a session prefix from a resident cache sequence. */
+ LLAMA_API enum skippy_status skippy_session_restore_prefix(
+         struct skippy_session * session,
+         int32_t cache_seq_id,
+@@ -117,6 +135,7 @@ LLAMA_API enum skippy_status skippy_session_restore_prefix(
+         size_t token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Drops a llama.cpp sequence from the session's cache. */
+ LLAMA_API enum skippy_status skippy_session_drop_sequence(
+         struct skippy_session * session,
+         int32_t seq_id,
+diff --git a/include/skippy/tokenization.h b/include/skippy/tokenization.h
+index 7b8c4dcc4..ccf3d020c 100644
+--- a/include/skippy/tokenization.h
++++ b/include/skippy/tokenization.h
+@@ -1,12 +1,18 @@
+ #ifndef SKIPPY_TOKENIZATION_H
+ #define SKIPPY_TOKENIZATION_H
+ 
++/**
++ * @file skippy/tokenization.h
++ * @brief Token, detokenization, chat-template, and chat-response helpers.
++ */
++
+ #include "runtime.h"
+ 
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+ 
++/** @brief Converts UTF-8 text into model tokens. */
+ LLAMA_API enum skippy_status skippy_tokenize(
+         struct skippy_model * model,
+         const char * text,
+@@ -16,6 +22,7 @@ LLAMA_API enum skippy_status skippy_tokenize(
+         size_t * out_token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Converts model tokens into UTF-8 text. */
+ LLAMA_API enum skippy_status skippy_detokenize(
+         struct skippy_model * model,
+         const llama_token * tokens,
+@@ -25,15 +32,18 @@ LLAMA_API enum skippy_status skippy_detokenize(
+         size_t * out_text_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Reports whether a token is an end-of-generation token for the model. */
+ LLAMA_API enum skippy_status skippy_token_is_eog(
+         struct skippy_model * model,
+         llama_token token,
+         bool * out_is_eog,
+         struct skippy_error ** out_error);
+ 
++/** @brief Exposes the underlying llama model for native integrations. */
+ LLAMA_API const struct llama_model * skippy_model_native_model(
+         const struct skippy_model * model);
+ 
++/** @brief Renders OpenAI-style JSON messages through the model chat template. */
+ LLAMA_API enum skippy_status skippy_apply_chat_template_json(
+         struct skippy_model * model,
+         const char * messages_json,
+@@ -53,6 +63,7 @@ LLAMA_API enum skippy_status skippy_apply_chat_template_json(
+         size_t * out_metadata_json_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Parses generated chat text and template metadata into an OpenAI message. */
+ LLAMA_API enum skippy_status skippy_parse_chat_response_json(
+         const char * generated_text,
+         const char * metadata_json,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 24f05cc91..ace4a461d 100644
+index c6df19f2e..b5bc083fc 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -37,6 +37,23 @@ add_library(llama
+@@ -38,6 +38,23 @@ add_library(llama
              llama-model.cpp
              llama-quant.cpp
              llama-sampler.cpp
@@ -67,8 +1398,481 @@ index 24f05cc91..ace4a461d 100644
              llama-vocab.cpp
              unicode-data.cpp
              unicode.cpp
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index 6592f8c2a..80e4f95e2 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -71,6 +71,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+     { LLM_ARCH_OLMO,             "olmo"             },
+     { LLM_ARCH_OLMO2,            "olmo2"            },
+     { LLM_ARCH_OLMOE,            "olmoe"            },
++    { LLM_ARCH_MUSE_GLIMMER,     "muse-glimmer"     },
+     { LLM_ARCH_OPENELM,          "openelm"          },
+     { LLM_ARCH_ARCTIC,           "arctic"           },
+     { LLM_ARCH_DEEPSEEK,         "deepseek"         },
+@@ -232,6 +233,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+     { LLM_KV_TIME_DECAY_EXTRA_DIM,              "%s.time_decay_extra_dim"              },
+     { LLM_KV_RESIDUAL_SCALE,                    "%s.residual_scale"                    },
+     { LLM_KV_EMBEDDING_SCALE,                   "%s.embedding_scale"                   },
++    { LLM_KV_ADAPTER_COUNT,                     "%s.adapters.count"                    },
++    { LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE,        "%s.adapters.token_ids_activate"       },
++    { LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE,      "%s.adapters.token_ids_substitute"     },
++    { LLM_KV_ADAPTER_LORA_RANK,                 "%s.adapters.lora_rank"                },
++    { LLM_KV_ADAPTER_ROUTER_GAIN,               "%s.adapters.router_gain"              },
+     { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                 },
+     { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
+     { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
+diff --git a/src/llama-arch.h b/src/llama-arch.h
+index 909e34290..b1341dd04 100644
+--- a/src/llama-arch.h
++++ b/src/llama-arch.h
+@@ -76,6 +76,7 @@ enum llm_arch {
+     LLM_ARCH_OLMO,
+     LLM_ARCH_OLMO2,
+     LLM_ARCH_OLMOE,
++    LLM_ARCH_MUSE_GLIMMER,
+     LLM_ARCH_OPENELM,
+     LLM_ARCH_ARCTIC,
+     LLM_ARCH_DEEPSEEK,
+@@ -237,6 +238,11 @@ enum llm_kv {
+     LLM_KV_TIME_DECAY_EXTRA_DIM,
+     LLM_KV_RESIDUAL_SCALE,
+     LLM_KV_EMBEDDING_SCALE,
++    LLM_KV_ADAPTER_COUNT,
++    LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE,
++    LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE,
++    LLM_KV_ADAPTER_LORA_RANK,
++    LLM_KV_ADAPTER_ROUTER_GAIN,
+     LLM_KV_TOKEN_SHIFT_COUNT,
+     LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
+     LLM_KV_FULL_ATTENTION_INTERVAL,
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index f22aa2532..fa9e356dc 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1251,7 +1251,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+     if (sampler && can_offload) {
+         auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
+ 
+-        sampler->iface->backend_init(sampler, buft);
++        sampler->iface->backend_init(sampler, buft, cparams.n_outputs_max_per_seq);
+ 
+         sampling.samplers[seq_id] = sampler;
+ 
+@@ -1610,90 +1610,38 @@ static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubat
+     return seq_to_row;
+ }
+ 
+-static void copy_tensor_async_ints(
+-    const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
+-    const buffer_view<llama_token> & sampled,
+-    const std::map<llama_seq_id, uint32_t> & seq_to_row,
+-    ggml_backend_sched_t sched) {
+-    if (!sampled.has_data()) {
+-        return;
+-    }
+-
+-    for (const auto & [seq_id, tensor] : tensor_map) {
+-        auto it = seq_to_row.find(seq_id);
+-        if (it == seq_to_row.end()) {
+-            continue;
+-        }
+-
+-        const uint32_t row = it->second;
+-        GGML_ASSERT(row < sampled.size);
+-
+-        GGML_ASSERT(ggml_is_contiguous(tensor) && "sampled tokens tensor must be contiguous for async copy");
+-
+-        ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, tensor);
+-        ggml_backend_tensor_get_async(backend, tensor, sampled.data + row, 0, sizeof(sampled.data[row]));
+-    }
+-}
+-
+-static void copy_tensor_async_floats(
+-    const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
+-    const buffer_view<float> & dst,
++template<typename T>
++static void copy_tensor_async_rows(
++    const std::vector<ggml_tensor *> & tensors,
++    const buffer_view<T> & dst,
+     size_t stride,
+-    std::vector<uint32_t> & counts,
+-    const std::map<llama_seq_id, uint32_t> & seq_to_row,
+-    ggml_backend_sched_t sched) {
++    uint32_t row_offset,
++    ggml_backend_sched_t sched,
++    std::vector<uint32_t> * counts = nullptr) {
+     if (!dst.has_data()) {
+         return;
+     }
+ 
+-    for (const auto & [seq_id, tensor] : tensor_map) {
+-        auto it = seq_to_row.find(seq_id);
+-        if (it == seq_to_row.end()) {
++    for (size_t i = 0; i < tensors.size(); ++i) {
++        auto * tensor = tensors[i];
++        if (tensor == nullptr) {
+             continue;
+         }
+ 
+-        const uint32_t row = it->second;
+-        GGML_ASSERT(row < counts.size());
+-
+-        GGML_ASSERT(ggml_is_contiguous(tensor) && "logits/probs tensor must be contiguous for async copy");
++        const uint32_t row = row_offset + i;
++        const size_t n_elements = ggml_nelements(tensor);
++        GGML_ASSERT(ggml_is_contiguous(tensor) && "sampling tensor must be contiguous for async copy");
++        GGML_ASSERT(n_elements <= stride);
++        GGML_ASSERT((size_t) row * stride + n_elements <= dst.size);
+ 
+         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, tensor);
+-        float * row_ptr = dst.data + (size_t) row * stride;
++        T * row_ptr = dst.data + (size_t) row * stride;
+         ggml_backend_tensor_get_async(backend, tensor, row_ptr, 0, ggml_nbytes(tensor));
+ 
+-        // Update the actual number of logits/probabilities that were written for this row.
+-        counts[row] = ggml_nelements(tensor);
+-    }
+-}
+-
+-static void copy_tensor_async_candidates(
+-    const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
+-    const buffer_view<llama_token> & dst,
+-    size_t stride,
+-    std::vector<uint32_t> & counts,
+-    const std::map<llama_seq_id, uint32_t> & seq_to_row,
+-    ggml_backend_sched_t sched) {
+-    if (!dst.has_data()) {
+-        return;
+-    }
+-
+-    for (const auto & [seq_id, tensor] : tensor_map) {
+-        auto it = seq_to_row.find(seq_id);
+-        if (it == seq_to_row.end()) {
+-            continue;
++        if (counts) {
++            GGML_ASSERT(row < counts->size());
++            (*counts)[row] = n_elements;
+         }
+-
+-        const uint32_t row = it->second;
+-        GGML_ASSERT(row < counts.size());
+-
+-        GGML_ASSERT(ggml_is_contiguous(tensor) && "candidates tensor must be contiguous for async copy");
+-
+-        ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, tensor);
+-        llama_token * row_ptr = dst.data + (size_t) row * stride;
+-        ggml_backend_tensor_get_async(backend, tensor, row_ptr, 0, ggml_nbytes(tensor));
+-
+-        // Update the actual number of candidates that were written.
+-        counts[row] = ggml_nelements(tensor);
+     }
+ }
+ 
+@@ -2038,11 +1986,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
+             const auto stride = n_vocab;
+ 
+             // async copy the sampling data from the backend to the host
+-            copy_tensor_async_ints(res->t_sampled, sampling.sampled, seq_to_output_row, sched.get());
+-
+-            copy_tensor_async_floats    (res->t_sampled_logits, sampling.logits,     stride, sampling.logits_count,     seq_to_output_row, sched.get());
+-            copy_tensor_async_floats    (res->t_sampled_probs,  sampling.probs,      stride, sampling.probs_count,      seq_to_output_row, sched.get());
+-            copy_tensor_async_candidates(res->t_candidates,     sampling.candidates, stride, sampling.candidates_count, seq_to_output_row, sched.get());
++            copy_tensor_async_rows(res->t_sampled,        sampling.sampled,    1,      n_outputs_prev, sched.get());
++            copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     stride, n_outputs_prev, sched.get(), &sampling.logits_count);
++            copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count);
++            copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+         }
+ 
+         n_outputs_prev += n_outputs;
+@@ -3575,6 +3522,7 @@ llama_context_params llama_context_default_params() {
+         /*.n_seq_max                   =*/ 1,
+         /*.n_rs_seq                    =*/ 0,
+         /*.n_outputs_max               =*/ 0,
++        /*.n_outputs_max_per_seq      =*/ 0,
+         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
+         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
+         /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
+diff --git a/src/llama-hparams.cpp b/src/llama-hparams.cpp
+index 293619dbb..041828b16 100644
+--- a/src/llama-hparams.cpp
++++ b/src/llama-hparams.cpp
+@@ -180,6 +180,16 @@ uint32_t llama_hparams::n_embd_v_gqa_max() const {
+     return val;
+ }
+ 
++uint32_t llama_hparams::n_embd_k_idx(uint32_t il) const {
++    if (!indexer_kv || indexer_head_size == 0) {
++        return 0; // arch without a MSA indexer
++    }
++    if (il < n_layer_dense_lead) {
++        return 0; // leading dense layers carry no indexer
++    }
++    return indexer_head_size;
++}
++
+ uint32_t llama_hparams::n_embd_r() const {
+     if (n_embd_r_impl != 0) {
+         // explicit override (e.g. inkling: 4 packed shortconv streams per layer)
+diff --git a/src/llama-hparams.h b/src/llama-hparams.h
+index 4bf1c4558..225dd8cb9 100644
+--- a/src/llama-hparams.h
++++ b/src/llama-hparams.h
+@@ -54,6 +54,8 @@ struct llama_hparams {
+     uint32_t n_embd;
+     uint32_t n_layer_all;
+     uint32_t n_layer_nextn = 0;
++
++    int32_t router_layer = -1;
+     uint32_t n_expert = 0;
+     uint32_t n_expert_used = 0;
+     uint32_t n_rel_attn_bkts = 0;
+@@ -416,6 +418,8 @@ struct llama_hparams {
+ 
+     bool has_kv(uint32_t il) const;
+ 
++    bool has_rope(uint32_t il) const;
++
+     // number of effective layers (excludes nextn layers)
+     uint32_t n_layer() const;
+ 
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 56dbfc9d7..6a8ef660b 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -177,6 +177,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+             return new llama_model_olmo2(params);
+         case LLM_ARCH_OLMOE:
+             return new llama_model_olmoe(params);
++        case LLM_ARCH_MUSE_GLIMMER:
++            return new llama_model_muse_glimmer(params);
+         case LLM_ARCH_OPENELM:
+             return new llama_model_openelm(params);
+         case LLM_ARCH_GPTNEOX:
+@@ -2446,15 +2448,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                         filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                     }
+ 
+-                    if ((arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_HY_V3) && hparams.n_layer_nextn > 0) {
+-                        if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+-                            filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
+-                        } else {
+-                            filter = [&](uint32_t il) { return il <  hparams.n_layer(); };
+-                        }
+-                    }
+-
+-                    if ((arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA) && hparams.n_layer_nextn > 0) {
++                    if ((arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_HY_V3 || arch == LLM_ARCH_GLM_DSA ||
++                            arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_DEEPSEEK2) &&
++                            hparams.n_layer_nextn > 0) {
+                         if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+                             filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                         } else {
+@@ -2464,24 +2460,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+ 
+                     filter = skippy_stage_memory_filter(std::move(filter), params.ctx_type);
+ 
+-                    if (arch == LLM_ARCH_DEEPSEEK4) {
+-                        GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
+-
+-                        res = new llama_kv_cache_dsv4(
+-                                *this,
+-                                params.type_k,
+-                                params.type_v,
+-                                !cparams.flash_attn,
+-                                cparams.offload_kqv,
+-                                params.swa_full,
+-                                cparams.kv_unified,
+-                                cparams.n_ctx_seq,
+-                                cparams.n_seq_max,
+-                                cparams.n_ubatch,
+-                                1,
+-                                filter,
+-                                reuse);
+-                    } else if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
++                    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                         GGML_ASSERT(hparams.is_swa_any());
+ 
+                         if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+@@ -2601,6 +2580,7 @@ llama_model_params llama_model_default_params() {
+         /*.use_extra_bufts             =*/ true,
+         /*.no_host                     =*/ false,
+         /*.no_alloc                    =*/ false,
++        /*.load_mtp                    =*/ false,
+     };
+ 
+     return result;
+@@ -2740,6 +2720,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_DEEPSEEK2OCR:
+         case LLM_ARCH_DEEPSEEK32:
+         case LLM_ARCH_DEEPSEEK4:
++        case LLM_ARCH_MUSE_GLIMMER:
+         case LLM_ARCH_PLM:
+         case LLM_ARCH_CHATGLM:
+         case LLM_ARCH_GRANITE:
+@@ -2837,9 +2818,12 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_STEP35:
+         case LLM_ARCH_TALKIE:
+         case LLM_ARCH_MELLUM:
+-        case LLM_ARCH_DFLASH:
+             return LLAMA_ROPE_TYPE_NEOX;
+ 
++        case LLM_ARCH_DFLASH:
++            // DSV4 DSpark drafters use DeepSeek-V4's normal RoPE; legacy DFlash backbones are NeoX
++            return model->hparams.dsv4_hc_mult > 0 ? LLAMA_ROPE_TYPE_NORM : LLAMA_ROPE_TYPE_NEOX;
++
+         case LLM_ARCH_QWEN2VL:
+         case LLM_ARCH_PADDLEOCR:
+             return LLAMA_ROPE_TYPE_MROPE;
+@@ -2847,6 +2831,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_QWEN3VLMOE:
+         case LLM_ARCH_QWEN35:
+         case LLM_ARCH_QWEN35MOE:
++        case LLM_ARCH_QWEN3TTS:
+             return LLAMA_ROPE_TYPE_IMROPE;
+ 
+         case LLM_ARCH_GLM4:
+@@ -3021,7 +3006,8 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+     TENSOR_DUPLICATED     (llama_model_loader::TENSOR_DUPLICATED),
+     TENSOR_NOT_REQUIRED   (llama_model_loader::TENSOR_NOT_REQUIRED),
+     TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
+-    TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL) {}
++    TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL),
++    TENSOR_ALLOW_RESHAPE  (llama_model_loader::TENSOR_ALLOW_RESHAPE) {}
+ 
+ ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
+     GGML_ASSERT(ml != nullptr);
+@@ -3062,3 +3048,38 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
+ uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
+     return (uint32_t) model->target_layer_ids.size();
+ }
++
++uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out) {
++    if (model->vocab.n_tokens() == 0 || model->tok_embd == nullptr) {
++        return 0;
++    }
++
++    const ggml_tensor * tensor = model->tok_embd;
++    const size_t nelements = ggml_nelements(tensor);
++    GGML_ASSERT(nelements <= UINT32_MAX);
++
++    if (out == nullptr) {
++        return (uint32_t) nelements;
++    }
++
++    if (tensor->type == GGML_TYPE_F32) {
++        ggml_backend_tensor_get(tensor, out, 0, nelements * sizeof(float));
++        return (uint32_t) nelements;
++    }
++
++    std::vector<uint8_t> buf(ggml_nbytes(tensor));
++    ggml_backend_tensor_get(tensor, buf.data(), 0, buf.size());
++
++    const ggml_type_traits * traits = ggml_get_type_traits(tensor->type);
++    if (tensor->type == GGML_TYPE_F16) {
++        ggml_fp16_to_fp32_row((const ggml_fp16_t *) buf.data(), out, nelements);
++    } else if (tensor->type == GGML_TYPE_BF16) {
++        ggml_bf16_to_fp32_row((const ggml_bf16_t *) buf.data(), out, nelements);
++    } else if (ggml_is_quantized(tensor->type) && traits->to_float != nullptr) {
++        traits->to_float(buf.data(), out, nelements);
++    } else {
++        GGML_ABORT("unsupported tensor type for dequantization: %s", ggml_type_name(tensor->type));
++    }
++
++    return (uint32_t) nelements;
++}
+diff --git a/src/llama-model.h b/src/llama-model.h
+index ecc923d73..e5a9ddaa8 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -132,6 +132,7 @@ enum llm_type {
+     LLM_TYPE_100B_A6B,
+     LLM_TYPE_102B_A12B, // Solar-Open
+     LLM_TYPE_106B_A12B, // GLM-4.5-Air
++    LLM_TYPE_118B_A8B,  // Laguna-S-2
+     LLM_TYPE_120B_A12B, // Nemotron 3 Super
+     LLM_TYPE_122B_A10B, // Qwen3.5
+     LLM_TYPE_124B_A5_1B, // Ling-3.0-flash
+@@ -227,6 +228,24 @@ struct llama_layer_nextn {
+     struct ggml_tensor * shared_head_norm      = nullptr;
+ };
+ 
++struct llama_layer_switch_lora {
++    struct ggml_tensor * a_q    = nullptr;
++    struct ggml_tensor * b_q    = nullptr;
++    struct ggml_tensor * a_k    = nullptr;
++    struct ggml_tensor * b_k    = nullptr;
++    struct ggml_tensor * a_v    = nullptr;
++    struct ggml_tensor * b_v    = nullptr;
++    struct ggml_tensor * a_o    = nullptr;
++    struct ggml_tensor * b_o    = nullptr;
++
++    struct ggml_tensor * a_gate = nullptr;
++    struct ggml_tensor * b_gate = nullptr;
++    struct ggml_tensor * a_up   = nullptr;
++    struct ggml_tensor * b_up   = nullptr;
++    struct ggml_tensor * a_down = nullptr;
++    struct ggml_tensor * b_down = nullptr;
++};
++
+ struct llama_layer {
+     // normalization
+     struct ggml_tensor * attn_norm       = nullptr;
+@@ -745,6 +764,7 @@ struct llama_model_base : public llama_model {
+     const int TENSOR_NOT_REQUIRED;
+     const int TENSOR_SKIP;
+     const int TENSOR_SKIP_IF_VIRTUAL;
++    const int TENSOR_ALLOW_RESHAPE;
+ 
+     explicit llama_model_base(const llama_model_params & params);
+     virtual ~llama_model_base() = default;
+diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
+index 074b709e5..00291a3b3 100644
+--- a/src/models/glm-dsa.cpp
++++ b/src/models/glm-dsa.cpp
+@@ -562,6 +562,9 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+ 
+     // the indexer head layout is [rope | nope]
+     GGML_ASSERT(hparams.n_rot() <= n_embd_indexer_head);
++    const int64_t n_embd_indexer_head_rope = hparams.n_rot();
++    const int64_t n_embd_indexer_head_nope = n_embd_indexer_head - n_embd_indexer_head_rope;
++    GGML_ASSERT(n_embd_indexer_head_nope >= 1);
+ 
+     const uint32_t kv_lora_rank = hparams.n_lora_kv;
+ 
+diff --git a/src/models/models.h b/src/models/models.h
+index 7867f35c8..5f5828eac 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -1320,10 +1320,6 @@ struct llama_model_glm_dsa : public llama_model_base {
+     void load_arch_hparams(llama_model_loader & ml) override;
+     void load_arch_tensors(llama_model_loader & ml) override;
+ 
+-    struct graph_mtp : public llm_graph_context {
+-        graph_mtp(const llama_model & model, const llm_graph_params & params);
+-    };
+-
+     struct graph : public llm_graph_context {
+         graph(const llama_model & model, const llm_graph_params & params);
+     };
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index 3a9fb82f0..49d4eaa59 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -372,9 +372,11 @@ llama_sampler * skippy_build_sampling_chain(
+     const int32_t penalty_last_n = sampling->penalty_last_n == 0 ? -1 : sampling->penalty_last_n;
+     const float repeat_penalty = sampling->repeat_penalty == 0.0f ? 1.0f : sampling->repeat_penalty;
+     if (repeat_penalty != 1.0f || sampling->frequency_penalty != 0.0f || sampling->presence_penalty != 0.0f) {
++        const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
+         llama_sampler_chain_add(
+                 sampler,
+                 llama_sampler_init_penalties(
++                        llama_vocab_n_tokens(vocab),
+                         penalty_last_n,
+                         repeat_penalty,
+                         sampling->frequency_penalty,
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 419e1eba4..6aa8e347a 100644
+index e517d2c63..7a963ca24 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -151,6 +151,9 @@ endif ()
@@ -79,9 +1883,9 @@ index 419e1eba4..6aa8e347a 100644
 +    llama_build_and_test(test-skippy-verify-checkpoint-retirement.cpp)
 +    llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+     llama_build_and_test(test-unicode.cpp)
      llama_build_and_test(test-sampling.cpp)
-     llama_build_and_test(test-reasoning-budget.cpp)
-@@ -268,6 +271,14 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
+@@ -279,6 +282,14 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
  endif()
  llama_build_and_test(test-backend-ops.cpp)
  
@@ -97,7 +1901,7 @@ index 419e1eba4..6aa8e347a 100644
  llama_build_and_test(test-autorelease.cpp       LABEL "model")
  llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index e900bdc0d..2101381fc 100644
+index 07e3a7a11..68d75abbe 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -14,6 +14,7 @@
@@ -135,7 +1939,7 @@ index e900bdc0d..2101381fc 100644
  
      uint32_t n_vocab = 128;
      uint32_t n_embd  = 256;
-@@ -109,6 +124,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -112,6 +127,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
          n_embd = 128;
          n_head = 1;
          n_ff   = 192;
@@ -147,7 +1951,7 @@ index e900bdc0d..2101381fc 100644
      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
          n_layer = 3;
      } else if (arch == LLM_ARCH_CHAMELEON) {
-@@ -206,10 +226,35 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -230,10 +250,35 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
      // indexer head count is independent of the main attention head count.
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MINIMAX_M3 ? n_head : uint32_t(1));
@@ -185,7 +1989,7 @@ index e900bdc0d..2101381fc 100644
      ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
      ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
      // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,     n_embd);
-@@ -264,9 +309,244 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -300,9 +345,244 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -431,7 +2235,7 @@ index e900bdc0d..2101381fc 100644
      GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
      llama_model_params model_params = llama_model_default_params();
      model_params.progress_callback = silent_model_load_progress;
-@@ -282,6 +562,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -318,6 +598,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      if (!encode) {
          ctx_params.n_ubatch = 64;
      }
@@ -441,7 +2245,7 @@ index e900bdc0d..2101381fc 100644
  
      size_t tmp = seed;
      llama_model_ptr model(gguf_ctx != nullptr ?
-@@ -297,6 +580,656 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -333,6 +616,656 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -1098,7 +2902,7 @@ index e900bdc0d..2101381fc 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -433,6 +1366,9 @@ static bool arch_supported(const llm_arch arch) {
+@@ -473,6 +1406,9 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK4) {
          return false;
      }
@@ -1108,7 +2912,7 @@ index e900bdc0d..2101381fc 100644
  
      // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
  #ifdef GGML_USE_WEBGPU
-@@ -452,6 +1388,20 @@ static bool arch_supported(const llm_arch arch) {
+@@ -492,6 +1428,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -1129,7 +2933,7 @@ index e900bdc0d..2101381fc 100644
  static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -565,6 +1515,85 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -605,6 +1555,85 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
      const std::string template_row_res = "%15s %10s|%20s|\n";
  
      bool all_ok = true;
@@ -1215,7 +3019,7 @@ index e900bdc0d..2101381fc 100644
      common_log_flush(common_log_main());
      printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
      printf("|");
-@@ -614,6 +1643,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -657,6 +1686,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                  std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                  char nmse_str[12] = {0};
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -1228,3 +3032,89 @@ index e900bdc0d..2101381fc 100644
                  if (!skip) {
                      if (logits_cpu.empty()) {
                          model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
+diff --git a/tools/mtmd/mtmd-image.cpp b/tools/mtmd/mtmd-image.cpp
+index 0d9db4f62..9f788e8c1 100644
+--- a/tools/mtmd/mtmd-image.cpp
++++ b/tools/mtmd/mtmd-image.cpp
+@@ -643,6 +643,78 @@ private:
+ };
+ 
+ 
++static clip_image_u8 mtmd_inkling_resize(const clip_image_u8 & img, resize_algo algo) {
++    constexpr int patch_size = 40;
++    const clip_image_size source_size = img.get_size();
++    const clip_image_size target_size = {
++        std::max(patch_size, ((source_size.width + patch_size - 1) / patch_size) * patch_size),
++        std::max(patch_size, ((source_size.height + patch_size - 1) / patch_size) * patch_size),
++    };
++
++    clip_image_u8 resized;
++    img_tool::resize(img, resized, target_size, algo, PAD_CEIL);
++    return resized;
++}
++
++mtmd_inkling_image_preproc_out mtmd_image_preprocess_inkling(
++        const clip_image_u8 & img,
++        resize_algo algo) {
++    constexpr int patch_size = 40;
++    constexpr int temporal_patch_size = 2;
++
++    const clip_image_u8 resized = mtmd_inkling_resize(img, algo);
++    const clip_image_size resized_size = resized.get_size();
++    mtmd_inkling_image_preproc_out output;
++    output.source_size = img.get_size();
++    output.resized_size = resized_size;
++    output.patch_rows = resized_size.height / patch_size;
++    output.patch_cols = resized_size.width / patch_size;
++    output.resized_rgb = resized.get_ro_buf();
++    output.pixel_values_bthwc.reserve(
++        (size_t) output.patch_rows * output.patch_cols * temporal_patch_size * patch_size * patch_size * 3);
++
++    for (int row = 0; row < output.patch_rows; ++row) {
++        for (int col = 0; col < output.patch_cols; ++col) {
++            for (int temporal = 0; temporal < temporal_patch_size; ++temporal) {
++                (void) temporal;
++                for (int y = 0; y < patch_size; ++y) {
++                    for (int x = 0; x < patch_size; ++x) {
++                        const auto pixel = resized.get_pixel(col * patch_size + x, row * patch_size + y);
++                        output.pixel_values_bthwc.push_back((float) pixel[0] / 255.0f);
++                        output.pixel_values_bthwc.push_back((float) pixel[1] / 255.0f);
++                        output.pixel_values_bthwc.push_back((float) pixel[2] / 255.0f);
++                    }
++                }
++            }
++        }
++    }
++
++    return output;
++}
++
++mtmd_image_preproc_out mtmd_image_preprocessor_inkling::preprocess(const clip_image_u8 & img) {
++    constexpr int patch_size = 40;
++    constexpr int temporal_patch_size = 2;
++
++    const clip_image_u8 resized = mtmd_inkling_resize(img, hparams.image_resize_algo);
++    const clip_image_size resized_size = resized.get_size();
++    const int patch_rows = resized_size.height / patch_size;
++    const int patch_cols = resized_size.width / patch_size;
++
++    mtmd_image_preproc_out output;
++    output.entries.reserve((size_t) patch_rows * patch_cols * temporal_patch_size);
++    for (int row = 0; row < patch_rows; ++row) {
++        for (int col = 0; col < patch_cols; ++col) {
++            clip_image_u8 patch;
++            img_tool::crop(resized, patch, col * patch_size, row * patch_size, patch_size, patch_size);
++            output.append(hparams, patch, true);
++            output.append(hparams, patch, true);
++        }
++    }
++    return output;
++}
++
++
+ //
+ // mtmd_image_preprocessor_llava_uhd
+ //
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,3 +1,4 @@
+use super::cancellation::{CancelUpstream, cancel_upstream_if_client_disconnected};
 use super::common::{
     ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
     retryable_route_result_from_error,
@@ -9,7 +10,7 @@ use crate::mesh;
 use crate::network::openai::forwarded_request::prepare_peer_forwarded_request;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use mesh_llm_events::logging::identifiers::RequestId;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 pub(in crate::network::openai) async fn route_local_attempt(
@@ -92,10 +93,7 @@ async fn route_local_attempt_after_forward(
                 response_adapter,
             )
             .await;
-            if matches!(result, RouteAttemptResult::ClientDisconnected) {
-                let _ = upstream.shutdown().await;
-            }
-            result
+            cancel_upstream_if_client_disconnected(result, upstream).await
         }
         Err(err) => {
             tracing::warn!(
@@ -184,9 +182,9 @@ async fn forward_buffered_request<W: AsyncWrite + Unpin>(
     upstream.write_all(prefetched).await
 }
 
-async fn route_remote_attempt_after_forward(
+async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstream>(
     tcp_stream: &mut TcpStream,
-    quic_recv: &mut iroh::endpoint::RecvStream,
+    quic_recv: &mut R,
     host_id: iroh::EndpointId,
     request_id: RequestId,
     retry_policy: ResponseRetryPolicy,
@@ -195,7 +193,7 @@ async fn route_remote_attempt_after_forward(
 ) -> RouteAttemptResult {
     match probe_http_response(quic_recv).await {
         Ok(probe) => {
-            relay_attempted_response(
+            let result = relay_attempted_response(
                 tcp_stream,
                 quic_recv,
                 probe,
@@ -208,7 +206,8 @@ async fn route_remote_attempt_after_forward(
                 retry_policy,
                 response_adapter,
             )
-            .await
+            .await;
+            cancel_upstream_if_client_disconnected(result, quic_recv).await
         }
         Err(err) => {
             tracing::warn!(
@@ -223,7 +222,195 @@ async fn route_remote_attempt_after_forward(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
     use tokio::io::AsyncReadExt;
+    use tokio::io::ReadBuf;
+    use tokio::net::TcpListener;
+    use tokio::sync::Notify;
+
+    /// A real duplex pipe as the upstream half of `CancelUpstream`, wrapped to
+    /// signal a `Notify` the moment a read finds nothing buffered yet.
+    ///
+    /// Unlike `ScriptedUpstream` below, this can genuinely block waiting for
+    /// more bytes, which is what lets a test prove the route arm is actively
+    /// relaying (header consumed, now waiting on the body) at a specific
+    /// moment, rather than assuming it from timing.
+    struct DuplexUpstream {
+        inner: tokio::io::DuplexStream,
+        cancels: Arc<AtomicUsize>,
+        waiting_for_more: Arc<Notify>,
+    }
+
+    impl AsyncRead for DuplexUpstream {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+            if result.is_pending() {
+                self.waiting_for_more.notify_one();
+            }
+            result
+        }
+    }
+
+    impl CancelUpstream for DuplexUpstream {
+        async fn cancel(&mut self) {
+            self.cancels.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// An upstream that hands out a fixed script of reads, then records whether
+    /// the route arm cancelled it.
+    struct ScriptedUpstream {
+        steps: std::collections::VecDeque<Result<Vec<u8>, io::ErrorKind>>,
+        cancels: Arc<AtomicUsize>,
+    }
+
+    impl ScriptedUpstream {
+        fn new(steps: Vec<Result<Vec<u8>, io::ErrorKind>>) -> Self {
+            Self {
+                steps: steps.into(),
+                cancels: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl AsyncRead for ScriptedUpstream {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            match self.steps.pop_front() {
+                Some(Ok(bytes)) => {
+                    buf.put_slice(&bytes);
+                    Poll::Ready(Ok(()))
+                }
+                Some(Err(kind)) => Poll::Ready(Err(io::Error::new(kind, "scripted failure"))),
+                None => Poll::Ready(Ok(())),
+            }
+        }
+    }
+
+    impl CancelUpstream for ScriptedUpstream {
+        async fn cancel(&mut self) {
+            self.cancels.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// A remote attempt that loses its client must tell the worker peer to stop.
+    ///
+    /// The local arm has always shut its upstream down here. The remote arm did
+    /// not, so a worker on another node kept generating a response for a client
+    /// that had already hung up — observed in rc6 validation as the worker
+    /// logging `request_stream_completed` after the gateway had already logged
+    /// `request_dropped`.
+    #[tokio::test]
+    async fn a_remote_attempt_cancels_the_peer_tunnel_when_the_client_disconnects() {
+        let (mut upstream_writer, upstream_reader) = tokio::io::duplex(64 * 1024);
+        let cancels = Arc::new(AtomicUsize::new(0));
+        let waiting_for_more = Arc::new(Notify::new());
+        let mut upstream = DuplexUpstream {
+            inner: upstream_reader,
+            cancels: Arc::clone(&cancels),
+            waiting_for_more: Arc::clone(&waiting_for_more),
+        };
+        let host_id = iroh::SecretKey::generate().public();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+            route_remote_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                host_id,
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                ResponseAdapter::None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+        let client_socket = TcpStream::connect(address).await.unwrap();
+
+        let body = "x".repeat(64);
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        // Send only the header. The route arm buffers it, then blocks asking
+        // upstream for body bytes that have not arrived yet.
+        upstream_writer.write_all(header.as_bytes()).await.unwrap();
+        waiting_for_more.notified().await;
+
+        // The route arm is now genuinely waiting on upstream body bytes, not
+        // still parsing the header -- closing the client here means the write
+        // it makes once the body arrives lands on an actually disconnected
+        // socket, rather than an upstream read failure standing in for one.
+        //
+        // A graceful close (a plain `drop`) sends only a FIN; the server's
+        // very next write can still succeed locally before it learns the
+        // peer is gone, which is exactly the kind of timing-dependent gap
+        // this test exists to close. Zero linger forces an RST instead, so
+        // the eventual write fails deterministically.
+        client_socket.set_zero_linger().unwrap();
+        drop(client_socket);
+
+        upstream_writer.write_all(body.as_bytes()).await.unwrap();
+
+        let result = task.await.unwrap();
+
+        assert_eq!(result, RouteAttemptResult::ClientDisconnected);
+        assert_eq!(
+            cancels.load(Ordering::SeqCst),
+            1,
+            "the peer tunnel was left running after the client disconnected"
+        );
+    }
+
+    /// The counterpart: a normal delivery must not cancel anything.
+    #[tokio::test]
+    async fn a_remote_attempt_that_delivers_leaves_the_peer_tunnel_alone() {
+        let body = "x".repeat(8);
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mut upstream = ScriptedUpstream::new(vec![Ok(header.into_bytes())]);
+        let cancels = Arc::clone(&upstream.cancels);
+        let host_id = iroh::SecretKey::generate().public();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+            route_remote_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                host_id,
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                ResponseAdapter::None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+        let mut socket = TcpStream::connect(address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+
+        let result = task.await.unwrap();
+
+        assert!(matches!(result, RouteAttemptResult::Delivered { .. }));
+        assert_eq!(cancels.load(Ordering::SeqCst), 0);
+    }
 
     #[tokio::test]
     async fn local_and_remote_forwarding_preserve_the_canonical_request_id_bytes() {

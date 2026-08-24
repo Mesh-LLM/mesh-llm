@@ -43,8 +43,6 @@ const LATENCY_DIVISOR: u64 = 40;
 #[derive(Debug, Clone, serde::Deserialize)]
 struct RecordedWorker {
     model: String,
-    #[allow(dead_code)]
-    tier: String,
     elapsed_ms: u64,
     finish_reason: Option<String>,
     content: Option<String>,
