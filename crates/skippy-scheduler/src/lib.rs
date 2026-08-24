@@ -30,6 +30,8 @@ pub struct Sequence {
     pub priority: u64,
     pub admitted_at: Option<Instant>,
     pub kv_prefix_shared: bool,
+    /// Most recent sampled token, fed back as the next decode input.
+    pub last_sampled_token: Option<i32>,
 }
 
 impl Sequence {
@@ -53,6 +55,7 @@ impl Sequence {
             priority,
             admitted_at: None,
             kv_prefix_shared: false,
+            last_sampled_token: None,
         }
     }
 
@@ -73,12 +76,13 @@ impl Sequence {
         &self.prompt_tokens[self.prompt_pos..end]
     }
 
+    /// The token to feed into the next decode step: the last sampled token once
+    /// generation has begun, otherwise the final prompt token (the first decode
+    /// input after prefill completes).
     pub fn next_decode_token(&self) -> i32 {
-        if self.generated_tokens == 0 {
-            self.prompt_tokens.last().copied().unwrap_or(0)
-        } else {
-            0
-        }
+        self.last_sampled_token
+            .or_else(|| self.prompt_tokens.last().copied())
+            .unwrap_or(0)
     }
 }
 
@@ -495,6 +499,9 @@ impl Scheduler {
                     if token < 0 || seq.generated_tokens >= seq.max_tokens as usize {
                         seq.status = SequenceStatus::Finished;
                         finished.push(id.clone());
+                    } else {
+                        // Feed the sampled token back as the next decode input.
+                        seq.last_sampled_token = Some(token);
                     }
                 }
             }
@@ -574,10 +581,18 @@ impl Scheduler {
         if let Some(mut seq) = seq {
             let mut rt = self.runtime.lock();
             rt.drop_session_timed(&id).ok();
-            self.state.lock().free_seq_ids.push(seq.seq_id);
+            drop(rt);
+            // Recompute-on-resume: drop KV and re-queue for a fresh prefill. The
+            // sequence keeps its assigned seq_id (it is not returned to the free
+            // list) so a concurrently admitted request cannot collide with it.
             seq.status = SequenceStatus::Preempted;
             seq.prompt_pos = 0;
             seq.generated_tokens = 0;
+            seq.last_sampled_token = None;
+            seq.admitted_at = None;
+            // NOTE: recompute currently restarts from the prompt only; resuming
+            // mid-generation must re-prefill previously generated tokens too.
+            // Tracked as a follow-up before the preemption path is load-bearing.
             self.state.lock().waiting_queue.push_front(seq);
         }
     }
@@ -634,6 +649,18 @@ mod tests {
         assert_eq!(seq.status, SequenceStatus::Waiting);
         assert!(!seq.is_prefill_done());
         assert_eq!(seq.remaining_prefill(), 1);
+    }
+
+    #[test]
+    fn decode_token_feeds_back_last_sampled() {
+        let mut seq = Sequence::new("test-1".to_string(), vec![1, 2, 3, 4, 5], 10, None, 1);
+        // Before any generation, the first decode input is the final prompt token.
+        assert_eq!(seq.next_decode_token(), 5);
+        // Once a token is sampled it becomes the next decode input, rather than 0.
+        seq.last_sampled_token = Some(42);
+        assert_eq!(seq.next_decode_token(), 42);
+        seq.last_sampled_token = Some(99);
+        assert_eq!(seq.next_decode_token(), 99);
     }
 
     #[test]
