@@ -69,6 +69,7 @@ PY
     }
 fi
 
+curl --fail --silent --show-error "$BASE_URL/health" >"$OUTPUT_DIR/health.json"
 curl --fail --silent --show-error "$BASE_URL/v1/models" >"$OUTPUT_DIR/models.json"
 
 VERSIONED_MODEL_ID="$(python3 - "$OUTPUT_DIR/models.json" <<'PY'
