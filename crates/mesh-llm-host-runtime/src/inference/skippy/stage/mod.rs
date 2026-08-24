@@ -14,7 +14,7 @@ use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig};
 use skippy_server::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
 use tokio::{
-    sync::{Mutex, mpsc},
+    sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -49,6 +49,25 @@ struct StagePreparationTask {
     handle: JoinHandle<()>,
 }
 
+pub(crate) struct StageControlHandle {
+    sender: mpsc::UnboundedSender<StageControlCommand>,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: JoinHandle<Result<()>>,
+}
+
+impl StageControlHandle {
+    pub(crate) fn sender(&self) -> mpsc::UnboundedSender<StageControlCommand> {
+        self.sender.clone()
+    }
+
+    pub(crate) async fn shutdown(mut self) -> Result<()> {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        self.task.await.context("join stage control loop")?
+    }
+}
+
 #[async_trait::async_trait]
 pub(crate) trait StagePackagePrefetcher: Send + Sync {
     async fn prefetch_stage_package(&self, request: &StagePrepareRequest) -> Result<()>;
@@ -57,23 +76,56 @@ pub(crate) trait StagePackagePrefetcher: Send + Sync {
 pub(crate) fn spawn_stage_control_loop(
     package_prefetcher: Option<Arc<dyn StagePackagePrefetcher>>,
     telemetry: super::SkippyTelemetryOptions,
-) -> mpsc::UnboundedSender<StageControlCommand> {
+) -> StageControlHandle {
     let (tx, mut rx) = mpsc::unbounded_channel::<StageControlCommand>();
-    tokio::spawn(async move {
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
         let mut state = StageControlState {
             package_prefetcher,
             telemetry,
             ..Default::default()
         };
-        while let Some(command) = rx.recv().await {
-            let result = state.handle(command.request).await;
-            let _ = command.resp.send(result);
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => break,
+                command = rx.recv() => {
+                    let Some(command) = command else { break };
+                    let result = state.handle(command.request).await;
+                    let _ = command.resp.send(result);
+                }
+            }
         }
+        state.shutdown().await
     });
-    tx
+    StageControlHandle {
+        sender: tx,
+        shutdown: Some(shutdown_tx),
+        task,
+    }
 }
 
 impl StageControlState {
+    async fn shutdown(&mut self) -> Result<()> {
+        for (_, task) in self.preparation_tasks.drain() {
+            task.cancelled.store(true, Ordering::Release);
+            task.handle.abort();
+            let _ = task.handle.await;
+        }
+        let mut first_error = None;
+        for (_, stage) in self.stages.drain() {
+            if let Err(error) = stage.server.shutdown().await
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(())
+    }
+
     async fn handle(&mut self, request: StageControlRequest) -> Result<StageControlResponse> {
         match request {
             StageControlRequest::Claim(claim) => self

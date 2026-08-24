@@ -684,6 +684,15 @@ impl Node {
         self.inflight_change_tx.subscribe()
     }
 
+    pub(crate) async fn set_stage_control_handle(
+        &self,
+        lifecycle: crate::inference::skippy::StageControlHandle,
+    ) {
+        *self.stage_control_tx.lock().await = Some(lifecycle.sender());
+        *self.stage_control_lifecycle.lock().await = Some(lifecycle);
+    }
+
+    #[cfg(test)]
     pub(crate) async fn set_stage_control_sender(
         &self,
         tx: tokio::sync::mpsc::UnboundedSender<crate::inference::skippy::StageControlCommand>,

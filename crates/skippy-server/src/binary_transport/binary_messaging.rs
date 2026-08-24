@@ -6,7 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    thread,
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -44,6 +44,87 @@ mod summary;
 mod telemetry;
 
 use self::connection::handle_binary_connection;
+
+#[derive(Default)]
+struct ConnectionWorkerControl {
+    shutting_down: AtomicBool,
+    sockets: Mutex<Vec<std::net::TcpStream>>,
+}
+
+impl ConnectionWorkerControl {
+    fn track(&self, stream: &std::net::TcpStream) -> io::Result<()> {
+        let tracked = stream.try_clone()?;
+        let mut sockets = self
+            .sockets
+            .lock()
+            .expect("connection sockets lock poisoned");
+        if self.shutting_down.load(Ordering::Acquire) {
+            let _ = tracked.shutdown(std::net::Shutdown::Both);
+        }
+        sockets.push(tracked);
+        Ok(())
+    }
+
+    fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Release);
+        let sockets = self
+            .sockets
+            .lock()
+            .expect("connection sockets lock poisoned");
+        for socket in sockets.iter() {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    fn clear(&self) {
+        self.sockets
+            .lock()
+            .expect("connection sockets lock poisoned")
+            .clear();
+    }
+}
+
+struct ConnectionWorker {
+    control: Arc<ConnectionWorkerControl>,
+    task: JoinHandle<()>,
+}
+
+#[derive(Default)]
+struct ConnectionWorkers(Vec<ConnectionWorker>);
+
+impl ConnectionWorkers {
+    fn push(&mut self, worker: ConnectionWorker) {
+        self.0.push(worker);
+    }
+
+    fn reap_finished(&mut self) {
+        let mut index = 0;
+        while index < self.0.len() {
+            if self.0[index].task.is_finished() {
+                let worker = self.0.swap_remove(index);
+                if worker.task.join().is_err() {
+                    eprintln!("binary stage connection worker panicked");
+                }
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn shutdown(mut self) -> Result<()> {
+        for worker in &self.0 {
+            worker.control.shutdown();
+        }
+        let mut panicked = false;
+        for worker in self.0.drain(..) {
+            panicked |= worker.task.join().is_err();
+        }
+        if panicked {
+            bail!("binary stage connection worker panicked during shutdown");
+        }
+        Ok(())
+    }
+}
 
 pub async fn serve_binary(args: ServeBinaryArgs) -> Result<()> {
     serve_binary_stage(BinaryStageOptions::from_cli_args(args)?).await
@@ -142,6 +223,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
     let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
     let prediction_returns = Arc::new(PredictionReturnHub::default());
     let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
+    let mut connection_workers = ConnectionWorkers::default();
     let listener = TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
     if let Some(openai_options) = openai {
@@ -206,6 +288,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
     );
 
     while !shutdown.load(Ordering::SeqCst) {
+        connection_workers.reap_finished();
         let (mut upstream, _) = match listener.accept() {
             Ok(conn) => conn,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -229,7 +312,12 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         let warm_downstream = warm_downstream.clone();
         let prediction_returns = prediction_returns.clone();
         let prediction_return_sinks = prediction_return_sinks.clone();
-        thread::spawn(move || {
+        let worker_control = Arc::new(ConnectionWorkerControl::default());
+        worker_control
+            .track(&upstream)
+            .context("track upstream binary stage connection")?;
+        let task_control = worker_control.clone();
+        let task = thread::spawn(move || {
             let connection_result = (|| -> Result<()> {
                 eprintln!(
                     "binary sending ready: stage_id={} peer={peer_addr:?}",
@@ -260,6 +348,11 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                     &warm_downstream,
                     downstream_connect_timeout_secs,
                 )?;
+                if let Some(stream) = downstream.as_ref() {
+                    task_control
+                        .track(stream)
+                        .context("track downstream binary stage connection")?;
+                }
                 handle_binary_connection(
                     &config,
                     topology.as_ref(),
@@ -291,7 +384,46 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 eprintln!("{error:#}");
                 telemetry.emit("stage.binary_connection_error", attrs);
             }
+            task_control.clear();
+        });
+        connection_workers.push(ConnectionWorker {
+            control: worker_control,
+            task,
         });
     }
-    Ok(())
+    connection_workers.shutdown()
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::{ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers};
+    use std::{
+        io::Read,
+        net::{TcpListener, TcpStream},
+        sync::Arc,
+        thread,
+        time::Duration,
+    };
+
+    #[test]
+    fn shutdown_closes_and_joins_an_active_connection_worker() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let control = Arc::new(ConnectionWorkerControl::default());
+        control.track(&server).unwrap();
+        let task_control = control.clone();
+        let task = thread::spawn(move || {
+            let mut byte = [0u8; 1];
+            let _ = server.read(&mut byte);
+            task_control.clear();
+        });
+        let mut workers = ConnectionWorkers::default();
+        workers.push(ConnectionWorker { control, task });
+
+        let started = std::time::Instant::now();
+        workers.shutdown().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(client);
+    }
 }

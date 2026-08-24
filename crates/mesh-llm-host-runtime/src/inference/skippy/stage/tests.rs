@@ -10,6 +10,31 @@ use anyhow::{Result, anyhow};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
 use tokio::sync::{Mutex as TokioMutex, oneshot};
 
+#[tokio::test]
+async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
+    let handle = spawn_stage_control_loop(None, super::super::SkippyTelemetryOptions::default());
+    let sender = handle.sender();
+
+    tokio::time::timeout(Duration::from_secs(1), handle.shutdown())
+        .await
+        .expect("stage control shutdown should be bounded")
+        .expect("stage control shutdown should succeed");
+    let (resp, _rx) = oneshot::channel();
+    assert!(
+        sender
+            .send(StageControlCommand {
+                request: StageControlRequest::Status(StageStatusFilter {
+                    topology_id: None,
+                    run_id: None,
+                    stage_id: None,
+                }),
+                resp,
+            })
+            .is_err(),
+        "shutdown must close the stage control command channel"
+    );
+}
+
 fn load_request() -> StageLoadRequest {
     StageLoadRequest {
         topology_id: "topology-a".to_string(),
