@@ -1,0 +1,82 @@
+{
+  "cases": [
+    {
+      "key": "llama-gqa",
+      "family": "Llama GQA",
+      "model_id": "hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF:Q4_K_M",
+      "model_path": "$SKIPPY_MODEL_ROOT/llama-gqa/llama-3.2-1b-instruct-q4_k_m.gguf",
+      "layer_end": 16,
+      "payload": "resident-kv",
+      "source": {
+        "repo": "hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF",
+        "revision": "7d1f70022fcab2038000074bd0342e03e1d8b755",
+        "filename": "llama-3.2-1b-instruct-q4_k_m.gguf"
+      }
+    },
+    {
+      "key": "gemma2-swa",
+      "family": "Gemma2 SWA",
+      "model_id": "bartowski/gemma-2-2b-it-GGUF:Q4_K_M",
+      "model_path": "$SKIPPY_MODEL_ROOT/gemma2-swa/gemma-2-2b-it-Q4_K_M.gguf",
+      "layer_end": 26,
+      "payload": "resident-kv",
+      "source": {
+        "repo": "bartowski/gemma-2-2b-it-GGUF",
+        "revision": "855f67caed130e1befc571b52bd181be2e858883",
+        "filename": "gemma-2-2b-it-Q4_K_M.gguf"
+      }
+    },
+    {
+      "key": "deepseek-mla",
+      "family": "DeepSeek MLA",
+      "model_id": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M",
+      "model_path": "$SKIPPY_MODEL_ROOT/deepseek-mla/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+      "layer_end": 27,
+      "payload": "resident-kv",
+      "source": {
+        "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+        "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+        "filename": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"
+      }
+    },
+    {
+      "key": "falcon-h1-recurrent",
+      "family": "Falcon-H1 recurrent",
+      "model_id": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M",
+      "model_path": "$SKIPPY_MODEL_ROOT/falcon-h1-recurrent/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
+      "layer_end": 24,
+      "payload": "kv-recurrent",
+      "source": {
+        "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
+        "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
+        "filename": "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+      }
+    },
+    {
+      "key": "qwen35-hybrid",
+      "family": "Qwen3.5 hybrid",
+      "model_id": "local/qwen3.5-0.8b",
+      "model_path": "$SKIPPY_MODEL_ROOT/qwen35-hybrid/Qwen3.5-0.8B-UD-Q8_K_XL.gguf",
+      "layer_end": 24,
+      "payload": "kv-recurrent",
+      "source": {
+        "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+        "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+        "filename": "Qwen3.5-0.8B-UD-Q8_K_XL.gguf"
+      }
+    },
+    {
+      "key": "qwen3next-linear",
+      "family": "Qwen3-Next linear recurrent",
+      "model_id": "local/qwen3-coder-next",
+      "model_path": "$SKIPPY_MODEL_ROOT/qwen3next-linear/Qwen_Qwen3-Coder-Next-IQ2_XS.gguf",
+      "layer_end": 48,
+      "payload": "kv-recurrent",
+      "source": {
+        "repo": "bartowski/Qwen_Qwen3-Coder-Next-GGUF",
+        "revision": "d32741c4b434bf1f927798d0c093564c7f4e92fd",
+        "filename": "Qwen_Qwen3-Coder-Next-IQ2_XS.gguf"
+      }
+    }
+  ]
+}

@@ -1,0 +1,212 @@
+name: Skippy radix cache benchmark
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Benchmark depth.
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - full
+      model_key:
+        description: One key from evals/skippy-radix-cache-models.json, or all.
+        required: true
+        default: all
+        type: string
+      baseline_sha:
+        description: Exact OLD scheduler commit to compare against.
+        required: true
+        default: 3c0f43d4d53361fcdd9eee849824e9392bab522a
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: skippy-radix-cache-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'full' }} · ${{ github.event_name == 'workflow_dispatch' && inputs.model_key || 'all' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'radix-cache-benchmark')) }}
+    # The six-family set includes models too large for GitHub-hosted disks.
+    # This is the repository-scoped ephemeral GPU runner already approved for
+    # real Skippy inference smoke; workflow_dispatch restricts execution to a
+    # maintainer-selected repository revision. Pull requests must be same-repo
+    # and carry the explicit radix-cache-benchmark maintainer label.
+    runs-on: ${{ fromJSON('["self-hosted","Linux","X64","amd64","gpu-nvidia","mesh-llm-amd64","mesh-llm"]') }}
+    timeout-minutes: 360
+    env:
+      BASELINE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.baseline_sha || '3c0f43d4d53361fcdd9eee849824e9392bab522a' }}
+      NEW_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LLAMA_STAGE_BACKEND: cuda
+      LLAMA_STAGE_LINK_MODE: static
+      LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-build/build-stage-abi-static-cuda
+      SKIPPY_MODEL_ROOT: ${{ github.workspace }}/.benchmark-models
+      RESULT_DIR: ${{ github.workspace }}/benchmark-results
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install benchmark build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build jq lld libcurl4-openssl-dev
+          if ! command -v just >/dev/null 2>&1; then
+            cargo install just --locked --version 1.56.0
+          fi
+
+      - name: Install pinned Hugging Face client
+        env:
+          HF_TOKEN: ""
+          HUGGING_FACE_HUB_TOKEN: ""
+        run: python -m pip install --upgrade "huggingface_hub[cli]==0.36.0"
+
+      - name: Record hardware and source identity
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git rev-parse HEAD
+          git rev-parse "$BASELINE_SHA"
+          rustc --version
+          nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader
+
+      - name: Require one shared native ABI for OLD and NEW
+        run: |
+          set -euo pipefail
+          git diff --exit-code "$BASELINE_SHA" HEAD -- \
+            third_party/llama.cpp/upstream.txt \
+            third_party/llama.cpp/patches \
+            scripts/prepare-llama.sh \
+            scripts/build-llama.sh \
+            crates/skippy-ffi
+
+      - name: Build patched static CUDA ABI
+        run: |
+          set -euo pipefail
+          scripts/prepare-llama.sh pinned
+          scripts/build-llama.sh
+
+      - name: Build exact NEW and OLD release binaries
+        run: |
+          set -euo pipefail
+          new_target="$RUNNER_TEMP/skippy-radix-new-target"
+          old_target="$RUNNER_TEMP/skippy-radix-old-target"
+          old_worktree="$RUNNER_TEMP/skippy-radix-old-worktree"
+          mkdir -p "$RUNNER_TEMP/skippy-radix-bin"
+
+          just with-lld env \
+            CARGO_TARGET_DIR="$new_target" \
+            LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
+            cargo build --release --locked -p skippy-server
+          cp "$new_target/release/skippy-server" "$RUNNER_TEMP/skippy-radix-bin/new-skippy-server"
+
+          git worktree add --detach "$old_worktree" "$BASELINE_SHA"
+          (
+            cd "$old_worktree"
+            just with-lld env \
+              CARGO_TARGET_DIR="$old_target" \
+              LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
+              cargo build --release --locked -p skippy-server
+          )
+          cp "$old_target/release/skippy-server" "$RUNNER_TEMP/skippy-radix-bin/old-skippy-server"
+          sha256sum "$RUNNER_TEMP/skippy-radix-bin/"*-skippy-server
+
+      - name: Resolve and download the pinned model set
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
+          MODEL_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.model_key || 'all' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$SKIPPY_MODEL_ROOT" "$RESULT_DIR"
+          if [[ "$MODEL_KEY" == "all" ]]; then
+            jq '{cases: .cases}' evals/skippy-radix-cache-models.json > "$RUNNER_TEMP/radix-cases.json"
+          else
+            jq --arg key "$MODEL_KEY" '{cases: [.cases[] | select(.key == $key)]}' \
+              evals/skippy-radix-cache-models.json > "$RUNNER_TEMP/radix-cases.json"
+          fi
+          jq -e '.cases | length > 0' "$RUNNER_TEMP/radix-cases.json" >/dev/null
+
+          jq -r '.cases[] | [.key, .source.repo, .source.revision, .source.filename] | @tsv' \
+            "$RUNNER_TEMP/radix-cases.json" |
+          while IFS=$'\t' read -r key repo revision filename; do
+            mkdir -p "$SKIPPY_MODEL_ROOT/$key"
+            hf download "$repo" "$filename" \
+              --revision "$revision" \
+              --local-dir "$SKIPPY_MODEL_ROOT/$key"
+          done
+
+      - name: Run OLD/NEW cache gate
+        env:
+          PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'full' }}
+        run: |
+          set -euo pipefail
+          if [[ "$PROFILE" == "full" ]]; then
+            rounds=2
+            requests=10
+            concurrency=1,2,4
+            prefix_blocks=192
+          else
+            rounds=1
+            requests=2
+            concurrency=1
+            prefix_blocks=64
+          fi
+          python3 evals/skippy-radix-cache-ab.py \
+            --case-file "$RUNNER_TEMP/radix-cases.json" \
+            --old-bin "$RUNNER_TEMP/skippy-radix-bin/old-skippy-server" \
+            --new-bin "$RUNNER_TEMP/skippy-radix-bin/new-skippy-server" \
+            --old-commit "$BASELINE_SHA" \
+            --new-commit "$NEW_SHA" \
+            --native-build "$LLAMA_STAGE_BUILD_DIR" \
+            --output-dir "$RESULT_DIR" \
+            --rounds "$rounds" \
+            --requests "$requests" \
+            --concurrency "$concurrency" \
+            --output-tokens 8 \
+            --prefix-blocks "$prefix_blocks" \
+            --ctx-size 32768 \
+            --lanes 4 \
+            --require-gates
+
+      - name: Publish benchmark summary
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Skippy radix cache A/B"
+            echo
+            echo "OLD: \`$BASELINE_SHA\`"
+            echo "NEW: \`$NEW_SHA\`"
+            echo
+            find "$RESULT_DIR" -name table.md -type f -print0 |
+              sort -z |
+              xargs -0 -n1 cat
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: skippy-radix-cache-${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'full' }}-${{ github.event_name == 'workflow_dispatch' && inputs.model_key || 'all' }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: benchmark-results/
+          if-no-files-found: error
+          retention-days: 30
