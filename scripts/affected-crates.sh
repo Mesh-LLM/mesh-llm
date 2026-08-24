@@ -168,10 +168,16 @@ main() {
       continue
     fi
 
-    # Escalation patterns. Native llama.cpp inputs are routed by
+    # Escalation patterns. Most native llama.cpp inputs are routed by
     # .github/actions/compute-changes as backend builds, not as all-Rust crate
-    # test fanout.
-    if [[ "$file" =~ ^Cargo\.lock$ ]] || \
+    # test fanout. The upstream pin and the patch queue are the exception: they
+    # can change which archives the native build emits, and the static link
+    # line in crates/skippy-ffi/build.rs is hand-maintained, so only the Rust
+    # test batches can prove the link still closes. Advancing the pin without
+    # this escalation is how an undefined hash_sha256_hex reached main.
+    if [[ "$file" =~ ^third_party/llama\.cpp/upstream\.txt$ ]] || \
+       [[ "$file" =~ ^third_party/llama\.cpp/patches/ ]] || \
+       [[ "$file" =~ ^Cargo\.lock$ ]] || \
        [[ "$file" =~ ^Cargo\.toml$ ]] || \
             [[ "$file" =~ ^scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|skippy-ci-smoke|ci-install-native-runtime|ci-prepare-native-runtime|ci-smoke-test|ci-compat-smoke|ci-client-auto-test|ci-two-node-client-serving-smoke|ci-two-node-split-smoke)\. ]] || \
        [[ "$file" =~ ^\.github/cache-version\.txt$ ]] || \

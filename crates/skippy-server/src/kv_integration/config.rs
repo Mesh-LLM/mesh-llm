@@ -241,7 +241,25 @@ fn infer_cache_payload(config: &StageConfig) -> StagePrefixCachePayload {
     StagePrefixCachePayload::Disabled
 }
 
+/// Either kill-switch variable resolving to `off` disables the cache, so an
+/// explicit `SKIPPY_KV_CACHE=on` cannot mask `SKIPPY_PREFIX_CACHE=off`.
+fn cache_disabled_by_env(kv_cache: Option<&str>, prefix_cache: Option<&str>) -> bool {
+    [kv_cache, prefix_cache]
+        .into_iter()
+        .flatten()
+        .any(|value| parse_cache_mode(value) == Some(StageKvCacheMode::Disabled))
+}
+
 fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
+    // An explicit environment kill-switch beats the planned stage config so
+    // benches and incident response can turn the prefix cache off without
+    // replanning the topology.
+    if cache_disabled_by_env(
+        std::env::var("SKIPPY_KV_CACHE").ok().as_deref(),
+        std::env::var("SKIPPY_PREFIX_CACHE").ok().as_deref(),
+    ) {
+        return None;
+    }
     if let Some(cache) = config.kv_cache.clone() {
         return Some(cache);
     }
@@ -311,6 +329,16 @@ fn parse_cache_mode(value: &str) -> Option<StageKvCacheMode> {
 mod tests {
     use super::*;
     use skippy_protocol::FlashAttentionType;
+
+    #[test]
+    fn either_cache_kill_switch_disables_the_cache() {
+        assert!(!cache_disabled_by_env(None, None));
+        assert!(!cache_disabled_by_env(Some("on"), None));
+        assert!(cache_disabled_by_env(Some("off"), None));
+        assert!(cache_disabled_by_env(None, Some("off")));
+        assert!(cache_disabled_by_env(Some("on"), Some("off")));
+        assert!(cache_disabled_by_env(Some("off"), Some("on")));
+    }
 
     #[test]
     fn recurrent_tensor_names_require_exact_state_cache() {

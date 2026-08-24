@@ -88,7 +88,8 @@ required_static_archives() {
     "$LLAMA_BUILD_DIR/common/libllama-common-base.a" \
     "$LLAMA_BUILD_DIR/ggml/src/libggml.a" \
     "$LLAMA_BUILD_DIR/ggml/src/libggml-base.a" \
-    "$LLAMA_BUILD_DIR/tools/mtmd/libmtmd.a"
+    "$LLAMA_BUILD_DIR/tools/mtmd/libmtmd.a" \
+    "$LLAMA_BUILD_DIR/vendor/hash/libvendor-hash.a"
 }
 
 required_static_archives_exist() {

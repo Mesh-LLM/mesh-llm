@@ -7,7 +7,7 @@ import { ApiError, parseApiErrorBody } from '@/lib/api/errors'
 import { getClientId } from '@/lib/api/client-id'
 import { generateRequestId } from '@/lib/api/request-id'
 import type { ChatSSEEvent } from '@/lib/api/types'
-import { buildResponsesInput } from '@/features/chat/api/build-input'
+import { buildResponsesInput, type AttachmentUploadCache } from '@/features/chat/api/build-input'
 import type { ChatResponseMetadata } from '@/features/chat/api/response-metadata'
 import { isMeshVirtualModel, syntheticMoaProgressKey } from '@/features/chat/lib/moa-progress'
 
@@ -82,11 +82,50 @@ function isAbortError(error: unknown) {
 }
 
 const MODEL_ROUTE_RETRY_DELAY_MS = 500
+// The router estimates request tokens from serialized bytes (~4 bytes/token)
+// and adds a safety margin. Keep the compacted retry below 3.5K prompt tokens
+// so it can fit Apple's 4K context window with that margin.
+const CONTEXT_COMPACTION_RETRY_BODY_BYTES = 14_000
 
 function isModelRouteNotFound(status: number, body: string): boolean {
   if (status !== 404) return false
   const normalized = body.toLowerCase()
   return normalized.includes('model') && (normalized.includes('not found') || normalized.includes('missing'))
+}
+
+function isContextRouteUnavailable(status: number, body: string): boolean {
+  return status === 503 && body.toLowerCase().includes('no context-compatible target')
+}
+
+async function compactResponsesInput(
+  messages: Array<UIMessage> | Array<ModelMessage>,
+  model: string,
+  clientId: string,
+  requestId: string,
+  systemPrompt: string,
+  uploadCache: AttachmentUploadCache
+) {
+  if (messages.length < 2) return undefined
+
+  const firstMessage = Math.max(1, messages.length - 8)
+  for (let start = firstMessage; start < messages.length; start += 1) {
+    // A compacted request must begin at a user turn. Starting at an assistant
+    // message would detach it from the user turn that produced it.
+    if (messages[start]?.role !== 'user') continue
+    const candidate = await buildResponsesInput(
+      messages.slice(start),
+      model,
+      clientId,
+      requestId,
+      systemPrompt,
+      uploadCache
+    )
+    const serialized = JSON.stringify(candidate)
+    const byteLength = new TextEncoder().encode(serialized).length
+    if (byteLength <= CONTEXT_COMPACTION_RETRY_BODY_BYTES) return candidate
+  }
+
+  return undefined
 }
 
 async function waitForModelRouteRetry(abortSignal?: AbortSignal): Promise<boolean> {
@@ -207,7 +246,15 @@ async function* runConnect(
 
   let response: Response
   try {
-    const requestBody = await buildResponsesInput(messages, model, clientId, requestId, systemPrompt)
+    const attachmentUploadCache: AttachmentUploadCache = new Map()
+    let requestBody = await buildResponsesInput(
+      messages,
+      model,
+      clientId,
+      requestId,
+      systemPrompt,
+      attachmentUploadCache
+    )
     for (let attempt = 0; ; attempt += 1) {
       response = await fetch(`${env.managementApiUrl}/api/responses`, {
         method: 'POST',
@@ -219,16 +266,33 @@ async function* runConnect(
       if (response.ok) break
 
       const errorBody = await parseApiErrorBody(response)
-      const shouldRetry = attempt === 0 && isModelRouteNotFound(response.status, errorBody)
-      if (!shouldRetry) {
-        throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+      const shouldRetryModelRoute = attempt === 0 && isModelRouteNotFound(response.status, errorBody)
+      if (shouldRetryModelRoute) {
+        const retryAllowed = await waitForModelRouteRetry(abortSignal)
+        if (abortSignal?.aborted) return
+        if (!retryAllowed) {
+          throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+        }
+        continue
       }
 
-      const retryAllowed = await waitForModelRouteRetry(abortSignal)
-      if (abortSignal?.aborted) return
-      if (!retryAllowed) {
-        throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+      const shouldCompactContext = attempt === 0 && isContextRouteUnavailable(response.status, errorBody)
+      if (shouldCompactContext) {
+        const compactedBody = await compactResponsesInput(
+          messages,
+          model,
+          clientId,
+          requestId,
+          systemPrompt,
+          attachmentUploadCache
+        )
+        if (compactedBody) {
+          requestBody = compactedBody
+          continue
+        }
       }
+
+      throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
     }
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return

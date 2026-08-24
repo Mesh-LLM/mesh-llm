@@ -169,10 +169,25 @@ pub fn sanitize_lifecycle_event(event: LifecycleEvent) -> LifecycleEvent {
     }
 }
 
+/// True if `value` starts with an `http`/`https` scheme, matched
+/// case-insensitively.
+///
+/// URL schemes are case-insensitive (RFC 3986 §3.1), so an address like
+/// `HTTP://user:pass@host` is still an HTTP URL. A case-sensitive check would
+/// let such an address bypass credential redaction, so every redaction gate
+/// must use this helper rather than a bare `starts_with("http://")`.
+pub(crate) fn is_http_url(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let starts_ci = |prefix: &[u8]| {
+        bytes.len() >= prefix.len() && bytes[..prefix.len()].eq_ignore_ascii_case(prefix)
+    };
+    starts_ci(b"http://") || starts_ci(b"https://")
+}
+
 pub(crate) fn redact_urls_in_text(text: &str) -> String {
     text.split_whitespace()
         .map(|word| {
-            if word.starts_with("http://") || word.starts_with("https://") {
+            if is_http_url(word) {
                 redact_url_query(word)
             } else {
                 word.to_string()

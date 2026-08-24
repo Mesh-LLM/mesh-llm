@@ -1013,7 +1013,7 @@ impl ModelMetrics {
             .targets
             .iter()
             .map(|(target, metrics)| TargetRoutingMetricsSnapshot {
-                target: target.label.clone(),
+                target: target.redacted_label(),
                 kind: target.kind.label().to_string(),
                 attempt_count: metrics.attempt_count,
                 success_count: metrics.success_count,
@@ -1153,6 +1153,27 @@ impl TargetKind {
 struct TargetKey {
     kind: TargetKind,
     label: String,
+}
+
+impl TargetKey {
+    /// Return the label safe to serialize across a network boundary.
+    ///
+    /// The `Endpoint` label is the plugin endpoint address, which can embed
+    /// credentials in an HTTP URL (`user:pass@` userinfo or `?api_key=...`
+    /// query). The routing-metrics snapshot is served by the management API,
+    /// which can bind a non-loopback interface, so the raw label would leak
+    /// those credentials on an unauthenticated read. Redact HTTP(S) endpoint
+    /// labels; local/remote labels (`127.0.0.1:port`, short peer ids) carry no
+    /// URL credentials and pass through verbatim.
+    fn redacted_label(&self) -> String {
+        if matches!(self.kind, TargetKind::Endpoint)
+            && crate::logging::policy::is_http_url(&self.label)
+        {
+            crate::logging::policy::redact_url_query(&self.label)
+        } else {
+            self.label.clone()
+        }
+    }
 }
 
 fn normalized_model_name(model: Option<&str>) -> Option<&str> {
@@ -1299,6 +1320,86 @@ mod tests {
         assert!(model_snapshots.contains_key("beta"));
         assert!(model_snapshots.contains_key("gamma"));
         assert_eq!(model_snapshots["beta"].targets.len(), 1);
+    }
+
+    #[test]
+    fn endpoint_target_label_credentials_are_redacted_in_snapshot() {
+        let metrics = RoutingMetrics::with_config(Duration::from_secs(3600), 8, 8);
+        metrics.record_attempt(
+            Some("gamma"),
+            AttemptTarget::Endpoint(
+                "https://alice:s3cret@endpoint.example/v1?api_key=abc123".into(),
+            ),
+            Duration::from_millis(4),
+            Duration::from_millis(20),
+            AttemptOutcome::Success,
+            Some(5),
+        );
+
+        let snapshot = &metrics.model_snapshots()["gamma"];
+        let target = &snapshot.targets[0];
+        assert_eq!(target.kind, "endpoint");
+        assert!(
+            !target.target.contains("alice:s3cret"),
+            "endpoint userinfo leaked into metrics: {}",
+            target.target
+        );
+        assert!(
+            !target.target.contains("abc123"),
+            "endpoint api_key leaked into metrics: {}",
+            target.target
+        );
+        assert!(
+            target.target.contains("endpoint.example"),
+            "endpoint host lost from metrics: {}",
+            target.target
+        );
+    }
+
+    #[test]
+    fn uppercase_scheme_endpoint_label_is_still_redacted_in_snapshot() {
+        // URL schemes are case-insensitive (RFC 3986); an uppercase scheme
+        // must not bypass credential redaction of the metrics label.
+        let metrics = RoutingMetrics::with_config(Duration::from_secs(3600), 8, 8);
+        metrics.record_attempt(
+            Some("gamma"),
+            AttemptTarget::Endpoint(
+                "HTTPS://alice:s3cret@endpoint.example/v1?api_key=abc123".into(),
+            ),
+            Duration::from_millis(4),
+            Duration::from_millis(20),
+            AttemptOutcome::Success,
+            Some(5),
+        );
+
+        let snapshot = &metrics.model_snapshots()["gamma"];
+        let target = &snapshot.targets[0];
+        assert!(
+            !target.target.contains("alice:s3cret"),
+            "endpoint userinfo leaked for uppercase scheme: {}",
+            target.target
+        );
+        assert!(
+            !target.target.contains("abc123"),
+            "endpoint api_key leaked for uppercase scheme: {}",
+            target.target
+        );
+    }
+
+    #[test]
+    fn non_endpoint_target_labels_pass_through_verbatim() {
+        let metrics = RoutingMetrics::with_config(Duration::from_secs(3600), 8, 8);
+        metrics.record_attempt(
+            Some("beta"),
+            AttemptTarget::Local("127.0.0.1:9001".into()),
+            Duration::from_millis(1),
+            Duration::from_millis(11),
+            AttemptOutcome::Success,
+            Some(7),
+        );
+
+        let snapshot = &metrics.model_snapshots()["beta"];
+        assert_eq!(snapshot.targets[0].target, "127.0.0.1:9001");
     }
 
     #[test]

@@ -201,17 +201,19 @@ new jobs.
 
 | Change class | PR profile | Main profile |
 | --- | --- | --- |
-| Draft pull request | `pr-draft`: quality plus the smallest affected signal and core smoke | n/a |
+| Draft pull request | `pr-draft`: stable planner/gate results only; no build slices unless CI-control or runner-infrastructure fail-open applies | n/a |
 | Ready pull request | `pr-ready`: complete targeted rows and affected Rust dependents | n/a |
 | Push to `main` | n/a | `main`: every workspace crate and supported product/platform/backend/SDK row |
 | Manual dispatch | `manual-full` when invoked from the PR entrypoint | `main`-equivalent full validation from `ci.yml` |
 
-Docs-only changes select the quality contract slice. UI, website, Rust,
-protocol, split-serving, model, backend, platform and SDK ownership selects the
-corresponding typed rows. CI-control and runner-infrastructure changes fail
-open to the control rows and supported product rows. Paths mapping only to
-documentation plus `ci-control` retain limited documentation routing instead
-of forcing all product rows. Unknown paths fail closed.
+For `pr-ready`, docs-only changes select the quality contract slice. Regular
+`pr-draft` docs-only changes stop at the stable planner/gate results. For
+`pr-ready`, UI, website, Rust, protocol, split-serving, model, backend, platform
+and SDK ownership selects the corresponding typed rows. CI-control and
+runner-infrastructure changes fail open to the control rows and supported
+product rows. Paths mapping only to documentation plus `ci-control` retain
+limited documentation routing instead of forcing all product rows. Unknown
+paths fail closed.
 
 ### Local validation and extensions
 

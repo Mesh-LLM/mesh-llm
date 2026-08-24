@@ -70,6 +70,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             "libggml.a",
             "libggml-base.a",
             "libggml-cpu.a",
+            "libvendor-hash.a",
         ):
             self.assertIn(archive, build_script)
         self.assertIn("--require-prebuilt-llama", package_script)
@@ -131,6 +132,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             "ggml/src/libggml-base.a",
             "ggml/src/ggml-cpu/libggml-cpu.a",
             "tools/mtmd/libmtmd.a",
+            "vendor/hash/libvendor-hash.a",
         ):
             if relative == omit_archive:
                 continue
@@ -294,19 +296,26 @@ class StaticAbiArtifactTests(unittest.TestCase):
             self.assertIn("link-mode mismatch", result.stderr)
 
     def test_restore_rejects_incomplete_link_closure(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            download = self.write_artifact(
-                root,
-                omit_archive="common/libllama-common-base.a",
-            )
+        # Every required archive is load-bearing for the link, so omitting any
+        # one of them must fail the restore. vendor-hash is listed explicitly:
+        # it was added after the others and only the Rust link line consumes
+        # it, so a silent drop reappears as an undefined hash_sha256_hex far
+        # from here.
+        for omitted in (
+            "common/libllama-common-base.a",
+            "vendor/hash/libvendor-hash.a",
+        ):
+            with self.subTest(omitted=omitted):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    download = self.write_artifact(root, omit_archive=omitted)
 
-            result = self.restore(
-                download,
-                root / "restored" / "build-stage-abi-static",
-            )
+                    result = self.restore(
+                        download,
+                        root / "restored" / "build-stage-abi-static",
+                    )
 
-            self.assertNotEqual(result.returncode, 0)
+                    self.assertNotEqual(result.returncode, 0)
 
     def test_restore_rejects_toolchain_epoch_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
