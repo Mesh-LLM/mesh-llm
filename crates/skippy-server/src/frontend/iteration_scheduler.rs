@@ -128,6 +128,7 @@ struct SchedulerWorker {
     max_direct_batch_size: usize,
     iteration_interval: Duration,
     telemetry: Option<Telemetry>,
+    last_served_direct: bool,
 }
 
 impl IterationScheduler {
@@ -175,6 +176,7 @@ impl IterationScheduler {
                     max_direct_batch_size: lane_count.max(1),
                     iteration_interval,
                     telemetry: Some(telemetry),
+                    last_served_direct: false,
                 }
                 .run();
             })
@@ -563,15 +565,31 @@ impl SchedulerWorker {
 
     fn run_iteration(&mut self) {
         self.apply_pending_controls();
-        if !self.direct_iterations.is_empty() {
+        let has_direct = !self.direct_iterations.is_empty();
+        let mut plan = self.scheduler.plan_iteration();
+        let has_planned = !plan.work.is_empty();
+
+        // Alternate between direct iterations and planned scheduler work to prevent starvation.
+        // If both queues have work, serve the one that wasn't served last time.
+        // If only one queue has work, serve it regardless of last-served state.
+        let serve_direct = if has_direct && has_planned {
+            !self.last_served_direct
+        } else {
+            has_direct
+        };
+
+        if serve_direct {
+            self.last_served_direct = true;
             self.run_direct_iteration_batch();
             return;
         }
-        let iteration_started = Instant::now();
-        let mut plan = self.scheduler.plan_iteration();
-        if plan.work.is_empty() {
+
+        if !has_planned {
             return;
         }
+
+        self.last_served_direct = false;
+        let iteration_started = Instant::now();
         let mut setup_ids = BTreeSet::new();
         let mut setup = Vec::new();
         for work in &plan.work {
@@ -1152,6 +1170,7 @@ mod tests {
             max_direct_batch_size: 2,
             iteration_interval: Duration::ZERO,
             telemetry: None,
+            last_served_direct: false,
         };
         let (reply_a, events_a) = std_mpsc::channel();
         let (reply_b, events_b) = std_mpsc::channel();
@@ -1247,6 +1266,7 @@ mod tests {
             max_direct_batch_size: 1,
             iteration_interval: Duration::ZERO,
             telemetry: None,
+            last_served_direct: false,
         };
         let (reply, events) = std_mpsc::channel();
         worker.submit(ScheduledRequest {
@@ -1286,6 +1306,7 @@ mod tests {
                 max_direct_batch_size: 3,
                 iteration_interval: Duration::ZERO,
                 telemetry: None,
+                last_served_direct: false,
             }
             .run();
         });
