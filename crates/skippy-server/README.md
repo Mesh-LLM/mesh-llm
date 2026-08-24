@@ -159,9 +159,13 @@ deadline handling.
 - Set `SKIPPY_BINARY_WARM_PRECONNECT=1` to establish one downstream binary
   connection while a stage runtime loads and replenish it after use. This is
   opt-in and leaves the normal on-demand connection path unchanged.
-- Set `SKIPPY_DECODE_BATCH_COLLECTION_US` to an opt-in collection window for
-  cross-request decode batching. The default is zero added wait; configured
-  values are capped at 10,000 microseconds and ignored for single-lane runtimes.
+- Set `SKIPPY_ITERATION_SCHEDULER_SAFE_MODE=1` for an operator-controlled
+  degraded mode that keeps the iteration scheduler as the sole serving path
+  while serializing active sequences, prefills, and direct iteration batches.
+  This is a restart-time containment control for production incidents; it does
+  not restore or retain the removed decode batchers. Scheduler startup
+  telemetry records `skippy.scheduler.safe_mode` and the bounded command-queue
+  capacity so operators can verify the effective mode.
 - `--openai-prefill-chunk-policy` selects fixed, scheduled, or adaptive stage0
   prefill chunking without changing the default fixed
   `--openai-prefill-chunk-size`. Passing `--openai-prefill-chunk-schedule`
