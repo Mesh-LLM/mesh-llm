@@ -4,12 +4,12 @@ mod locked;
 
 pub use locked::{LockedTopologyStage, plan_locked_topology};
 
-/// Default auto lane cap.  Matches llama-server's default of `--parallel 4`.
-/// Users can override via `gpu.parallel` in config.toml or the per-model
-/// `parallel` setting.
-const MAX_AUTO_PARALLEL_LANES: usize = 4;
 const MINIMUM_AUTO_CONTEXT_LENGTH: u32 = 65_536;
 const CONTEXT_STEPS: &[u32] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072];
+
+/// Minimum context length per session for lane ceiling calculation.
+/// This is the floor_ctx_per_session from the design.
+const FLOOR_CTX_PER_SESSION: u32 = 4096;
 
 /// Compute-buffer reserve applied to the KV term of each layer's placement
 /// cost. Charging KV at 100/85 holds back 15% of a node's post-weight space for
@@ -135,13 +135,17 @@ fn plan_topology_with_required_stage0(
         minimum_context,
         input.context_length_override,
     )?;
-    let lane_candidates = parallel_lane_candidates(input.parallel_lanes_override)?;
     let nodes = usable_nodes(&input.nodes);
     let latency_aware = latency_aware_planning(input, &nodes);
 
     let minimum_nodes = input.minimum_nodes.max(1);
     let mut best_latency_candidate: Option<CandidatePlan> = None;
     for context_length in context_candidates {
+        let lane_candidates = parallel_lane_candidates(
+            input.parallel_lanes_override,
+            context_length,
+            input.kv_bytes_per_token,
+        )?;
         for node_count in minimum_nodes..=nodes.len().min(input.layer_count as usize) {
             for parallel_lanes in lane_candidates.iter().copied() {
                 let mut best_for_count: Option<CandidatePlan> = None;
@@ -231,6 +235,8 @@ fn context_candidates(
 
 fn parallel_lane_candidates(
     override_lanes: Option<usize>,
+    context_length: u32,
+    _kv_bytes_per_token: u64,
 ) -> Result<Vec<usize>, TopologyPlanError> {
     if let Some(lanes) = override_lanes {
         if lanes == 0 {
@@ -238,7 +244,13 @@ fn parallel_lane_candidates(
         }
         return Ok(vec![lanes]);
     }
-    Ok((1..=MAX_AUTO_PARALLEL_LANES).rev().collect())
+    // Derive ceiling from KV pool size: n_seq_max = pool_cells / floor_ctx_per_session
+    // pool_cells = context_length (total tokens in shared KV pool)
+    // floor_ctx_per_session = minimum context needed per session
+    let pool_cells = context_length as usize;
+    let max_seq = pool_cells / FLOOR_CTX_PER_SESSION as usize;
+    let max_seq = max_seq.max(1).min(64); // Cap at 64 for practical purposes
+    Ok((1..=max_seq).rev().collect())
 }
 
 pub fn minimum_valid_context(native_context: u32) -> u32 {

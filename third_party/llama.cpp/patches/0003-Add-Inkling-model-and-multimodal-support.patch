@@ -1,14 +1,14 @@
-From 265af68b30cd9c920ba2c09c4d6b6c29842efcbc Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
 Subject: [PATCH 03/15] Add Inkling model and multimodal support
 
 
 diff --git a/conversion/__init__.py b/conversion/__init__.py
-index c7d8046c4..5c67dc37c 100644
+index b4afdf0f8..5fd336f8d 100644
 --- a/conversion/__init__.py
 +++ b/conversion/__init__.py
-@@ -114,6 +114,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+@@ -123,6 +123,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
      "HunYuanVLForConditionalGeneration": "hunyuan",
      "HYV3ForCausalLM": "hunyuan",
      "IQuestCoderForCausalLM": "llama",
@@ -16,7 +16,7 @@ index c7d8046c4..5c67dc37c 100644
      "InternLM2ForCausalLM": "internlm",
      "InternLM3ForCausalLM": "internlm",
      "JAISLMHeadModel": "jais",
-@@ -285,6 +286,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
+@@ -298,6 +299,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
      "GraniteSpeechPlusForConditionalGeneration": "granite",
      "HunYuanVLForConditionalGeneration": "hunyuan",
      "Idefics3ForConditionalGeneration": "smolvlm",
@@ -25,10 +25,10 @@ index c7d8046c4..5c67dc37c 100644
      "JanusForConditionalGeneration": "januspro",
      "KimiK25ForConditionalGeneration": "kimivl",
 diff --git a/conversion/base.py b/conversion/base.py
-index a7cd3fd90..720cfdca3 100644
+index 56547ace0..39ccdc414 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
-@@ -268,8 +268,17 @@ class ModelBase:
+@@ -274,8 +274,17 @@ class ModelBase:
                              data_gen = lambda data=data_torch: LazyTorchTensor.from_eager(data)  # noqa: E731
                          else:
                              data_gen = lambda data=data_torch: data  # noqa: E731
@@ -46,7 +46,7 @@ index a7cd3fd90..720cfdca3 100644
                          tensors[tname] = tgen
  
          # verify tensor name presence and identify potentially missing files
-@@ -537,6 +546,20 @@ class ModelBase:
+@@ -543,6 +552,20 @@ class ModelBase:
                  else:
                      raise NotImplementedError(f"Quant format {quant_format!r} for method {quant_method!r} is not yet supported")
              elif quant_method == "modelopt":
@@ -67,7 +67,7 @@ index a7cd3fd90..720cfdca3 100644
                  # Mixed-precision ModelOpt models: NVFP4 tensors are handled by
                  # _generate_nvfp4_tensors; FP8 tensors have 1D weight_scale and
                  # are dequantized here. k/v scale tensors are unused.
-@@ -1023,6 +1046,14 @@ class ModelBase:
+@@ -1066,6 +1089,14 @@ class ModelBase:
  
      def write(self):
          self.prepare_tensors()
@@ -511,18 +511,18 @@ index 000000000..079842903
 +
 +        raise ValueError(f"unexpected Inkling vision tensor {name!r}")
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index 8d0cad59b..0d78da843 100644
+index 886253d88..47065bdbf 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -581,6 +581,7 @@ class MODEL_ARCH(IntEnum):
-     MELLUM           = auto()
+@@ -604,6 +604,7 @@ class MODEL_ARCH(IntEnum):
      NANBEIGE         = auto()
      QWEN3TTS         = auto()
+     POCKETTTS        = auto()
 +    INKLING          = auto()
  
  
  class VISION_PROJECTOR_TYPE(IntEnum):
-@@ -804,6 +805,14 @@ class MODEL_TENSOR(IntEnum):
+@@ -834,6 +835,14 @@ class MODEL_TENSOR(IntEnum):
      SHORTCONV_CONV       = auto()
      SHORTCONV_INPROJ     = auto()
      SHORTCONV_OUTPROJ    = auto()
@@ -537,15 +537,15 @@ index 8d0cad59b..0d78da843 100644
      VISEXP_ATTN_QKV      = auto()
      VISEXP_ATTN_OUT      = auto()
      VISEXP_GATE          = auto()
-@@ -1255,6 +1264,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
-     MODEL_ARCH.MELLUM:           "mellum",
+@@ -1323,6 +1332,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
      MODEL_ARCH.NANBEIGE:         "nanbeige",
      MODEL_ARCH.QWEN3TTS:         "qwen3tts",
+     MODEL_ARCH.POCKETTTS:        "pockettts",
 +    MODEL_ARCH.INKLING:          "inkling",
  }
  
  VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
-@@ -1476,6 +1486,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+@@ -1551,6 +1561,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
      MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
      MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
      MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
@@ -559,7 +559,7 @@ index 8d0cad59b..0d78da843 100644
      MODEL_TENSOR.VISEXP_ATTN_QKV:           "blk.{bid}.vis_attn_qkv",
      MODEL_TENSOR.VISEXP_ATTN_OUT:           "blk.{bid}.vis_attn_output",
      MODEL_TENSOR.VISEXP_GATE:               "blk.{bid}.vis_gate",
-@@ -4421,6 +4438,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -4665,6 +4682,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.FFN_UP_EXP,
          MODEL_TENSOR.FFN_EXP_PROBS_B,
      ],
@@ -598,7 +598,7 @@ index 8d0cad59b..0d78da843 100644
      MODEL_ARCH.SMALLTHINKER: [
          MODEL_TENSOR.TOKEN_EMBD,
          MODEL_TENSOR.OUTPUT_NORM,
-@@ -5138,6 +5187,7 @@ class GGUFValueType(IntEnum):
+@@ -5465,6 +5514,7 @@ class GGUFValueType(IntEnum):
  
  
  class VisionProjectorType:
@@ -607,7 +607,7 @@ index 8d0cad59b..0d78da843 100644
      GEMMA3NV = "gemma3nv"
      GEMMA3NA = "gemma3na"
 diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
-index 79d270ab8..ef7e70aa8 100644
+index 1ff4b61d9..629575b13 100644
 --- a/gguf-py/gguf/tensor_mapping.py
 +++ b/gguf-py/gguf/tensor_mapping.py
 @@ -63,6 +63,7 @@ class TensorNameMap:
@@ -619,14 +619,14 @@ index 79d270ab8..ef7e70aa8 100644
  
          # Position embeddings
 @@ -86,6 +87,7 @@ class TensorNameMap:
-             "lm_head",                   # llama4
+             "model.lm_head",             # dflash
              "model.transformer.ff_out",  # llada
              "head.decoder",              # modern-bert
 +            "model.unembed",             # inkling
          ),
          MODEL_TENSOR.DENSE_2_OUT: (
              "dense_2_out",  # embeddinggemma
-@@ -2582,6 +2584,53 @@ class TensorNameMap:
+@@ -2619,6 +2621,53 @@ class TensorNameMap:
  
      # architecture-specific block mappings
      arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
@@ -2020,10 +2020,10 @@ index 000000000..c054f1d98
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 923034520..5806d2d35 100644
+index 157b05dc0..7867f35c8 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -1295,6 +1295,10 @@ struct llama_model_glm_dsa : public llama_model_base {
+@@ -1320,6 +1320,10 @@ struct llama_model_glm_dsa : public llama_model_base {
      void load_arch_hparams(llama_model_loader & ml) override;
      void load_arch_tensors(llama_model_loader & ml) override;
  
@@ -2034,7 +2034,7 @@ index 923034520..5806d2d35 100644
      struct graph : public llm_graph_context {
          graph(const llama_model & model, const llm_graph_params & params);
      };
-@@ -1990,6 +1994,19 @@ struct llama_model_lfm2moe : public llama_model_base {
+@@ -2062,6 +2066,19 @@ struct llama_model_lfm2moe : public llama_model_base {
  };
  
  
@@ -2055,10 +2055,10 @@ index 923034520..5806d2d35 100644
      llama_model_smallthinker(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
-index fe22cb125..dc8952dd7 100644
+index 63a8b17a5..dab18d352 100644
 --- a/tools/mtmd/CMakeLists.txt
 +++ b/tools/mtmd/CMakeLists.txt
-@@ -40,6 +40,7 @@ add_library(mtmd
+@@ -41,6 +41,7 @@ add_library(mtmd
              models/granite4-vision.cpp
              models/hunyuanvl.cpp
              models/internvl.cpp
@@ -2067,10 +2067,10 @@ index fe22cb125..dc8952dd7 100644
              models/kimik25.cpp
              models/nemotron-v2-vl.cpp
 diff --git a/tools/mtmd/clip-impl.h b/tools/mtmd/clip-impl.h
-index bf73222f9..6aa76821b 100644
+index ea8549776..c95f3e855 100644
 --- a/tools/mtmd/clip-impl.h
 +++ b/tools/mtmd/clip-impl.h
-@@ -331,6 +331,13 @@
+@@ -366,6 +366,13 @@
  #define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
  #define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
  
@@ -2084,7 +2084,7 @@ index bf73222f9..6aa76821b 100644
  // mobilenetv5 (gemma3n) definitions
  #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
  #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
-@@ -399,6 +406,7 @@
+@@ -434,6 +441,7 @@
  struct clip_ctx;
  
  enum projector_type {
@@ -2092,7 +2092,7 @@ index bf73222f9..6aa76821b 100644
      PROJECTOR_TYPE_MLP,
      PROJECTOR_TYPE_MLP_NORM,
      PROJECTOR_TYPE_LDP,
-@@ -460,6 +468,7 @@ enum projector_type {
+@@ -497,6 +505,7 @@ enum projector_type {
  };
  
  static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
@@ -2101,10 +2101,10 @@ index bf73222f9..6aa76821b 100644
      { PROJECTOR_TYPE_LDP,               "ldp" },
      { PROJECTOR_TYPE_LDPV2,             "ldpv2"},
 diff --git a/tools/mtmd/clip-model.h b/tools/mtmd/clip-model.h
-index 761aabf64..a59fc7f1b 100644
+index ad25c008e..0bdfe4acc 100644
 --- a/tools/mtmd/clip-model.h
 +++ b/tools/mtmd/clip-model.h
-@@ -467,6 +467,12 @@ struct clip_code2wav {
+@@ -538,6 +538,12 @@ struct clip_code2wav {
      ggml_tensor * dac_post_snake_beta  = nullptr;
      ggml_tensor * dac_post_conv_w      = nullptr;
      ggml_tensor * dac_post_conv_b      = nullptr;
@@ -2117,7 +2117,7 @@ index 761aabf64..a59fc7f1b 100644
  };
  
  struct clip_model {
-@@ -483,6 +489,12 @@ struct clip_model {
+@@ -554,6 +560,12 @@ struct clip_model {
      ggml_tensor * norm_embd_w = nullptr;
      ggml_tensor * norm_embd_b = nullptr;
  
@@ -2131,10 +2131,10 @@ index 761aabf64..a59fc7f1b 100644
      ggml_tensor * patch_norm_1_w = nullptr;
      ggml_tensor * patch_norm_1_b = nullptr;
 diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index 1e53eddf8..3322e12d9 100644
+index 45e33042d..133ae5c2a 100644
 --- a/tools/mtmd/clip.cpp
 +++ b/tools/mtmd/clip.cpp
-@@ -904,6 +904,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
+@@ -907,6 +907,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
      std::unique_ptr<clip_graph> builder;
  
      switch (ctx->proj_type()) {
@@ -2145,7 +2145,7 @@ index 1e53eddf8..3322e12d9 100644
          case PROJECTOR_TYPE_GEMMA3:
          case PROJECTOR_TYPE_IDEFICS3:
          case PROJECTOR_TYPE_LFM2:
-@@ -1356,6 +1360,21 @@ struct clip_model_loader {
+@@ -1379,6 +1383,21 @@ struct clip_model_loader {
  
              // model-specific params
              switch (model.proj_type) {
@@ -2167,17 +2167,17 @@ index 1e53eddf8..3322e12d9 100644
                  case PROJECTOR_TYPE_MLP:
                  case PROJECTOR_TYPE_MLP_NORM:
                  case PROJECTOR_TYPE_LDP:
-@@ -2081,7 +2100,8 @@ struct clip_model_loader {
- 
+@@ -2160,7 +2179,8 @@ struct clip_model_loader {
          const bool has_standard_layers = (
              model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
--            model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC);
-+            model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
+             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
+-            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN);
++            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
 +            model.proj_type != PROJECTOR_TYPE_INKLING);
  
          // layers
          const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
-@@ -2167,6 +2187,23 @@ struct clip_model_loader {
+@@ -2246,6 +2266,23 @@ struct clip_model_loader {
  
  
          switch (model.proj_type) {
@@ -2201,7 +2201,7 @@ index 1e53eddf8..3322e12d9 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
                  {
-@@ -3404,6 +3441,11 @@ struct clip_model_loader {
+@@ -3558,6 +3595,11 @@ struct clip_model_loader {
              LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
          }
          batch.entries.push_back(img);
@@ -2213,7 +2213,7 @@ index 1e53eddf8..3322e12d9 100644
          return batch;
      }
  
-@@ -3813,6 +3855,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
+@@ -3973,6 +4015,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
      projector_type proj = ctx->proj_type();
  
      switch (proj) {
@@ -2230,7 +2230,7 @@ index 1e53eddf8..3322e12d9 100644
          case PROJECTOR_TYPE_MLP:
          case PROJECTOR_TYPE_MLP_NORM:
          case PROJECTOR_TYPE_JANUS_PRO:
-@@ -4218,6 +4270,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -4449,6 +4501,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
      // set input per projector
      switch (ctx->model.proj_type) {
@@ -2241,7 +2241,7 @@ index 1e53eddf8..3322e12d9 100644
          case PROJECTOR_TYPE_MUSE_GLIMMER:
              {
                  const int grid_w = pos_w;            // image_size_width  / patch_size
-@@ -5438,6 +5494,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -5704,6 +5760,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
  int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
      switch (ctx->model.proj_type) {
@@ -2365,7 +2365,7 @@ index 000000000..c072f66a2
 +    return gf;
 +}
 diff --git a/tools/mtmd/models/models.h b/tools/mtmd/models/models.h
-index 519c0d019..014db1263 100644
+index 3631d849b..6a5212f98 100644
 --- a/tools/mtmd/models/models.h
 +++ b/tools/mtmd/models/models.h
 @@ -17,6 +17,17 @@ struct clip_graph_siglip : clip_graph {
@@ -2387,7 +2387,7 @@ index 519c0d019..014db1263 100644
      clip_graph_gemma4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
      ggml_cgraph * build() override;
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index ca4b64efa..aed7873d1 100644
+index 98a8c11ee..7bc8b72a9 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
 @@ -283,6 +283,7 @@ struct filter_params {
@@ -2483,7 +2483,7 @@ index ca4b64efa..aed7873d1 100644
  // mtmd_audio_preprocessor_whisper
  //
 diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
-index b4d6f7259..723236fb4 100644
+index 44ad098ae..08c74ea66 100644
 --- a/tools/mtmd/mtmd-audio.h
 +++ b/tools/mtmd/mtmd-audio.h
 @@ -69,6 +69,16 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
@@ -2504,7 +2504,7 @@ index b4d6f7259..723236fb4 100644
      mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
      void initialize() override;
 diff --git a/tools/mtmd/mtmd-image.h b/tools/mtmd/mtmd-image.h
-index 0669aa112..76e0973e7 100644
+index 732e27379..22e4f9968 100644
 --- a/tools/mtmd/mtmd-image.h
 +++ b/tools/mtmd/mtmd-image.h
 @@ -26,6 +26,20 @@ struct mtmd_image_preproc_out {
@@ -2542,10 +2542,10 @@ index 0669aa112..76e0973e7 100644
  // if image_resize_pad is true, the resized image will be padded, otherwise it will be either stretched or center-cropped depending on image_resize_pad
  // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
 diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
-index 82b73d5cd..21970cd75 100644
+index 95f17f7af..c95105b60 100644
 --- a/tools/mtmd/mtmd.cpp
 +++ b/tools/mtmd/mtmd.cpp
-@@ -622,6 +622,12 @@ struct mtmd_context {
+@@ -629,6 +629,12 @@ struct mtmd_context {
          projector_type proj = clip_get_projector_type(ctx_v);
  
          switch (proj) {
@@ -2558,7 +2558,7 @@ index 82b73d5cd..21970cd75 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
              case PROJECTOR_TYPE_LDP:
-@@ -913,6 +919,13 @@ struct mtmd_context {
+@@ -920,6 +926,13 @@ struct mtmd_context {
  
          // set preprocessor
          switch (proj) {
@@ -2614,3 +2614,6 @@ index 82b73d5cd..21970cd75 100644
                  } else {
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
+-- 
+2.54.0 (Apple Git-157)
+

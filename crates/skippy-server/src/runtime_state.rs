@@ -141,6 +141,10 @@ impl RuntimeState {
             session_resident_prefixes: BTreeMap::new(),
         }
     }
+
+    pub fn lane_count(&self) -> u32 {
+        self.lane_count
+    }
 }
 
 impl Drop for RuntimeState {

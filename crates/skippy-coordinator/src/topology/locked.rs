@@ -25,11 +25,15 @@ pub fn plan_locked_topology(
         minimum_context,
         input.context_length_override,
     )?;
-    let lane_candidates = parallel_lane_candidates(input.parallel_lanes_override)?;
     let nodes = usable_nodes(&input.nodes);
     let locked_nodes = locked_stage_nodes(&nodes, locked_stages)?;
 
     for context_length in context_candidates {
+        let lane_candidates = parallel_lane_candidates(
+            input.parallel_lanes_override,
+            context_length,
+            input.kv_bytes_per_token,
+        )?;
         for parallel_lanes in lane_candidates.iter().copied() {
             if let Some(candidate) = fit_locked_candidate(
                 input,
