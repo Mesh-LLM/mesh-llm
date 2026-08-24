@@ -183,7 +183,7 @@ impl KvStageIntegration {
     /// `n_batch` is larger than the resident working set). Account for both
     /// active-lane and resident-prefix occupancy first, then evict only the
     /// actual deficit. A zero pool size is the modelless/unknown-capacity
-    /// fallback and preserves the legacy fixed-batch behaviour.
+    /// fallback and conservatively reserves one complete decode batch.
     pub fn evict_resident_prefix_for_decode_batch(
         &self,
         runtime: &mut RuntimeState,

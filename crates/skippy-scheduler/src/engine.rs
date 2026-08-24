@@ -233,6 +233,10 @@ impl Scheduler {
                 .collect(),
             prefix_hits: self.metrics.prefix_hits,
             prefix_misses: self.metrics.prefix_misses,
+            finished: self.metrics.finished,
+            failed: self.metrics.failed,
+            cancelled: self.metrics.cancelled,
+            rejected_overload: self.metrics.rejected_overload,
         }
     }
 

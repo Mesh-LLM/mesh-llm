@@ -151,7 +151,7 @@ fn scheduler_generation_driver_eligible(
     // driver. Speculative and extended requests keep their strategy-specific
     // proposal/checkpoint state machine, but every target iteration,
     // verification, and repair operation is submitted to the same scheduler
-    // worker. They do not fall back to the removed DecodeBatcher.
+    // worker, including strategy-specific runtime operations.
     max_tokens > 0
         && !kv_enabled
         && !linear_proposal_enabled
