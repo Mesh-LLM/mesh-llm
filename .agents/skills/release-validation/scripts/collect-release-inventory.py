@@ -70,10 +70,11 @@ def require_local_tag(tag: str) -> str:
 # tags that prepared-source commit directly without pushing it to origin/main, so
 # every release tag -- prerelease or stable -- sits one documented commit ahead
 # of its main-line ancestor by design.
-RELEASE_PREPARE_SUBJECT_SUFFIX = ": prepare release source"
+def release_prepare_subject(tag: str) -> str:
+    return f"{tag}: prepare release source"
 
 
-def require_release_base(origin_main: str, tag_sha: str) -> str:
+def require_release_base(origin_main: str, tag: str, tag_sha: str) -> str:
     """Return the main-line commit a release tag was prepared from.
 
     Fails closed unless every commit between that point and the tag itself is
@@ -81,24 +82,24 @@ def require_release_base(origin_main: str, tag_sha: str) -> str:
     """
     release_base = git("merge-base", origin_main, tag_sha)
     if release_base != tag_sha:
-        unexpected = [
-            commit
-            for commit in collect_commits(release_base, tag_sha)
-            if not commit["subject"].endswith(RELEASE_PREPARE_SUBJECT_SUFFIX)
-        ]
-        if unexpected:
-            detail = "; ".join(f"{c['sha'][:12]} {c['subject']!r}" for c in unexpected)
+        commits = collect_commits(release_base, tag_sha)
+        expected_subject = release_prepare_subject(tag)
+        if len(commits) != 1 or commits[0]["subject"] != expected_subject:
+            detail = "; ".join(f"{c['sha'][:12]} {c['subject']!r}" for c in commits)
             raise RuntimeError(
-                f"{tag_sha} diverges from origin/main (base {release_base}) with commits "
-                f"beyond the documented release-prepare step: {detail}"
+                f"release {tag!r} ({tag_sha}) diverges from origin/main (base "
+                f"{release_base}); expected zero commits or exactly one commit with "
+                f"subject {expected_subject!r}, found: {detail or 'no commits'}"
             )
     return release_base
 
 
-def require_release_provenance(base_sha: str, head_sha: str) -> None:
+def require_release_provenance(
+    base_tag: str, base_sha: str, head_ref: str, head_sha: str
+) -> None:
     origin_main = git("rev-parse", "--verify", "origin/main^{commit}")
-    base_release_base = require_release_base(origin_main, base_sha)
-    head_release_base = require_release_base(origin_main, head_sha)
+    base_release_base = require_release_base(origin_main, base_tag, base_sha)
+    head_release_base = require_release_base(origin_main, head_ref, head_sha)
     if subprocess.run(
         ["git", "merge-base", "--is-ancestor", base_release_base, head_release_base],
         check=False,
@@ -220,7 +221,7 @@ def main() -> int:
         release = latest_release(args.repo, args.release_tag)
         base_sha = require_local_tag(release["tagName"])
         head_sha = git("rev-parse", f"{args.head}^{{commit}}")
-        require_release_provenance(base_sha, head_sha)
+        require_release_provenance(release["tagName"], base_sha, args.head, head_sha)
         manifest = {
             "schema_version": 1,
             "collected_at": datetime.now(timezone.utc).isoformat(),
