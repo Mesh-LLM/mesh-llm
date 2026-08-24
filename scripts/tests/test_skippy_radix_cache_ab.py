@@ -25,12 +25,12 @@ def load_module():
 BENCH = load_module()
 
 
-def summary(output: str, ttft: float) -> dict:
+def summary(output: str, ttft: float, cache_hits: int = 1) -> dict:
     return {
         "requests": 1,
         "successful": 1,
-        "cache_hits": 1,
-        "cache_misses": 0,
+        "cache_hits": cache_hits,
+        "cache_misses": 1 - cache_hits,
         "matched_prefix_tokens_median": 100,
         "suffix_prefill_tokens_median": 5,
         "ttft_ms_p50": ttft,
@@ -45,16 +45,23 @@ def summary(output: str, ttft: float) -> dict:
     }
 
 
-def cell(version: str, cache: str, output: str, ttft: float) -> dict:
+def cell(
+    version: str,
+    cache: str,
+    output: str,
+    ttft: float,
+    scenario: str = "divergent",
+    cache_hits: int = 1,
+) -> dict:
     return {
         "version": version,
         "cache": cache,
         "suspect_log_lines": [],
         "observations": [
             {
-                "scenario": "divergent",
+                "scenario": scenario,
                 "concurrency": 1,
-                "summary": summary(output, ttft),
+                "summary": summary(output, ttft, cache_hits),
             }
         ],
     }
@@ -134,12 +141,39 @@ class RadixCacheAbTest(unittest.TestCase):
         }
         self.assertEqual(preservation, {"old": False, "new": True})
         case_result = {
+            "case": {"payload": "resident-kv"},
             "cells": [
                 cell("old", "cold", "correct", 100),
                 cell("old", "warm", "stale", 30),
                 cell("new", "cold", "correct", 100),
                 cell("new", "warm", "correct", 20),
             ],
+            "aggregate": rows,
+            "output_parity": BENCH.parity(rows),
+            "cache_output_preservation": BENCH.cache_preservation(rows),
+        }
+        self.assertEqual(BENCH.evaluate_gate(case_result), {"passed": True, "failures": []})
+
+    def test_recurrent_gate_requires_exact_and_growing_hits_not_divergent_hit(self) -> None:
+        cells = []
+        for version in ("old", "new"):
+            for cache in ("cold", "warm"):
+                for scenario in ("exact", "divergent", "coding"):
+                    hits = int(cache == "warm" and scenario != "divergent")
+                    cells.append(
+                        cell(
+                            version,
+                            cache,
+                            "correct",
+                            25 if cache == "warm" else 100,
+                            scenario=scenario,
+                            cache_hits=hits,
+                        )
+                    )
+        rows = BENCH.aggregate(cells)
+        case_result = {
+            "case": {"payload": "kv-recurrent"},
+            "cells": cells,
             "aggregate": rows,
             "output_parity": BENCH.parity(rows),
             "cache_output_preservation": BENCH.cache_preservation(rows),
