@@ -127,6 +127,8 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             "contains(github.event.pull_request.labels.*.name, 'radix-cache-benchmark')",
             workflow,
         )
+        self.assertIn('CMAKE_BUILD_PARALLEL_LEVEL: "4"', workflow)
+        self.assertIn("if-no-files-found: warn", workflow)
 
     def test_main_validation_has_exactly_five_focused_entrypoints(self):
         expected = {

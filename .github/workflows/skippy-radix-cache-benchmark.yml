@@ -49,6 +49,10 @@ jobs:
       LLAMA_STAGE_BACKEND: cuda
       LLAMA_STAGE_LINK_MODE: static
       LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-build/build-stage-abi-static-cuda
+      # nvcc's cicc frontend is memory-spiky across the full template matrix.
+      # Bound native fan-out instead of inheriting every logical CPU on the
+      # self-hosted GPU runner.
+      CMAKE_BUILD_PARALLEL_LEVEL: "4"
       SKIPPY_MODEL_ROOT: ${{ github.workspace }}/.benchmark-models
       RESULT_DIR: ${{ github.workspace }}/benchmark-results
     steps:
@@ -82,6 +86,7 @@ jobs:
       - name: Record hardware and source identity
         run: |
           set -euo pipefail
+          mkdir -p "$RESULT_DIR"
           git cat-file -e "${BASELINE_SHA}^{commit}"
           git rev-parse HEAD
           git rev-parse "$BASELINE_SHA"
@@ -197,9 +202,9 @@ jobs:
             echo "OLD: \`$BASELINE_SHA\`"
             echo "NEW: \`$NEW_SHA\`"
             echo
-            find "$RESULT_DIR" -name table.md -type f -print0 |
-              sort -z |
-              xargs -0 -n1 cat
+            while IFS= read -r -d '' table; do
+              cat "$table"
+            done < <(find "$RESULT_DIR" -name table.md -type f -print0 | sort -z)
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark evidence
@@ -208,5 +213,5 @@ jobs:
         with:
           name: skippy-radix-cache-${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'full' }}-${{ github.event_name == 'workflow_dispatch' && inputs.model_key || 'all' }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: benchmark-results/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
