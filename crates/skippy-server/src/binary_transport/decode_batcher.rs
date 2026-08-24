@@ -12,9 +12,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use skippy_runtime::{ActivationFrame, SamplingConfig};
 
-use crate::runtime_state::{
-    RuntimeDecodeFrameBatchRequest, RuntimeSessionAlignStats, RuntimeState,
-};
+use crate::runtime_state::{RuntimeIterationBatchRequest, RuntimeSessionAlignStats, RuntimeState};
 
 pub(crate) struct DecodeFrameBatcher {
     shared: Arc<DecodeFrameBatcherShared>,
@@ -217,14 +215,16 @@ impl DecodeFrameBatcherShared {
                 .collect::<Result<Vec<_>>>()?;
             let requests = batch
                 .iter()
-                .map(|pending| RuntimeDecodeFrameBatchRequest {
+                .map(|pending| RuntimeIterationBatchRequest {
                     session_id: pending.session_id.as_str(),
-                    token_id: pending.token_id,
+                    token_ids: std::slice::from_ref(&pending.token_id),
+                    positions: &[],
                     sampling: pending.sampling.as_ref(),
                     input: pending.input.as_ref(),
+                    sample_last: true,
                 })
                 .collect::<Vec<_>>();
-            let outputs = runtime.decode_frame_batch_sampled(&requests)?;
+            let outputs = runtime.iteration_batch_sampled(&requests)?;
             Ok((outputs, alignments, elapsed_ms(hold_started)))
         });
         Self::send_batch_replies(

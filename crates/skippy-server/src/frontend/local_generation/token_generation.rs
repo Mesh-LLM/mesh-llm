@@ -305,27 +305,25 @@ impl StageOpenAiBackend {
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<Option<i32>> {
         let prefill_timer = PhaseTimer::start();
-        let lock_timer = PhaseTimer::start();
-        let mut runtime = self
+        let runtime_sessions_before = self
             .runtime
             .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-        let runtime_lock_hold_timer = PhaseTimer::start();
-        let runtime_sessions_before = runtime.session_stats();
-        let (predicted, _) = runtime
-            .prefill_final_frame_sampled(
-                session_id,
-                request.prompt_token_ids,
-                &[],
-                request.sampling.enabled.then_some(request.sampling),
-                None,
-            )
-            .map_err(openai_backend_error)?;
-        let prompt_prefill_sample = Some(predicted);
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .session_stats();
+        let outcome = self.decode_batcher.execute_iteration(
+            session_id,
+            request.prompt_token_ids,
+            &[],
+            request.sampling.enabled.then_some(request.sampling),
+            true,
+        )?;
+        let prompt_prefill_sample = Some(outcome.predicted);
         cache_stats.suffix_prefill_tokens = saturating_u32(request.prompt_token_ids.len());
-        let runtime_sessions_after = runtime.session_stats();
-        let runtime_lock_hold_ms = runtime_lock_hold_timer.elapsed_ms();
+        let runtime_sessions_after = self
+            .runtime
+            .lock()
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .session_stats();
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert(
             "llama_stage.prefill_token_count".to_string(),
@@ -341,11 +339,11 @@ impl StageOpenAiBackend {
         attrs.insert("skippy.kv.recorded_pages".to_string(), json!(0));
         attrs.insert(
             "llama_stage.runtime_lock_wait_ms".to_string(),
-            json!(runtime_lock_wait_ms),
+            json!(outcome.runtime_lock_wait_ms),
         );
         attrs.insert(
             "llama_stage.runtime_lock_hold_ms".to_string(),
-            json!(runtime_lock_hold_ms),
+            json!(outcome.runtime_lock_hold_ms),
         );
         attrs.insert("llama_stage.runtime_lock_acquires".to_string(), json!(1));
         Self::insert_runtime_session_stats(

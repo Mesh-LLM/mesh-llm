@@ -4,7 +4,8 @@ use std::ptr;
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::{
     ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
-    NativeMtpDraft as RawNativeMtpDraft, SamplingConfig as RawSamplingConfig,
+    IterationRequest as RawIterationRequest, NativeMtpDraft as RawNativeMtpDraft,
+    SamplingConfig as RawSamplingConfig,
 };
 
 use crate::error::{ensure_ok, free_error};
@@ -43,7 +44,121 @@ pub struct DecodeFrameBatchRequest<'a> {
     pub input: Option<&'a ActivationFrame>,
 }
 
+pub struct IterationBatchRequest<'a> {
+    pub session: &'a mut StageSession,
+    pub token_ids: &'a [i32],
+    pub positions: &'a [i32],
+    pub sampling: Option<&'a SamplingConfig>,
+    pub input: Option<&'a ActivationFrame>,
+    pub sample_last: bool,
+}
+
 impl StageSession {
+    pub fn iteration_batch_sampled(
+        requests: &mut [IterationBatchRequest<'_>],
+    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+        Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()])
+    }
+
+    fn iteration_batch_sampled_raw(
+        requests: &mut [IterationBatchRequest<'_>],
+        output_capacities: &[usize],
+    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let raw_sampling = requests
+            .iter()
+            .map(|request| request.sampling.map(SamplingConfig::as_raw))
+            .collect::<Vec<_>>();
+        let input_frames = requests
+            .iter()
+            .map(|request| raw_input_frame(request.input))
+            .collect::<Result<Vec<_>>>()?;
+        let raw_requests = requests
+            .iter()
+            .zip(raw_sampling.iter())
+            .zip(input_frames.iter())
+            .map(|((request, sampling), input)| RawIterationRequest {
+                session: request.session.raw,
+                token_ids: request.token_ids.as_ptr(),
+                token_count: request.token_ids.len(),
+                positions: if request.positions.is_empty() {
+                    ptr::null()
+                } else {
+                    request.positions.as_ptr()
+                },
+                position_count: request.positions.len(),
+                sampling: sampling
+                    .as_ref()
+                    .map_or(ptr::null(), |config| config as *const RawSamplingConfig),
+                input_desc: raw_input_desc_ptr(input),
+                input_payload: input.1,
+                sample_last: request.sample_last,
+            })
+            .collect::<Vec<_>>();
+        let mut output_descs = vec![empty_raw_activation_desc(); requests.len()];
+        let mut output_payloads = output_capacities
+            .iter()
+            .map(|capacity| vec![0_u8; *capacity])
+            .collect::<Vec<_>>();
+        let output_payload_ptrs = output_payloads
+            .iter_mut()
+            .map(|payload| payload.as_mut_ptr().cast())
+            .collect::<Vec<_>>();
+        let mut output_bytes = vec![0_usize; requests.len()];
+        let mut predicted_tokens = vec![-1_i32; requests.len()];
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_iteration_batch_sampled(
+                raw_requests.as_ptr(),
+                raw_requests.len(),
+                output_descs.as_mut_ptr(),
+                output_payload_ptrs.as_ptr(),
+                output_capacities.as_ptr(),
+                output_bytes.as_mut_ptr(),
+                predicted_tokens.as_mut_ptr(),
+                predicted_tokens.len(),
+                &mut error,
+            )
+        };
+        if status == Status::BufferTooSmall
+            && output_bytes
+                .iter()
+                .zip(output_capacities.iter())
+                .any(|(required, capacity)| required > capacity)
+        {
+            free_error(error);
+            return Self::iteration_batch_sampled_raw(requests, &output_bytes);
+        }
+        ensure_ok(status, error)?;
+        for request in requests.iter_mut() {
+            request.session.token_count = request
+                .session
+                .token_count
+                .checked_add(
+                    u64::try_from(request.token_ids.len()).context("token count exceeds u64")?,
+                )
+                .context("session token count overflow")?;
+        }
+        Ok(output_payloads
+            .into_iter()
+            .zip(output_descs)
+            .zip(output_bytes)
+            .zip(predicted_tokens)
+            .map(|(((mut payload, desc), bytes), predicted_token)| {
+                payload.truncate(bytes);
+                DecodeFrameBatchOutput {
+                    predicted_token,
+                    output: ActivationFrame {
+                        desc: desc.into(),
+                        payload,
+                    },
+                }
+            })
+            .collect())
+    }
+
     pub fn prefill_chunk_frame(
         &mut self,
         token_ids: &[i32],

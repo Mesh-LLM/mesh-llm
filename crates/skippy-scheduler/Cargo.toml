@@ -7,14 +7,5 @@ description = "Iteration-level scheduler for concurrent staged serving with unif
 categories = ["concurrency", "machine-learning"]
 
 [dependencies]
-anyhow = { workspace = true }
-crossbeam = "0.8"
-parking_lot = "0.12"
 skippy-runtime = { path = "../skippy-runtime" }
-skippy-server = { path = "../skippy-server" }
-tokio = { version = "1", features = ["sync", "time", "macros"] }
-tracing = "0.1"
-
-[dev-dependencies]
-skippy-correctness = { path = "../skippy-correctness" }
-skippy-protocol = { path = "../skippy-protocol" }
+thiserror = "2"

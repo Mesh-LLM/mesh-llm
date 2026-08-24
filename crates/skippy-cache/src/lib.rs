@@ -21,3 +21,6 @@ pub use resident::{
     ResidentActivationStats, ResidentPrefixAllocation, ResidentPrefixCache,
     ResidentPrefixCacheStats, ResidentPrefixEviction, ResidentPrefixLookup,
 };
+
+/// llama.cpp's hard sequence-id capacity for one context.
+pub const LLAMA_MAX_SEQ: i32 = 256;

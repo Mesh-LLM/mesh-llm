@@ -1,10 +1,11 @@
 use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
-    ActivationDesc, BackendDevice, Error, GenerationSignalWindow, KvPageDesc, LlamaLogCallback,
-    LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext, MtmdContextParams,
-    MtmdDecoderPos, MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache,
-    Opaque, RuntimeConfig, SamplingConfig, Session, SlicePlan, Status, TensorInfo, TokenSignal,
+    ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
+    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext,
+    MtmdContextParams, MtmdDecoderPos, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SlicePlan, Status,
+    TensorInfo, TokenSignal,
 };
 
 unsafe extern "C" {
@@ -199,6 +200,18 @@ unsafe extern "C" {
         token_ids: *const i32,
         sampling: *const *const SamplingConfig,
         request_count: usize,
+        out_predicted_tokens: *mut i32,
+        predicted_token_capacity: usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_iteration_batch_sampled(
+        requests: *const IterationRequest,
+        request_count: usize,
+        output_descs: *mut ActivationDesc,
+        output_payloads: *const *mut c_void,
+        output_payload_capacities: *const usize,
+        out_output_payload_bytes: *mut usize,
         out_predicted_tokens: *mut i32,
         predicted_token_capacity: usize,
         out_error: *mut *mut Error,

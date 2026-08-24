@@ -47,6 +47,8 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) model_weight_bytes: u64,
     pub(super) layer_weight_bytes: Vec<u64>,
     pub(super) kv_bytes_per_token: u64,
+    pub(super) recurrent_bytes_per_sequence_by_layer: Vec<u64>,
+    pub(super) reserved_sequence_ids: usize,
     pub(super) context_length_override: Option<u32>,
     pub(super) parallel_lanes_override: Option<usize>,
     pub(super) target_decode_tpot_ms: Option<u32>,
@@ -131,6 +133,8 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
         model_weight_bytes: input.model_weight_bytes,
         layer_weight_bytes: input.layer_weight_bytes,
         kv_bytes_per_token: input.kv_bytes_per_token,
+        recurrent_bytes_per_sequence_by_layer: input.recurrent_bytes_per_sequence_by_layer,
+        reserved_sequence_ids: input.reserved_sequence_ids,
         minimum_nodes: input.minimum_nodes,
         nodes: input
             .nodes
@@ -353,6 +357,8 @@ fn runtime_slice_plan_input(
         model_weight_bytes: package.source_model_bytes,
         layer_weight_bytes: package_layer_weight_bytes(package),
         kv_bytes_per_token: resources.kv_bytes_per_token,
+        recurrent_bytes_per_sequence_by_layer: Vec::new(),
+        reserved_sequence_ids: 16,
         context_length_override: resources.ctx_size_override,
         parallel_lanes_override: resources.parallel_override,
         target_decode_tpot_ms: Some(DEFAULT_TARGET_DECODE_TPOT_MS),

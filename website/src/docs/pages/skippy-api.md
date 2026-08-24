@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **13 headers** and **73 exported functions**.
+Current generated surface: **13 headers** and **74 exported functions**.
 
 ## Quick navigation
 
@@ -42,12 +42,13 @@ Current generated surface: **13 headers** and **73 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-execution-h"><code>execution.h</code><span>14 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-execution-h"><code>execution.h</code><span>15 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-prefill-chunk"><code>skippy_prefill_chunk</code></a>
         <a href="#skippy-fn-skippy-verify-tokens"><code>skippy_verify_tokens</code></a>
         <a href="#skippy-fn-skippy-decode-step-sampled"><code>skippy_decode_step_sampled</code></a>
         <a href="#skippy-fn-skippy-decode-step-sampled-mtp"><code>skippy_decode_step_sampled_mtp</code></a>
+        <a href="#skippy-fn-skippy-iteration-batch-sampled"><code>skippy_iteration_batch_sampled</code></a>
         <a href="#skippy-fn-skippy-decode-batch-sampled"><code>skippy_decode_batch_sampled</code></a>
         <a href="#skippy-fn-skippy-prefill-chunk-frame"><code>skippy_prefill_chunk_frame</code></a>
         <a href="#skippy-fn-skippy-prefill-chunk-frame-sampled"><code>skippy_prefill_chunk_frame_sampled</code></a>
@@ -321,14 +322,32 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled_mtp(
         struct skippy_error ** out_error);
 ```
 
+<a id="skippy-fn-skippy-iteration-batch-sampled"></a>
+#### `skippy_iteration_batch_sampled`
+
+Executes mixed prefill chunks and decode tokens in one model iteration. Requests may have different token counts. Outputs are request-major and each activation frame contains the complete token span for its request. GLM-DSA inputs in one iteration must use the same sideband width and stream count.
+
+```cpp
+LLAMA_API enum skippy_status skippy_iteration_batch_sampled(
+         const struct skippy_iteration_request * requests,
+        size_t request_count,
+        struct skippy_activation_desc * output_descs,
+        void * const * output_payloads,
+        const size_t * output_payload_capacities,
+        size_t * out_output_payload_bytes,
+        llama_token * out_predicted_tokens,
+        size_t predicted_token_capacity,
+        struct skippy_error ** out_error);
+```
+
 <a id="skippy-fn-skippy-decode-batch-sampled"></a>
 #### `skippy_decode_batch_sampled`
 
 Samples one predicted token for each session in a request batch.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_decode_batch_sampled(
-         struct skippy_session * const * sessions,
+LLAMA_API SKIPPY_DEPRECATED(
+        "use skippy_iteration_batch_sampled") enum skippy_status skippy_decode_batch_sampled( struct skippy_session * const * sessions,
         const llama_token * token_ids,
         const struct skippy_sampling_config * const * sampling,
         size_t request_count,
@@ -469,8 +488,8 @@ LLAMA_API enum skippy_status skippy_decode_step_frame_sampled_mtp(
 Runs framed sampled decode for multiple sessions in one batch.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_decode_step_frame_batch_sampled(
-         struct skippy_session * const * sessions,
+LLAMA_API SKIPPY_DEPRECATED(
+        "use skippy_iteration_batch_sampled") enum skippy_status skippy_decode_step_frame_batch_sampled( struct skippy_session * const * sessions,
         const llama_token * token_ids,
         const struct skippy_sampling_config * const * sampling,
         const struct skippy_activation_desc * const * input_descs,
@@ -1282,9 +1301,10 @@ LLAMA_API enum skippy_status skippy_parse_chat_response_json(
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 39`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 40`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
+- `execution.h`: `skippy_iteration_request`
 - `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_slice_plan`, `skippy_tensor_info`
 - `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`
 - `sampling.h`: `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`

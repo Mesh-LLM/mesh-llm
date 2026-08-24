@@ -297,6 +297,62 @@ impl RuntimeState {
         result
     }
 
+    pub fn iteration_batch_sampled(
+        &mut self,
+        requests: &[RuntimeIterationBatchRequest<'_>],
+    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for request in requests {
+            if !unique.insert(request.session_id) {
+                bail!(
+                    "iteration contains duplicate session {}",
+                    request.session_id
+                );
+            }
+            self.session(request.session_id)?;
+        }
+
+        let mut lane_sessions = Vec::with_capacity(requests.len());
+        for request in requests {
+            let lane_session = self.sessions.remove(request.session_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "session {} was not active after admission",
+                    request.session_id
+                )
+            })?;
+            lane_sessions.push((request.session_id.to_string(), lane_session));
+        }
+
+        let result = {
+            let mut iteration_requests = lane_sessions
+                .iter_mut()
+                .zip(requests.iter())
+                .map(|((_, lane_session), request)| IterationBatchRequest {
+                    session: &mut lane_session.session,
+                    token_ids: request.token_ids,
+                    positions: request.positions,
+                    sampling: request.sampling,
+                    input: request.input,
+                    sample_last: request.sample_last,
+                })
+                .collect::<Vec<_>>();
+            StageSession::iteration_batch_sampled(&mut iteration_requests)
+        };
+
+        for (session_id, lane_session) in lane_sessions {
+            self.sessions.insert(session_id, lane_session);
+        }
+        if result.is_ok() {
+            for request in requests {
+                self.add_session_tokens(request.session_id, request.token_ids.len() as u64);
+            }
+        }
+        result
+    }
+
     pub fn verify_frame(
         &mut self,
         session_id: &str,

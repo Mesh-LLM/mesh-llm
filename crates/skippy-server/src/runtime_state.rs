@@ -8,10 +8,10 @@ use anyhow::{Context, Result, bail};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
-    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, MediaInput,
-    MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
-    RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel, StageSession, TokenSignal,
-    parse_cache_type,
+    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, IterationBatchRequest,
+    MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft, RuntimeConfig,
+    RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel, StageSession,
+    TokenSignal, parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -115,6 +115,15 @@ pub struct RuntimeDecodeFrameBatchRequest<'a> {
     pub token_id: i32,
     pub sampling: Option<&'a SamplingConfig>,
     pub input: Option<&'a ActivationFrame>,
+}
+
+pub struct RuntimeIterationBatchRequest<'a> {
+    pub session_id: &'a str,
+    pub token_ids: &'a [i32],
+    pub positions: &'a [i32],
+    pub sampling: Option<&'a SamplingConfig>,
+    pub input: Option<&'a ActivationFrame>,
+    pub sample_last: bool,
 }
 
 #[derive(Debug, Clone)]

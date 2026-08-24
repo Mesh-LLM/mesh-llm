@@ -10,6 +10,7 @@ const CONTEXT_STEPS: &[u32] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_
 /// Minimum context length per session for lane ceiling calculation.
 /// This is the floor_ctx_per_session from the design.
 const FLOOR_CTX_PER_SESSION: u32 = 4096;
+const LLAMA_MAX_SEQ: usize = 256;
 
 /// Compute-buffer reserve applied to the KV term of each layer's placement
 /// cost. Charging KV at 100/85 holds back 15% of a node's post-weight space for
@@ -31,6 +32,11 @@ pub struct TopologyPlanningInput {
     pub model_weight_bytes: u64,
     pub layer_weight_bytes: Vec<u64>,
     pub kv_bytes_per_token: u64,
+    /// Fixed recurrent-state allocation for one configured lane, per layer.
+    /// Dense/SWA-only layers use zero. The vector is layer-aligned when set.
+    pub recurrent_bytes_per_sequence_by_layer: Vec<u64>,
+    /// Sequence identifiers reserved for resident prefixes and auxiliary work.
+    pub reserved_sequence_ids: usize,
     pub minimum_nodes: usize,
     pub nodes: Vec<TopologyNode>,
     pub context_length_override: Option<u32>,
@@ -84,6 +90,8 @@ pub enum TopologyPlanError {
     ContextExceedsNative { requested: u32, native: u32 },
     #[error("requested parallel lanes must be greater than zero")]
     ZeroParallelLanes,
+    #[error("requested parallel lanes {requested} exceed sequence-id capacity {capacity}")]
+    ParallelLanesExceedSequenceCapacity { requested: usize, capacity: usize },
     #[error("no topology can distribute all layers and keep context >= {minimum_context}")]
     NoValidTopology { minimum_context: u32 },
     #[error("locked topology must contain at least {minimum} stages; found {actual}")]
@@ -145,6 +153,7 @@ fn plan_topology_with_required_stage0(
             input.parallel_lanes_override,
             context_length,
             input.kv_bytes_per_token,
+            input.reserved_sequence_ids,
         )?;
         for node_count in minimum_nodes..=nodes.len().min(input.layer_count as usize) {
             for parallel_lanes in lane_candidates.iter().copied() {
@@ -237,10 +246,18 @@ fn parallel_lane_candidates(
     override_lanes: Option<usize>,
     context_length: u32,
     _kv_bytes_per_token: u64,
+    reserved_sequence_ids: usize,
 ) -> Result<Vec<usize>, TopologyPlanError> {
+    let sequence_capacity = LLAMA_MAX_SEQ.saturating_sub(reserved_sequence_ids);
     if let Some(lanes) = override_lanes {
         if lanes == 0 {
             return Err(TopologyPlanError::ZeroParallelLanes);
+        }
+        if lanes > sequence_capacity {
+            return Err(TopologyPlanError::ParallelLanesExceedSequenceCapacity {
+                requested: lanes,
+                capacity: sequence_capacity,
+            });
         }
         return Ok(vec![lanes]);
     }
@@ -249,7 +266,7 @@ fn parallel_lane_candidates(
     // floor_ctx_per_session = minimum context needed per session
     let pool_cells = context_length as usize;
     let max_seq = pool_cells / FLOOR_CTX_PER_SESSION as usize;
-    let max_seq = max_seq.max(1).min(64); // Cap at 64 for practical purposes
+    let max_seq = max_seq.clamp(1, sequence_capacity.max(1));
     Ok((1..=max_seq).rev().collect())
 }
 
@@ -366,8 +383,14 @@ fn fit_candidate(
     let kv_per_layer = input
         .kv_bytes_per_token
         .div_ceil(u64::from(input.layer_count));
-    let layer_required_bytes =
-        layer_required_bytes(&layer_weights, kv_per_layer, context_length, parallel_lanes)?;
+    let recurrent_by_layer = recurrent_bytes_by_layer(input);
+    let layer_required_bytes = layer_required_bytes(
+        &layer_weights,
+        &recurrent_by_layer,
+        kv_per_layer,
+        context_length,
+        parallel_lanes,
+    )?;
 
     let mut capacities = nodes.to_vec();
     capacities.sort_by(|left, right| {
@@ -557,16 +580,30 @@ fn candidate_bytes_per_layer(
 
 fn layer_required_bytes(
     layer_weights: &[u64],
+    recurrent_bytes_by_layer: &[u64],
     kv_per_layer: u64,
     context_length: u32,
     parallel_lanes: usize,
 ) -> Option<Vec<u64>> {
     layer_weights
         .iter()
-        .map(|weight| {
+        .zip(recurrent_bytes_by_layer.iter().copied())
+        .map(|(weight, recurrent_bytes)| {
             candidate_bytes_per_layer(*weight, kv_per_layer, context_length, parallel_lanes)
+                .and_then(|base| {
+                    recurrent_bytes
+                        .checked_mul(parallel_lanes as u64)
+                        .and_then(|recurrent| base.checked_add(recurrent))
+                })
         })
         .collect()
+}
+
+fn recurrent_bytes_by_layer(input: &TopologyPlanningInput) -> Vec<u64> {
+    if input.recurrent_bytes_per_sequence_by_layer.len() == input.layer_count as usize {
+        return input.recurrent_bytes_per_sequence_by_layer.clone();
+    }
+    vec![0; input.layer_count as usize]
 }
 
 fn max_contiguous_layers_from(
@@ -631,6 +668,8 @@ mod tests {
             model_weight_bytes: 40 * GIB,
             layer_weight_bytes: Vec::new(),
             kv_bytes_per_token: 64 * 1024,
+            recurrent_bytes_per_sequence_by_layer: Vec::new(),
+            reserved_sequence_ids: 16,
             minimum_nodes: 1,
             nodes,
             context_length_override: None,
@@ -646,6 +685,8 @@ mod tests {
             model_weight_bytes: QWEN_CODER_480B_WEIGHT_BYTES,
             layer_weight_bytes: Vec::new(),
             kv_bytes_per_token: QWEN_CODER_480B_Q8_KV_BYTES_PER_TOKEN,
+            recurrent_bytes_per_sequence_by_layer: Vec::new(),
+            reserved_sequence_ids: 16,
             minimum_nodes: 2,
             nodes,
             context_length_override: None,
@@ -679,7 +720,7 @@ mod tests {
         let plan = plan_topology(&input(vec![node("a", 23), node("b", 23)])).unwrap();
 
         assert_eq!(plan.context_length, 65_536);
-        assert_eq!(plan.parallel_lanes, 4);
+        assert_eq!(plan.parallel_lanes, 16);
         assert_eq!(plan.stages.len(), 2);
     }
 
@@ -697,7 +738,7 @@ mod tests {
 
         assert_eq!(plan.context_length, 65_536);
         assert_eq!(plan.stages.len(), 1);
-        assert_eq!(plan.parallel_lanes, 4);
+        assert_eq!(plan.parallel_lanes, 16);
     }
 
     #[test]
@@ -897,7 +938,7 @@ mod tests {
         //   part of the fixture, but the planner must use Metal working set
         //   size, not total RAM.
         //
-        // Expected topology: possible, 131_072 context, 4 lanes.
+        // Expected topology: possible, 131_072 context, 32 lanes.
         //
         // Why: this is a fixture-driven simulation. The model package metadata
         // and each machine's Metal working-set budget are passed into the same
@@ -924,7 +965,7 @@ mod tests {
 
         assert!(split_possible, "{planned:?}");
         assert_eq!(context_length, Some(131_072));
-        assert_eq!(parallel_lanes, Some(4));
+        assert_eq!(parallel_lanes, Some(32));
 
         let plan = planned.expect("studio-james and studio-mic should form a split topology");
         assert_eq!(plan.stages.len(), 2);
@@ -938,16 +979,16 @@ mod tests {
     fn qwen_coder_480b_uses_context_floor_when_larger_contexts_do_not_fit() {
         // Simulation: 4 x 80 GiB nodes.
         //
-        // Expected topology: 4 stages, 65_536 context, 4 lanes.
+        // Expected topology: 4 stages, 65_536 context, 16 lanes.
         //
         // Why: native 262_144 and 131_072 contexts do not fit across these
         // nodes, but the shared 64k floor does.  Lanes use a shared unified
-        // KV cache and do not multiply memory cost, so the auto cap of 4
-        // applies.
+        // KV cache and do not multiply memory cost, so the pool/floor formula
+        // derives 16 lanes.
         let plan = plan_topology(&qwen_coder_480b_input(qwen_nodes(4, 80))).unwrap();
 
         assert_eq!(plan.context_length, 65_536);
-        assert_eq!(plan.parallel_lanes, 4);
+        assert_eq!(plan.parallel_lanes, 16);
         assert_eq!(plan.stages.len(), 4);
         assert_eq!(plan.stages.first().unwrap().layer_start, 0);
         assert_eq!(
@@ -960,14 +1001,14 @@ mod tests {
     fn qwen_coder_480b_prefers_native_context_then_parallelism() {
         // Simulation: 5 x 80 GiB nodes.
         //
-        // Expected topology: 5 stages, native 262_144 context, 4 lanes.
+        // Expected topology: 5 stages, native 262_144 context, 64 lanes.
         //
         // Why: adding the fifth node makes native context fit.  Lanes use a
-        // shared unified KV cache, so the auto cap of 4 applies.
+        // shared unified KV cache, so the pool/floor formula derives 64 lanes.
         let plan = plan_topology(&qwen_coder_480b_input(qwen_nodes(5, 80))).unwrap();
 
         assert_eq!(plan.context_length, QWEN_CODER_480B_NATIVE_CONTEXT);
-        assert_eq!(plan.parallel_lanes, 4);
+        assert_eq!(plan.parallel_lanes, 64);
         assert_eq!(plan.stages.len(), 5);
     }
 
@@ -975,16 +1016,16 @@ mod tests {
     fn qwen_coder_480b_prefers_fewest_nodes_then_maximizes_lanes() {
         // Simulation: 10 x 80 GiB nodes.
         //
-        // Expected topology: 5 stages, native 262_144 context, 4 lanes.
+        // Expected topology: 5 stages, native 262_144 context, 64 lanes.
         //
         // Why: the planner prefers fewest nodes before more lanes. Five nodes
         // is the minimum that can hold the full layer package at native
         // context.  Lanes use a shared unified KV cache, so the auto cap of
-        // 4 applies regardless of extra VRAM headroom.
+        // 64 applies regardless of extra VRAM headroom.
         let plan = plan_topology(&qwen_coder_480b_input(qwen_nodes(10, 80))).unwrap();
 
         assert_eq!(plan.context_length, QWEN_CODER_480B_NATIVE_CONTEXT);
-        assert_eq!(plan.parallel_lanes, 4);
+        assert_eq!(plan.parallel_lanes, 64);
         assert_eq!(plan.stages.len(), 5);
     }
 
@@ -992,7 +1033,7 @@ mod tests {
     fn qwen_coder_480b_excludes_bystander_nodes() {
         // Simulation: 7 x 80 GiB nodes plus 3 x 1 GiB bystanders.
         //
-        // Expected topology: 5 stages, native 262_144 context, 4 lanes.
+        // Expected topology: 5 stages, native 262_144 context, 64 lanes.
         //
         // Why: the planner prefers fewest nodes first. Five 80 GiB nodes
         // achieve native context. Bystander nodes (1 GiB) cannot carry even
@@ -1002,7 +1043,7 @@ mod tests {
         let plan = plan_topology(&qwen_coder_480b_input(nodes)).unwrap();
 
         assert_eq!(plan.context_length, QWEN_CODER_480B_NATIVE_CONTEXT);
-        assert_eq!(plan.parallel_lanes, 4);
+        assert_eq!(plan.parallel_lanes, 64);
         assert_eq!(plan.stages.len(), 5);
         assert!(
             plan.stages

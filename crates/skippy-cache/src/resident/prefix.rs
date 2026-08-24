@@ -320,7 +320,7 @@ impl ResidentPrefixCache {
             .next_seq_id
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("resident prefix sequence id overflow"))?;
-        if seq_id < self.reserved_seq_count || seq_id >= 1024 {
+        if seq_id < self.reserved_seq_count || seq_id >= crate::LLAMA_MAX_SEQ {
             bail!("resident prefix sequence id capacity exhausted");
         }
         Ok(seq_id)

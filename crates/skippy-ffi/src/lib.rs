@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 39;
+pub const ABI_VERSION_PATCH: u32 = 40;
 
 mod abi;
 mod activation;
@@ -26,13 +26,14 @@ pub use abi::{
     AbiVersion, ActivationDType, ActivationLayout, BACKEND_DEVICE_CAP_ASYNC,
     BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR, BACKEND_DEVICE_CAP_EVENTS,
     BACKEND_DEVICE_CAP_HOST_BUFFER, BackendDevice, BackendDeviceType, Error,
-    FEATURE_BACKEND_DEVICES, FEATURE_INKLING_MTP_MM, FEATURE_NATIVE_MTP_N1,
-    FEATURE_NGRAM_CACHE_DRAFT, FEATURE_RUNTIME_EVENTS, LlamaLogCallback, LoadMode, Model,
-    ModelInfo, MtmdProgressCallback, MtpSource, NgramCache, Opaque, RuntimeConfig, Session,
-    SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventCallback,
-    SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode,
-    SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit, SkippyRuntimeEventReporterV1,
-    SkippyRuntimeEventV1, SlicePlan, Status, TensorRole, runtime_abi_supported,
+    FEATURE_BACKEND_DEVICES, FEATURE_INKLING_MTP_MM, FEATURE_ITERATION_BATCH,
+    FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT, FEATURE_RUNTIME_EVENTS, IterationRequest,
+    LlamaLogCallback, LoadMode, Model, ModelInfo, MtmdProgressCallback, MtpSource, NgramCache,
+    Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
+    SkippyRuntimeEventCallback, SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind,
+    SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit,
+    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan, Status, TensorRole,
+    runtime_abi_supported,
 };
 pub use activation::{ACTIVATION_FLAG_INKLING_MTP_EMBD, ActivationDesc, LogitBias, TensorInfo};
 pub use model::{
@@ -79,25 +80,25 @@ pub use dynamic::{
     skippy_detokenize, skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
     skippy_export_recurrent_state, skippy_export_state, skippy_import_full_state,
     skippy_import_kv_page, skippy_import_recurrent_state, skippy_import_state,
-    skippy_model_attach_mtp_draft_model_fn, skippy_model_free, skippy_model_info_free,
-    skippy_model_info_open, skippy_model_info_tensor_at, skippy_model_info_tensor_count,
-    skippy_model_llama_model, skippy_model_open, skippy_model_open_from_parts,
-    skippy_model_open_from_parts_with_events_fn, skippy_model_open_with_events_fn,
-    skippy_ngram_cache_append, skippy_ngram_cache_create, skippy_ngram_cache_draft,
-    skippy_ngram_cache_free, skippy_ngram_cache_reset, skippy_parse_chat_response_json,
-    skippy_prefill_chunk, skippy_prefill_chunk_frame, skippy_prefill_chunk_frame_sampled,
-    skippy_prefill_chunk_frame_sampled_with_positions, skippy_prefill_chunk_frame_with_positions,
-    skippy_retire_verify_checkpoint, skippy_session_batch_size,
-    skippy_session_begin_external_decode, skippy_session_configure_chat_sampling,
-    skippy_session_copy_output_activation_frame, skippy_session_create,
-    skippy_session_create_from_resident_prefix, skippy_session_drop_sequence,
-    skippy_session_end_external_decode, skippy_session_free, skippy_session_last_token_signal,
-    skippy_session_llama_context, skippy_session_position, skippy_session_reset,
-    skippy_session_restore_prefix, skippy_session_sample_current, skippy_session_save_prefix,
-    skippy_session_set_position, skippy_session_signal_window, skippy_slice_plan_add_layer_range,
-    skippy_slice_plan_create, skippy_slice_plan_free, skippy_token_is_eog, skippy_tokenize,
-    skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
-    skippy_write_gguf_from_parts, skippy_write_slice_gguf,
+    skippy_iteration_batch_sampled, skippy_model_attach_mtp_draft_model_fn, skippy_model_free,
+    skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
+    skippy_model_info_tensor_count, skippy_model_llama_model, skippy_model_open,
+    skippy_model_open_from_parts, skippy_model_open_from_parts_with_events_fn,
+    skippy_model_open_with_events_fn, skippy_ngram_cache_append, skippy_ngram_cache_create,
+    skippy_ngram_cache_draft, skippy_ngram_cache_free, skippy_ngram_cache_reset,
+    skippy_parse_chat_response_json, skippy_prefill_chunk, skippy_prefill_chunk_frame,
+    skippy_prefill_chunk_frame_sampled, skippy_prefill_chunk_frame_sampled_with_positions,
+    skippy_prefill_chunk_frame_with_positions, skippy_retire_verify_checkpoint,
+    skippy_session_batch_size, skippy_session_begin_external_decode,
+    skippy_session_configure_chat_sampling, skippy_session_copy_output_activation_frame,
+    skippy_session_create, skippy_session_create_from_resident_prefix,
+    skippy_session_drop_sequence, skippy_session_end_external_decode, skippy_session_free,
+    skippy_session_last_token_signal, skippy_session_llama_context, skippy_session_position,
+    skippy_session_reset, skippy_session_restore_prefix, skippy_session_sample_current,
+    skippy_session_save_prefix, skippy_session_set_position, skippy_session_signal_window,
+    skippy_slice_plan_add_layer_range, skippy_slice_plan_create, skippy_slice_plan_free,
+    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
+    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts, skippy_write_slice_gguf,
 };
 
 #[cfg(not(feature = "dynamic-runtime"))]
@@ -117,8 +118,8 @@ pub use static_bindings::{
     skippy_decode_step_sampled_mtp, skippy_detokenize, skippy_error_free, skippy_export_full_state,
     skippy_export_kv_page, skippy_export_recurrent_state, skippy_export_state,
     skippy_import_full_state, skippy_import_kv_page, skippy_import_recurrent_state,
-    skippy_import_state, skippy_model_attach_mtp_draft_model, skippy_model_free,
-    skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
+    skippy_import_state, skippy_iteration_batch_sampled, skippy_model_attach_mtp_draft_model,
+    skippy_model_free, skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
     skippy_model_info_tensor_count, skippy_model_llama_model, skippy_model_open,
     skippy_model_open_from_parts, skippy_ngram_cache_append, skippy_ngram_cache_create,
     skippy_ngram_cache_draft, skippy_ngram_cache_free, skippy_ngram_cache_reset,

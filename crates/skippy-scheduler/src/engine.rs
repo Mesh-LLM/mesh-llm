@@ -1,0 +1,453 @@
+use std::collections::{BTreeMap, VecDeque};
+use std::time::Instant;
+
+use crate::{
+    IterationPhase, IterationPlan, IterationTelemetry, IterationWork, SchedulerConfig,
+    SchedulerMetrics, Sequence, SequenceStatus,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AdmissionError {
+    #[error("scheduler waiting queue is full ({capacity} requests)")]
+    QueueFull { capacity: usize },
+    #[error("sequence id is already queued or active: {0}")]
+    DuplicateSequence(String),
+    #[error("sequence prompt must contain at least one token")]
+    EmptyPrompt,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchedulerSnapshot {
+    pub active_ids: Vec<String>,
+    pub waiting_ids: Vec<String>,
+    pub component_used_bytes: Vec<(String, u64)>,
+}
+
+pub struct Scheduler {
+    config: SchedulerConfig,
+    waiting: VecDeque<Sequence>,
+    active: BTreeMap<String, Sequence>,
+    component_used_bytes: Vec<u64>,
+    metrics: SchedulerMetrics,
+}
+
+impl Scheduler {
+    pub fn new(config: SchedulerConfig) -> Self {
+        let config = config.normalized();
+        Self {
+            component_used_bytes: vec![0; config.memory_components.len()],
+            config,
+            waiting: VecDeque::new(),
+            active: BTreeMap::new(),
+            metrics: SchedulerMetrics::default(),
+        }
+    }
+
+    pub fn submit(&mut self, sequence: Sequence) -> Result<(), AdmissionError> {
+        if sequence.prompt_tokens.is_empty() {
+            return Err(AdmissionError::EmptyPrompt);
+        }
+        if self.active.contains_key(&sequence.id)
+            || self.waiting.iter().any(|queued| queued.id == sequence.id)
+        {
+            return Err(AdmissionError::DuplicateSequence(sequence.id));
+        }
+        if self.waiting.len() >= self.config.max_waiting_sequences {
+            self.metrics.rejected_overload = self.metrics.rejected_overload.saturating_add(1);
+            return Err(AdmissionError::QueueFull {
+                capacity: self.config.max_waiting_sequences,
+            });
+        }
+        if sequence.prefix_restore.is_some() {
+            self.metrics.prefix_hits = self.metrics.prefix_hits.saturating_add(1);
+        } else {
+            self.metrics.prefix_misses = self.metrics.prefix_misses.saturating_add(1);
+        }
+        self.waiting.push_back(sequence);
+        self.refresh_counts();
+        Ok(())
+    }
+
+    pub fn plan_iteration(&mut self) -> IterationPlan {
+        let admitted = self.admit_waiting();
+        let mut plan = IterationPlan {
+            admitted,
+            ..IterationPlan::default()
+        };
+        let mut budget = self.config.max_tokens_per_iteration;
+        let ids = self.active.keys().cloned().collect::<Vec<_>>();
+
+        for id in ids {
+            if budget == 0 {
+                break;
+            }
+            let Some(sequence) = self.active.get_mut(&id) else {
+                continue;
+            };
+            let replay = sequence.recompute_tokens();
+            if sequence.prefill_cursor < replay.len() {
+                let count = self
+                    .config
+                    .prefill_chunk_tokens
+                    .min(replay.len() - sequence.prefill_cursor)
+                    .min(budget);
+                let start = sequence.prefill_cursor;
+                let end = start + count;
+                let phase = if sequence.generated_tokens.is_empty() {
+                    IterationPhase::Prefill
+                } else {
+                    IterationPhase::Recompute
+                };
+                let sample_last = end == replay.len() && sequence.generated_tokens.is_empty();
+                plan.work.push(IterationWork {
+                    sequence_id: id,
+                    tokens: replay[start..end].to_vec(),
+                    positions: contiguous_positions(start, count),
+                    sample_last,
+                    phase,
+                    sampling: sequence.sampling.clone(),
+                });
+                sequence.prefill_cursor = end;
+                plan.token_count += count;
+                budget -= count;
+                continue;
+            }
+
+            if let Some(token) = sequence.pending_decode_token() {
+                plan.work.push(IterationWork {
+                    sequence_id: id,
+                    tokens: vec![token],
+                    positions: contiguous_positions(replay.len(), 1),
+                    sample_last: true,
+                    phase: IterationPhase::Decode,
+                    sampling: sequence.sampling.clone(),
+                });
+                plan.token_count += 1;
+                budget -= 1;
+            }
+        }
+
+        plan
+    }
+
+    pub fn complete_iteration(
+        &mut self,
+        plan: &IterationPlan,
+        predicted_tokens: &[i32],
+    ) -> IterationTelemetry {
+        let mut finished = Vec::new();
+        let mut prefill_tokens = 0usize;
+        let mut recompute_tokens = 0usize;
+        let mut decode_tokens = 0usize;
+
+        for (index, work) in plan.work.iter().enumerate() {
+            match work.phase {
+                IterationPhase::Prefill => prefill_tokens += work.tokens.len(),
+                IterationPhase::Recompute => recompute_tokens += work.tokens.len(),
+                IterationPhase::Decode => decode_tokens += work.tokens.len(),
+            }
+            if !work.sample_last {
+                continue;
+            }
+            let Some(sequence) = self.active.get_mut(&work.sequence_id) else {
+                continue;
+            };
+            let predicted = predicted_tokens.get(index).copied().unwrap_or(-1);
+            if predicted < 0 {
+                sequence.status = SequenceStatus::Finished;
+                finished.push(work.sequence_id.clone());
+                continue;
+            }
+            sequence.generated_tokens.push(predicted);
+            if sequence.generated_tokens.len() >= sequence.max_tokens as usize {
+                sequence.status = SequenceStatus::Finished;
+                finished.push(work.sequence_id.clone());
+            }
+        }
+
+        for id in finished {
+            self.remove_active(&id);
+            self.metrics.finished = self.metrics.finished.saturating_add(1);
+        }
+        self.metrics.iterations = self.metrics.iterations.saturating_add(1);
+        self.metrics.admitted = self.metrics.admitted.saturating_add(plan.admitted as u64);
+        self.metrics.prefill_tokens = self
+            .metrics
+            .prefill_tokens
+            .saturating_add(prefill_tokens as u64);
+        self.metrics.recompute_tokens = self
+            .metrics
+            .recompute_tokens
+            .saturating_add(recompute_tokens as u64);
+        self.metrics.decode_tokens = self
+            .metrics
+            .decode_tokens
+            .saturating_add(decode_tokens as u64);
+        self.refresh_counts();
+
+        IterationTelemetry {
+            iteration: self.metrics.iterations,
+            active_sequences: self.active.len(),
+            waiting_sequences: self.waiting.len(),
+            admitted: plan.admitted,
+            preempted: plan.preempted,
+            prefill_tokens,
+            recompute_tokens,
+            decode_tokens,
+            component_used_bytes: self.component_usage(),
+        }
+    }
+
+    pub fn preempt_for_component_pressure(&mut self, component_used_bytes: &[u64]) -> Vec<String> {
+        for (target, used) in self
+            .component_used_bytes
+            .iter_mut()
+            .zip(component_used_bytes.iter().copied())
+        {
+            *target = used;
+        }
+        let mut preempted = Vec::new();
+        while self.component_over_capacity() {
+            let Some(victim) = self.preemption_victim() else {
+                break;
+            };
+            let Some(mut sequence) = self.active.remove(&victim) else {
+                break;
+            };
+            self.release_memory(&sequence);
+            sequence.reset_for_recompute();
+            self.waiting.push_front(sequence);
+            preempted.push(victim);
+            self.metrics.preempted = self.metrics.preempted.saturating_add(1);
+        }
+        self.refresh_counts();
+        preempted
+    }
+
+    pub fn metrics(&self) -> &SchedulerMetrics {
+        &self.metrics
+    }
+
+    pub fn snapshot(&self) -> SchedulerSnapshot {
+        SchedulerSnapshot {
+            active_ids: self.active.keys().cloned().collect(),
+            waiting_ids: self
+                .waiting
+                .iter()
+                .map(|sequence| sequence.id.clone())
+                .collect(),
+            component_used_bytes: self.component_usage(),
+        }
+    }
+
+    pub fn sequence(&self, id: &str) -> Option<&Sequence> {
+        self.active
+            .get(id)
+            .or_else(|| self.waiting.iter().find(|sequence| sequence.id == id))
+    }
+
+    fn admit_waiting(&mut self) -> usize {
+        let mut admitted = 0;
+        let mut deferred = VecDeque::new();
+        while let Some(mut sequence) = self.waiting.pop_front() {
+            if self.active.len() >= self.config.max_active_sequences
+                || !self.can_reserve_memory(&sequence)
+            {
+                deferred.push_back(sequence);
+                continue;
+            }
+            self.reserve_memory(&sequence);
+            sequence.status = SequenceStatus::Running;
+            sequence.admitted_at = Some(Instant::now());
+            self.active.insert(sequence.id.clone(), sequence);
+            admitted += 1;
+        }
+        self.waiting = deferred;
+        self.refresh_counts();
+        admitted
+    }
+
+    fn can_reserve_memory(&self, sequence: &Sequence) -> bool {
+        self.config
+            .memory_components
+            .iter()
+            .zip(self.component_used_bytes.iter().copied())
+            .all(|(component, used)| {
+                used.saturating_add(
+                    component.request_bytes(sequence.prompt_tokens.len(), sequence.max_tokens),
+                ) <= component.available_bytes()
+            })
+    }
+
+    fn reserve_memory(&mut self, sequence: &Sequence) {
+        for (index, component) in self.config.memory_components.iter().enumerate() {
+            self.component_used_bytes[index] = self.component_used_bytes[index].saturating_add(
+                component.request_bytes(sequence.prompt_tokens.len(), sequence.max_tokens),
+            );
+        }
+    }
+
+    fn release_memory(&mut self, sequence: &Sequence) {
+        for (index, component) in self.config.memory_components.iter().enumerate() {
+            self.component_used_bytes[index] = self.component_used_bytes[index].saturating_sub(
+                component.request_bytes(sequence.prompt_tokens.len(), sequence.max_tokens),
+            );
+        }
+    }
+
+    fn remove_active(&mut self, id: &str) {
+        if let Some(sequence) = self.active.remove(id) {
+            self.release_memory(&sequence);
+        }
+    }
+
+    fn component_over_capacity(&self) -> bool {
+        self.config
+            .memory_components
+            .iter()
+            .zip(self.component_used_bytes.iter().copied())
+            .any(|(component, used)| used > component.available_bytes())
+    }
+
+    fn preemption_victim(&self) -> Option<String> {
+        self.active
+            .values()
+            .min_by(|left, right| {
+                left.priority.cmp(&right.priority).then_with(|| {
+                    right
+                        .admitted_at
+                        .unwrap_or_else(Instant::now)
+                        .cmp(&left.admitted_at.unwrap_or_else(Instant::now))
+                })
+            })
+            .map(|sequence| sequence.id.clone())
+    }
+
+    fn component_usage(&self) -> Vec<(String, u64)> {
+        self.config
+            .memory_components
+            .iter()
+            .zip(self.component_used_bytes.iter().copied())
+            .map(|(component, used)| (component.name.clone(), used))
+            .collect()
+    }
+
+    fn refresh_counts(&mut self) {
+        self.metrics.active_sequences = self.active.len();
+        self.metrics.waiting_sequences = self.waiting.len();
+    }
+}
+
+fn contiguous_positions(start: usize, count: usize) -> Vec<i32> {
+    (start..start.saturating_add(count))
+        .map(|position| i32::try_from(position).unwrap_or(i32::MAX))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{MemoryComponent, PrefixRestore, PrefixRestoreKind};
+
+    fn sequence(id: &str, prompt_len: usize, max_tokens: u32) -> Sequence {
+        Sequence::new(
+            id.into(),
+            (0..prompt_len).map(|token| token as i32).collect(),
+            max_tokens,
+            None,
+            1,
+        )
+    }
+
+    #[test]
+    fn iteration_mixes_prefill_and_decode_without_replaying_final_prompt_token() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_tokens_per_iteration: 8,
+            prefill_chunk_tokens: 4,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("decode", 2, 4)).unwrap();
+        let first = scheduler.plan_iteration();
+        assert!(first.work[0].sample_last);
+        scheduler.complete_iteration(&first, &[42]);
+        scheduler.submit(sequence("prefill", 8, 4)).unwrap();
+
+        let mixed = scheduler.plan_iteration();
+        assert!(
+            mixed
+                .work
+                .iter()
+                .any(|work| work.phase == IterationPhase::Decode)
+        );
+        assert!(
+            mixed
+                .work
+                .iter()
+                .any(|work| work.phase == IterationPhase::Prefill)
+        );
+        let decode = mixed
+            .work
+            .iter()
+            .find(|work| work.sequence_id == "decode")
+            .unwrap();
+        assert_eq!(decode.tokens, vec![42]);
+        assert_eq!(decode.positions, vec![2]);
+    }
+
+    #[test]
+    fn admission_uses_effective_minimum_across_components() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 8,
+            memory_components: vec![
+                MemoryComponent {
+                    name: "full-attention".into(),
+                    capacity_bytes: 10_000,
+                    resident_bytes: 0,
+                    bytes_per_token: 1,
+                    bytes_per_sequence: 0,
+                },
+                MemoryComponent {
+                    name: "recurrent".into(),
+                    capacity_bytes: 1024,
+                    resident_bytes: 0,
+                    bytes_per_token: 0,
+                    bytes_per_sequence: 1024,
+                },
+            ],
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("a", 10, 10)).unwrap();
+        scheduler.submit(sequence("b", 10, 10)).unwrap();
+        let plan = scheduler.plan_iteration();
+        assert_eq!(plan.admitted, 1);
+        assert_eq!(scheduler.snapshot().waiting_ids, vec!["b"]);
+    }
+
+    #[test]
+    fn prefix_restore_skips_only_the_restored_token_span() {
+        let mut scheduler = Scheduler::new(SchedulerConfig::default());
+        let restored = sequence("a", 8, 4).with_prefix_restore(PrefixRestore {
+            page_id: "page".into(),
+            token_count: 6,
+            kind: PrefixRestoreKind::RecurrentWholeState,
+        });
+        scheduler.submit(restored).unwrap();
+        let plan = scheduler.plan_iteration();
+        assert_eq!(plan.work[0].tokens, vec![6, 7]);
+        assert_eq!(plan.work[0].positions, vec![6, 7]);
+    }
+
+    #[test]
+    fn overload_is_rejected_before_native_decode() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_waiting_sequences: 1,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("a", 2, 1)).unwrap();
+        assert_eq!(
+            scheduler.submit(sequence("b", 2, 1)),
+            Err(AdmissionError::QueueFull { capacity: 1 })
+        );
+        assert_eq!(scheduler.metrics().rejected_overload, 1);
+    }
+}

@@ -1,6 +1,6 @@
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::util::openai_backend_error;
-use crate::runtime_state::RuntimeDecodeBatchRequest;
+use crate::runtime_state::RuntimeIterationBatchRequest;
 use crate::runtime_state::RuntimeState;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
@@ -40,8 +40,10 @@ struct DecodeBatcherState {
 
 struct PendingDecode {
     session_id: String,
-    token_id: i32,
+    token_ids: Vec<i32>,
+    positions: Vec<i32>,
     sampling: Option<SamplingConfig>,
+    sample_last: bool,
     enqueued_at: Instant,
     reply: std_mpsc::SyncSender<OpenAiResult<DecodeBatchOutcome>>,
 }
@@ -83,14 +85,44 @@ impl DecodeBatcher {
         let (reply, receiver) = std_mpsc::sync_channel(1);
         self.shared.enqueue(PendingDecode {
             session_id: session_id.to_string(),
-            token_id,
+            token_ids: vec![token_id],
+            positions: Vec::new(),
             sampling: sampling.cloned(),
+            sample_last: true,
             enqueued_at: Instant::now(),
             reply,
         })?;
         receiver
             .recv()
             .map_err(|error| OpenAiError::backend(format!("decode batcher stopped: {error}")))?
+    }
+
+    pub(super) fn execute_iteration(
+        &self,
+        session_id: &str,
+        token_ids: &[i32],
+        positions: &[i32],
+        sampling: Option<&SamplingConfig>,
+        sample_last: bool,
+    ) -> OpenAiResult<DecodeBatchOutcome> {
+        if token_ids.is_empty() {
+            return Err(OpenAiError::invalid_request(
+                "scheduler iteration requires at least one token",
+            ));
+        }
+        let (reply, receiver) = std_mpsc::sync_channel(1);
+        self.shared.enqueue(PendingDecode {
+            session_id: session_id.to_string(),
+            token_ids: token_ids.to_vec(),
+            positions: positions.to_vec(),
+            sampling: sampling.cloned(),
+            sample_last,
+            enqueued_at: Instant::now(),
+            reply,
+        })?;
+        receiver
+            .recv()
+            .map_err(|error| OpenAiError::backend(format!("iteration batcher stopped: {error}")))?
     }
 }
 
@@ -154,8 +186,19 @@ impl DecodeBatcherShared {
             return None;
         }
         state = self.collect_until_deadline(state);
-        let batch_size = self.max_batch_size.min(state.pending.len());
-        Some(state.pending.drain(..batch_size).collect())
+        let mut token_budget = 2048usize;
+        let mut batch_size = 0usize;
+        for pending in state.pending.iter().take(self.max_batch_size) {
+            if pending.token_ids.len() > token_budget && batch_size > 0 {
+                break;
+            }
+            token_budget = token_budget.saturating_sub(pending.token_ids.len());
+            batch_size += 1;
+            if token_budget == 0 {
+                break;
+            }
+        }
+        Some(state.pending.drain(..batch_size.max(1)).collect())
     }
 
     fn collect_until_deadline<'a>(
@@ -198,16 +241,25 @@ impl DecodeBatcherShared {
             let hold_timer = PhaseTimer::start();
             let requests = batch
                 .iter()
-                .map(|pending| RuntimeDecodeBatchRequest {
+                .map(|pending| RuntimeIterationBatchRequest {
                     session_id: pending.session_id.as_str(),
-                    token_id: pending.token_id,
+                    token_ids: &pending.token_ids,
+                    positions: &pending.positions,
                     sampling: pending.sampling.as_ref(),
+                    input: None,
+                    sample_last: pending.sample_last,
                 })
                 .collect::<Vec<_>>();
             let predicted = runtime
-                .decode_batch_sampled(&requests)
+                .iteration_batch_sampled(&requests)
                 .map_err(openai_backend_error)?;
-            Ok((predicted, hold_timer.elapsed_ms()))
+            Ok((
+                predicted
+                    .into_iter()
+                    .map(|output| output.predicted_token)
+                    .collect(),
+                hold_timer.elapsed_ms(),
+            ))
         });
         Self::send_batch_replies(
             batch,
