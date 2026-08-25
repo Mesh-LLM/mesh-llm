@@ -40,6 +40,7 @@ export type LogsLiveRecovery = {
   readonly requestUpdates: readonly LogRequest[]
   readonly excludedRequestIds: readonly string[]
   readonly auditEntries: readonly LogAuditEntry[]
+  readonly fallbackPollingActive: boolean
   readonly pollingEnabled: boolean
   readonly togglePolling: () => void
 }
@@ -174,6 +175,7 @@ export function useLogsLiveRecovery({
 }: LogsLiveRecoveryOptions): LogsLiveRecovery {
   const [lifecycleState, setLifecycleState] = useState<LogsLiveConnectionState>('reconnecting')
   const [liveRequests, setLiveRequests] = useState<LiveRequestState>({ subscriptionKey: '', entries: [] })
+  const [lifecycleFallbackPollingActive, setLifecycleFallbackPollingActive] = useState(false)
   const [pollingEnabled, setPollingEnabled] = useState(true)
   const pollingEnabledRef = useRef(true)
   const sequenceByChannelRef = useRef(new Map<LogReplayChannel, number>())
@@ -283,9 +285,9 @@ export function useLogsLiveRecovery({
     }
 
     const clearPolling = () => {
-      if (pollingTimer === undefined) return
-      window.clearInterval(pollingTimer)
+      if (pollingTimer !== undefined) window.clearInterval(pollingTimer)
       pollingTimer = undefined
+      setLifecycleFallbackPollingActive(false)
     }
 
     const clearFallback = () => {
@@ -344,6 +346,7 @@ export function useLogsLiveRecovery({
       pollingTimer = window.setInterval(() => {
         if (pollingEnabledRef.current) hydrateAuthoritatively(false)
       }, POLL_INTERVAL_MS)
+      setLifecycleFallbackPollingActive(true)
     }
 
     const queuePollingFallback = () => {
@@ -451,7 +454,11 @@ export function useLogsLiveRecovery({
     }
   }, [channels, createEventSource, enabled, hydrate, key, search.replayCursor, subscriptionFilters])
 
-  const { state: auditState, entries: auditEntries } = useAuditLiveRecovery({
+  const {
+    state: auditState,
+    entries: auditEntries,
+    fallbackPollingActive: auditFallbackPollingActive
+  } = useAuditLiveRecovery({
     enabled: auditEnabled,
     hydrate: hydrateAudit,
     cursor: auditCursor,
@@ -460,6 +467,8 @@ export function useLogsLiveRecovery({
   })
 
   const state = combinedConnectionState(lifecycleState, auditState, enabled, auditEnabled)
+  const fallbackPollingActive =
+    (enabled && lifecycleFallbackPollingActive) || (auditEnabled && auditFallbackPollingActive)
   const activeLiveRequests = useMemo(
     () => (enabled && liveRequests.subscriptionKey === key ? liveRequests.entries : []),
     [enabled, key, liveRequests]
@@ -480,6 +489,7 @@ export function useLogsLiveRecovery({
     requestUpdates,
     excludedRequestIds,
     auditEntries,
+    fallbackPollingActive,
     pollingEnabled,
     togglePolling
   }

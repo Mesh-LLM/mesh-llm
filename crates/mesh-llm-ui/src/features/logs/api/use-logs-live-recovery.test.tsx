@@ -530,6 +530,32 @@ describe('useLogsLiveRecovery', () => {
     expect(source?.closed).toBe(false)
   })
 
+  it('reports combined fallback polling until both lifecycle and audit timers reconnect', async () => {
+    vi.useFakeTimers()
+    const { result, sources } = renderLive({ auditEnabled: true })
+    await flush()
+    act(() => {
+      sources[0]?.open()
+      sources[1]?.open()
+      sources[0]?.error()
+      sources[1]?.error()
+    })
+
+    expect(result.current.state).toBe('reconnecting')
+    expect(result.current.fallbackPollingActive).toBe(false)
+
+    act(() => vi.advanceTimersByTime(1_000))
+    await flush()
+    expect(result.current.fallbackPollingActive).toBe(true)
+
+    act(() => sources[0]?.open())
+    expect(result.current.fallbackPollingActive).toBe(true)
+
+    act(() => sources[1]?.open())
+    expect(result.current.state).toBe('connected')
+    expect(result.current.fallbackPollingActive).toBe(false)
+  })
+
   it('serializes route and reconnects while source remains unsupported', async () => {
     const { rerender, sources } = renderLive({ search: { route: 'reserve', source: 'active' } })
     await flush()
@@ -756,9 +782,11 @@ describe('useLogsLiveRecovery', () => {
     const source = sources[0]
     act(() => source?.error())
     expect(result.current.state).toBe('reconnecting')
+    expect(result.current.fallbackPollingActive).toBe(false)
     act(() => vi.advanceTimersByTime(1_000))
     await flush()
     expect(result.current.state).toBe('reconnecting')
+    expect(result.current.fallbackPollingActive).toBe(true)
     expect(hydrate).toHaveBeenCalledTimes(1)
     expect(vi.getTimerCount()).toBe(1)
 
@@ -776,6 +804,7 @@ describe('useLogsLiveRecovery', () => {
     expect(sources).toHaveLength(1)
     act(() => source?.open())
     expect(result.current.state).toBe('connected')
+    expect(result.current.fallbackPollingActive).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
     act(() => vi.advanceTimersByTime(5_000))
     await flush()

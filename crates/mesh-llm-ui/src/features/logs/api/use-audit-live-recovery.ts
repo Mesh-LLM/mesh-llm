@@ -37,6 +37,7 @@ export function useAuditLiveRecovery({
 }: AuditLiveRecoveryOptions) {
   const [state, setState] = useState<LogsLiveConnectionState>('reconnecting')
   const [liveEntries, setLiveEntries] = useState<readonly LogAuditEntry[]>([])
+  const [fallbackPollingActive, setFallbackPollingActive] = useState(false)
   const latestCursorRef = useRef<LogAuditCursor | undefined>(undefined)
   const sequenceRef = useRef<bigint>(0n)
   const hydrateInFlightRef = useRef(false)
@@ -68,6 +69,7 @@ export function useAuditLiveRecovery({
       fallbackTimer = undefined
       if (reconciliationTimer !== undefined) window.clearInterval(reconciliationTimer)
       reconciliationTimer = undefined
+      setFallbackPollingActive(false)
     }
     const hydrateAuthoritatively = (request: AuditHydrationRequest) => {
       if (disposed) return
@@ -113,6 +115,7 @@ export function useAuditLiveRecovery({
       reconciliationTimer = window.setInterval(() => {
         if (pollingEnabledRef.current) hydrateAuthoritatively({ kind: 'standard', clearGap: false })
       }, POLL_INTERVAL_MS)
+      setFallbackPollingActive(true)
     }
 
     function applyTerminalTransition(transition: auditTerminal.AuditTerminalRecoveryTransition<AuditEventSource>) {
@@ -231,5 +234,9 @@ export function useAuditLiveRecovery({
     }
   }, [enabled, eventSourceFactory, pollingEnabledRef])
 
-  return { state, entries: enabled ? liveEntries : EMPTY_AUDIT_ENTRIES }
+  return {
+    state,
+    entries: enabled ? liveEntries : EMPTY_AUDIT_ENTRIES,
+    fallbackPollingActive: enabled && fallbackPollingActive
+  }
 }
