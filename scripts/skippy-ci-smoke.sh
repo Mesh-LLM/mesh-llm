@@ -153,7 +153,13 @@ download_model() {
     output="$(run_with_timeout "download ${repo}/${file}" hf download "$repo" "$file" --local-dir "$out_dir")"
   fi
 
-  path="$(printf '%s\n' "$output" | sed -n 's/^path=//p' | tail -n 1)"
+  path="$(
+    printf '%s\n' "$output" \
+      | sed -n \
+        -e 's/^path=//p' \
+        -e 's/^[[:space:]]*path:[[:space:]]*//p' \
+      | tail -n 1
+  )"
   if [[ -z "$path" ]]; then
     if [[ -n "${HF_CACHE:-}" ]]; then
       path="$(printf '%s\n' "$output" | tail -n 1)"

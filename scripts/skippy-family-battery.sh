@@ -85,7 +85,13 @@ resolve_model() {
   if ! raw="$(hf download "$repo" "$file" 2>/dev/null)"; then
     return 0
   fi
-  out="$(printf '%s\n' "$raw" | sed -n 's/^path=//p' | tail -n 1)"
+  out="$(
+    printf '%s\n' "$raw" \
+      | sed -n \
+        -e 's/^path=//p' \
+        -e 's/^[[:space:]]*path:[[:space:]]*//p' \
+      | tail -n 1
+  )"
   if [[ -z "$out" ]]; then
     # newer hub-cli versions print the bare path
     out="$(printf '%s\n' "$raw" | tail -n 1)"

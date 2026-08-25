@@ -68,6 +68,10 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('HF_HUB_CACHE="$HF_CACHE/hub"', smoke)
         self.assertIn("HF_HUB_OFFLINE=1", smoke)
         self.assertIn('hf download "$repo" "$file"', smoke)
+        self.assertIn("'s/^[[:space:]]*path:[[:space:]]*//p'", smoke)
+
+        battery = BATTERY.read_text(encoding="utf-8")
+        self.assertIn("'s/^[[:space:]]*path:[[:space:]]*//p'", battery)
 
         manifest = FAMILY_MANIFEST.read_text(encoding="utf-8")
         self.assertIn(
