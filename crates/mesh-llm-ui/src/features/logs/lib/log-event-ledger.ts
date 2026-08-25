@@ -1,8 +1,6 @@
 import type { LogAuditEntry, LogRequest } from '@/features/logs/api/schemas'
 import { compareLogInstants } from '@/features/logs/lib/log-instant'
 
-export const LOG_EVENT_WINDOW_LIMIT = 64
-
 export const LOG_EVENT_CATEGORIES = ['requests', 'system', 'quic', 'gossip', 'iroh'] as const
 
 export type LogEventCategory = (typeof LOG_EVENT_CATEGORIES)[number]
@@ -41,7 +39,7 @@ export function classifyAuditCategory(code: string): OperationalLogEventCategory
 export function mergeLogEventWindow(
   requests: readonly LogRequest[],
   audits: readonly LogAuditEntry[],
-  limit = LOG_EVENT_WINDOW_LIMIT
+  limit?: number
 ): LogEventLedgerRow[] {
   const requestsById = new Map<string, LogRequest>()
   for (const request of requests) {
@@ -67,7 +65,9 @@ export function mergeLogEventWindow(
     audit
   }))
 
-  return [...requestRows, ...auditRows].sort(compareLogEventRows).slice(0, Math.max(0, limit))
+  return [...requestRows, ...auditRows]
+    .sort(compareLogEventRows)
+    .slice(0, limit === undefined ? undefined : Math.max(0, limit))
 }
 
 export function filterLogEventRows(

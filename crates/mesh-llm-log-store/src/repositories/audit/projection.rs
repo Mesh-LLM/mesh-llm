@@ -1,20 +1,20 @@
 use mesh_llm_events::audit::SanitizedAuditScalar;
 
 use super::detail::StoredAuditDetail;
+use super::model::canonicalize_persisted_source;
 use super::{AuditEntryRow, AuditEntrySeverity};
 use crate::AuditEntryDetail;
 
 pub(super) fn audit_entry_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEntryDetail> {
     let detail = StoredAuditDetail::parse(row.get(6)?).bounded();
+    let source = SanitizedAuditScalar::sanitize(&row.get::<_, String>(4)?);
     Ok(AuditEntryDetail {
         entry: AuditEntryRow {
             sequence: row.get(0)?,
             entry_id: row.get(1)?,
             request_id: row.get(2)?,
             occurred_at: row.get(3)?,
-            source: SanitizedAuditScalar::sanitize(&row.get::<_, String>(4)?)
-                .as_str()
-                .to_owned(),
+            source: canonicalize_persisted_source(source.as_str()).to_owned(),
             code: SanitizedAuditScalar::sanitize(&row.get::<_, String>(5)?)
                 .as_str()
                 .to_owned(),

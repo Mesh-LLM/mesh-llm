@@ -71,6 +71,7 @@ function cleanupReceiptDto() {
       from: '2026-08-01T00:00:00Z',
       to: TIMESTAMP,
       route: 'reserve',
+      excludeRoute: 'models',
       model: 'Qwen/Qwen3',
       provider: 'reserve-a',
       engine: 'skippy',
@@ -242,7 +243,12 @@ describe('logs operation DTO parser', () => {
 
     const parsed = parseLogCleanupReceipt(receipt)
     expect(parsed.auditId.toString()).toBe(AUDIT_ID)
-    expect(parsed.scope).toMatchObject({ source: 'durable', model: 'Qwen/Qwen3', outcome: 'completed' })
+    expect(parsed.scope).toMatchObject({
+      source: 'durable',
+      excludeRoute: 'models',
+      model: 'Qwen/Qwen3',
+      outcome: 'completed'
+    })
     const { auditId: _auditId, ...missingAuditId } = receipt
     expect(() => parseLogCleanupReceipt(missingAuditId)).toThrow(LogsDtoError)
     expect(() => parseLogCleanupReceipt({ ...receipt, auditId: 'audit:/private/secret' })).toThrow(LogsDtoError)
@@ -256,6 +262,9 @@ describe('logs operation DTO parser', () => {
     )
     expect(() =>
       parseLogCleanupReceipt({ ...receipt, scope: { ...receipt.scope, model: '/private/model?token=secret' } })
+    ).toThrow(LogsDtoError)
+    expect(() =>
+      parseLogCleanupReceipt({ ...receipt, scope: { ...receipt.scope, excludeRoute: '/private/models' } })
     ).toThrow(LogsDtoError)
     expect(() => parseLogCleanupReceipt({ ...receipt, scope: { ...receipt.scope, requestLimit: 2 } })).toThrow(
       LogsDtoError
@@ -395,12 +404,57 @@ describe('dedicated logs SSE frame parser', () => {
       reasonCode: 'model_loaded',
       outcome: 'ready',
       durationMs: 412,
-      numericSummaries: { layers: 36 }
+      numericSummaries: { layers: 36 },
+      commandSummary: 'mesh-llm load name [REDACTED] --root-relay [REDACTED]'
     }
 
     const page = parseLogAuditPage({ items: [oldEntry, typedEntry], nextCursor: null })
     expect(page.items[0]).toEqual(oldEntry)
     expect(page.items[1]).toEqual(typedEntry)
+    expect(page.items[0]?.commandSummary).toBeUndefined()
+    expect(page.items[1]?.commandSummary).toBe('mesh-llm load name [REDACTED] --root-relay [REDACTED]')
+
+    const sse = parseLogsSseFrame({
+      event: 'audit_entry',
+      lastEventId: 'a1:2',
+      data: JSON.stringify(typedEntry)
+    })
+    expect(sse).toMatchObject({
+      type: 'audit_entry',
+      entry: { commandSummary: 'mesh-llm load name [REDACTED] --root-relay [REDACTED]' }
+    })
+  })
+
+  it('rejects malformed command summaries at REST and SSE boundaries', () => {
+    const malformedSummaries = [
+      'mesh-llm load private-value',
+      'mesh-llm models list --json --json',
+      'mesh-llm models --json list',
+      'mesh-llm load name [REDACTED] name [REDACTED]',
+      'mesh-llm gpus run-benchmark --backend cuda --json --json',
+      'mesh-llm load name [REDACTED] --relay private-relay',
+      'mesh-llm  models list --json'
+    ]
+
+    for (const [index, commandSummary] of malformedSummaries.entries()) {
+      const malformedEntry = {
+        entryId: `audit-malformed-summary-${index}`,
+        occurredAt: TIMESTAMP,
+        source: 'cli',
+        code: 'command_completed',
+        sequence: index + 3,
+        commandSummary
+      }
+
+      expect(() => parseLogAuditPage({ items: [malformedEntry], nextCursor: null })).toThrow(LogsDtoError)
+      expect(() =>
+        parseLogsSseFrame({
+          event: 'audit_entry',
+          lastEventId: `a1:${index + 3}`,
+          data: JSON.stringify(malformedEntry)
+        })
+      ).toThrow(LogsDtoError)
+    }
   })
 
   it('parses lifecycle, gap, and typed stream-error frames', () => {
@@ -470,14 +524,89 @@ describe('dedicated logs SSE frame parser', () => {
     )
   })
 
-  it('parses audit stream errors with the audit cursor family', () => {
-    expect(
-      parseLogsSseFrame({
-        event: 'stream_error',
-        lastEventId: 'a1:42',
-        data: JSON.stringify({ code: 'invalid_event' })
-      })
-    ).toEqual({ type: 'stream_error', cursor: LogAuditCursor.parse('a1:42'), code: 'invalid_event' })
+  it('parses invalid-event stream errors with either valid cursor family', () => {
+    // Given
+    const auditInput = {
+      event: 'stream_error',
+      lastEventId: 'a1:42',
+      data: JSON.stringify({ code: 'invalid_event' })
+    }
+    const lifecycleInput = {
+      event: 'stream_error',
+      lastEventId: 'v1:2.0.0',
+      data: JSON.stringify({ code: 'invalid_event' })
+    }
+
+    // When
+    const auditFrame = parseLogsSseFrame(auditInput)
+    const lifecycleFrame = parseLogsSseFrame(lifecycleInput)
+
+    // Then
+    expect(auditFrame).toEqual({ type: 'stream_error', cursor: LogAuditCursor.parse('a1:42'), code: 'invalid_event' })
+    expect(lifecycleFrame).toEqual({
+      type: 'stream_error',
+      cursor: LogReplayCursor.parse('v1:2.0.0'),
+      code: 'invalid_event'
+    })
+  })
+
+  it('parses audit reconciliation failures only with a valid audit cursor', () => {
+    // Given
+    const input = {
+      event: 'stream_error',
+      lastEventId: 'a1:43',
+      data: JSON.stringify({ code: 'audit_reconcile_failed' })
+    }
+
+    // When
+    const frame = parseLogsSseFrame(input)
+
+    // Then
+    expect(frame).toEqual({
+      type: 'stream_error',
+      cursor: LogAuditCursor.parse('a1:43'),
+      code: 'audit_reconcile_failed'
+    })
+  })
+
+  it('rejects an audit reconciliation failure paired with a lifecycle cursor', () => {
+    // Given
+    const input = {
+      event: 'stream_error',
+      lastEventId: 'v1:2.0.0',
+      data: JSON.stringify({ code: 'audit_reconcile_failed' })
+    }
+
+    // When / Then
+    expect(() => parseLogsSseFrame(input)).toThrow()
+  })
+
+  it.each([
+    ['audit invalid-event cursor', 'a1:not-a-sequence', 'invalid_event'],
+    ['lifecycle invalid-event cursor', 'v1:2.0', 'invalid_event'],
+    ['audit reconciliation cursor', 'a1:not-a-sequence', 'audit_reconcile_failed']
+  ])('rejects a malformed %s', (_label, lastEventId, code) => {
+    // Given
+    const input = {
+      event: 'stream_error',
+      lastEventId,
+      data: JSON.stringify({ code })
+    }
+
+    // When / Then
+    expect(() => parseLogsSseFrame(input)).toThrow()
+  })
+
+  it('rejects unknown audit stream-error codes', () => {
+    // Given
+    const input = {
+      event: 'stream_error',
+      lastEventId: 'a1:44',
+      data: JSON.stringify({ code: 'future_error' })
+    }
+
+    // When / Then
+    expect(() => parseLogsSseFrame(input)).toThrow(LogsDtoError)
   })
 
   it('parses audit replay gaps from the shared replay_gap event name', () => {

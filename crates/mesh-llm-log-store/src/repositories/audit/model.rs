@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 pub const DEFAULT_AUDIT_ENTRY_LIMIT: usize = 50;
 pub const MAX_AUDIT_ENTRY_LIMIT: usize = 100;
+pub(super) const LEGACY_LOGGING_RUNTIME_SOURCE: &str = "logging-runtime";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditEntryRow {
@@ -41,6 +42,14 @@ impl AuditEntrySource {
             Self::Cli => "cli",
             Self::LogsApi => "logs_api",
         }
+    }
+}
+
+pub(super) fn canonicalize_persisted_source(source: &str) -> &str {
+    if source == LEGACY_LOGGING_RUNTIME_SOURCE {
+        AuditEntrySource::LoggingService.as_str()
+    } else {
+        source
     }
 }
 

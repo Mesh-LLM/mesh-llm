@@ -130,6 +130,92 @@ fn cleanup_targets_visible_requests_instead_of_hidden_management_traffic() {
 }
 
 #[test]
+fn cleanup_exact_route_exclusion_is_persisted_and_omits_matching_targets() {
+    let (_root, artifacts) = fixture();
+    let store = artifacts.store_ref();
+    seed_terminal_with_metadata(
+        store,
+        "models-request",
+        "2025-01-01T00:00:00Z",
+        "models",
+        "model-a",
+        "mesh",
+        "skippy",
+        "completed",
+    );
+    seed_terminal_with_metadata(
+        store,
+        "chat-request",
+        "2025-01-01T00:00:01Z",
+        "chat_completions",
+        "model-a",
+        "mesh",
+        "skippy",
+        "completed",
+    );
+    let filters = serde_json::from_value::<CleanupFilters>(serde_json::json!({
+        "excludeRoute": "models",
+    }))
+    .expect("deserialize exact-route exclusion");
+    let request = CleanupPreviewRequest {
+        scope: CleanupScope::new(
+            MaintenanceTimestamp::try_from("2025-02-01T00:00:00Z").expect("cutoff"),
+            10,
+        )
+        .expect("scope")
+        .with_filters(filters),
+        ..request_with_limit(0x51, "2025-02-01T00:00:00Z", 10)
+    };
+
+    let receipt = store
+        .preview_cleanup(&request, &NeverCancelled)
+        .expect("preview exact-route exclusion");
+    let targets = store
+        .conn()
+        .prepare(
+            "SELECT request_id FROM maintenance_operation_targets WHERE operation_id = ?1 ORDER BY ordinal",
+        )
+        .expect("prepare cleanup targets")
+        .query_map([request.operation_id.to_string()], |row| row.get::<_, String>(0))
+        .expect("query cleanup targets")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect cleanup targets");
+
+    assert_eq!(targets, ["chat-request"]);
+    let persisted_filters =
+        serde_json::to_value(receipt.scope.filters()).expect("serialize receipt filters");
+    assert_eq!(persisted_filters["excludeRoute"], "models");
+}
+
+#[test]
+fn cleanup_exact_route_exclusion_changes_the_selection_fingerprint() {
+    let baseline = CleanupScope::new(
+        MaintenanceTimestamp::try_from("2025-02-01T00:00:00Z").expect("cutoff"),
+        10,
+    )
+    .expect("baseline scope");
+    let excluded = baseline.clone().with_filters(
+        serde_json::from_value::<CleanupFilters>(serde_json::json!({
+            "excludeRoute": "models",
+        }))
+        .expect("deserialize exact-route exclusion"),
+    );
+
+    assert_ne!(
+        super::super::execution::selection_fingerprint(
+            MaintenanceAction::Cleanup,
+            &baseline,
+            &["chat-request".to_owned()],
+        ),
+        super::super::execution::selection_fingerprint(
+            MaintenanceAction::Cleanup,
+            &excluded,
+            &["chat-request".to_owned()],
+        )
+    );
+}
+
+#[test]
 fn stale_preview_only_cleanup_receipt_is_ttl_eligible() {
     let (_root, artifacts) = fixture();
     let store = artifacts.store_ref();

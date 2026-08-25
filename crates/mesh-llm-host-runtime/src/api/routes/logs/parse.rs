@@ -133,6 +133,8 @@ struct CleanupPreviewBody {
     #[serde(default)]
     route: Option<String>,
     #[serde(default)]
+    exclude_route: Option<String>,
+    #[serde(default)]
     model: Option<String>,
     #[serde(default)]
     provider: Option<String>,
@@ -236,7 +238,8 @@ pub(super) fn cleanup_preview_request(
             .as_deref()
             .map(mesh_llm_log_store::CleanupOutcome::try_from)
             .transpose()?,
-    )?;
+    )?
+    .with_exclude_route(body.exclude_route)?;
     let scope = mesh_llm_log_store::CleanupScope::new(
         mesh_llm_log_store::MaintenanceTimestamp::try_from(cutoff.as_str())?,
         body.request_limit,
@@ -648,7 +651,7 @@ mod tests {
     fn cleanup_parsing_normalizes_and_rejects_unbounded_input_before_store_access() {
         let operation_id = uuid::Uuid::new_v4();
         let body = format!(
-            r#"{{"operationId":"{operation_id}","cutoffBefore":"2026-08-03T01:00:00+01:00","requestLimit":1,"source":"durable","from":"2026-08-01T01:00:00+01:00","to":"2026-08-03T00:00:00Z","route":"route-a","model":"Qwen/Qwen3","provider":"mesh","engine":"skippy","outcome":"completed","reason":"operator cleanup"}}"#
+            r#"{{"operationId":"{operation_id}","cutoffBefore":"2026-08-03T01:00:00+01:00","requestLimit":1,"source":"durable","from":"2026-08-01T01:00:00+01:00","to":"2026-08-03T00:00:00Z","route":"route-a","excludeRoute":"models","model":"Qwen/Qwen3","provider":"mesh","engine":"skippy","outcome":"completed","reason":"operator cleanup"}}"#
         );
         let preview = cleanup_preview_request("/api/logs/cleanup/preview", &body)
             .expect("bounded cleanup preview");
@@ -667,6 +670,7 @@ mod tests {
             Some("2026-08-03T00:00:00.000000000Z")
         );
         assert_eq!(preview.scope.filters().model(), Some("Qwen/Qwen3"));
+        assert_eq!(preview.scope.filters().exclude_route(), Some("models"));
         assert_eq!(
             preview.scope.filters().outcome(),
             Some(mesh_llm_log_store::CleanupOutcome::Completed)

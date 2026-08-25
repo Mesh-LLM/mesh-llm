@@ -1,6 +1,9 @@
 use rusqlite::types::Value;
 
-use super::{AuditEntryFilters, DEFAULT_AUDIT_ENTRY_LIMIT, MAX_AUDIT_ENTRY_LIMIT};
+use super::model::LEGACY_LOGGING_RUNTIME_SOURCE;
+use super::{
+    AuditEntryFilters, AuditEntrySource, DEFAULT_AUDIT_ENTRY_LIMIT, MAX_AUDIT_ENTRY_LIMIT,
+};
 use crate::error::LogStoreError;
 use crate::timestamps::canonical_comparison_timestamp;
 
@@ -27,8 +30,20 @@ pub(super) fn query_parts(
         parameters.push(Value::Text(entry_id.clone()));
     }
     if let Some(source) = filters.source {
-        clauses.push("actor = ?".to_string());
-        parameters.push(Value::Text(source.as_str().to_string()));
+        match source {
+            AuditEntrySource::LoggingService => {
+                clauses.push("actor IN (?, ?)".to_string());
+                parameters.push(Value::Text(source.as_str().to_string()));
+                parameters.push(Value::Text(LEGACY_LOGGING_RUNTIME_SOURCE.to_string()));
+            }
+            AuditEntrySource::Runtime
+            | AuditEntrySource::Mesh
+            | AuditEntrySource::Cli
+            | AuditEntrySource::LogsApi => {
+                clauses.push("actor = ?".to_string());
+                parameters.push(Value::Text(source.as_str().to_string()));
+            }
+        }
     }
     if let Some(severity) = filters.severity {
         clauses.push("CASE WHEN json_valid(detail_json) THEN json_extract(detail_json, '$.severity') END = ?".to_string());

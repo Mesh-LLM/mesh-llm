@@ -7,8 +7,12 @@ import {
   type LogEventLedgerRow
 } from '@/features/logs/lib/log-event-ledger'
 import {
+  BUCKET_INTERVALS,
   MAX_VOLUME_BUCKETS,
+  PREFERRED_VOLUME_BUCKETS,
+  VOLUME_TIME_RANGES,
   buildEventVolumeBuckets,
+  defaultBucketIntervalKey,
   effectiveEventVolumeIntervalMs,
   formatBucketRange,
   formatBucketTick,
@@ -223,5 +227,33 @@ describe('time label formatters', () => {
   it('drops minutes for hourly bucket ticks', () => {
     expect(formatBucketTick(utc(22, 0), 3_600_000)).toMatch(/^\d{1,2} (AM|PM)$/)
     expect(formatBucketTick(utc(10, 25), FIVE_MINUTES)).toMatch(/^\d{1,2}:25 (AM|PM)$/)
+  })
+})
+
+describe('defaultBucketIntervalKey', () => {
+  it('pairs each selectable time range with a legible bucket interval', () => {
+    expect(defaultBucketIntervalKey(3_600_000)).toBe('1m')
+    expect(defaultBucketIntervalKey(21_600_000)).toBe('5m')
+    expect(defaultBucketIntervalKey(43_200_000)).toBe('15m')
+    expect(defaultBucketIntervalKey(86_400_000)).toBe('30m')
+    expect(defaultBucketIntervalKey(604_800_000)).toBe('1h')
+  })
+
+  it('falls back to the coarsest interval for lifetime and degenerate windows', () => {
+    expect(defaultBucketIntervalKey(Number.POSITIVE_INFINITY)).toBe('1h')
+    expect(defaultBucketIntervalKey(Number.NaN)).toBe('1h')
+    expect(defaultBucketIntervalKey(0)).toBe('1h')
+    expect(defaultBucketIntervalKey(-1)).toBe('1h')
+  })
+
+  it('keeps every finite range at the preferred bar count or the coarsest interval available', () => {
+    const coarsest = BUCKET_INTERVALS[BUCKET_INTERVALS.length - 1]
+    for (const range of VOLUME_TIME_RANGES) {
+      if (!Number.isFinite(range.ms)) continue
+      const key = defaultBucketIntervalKey(range.ms)
+      const intervalMs = BUCKET_INTERVALS.find((option) => option.value === key)?.ms ?? 0
+      expect(intervalMs).toBeGreaterThan(0)
+      expect(range.ms / intervalMs <= PREFERRED_VOLUME_BUCKETS || key === coarsest.value).toBe(true)
+    }
   })
 })

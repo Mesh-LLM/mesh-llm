@@ -231,6 +231,8 @@ mod tests {
     use tokio::io::ReadBuf;
     use tokio::net::TcpListener;
     use tokio::sync::Notify;
+    use tokio::sync::oneshot;
+    use tokio::time::{Duration, timeout};
 
     /// A real duplex pipe as the upstream half of `CancelUpstream`, wrapped to
     /// signal a `Notify` the moment a read finds nothing buffered yet.
@@ -325,9 +327,27 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let (disconnected_tx, disconnected_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
-            let (mut client, _) = listener.accept().await.unwrap();
-            route_remote_attempt_after_forward(
+            let (client, _) = listener.accept().await.unwrap();
+            let client_std = client.into_std().unwrap();
+            let observer_std = client_std.try_clone().unwrap();
+            let mut client = TcpStream::from_std(client_std).unwrap();
+            let observer = TcpStream::from_std(observer_std).unwrap();
+            let observer_task = tokio::spawn(async move {
+                let mut peeked = [0; 1];
+                loop {
+                    if observer.readable().await.is_err() {
+                        break;
+                    }
+                    match observer.peek(&mut peeked).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+                let _ = disconnected_tx.send(());
+            });
+            let result = route_remote_attempt_after_forward(
                 &mut client,
                 &mut upstream,
                 host_id,
@@ -336,7 +356,9 @@ mod tests {
                 ResponseAdapter::None,
                 OpenAiRouteObserver::default(),
             )
-            .await
+            .await;
+            observer_task.await.unwrap();
+            result
         });
         let client_socket = TcpStream::connect(address).await.unwrap();
 
@@ -355,13 +377,15 @@ mod tests {
         // it makes once the body arrives lands on an actually disconnected
         // socket, rather than an upstream read failure standing in for one.
         //
-        // A graceful close (a plain `drop`) sends only a FIN; the server's
-        // very next write can still succeed locally before it learns the
-        // peer is gone, which is exactly the kind of timing-dependent gap
-        // this test exists to close. Zero linger forces an RST instead, so
-        // the eventual write fails deterministically.
+        // A graceful close (a plain `drop`) sends only a FIN; wait until the
+        // accepted socket observes EOF/reset before releasing the body. This
+        // closes the propagation window without consuming route data.
         client_socket.set_zero_linger().unwrap();
         drop(client_socket);
+        timeout(Duration::from_secs(5), disconnected_rx)
+            .await
+            .unwrap()
+            .unwrap();
 
         upstream_writer.write_all(body.as_bytes()).await.unwrap();
 

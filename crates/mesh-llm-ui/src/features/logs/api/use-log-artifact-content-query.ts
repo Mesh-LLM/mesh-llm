@@ -14,7 +14,7 @@ export function useLogArtifactContentQuery(artifact: AvailableLogArtifact) {
   return useQuery({
     queryKey: logArtifactContentKeys.detail(artifact, dataMode.mode),
     queryFn: () => new LogsApiClient().getArtifact(artifact.artifactId, dataMode.mode),
-    enabled: false,
+    enabled: true,
     retry: false,
     staleTime: 10_000
   })

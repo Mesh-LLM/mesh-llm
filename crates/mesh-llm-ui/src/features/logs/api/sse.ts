@@ -12,6 +12,20 @@ import {
 
 export type LogsSseFilterKey = 'from' | 'to' | 'route' | 'model' | 'provider' | 'engine' | 'outcome'
 
+export type LogsStreamErrorFrame =
+  | {
+      readonly type: 'stream_error'
+      readonly cursor: LogReplayCursor | LogAuditCursor
+      readonly code: 'invalid_event'
+    }
+  | {
+      readonly type: 'stream_error'
+      readonly cursor: LogAuditCursor
+      readonly code: 'audit_reconcile_failed'
+    }
+
+export type LogsStreamErrorCode = LogsStreamErrorFrame['code']
+
 export type LogsSseFilter = {
   readonly key: LogsSseFilterKey
   readonly value: string
@@ -32,11 +46,7 @@ export type LogsSseSubscription = {
 export type LogsSseFrame =
   | { readonly type: 'log_event'; readonly cursor: LogReplayCursor; readonly event: ParsedReplayEvent }
   | { readonly type: 'replay_gap'; readonly cursor: LogReplayCursor; readonly gap: ParsedReplayGap }
-  | {
-      readonly type: 'stream_error'
-      readonly cursor: LogReplayCursor | LogAuditCursor
-      readonly code: 'invalid_event'
-    }
+  | LogsStreamErrorFrame
   | {
       readonly type: 'audit_entry'
       readonly cursor: LogAuditCursor
@@ -68,11 +78,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object'
 }
 
-function parseStreamError(input: unknown): 'invalid_event' {
-  if (isRecord(input) && input['code'] === 'invalid_event') {
-    return 'invalid_event'
+function parseStreamError(input: unknown, lastEventId: string): LogsStreamErrorFrame {
+  if (!isRecord(input)) throw new LogsDtoError()
+
+  const code = input['code']
+  switch (code) {
+    case 'invalid_event': {
+      switch (lastEventId.slice(0, 3)) {
+        case 'a1:':
+          return { type: 'stream_error', cursor: LogAuditCursor.parse(lastEventId), code }
+        case 'v1:':
+          return { type: 'stream_error', cursor: LogReplayCursor.parse(lastEventId), code }
+        default:
+          throw new LogsDtoError()
+      }
+    }
+    case 'audit_reconcile_failed':
+      return { type: 'stream_error', cursor: LogAuditCursor.parse(lastEventId), code }
+    default:
+      throw new LogsDtoError()
   }
-  throw new LogsDtoError()
 }
 
 export function parseLogsSseFrame(input: LogsSseFrameInput): LogsSseFrame {
@@ -99,12 +124,8 @@ export function parseLogsSseFrame(input: LogsSseFrameInput): LogsSseFrame {
       const cursor = LogReplayCursor.parse(input.lastEventId)
       return { type: 'replay_gap', cursor, gap: parseReplayGap(data) }
     }
-    case 'stream_error': {
-      const cursor = input.lastEventId.startsWith('a1:')
-        ? LogAuditCursor.parse(input.lastEventId)
-        : LogReplayCursor.parse(input.lastEventId)
-      return { type: 'stream_error', cursor, code: parseStreamError(data) }
-    }
+    case 'stream_error':
+      return parseStreamError(data, input.lastEventId)
     case 'audit_entry': {
       const cursor = LogAuditCursor.parse(input.lastEventId)
       const entry = parseAuditEntry(data)

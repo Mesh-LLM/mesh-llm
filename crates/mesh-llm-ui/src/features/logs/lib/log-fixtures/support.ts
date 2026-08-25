@@ -1,6 +1,8 @@
 import { LogArtifactId, LogEventId, type LogRequestId } from '@/features/logs/api/ids'
 
-const HARNESS_REFERENCE_TIME_MS = Date.parse('2026-08-10T23:50:04.659Z')
+// Captured once at module load so fixture offsets stay stable for the session
+// while the dataset keeps falling inside the ledger's rolling time presets.
+const HARNESS_REFERENCE_TIME_MS = Date.now()
 
 export const HARNESS_REFERENCE_TIME = new Date(HARNESS_REFERENCE_TIME_MS).toISOString()
 

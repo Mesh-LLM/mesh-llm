@@ -24,7 +24,11 @@ fn audit_record(sequence: u64) -> AuditReplayRecord {
     }
 }
 
-fn durable_audit_detail(entry_id: &str, detail: serde_json::Value) -> AuditEntryDetail {
+fn durable_audit_detail(
+    entry_id: &str,
+    source: &str,
+    detail: serde_json::Value,
+) -> AuditEntryDetail {
     let root = tempfile::tempdir().expect("temporary durable audit store");
     let store = LogStore::open(root.path(), Arc::new(RealClock)).expect("open audit store");
     store
@@ -32,7 +36,7 @@ fn durable_audit_detail(entry_id: &str, detail: serde_json::Value) -> AuditEntry
             entry_id,
             None,
             "2026-01-01T00:00:00Z",
-            "cli",
+            source,
             "command_completed",
             Some(&detail.to_string()),
         )
@@ -270,6 +274,7 @@ fn live_audit_frame_preserves_valid_command_summary() {
 fn durable_audit_frame_drops_malformed_command_summary() {
     let record = durable_audit_detail(
         "id-9",
+        "cli",
         serde_json::json!({
             "context_version": 1,
             "command_summary": "mesh-llm gpus --draft run-benchmark --backend cuda",
@@ -284,6 +289,7 @@ fn durable_audit_frame_drops_malformed_command_summary() {
 fn durable_audit_frame_drops_deep_malformed_command_summary() {
     let record = durable_audit_detail(
         "id-12",
+        "cli",
         serde_json::json!({
             "context_version": 1,
             "command_summary": "mesh-llm load unload status discover rotate-key setup --port 1234",
@@ -298,6 +304,7 @@ fn durable_audit_frame_drops_deep_malformed_command_summary() {
 fn durable_audit_frame_preserves_valid_command_summary() {
     let record = durable_audit_detail(
         "id-11",
+        "cli",
         serde_json::json!({
             "context_version": 1,
             "command_summary": "mesh-llm runtime guardrails --mode metrics --port 41731 --root-relay [REDACTED]",
@@ -314,6 +321,7 @@ fn durable_audit_frame_preserves_valid_command_summary() {
 fn durable_audit_frame_redacts_unsafe_rest_parity_metadata() {
     let record = durable_audit_detail(
         "id-14",
+        "cli",
         serde_json::json!({
             "context_version": 1,
             "subject_id": "https://alice:subject-secret@example.test/model?api_key=subject-query",
@@ -339,4 +347,23 @@ fn durable_audit_frame_redacts_unsafe_rest_parity_metadata() {
     ] {
         assert!(!serialized.contains(unsafe_value));
     }
+}
+
+#[test]
+fn durable_audit_frame_projects_legacy_logging_source_as_canonical() {
+    let record = durable_audit_detail(
+        "legacy-logging-entry",
+        "logging-runtime",
+        serde_json::json!({}),
+    );
+
+    let frame = durable_audit_entry_frame(record).expect("durable audit frame");
+    let data = frame_data(&frame);
+
+    assert!(frame.contains("event: audit_entry"));
+    assert!(frame.contains("id: a1:1"));
+    assert_eq!(data["entryId"], "legacy-logging-entry");
+    assert_eq!(data["source"], "logging_service");
+    assert_eq!(data["sequence"], 1);
+    assert!(!frame.contains("logging-runtime"));
 }

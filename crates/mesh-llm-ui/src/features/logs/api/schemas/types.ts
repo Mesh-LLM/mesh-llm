@@ -11,6 +11,8 @@ export type LogOutcome = 'active' | 'completed' | 'failed' | 'rejected' | 'cance
 export type LogSource = 'active' | 'durable'
 export type LogAuditSource = 'logging_service' | 'logs_api' | 'runtime' | 'mesh' | 'cli'
 export type LogAuditSeverity = 'info' | 'warning' | 'error'
+export type LogPeerPathType = 'direct' | 'relay'
+export type LogCallerPathType = 'local_http' | 'remote_quic_http' | 'relay'
 export type LogArtifactUnavailableReason =
   | 'streaming_response_not_assembled'
   | 'response_body_not_bounded'
@@ -48,6 +50,9 @@ export type LogRequest = {
   readonly engine: string | undefined
   readonly statusCode: number | undefined
   readonly source: LogSource
+  readonly callerEndpointId?: string
+  readonly callerAddr?: string
+  readonly callerPathType?: LogCallerPathType
 }
 
 export type LogAuditEntry = {
@@ -58,14 +63,17 @@ export type LogAuditEntry = {
   readonly severity?: LogAuditSeverity
   readonly sequence: number
   readonly contextVersion?: 1
-  readonly subjectKind?: 'runtime' | 'model' | 'runtime_instance' | 'cli_command'
+  readonly subjectKind?: 'runtime' | 'model' | 'runtime_instance' | 'cli_command' | 'mesh_peer'
   readonly subjectId?: string
+  readonly remoteAddr?: string
+  readonly pathType?: LogPeerPathType
   readonly operationId?: string
   readonly requestId?: string
   readonly reasonCode?: string
   readonly outcome?: string
   readonly durationMs?: number
   readonly numericSummaries?: Readonly<Record<string, number>>
+  readonly commandSummary?: string
 }
 
 export type LogLifecycleEvent = {
@@ -159,6 +167,7 @@ export type LogCleanupScope = {
   readonly from?: string
   readonly to?: string
   readonly route?: string
+  readonly excludeRoute?: string
   readonly model?: string
   readonly provider?: string
   readonly engine?: string

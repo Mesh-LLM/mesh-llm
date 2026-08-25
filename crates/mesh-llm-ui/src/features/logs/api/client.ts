@@ -63,6 +63,8 @@ export type LogsRequestQuery = {
   readonly from?: string
   readonly to?: string
   readonly route?: string
+  readonly excludeRoute?: string
+  readonly excludeRoutePrefix?: string
   readonly model?: string
   readonly provider?: string
   readonly engine?: string
@@ -118,6 +120,7 @@ export type LogCleanupPreviewRequest = {
   readonly from?: string
   readonly to?: string
   readonly route?: string
+  readonly excludeRoute?: string
   readonly model?: string
   readonly provider?: string
   readonly engine?: string
@@ -152,6 +155,8 @@ function serializeRequestQuery(input: LogsRequestQuery) {
   setQueryValue(query, 'from', input.from)
   setQueryValue(query, 'to', input.to)
   setQueryValue(query, 'route', input.route)
+  setQueryValue(query, 'exclude_route', input.excludeRoute)
+  setQueryValue(query, 'exclude_route_prefix', input.excludeRoutePrefix)
   setQueryValue(query, 'model', input.model)
   setQueryValue(query, 'provider', input.provider)
   setQueryValue(query, 'engine', input.engine)
@@ -243,6 +248,8 @@ function filterHarnessRequests(items: readonly LogRequest[], query: LogsRequestQ
     if (query.from && compareLogInstants(item.createdAt, query.from) < 0) return false
     if (query.to && compareLogInstants(item.createdAt, query.to) > 0) return false
     if (query.route && item.route !== query.route) return false
+    if (query.excludeRoute && item.route === query.excludeRoute) return false
+    if (query.excludeRoutePrefix && item.route?.startsWith(query.excludeRoutePrefix)) return false
     if (query.model && item.model !== query.model) return false
     if (query.provider && item.provider !== query.provider) return false
     if (query.engine && item.engine !== query.engine) return false

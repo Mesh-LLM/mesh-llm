@@ -11,10 +11,37 @@ export const unsupportedEventSourceFactory: LogsEventSourceFactory = () => {
 
 export type Listener = (event: MessageEvent<string>) => void
 
+export class DeferredHydration {
+  readonly promise: Promise<void>
+  readonly #resolve: () => void
+  readonly #reject: (error: Error) => void
+
+  constructor() {
+    let resolveHydration: () => void = () => undefined
+    let rejectHydration: (error: Error) => void = () => undefined
+    this.promise = new Promise<void>((resolve, reject) => {
+      resolveHydration = () => resolve()
+      rejectHydration = (error) => reject(error)
+    })
+    this.#resolve = resolveHydration
+    this.#reject = rejectHydration
+  }
+
+  resolve() {
+    this.#resolve()
+  }
+
+  reject(error: Error) {
+    this.#reject(error)
+  }
+}
+
 export class FakeEventSource {
   readonly listeners = new Map<string, Listener>()
   readonly url: string
   closed = false
+  closeCalls = 0
+  serverClosed = false
   onopen: ((event: Event) => void) | null = null
   onerror: ((event: Event) => void) | null = null
 
@@ -28,6 +55,7 @@ export class FakeEventSource {
 
   close() {
     this.closed = true
+    this.closeCalls += 1
   }
 
   open() {
@@ -35,6 +63,11 @@ export class FakeEventSource {
   }
 
   error() {
+    this.onerror?.(new Event('error'))
+  }
+
+  serverClose() {
+    this.serverClosed = true
     this.onerror?.(new Event('error'))
   }
 

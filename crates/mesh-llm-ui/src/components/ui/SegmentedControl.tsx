@@ -37,8 +37,8 @@ const rootClassNameByVariant = {
 
 const itemClassNameByVariant = {
   buttons:
-    'ui-control inline-flex h-[30px] items-center rounded-[var(--radius)] border px-2.5 text-[length:var(--density-type-control)] font-medium leading-none outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent',
-  pill: 'segmented-control__item inline-flex h-6 min-w-[65px] items-center justify-center rounded-full border border-transparent px-3 text-[length:var(--density-type-caption)] font-medium leading-none outline-none transition-[background,color,box-shadow] duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent'
+    'ui-control inline-flex h-[30px] items-center rounded-[var(--radius)] border px-2.5 text-[length:var(--density-type-control)] font-medium leading-none focus-visible:outline-none focus-visible:!ring-2 focus-visible:!ring-accent-contrast focus-visible:!ring-offset-1 focus-visible:!ring-offset-background',
+  pill: 'segmented-control__item inline-flex h-6 min-w-[65px] items-center justify-center rounded-full border border-transparent px-3 text-[length:var(--density-type-caption)] font-medium leading-none transition-[background,color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:!ring-2 focus-visible:!ring-accent-contrast focus-visible:!ring-offset-1 focus-visible:!ring-offset-background'
 } satisfies Record<SegmentedControlVariant, string>
 
 export function SegmentedControl({

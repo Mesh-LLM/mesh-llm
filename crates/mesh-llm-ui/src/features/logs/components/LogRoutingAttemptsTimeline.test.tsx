@@ -64,8 +64,8 @@ describe('LogRoutingAttemptsTimeline', () => {
     expect(screen.getByText('Failed')).toBeInTheDocument()
     expect(screen.getByText('HTTP 200')).toBeInTheDocument()
     expect(screen.getByText('HTTP 502')).toBeInTheDocument()
-    expect(screen.getByText('843 ms')).toBeInTheDocument()
-    expect(screen.getByText(`${(1_000).toLocaleString()} ms`)).toBeInTheDocument()
+    expect(screen.getByText('843ms')).toBeInTheDocument()
+    expect(screen.getByText('1s')).toBeInTheDocument()
   })
 
   it('labels a started unfinished attempt In progress without an HTTP line', () => {

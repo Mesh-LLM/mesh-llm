@@ -614,6 +614,10 @@ fn select_targets(
             parameters.push(rusqlite::types::Value::Text(value.to_owned()));
         }
     }
+    if let Some(exclude_route) = filters.exclude_route() {
+        sql.push_str(" AND (route IS NULL OR route != ?)");
+        parameters.push(rusqlite::types::Value::Text(exclude_route.to_owned()));
+    }
     if let Some(outcome) = filters.outcome() {
         sql.push_str(" AND state = ?");
         parameters.push(rusqlite::types::Value::Text(outcome.as_str().to_owned()));
@@ -960,6 +964,7 @@ pub(super) fn selection_fingerprint(
         scope.filters.from(),
         scope.filters.to(),
         scope.filters.route(),
+        scope.filters.exclude_route(),
         scope.filters.model(),
         scope.filters.provider(),
         scope.filters.engine(),

@@ -328,13 +328,15 @@ First create a UUID operation ID and freeze a bounded durable selection with
   "cutoffBefore": "2026-08-01T00:00:00Z",
   "requestLimit": 100,
   "source": "durable",
+  "excludeRoute": "models",
   "outcome": "completed",
   "reason": "retention cleanup"
 }
 ```
 
 `requestLimit` accepts 1 through 100. Optional selection fields are `from`,
-`to`, `route`, `model`, `provider`, `engine`, and a terminal `outcome`. The
+`to`, `route`, `excludeRoute`, `model`, `provider`, `engine`, and a terminal
+`outcome`. `excludeRoute` omits rows whose route exactly matches its value. The
 receipt records the exact scope, selection fingerprint, planned counts,
 `hasMore`, artifact-deletion progress, and a fixed audit ID.
 

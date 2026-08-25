@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use mesh_llm_log_store::{
-    AuditEntryFilters, AuditEntryRow, LogStore, LogStoreError, Page, QueryPage, RequestQuery,
-    RequestRecord,
+    AuditEntryFilters, AuditEntryRow, CleanupFilters, LogStore, LogStoreError,
+    MaintenanceTimestamp, Page, QueryPage, RequestQuery, RequestRecord,
 };
 
 type LegacyAuditPageMethod = fn(
@@ -22,6 +22,15 @@ type LegacySummaryMetadataMethod = fn(
     Option<&str>,
     &str,
 ) -> Result<(), LogStoreError>;
+type LegacyCleanupFiltersConstructor = fn(
+    Option<MaintenanceTimestamp>,
+    Option<MaintenanceTimestamp>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<mesh_llm_log_store::CleanupOutcome>,
+) -> Result<CleanupFilters, LogStoreError>;
 
 #[test]
 fn released_request_record_struct_literal_remains_source_compatible() {
@@ -79,4 +88,9 @@ fn released_query_and_list_methods_keep_legacy_return_shapes() {
 #[test]
 fn released_summary_metadata_method_keeps_legacy_signature() {
     let _: LegacySummaryMetadataMethod = LogStore::upsert_summary_metadata;
+}
+
+#[test]
+fn released_cleanup_filters_constructor_keeps_legacy_signature() {
+    let _: LegacyCleanupFiltersConstructor = CleanupFilters::new;
 }

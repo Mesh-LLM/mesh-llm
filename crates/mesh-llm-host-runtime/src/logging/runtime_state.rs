@@ -39,7 +39,7 @@ use super::{
     WebhookDeliveryScheduler, WebhookDeliveryWorker,
 };
 
-const HEALTH_AUDIT_ACTOR: &str = "logging-runtime";
+const HEALTH_AUDIT_ACTOR: &str = "logging_service";
 
 /// Internal capability state for local logging storage.
 ///

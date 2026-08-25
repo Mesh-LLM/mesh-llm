@@ -117,6 +117,53 @@ async fn audit_filters_by_source() {
 }
 
 #[tokio::test]
+async fn audit_logging_service_filter_includes_legacy_rows_with_canonical_source() {
+    let (_temp, state) = runtime();
+    let store = state.store().expect("store");
+    for (entry_id, occurred_at, source) in [
+        (
+            "00000000-0000-4000-8000-000000000012",
+            "2026-01-01T00:00:00Z",
+            "logging-runtime",
+        ),
+        (
+            "00000000-0000-4000-8000-000000000013",
+            "2026-01-01T00:00:01Z",
+            "logging_service",
+        ),
+        (
+            "00000000-0000-4000-8000-000000000014",
+            "2026-01-01T00:00:02Z",
+            "runtime",
+        ),
+    ] {
+        store
+            .insert_audit_entry(entry_id, None, occurred_at, source, "health_check", None)
+            .expect("seed audit row");
+    }
+
+    let page = list_audits(&state, "/api/logs/audit?source=logging_service&limit=10")
+        .await
+        .expect("filter logging service rows");
+    let json = serde_json::to_value(page).expect("serialize page");
+    let items = json["items"].as_array().expect("items");
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item["entryId"].as_str().expect("entry id"))
+            .collect::<Vec<_>>(),
+        vec![
+            "00000000-0000-4000-8000-000000000013",
+            "00000000-0000-4000-8000-000000000012",
+        ]
+    );
+    assert!(items.iter().all(|item| item["source"] == "logging_service"));
+    assert!(!json.to_string().contains("logging-runtime"));
+}
+
+#[tokio::test]
 async fn audit_filters_by_severity() {
     let (_temp, state) = runtime();
     let store = state.store().expect("store");

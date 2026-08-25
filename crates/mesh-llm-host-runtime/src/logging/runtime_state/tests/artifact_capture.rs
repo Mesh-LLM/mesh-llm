@@ -488,6 +488,15 @@ fn write_time_privacy_failure_publishes_one_marker_and_keeps_metadata_available(
     );
     assert!(state.health().metadata_available);
     assert_eq!(marker_audit_count(&store), 1);
+    let marker_actor: String = store
+        .conn()
+        .query_row(
+            "SELECT actor FROM audit_entries WHERE action = ?",
+            [ARTIFACT_CAPTURE_DISABLED_PRIVACY_UNAVAILABLE],
+            |row| row.get(0),
+        )
+        .expect("query marker audit actor");
+    assert_eq!(marker_actor, "logging_service");
 }
 
 #[test]

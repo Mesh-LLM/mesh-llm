@@ -60,6 +60,12 @@ class LoggingApiDocumentationTests(unittest.TestCase):
             with self.subTest(route=route):
                 self.assertIn(route, page)
 
+    def test_cleanup_selection_documents_exact_route_exclusion(self) -> None:
+        page = self.page()
+        cleanup = page.split("## Cleanup and deletion", 1)[1].split("## Terminal webhooks", 1)[0]
+        self.assertIn("`excludeRoute`", cleanup)
+        self.assertIn("omits rows whose route exactly matches its value", cleanup)
+
     def test_page_covers_recovery_privacy_and_configuration_contracts(self) -> None:
         page = self.page()
         for anchor in (
