@@ -43,12 +43,7 @@ const annotationToneClass: Record<InfoBannerAnnotationTone, string> = {
   bad: 'text-bad'
 }
 
-export function InfoBannerAnnotation({
-  ariaLabel,
-  children,
-  className,
-  tone = 'warn'
-}: InfoBannerAnnotationProps) {
+export function InfoBannerAnnotation({ ariaLabel, children, className, tone = 'warn' }: InfoBannerAnnotationProps) {
   return (
     <fieldset
       aria-label={ariaLabel}
