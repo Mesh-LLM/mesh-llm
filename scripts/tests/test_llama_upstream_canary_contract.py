@@ -36,6 +36,11 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("LLAMA_STAGE_BACKEND: metal", workflow)
+        self.assertNotIn("mozilla-actions/sccache-action", workflow)
+        self.assertNotIn("SCCACHE_GHA_ENABLED", workflow)
+        self.assertIn(
+            'SCCACHE_C_CUSTOM_CACHE_BUSTER: "family-certify-darwin-arm64"', workflow
+        )
 
         build = _step_block(workflow, "Build stage runtime crates")
         self.assertIn("cargo build", build)

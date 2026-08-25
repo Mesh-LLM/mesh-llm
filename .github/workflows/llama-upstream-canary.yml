@@ -45,8 +45,11 @@ jobs:
     timeout-minutes: 960
     env:
       LLAMA_UPSTREAM_CANARY_SMOKE: ${{ vars.LLAMA_UPSTREAM_CANARY_SMOKE || '1' }}
-      SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      # Use the persistent runner's local sccache only. The GitHub backend
+      # previously served Intel C/C++ objects to this arm64 runner because
+      # AppleClang's implicit host architecture was absent from the key.
+      SCCACHE_C_CUSTOM_CACHE_BUSTER: "family-certify-darwin-arm64"
       # A persistent runner can retain a CMake cache from a different host
       # architecture. Build every canary in a run-unique directory, and feed
       # that exact native closure to all Rust, smoke, and battery commands.
@@ -96,8 +99,6 @@ jobs:
             echo "bake the missing tools into the family-certify runner image; this job installs nothing" >&2
             exit 1
           fi
-
-      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: Prepare requested llama.cpp upstream
         id: prepare
