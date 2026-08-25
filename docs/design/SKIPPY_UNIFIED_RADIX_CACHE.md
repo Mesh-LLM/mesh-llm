@@ -107,23 +107,39 @@ The OLD baseline is exact PR #1420 behavior. The NEW candidate is the radix
 branch. Both use matched release binaries, models, prompts, token budgets,
 contexts, lanes, and sampling on the same machine with alternating run order.
 
-The live matrix includes:
+The final cache A/B uses one representative for each physical payload class:
+Llama GQA for `ResidentKv` and Qwen3.5 hybrid for `KvRecurrent`. It covers cold
+and warm exact replay, divergent tails, and a growing coding-agent trace at
+serial and concurrent load. The tree treats these components as opaque
+payloads, so additional model families and repeated rounds primarily broaden
+runtime-family coverage and reduce timing variance rather than exercise a
+third radix implementation.
 
-- ResidentKv: Llama dense GQA, Gemma sliding-window, DeepSeek MLA;
-- KvRecurrent: Qwen3.5 hybrid, Falcon-H1 SSM, Qwen3-Next linear attention;
-- prefix lengths 128, 512, 2,048, and a coding-agent-sized stable prefix;
-- concurrency 1, 2, and 4 (higher only where topology capacity permits);
-- exact hit/matched-prefix/suffix-prefill telemetry, TTFT, TPOT, throughput,
-  goodput, native cells/bytes, active references, and eviction churn; and
-- a multi-turn coding-agent trace with several sessions sharing one large
-  system/tool prefix.
+Cross-family graph, tensor-layout, dtype, parity, and hybrid-boundary coverage
+is supplied separately by the tiered family battery in
+[PR #1436](https://github.com/Mesh-LLM/mesh-llm/pull/1436). Its checked-in
+manifests expand to 104 tier-1 lanes and 13 tier-2 lanes across dense, MLA, MoE,
+hybrid, and recurrent families; hybrid/recurrent rows sweep planner cut offsets
+so first-layer-only detection defects cannot hide. That battery complements the
+cache-specific OLD/NEW measurements here rather than replacing them.
 
-The radix implementation is accepted only if correctness is exact across all
-six structural families, lookup overhead stays below 1% on hits and misses,
-resident shared-prefix physical duplication falls materially under concurrent
-agents, and warm-cache p50/p99 or admitted concurrency improves without a cold
-path or eviction regression. Any family-specific trade-off remains visible in
-the PR table rather than being hidden in one aggregate.
+Acceptance requires successful requests, correct output preservation, exact
+replay hits for both payload classes, divergent/growing reuse for `ResidentKv`,
+concurrent reader/refcount safety, and no suspect server or telemetry failures.
+Atomic `KvRecurrent` checkpoints are expected to miss divergent/growing prompts
+unless explicit message-boundary checkpoints are recorded.
+
+### Model-backed closeout charts
+
+![Resident KV serial TTFT, cold versus warm](../skippy/assets/radix-cache-ttft.svg)
+
+![Resident KV serial suffix prefill, OLD versus unified radix](../skippy/assets/radix-cache-suffix-prefill.svg)
+
+Both charts use the two-round Llama GQA Metal certificate at concurrency 1
+(20 measured requests per cell). Serial cells isolate cache behavior from
+concurrent accelerator scheduling variance. The exact-head Qwen3.5 recurrent
+certificate is correctness evidence and is intentionally not used for a
+single-round performance chart.
 
 ## Follow-on: file-backed L3
 
