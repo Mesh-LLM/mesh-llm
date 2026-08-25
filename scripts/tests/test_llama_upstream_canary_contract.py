@@ -43,6 +43,12 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('LLAMA_STAGE_USE_SCCACHE: "0"', workflow)
         self.assertNotIn("Show sccache stats", workflow)
 
+        native_build = _step_block(workflow, "Build patched llama.cpp ABI")
+        self.assertIn(
+            "arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64",
+            native_build,
+        )
+
         build = _step_block(workflow, "Build stage runtime crates")
         self.assertIn("cargo build", build)
         self.assertIn("steps.sha.outputs.certify == 'true'", build)
