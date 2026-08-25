@@ -47,7 +47,9 @@ Speculative options:
   --state-reject-ratio N      reject exact state mobility over Nx baseline; default: 100
   --state-payload-kind KIND   state payload for handoff; default: full-state
   --prefix-token-count N      prefix length for state/cache smoke
-  --cache-hit-repeats N       repeated cache hits for state/cache smoke; default: 1
+  --cache-hit-repeats N       repeated cache hits for state/cache smoke; default: 2
+                              (first inference + 1 cached repeat; the cached
+                              pass must be token-exact vs the uncached one)
   --borrow-resident-hits      borrow resident KV sessions for ResidentKv hits
   --cache-decoded-result-hits reuse decoded-result hits where supported
   --recurrent-ranges CSV      recurrent ranges, for example 0..12,16..24
@@ -126,7 +128,7 @@ QWEN_STATE_BASELINE_BYTES="115388"
 STATE_REJECT_RATIO="100"
 STATE_PAYLOAD_KIND="full-state"
 PREFIX_TOKEN_COUNT=""
-CACHE_HIT_REPEATS="1"
+CACHE_HIT_REPEATS="2"
 BORROW_RESIDENT_HITS=0
 CACHE_DECODED_RESULT_HITS=0
 RECURRENT_RANGES=""
@@ -404,6 +406,13 @@ else
     run_logged "dtype-matrix" "$REPORT_DIR/dtype-matrix.json" "${dtype_args[@]}"
   else
     record_event "dtype-matrix" "skipped" 0 "" "" "requires --split-layer and --layer-end"
+  fi
+
+  # The state-handoff lane (which carries the in-run KV cache-hit oracle)
+  # needs the hidden activation width. Backfill it from the single-step report
+  # when not passed explicitly, so battery runs do not silently skip the lane.
+  if [[ -z "$ACTIVATION_WIDTH" && -f "$REPORT_DIR/single-step.json" ]]; then
+    ACTIVATION_WIDTH="$(jq -r '.split.activation_width // empty' "$REPORT_DIR/single-step.json")"
   fi
 
   if (( SKIP_STATE != 0 )); then

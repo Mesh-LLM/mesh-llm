@@ -30,7 +30,7 @@ in those skills are hard requirements for this repair, not suggestions.
 3. **Build.** `scripts/build-llama.sh` then
    `cargo check -p skippy-ffi -p skippy-runtime -p skippy-server`.
 
-4. **Certify.** `scripts/skippy-family-battery.sh --tier1 --tier2 --skip-build`.
+4. **Certify.** `scripts/skippy-family-battery.sh --skip-build`.
    All lanes must pass. Do not weaken a failing lane; if a model is genuinely
    broken by upstream, revert to fixing our patches or flag it in the PR body.
 
