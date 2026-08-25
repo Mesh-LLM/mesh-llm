@@ -27,25 +27,40 @@ pub(crate) fn downstream_source_ip(config: &StageConfig) -> Result<Option<IpAddr
     }
 }
 
-pub(crate) fn resolve_downstream_endpoint(endpoint: &str) -> Result<SocketAddr> {
+pub(crate) fn resolve_downstream_endpoint(
+    endpoint: &str,
+    source_ip: Option<IpAddr>,
+) -> Result<SocketAddr> {
     if let Ok(addr) = endpoint.parse::<SocketAddr>() {
         return Ok(addr);
     }
-    let mut addrs = endpoint
+    let addrs = endpoint
         .to_socket_addrs()
-        .with_context(|| format!("resolve downstream binary stage endpoint {endpoint}"))?;
-    let first = addrs.next();
-    first
-        .filter(SocketAddr::is_ipv4)
-        .or_else(|| addrs.find(SocketAddr::is_ipv4))
-        .or(first)
-        .with_context(|| {
-            format!("downstream binary stage endpoint resolved no addresses: {endpoint}")
+        .with_context(|| format!("resolve downstream binary stage endpoint {endpoint}"))?
+        .collect::<Vec<_>>();
+    select_downstream_address(&addrs, source_ip).with_context(|| {
+        format!("downstream binary stage endpoint resolved no addresses: {endpoint}")
+    })
+}
+
+fn select_downstream_address(
+    addrs: &[SocketAddr],
+    source_ip: Option<IpAddr>,
+) -> Option<SocketAddr> {
+    source_ip
+        .and_then(|source_ip| {
+            addrs
+                .iter()
+                .find(|addr| addr.is_ipv4() == source_ip.is_ipv4())
         })
+        .or_else(|| addrs.iter().find(|addr| addr.is_ipv4()))
+        .or_else(|| addrs.first())
+        .copied()
 }
 
 pub(crate) fn resolve_downstream_endpoint_cancellable(
     endpoint: &str,
+    source_ip: Option<IpAddr>,
     deadline: Instant,
     shutdown: &AtomicBool,
 ) -> Result<SocketAddr> {
@@ -63,7 +78,7 @@ pub(crate) fn resolve_downstream_endpoint_cancellable(
     thread::Builder::new()
         .name("skippy-downstream-resolver".to_string())
         .spawn(move || {
-            let result = resolve_downstream_endpoint(&endpoint);
+            let result = resolve_downstream_endpoint(&endpoint, source_ip);
             let _ = tx.send(result);
         })
         .context("spawn downstream endpoint resolver")?;
@@ -382,9 +397,12 @@ pub(super) fn sockaddr_ip(addr: *const libc::sockaddr) -> Option<IpAddr> {
 
 #[cfg(test)]
 mod tests {
-    use super::{connect_downstream_socket_cancellable, wait_for_downstream_resolution};
+    use super::{
+        connect_downstream_socket_cancellable, select_downstream_address,
+        wait_for_downstream_resolution,
+    };
     use std::{
-        net::{Ipv4Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
         sync::{atomic::AtomicBool, mpsc},
         time::{Duration, Instant},
     };
@@ -415,5 +433,32 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn downstream_resolution_prefers_source_address_family() {
+        let ipv4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9337);
+        let ipv6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 9337);
+
+        assert_eq!(
+            select_downstream_address(&[ipv4, ipv6], Some(IpAddr::V6(Ipv6Addr::LOCALHOST))),
+            Some(ipv6)
+        );
+        assert_eq!(
+            select_downstream_address(&[ipv6, ipv4], Some(IpAddr::V4(Ipv4Addr::LOCALHOST))),
+            Some(ipv4)
+        );
+    }
+
+    #[test]
+    fn downstream_resolution_preserves_generic_ipv4_preference() {
+        let ipv4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9337);
+        let ipv6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 9337);
+
+        assert_eq!(select_downstream_address(&[ipv6, ipv4], None), Some(ipv4));
+        assert_eq!(
+            select_downstream_address(&[ipv4], Some(IpAddr::V6(Ipv6Addr::LOCALHOST))),
+            Some(ipv4)
+        );
     }
 }

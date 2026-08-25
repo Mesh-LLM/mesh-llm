@@ -544,8 +544,10 @@ fn connect_binary_downstream_inner(
     let source_ip = downstream_source_ip(config)?;
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
     let downstream_addr = match shutdown {
-        Some(shutdown) => resolve_downstream_endpoint_cancellable(endpoint, deadline, shutdown)?,
-        None => resolve_downstream_endpoint(endpoint)?,
+        Some(shutdown) => {
+            resolve_downstream_endpoint_cancellable(endpoint, source_ip, deadline, shutdown)?
+        }
+        None => resolve_downstream_endpoint(endpoint, source_ip)?,
     };
     let mut last_error = None;
     loop {
