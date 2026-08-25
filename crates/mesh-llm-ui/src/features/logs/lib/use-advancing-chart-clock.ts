@@ -14,7 +14,6 @@ export function useAdvancingChartClock(enabled = true): number {
 
     if (!wasEnabled.current) {
       // Re-enabling must re-anchor the rolling window before its aligned timer starts.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCurrent(Date.now())
     }
     wasEnabled.current = true
