@@ -1190,7 +1190,7 @@ index 67fc99716..3953ed990 100644
          struct skippy_ngram_cache * cache,
          const llama_token * continuation_prefix,
 diff --git a/include/skippy/state.h b/include/skippy/state.h
-index 9556bfd84..446da8dad 100644
+index fa5ca80be..0e7bec61d 100644
 --- a/include/skippy/state.h
 +++ b/include/skippy/state.h
 @@ -1,6 +1,11 @@
@@ -1205,15 +1205,15 @@ index 9556bfd84..446da8dad 100644
  #include "runtime.h"
  
  #ifdef __cplusplus
-@@ -11,6 +16,7 @@ enum skippy_kv_page_flag {
-     SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
+@@ -12,6 +17,7 @@ enum skippy_kv_page_flag {
+     SKIPPY_KV_PAGE_FLAG_HAS_K_IDX         = 1 << 1,
  };
  
 +/** @brief Describes the layout and ownership of an exported KV page payload. */
  struct skippy_kv_page_desc {
      uint32_t version;
      int32_t layer_start;
-@@ -27,6 +33,7 @@ struct skippy_kv_page_desc {
+@@ -29,6 +35,7 @@ struct skippy_kv_page_desc {
      uint64_t flags;
  };
  
@@ -1221,7 +1221,7 @@ index 9556bfd84..446da8dad 100644
  LLAMA_API enum skippy_status skippy_export_state(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -36,6 +43,7 @@ LLAMA_API enum skippy_status skippy_export_state(
+@@ -38,6 +45,7 @@ LLAMA_API enum skippy_status skippy_export_state(
          size_t * out_bytes,
          struct skippy_error ** out_error);
  
@@ -1229,7 +1229,7 @@ index 9556bfd84..446da8dad 100644
  LLAMA_API enum skippy_status skippy_import_state(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -44,6 +52,7 @@ LLAMA_API enum skippy_status skippy_import_state(
+@@ -46,6 +54,7 @@ LLAMA_API enum skippy_status skippy_import_state(
          size_t input_bytes,
          struct skippy_error ** out_error);
  
@@ -1237,7 +1237,7 @@ index 9556bfd84..446da8dad 100644
  LLAMA_API enum skippy_status skippy_export_full_state(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -53,6 +62,7 @@ LLAMA_API enum skippy_status skippy_export_full_state(
+@@ -55,6 +64,7 @@ LLAMA_API enum skippy_status skippy_export_full_state(
          size_t * out_bytes,
          struct skippy_error ** out_error);
  
@@ -1245,7 +1245,7 @@ index 9556bfd84..446da8dad 100644
  LLAMA_API enum skippy_status skippy_export_recurrent_state(
          struct skippy_session * session,
          void * output,
-@@ -60,6 +70,7 @@ LLAMA_API enum skippy_status skippy_export_recurrent_state(
+@@ -62,6 +72,7 @@ LLAMA_API enum skippy_status skippy_export_recurrent_state(
          size_t * out_bytes,
          struct skippy_error ** out_error);
  
@@ -1253,7 +1253,7 @@ index 9556bfd84..446da8dad 100644
  LLAMA_API enum skippy_status skippy_import_full_state(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -68,23 +79,27 @@ LLAMA_API enum skippy_status skippy_import_full_state(
+@@ -70,6 +81,7 @@ LLAMA_API enum skippy_status skippy_import_full_state(
          size_t input_bytes,
          struct skippy_error ** out_error);
  
@@ -1261,12 +1261,7 @@ index 9556bfd84..446da8dad 100644
  LLAMA_API enum skippy_status skippy_import_recurrent_state(
          struct skippy_session * session,
          const void * input,
-         size_t input_bytes,
-         struct skippy_error ** out_error);
- 
-+/** @brief Trims the session's token history and associated state. */
- LLAMA_API enum skippy_status skippy_trim_session(
-         struct skippy_session * session,
+@@ -81,12 +93,14 @@ LLAMA_API enum skippy_status skippy_trim_session(
          uint64_t token_count,
          struct skippy_error ** out_error);
  
@@ -1281,7 +1276,7 @@ index 9556bfd84..446da8dad 100644
  LLAMA_API enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -97,6 +112,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
+@@ -99,6 +113,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
          size_t * out_bytes,
          struct skippy_error ** out_error);
  
@@ -1289,29 +1284,6 @@ index 9556bfd84..446da8dad 100644
  LLAMA_API enum skippy_status skippy_import_kv_page(
          struct skippy_session * session,
          const struct skippy_kv_page_desc * desc,
-@@ -104,12 +120,14 @@ LLAMA_API enum skippy_status skippy_import_kv_page(
-         size_t input_bytes,
-         struct skippy_error ** out_error);
- 
-+/** @brief Saves a session prefix into a resident cache sequence. */
- LLAMA_API enum skippy_status skippy_session_save_prefix(
-         struct skippy_session * session,
-         int32_t cache_seq_id,
-         uint64_t token_count,
-         struct skippy_error ** out_error);
- 
-+/** @brief Restores a session prefix from a resident cache sequence. */
- LLAMA_API enum skippy_status skippy_session_restore_prefix(
-         struct skippy_session * session,
-         int32_t cache_seq_id,
-@@ -117,6 +135,7 @@ LLAMA_API enum skippy_status skippy_session_restore_prefix(
-         size_t token_count,
-         struct skippy_error ** out_error);
- 
-+/** @brief Drops a llama.cpp sequence from the session's cache. */
- LLAMA_API enum skippy_status skippy_session_drop_sequence(
-         struct skippy_session * session,
-         int32_t seq_id,
 diff --git a/include/skippy/tokenization.h b/include/skippy/tokenization.h
 index 7b8c4dcc4..ccf3d020c 100644
 --- a/include/skippy/tokenization.h
