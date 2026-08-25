@@ -32,8 +32,12 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
 `llama-upstream-canary.yml` runs trusted default-branch content only on the
-persistent self-hosted `family-certify` runner group (tools and the pre-warmed
-`HF_CACHE` come from the runner image; no GitHub Actions model caching). On a
+persistent self-hosted `family-certify` runner group (tools come from the
+runner image; no GitHub Actions model caching). The runner's `.env` exports
+`HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
+volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
+read-only; the cache is populated by a two-stage prewarm that downloads on
+local disk and moves each repo to NFS). On a
 patch-apply failure it hands the queue to a non-interactive `opencode` agent
 (`LLAMA_CANARY_AGENT_MODEL`, default `Nemotron 3 Ultra Free`) which rebases
 `third_party/llama.cpp/patches`, runs the supported-families certification
