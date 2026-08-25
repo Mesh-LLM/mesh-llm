@@ -220,8 +220,7 @@ pub(crate) fn redact_urls_in_text(text: &str) -> String {
                 let url_with_separator = &word[url_start..url_end];
                 let url_len = url_with_separator
                     .trim_end_matches(|character: char| {
-                        character.is_ascii_punctuation()
-                            && !matches!(character, '=' | '&' | '?' | '#')
+                        character.is_ascii_punctuation() && character != '='
                     })
                     .len();
                 let (url, separator) = url_with_separator.split_at(url_len);
@@ -786,6 +785,23 @@ mod redaction_corpus_tests {
         );
         assert!(!cleaned.contains("first"));
         assert!(!cleaned.contains("second"));
+    }
+
+    #[test]
+    fn url_syntax_punctuation_between_adjacent_urls_is_preserved() {
+        for separator in ['?', '&', '#'] {
+            let text =
+                format!("https://host/v1?token=first{separator}https://host/v2?token=second");
+            let cleaned = redact_urls_in_text(&text);
+            assert_eq!(
+                cleaned,
+                format!(
+                    "https://host/v1?token=[REDACTED]{separator}https://host/v2?token=[REDACTED]"
+                )
+            );
+            assert!(!cleaned.contains("first"));
+            assert!(!cleaned.contains("second"));
+        }
     }
 
     #[test]
