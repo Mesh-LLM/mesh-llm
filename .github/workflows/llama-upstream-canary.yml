@@ -28,7 +28,9 @@ permissions:
 jobs:
   latest-upstream:
     runs-on: [self-hosted, family-certify]
-    timeout-minutes: 360
+    # Ceiling covers the repair path: agent turns plus up to
+    # CANARY_REPAIR_MAX_TURNS+1 full battery runs in the repair loop.
+    timeout-minutes: 960
     env:
       LLAMA_UPSTREAM_CANARY_SMOKE: ${{ vars.LLAMA_UPSTREAM_CANARY_SMOKE || '1' }}
       SCCACHE_GHA_ENABLED: "true"
@@ -147,10 +149,13 @@ jobs:
       # Patch queue failed to apply onto the new upstream: hand the queue to
       # the opencode agent (default model: Nemotron 3 Ultra Free) to rebase
       # the patches, run the family battery, and open or reuse a repair PR.
+      # The repair script re-runs the battery itself and loops certify ->
+      # agent fix -> recertify (CANARY_REPAIR_MAX_TURNS, default 2), so this
+      # step needs headroom for multiple full battery runs.
       - name: Agent repair of the patch queue
         id: agent_repair
         if: steps.prepare.outcome == 'failure'
-        timeout-minutes: 300
+        timeout-minutes: 900
         env:
           DISPATCH_UPSTREAM_SHA: ${{ github.event.inputs.upstream_sha }}
         run: |
