@@ -3617,11 +3617,11 @@
   ],
   "crates/skippy-correctness/src/main.rs": [
     {
-      "line": 22,
+      "line": 25,
       "macro_name": "eprintln!"
     },
     {
-      "line": 30,
+      "line": 33,
       "macro_name": "eprintln!"
     }
   ],
