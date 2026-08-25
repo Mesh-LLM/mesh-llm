@@ -131,16 +131,16 @@ pub(crate) fn run_compose_mtp(args: ComposeMtpArgs) -> Result<()> {
         block_count,
     };
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        crate::output::print_json_pretty(&report)?;
     } else {
-        println!(
+        crate::output::print_success(format!(
             "composed {}: {} target + {} MTP tensors, {} appended bytes, block_count={:?}",
             report.output.display(),
             report.target_tensors,
             report.mtp_tensors,
             report.appended_bytes,
             report.block_count,
-        );
+        ));
     }
     Ok(())
 }
