@@ -70,7 +70,11 @@ mod tests {
 
     fn frame(token_count: u32, row_bytes: usize) -> ActivationFrame {
         use skippy_runtime::{ActivationDesc, RuntimeActivationDType, RuntimeActivationLayout};
-        let payload = vec![0xA5_u8; row_bytes * token_count as usize];
+        let mut payload = Vec::with_capacity(row_bytes * token_count as usize);
+        for row_idx in 0..token_count {
+            // Each row is filled with a distinct byte value (the row index)
+            payload.extend(vec![row_idx as u8; row_bytes]);
+        }
         ActivationFrame {
             desc: ActivationDesc {
                 version: 1,
@@ -97,7 +101,11 @@ mod tests {
         assert_eq!(sliced.desc.sequence_count, 1);
         assert_eq!(sliced.payload.len(), 16);
         assert_eq!(sliced.desc.payload_bytes, 16);
-        assert_eq!(&sliced.payload, &vec![0xA5_u8; 16]);
+        // Verify the payload contains rows 3 and 4 from the original frame
+        // Row 3: 8 bytes of 0x03, Row 4: 8 bytes of 0x04
+        let mut expected = vec![3_u8; 8];
+        expected.extend(vec![4_u8; 8]);
+        assert_eq!(&sliced.payload, &expected);
     }
 
     #[test]
