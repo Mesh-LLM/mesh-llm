@@ -40,7 +40,9 @@ read-only; the cache is populated by a two-stage prewarm that downloads on
 local disk and moves each repo to NFS). The workflow builds its three
 certification binaries before the manifest lanes; the family battery builds
 them once itself unless `--skip-build` is selected, in which case it verifies
-that every binary already exists. On a
+that every binary already exists. A manual dispatch may set `force_certify` to
+run build, smoke, and the full family battery when the upstream SHA is
+unchanged. On a
 patch-apply failure it hands the queue to a non-interactive `opencode` agent
 (`LLAMA_CANARY_AGENT_MODEL`, default `Nemotron 3 Ultra Free`) which rebases
 `third_party/llama.cpp/patches`, runs the supported-families certification

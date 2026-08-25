@@ -21,6 +21,11 @@ on:
       queue_ref:
         description: "Optional branch/ref whose patch queue is validated (default: main). Non-main refs run report-only: the credentialed pin-push step is skipped."
         required: false
+      force_certify:
+        description: "Run build, smoke, and the supported-families battery even when the requested upstream SHA already matches the pin."
+        required: false
+        type: boolean
+        default: false
 
 # This workflow checks out and executes trusted default-branch content by
 # default (schedule/dispatch/main push). A maintainer may explicitly dispatch
@@ -52,6 +57,7 @@ jobs:
       # this being `main`, so write credentials only ever reach runs whose
       # checked-out content is the trusted default branch.
       QUEUE_REF: ${{ inputs.queue_ref || 'main' }}
+      FORCE_CERTIFY: ${{ inputs.force_certify && 'true' || 'false' }}
     steps:
       # Checkout content is normally pinned to the default branch even for a
       # manual dispatch: a dispatcher can select a feature ref, and this job
@@ -107,17 +113,22 @@ jobs:
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+          if [[ "$old_sha" != "$new_sha" || "$FORCE_CERTIFY" == "true" ]]; then
+            echo "certify=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "certify=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build patched llama.cpp ABI
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
         run: scripts/build-llama.sh
 
       - name: Build stage runtime crates
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
         run: cargo build -p skippy-ffi -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p llama-spec-bench
 
       - name: Skippy smoke tests
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
         timeout-minutes: 45
         env:
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
@@ -128,12 +139,12 @@ jobs:
 
       - name: Supported-families certification battery (parity gate)
         id: battery
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
         timeout-minutes: 300
         run: scripts/skippy-family-battery.sh --skip-build
 
       - name: Generate summary
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
         env:
           SKIPPY_CI_SMOKE: ${{ env.LLAMA_UPSTREAM_CANARY_SMOKE }}
         run: |
@@ -178,8 +189,19 @@ jobs:
             cat /tmp/llama-upstream-pr.md
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Report forced certification result
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'false' && steps.sha.outputs.certify == 'true' && steps.battery.outcome == 'success' && env.QUEUE_REF == 'main'
+        run: |
+          {
+            echo "## llama.cpp upstream canary (forced certification)"
+            echo
+            echo "The pinned upstream passed the requested full family battery. No pin update was needed."
+            echo
+            cat /tmp/llama-upstream-pr.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Report report-only canary result
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success' && env.QUEUE_REF != 'main'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.battery.outcome == 'success' && env.QUEUE_REF != 'main'
         run: |
           {
             echo "## llama.cpp upstream canary (report-only, queue_ref=$QUEUE_REF)"

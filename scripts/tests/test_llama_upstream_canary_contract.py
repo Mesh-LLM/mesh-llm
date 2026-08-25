@@ -23,9 +23,12 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
     def test_workflow_builds_binaries_before_skipping_per_lane_builds(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('- "scripts/family-certify.sh"', workflow)
+        self.assertIn("force_certify:", workflow)
+        self.assertIn("FORCE_CERTIFY:", workflow)
 
         build = _step_block(workflow, "Build stage runtime crates")
         self.assertIn("cargo build", build)
+        self.assertIn("steps.sha.outputs.certify == 'true'", build)
         for package in ("skippy-correctness", "skippy-server", "llama-spec-bench"):
             self.assertIn(f"-p {package}", build)
 
@@ -33,6 +36,15 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             workflow, "Supported-families certification battery (parity gate)"
         )
         self.assertIn("run: scripts/skippy-family-battery.sh --skip-build", battery)
+        self.assertIn("steps.sha.outputs.certify == 'true'", battery)
+
+        capture = _step_block(workflow, "Capture upstream SHAs")
+        self.assertIn('"$FORCE_CERTIFY" == "true"', capture)
+        self.assertIn('echo "certify=true"', capture)
+
+        forced_report = _step_block(workflow, "Report forced certification result")
+        self.assertIn("steps.sha.outputs.changed == 'false'", forced_report)
+        self.assertIn("steps.sha.outputs.certify == 'true'", forced_report)
 
     def test_failed_repair_summary_runs_after_a_failed_step(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
