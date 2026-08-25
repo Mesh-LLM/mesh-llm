@@ -4211,15 +4211,15 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 338,
+      "line": 339,
       "macro_name": "eprintln!"
     },
     {
-      "line": 346,
+      "line": 347,
       "macro_name": "eprintln!"
     },
     {
-      "line": 400,
+      "line": 402,
       "macro_name": "eprintln!"
     }
   ],
@@ -4281,7 +4281,7 @@
   ],
   "crates/skippy-server/src/binary_transport/stage_execution.rs": [
     {
-      "line": 211,
+      "line": 302,
       "macro_name": "eprintln!"
     }
   ],
