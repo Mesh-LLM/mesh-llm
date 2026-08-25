@@ -21,6 +21,7 @@ export type LogsHeaderSource = {
 
 type LogsHeaderLiveState = {
   readonly state: LogsLiveConnectionState
+  readonly fallbackPollingActive: boolean
   readonly pollingEnabled: boolean
   readonly togglePolling: () => void
 }
@@ -57,10 +58,7 @@ function availableSourceDescription(sources: readonly LogsHeaderSource[]): strin
   return ` ${availableSource.label} ${availableSource.id === 'requests' ? 'remains' : 'remain'} available.`
 }
 
-function recoveryDescription(
-  sources: readonly LogsHeaderSource[],
-  failedSources: readonly LogsHeaderSource[]
-): string {
+function recoveryDescription(sources: readonly LogsHeaderSource[], failedSources: readonly LogsHeaderSource[]): string {
   const firstFailure = failedSources.at(0)
   if (!firstFailure) return NORMAL_DESCRIPTION
 
@@ -118,9 +116,8 @@ export function LogsLedgerHeader({
   const requestSource = sources.find((source) => source.id === 'requests')
   const showStatus = hasSupportedWindow || hasError
   const liveStatusLabel =
-    live.state === 'polling' && !live.pollingEnabled ? 'Polling paused' : liveStateLabel(live.state)
-  const liveStatusTone =
-    live.state === 'polling' && !live.pollingEnabled ? 'muted' : liveStateTone(live.state)
+    live.fallbackPollingActive && !live.pollingEnabled ? 'Polling paused' : liveStateLabel(live.state)
+  const liveStatusTone = live.fallbackPollingActive && !live.pollingEnabled ? 'muted' : liveStateTone(live.state)
   return (
     <InfoBanner
       action={
@@ -148,8 +145,8 @@ export function LogsLedgerHeader({
                 <div>
                   <div className="font-medium text-foreground">Ledger window is bounded</div>
                   <div>
-                    The server returned more than 1,000 matching records. The table, chart, and KPIs show the first 1,000
-                    only; narrow the filters for complete totals.
+                    The server returned more than 1,000 matching records. The table, chart, and KPIs show the first
+                    1,000 only; narrow the filters for complete totals.
                   </div>
                 </div>
               ) : null}
@@ -204,7 +201,7 @@ export function LogsLedgerHeader({
                 Updating
               </StatusBadge>
             ) : requestSource?.hasLoadedData ? (
-              live.state === 'polling' ? (
+              live.fallbackPollingActive ? (
                 <button
                   aria-label="Fallback log polling"
                   aria-pressed={live.pollingEnabled}
@@ -223,10 +220,7 @@ export function LogsLedgerHeader({
                 </StatusBadge>
               ) : live.state === 'reconnecting' ? (
                 <StatusBadge size="caption" tone={liveStatusTone}>
-                  <WifiSync
-                    aria-hidden="true"
-                    className="size-3.5 animate-pulse motion-reduce:animate-none"
-                  />
+                  <WifiSync aria-hidden="true" className="size-3.5 animate-pulse motion-reduce:animate-none" />
                   {liveStatusLabel}
                 </StatusBadge>
               ) : (

@@ -220,7 +220,12 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
           ) : undefined
         }
         hasSupportedWindow={hasSupportedWindow}
-        live={{ state: live.state, pollingEnabled: live.pollingEnabled, togglePolling: live.togglePolling }}
+        live={{
+          state: live.state,
+          fallbackPollingActive: live.fallbackPollingActive,
+          pollingEnabled: live.pollingEnabled,
+          togglePolling: live.togglePolling
+        }}
         loggingStatus={loggingStatus}
         operationsBounded={auditResult?.state === 'supported' && auditResult.value.incomplete === true}
         requestBounded={requestResult?.state === 'supported' && requestResult.value.incomplete === true}

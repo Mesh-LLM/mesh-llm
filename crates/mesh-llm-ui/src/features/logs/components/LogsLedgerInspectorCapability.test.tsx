@@ -27,6 +27,7 @@ vi.mock('@/features/logs/api/use-logs-live-recovery', () => ({
   useLogsLiveRecovery: () => ({
     state: 'connected',
     liveRequestIds: [],
+    fallbackPollingActive: false,
     pollingEnabled: true,
     togglePolling: vi.fn()
   })

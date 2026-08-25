@@ -18,7 +18,13 @@ const auditQueryState = vi.hoisted(() => ({ current: {} }))
 const liveState = vi.hoisted(() => {
   const togglePolling = vi.fn()
   return {
-    current: { state: 'connected', liveRequestIds: [], pollingEnabled: true, togglePolling },
+    current: {
+      state: 'connected',
+      liveRequestIds: [],
+      fallbackPollingActive: false,
+      pollingEnabled: true,
+      togglePolling
+    },
     togglePolling
   }
 })
@@ -95,6 +101,7 @@ describe('LogsLedger', () => {
     liveState.current = {
       state: 'connected',
       liveRequestIds: [],
+      fallbackPollingActive: false,
       pollingEnabled: true,
       togglePolling: liveState.togglePolling
     }
@@ -494,9 +501,7 @@ describe('LogsLedger', () => {
     expect(screen.getByText('Page 7 of 7')).toBeVisible()
     const requestRow = screen.getByRole('row', { name: `Inspect request ${REQUEST_A}` })
     expect(requestRow).toBeVisible()
-    expect(
-      screen.getAllByRole('row', { name: /^Inspect / }).map((row) => row.getAttribute('aria-label'))
-    ).toEqual([
+    expect(screen.getAllByRole('row', { name: /^Inspect / }).map((row) => row.getAttribute('aria-label'))).toEqual([
       'Inspect operational event newer_operational_event_05',
       'Inspect operational event newer_operational_event_04',
       'Inspect operational event newer_operational_event_03',
@@ -552,6 +557,7 @@ describe('LogsLedger', () => {
     liveState.current = {
       state: 'polling',
       liveRequestIds: [],
+      fallbackPollingActive: true,
       pollingEnabled: true,
       togglePolling: liveState.togglePolling
     }
@@ -576,6 +582,7 @@ describe('LogsLedger', () => {
     liveState.current = {
       state: 'polling',
       liveRequestIds: [],
+      fallbackPollingActive: true,
       pollingEnabled: false,
       togglePolling: liveState.togglePolling
     }
@@ -599,6 +606,7 @@ describe('LogsLedger', () => {
     liveState.current = {
       state: 'reconnecting',
       liveRequestIds: [],
+      fallbackPollingActive: false,
       pollingEnabled: false,
       togglePolling: liveState.togglePolling
     }
@@ -608,6 +616,37 @@ describe('LogsLedger', () => {
     const reconnectingIcon = container.querySelector('svg.lucide-wifi-sync')
     expect(reconnectingIcon).toHaveClass('animate-pulse', 'motion-reduce:animate-none')
     expect(reconnectingStatus?.querySelector('span')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Fallback log polling' })).not.toBeInTheDocument()
+  })
+
+  it('renders active reconnecting fallback as a pressed toggle without changing its visible label', () => {
+    liveState.current = {
+      state: 'reconnecting',
+      liveRequestIds: [],
+      fallbackPollingActive: true,
+      pollingEnabled: true,
+      togglePolling: liveState.togglePolling
+    }
+    render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({})} />)
+
+    const pollingToggle = screen.getByRole('button', { name: 'Fallback log polling' })
+    expect(pollingToggle).toHaveAttribute('aria-pressed', 'true')
+    expect(within(pollingToggle).getByText('Reconnecting', { exact: true })).toBeVisible()
+  })
+
+  it('labels paused reconnecting fallback polling with an unpressed toggle', () => {
+    liveState.current = {
+      state: 'reconnecting',
+      liveRequestIds: [],
+      fallbackPollingActive: true,
+      pollingEnabled: false,
+      togglePolling: liveState.togglePolling
+    }
+    render(<LogsLedger onSearchChange={vi.fn()} search={parseLogsLedgerSearch({})} />)
+
+    const pollingToggle = screen.getByRole('button', { name: 'Fallback log polling' })
+    expect(pollingToggle).toHaveAttribute('aria-pressed', 'false')
+    expect(within(pollingToggle).getByText('Polling paused', { exact: true })).toBeVisible()
   })
 
   it('shows a warning-toned request refresh before restoring the connected live state', () => {
@@ -639,6 +678,7 @@ describe('LogsLedger', () => {
     liveState.current = {
       state: 'reconnecting',
       liveRequestIds: [],
+      fallbackPollingActive: false,
       pollingEnabled: false,
       togglePolling: liveState.togglePolling
     }
@@ -672,6 +712,7 @@ describe('LogsLedger', () => {
     liveState.current = {
       state,
       liveRequestIds: [],
+      fallbackPollingActive: false,
       pollingEnabled: false,
       togglePolling: liveState.togglePolling
     }
@@ -709,6 +750,7 @@ describe('LogsLedger', () => {
     liveState.current = {
       state: 'polling',
       liveRequestIds: [],
+      fallbackPollingActive: true,
       pollingEnabled: false,
       togglePolling: liveState.togglePolling
     }
