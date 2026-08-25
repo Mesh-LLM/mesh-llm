@@ -94,6 +94,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("HF_HUB_OFFLINE=1", smoke)
         self.assertIn('hf download "$repo" "$file"', smoke)
         self.assertIn("'s/^[[:space:]]*path:[[:space:]]*//p'", smoke)
+        self.assertIn('CTX_SIZE="${CTX_SIZE:-8192}"', smoke)
+        self.assertIn('PROMPT_CTX_SIZE="${PROMPT_CTX_SIZE:-$CTX_SIZE}"', smoke)
 
         battery = BATTERY.read_text(encoding="utf-8")
         self.assertIn("'s/^[[:space:]]*path:[[:space:]]*//p'", battery)
