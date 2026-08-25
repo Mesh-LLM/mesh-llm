@@ -202,7 +202,7 @@ write_product_manifest() {
         --runtime "$runtime_path" \
         --version "$version" \
         --backend "$flavor" \
-        "${provider_args[@]}"
+        ${provider_args[@]+"${provider_args[@]}"}
 }
 
 provider_runtime_coordinates() {
@@ -695,7 +695,7 @@ copy_and_verify_precomposed_product() {
         --runtime "$runtime_dir" \
         --version "$version" \
         --backend "$flavor" \
-        "${provider_args[@]}" \
+        ${provider_args[@]+"${provider_args[@]}"} \
         --check
 }
 

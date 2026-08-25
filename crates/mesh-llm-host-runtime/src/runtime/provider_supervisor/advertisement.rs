@@ -147,9 +147,12 @@ pub(super) async fn reconcile_provider_advertisements(
                 availability,
             ))
             .await;
-        changed |= context
+        let runtime_descriptor = provider_runtime_descriptor(model_id, availability);
+        let prev_descriptor = context.node.model_runtime_descriptor(model_id).await;
+        changed |= stable_descriptor_changed(prev_descriptor.as_ref(), &runtime_descriptor);
+        context
             .node
-            .upsert_model_runtime_descriptor(provider_runtime_descriptor(model_id, availability))
+            .upsert_model_runtime_descriptor(runtime_descriptor)
             .await;
     }
     *advertised_model_ids = desired;
@@ -243,6 +246,21 @@ fn provider_runtime_descriptor(
         active_requests: Some(availability.active_requests),
         queued_requests: Some(availability.queued_requests),
     }
+}
+
+fn stable_descriptor_changed(
+    prev: Option<&mesh::ModelRuntimeDescriptor>,
+    next: &mesh::ModelRuntimeDescriptor,
+) -> bool {
+    let Some(prev) = prev else {
+        return true;
+    };
+    prev.model_name != next.model_name
+        || prev.context_length != next.context_length
+        || prev.ready != next.ready
+        || prev.provider_kind != next.provider_kind
+        || prev.model_version != next.model_version
+        || prev.max_concurrent_requests != next.max_concurrent_requests
 }
 
 pub(super) async fn withdraw_provider_advertisement(

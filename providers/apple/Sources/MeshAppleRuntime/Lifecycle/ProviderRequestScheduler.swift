@@ -3,7 +3,7 @@ import Foundation
 public actor ProviderRequestScheduler {
   private var occupied = false
   private var waiterOrder: [UUID] = []
-  private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+  private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
 
   public init() {}
 
@@ -37,20 +37,27 @@ public actor ProviderRequestScheduler {
       return
     }
     let id = UUID()
-    try await withTaskCancellationHandler {
-      await withCheckedContinuation { continuation in
-        waiterOrder.append(id)
-        waiters[id] = continuation
+    do {
+      try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+          waiterOrder.append(id)
+          waiters[id] = continuation
+        }
+        try Task.checkCancellation()
+      } onCancel: {
+        Task { await self.cancelWaiter(id) }
       }
-      try Task.checkCancellation()
-    } onCancel: {
-      Task { await self.cancelWaiter(id) }
+    } catch is CancellationError {
+      if occupied {
+        release()
+      }
+      throw CancellationError()
     }
   }
 
   private func cancelWaiter(_ id: UUID) {
     waiterOrder.removeAll { $0 == id }
-    waiters.removeValue(forKey: id)?.resume()
+    waiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
   }
 
   private func release() {

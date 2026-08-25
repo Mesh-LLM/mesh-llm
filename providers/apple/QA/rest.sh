@@ -87,10 +87,10 @@ matches = [
 ]
 if requested is None:
     artifact_matches = [
-        model for model in matches if not model["id"].startswith("apple/system@")
+        model_id for model_id in matches if not model_id.startswith("apple/system@")
     ]
     matches = artifact_matches or [
-        model for model in matches if model["id"].startswith("apple/system@")
+        model_id for model_id in matches if model_id.startswith("apple/system@")
     ]
 assert len(matches) == 1, models
 print(matches[0])

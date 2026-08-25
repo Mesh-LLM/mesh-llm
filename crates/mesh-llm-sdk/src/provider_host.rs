@@ -38,8 +38,12 @@ impl ProviderHost {
             !config.bundle_roots.is_empty() || config.release_manifest.is_some(),
             "provider host requires a bundle root or release manifest"
         );
-        let api_port = free_loopback_port().context("reserve provider host API port")?;
-        let console_port = free_loopback_port().context("reserve provider host console port")?;
+        let api_listener =
+            TcpListener::bind(("127.0.0.1", 0)).context("reserve provider host API port")?;
+        let api_port = api_listener.local_addr()?.port();
+        let console_listener =
+            TcpListener::bind(("127.0.0.1", 0)).context("reserve provider host console port")?;
+        let console_port = console_listener.local_addr()?.port();
         let mut builder = MeshNode::builder()
             .serve()
             .provider_runtime_roots(config.bundle_roots)
@@ -54,6 +58,8 @@ impl ProviderHost {
         if let Some(path) = config.cache_dir {
             builder = builder.provider_runtime_cache_dir(path);
         }
+        drop(api_listener);
+        drop(console_listener);
         Ok(Self {
             node: builder.start().await?,
         })
@@ -82,10 +88,6 @@ impl Default for ProviderHostConfig {
             startup_timeout: Duration::from_secs(30),
         }
     }
-}
-
-fn free_loopback_port() -> Result<u16> {
-    Ok(TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port())
 }
 
 #[cfg(test)]

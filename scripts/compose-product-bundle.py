@@ -133,6 +133,26 @@ def compose_manifest(
     return manifest
 
 
+def validate_provider_runtime_manifest(
+    manifest_path: Path, provider_manifest: ProviderRuntimeManifest, provider_runtime: Path
+) -> None:
+    runtime_data = provider_manifest["runtime"]
+    required_fields = ["id", "version", "provider_kind", "protocol_version"]
+    for field in required_fields:
+        if field not in runtime_data:
+            raise ValueError(f"provider runtime manifest {manifest_path} missing required field: runtime.{field}")
+    if "entrypoint" not in runtime_data:
+        raise ValueError(f"provider runtime manifest {manifest_path} missing required field: runtime.entrypoint")
+    entrypoint = runtime_data["entrypoint"]
+    if not isinstance(entrypoint, str) or not entrypoint:
+        raise ValueError(f"provider runtime manifest {manifest_path} has invalid entrypoint")
+    entrypoint_path = provider_runtime / entrypoint
+    if not entrypoint_path.is_file():
+        raise ValueError(
+            f"provider runtime {manifest_path} entrypoint {entrypoint} does not exist or is not a file"
+        )
+
+
 def compose_provider_runtimes(
     bundle: Path, provider_runtimes: list[Path]
 ) -> list[dict[str, str]]:
@@ -149,6 +169,7 @@ def compose_provider_runtimes(
                 f"{provider_manifest['schema_version']}"
             )
         runtime_data = provider_manifest["runtime"]
+        validate_provider_runtime_manifest(manifest_path, provider_manifest, provider_runtime)
         runtime_id = runtime_data["id"]
         provider_kind = runtime_data["provider_kind"]
         coordinate = (runtime_id, runtime_data["version"])

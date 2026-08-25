@@ -313,7 +313,10 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
       if let data = try? JSONSerialization.data(withJSONObject: payload),
         let json = String(data: data, encoding: .utf8)
       {
-        connection.send(content: Data("data: \(json)\n\n".utf8), completion: .idempotent)
+        let errorResponse = "data: \(json)\n\ndata: [DONE]\n\n"
+        connection.send(
+          content: Data(errorResponse.utf8), contentContext: .finalMessage, isComplete: true,
+          completion: .idempotent)
       }
       return
     }

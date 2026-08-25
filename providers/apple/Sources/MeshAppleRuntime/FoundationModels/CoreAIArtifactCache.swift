@@ -119,15 +119,20 @@ struct CoreAIArtifactCache {
 
   private func downloadFile(path: String, to destination: URL) async throws {
     let (temporaryURL, response) = try await URLSession.shared.download(
-      from: remoteURL(path: path))
+      from: try remoteURL(path: path))
     guard (response as? HTTPURLResponse)?.statusCode == 200 else {
       throw CoreAIArtifactCacheError.downloadFailed(path)
     }
     try fileManager.moveItem(at: temporaryURL, to: destination)
   }
 
-  private func remoteURL(path: String) -> URL {
-    URL(string: "https://huggingface.co/\(reference.repository)/resolve/\(reference.revision)/\(path)")!
+  private func remoteURL(path: String) throws -> URL {
+    guard let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+          let url = URL(string: "https://huggingface.co/\(reference.repository)/resolve/\(reference.revision)/\(encodedPath)")
+    else {
+      throw CoreAIArtifactCacheError.downloadFailed(path)
+    }
+    return url
   }
 
   private func safeRelativePath(_ path: String) -> Bool {

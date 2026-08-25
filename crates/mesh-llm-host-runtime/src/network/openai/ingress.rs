@@ -172,6 +172,8 @@ async fn collect_available_models_for_auto_route(
         }
     }
     available_models
+        .retain(|model| !crate::network::openai::provider_policy::is_explicit_only_model(model));
+    available_models
 }
 
 async fn resolve_auto_routed_model(
@@ -746,6 +748,7 @@ async fn provider_mesh_targets(
         .local_model_runtime_load(model_name)
         .await
         .is_some();
+    let mut active_remote_hosts = Vec::new();
     let mut remote_provider = false;
     for peer_id in &remote_hosts {
         if ctx
@@ -754,15 +757,15 @@ async fn provider_mesh_targets(
             .await
             .is_some()
         {
+            active_remote_hosts.push(*peer_id);
             remote_provider = true;
-            break;
         }
     }
     if !local_provider && !remote_provider {
         return None;
     }
 
-    let candidates = merge_provider_candidates(&local_candidates, &remote_hosts);
+    let candidates = merge_provider_candidates(&local_candidates, &active_remote_hosts);
     if candidates.is_empty() {
         return None;
     }

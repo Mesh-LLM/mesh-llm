@@ -294,6 +294,60 @@ class PackageReleaseTests(unittest.TestCase):
             self.assertEqual(manifest["runtime"]["id"], "linux-rocm")
             self.assertEqual(manifest["runtime"]["path"], "native-runtimes/linux-rocm")
 
+    def test_rejects_provider_runtime_missing_required_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "mesh-bundle"
+            runtime_root = bundle / "native-runtimes"
+            host = bundle / "mesh-llm"
+            bundle.mkdir()
+            host.write_bytes(b"host")
+            runtime = self.runtime(runtime_root, "linux-cpu", "cpu")
+            provider = bundle / "provider-runtimes" / "apple" / "meshllm-apple-runtime-darwin-arm64"
+            (provider / "bin").mkdir(parents=True)
+            executable = provider / "bin" / "mesh-apple-runtime"
+            executable.write_bytes(b"provider")
+            executable.chmod(0o755)
+            (provider / "provider-runtime.json").write_text(
+                json.dumps({"schema_version": 1, "runtime": {"id": "meshllm-apple-runtime-darwin-arm64"}}) + "\n",
+                encoding="utf-8",
+            )
+            result = run_bash(
+                f'write_product_manifest "{bundle}" "{host}" "{runtime}" "v0.73.1" "cpu"',
+                {},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missing required field", result.stderr)
+
+    def test_rejects_provider_runtime_with_invalid_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "mesh-bundle"
+            runtime_root = bundle / "native-runtimes"
+            host = bundle / "mesh-llm"
+            bundle.mkdir()
+            host.write_bytes(b"host")
+            runtime = self.runtime(runtime_root, "linux-cpu", "cpu")
+            provider = bundle / "provider-runtimes" / "apple" / "meshllm-apple-runtime-darwin-arm64"
+            (provider / "bin").mkdir(parents=True)
+            (provider / "provider-runtime.json").write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "runtime": {
+                        "id": "meshllm-apple-runtime-darwin-arm64",
+                        "version": "0.1.0",
+                        "provider_kind": "apple",
+                        "protocol_version": "0.1",
+                        "entrypoint": "bin/nonexistent",
+                    },
+                }) + "\n",
+                encoding="utf-8",
+            )
+            result = run_bash(
+                f'write_product_manifest "{bundle}" "{host}" "{runtime}" "v0.73.1" "cpu"',
+                {},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("entrypoint", result.stderr.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

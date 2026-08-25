@@ -105,16 +105,14 @@ public actor SystemModelProvider {
       instructions: request.instructions,
       maximumResponseTokens: request.maximumResponseTokens
     )
-    let session: LanguageModelSession
+    let session = LanguageModelSession(
+      model: model,
+      instructions: request.instructions
+    )
     if let preparedSession, request.instructions == nil {
-      session = preparedSession
-    } else {
-      session = LanguageModelSession(
-        model: model,
-        instructions: request.instructions
-      )
-      session.prewarm(promptPrefix: Prompt(request.prompt))
+      self.preparedSession = nil
     }
+    session.prewarm(promptPrefix: Prompt(request.prompt))
     let options = GenerationOptions(
       temperature: request.temperature,
       maximumResponseTokens: request.maximumResponseTokens

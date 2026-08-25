@@ -228,15 +228,9 @@ fn extract_archive(archive_path: &Path, destination: &Path) -> Result<()> {
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         bail!("provider runtime archive contains too many entries");
     }
-    let expanded_bytes = (0..archive.len()).try_fold(0_u64, |total, index| {
-        let entry = archive.by_index(index)?;
-        Ok::<_, zip::result::ZipError>(total.saturating_add(entry.size()))
-    })?;
-    if expanded_bytes > MAX_EXPANDED_BYTES {
-        bail!("provider runtime archive exceeds the expanded size limit");
-    }
+    let mut remaining_budget = MAX_EXPANDED_BYTES;
     for index in 0..archive.len() {
-        extract_entry(&mut archive, index, destination)?;
+        extract_entry(&mut archive, index, destination, &mut remaining_budget)?;
     }
     Ok(())
 }
@@ -245,6 +239,7 @@ fn extract_entry(
     archive: &mut zip::ZipArchive<fs::File>,
     index: usize,
     destination: &Path,
+    remaining_budget: &mut u64,
 ) -> Result<()> {
     let mut entry = archive.by_index(index)?;
     let relative = entry
@@ -271,7 +266,15 @@ fn extract_entry(
                 output.display()
             )
         })?;
-    std::io::copy(&mut entry, &mut file)?;
+    let mut limited_reader = entry.take(*remaining_budget);
+    let bytes_written = std::io::copy(&mut limited_reader, &mut file)?;
+    if bytes_written > *remaining_budget {
+        bail!("provider runtime archive exceeds the expanded size limit");
+    }
+    *remaining_budget = remaining_budget.saturating_sub(bytes_written);
+    if limited_reader.limit() == 0 && entry.bytes().next().is_some() {
+        bail!("provider runtime archive exceeds the expanded size limit");
+    }
     file.flush()?;
     apply_zip_permissions(&output, entry.unix_mode())?;
     Ok(())
