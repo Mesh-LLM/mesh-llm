@@ -391,7 +391,7 @@ test('logs recovery uses the dedicated stream gap and bounded polling fallback',
   await browserPage.clock.pauseAt(new Date(await browserPage.evaluate(() => Date.now() + 2_000)))
   const pollingToggle = browserPage.getByRole('button', { name: 'Fallback log polling' })
   await expect(pollingToggle).toHaveAttribute('aria-pressed', 'true')
-  await expect(pollingToggle).toContainText('Polling')
+  await expect(pollingToggle).toContainText('Reconnecting')
   backend.streamMode = 'event'
 
   const streamAttemptsBeforePause = backend.streamUrls.length
@@ -408,7 +408,7 @@ test('logs recovery uses the dedicated stream gap and bounded polling fallback',
   await pollingToggle.click()
 
   await expect(pollingToggle).toHaveAttribute('aria-pressed', 'true')
-  await expect(pollingToggle).toContainText('Polling')
+  await expect(pollingToggle).toContainText('Reconnecting')
   expect(backend.listCalls).toBe(listCallsBeforePause)
   expect(backend.streamUrls).toHaveLength(streamAttemptsBeforeResume)
   await browserPage.clock.runFor(5_000)
