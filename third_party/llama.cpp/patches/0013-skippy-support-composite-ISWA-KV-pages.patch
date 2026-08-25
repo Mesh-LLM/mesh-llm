@@ -1,8 +1,19 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 2976aa8fd1631412bc1184d4a06332021a058c3d Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 13 Aug 2026 22:32:25 +1000
-Subject: [PATCH 13/15] skippy: support composite ISWA KV pages
+Subject: [PATCH 13/18] skippy: support composite ISWA KV pages
 
+---
+ include/skippy/common.h                       |   2 +-
+ include/skippy/state.h                        |  33 ++-
+ src/llama-kv-cache.cpp                        |  76 +++--
+ src/llama-kv-cache.h                          |   4 +-
+ src/skippy/state.cpp                          | 262 ++++++++++++++----
+ tests/CMakeLists.txt                          |   1 +
+ tests/test-skippy-kv-page-export.cpp          |   8 +-
+ .../test-skippy-recurrent-state-roundtrip.cpp | 159 +++++++++++
+ 8 files changed, 457 insertions(+), 88 deletions(-)
+ create mode 100644 tests/test-skippy-recurrent-state-roundtrip.cpp
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 0911776cd..012aceb9a 100644
@@ -18,7 +29,7 @@ index 0911776cd..012aceb9a 100644
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/include/skippy/state.h b/include/skippy/state.h
-index 74f9ac52a..1c77c5450 100644
+index 0e7bec61d..c5762f5d3 100644
 --- a/include/skippy/state.h
 +++ b/include/skippy/state.h
 @@ -17,6 +17,34 @@ enum skippy_kv_page_flag {
@@ -66,7 +77,7 @@ index 74f9ac52a..1c77c5450 100644
  };
  
  /** @brief Exports the selected layer-range state for staged transfer. */
-@@ -114,7 +145,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
+@@ -113,7 +144,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
          size_t * out_bytes,
          struct skippy_error ** out_error);
  
@@ -76,10 +87,10 @@ index 74f9ac52a..1c77c5450 100644
          struct skippy_session * session,
          const struct skippy_kv_page_desc * desc,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index fdbd1b518..3bc5ea5c5 100644
+index 7c69af599..8242017bd 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1447,6 +1447,26 @@ const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
+@@ -1448,6 +1448,26 @@ const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
      return v_cells[seq_to_stream[seq_id]];
  }
  
@@ -106,7 +117,7 @@ index fdbd1b518..3bc5ea5c5 100644
  bool llama_kv_cache::stage_export_kv_page(
          llama_seq_id seq_id,
          int32_t layer_start,
-@@ -1620,12 +1640,14 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1621,12 +1641,14 @@ bool llama_kv_cache::stage_export_kv_page(
          return false;
      }
  
@@ -124,7 +135,7 @@ index fdbd1b518..3bc5ea5c5 100644
          }
      }
  
-@@ -1635,9 +1657,10 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1636,9 +1658,10 @@ bool llama_kv_cache::stage_export_kv_page(
                  continue;
              }
              auto * v = layer->v_stream[strm];
@@ -138,7 +149,7 @@ index fdbd1b518..3bc5ea5c5 100644
              }
          }
      } else {
-@@ -1648,10 +1671,11 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1649,10 +1672,11 @@ bool llama_kv_cache::stage_export_kv_page(
              auto * v = layer->v_stream[strm];
              const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
              for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
@@ -154,7 +165,7 @@ index fdbd1b518..3bc5ea5c5 100644
                  }
              }
          }
-@@ -1678,7 +1702,8 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1679,7 +1703,8 @@ bool llama_kv_cache::stage_import_kv_page(
          const skippy_kv_page_desc & desc,
          const void * input,
          size_t input_bytes,
@@ -164,7 +175,7 @@ index fdbd1b518..3bc5ea5c5 100644
      if (input == nullptr) {
          error = "input payload is required";
          return false;
-@@ -1689,7 +1714,7 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1690,7 +1715,7 @@ bool llama_kv_cache::stage_import_kv_page(
      }
      if (desc.layer_start < 0 ||
              desc.layer_end <= desc.layer_start ||
@@ -173,7 +184,7 @@ index fdbd1b518..3bc5ea5c5 100644
              desc.token_count == 0) {
          error = "invalid native KV page descriptor";
          return false;
-@@ -1778,6 +1803,9 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1779,6 +1804,9 @@ bool llama_kv_cache::stage_import_kv_page(
          error = "native KV page descriptor payload size is inconsistent";
          return false;
      }
@@ -183,7 +194,7 @@ index fdbd1b518..3bc5ea5c5 100644
  
      llama_ubatch ubatch = {};
      auto udata = std::make_shared<llama_ubatch::data_t>();
-@@ -1843,12 +1871,14 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1844,12 +1872,14 @@ bool llama_kv_cache::stage_import_kv_page(
      }
      apply_ubatch(sinfo, ubatch);
  
@@ -201,7 +212,7 @@ index fdbd1b518..3bc5ea5c5 100644
          }
      }
  
-@@ -1859,9 +1889,10 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1860,9 +1890,10 @@ bool llama_kv_cache::stage_import_kv_page(
                  continue;
              }
              auto * v = layer->v_stream[strm];
@@ -215,7 +226,7 @@ index fdbd1b518..3bc5ea5c5 100644
              }
          }
      } else {
-@@ -1872,10 +1903,11 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1873,10 +1904,11 @@ bool llama_kv_cache::stage_import_kv_page(
              auto * v = layer->v_stream[strm];
              const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
              for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
@@ -585,7 +596,7 @@ index 2bfd88523..5b64b97a9 100644
  }
  
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 7a963ca24..5a4e3cc17 100644
+index 25dc1b014..4dcb6d257 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -154,6 +154,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
@@ -798,3 +809,6 @@ index 000000000..9ef80a6ce
 +
 +    return 0;
 +}
+-- 
+2.54.0 (Apple Git-157)
+

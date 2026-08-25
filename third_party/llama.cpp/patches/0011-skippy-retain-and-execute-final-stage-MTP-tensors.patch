@@ -1,14 +1,19 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From f3c14b7d58e1074738703bef2612df61170d5714 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 11 Aug 2026 16:14:30 -0400
-Subject: [PATCH 12/15] skippy: retain and execute final-stage MTP tensors
+Subject: [PATCH 11/18] skippy: retain and execute final-stage MTP tensors
 
+---
+ include/skippy/common.h      |  2 +-
+ include/skippy/runtime.h     |  8 ++++++++
+ src/skippy/model_loading.cpp | 23 ++++++++++++++++++++++-
+ 3 files changed, 31 insertions(+), 2 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index d43424f0d..0911776cd 100644
+index ec9d59ec3..1bb08fb37 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -34,7 +34,7 @@ extern "C" {
+@@ -25,7 +25,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
@@ -18,10 +23,10 @@ index d43424f0d..0911776cd 100644
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
-index 9aee298d3..bfb80e105 100644
+index 17fbd2a28..eab00881b 100644
 --- a/include/skippy/runtime.h
 +++ b/include/skippy/runtime.h
-@@ -20,6 +20,13 @@ enum skippy_load_mode {
+@@ -15,6 +15,13 @@ enum skippy_load_mode {
      SKIPPY_LOAD_MODE_ARTIFACT_SLICE       = 2,
  };
  
@@ -35,7 +40,7 @@ index 9aee298d3..bfb80e105 100644
  #define SKIPPY_GLM_DSA_POLICY_PROFILE_NONE     0
  #define SKIPPY_GLM_DSA_POLICY_PROFILE_V1       1
  
-@@ -58,6 +65,7 @@ struct skippy_runtime_config {
+@@ -52,6 +59,7 @@ struct skippy_runtime_config {
      bool filter_tensors_on_load;
      bool include_embeddings;
      bool include_output;
@@ -44,7 +49,7 @@ index 9aee298d3..bfb80e105 100644
      // Optional ggml backend device name, for example "CUDA0", "MTL0",
      // "Vulkan1", or "CPU". When set, skippy loads the model only on that
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index dd21a313f..4a2c64239 100644
+index dd21a313f..f4517f917 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
 @@ -411,6 +411,7 @@ static bool skippy_should_create_native_mtp_sidecar(

@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From c7e667c3e0d3e8c269018d932b042fe6fba10e49 Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Tue, 18 Aug 2026 16:44:10 +1000
-Subject: [PATCH 14/15] skippy: roll back bounded verify windows in place
+Subject: [PATCH 14/18] skippy: roll back bounded verify windows in place
 
 Recurrent memory supports bounded in-place rollback through the RS
 snapshot index, but the verify window copied the whole sequence state to
@@ -9,9 +9,14 @@ host memory before every batched verify, and replayed accepted tokens
 serially on partial accept. Skip both when the span fits inside
 n_rs_seq. Staged sessions keep the checkpoint: they roll back across
 hosts, where an in-process RS index is not a usable restore point.
+---
+ src/skippy/activation.cpp    | 26 ++++++++++++++++++++++++++
+ src/skippy/runtime_support.h |  3 +++
+ src/skippy/state.cpp         |  5 +++++
+ 3 files changed, 34 insertions(+)
 
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
-index 1f8ac850a..d9fe850b2 100644
+index 4b208cd4b..2e85acf51 100644
 --- a/src/skippy/activation.cpp
 +++ b/src/skippy/activation.cpp
 @@ -64,6 +64,29 @@ bool skippy_memory_needs_verify_checkpoint(llama_memory_t memory) {
@@ -69,10 +74,10 @@ index 29c88b137..8146f5a65 100644
          skippy_session * session,
          uint64_t token_count,
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index a5ab006aa..b3feee484 100644
+index 5b64b97a9..375cc7196 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -652,6 +652,11 @@ enum skippy_status skippy_retire_verify_checkpoint(
+@@ -654,6 +654,11 @@ enum skippy_status skippy_retire_verify_checkpoint(
      if (!skippy_memory_needs_verify_checkpoint(session->ctx->get_memory())) {
          return skippy_success(out_error);
      }

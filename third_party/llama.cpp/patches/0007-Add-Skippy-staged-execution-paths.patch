@@ -1,8 +1,20 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 0945272f48802aa842982dd598e574d5fdb9a973 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 08/15] Add Skippy staged execution paths
+Subject: [PATCH 07/18] Add Skippy staged execution paths
 
+---
+ include/skippy/execution.h      | 193 ++++++++++
+ src/skippy/execution-batch.cpp  | 329 +++++++++++++++++
+ src/skippy/execution-single.cpp | 613 ++++++++++++++++++++++++++++++++
+ src/skippy/execution_internal.h |  18 +
+ src/skippy/verification.cpp     | 242 +++++++++++++
+ 5 files changed, 1395 insertions(+)
+ create mode 100644 include/skippy/execution.h
+ create mode 100644 src/skippy/execution-batch.cpp
+ create mode 100644 src/skippy/execution-single.cpp
+ create mode 100644 src/skippy/execution_internal.h
+ create mode 100644 src/skippy/verification.cpp
 
 diff --git a/include/skippy/execution.h b/include/skippy/execution.h
 new file mode 100644
