@@ -54,8 +54,9 @@ jobs:
       contents: read
     outputs:
       runner_macos: ${{ steps.policy.outputs.runner_macos }}
+      runner_macos_apple: ${{ steps.policy.outputs.runner_macos_apple }}
       runner_windows: ${{ steps.policy.outputs.runner_windows }}
-      runner_by_platform: ${{ steps.platform_runners.outputs.runner_by_platform }}
+      runner_by_role: ${{ steps.platform_runners.outputs.runner_by_role }}
       allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
       allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
     steps:
@@ -79,21 +80,22 @@ jobs:
           pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
           pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
           force_hosted: ${{ inputs.force_hosted }}
-      - name: Map platform runners explicitly
+      - name: Map platform runner roles explicitly
         id: platform_runners
         env:
           RUNNER_MACOS: ${{ steps.policy.outputs.runner_macos }}
+          RUNNER_MACOS_APPLE: ${{ steps.policy.outputs.runner_macos_apple }}
           RUNNER_WINDOWS: ${{ steps.policy.outputs.runner_windows }}
         run: |
           set -euo pipefail
-          printf 'runner_by_platform={"macos":"%s","windows":"%s"}\n' \
-            "$RUNNER_MACOS" "$RUNNER_WINDOWS" >> "$GITHUB_OUTPUT"
+          printf 'runner_by_role={"macos-build":"%s","macos-apple":"%s","windows-build":"%s"}\n' \
+            "$RUNNER_MACOS" "$RUNNER_MACOS_APPLE" "$RUNNER_WINDOWS" >> "$GITHUB_OUTPUT"
 
   platform_checks:
     name: Platform checks (${{ matrix.check.id }})
     needs: runner_policy
     if: ${{ inputs.platform_checks_matrix != '[]' }}
-    runs-on: ${{ fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform] }}
+    runs-on: ${{ fromJSON(needs.runner_policy.outputs.runner_by_role)[matrix.check.runner_role] }}
     timeout-minutes: 75
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
@@ -104,7 +106,7 @@ jobs:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
           original_event_name: ${{ inputs.original_event_name }}
-          depot_selected: ${{ startsWith(fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform], 'depot-') }}
+          depot_selected: ${{ startsWith(fromJSON(needs.runner_policy.outputs.runner_by_role)[matrix.check.runner_role], 'depot-') }}
           allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -112,8 +114,9 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+        if: ${{ matrix.check.kind != 'apple' }}
       - name: Configure macOS linker
-        if: ${{ matrix.check.platform == 'macos' }}
+        if: ${{ matrix.check.platform == 'macos' && matrix.check.kind != 'apple' }}
         uses: ./.github/actions/setup-macos-lld
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         if: ${{ matrix.check.platform == 'windows' }}
@@ -189,12 +192,12 @@ jobs:
           cargo test --locked -p mesh-llm-host-runtime --lib
           cargo test --locked -p mesh-llm --lib
       - name: Install just
-        if: ${{ matrix.check.kind == 'unit' }}
+        if: ${{ matrix.check.kind == 'apple' }}
         uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
         with:
           tool: just
       - name: Build and test the Apple provider
-        if: ${{ matrix.check.kind == 'unit' }}
+        if: ${{ matrix.check.kind == 'apple' }}
         run: |
           set -euo pipefail
           just apple::build

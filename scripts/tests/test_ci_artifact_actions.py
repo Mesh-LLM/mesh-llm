@@ -2257,6 +2257,7 @@ class CiArtifactActionTests(unittest.TestCase):
                     else "windows-2022"
                 )
                 self.assertEqual(outputs["runner_macos"], expected_macos)
+                self.assertEqual(outputs["runner_macos_apple"], "macos27")
                 self.assertEqual(outputs["runner_windows"], expected_windows)
 
         untrusted_repository = self.run_runner_selector(

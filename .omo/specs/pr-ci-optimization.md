@@ -148,7 +148,8 @@ credentials may differ.
   backend, running in parallel with the matching host.
 - ci-{linux,macos,windows}-product-slice.yml: platform-local composition after
   matching host and runtime producers succeed.
-- ci-platform-checks-slice.yml: macOS portable/unit and Windows checks.
+- ci-platform-checks-slice.yml: macOS portable/unit, a dedicated Apple-provider
+  row on the centrally mapped `macos-apple` role, and Windows checks.
 - ci-linux-product-smoke-slice.yml and ci-macos-product-smoke-slice.yml:
   platform-local inference, backend, two-node, Metal and model-download
   consumers using only composed artifacts.

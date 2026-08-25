@@ -172,7 +172,7 @@ class PlanCiTests(unittest.TestCase):
             ["core-cuda"],
         )
 
-    def test_macos_platform_change_selects_portable_and_unit_rows(self) -> None:
+    def test_macos_platform_change_selects_all_macos_rows(self) -> None:
         payload = fixture("runtime.json")
         payload["changed_files"] = ["scripts/build-mac.sh"]
         payload["affected_crates"] = ["mesh-llm"]
@@ -181,7 +181,7 @@ class PlanCiTests(unittest.TestCase):
 
         self.assertEqual(
             [row["id"] for row in plan["matrices"]["platform_checks"]],
-            ["macos-portable", "macos-unit"],
+            ["macos-portable", "macos-unit", "macos-apple"],
         )
 
     def test_log_store_selects_only_the_windows_storage_privacy_row(self) -> None:
@@ -453,6 +453,17 @@ class PlanCiTests(unittest.TestCase):
         with self.assertRaisesRegex(
             PLANNER.PlanError,
             r"runtime_rows\[0\]\.runner_role must be a non-empty string",
+        ):
+            PLANNER._validate_manifests(ownership, slices)
+
+    def test_manifest_platform_row_requires_runner_role(self) -> None:
+        ownership = json.loads((ROOT / "ci" / "ownership.yml").read_text())
+        slices = json.loads((ROOT / "ci" / "slices.yml").read_text())
+        del slices["platform_rows"][0]["runner_role"]
+
+        with self.assertRaisesRegex(
+            PLANNER.PlanError,
+            r"platform_rows\[0\]\.runner_role must be a non-empty string",
         ):
             PLANNER._validate_manifests(ownership, slices)
 

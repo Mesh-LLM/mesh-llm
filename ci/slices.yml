@@ -187,7 +187,7 @@
     "backend-vulkan": ["core"]
   },
   "platform_domain_rows": {
-  "platform-macos": ["macos-portable", "macos-unit"],
+  "platform-macos": ["macos-portable", "macos-unit", "macos-apple"],
     "platform-windows": ["windows-portable"],
     "platform-windows-storage": ["windows-log-store"]
   },
@@ -210,6 +210,7 @@
   "platform_rows": [
   {"id": "macos-portable", "platform": "macos", "architecture": "arm64", "runner_role": "macos-build", "kind": "portable"},
   {"id": "macos-unit", "platform": "macos", "architecture": "arm64", "runner_role": "macos-build", "kind": "unit"},
+  {"id": "macos-apple", "platform": "macos", "architecture": "arm64", "runner_role": "macos-apple", "kind": "apple"},
     {"id": "windows-portable", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "portable"},
     {"id": "windows-log-store", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "log-store"}
   ],

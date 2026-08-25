@@ -231,7 +231,8 @@ runtime producers are not duplicated.
   producers selected by backend rows.
 - `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
   that join only their matching immutable host and runtime artifacts.
-- `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable, and
+- `ci-platform-checks-slice.yml` — macOS portable/unit, an Apple-provider row
+  on the centrally selected `macos-apple` runner role, Windows portable, and
   focused Windows log-store privacy ACL checks.
 - `ci-linux-product-smoke-slice.yml` and
   `ci-macos-product-smoke-slice.yml` — platform-local CPU core, CUDA,
@@ -343,6 +344,9 @@ from being duplicated into every composed product artifact.
 ## Provider and cache policy
 
 `.github/actions/select-ci-runners` maps semantic roles to approved labels.
+The `macos-apple` role maps to the Xcode 27-capable `macos27` runner and is
+used only by the Apple-provider platform row; other macOS work retains the
+normal `macos-build` policy.
 Fork pull requests use GitHub-hosted runners. Same-repository PRs normally do
 too, but an exact maintainer-approved merge ref and head SHA may use Depot under
 the time-bounded cache-risk exception in `ci/DEPOT_PR_RISK_EXCEPTION.md`. The

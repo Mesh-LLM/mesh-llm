@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import unittest
 
@@ -99,6 +100,27 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                     self.assertIn(f"depot-{runner}", selector)
                     self.assertNotIn("macos-latest", workflow)
                     self.assertNotIn("windows-latest", workflow)
+
+    def test_platform_check_runner_roles_are_bounded_and_mapped(self) -> None:
+        slices = json.loads((ROOT / "ci" / "slices.yml").read_text())
+        rows = {row["id"]: row for row in slices["platform_rows"]}
+        self.assertEqual(rows["macos-apple"]["kind"], "apple")
+        self.assertEqual(rows["macos-apple"]["runner_role"], "macos-apple")
+
+        roles = {row["runner_role"] for row in rows.values()}
+        self.assertEqual(
+            roles,
+            {"macos-build", "macos-apple", "windows-build"},
+        )
+
+        workflow = self.workflow("ci-platform-checks-slice.yml")
+        for role in roles:
+            self.assertIn(f'"{role}":"%s"', workflow)
+
+        selector = (
+            ROOT / ".github" / "actions" / "select-ci-runners" / "action.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("runner_macos_apple=macos27", selector)
 
     def test_all_eligible_pr_slices_bind_runner_and_cache_policy(self) -> None:
         """Every ordinary PR producer must consume the same guarded policy.
@@ -234,16 +256,20 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                         self.assertIn(value, block, value)
 
                 # The runner-owning job must consume a selector output.  The
-                # platform-check slice maps two semantic OS outputs through a
-                # bounded JSON object; all other producers select one output
+                # The platform-check slice maps bounded semantic row roles
+                # through a JSON object; all other producers select one output
                 # directly (native SDK resolves its size in a policy helper).
                 if name == "ci-platform-checks-slice.yml":
                     self.assertIn(
-                        "runner_by_platform: ${{ steps.platform_runners.outputs.runner_by_platform }}",
+                        "runner_by_role: ${{ steps.platform_runners.outputs.runner_by_role }}",
                         workflow,
                     )
                     self.assertIn(
-                        "runs-on: ${{ fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform] }}",
+                        "runs-on: ${{ fromJSON(needs.runner_policy.outputs.runner_by_role)[matrix.check.runner_role] }}",
+                        workflow,
+                    )
+                    self.assertIn(
+                        '"macos-apple":"%s"',
                         workflow,
                     )
                 else:

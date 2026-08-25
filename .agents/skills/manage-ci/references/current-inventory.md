@@ -71,7 +71,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
-| `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
+| `ci-platform-checks-slice.yml` | macOS portable/unit, Apple provider, Windows portable, and Windows log-store privacy ACL checks |
 | `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local CPU, CUDA (`gpu-nvidia` self-hosted), two-node, Metal and model-download consumers; ROCm/Vulkan products remain package-verified pending eligible inference runners |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
@@ -418,8 +418,11 @@ permission.
 ## Providers and variables
 
 GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
-`windows-2022`. Depot labels are selected only by `select-ci-runners`; no
-workflow accepts a raw provider label. Trusted main Linux requires
+`windows-2022`. The Apple-provider platform row requests the semantic
+`macos-apple` role, which centralized policy maps to the Xcode 27-capable
+`macos27` runner; unrelated macOS rows retain `macos-build`. Depot labels are
+selected only by `select-ci-runners`; no workflow accepts a raw provider label.
+Trusted main Linux requires
 `DEPOT_RUNNERS_ENABLED=true`. An exact same-repository PR revision may use the
 time-bounded exception only when `DEPOT_PR_RUNNERS_ENABLED=true` and both
 `DEPOT_PR_APPROVED_REF` and `DEPOT_PR_APPROVED_SHA` match; it expires on

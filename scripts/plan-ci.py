@@ -189,7 +189,9 @@ def _validate_manifests(ownership: dict[str, Any], slices: dict[str, Any]) -> No
             required=("platform", "architecture", "runner_role"),
         ),
         "platform_domain_rows": _validate_rows(
-            slices, "platform_rows", required=("platform", "architecture")
+            slices,
+            "platform_rows",
+            required=("platform", "architecture", "runner_role"),
         ),
         "sdk_domain_rows": _validate_rows(
             slices,
