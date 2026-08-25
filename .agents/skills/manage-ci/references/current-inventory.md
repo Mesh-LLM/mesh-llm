@@ -36,8 +36,8 @@ persistent self-hosted `family-certify` runner group (tools and the pre-warmed
 `HF_CACHE` come from the runner image; no GitHub Actions model caching). On a
 patch-apply failure it hands the queue to a non-interactive `opencode` agent
 (`LLAMA_CANARY_AGENT_MODEL`, default `Nemotron 3 Ultra Free`) which rebases
-`third_party/llama.cpp/patches`, runs the tiered family battery
-(`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR on
+`third_party/llama.cpp/patches`, runs the supported-families certification
+battery (`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR on
 `llama-canary/patch-queue-fix`. The upstream pin commit to `main` is gated on
 the battery passing.
 

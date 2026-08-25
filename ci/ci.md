@@ -25,7 +25,7 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `ci.yml` | `workflow_call` only | Inert compatibility for the former main ingress filename |
 | `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` on `main` | Explicit operator-only full plan, detached lane dispatch, and correlated diagnostic checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
-| `llama-upstream-canary.yml` | schedule, main-path push, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner; tiered family battery gates the pin commit, and patch-apply failures trigger the opencode repair agent + repair PR |
+| `llama-upstream-canary.yml` | schedule, main-path push, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner; supported-families certification battery (single `ci/llama-canary/family-certified.tsv` manifest) gates the pin commit, and patch-apply failures trigger the opencode repair agent + repair PR |
 
 Each PR entry checks out the default branch for canonical planning, projects
 only its matching bounded lane, and invokes that lane at `@main` as a nested

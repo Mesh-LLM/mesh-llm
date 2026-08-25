@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Tiered family battery for llama bump certification (issue #1434).
+# Supported-families certification battery (issue #1434; tiers dropped 2026-08-25).
 #
-# Tier 1: parity oracle + dtype lanes for every row; hybrid/recurrent rows
-#         additionally run a boundary sweep — one representative split layer
-#         for every cut offset modulo the family's interleaving period.
-# Tier 2: single fixed-split parity per row.
+# Every row of the single manifest gets full certification: parity oracle +
+# dtype lanes; hybrid/recurrent rows (sweep_period > 0) additionally run a
+# boundary sweep — one representative split layer for every cut offset modulo
+# the family's interleaving period.
 #
 # Models are NEVER cached through GitHub Actions cache. The family-certify
 # runner ships a large pre-warmed HF cache; `hf download` (which honors
@@ -14,26 +14,22 @@ set -euo pipefail
 # cache-miss backstop.
 #
 # Usage:
-#   scripts/skippy-family-battery.sh --tier1 [--tier2] [--manifest-dir DIR]
-#                                    [--skip-build] [--dry-run]
+#   scripts/skippy-family-battery.sh [--manifest PATH] [--skip-build] [--dry-run]
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-TIER1=0
-TIER2=0
-MANIFEST_DIR="$ROOT/ci/llama-canary"
+MANIFEST="$ROOT/ci/llama-canary/family-certified.tsv"
 SKIP_BUILD=0
 DRY_RUN=0
 SWEEP_MAX_CUTS="${FAMILY_BATTERY_SWEEP_MAX_CUTS:-3}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/skippy-family-battery.sh --tier1 [--tier2] [options]
+usage: scripts/skippy-family-battery.sh [options]
 
 options:
-  --tier1                   run the tier 1 manifest (required unless --tier2)
-  --tier2                   run the tier 2 manifest
-  --manifest-dir DIR        manifest directory; default: ci/llama-canary
+  --manifest PATH           certification manifest;
+                            default: ci/llama-canary/family-certified.tsv
   --skip-build              pass --skip-build to family-certify.sh
   --dry-run                 print the certification commands only
   -h, --help                show this help
@@ -42,9 +38,7 @@ EOF
 
 while (( $# > 0 )); do
   case "$1" in
-    --tier1) TIER1=1 ;;
-    --tier2) TIER2=1 ;;
-    --manifest-dir) MANIFEST_DIR="$2"; shift ;;
+    --manifest) MANIFEST="$2"; shift ;;
     --skip-build) SKIP_BUILD=1 ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -53,8 +47,8 @@ while (( $# > 0 )); do
   shift
 done
 
-if (( TIER1 == 0 && TIER2 == 0 )); then
-  echo "error: select at least one tier (--tier1 / --tier2)" >&2
+if [[ ! -f "$MANIFEST" ]]; then
+  echo "error: manifest not found: $MANIFEST" >&2
   exit 1
 fi
 
@@ -113,7 +107,7 @@ run_certify() {
 }
 
 run_manifest() {
-  local manifest="$1" tier="$2"
+  local manifest="$1"
   [[ -f "$manifest" ]] || { echo "missing manifest: $manifest" >&2; exit 1; }
 
   while IFS='|' read -r family repo file selector sweep_period layer_end _notes; do
@@ -141,7 +135,7 @@ run_manifest() {
     local base_split=$(( layer_end / 2 ))
     run_certify "$family" "$target" "$model_id" "$base_split" "$layer_end"
 
-    if [[ "$tier" == "tier1" && "$sweep_period" != "0" ]]; then
+    if [[ "$sweep_period" != "0" ]]; then
       # Boundary sweep: every cut offset mod the interleaving period, one
       # representative cut each (then every period up to SWEEP_MAX_CUTS cuts),
       # so planner-cut dependence (the B1 bug class) cannot hide.
@@ -158,8 +152,7 @@ run_manifest() {
   done < <(grep -v '^[[:space:]]*#' "$manifest")
 }
 
-(( TIER1 == 1 )) && run_manifest "$MANIFEST_DIR/family-tier1.tsv" "tier1"
-(( TIER2 == 1 )) && run_manifest "$MANIFEST_DIR/family-tier2.tsv" "tier2"
+run_manifest "$MANIFEST"
 
 echo
 echo "family battery complete: $((TOTAL - ${#FAILURES[@]}))/$TOTAL lanes passed"
