@@ -14,6 +14,10 @@ set -euo pipefail
 # repair turn (with the battery failure summary in the prompt) followed by a
 # recertify, up to CANARY_REPAIR_MAX_TURNS (default 2) repair turns. The
 # script only succeeds when the battery actually passes on this runner.
+#
+# PR guarantee: whatever the outcome, the wrapper (not the agent) ensures a
+# repair PR exists on $BRANCH and posts a status comment describing the work
+# done and, on failure, what the agent is stuck on and needs human help with.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -50,8 +54,10 @@ if command -v gh >/dev/null 2>&1; then
 fi
 
 agent_turn() {
+  # Non-fatal: a crashed agent turn must not skip PR reporting.
   local prompt="$1"
-  opencode run --model "$AGENT_MODEL" "$prompt"
+  opencode run --model "$AGENT_MODEL" "$prompt" \
+    || echo "warning: opencode turn exited non-zero" >&2
 }
 
 battery_summary() {
@@ -59,6 +65,44 @@ battery_summary() {
   # family/split lanes without flooding the agent prompt.
   local log="$1"
   tail -n 80 "$log"
+}
+
+current_pr() {
+  gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || true
+}
+
+ensure_pr() {
+  # The agent is asked to open the PR, but the wrapper guarantees it: if no
+  # open PR exists on $BRANCH, push the branch and create one. If the branch
+  # has no diff against the base (agent produced nothing), fall back to an
+  # issue so the outcome is still visible to humans.
+  local pr title body
+  pr="$(current_pr)"
+  if [[ -n "$pr" ]]; then
+    printf '%s\n' "$pr"
+    return 0
+  fi
+  title="fix(llama): rebase patch queue onto upstream ${UPSTREAM_SHA:0:10}"
+  body="Automated canary repair PR for the llama.cpp patch queue at upstream ${UPSTREAM_SHA}."
+  if git push -u origin "$BRANCH" 2>/dev/null \
+     && pr="$(gh pr create --head "$BRANCH" --title "$title" --body "$body" 2>/dev/null \
+              | grep -oE '[0-9]+$')"; then
+    printf '%s\n' "$pr"
+    return 0
+  fi
+  gh issue create --title "llama canary repair needs human assistance (upstream ${UPSTREAM_SHA:0:10})" \
+    --body "The canary repair loop could not open a PR on \`$BRANCH\` (branch missing or no diff). See the canary run log for the repair-loop outcome." \
+    | grep -oE '[0-9]+$' || true
+  return 0
+}
+
+pr_comment() {
+  # Post a status comment on the repair PR; never fails the loop.
+  local body="$1" pr
+  pr="$(current_pr)"
+  [[ -n "$pr" ]] || pr="$(ensure_pr)"
+  [[ -n "$pr" ]] || return 0
+  gh pr comment "$pr" --body "$body" >/dev/null 2>&1 || true
 }
 
 run_battery() {
@@ -80,7 +124,11 @@ open PR %s on that branch if listed, otherwise create one). Report the PR URL.' 
     "$UPSTREAM_SHA" "$BRANCH" "${EXISTING_PR:-none}")"
 
 echo "agent repair turn finished; verifying queue applies..."
-scripts/prepare-llama.sh "$UPSTREAM_SHA"
+if ! scripts/prepare-llama.sh "$UPSTREAM_SHA"; then
+  pr_comment "$(printf '**Repair stuck — needs human assistance.** The patch queue still does not apply at upstream %s after the agent repair turn (see the canary run log for the failing patch). The agent work so far is on this branch.' \
+    "$UPSTREAM_SHA")"
+  exit 1
+fi
 
 # Certify → repair → recertify loop. The wrapper — not the agent — decides
 # when certification passes, so a lane failure can never be talked past.
@@ -89,6 +137,8 @@ for turn in $(seq 1 "$MAX_REPAIR_TURNS"); do
   echo "certification attempt $turn..."
   if run_battery; then
     echo "family battery passed; repair complete"
+    pr_comment "$(printf '**Family battery passed** after the agent repair at upstream %s.\nAll certification lanes green on the family-certify runner.' \
+      "$UPSTREAM_SHA")"
     exit 0
   fi
   echo "family battery failed on repair turn $turn; handing failures to the agent"
@@ -106,14 +156,22 @@ Re-run scripts/skippy-family-battery.sh --skip-build yourself to confirm your
 fix, commit to %s, and push to the PR.' \
     "$UPSTREAM_SHA" "$turn" "$MAX_REPAIR_TURNS" "$BRANCH" "$(battery_summary "$BATTERY_LOG")" "$BRANCH")"
   echo "agent repair turn $turn finished; verifying queue applies..."
-  scripts/prepare-llama.sh "$UPSTREAM_SHA"
+  if ! scripts/prepare-llama.sh "$UPSTREAM_SHA"; then
+    pr_comment "$(printf '**Repair stuck — needs human assistance.** The patch queue regressed or still does not apply at upstream %s after repair turn %s/%s. The agent work is on this branch; see the canary run log for the failing patch.' \
+      "$UPSTREAM_SHA" "$turn" "$MAX_REPAIR_TURNS")"
+    exit 1
+  fi
 done
 
 echo "final certification attempt..."
 if run_battery; then
   echo "family battery passed; repair complete"
+  pr_comment "$(printf '**Family battery passed** after the agent repair at upstream %s.\nAll certification lanes green on the family-certify runner.' \
+    "$UPSTREAM_SHA")"
   exit 0
 fi
 
+pr_comment "$(printf '**Repair stuck — needs human assistance.** The family battery is still failing after %s agent repair turns at upstream %s. The agent work is on this branch; the failing battery output (tail):\n\n```\n%s\n```' \
+  "$MAX_REPAIR_TURNS" "$UPSTREAM_SHA" "$(battery_summary "$BATTERY_LOG")")"
 echo "family battery still failing after $MAX_REPAIR_TURNS agent repair turns" >&2
 exit 1
