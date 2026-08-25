@@ -36,6 +36,7 @@ FORBIDDEN_IMPORTS = tuple(
 
 
 def binary_format(path: Path) -> str:
+    """Execute binary format operation."""
     header = path.read_bytes()[:4]
     if header == b"\x7fELF":
         return "elf"
@@ -54,10 +55,20 @@ def binary_format(path: Path) -> str:
 
 
 def parse_elf_imports(output: str) -> list[str]:
+    """Parse and validate elf imports.
+
+    Returns:
+        Parsed result.
+    """
     return sorted(set(re.findall(r"\(NEEDED\).*\[([^\]]+)\]", output)))
 
 
 def parse_macho_imports(output: str) -> list[str]:
+    """Parse and validate macho imports.
+
+    Returns:
+        Parsed result.
+    """
     imports = []
     for line in output.splitlines():
         if not line[:1].isspace():
@@ -69,6 +80,11 @@ def parse_macho_imports(output: str) -> list[str]:
 
 
 def parse_pe_imports(output: str) -> list[str]:
+    """Parse and validate pe imports.
+
+    Returns:
+        Parsed result.
+    """
     imports = []
     for line in output.splitlines():
         match = re.search(r"(?:DLL Name:|Name:)\s*(\S+\.dll)\b", line, re.IGNORECASE)
@@ -78,6 +94,7 @@ def parse_pe_imports(output: str) -> list[str]:
 
 
 def inspect_dependencies(path: Path, format_name: str | None = None) -> tuple[str, list[str]]:
+    """Execute inspect dependencies operation."""
     format_name = format_name or binary_format(path)
     if format_name == "elf":
         output = run_tool(("readelf", "-d", str(path)))
@@ -97,12 +114,14 @@ def inspect_dependencies(path: Path, format_name: str | None = None) -> tuple[st
 
 
 def run_tool(command: tuple[str, ...]) -> str:
+    """Run tool operation."""
     if shutil.which(command[0]) is None:
         raise RuntimeError(f"{command[0]} is required to inspect host dependencies")
     return subprocess.check_output(command, text=True, stderr=subprocess.STDOUT)
 
 
 def forbidden_imports(imports: list[str]) -> list[str]:
+    """Execute forbidden imports operation."""
     return [
         dependency
         for dependency in imports
@@ -111,6 +130,11 @@ def forbidden_imports(imports: list[str]) -> list[str]:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse and validate args.
+
+    Returns:
+        Parsed result.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
     parser.add_argument("--format", choices=("elf", "macho", "pe"))
@@ -119,6 +143,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str]) -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     args = parse_args(argv)
     try:
         format_name, imports = inspect_dependencies(args.binary, args.format)

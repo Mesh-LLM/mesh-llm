@@ -18,10 +18,12 @@ STABLE_TAG = re.compile(
 
 
 def version_from_match(match: re.Match[str]) -> tuple[int, int, int]:
+    """Execute version from match operation."""
     return tuple(int(match.group(name)) for name in ("major", "minor", "patch"))
 
 
 def select_release_notes_base(target: str, tags: Iterable[str]) -> str | None:
+    """Execute select release notes base operation."""
     target_match = TARGET_TAG.fullmatch(target.strip())
     if target_match is None:
         raise ValueError(f"invalid release tag: {target}")
@@ -43,6 +45,11 @@ def select_release_notes_base(target: str, tags: Iterable[str]) -> str | None:
 
 
 def main() -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     if len(sys.argv) != 2:
         print(
             "usage: select-release-notes-base.py <target-tag>",

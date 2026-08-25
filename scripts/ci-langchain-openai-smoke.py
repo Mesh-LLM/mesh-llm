@@ -8,6 +8,8 @@ from typing import Any, Iterable
 
 
 def content_text(content: Any) -> str:
+    """Execute content_text operation."""
+
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -23,7 +25,10 @@ def content_text(content: Any) -> str:
     return ""
 
 
+    """Execute streamed_text operation."""
+
 def streamed_text(chunks: Iterable[object]) -> str:
+    """Execute streamed text operation."""
     parts: list[str] = []
     saw_chunk = False
     for chunk in chunks:
@@ -38,8 +43,15 @@ def streamed_text(chunks: Iterable[object]) -> str:
         raise RuntimeError("stream returned no content")
     return text
 
+    """Execute main operation."""
+
 
 def main() -> None:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)

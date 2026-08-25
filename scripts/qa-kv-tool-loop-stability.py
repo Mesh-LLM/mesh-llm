@@ -41,16 +41,19 @@ FAILURE_PATTERNS = (
 
 
 class ToolCall(NamedTuple):
+    """Represents ToolCall functionality."""
     call_id: str
     key: str
 
 
 class CacheMetrics(NamedTuple):
+    """Represents CacheMetrics functionality."""
     prompt_tokens: int
     cached_tokens: int
 
 
 class LogFinding(NamedTuple):
+    """Represents LogFinding functionality."""
     path: str
     line_number: int
     pattern: str
@@ -58,6 +61,7 @@ class LogFinding(NamedTuple):
 
 
 class NativeLogCheckpoint(NamedTuple):
+    """Represents NativeLogCheckpoint functionality."""
     path: Path
     offset: int
     identity: tuple[int, int] | None
@@ -65,6 +69,7 @@ class NativeLogCheckpoint(NamedTuple):
 
 
 class ProbeResult(NamedTuple):
+    """Represents ProbeResult functionality."""
     model: str
     attempt: int
     phase: str
@@ -77,6 +82,7 @@ class ProbeResult(NamedTuple):
 
 
 class OverlapRequest(NamedTuple):
+    """Represents OverlapRequest functionality."""
     label: str
     payload: dict[str, Any]
     expects_tool_call: bool
@@ -84,6 +90,7 @@ class OverlapRequest(NamedTuple):
 
 
 def normalize_v1_base(base_url: str) -> str:
+    """Execute normalize v1 base operation."""
     base = base_url.strip().rstrip("/")
     if not base:
         raise ValueError("base URL is empty")
@@ -93,6 +100,11 @@ def normalize_v1_base(base_url: str) -> str:
 
 
 def parse_models(value: str) -> list[str]:
+    """Parse and validate models.
+
+    Returns:
+        Parsed result.
+    """
     models = [part.strip() for part in value.split(",") if part.strip()]
     if not models:
         raise ValueError("at least one model is required")
@@ -100,6 +112,11 @@ def parse_models(value: str) -> list[str]:
 
 
 def parse_native_logs(values: Iterable[str] | None) -> list[Path]:
+    """Parse and validate native logs.
+
+    Returns:
+        Parsed result.
+    """
     logs: list[Path] = []
     env_value = os.environ.get("MESH_KV_TOOL_LOOP_NATIVE_LOGS")
     if env_value:
@@ -114,6 +131,7 @@ def parse_native_logs(values: Iterable[str] | None) -> list[Path]:
 
 
 def dedupe_paths(paths: Iterable[Path]) -> list[Path]:
+    """Execute dedupe paths operation."""
     deduped: list[Path] = []
     seen: set[str] = set()
     for path in paths:
@@ -137,6 +155,11 @@ def build_plan(
     native_logs: Iterable[Path],
     overlap_requests: int = DEFAULT_OVERLAP_REQUESTS,
 ) -> dict[str, Any]:
+    """Create plan.
+
+    Returns:
+        Created object.
+    """
     model_list = list(models)
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
@@ -225,10 +248,12 @@ def build_plan(
 
 
 def render_plan(plan: dict[str, Any]) -> str:
+    """Render output for plan."""
     return json.dumps(plan, indent=2, sort_keys=True)
 
 
 def tool_schema() -> list[dict[str, Any]]:
+    """Execute tool schema operation."""
     return [
         {
             "type": "function",
@@ -257,6 +282,11 @@ def build_tool_call_request(
     key: str = "primary",
     messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Create tool call request.
+
+    Returns:
+        Created object.
+    """
     request_messages = list(messages) if messages is not None else initial_messages(attempt, key)
     return {
         "model": model,
@@ -280,6 +310,11 @@ def build_overlap_requests(
     attempt: int,
     overlap_requests: int,
 ) -> list[OverlapRequest]:
+    """Create overlap requests.
+
+    Returns:
+        Created object.
+    """
     if overlap_requests < 2:
         raise ValueError("overlap_requests must be at least 2")
     requests = [
@@ -311,6 +346,11 @@ def build_overlap_requests(
 
 
 def build_overlap_title_request(model: str, attempt: int) -> dict[str, Any]:
+    """Create overlap title request.
+
+    Returns:
+        Created object.
+    """
     return {
         "model": model,
         "messages": [
@@ -340,6 +380,11 @@ def build_overlap_tool_request(
     label: str,
     key: str,
 ) -> dict[str, Any]:
+    """Create overlap tool request.
+
+    Returns:
+        Created object.
+    """
     messages = [
         {
             "role": "system",
@@ -358,6 +403,7 @@ def build_overlap_tool_request(
 
 
 def initial_messages(attempt: int, key: str) -> list[dict[str, str]]:
+    """Execute initial messages operation."""
     return [
         {
             "role": "system",
@@ -379,6 +425,11 @@ def build_tool_result_request(
     messages: list[dict[str, Any]],
     max_tokens: int = 128,
 ) -> dict[str, Any]:
+    """Create tool result request.
+
+    Returns:
+        Created object.
+    """
     return {
         "model": model,
         "messages": messages,
@@ -391,6 +442,11 @@ def build_tool_result_request(
 
 
 def build_cache_request(model: str, tail: str) -> dict[str, Any]:
+    """Create cache request.
+
+    Returns:
+        Created object.
+    """
     return {
         "model": model,
         "messages": [
@@ -414,6 +470,7 @@ def build_cache_request(model: str, tail: str) -> dict[str, Any]:
 
 
 def stable_system_prefix() -> str:
+    """Execute stable system prefix operation."""
     lines = [
         "You are a deterministic KV/cache stability certification endpoint.",
         f"Pinned recall token: {KV_PIN}.",
@@ -428,6 +485,7 @@ def stable_system_prefix() -> str:
 
 
 def extract_tool_call(response: dict[str, Any]) -> ToolCall:
+    """Execute extract tool call operation."""
     finish_reason = _first_choice(response).get("finish_reason")
     if finish_reason != "tool_calls":
         raise ValueError(f"tool-call turn finish_reason was not tool_calls: {finish_reason!r}")
@@ -452,6 +510,7 @@ def extract_tool_call(response: dict[str, Any]) -> ToolCall:
 
 
 def assistant_tool_message(response: dict[str, Any]) -> dict[str, Any]:
+    """Execute assistant tool message operation."""
     message = dict(_first_message(response))
     return {
         "role": "assistant",
@@ -461,6 +520,7 @@ def assistant_tool_message(response: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_result_message(call: ToolCall) -> dict[str, Any]:
+    """Execute tool result message operation."""
     return {
         "role": "tool",
         "tool_call_id": call.call_id,
@@ -473,6 +533,7 @@ def tool_result_message(call: ToolCall) -> dict[str, Any]:
 
 
 def extract_cache_metrics(response: dict[str, Any]) -> CacheMetrics:
+    """Execute extract cache metrics operation."""
     usage = response.get("usage")
     if not isinstance(usage, dict):
         return CacheMetrics(prompt_tokens=0, cached_tokens=0)
@@ -489,6 +550,7 @@ def evaluate_cache_threshold(
     min_cached_tokens: int,
     suffix_prefill_limit: int,
 ) -> tuple[bool, str]:
+    """Execute evaluate cache threshold operation."""
     if metrics.cached_tokens < min_cached_tokens:
         return (
             False,
@@ -518,6 +580,7 @@ def evaluate_cache_threshold(
 
 
 def scan_failure_logs(paths: Iterable[Path]) -> list[LogFinding]:
+    """Execute scan failure logs operation."""
     findings: list[LogFinding] = []
     for path in paths:
         if not path.exists():
@@ -547,6 +610,7 @@ def scan_failure_logs(paths: Iterable[Path]) -> list[LogFinding]:
 
 
 def capture_native_log_checkpoints(paths: Iterable[Path]) -> list[NativeLogCheckpoint]:
+    """Execute capture native log checkpoints operation."""
     checkpoints: list[NativeLogCheckpoint] = []
     for path in paths:
         try:
@@ -568,6 +632,7 @@ def capture_native_log_checkpoints(paths: Iterable[Path]) -> list[NativeLogCheck
 def scan_failure_logs_since(
     checkpoints: Iterable[NativeLogCheckpoint],
 ) -> list[LogFinding]:
+    """Execute scan failure logs since operation."""
     findings: list[LogFinding] = []
     for checkpoint in checkpoints:
         findings.extend(scan_one_log_since(checkpoint))
@@ -575,6 +640,7 @@ def scan_failure_logs_since(
 
 
 def scan_one_log_since(checkpoint: NativeLogCheckpoint) -> list[LogFinding]:
+    """Execute scan one log since operation."""
     path = checkpoint.path
     try:
         stat = path.stat()
@@ -605,6 +671,7 @@ def scan_failure_lines(
     handle: Iterable[bytes],
     start_line_number: int = 1,
 ) -> list[LogFinding]:
+    """Execute scan failure lines operation."""
     findings: list[LogFinding] = []
     for line_number, raw_line in enumerate(handle, start=start_line_number):
         line = raw_line.decode("utf-8", errors="replace").strip()
@@ -622,6 +689,7 @@ def scan_failure_lines(
 
 
 def line_number_start_for_offset(handle: Any, offset: int) -> int:
+    """Execute line number start for offset operation."""
     if offset <= 0:
         return 1
     handle.seek(0)
@@ -637,10 +705,12 @@ def line_number_start_for_offset(handle: Any, offset: int) -> int:
 
 
 def file_identity(stat: os.stat_result) -> tuple[int, int]:
+    """Execute file identity operation."""
     return (int(stat.st_dev), int(stat.st_ino))
 
 
 def read_checkpoint_tail(path: Path, offset: int) -> bytes:
+    """Execute read checkpoint tail operation."""
     if offset <= 0:
         return b""
     start = max(offset - NATIVE_LOG_CHECKPOINT_TAIL_BYTES, 0)
@@ -650,6 +720,11 @@ def read_checkpoint_tail(path: Path, offset: int) -> bytes:
 
 
 def checkpoint_tail_matches(checkpoint: NativeLogCheckpoint) -> bool:
+    """Validate checkpoint tail matches.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     if checkpoint.offset <= 0:
         return True
     try:
@@ -659,6 +734,7 @@ def checkpoint_tail_matches(checkpoint: NativeLogCheckpoint) -> bool:
 
 
 def matched_failure_pattern(line: str) -> str | None:
+    """Execute matched failure pattern operation."""
     for pattern in FAILURE_PATTERNS:
         if pattern in line:
             return pattern
@@ -675,6 +751,7 @@ def run_tool_loop_probe(
     pressure_turns: int,
     transcript_dir: Path,
 ) -> ProbeResult:
+    """Run tool loop probe operation."""
     started = time.monotonic()
     transcript_path = transcript_dir / safe_name(f"{model}-attempt-{attempt}.jsonl")
     messages = initial_messages(attempt, "primary")
@@ -713,6 +790,7 @@ def run_final_after_tool(
     timeout: float,
     expected_values: Iterable[str],
 ) -> None:
+    """Run final after tool operation."""
     messages.append(
         {
             "role": "user",
@@ -737,6 +815,7 @@ def run_pressure_turns(
     pressure_turns: int,
     transcript_path: Path,
 ) -> None:
+    """Run pressure turns operation."""
     for turn in range(1, pressure_turns + 1):
         messages.append(
             {
@@ -765,6 +844,7 @@ def run_second_tool_loop(
     timeout: float,
     transcript_path: Path,
 ) -> None:
+    """Run second tool loop operation."""
     messages.append(
         {
             "role": "user",
@@ -792,6 +872,7 @@ def run_final_recall(
     timeout: float,
     transcript_path: Path,
 ) -> None:
+    """Run final recall operation."""
     expected = [KV_PIN, FIXTURE_FACTS["primary"], FIXTURE_FACTS["secondary"]]
     messages.append(
         {
@@ -818,6 +899,7 @@ def run_cache_probe(
     min_cached_tokens: int,
     suffix_prefill_limit: int,
 ) -> ProbeResult:
+    """Run cache probe operation."""
     started = time.monotonic()
     try:
         if phase == "exact_prefix_cache":
@@ -863,6 +945,7 @@ def measure_cache_reuse(
     warm_tail: str,
     measured_tail: str,
 ) -> tuple[int, CacheMetrics]:
+    """Execute measure cache reuse operation."""
     warm = build_cache_request(model, warm_tail)
     measured = build_cache_request(model, measured_tail)
     post_json(base_url, "/chat/completions", warm, timeout)
@@ -881,6 +964,7 @@ def run_overlap_tool_loop_probe(
     suffix_prefill_limit: int,
     transcript_dir: Path,
 ) -> ProbeResult:
+    """Run overlap tool loop probe operation."""
     started = time.monotonic()
     transcript_path = transcript_dir / safe_name(f"{model}-attempt-{attempt}-overlap")
     try:
@@ -945,9 +1029,11 @@ def run_initial_overlap_requests(
     contexts: list[OverlapRequest],
     timeout: float,
 ) -> list[tuple[OverlapRequest, dict[str, Any], int]]:
+    """Run initial overlap requests operation."""
     barrier = threading.Barrier(len(contexts))
 
     def send(context: OverlapRequest) -> tuple[OverlapRequest, dict[str, Any], int]:
+        """Execute send operation."""
         try:
             barrier.wait(timeout=min(max(timeout, 1.0), 30.0))
         except threading.BrokenBarrierError as exc:
@@ -974,6 +1060,7 @@ def complete_overlap_tool_loop(
     timeout: float,
     transcript_path: Path,
 ) -> None:
+    """Execute complete overlap tool loop operation."""
     messages = [dict(message) for message in context.payload["messages"]]
     first_call = extract_tool_call(response)
     record_transcript(
@@ -989,6 +1076,7 @@ def complete_overlap_tool_loop(
 
 
 def run_native_log_scan(checkpoints: Iterable[NativeLogCheckpoint]) -> ProbeResult:
+    """Run native log scan operation."""
     started = time.monotonic()
     findings = scan_failure_logs_since(checkpoints)
     if findings:
@@ -1014,6 +1102,7 @@ def run_certification(
     output_dir: Path,
     overlap_requests: int = DEFAULT_OVERLAP_REQUESTS,
 ) -> list[ProbeResult]:
+    """Run certification operation."""
     transcript_dir = output_dir / "transcripts"
     prepare_transcript_dir(transcript_dir)
     log_checkpoints = capture_native_log_checkpoints(native_logs)
@@ -1069,6 +1158,7 @@ def run_certification(
 
 
 def prepare_transcript_dir(transcript_dir: Path) -> None:
+    """Execute prepare transcript dir operation."""
     if transcript_dir.is_symlink() or transcript_dir.is_file():
         transcript_dir.unlink()
     elif transcript_dir.exists():
@@ -1077,6 +1167,7 @@ def prepare_transcript_dir(transcript_dir: Path) -> None:
 
 
 def write_evidence(output_dir: Path, plan: dict[str, Any], results: Iterable[ProbeResult]) -> None:
+    """Save evidence to destination."""
     output_dir.mkdir(parents=True, exist_ok=True)
     rows = list(results)
     manifest = dict(plan)
@@ -1100,6 +1191,7 @@ def write_evidence(output_dir: Path, plan: dict[str, Any], results: Iterable[Pro
 
 
 def summarize_results(results: Iterable[ProbeResult]) -> dict[str, Any]:
+    """Execute summarize results operation."""
     rows = list(results)
     passed = sum(1 for row in rows if row.ok)
     failed = len(rows) - passed
@@ -1118,6 +1210,7 @@ def summarize_results(results: Iterable[ProbeResult]) -> dict[str, Any]:
 
 
 def render_summary_markdown(summary: dict[str, Any], results: Iterable[ProbeResult]) -> str:
+    """Render output for summary markdown."""
     rows = list(results)
     status = "PASS" if summary["ok"] else "FAIL"
     lines = [
@@ -1153,6 +1246,7 @@ def post_json(
     payload: dict[str, Any],
     timeout: float,
 ) -> tuple[dict[str, Any], int]:
+    """Execute post json operation."""
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         f"{normalize_v1_base(base_url)}{path}",
@@ -1183,6 +1277,11 @@ def post_json(
 
 
 def validate_message(response: dict[str, Any], expected_values: Iterable[str]) -> None:
+    """Validate message.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     message = _first_message(response)
     if message.get("tool_calls"):
         raise ValueError("expected final text, got another tool call")
@@ -1201,6 +1300,7 @@ def record_transcript(
     tool_call_id: str | None = None,
     detail: str | None = None,
 ) -> None:
+    """Execute record transcript operation."""
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "phase": phase,
@@ -1214,6 +1314,7 @@ def record_transcript(
 
 
 def print_summary(results: Iterable[ProbeResult], output_dir: Path) -> None:
+    """Render output for summary."""
     rows = list(results)
     passed = sum(1 for row in rows if row.ok)
     print(f"kv/tool-loop stability: {passed}/{len(rows)} phases passed")
@@ -1224,6 +1325,11 @@ def print_summary(results: Iterable[ProbeResult], output_dir: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate args.
+
+    Returns:
+        Parsed result.
+    """
     parser = argparse.ArgumentParser(
         description="Certify live mesh-llm KV/cache stability under OpenAI tool-loop pressure.",
     )
@@ -1280,6 +1386,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def default_base_url() -> str:
+    """Execute default base url operation."""
     env_base = os.environ.get("MESH_KV_TOOL_LOOP_BASE_URL")
     if env_base:
         return env_base
@@ -1290,6 +1397,11 @@ def default_base_url() -> str:
 
 
 def main() -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     args = parse_args()
     base_url = normalize_v1_base(args.base_url)
     models = parse_models(args.models)
@@ -1329,6 +1441,11 @@ def main() -> int:
 
 
 def validate_runtime_options(args: argparse.Namespace) -> None:
+    """Validate runtime options.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     if args.attempts < 1:
         raise ValueError("attempts must be at least 1")
     if args.pressure_turns < 0:
@@ -1415,11 +1532,13 @@ def _result(
 
 
 def safe_name(value: str) -> str:
+    """Execute safe name operation."""
     safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
     return f"{safe}.jsonl"
 
 
 def utc_now() -> str:
+    """Execute utc now operation."""
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 

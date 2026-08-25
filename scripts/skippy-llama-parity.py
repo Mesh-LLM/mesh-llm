@@ -30,6 +30,7 @@ SHARDED_GGUF_RE = re.compile(r"-0*(\d+)-of-0*\d+\.gguf$", re.IGNORECASE)
 
 
 def repo_cache_dir(repo: str) -> Path:
+    """Execute repo cache dir operation."""
     cache_root = os.environ.get("HF_HUB_CACHE")
     if cache_root:
         hub = Path(cache_root)
@@ -41,11 +42,17 @@ def repo_cache_dir(repo: str) -> Path:
 
 
 def load_json(path: Path) -> dict[str, Any]:
+    """Load json from source.
+
+    Returns:
+        Loaded data.
+    """
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
 def run(args: list[str], *, cwd: Path | None = None, quiet: bool = False) -> str:
+    """Run run operation."""
     proc = subprocess.run(
         args,
         cwd=str(cwd) if cwd else None,
@@ -64,6 +71,7 @@ def run(args: list[str], *, cwd: Path | None = None, quiet: bool = False) -> str
 
 
 def pinned_llama_models(llama_src: Path | None) -> list[str]:
+    """Execute pinned llama models operation."""
     if llama_src:
         models_dir = llama_src / "src/models"
         if not models_dir.is_dir():
@@ -102,6 +110,7 @@ def pinned_llama_models(llama_src: Path | None) -> list[str]:
 
 
 def candidate_index(manifest: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Execute candidate index operation."""
     index: dict[str, list[dict[str, Any]]] = {}
     for candidate in manifest.get("candidates", []):
         index.setdefault(candidate["llama_model"], []).append(candidate)
@@ -109,6 +118,7 @@ def candidate_index(manifest: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
 
 
 def priority_lookup(manifest: dict[str, Any]) -> dict[tuple[str, str], str]:
+    """Execute priority lookup operation."""
     priorities = manifest.get("support_priority", {})
     lookup: dict[tuple[str, str], str] = {}
     for priority in ("p0", "p1", "p2"):
@@ -121,6 +131,7 @@ def priority_lookup(manifest: dict[str, Any]) -> dict[tuple[str, str], str]:
 
 
 def row_priority(row: dict[str, Any], lookup: dict[tuple[str, str], str]) -> str:
+    """Execute row priority operation."""
     return (
         lookup.get(("family", str(row.get("family", ""))))
         or lookup.get(("llama_model", str(row.get("llama_model", ""))))
@@ -132,6 +143,7 @@ def filter_priority(
     rows: list[dict[str, Any]],
     priorities: list[str] | None,
 ) -> list[dict[str, Any]]:
+    """Execute filter priority operation."""
     if not priorities:
         return rows
     requested = {priority.lower() for priority in priorities}
@@ -139,6 +151,7 @@ def filter_priority(
 
 
 def candidate_file_rank(path: Path) -> int:
+    """Execute candidate file rank operation."""
     name = path.name.lower()
     if "mmproj" in name:
         return 3
@@ -149,6 +162,7 @@ def candidate_file_rank(path: Path) -> int:
 
 
 def resolve_candidate_file(candidate: dict[str, Any]) -> Path | None:
+    """Execute resolve candidate file operation."""
     repo = candidate.get("repo")
     include = candidate.get("include", "*.gguf")
     if not repo:
@@ -172,6 +186,7 @@ def resolve_candidate_file(candidate: dict[str, Any]) -> Path | None:
 
 
 def download_command(candidate: dict[str, Any]) -> str:
+    """Execute download command operation."""
     repo = candidate.get("repo")
     include = candidate.get("include", "*.gguf")
     if not repo:
@@ -184,41 +199,52 @@ def download_command(candidate: dict[str, Any]) -> str:
 
 
 class GgufReader:
+    """Represents GgufReader functionality."""
     def __init__(self, path: Path):
         self.handle = path.open("rb")
 
     def close(self) -> None:
+        """Execute close operation."""
         self.handle.close()
 
     def read(self, size: int) -> bytes:
+        """Execute read operation."""
         data = self.handle.read(size)
         if len(data) != size:
             raise EOFError("short GGUF read")
         return data
 
     def u32(self) -> int:
+        """Execute u32 operation."""
         return struct.unpack("<I", self.read(4))[0]
 
     def u64(self) -> int:
+        """Execute u64 operation."""
         return struct.unpack("<Q", self.read(8))[0]
 
     def i32(self) -> int:
+        """Execute i32 operation."""
         return struct.unpack("<i", self.read(4))[0]
 
     def i64(self) -> int:
+        """Execute i64 operation."""
         return struct.unpack("<q", self.read(8))[0]
 
     def f32(self) -> float:
+        """Execute f32 operation."""
         return struct.unpack("<f", self.read(4))[0]
 
     def f64(self) -> float:
+        """Execute f64 operation."""
         return struct.unpack("<d", self.read(8))[0]
 
     def string(self) -> str:
+        """Execute string operation."""
         length = self.u64()
         return self.read(length).decode("utf-8", errors="replace")
 
     def value(self, typ: int) -> Any:
+        """Execute value operation."""
         if typ == 0:
             return self.read(1)[0]
         if typ == 1:
@@ -251,6 +277,7 @@ class GgufReader:
 
 
 def gguf_metadata(path: Path) -> dict[str, Any]:
+    """Execute gguf metadata operation."""
     reader = GgufReader(path)
     try:
         if reader.read(4) != b"GGUF":
@@ -272,6 +299,7 @@ def gguf_metadata(path: Path) -> dict[str, Any]:
 
 
 def infer_model_shape(path: Path) -> tuple[int, int, str | None]:
+    """Execute infer model shape operation."""
     metadata = gguf_metadata(path)
     arch = metadata.get("general.architecture")
     layer_count = None
@@ -289,6 +317,7 @@ def infer_model_shape(path: Path) -> tuple[int, int, str | None]:
 
 
 def split_args(layer_count: int) -> tuple[int, str]:
+    """Execute split args operation."""
     first = max(1, layer_count // 3)
     second = max(first + 1, (2 * layer_count) // 3)
     if second >= layer_count:
@@ -300,6 +329,7 @@ def split_args(layer_count: int) -> tuple[int, str]:
 
 
 def default_stage_build_dir() -> str | None:
+    """Execute default stage build dir operation."""
     if os.environ.get("LLAMA_STAGE_BUILD_DIR"):
         return os.environ["LLAMA_STAGE_BUILD_DIR"]
     llama_build_roots = (
@@ -321,6 +351,7 @@ def default_stage_build_dir() -> str | None:
 
 
 def inventory(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Execute inventory operation."""
     manifest = load_json(args.manifest)
     candidates = candidate_index(manifest)
     priorities = priority_lookup(manifest)
@@ -377,6 +408,7 @@ def inventory(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 
 def print_table(rows: list[dict[str, Any]]) -> None:
+    """Render output for table."""
     print("| priority | llama model | family | status | local | candidate/download |")
     print("| --- | --- | --- | --- | --- | --- |")
     for row in rows:
@@ -390,6 +422,11 @@ def print_table(rows: list[dict[str, Any]]) -> None:
 
 
 def validate_inventory(rows: list[dict[str, Any]]) -> int:
+    """Validate inventory.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     failures = 0
     missing = [row for row in rows if row.get("status") == "missing_candidate"]
     if missing:
@@ -432,6 +469,11 @@ def validate_inventory(rows: list[dict[str, Any]]) -> int:
 
 
 def validate_stage_abi_allowlist() -> int:
+    """Validate stage abi allowlist.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     llama_src = ROOT / ".deps/llama.cpp/src"
     skippy_cpp = llama_src / "skippy.cpp"
     arch_cpp = llama_src / "llama-arch.cpp"
@@ -440,6 +482,7 @@ def validate_stage_abi_allowlist() -> int:
         return 0
 
     def normalized(name: str) -> str:
+        """Execute normalized operation."""
         return name.replace("_", "").replace("-", "")
 
     arch_names: dict[str, str] = {}
@@ -510,6 +553,7 @@ def validate_stage_abi_allowlist() -> int:
 
 
 def run_certifications(args: argparse.Namespace, rows: list[dict[str, Any]]) -> int:
+    """Run certifications operation."""
     defaults = load_json(args.manifest).get("defaults", {})
     statuses = set(args.status) if args.status else {
         "candidate",
@@ -627,6 +671,11 @@ def run_certifications(args: argparse.Namespace, rows: list[dict[str, Any]]) -> 
 
 
 def main() -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--llama-src", type=Path)

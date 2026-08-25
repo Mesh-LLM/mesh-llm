@@ -23,24 +23,28 @@ TARGET_TRIPLES = {
 
 @dataclass(frozen=True, order=True)
 class RuntimeTarget:
+    """Represents RuntimeTarget functionality."""
     os: str
     arch: str
     backend: str
     cuda_major: int | None = None
 
     def label(self) -> str:
+        """Execute label operation."""
         if self.backend == "cuda" and self.cuda_major is not None:
             return f"{self.os}/{self.arch}/cuda{self.cuda_major}"
         return f"{self.os}/{self.arch}/{self.backend}"
 
 
 def default_backend(os_name: str, arch: str) -> str:
+    """Execute default backend operation."""
     if os_name == "macos" and arch == "aarch64":
         return "metal"
     return "cpu"
 
 
 def binary_target_from_asset(asset_name: str) -> RuntimeTarget | None:
+    """Execute binary target from asset operation."""
     name = os.path.basename(asset_name)
     if not name.startswith("mesh-llm-"):
         return None
@@ -60,6 +64,7 @@ def binary_target_from_asset(asset_name: str) -> RuntimeTarget | None:
 
 
 def target_from_suffix(os_name: str, arch: str, suffix: str) -> RuntimeTarget:
+    """Execute target from suffix operation."""
     if suffix == "":
         return RuntimeTarget(os_name, arch, default_backend(os_name, arch))
     if suffix.startswith("-cuda"):
@@ -72,6 +77,7 @@ def target_from_suffix(os_name: str, arch: str, suffix: str) -> RuntimeTarget:
 
 
 def native_target_from_artifact(artifact: dict[str, Any]) -> RuntimeTarget | None:
+    """Execute native target from artifact operation."""
     platform = artifact.get("platform")
     backend = artifact.get("backend")
     if not isinstance(platform, dict) or not isinstance(backend, dict):
@@ -90,6 +96,7 @@ def native_target_from_artifact(artifact: dict[str, Any]) -> RuntimeTarget | Non
 
 
 def native_target_matches(required: RuntimeTarget, candidate: RuntimeTarget) -> bool:
+    """Execute native target matches operation."""
     if (required.os, required.arch, required.backend) != (
         candidate.os,
         candidate.arch,
@@ -102,6 +109,7 @@ def native_target_matches(required: RuntimeTarget, candidate: RuntimeTarget) -> 
 
 
 def target_from_label(label: str) -> RuntimeTarget:
+    """Execute target from label operation."""
     parts = label.split("/")
     if len(parts) != 3:
         raise ValueError(f"expected target label as os/arch/backend, got {label!r}")
@@ -113,6 +121,7 @@ def target_from_label(label: str) -> RuntimeTarget:
 
 
 def required_targets_from_assets(asset_names: list[str]) -> set[RuntimeTarget]:
+    """Execute required targets from assets operation."""
     return {
         target
         for asset_name in asset_names
@@ -125,6 +134,7 @@ def find_matrix_violations(
     manifest: dict[str, Any],
     required_targets: set[RuntimeTarget] | None = None,
 ) -> list[str]:
+    """Execute find matrix violations operation."""
     if required_targets is None:
         required_targets = required_targets_from_assets(asset_names)
     native_targets = [
@@ -143,6 +153,11 @@ def find_matrix_violations(
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse and validate args.
+
+    Returns:
+        Parsed result.
+    """
     parser = argparse.ArgumentParser(
         description="Validate release binary bundle targets against native-runtimes.json."
     )
@@ -162,6 +177,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str]) -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     args = parse_args(argv)
     if not args.required_target and not args.assets:
         print(

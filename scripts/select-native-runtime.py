@@ -13,6 +13,7 @@ def select_runtime(
     backend: str,
     cuda_major: str = "",
 ) -> Path:
+    """Execute select runtime operation."""
     expected_kind = {"cuda-blackwell": "cuda", "hip": "rocm"}.get(backend, backend)
     matches = []
     if root.is_dir():
@@ -38,6 +39,11 @@ def select_runtime(
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate args.
+
+    Returns:
+        Parsed result.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--os", required=True)
@@ -48,6 +54,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     args = parse_args()
     print(select_runtime(args.root, args.os, args.arch, args.backend, args.cuda_major))
     return 0

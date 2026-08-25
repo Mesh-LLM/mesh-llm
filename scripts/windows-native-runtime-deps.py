@@ -71,6 +71,7 @@ def _cstring(data: bytes, offset: int) -> str:
 
 
 def imported_dlls(path: pathlib.Path) -> list[str]:
+    """Execute imported dlls operation."""
     data = path.read_bytes()
     if data[:2] != b"MZ":
         raise PeFormatError(f"not a PE image: {path}")
@@ -102,6 +103,7 @@ def imported_dlls(path: pathlib.Path) -> list[str]:
         sections.append((virtual_address, max(virtual_size, raw_size), raw_offset))
 
     def rva_offset(rva: int) -> int:
+        """Execute rva offset operation."""
         for virtual_address, size, raw_offset in sections:
             if virtual_address <= rva < virtual_address + size:
                 return raw_offset + rva - virtual_address
@@ -126,6 +128,11 @@ def imported_dlls(path: pathlib.Path) -> list[str]:
 
 
 def is_host_dll(name: str) -> bool:
+    """Check if host dll.
+
+    Returns:
+        True if condition is met.
+    """
     normalized = name.casefold()
     return (
         normalized in HOST_DLLS
@@ -135,6 +142,7 @@ def is_host_dll(name: str) -> bool:
 
 
 def default_search_dirs() -> list[pathlib.Path]:
+    """Execute default search dirs operation."""
     candidates: list[pathlib.Path] = []
     for compiler in ("g++", "gcc"):
         compiler_path = shutil.which(compiler)
@@ -180,6 +188,7 @@ def _packaged_dlls(lib_dir: pathlib.Path) -> dict[str, pathlib.Path]:
 def dependency_gaps(
     lib_dir: pathlib.Path, scan_dirs: list[pathlib.Path] | None = None
 ) -> dict[str, set[str]]:
+    """Execute dependency gaps operation."""
     packaged = _packaged_dlls(lib_dir)
     gaps: dict[str, set[str]] = {}
     scan_dirs = scan_dirs or [lib_dir]
@@ -204,6 +213,7 @@ def dependency_gaps(
 def collect_dependencies(
     lib_dir: pathlib.Path, search_dirs: list[pathlib.Path], scan_dirs: list[pathlib.Path] | None = None
 ) -> list[pathlib.Path]:
+    """Execute collect dependencies operation."""
     search_index = _dll_index([lib_dir, *search_dirs, *default_search_dirs()])
     copied: list[pathlib.Path] = []
     while True:
@@ -230,6 +240,7 @@ def collect_dependencies(
 
 
 def verify_dependencies(lib_dir: pathlib.Path, scan_dirs: list[pathlib.Path] | None = None) -> None:
+    """Execute verify dependencies operation."""
     gaps = dependency_gaps(lib_dir, scan_dirs)
     if not gaps:
         return
@@ -241,6 +252,11 @@ def verify_dependencies(lib_dir: pathlib.Path, scan_dirs: list[pathlib.Path] | N
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate args.
+
+    Returns:
+        Parsed result.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     collect = subparsers.add_parser("collect")
@@ -254,6 +270,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     args = parse_args()
     try:
         if args.command == "collect":

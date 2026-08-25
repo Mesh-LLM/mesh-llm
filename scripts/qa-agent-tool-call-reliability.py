@@ -24,16 +24,19 @@ DEFAULT_OUTPUT = "target/agent-tool-call-reliability/results.jsonl"
 
 
 class Probe(NamedTuple):
+    """Represents Probe functionality."""
     model: str
     attempt: int
 
 
 class ToolCall(NamedTuple):
+    """Represents ToolCall functionality."""
     call_id: str
     key: str
 
 
 class ProbeResult(NamedTuple):
+    """Represents ProbeResult functionality."""
     model: str
     attempt: int
     phase: str
@@ -44,6 +47,7 @@ class ProbeResult(NamedTuple):
 
 
 def normalize_v1_base(base_url: str) -> str:
+    """Execute normalize v1 base operation."""
     base = base_url.strip().rstrip("/")
     if not base:
         raise ValueError("base URL is empty")
@@ -53,6 +57,11 @@ def normalize_v1_base(base_url: str) -> str:
 
 
 def parse_models(value: str) -> list[str]:
+    """Parse and validate models.
+
+    Returns:
+        Parsed result.
+    """
     models = [part.strip() for part in value.split(",") if part.strip()]
     if not models:
         raise ValueError("at least one model is required")
@@ -60,6 +69,11 @@ def parse_models(value: str) -> list[str]:
 
 
 def build_plan(models: Iterable[str], attempts: int) -> list[Probe]:
+    """Create plan.
+
+    Returns:
+        Created object.
+    """
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
     return [
@@ -70,6 +84,7 @@ def build_plan(models: Iterable[str], attempts: int) -> list[Probe]:
 
 
 def render_plan(plan: Iterable[Probe], base_url: str) -> str:
+    """Render output for plan."""
     payload = {
         "name": "agent-tool-call-reliability",
         "endpoint": normalize_v1_base(base_url),
@@ -92,6 +107,7 @@ def render_plan(plan: Iterable[Probe], base_url: str) -> str:
 
 
 def tool_schema() -> list[dict[str, Any]]:
+    """Execute tool schema operation."""
     return [
         {
             "type": "function",
@@ -115,6 +131,7 @@ def tool_schema() -> list[dict[str, Any]]:
 
 
 def initial_messages(attempt: int) -> list[dict[str, str]]:
+    """Execute initial messages operation."""
     return [
         {
             "role": "system",
@@ -131,6 +148,11 @@ def initial_messages(attempt: int) -> list[dict[str, str]]:
 
 
 def build_tool_probe_request(model: str, attempt: int) -> dict[str, Any]:
+    """Create tool probe request.
+
+    Returns:
+        Created object.
+    """
     return {
         "model": model,
         "messages": initial_messages(attempt),
@@ -148,12 +170,18 @@ def build_tool_probe_request(model: str, attempt: int) -> dict[str, Any]:
 
 
 def build_stream_tool_probe_request(model: str, attempt: int) -> dict[str, Any]:
+    """Create stream tool probe request.
+
+    Returns:
+        Created object.
+    """
     request = build_tool_probe_request(model, attempt)
     request["stream"] = True
     return request
 
 
 def extract_tool_call(response: dict[str, Any]) -> ToolCall:
+    """Execute extract tool call operation."""
     _require_tool_call_finish(response)
     message = _first_message(response)
     calls = message.get("tool_calls")
@@ -178,6 +206,7 @@ def extract_tool_call(response: dict[str, Any]) -> ToolCall:
 
 
 def extract_stream_tool_call(chunks: Iterable[dict[str, Any]]) -> ToolCall:
+    """Execute extract stream tool call operation."""
     parts: dict[int, dict[str, Any]] = {}
     saw_tool_finish = False
     for chunk in chunks:
@@ -225,6 +254,11 @@ def build_tool_result_request(
     assistant_message: dict[str, Any],
     call: ToolCall,
 ) -> dict[str, Any]:
+    """Create tool result request.
+
+    Returns:
+        Created object.
+    """
     expected = FIXTURE_FACTS[call.key]
     messages = initial_messages(attempt)
     messages.append(_sanitize_assistant_tool_message(assistant_message))
@@ -255,12 +289,22 @@ def build_stream_tool_result_request(
     assistant_message: dict[str, Any],
     call: ToolCall,
 ) -> dict[str, Any]:
+    """Create stream tool result request.
+
+    Returns:
+        Created object.
+    """
     request = build_tool_result_request(model, attempt, assistant_message, call)
     request["stream"] = True
     return request
 
 
 def validate_final_answer(response: dict[str, Any], expected: str) -> None:
+    """Validate final answer.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     message = _first_message(response)
     if message.get("tool_calls"):
         raise ValueError("continuation returned another tool call")
@@ -269,6 +313,11 @@ def validate_final_answer(response: dict[str, Any], expected: str) -> None:
 
 
 def validate_final_content(content: Any, expected: str) -> None:
+    """Validate final content.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     if not isinstance(content, str) or not content.strip():
         raise ValueError("continuation returned empty content")
     if expected not in content:
@@ -276,6 +325,7 @@ def validate_final_content(content: Any, expected: str) -> None:
 
 
 def extract_stream_content(chunks: Iterable[dict[str, Any]]) -> str:
+    """Execute extract stream content operation."""
     parts: list[str] = []
     saw_choice = False
     for chunk in chunks:
@@ -298,6 +348,7 @@ def extract_stream_content(chunks: Iterable[dict[str, Any]]) -> str:
 
 
 def write_jsonl(path: Path, results: Iterable[ProbeResult]) -> None:
+    """Save jsonl to destination."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for result in results:
@@ -310,6 +361,7 @@ def run_probe(
     timeout: float,
     include_streaming: bool = True,
 ) -> list[ProbeResult]:
+    """Run probe operation."""
     results: list[ProbeResult] = []
     results.extend(run_non_stream_probe(base_url, probe, timeout))
     if include_streaming:
@@ -318,6 +370,7 @@ def run_probe(
 
 
 def run_non_stream_probe(base_url: str, probe: Probe, timeout: float) -> list[ProbeResult]:
+    """Run non stream probe operation."""
     results: list[ProbeResult] = []
     tool_started = time.monotonic()
     try:
@@ -360,6 +413,7 @@ def run_non_stream_probe(base_url: str, probe: Probe, timeout: float) -> list[Pr
 
 
 def run_stream_probe(base_url: str, probe: Probe, timeout: float) -> list[ProbeResult]:
+    """Run stream probe operation."""
     results: list[ProbeResult] = []
     tool_started = time.monotonic()
     try:
@@ -403,6 +457,7 @@ def run_stream_probe(base_url: str, probe: Probe, timeout: float) -> list[ProbeR
 
 
 def assistant_message_from_tool_call(call: ToolCall) -> dict[str, Any]:
+    """Execute assistant message from tool call operation."""
     return {
         "role": "assistant",
         "content": None,
@@ -425,6 +480,7 @@ def post_json(
     payload: dict[str, Any],
     timeout: float,
 ) -> tuple[dict[str, Any], int]:
+    """Execute post json operation."""
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         f"{normalize_v1_base(base_url)}{path}",
@@ -461,6 +517,7 @@ def post_json_stream(
     payload: dict[str, Any],
     timeout: float,
 ) -> tuple[list[dict[str, Any]], int]:
+    """Execute post json stream operation."""
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         f"{normalize_v1_base(base_url)}{path}",
@@ -488,6 +545,11 @@ def post_json_stream(
 
 
 def parse_sse_lines(lines: Iterable[str]) -> Iterable[dict[str, Any]]:
+    """Parse and validate sse lines.
+
+    Returns:
+        Parsed result.
+    """
     for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith(":") or not line.startswith("data:"):
@@ -505,6 +567,7 @@ def parse_sse_lines(lines: Iterable[str]) -> Iterable[dict[str, Any]]:
 
 
 def default_base_url() -> str:
+    """Execute default base url operation."""
     env_base = (
         os.environ.get("MESH_AGENT_TOOL_BASE_URL")
         or os.environ.get("MESH_AGENT_BASE_URL")
@@ -519,6 +582,11 @@ def default_base_url() -> str:
 
 
 def main() -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     args = parse_args()
     base_url = normalize_v1_base(args.base_url)
     models = parse_models(args.models)
@@ -543,6 +611,11 @@ def main() -> int:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate args.
+
+    Returns:
+        Parsed result.
+    """
     parser = argparse.ArgumentParser(
         description="Probe OpenAI chat tool-call and tool-result continuation reliability.",
     )
@@ -568,6 +641,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def print_summary(results: Iterable[ProbeResult], output: Path) -> None:
+    """Render output for summary."""
     rows = list(results)
     passed = sum(1 for row in rows if row.ok)
     print(f"agent tool-call reliability: {passed}/{len(rows)} phases passed")

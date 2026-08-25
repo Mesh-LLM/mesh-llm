@@ -32,6 +32,17 @@ class CacheError(RuntimeError):
 
 
 def parse_size(value: str) -> int:
+    """Parse a human-readable size string (e.g., '80GiB') into bytes.
+
+    Args:
+        value: Size string with optional unit (B, KiB, MiB, GiB, TiB).
+
+    Returns:
+        Size in bytes.
+
+    Raises:
+        argparse.ArgumentTypeError: If the size format is invalid.
+    """
     value = value.removeprefix("max_size=")
     match = SIZE_PATTERN.fullmatch(value.strip())
     if not match:
@@ -40,6 +51,17 @@ def parse_size(value: str) -> int:
 
 
 def parse_age(value: str) -> int:
+    """Parse a maximum age string into days.
+
+    Args:
+        value: Age string representing days (e.g., '14').
+
+    Returns:
+        Age in days.
+
+    Raises:
+        argparse.ArgumentTypeError: If the age format is invalid.
+    """
     try:
         return int(value.removeprefix("max_age="))
     except ValueError as error:
@@ -47,6 +69,14 @@ def parse_age(value: str) -> int:
 
 
 def human_size(value: int) -> str:
+    """Convert bytes to a human-readable size string.
+
+    Args:
+        value: Size in bytes.
+
+    Returns:
+        Human-readable size string (e.g., '1.5 GiB').
+    """
     amount = float(value)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
         if amount < 1024 or unit == "TiB":
@@ -56,6 +86,14 @@ def human_size(value: int) -> str:
 
 
 def tree_metrics(path: Path) -> tuple[int, float]:
+    """Calculate total size and newest modification time for a path tree.
+
+    Args:
+        path: File or directory path to measure.
+
+    Returns:
+        Tuple of (total bytes, newest mtime).
+    """
     if not path.exists():
         return 0, 0.0
     if path.is_file() or path.is_symlink():
@@ -79,6 +117,14 @@ def tree_metrics(path: Path) -> tuple[int, float]:
 
 
 def immediate_entries(path: Path) -> list[dict[str, Any]]:
+    """Collect metrics for immediate children of a directory, sorted by size.
+
+    Args:
+        path: Directory path to inspect.
+
+    Returns:
+        List of entry dictionaries with path, bytes, and newest_mtime fields.
+    """
     entries = []
     if path.is_dir():
         for child in path.iterdir():
@@ -88,6 +134,17 @@ def immediate_entries(path: Path) -> list[dict[str, Any]]:
 
 
 def cargo_metadata(workspace: Path) -> dict[str, Any]:
+    """Retrieve Cargo workspace metadata via just command.
+
+    Args:
+        workspace: Cargo workspace root directory.
+
+    Returns:
+        Parsed Cargo metadata JSON.
+
+    Raises:
+        CacheError: If cargo metadata command fails.
+    """
     result = subprocess.run(
         ["just", "cache-cargo-metadata"],
         cwd=workspace, check=False, capture_output=True, text=True,
@@ -98,10 +155,27 @@ def cargo_metadata(workspace: Path) -> dict[str, Any]:
 
 
 def cargo_packages(workspace: Path) -> list[str]:
+    """Get sorted list of all Cargo package names in the workspace.
+
+    Args:
+        workspace: Cargo workspace root directory.
+
+    Returns:
+        Sorted list of package names.
+    """
     return sorted({package["name"] for package in cargo_metadata(workspace)["packages"]})
 
 
 def reject_separate_build_directory(workspace: Path, managed_target: Path) -> None:
+    """Validate that Cargo build directory configuration is supported.
+
+    Args:
+        workspace: Cargo workspace root directory.
+        managed_target: Expected target directory path.
+
+    Raises:
+        CacheError: If build directory configuration is unsupported.
+    """
     managed_target = managed_target.resolve()
     if os.environ.get("CARGO_BUILD_BUILD_DIR"):
         raise CacheError("CARGO_BUILD_BUILD_DIR is unsupported by build-cache management")
@@ -129,6 +203,15 @@ def artifact_roots(target: Path, leaf: str) -> list[Path]:
 
 
 def package_metrics(target: Path, packages: Iterable[str]) -> list[dict[str, Any]]:
+    """Calculate size and age metrics for Cargo packages in the target directory.
+
+    Args:
+        target: Cargo target directory.
+        packages: Iterable of package names to measure.
+
+    Returns:
+        List of package metrics sorted by age and size.
+    """
     normalized = {package: package.replace("-", "_") for package in packages}
     totals = {package: [0, 0.0] for package in normalized}
     roots = [*artifact_roots(target, "deps"), *artifact_roots(target, "build")]
@@ -150,6 +233,11 @@ def package_metrics(target: Path, packages: Iterable[str]) -> list[dict[str, Any
 
 
 def active_compilers() -> list[str]:
+    """Detect active Rust compiler processes.
+
+    Returns:
+        List of process lines for active cargo/rustc/rustdoc/clippy processes.
+    """
     result = subprocess.run(
         ["ps", "-axo", "pid=,comm=,args="], check=True, capture_output=True, text=True,
     )
@@ -164,6 +252,19 @@ def active_compilers() -> list[str]:
 
 @contextmanager
 def cache_lock(target: Path, *, exclusive: bool, nonblocking: bool) -> Iterator[BinaryIO]:
+    """Acquire a file lock for cache operations.
+
+    Args:
+        target: Target directory containing the lock file.
+        exclusive: Whether to acquire an exclusive (write) lock.
+        nonblocking: Whether to fail immediately if lock is unavailable.
+
+    Yields:
+        Open lock file handle.
+
+    Raises:
+        CacheError: If lock cannot be acquired in nonblocking mode.
+    """
     target.mkdir(parents=True, exist_ok=True)
     lock_file = (target / ".mesh-llm-cache-prune.lock").open("a+b")
     operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
@@ -181,6 +282,15 @@ def cache_lock(target: Path, *, exclusive: bool, nonblocking: bool) -> Iterator[
 
 
 def remove_tree(path: Path, target: Path) -> None:
+    """Safely remove a directory tree within the target directory.
+
+    Args:
+        path: Path to remove.
+        target: Target directory that must contain the path.
+
+    Raises:
+        CacheError: If path is outside target or invalid.
+    """
     candidate = Path(os.path.abspath(path))
     target_absolute = Path(os.path.abspath(target))
     target_resolved = target.resolve()
@@ -200,6 +310,18 @@ def remove_tree(path: Path, target: Path) -> None:
 def prune_incremental(
     target: Path, cutoff: float, current_bytes: int, max_bytes: int, execute: bool,
 ) -> tuple[int, list[dict[str, Any]]]:
+    """Prune incremental compilation artifacts that are old or exceed size limit.
+
+    Args:
+        target: Cargo target directory.
+        cutoff: Age cutoff timestamp.
+        current_bytes: Current total size in bytes.
+        max_bytes: Maximum allowed bytes.
+        execute: Whether to actually remove files.
+
+    Returns:
+        Tuple of (updated byte count, list of pruned actions).
+    """
     candidates = []
     for root in artifact_roots(target, "incremental"):
         for child in root.iterdir():
@@ -221,6 +343,22 @@ def prune_packages(
     workspace: Path, target: Path, current_bytes: int, max_bytes: int,
     cutoff: float, execute: bool,
 ) -> tuple[int, list[dict[str, Any]]]:
+    """Prune Cargo package artifacts that are old or exceed size limit.
+
+    Args:
+        workspace: Cargo workspace root directory.
+        target: Cargo target directory.
+        current_bytes: Current total size in bytes.
+        max_bytes: Maximum allowed bytes.
+        cutoff: Age cutoff timestamp.
+        execute: Whether to actually remove files.
+
+    Returns:
+        Tuple of (updated byte count, list of pruned actions).
+
+    Raises:
+        CacheError: If cargo clean command fails.
+    """
     actions = []
     for metrics in package_metrics(target, cargo_packages(workspace)):
         if current_bytes <= max_bytes and metrics["newest_mtime"] >= cutoff:
@@ -253,6 +391,17 @@ def prune_packages(
 
 
 def snapshot(workspace: Path, target: Path, max_bytes: int, max_age_days: int) -> dict[str, Any]:
+    """Create a cache status snapshot with size and age information.
+
+    Args:
+        workspace: Cargo workspace root directory.
+        target: Cargo target directory.
+        max_bytes: Maximum allowed bytes.
+        max_age_days: Maximum age in days.
+
+    Returns:
+        Dictionary containing cache status information.
+    """
     total, newest = tree_metrics(target)
     return {
         "schema": "mesh-llm.local-build-cache", "schema_version": 1,
@@ -264,6 +413,11 @@ def snapshot(workspace: Path, target: Path, max_bytes: int, max_age_days: int) -
 
 
 def render_status(report: dict[str, Any]) -> None:
+    """Print human-readable cache status report.
+
+    Args:
+        report: Cache snapshot dictionary.
+    """
     print(f"Cargo target: {human_size(report['target_bytes'])}")
     print(f"Configured limit: {human_size(report['target_limit_bytes'])}")
     print(f"Configured maximum age: {report['max_age_days']} days")
@@ -275,6 +429,11 @@ def render_status(report: dict[str, Any]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for cache management operations.
+
+    Returns:
+        Parsed arguments namespace.
+    """
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("status", "prune"):
@@ -294,6 +453,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Execute cache management commands: status, prune, or build.
+
+    Returns:
+        Exit code: 0 for success, non-zero for errors.
+
+    Raises:
+        CacheError: If validation or operations fail.
+    """
     arguments = parse_args()
     workspace = arguments.workspace.resolve()
     target = (arguments.target_dir or workspace / "target").resolve()
@@ -325,6 +492,16 @@ def main() -> int:
 
 
 def run_prune(arguments: argparse.Namespace, workspace: Path, target: Path) -> int:
+    """Execute cache pruning based on age and size constraints.
+
+    Args:
+        arguments: Parsed command-line arguments.
+        workspace: Cargo workspace root directory.
+        target: Cargo target directory.
+
+    Returns:
+        Exit code 0 on success.
+    """
     before = snapshot(workspace, target, arguments.max_size, arguments.max_age)
     cutoff = time.time() - arguments.max_age * 86400
     current, incremental = prune_incremental(

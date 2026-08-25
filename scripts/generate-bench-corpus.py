@@ -22,6 +22,11 @@ DEFAULT_HF_DIR = ROOT / "target/hf-datasets"
 
 
 def main() -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tier")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -155,6 +160,7 @@ def main() -> int:
 
 
 def require_hf() -> None:
+    """Execute require hf operation."""
     try:
         subprocess.run(["hf", "--version"], check=True, stdout=subprocess.DEVNULL)
     except Exception as error:
@@ -162,6 +168,7 @@ def require_hf() -> None:
 
 
 def require_duckdb() -> None:
+    """Execute require duckdb operation."""
     if python_has_duckdb(sys.executable) or command_exists("uv"):
         return
     raise RuntimeError(
@@ -172,6 +179,7 @@ def require_duckdb() -> None:
 
 
 def python_has_duckdb(python: str) -> bool:
+    """Execute python has duckdb operation."""
     return (
         subprocess.run(
             [python, "-c", "import duckdb"],
@@ -183,6 +191,7 @@ def python_has_duckdb(python: str) -> bool:
 
 
 def command_exists(name: str) -> bool:
+    """Execute command exists operation."""
     return (
         subprocess.run(
             ["bash", "-lc", f"command -v {name} >/dev/null"],
@@ -194,17 +203,20 @@ def command_exists(name: str) -> bool:
 
 
 def read_json(path: Path) -> Any:
+    """Execute read json operation."""
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
 def write_json(path: Path, value: Any) -> None:
+    """Save json to destination."""
     with path.open("w", encoding="utf-8") as handle:
         json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
         handle.write("\n")
 
 
 def rel(path: Path) -> str:
+    """Execute rel operation."""
     try:
         return str(path.relative_to(ROOT))
     except ValueError:
@@ -212,6 +224,7 @@ def rel(path: Path) -> str:
 
 
 def git_commit() -> str | None:
+    """Execute git commit operation."""
     try:
         output = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
@@ -225,6 +238,7 @@ def git_commit() -> str | None:
 
 
 def hf_dataset_info(dataset: str, revision: str) -> dict[str, Any]:
+    """Execute hf dataset info operation."""
     output = subprocess.check_output(
         ["hf", "datasets", "info", dataset, "--revision", revision, "--format", "json"],
         cwd=ROOT,
@@ -234,6 +248,7 @@ def hf_dataset_info(dataset: str, revision: str) -> dict[str, Any]:
 
 
 def download_source(source: dict[str, Any], revision: str, hf_root: Path) -> Path:
+    """Execute download source operation."""
     local_dir = hf_root / safe_name(source["dataset"]) / revision
     local_dir.mkdir(parents=True, exist_ok=True)
     include = parquet_include_patterns(source)
@@ -260,6 +275,7 @@ def download_source(source: dict[str, Any], revision: str, hf_root: Path) -> Pat
 
 
 def download_converted_parquet(source: dict[str, Any], local_dir: Path) -> None:
+    """Execute download converted parquet operation."""
     output = subprocess.check_output(
         [
             "hf",
@@ -293,6 +309,7 @@ def download_converted_parquet(source: dict[str, Any], local_dir: Path) -> None:
 
 
 def hf_headers() -> dict[str, str]:
+    """Execute hf headers operation."""
     headers = {"User-Agent": "skippy-runtime-bench-corpus/1"}
     token = os.environ.get("HF_TOKEN")
     if token:
@@ -301,6 +318,7 @@ def hf_headers() -> dict[str, str]:
 
 
 def parquet_include_patterns(source: dict[str, Any]) -> list[str]:
+    """Execute parquet include patterns operation."""
     config = source["config"]
     split = source["split"]
     return [
@@ -314,6 +332,7 @@ def parquet_include_patterns(source: dict[str, Any]) -> list[str]:
 
 
 def find_parquet_files(local_dir: Path, source: dict[str, Any]) -> list[Path]:
+    """Execute find parquet files operation."""
     config = source["config"]
     split = source["split"]
     files = sorted(local_dir.rglob("*.parquet"))
@@ -340,6 +359,7 @@ def sample_rows(
     seed: int,
     limit: int,
 ) -> list[dict[str, Any]]:
+    """Execute sample rows operation."""
     table_expr = "[" + ",".join(sql_string(str(path)) for path in parquet_files) + "]"
     material = f"{seed}:{source['name']}:{source['dataset']}:{source['config']}:{source['split']}"
     source_seed = int.from_bytes(hashlib.sha256(material.encode()).digest()[:8], "little")
@@ -358,6 +378,7 @@ LIMIT {limit}
 
 
 def run_duckdb_json(query: str) -> str:
+    """Run duckdb json operation."""
     code = """
 import duckdb
 import json
@@ -378,10 +399,12 @@ print(json.dumps(rows, ensure_ascii=False, default=str))
 
 
 def sql_string(value: str) -> str:
+    """Execute sql string operation."""
     return "'" + value.replace("'", "''") + "'"
 
 
 def safe_name(value: str) -> str:
+    """Execute safe name operation."""
     return value.replace("/", "--")
 
 
@@ -394,6 +417,7 @@ def normalize_row(
     max_prompt_chars: int,
     target_prompt_chars: int | None,
 ) -> dict[str, Any] | None:
+    """Execute normalize row operation."""
     adapter = source["adapter"]
     prompt, expected, metadata, session_group = ADAPTERS[adapter](row)
     if prompt is None:
@@ -436,6 +460,7 @@ def normalize_loop_rows(
     max_prompt_chars: int,
     target_prompt_chars: int | None,
 ) -> list[dict[str, Any]]:
+    """Execute normalize loop rows operation."""
     adapter = source["adapter"]
     builder = LOOP_ADAPTERS.get(adapter)
     if builder is None:
@@ -486,6 +511,7 @@ def normalize_loop_rows(
 
 
 def expand_prompt_to_chars(prompt: str, target_chars: int) -> str:
+    """Execute expand prompt to chars operation."""
     prompt = clean_text(prompt)
     if len(prompt) >= target_chars:
         return prompt
@@ -501,6 +527,7 @@ def expand_prompt_to_chars(prompt: str, target_chars: int) -> str:
 
 
 def truncate_text(value: str, max_chars: int) -> str:
+    """Execute truncate text operation."""
     value = clean_text(value)
     if len(value) <= max_chars:
         return value
@@ -514,6 +541,7 @@ def truncate_text(value: str, max_chars: int) -> str:
 
 
 def clean_text(value: Any) -> str:
+    """Execute clean text operation."""
     if value is None:
         return ""
     if isinstance(value, str):
@@ -522,6 +550,7 @@ def clean_text(value: Any) -> str:
 
 
 def commitpack_edit(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute commitpack edit operation."""
     old = clean_text(row.get("old_contents"))
     new = clean_text(row.get("new_contents"))
     if not old or not new:
@@ -547,6 +576,7 @@ Return the updated file contents only."""
 
 
 def code_refinement(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute code refinement operation."""
     buggy = clean_text(row.get("buggy"))
     fixed = clean_text(row.get("fixed"))
     if not buggy or not fixed:
@@ -560,6 +590,7 @@ def code_refinement(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any
 
 
 def swe_smith_trajectory_loop(row: dict[str, Any]) -> tuple[list[str], Any, dict[str, Any], str | None]:
+    """Execute swe smith trajectory loop operation."""
     messages = row.get("messages")
     if not isinstance(messages, list):
         return [], None, {}, None
@@ -591,6 +622,7 @@ def swe_smith_trajectory_loop(row: dict[str, Any]) -> tuple[list[str], Any, dict
 
 
 def agent_trajectory_prompt(transcript: list[tuple[str, str]]) -> str:
+    """Execute agent trajectory prompt operation."""
     rendered: list[str] = []
     for role, content in transcript[-12:]:
         rendered.append(f"{role.upper()}:\n{content}")
@@ -603,11 +635,13 @@ def agent_trajectory_prompt(transcript: list[tuple[str, str]]) -> str:
 
 
 def sample_key(row: dict[str, Any]) -> str:
+    """Execute sample key operation."""
     material = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(material.encode()).hexdigest()[:12]
 
 
 def swe_bench_issue(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute swe bench issue operation."""
     statement = clean_text(row.get("problem_statement"))
     if not statement:
         return None, None, {}, None
@@ -626,6 +660,7 @@ Resolve this GitHub issue:
 
 
 def apps_codegen(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute apps codegen operation."""
     question = clean_text(row.get("question"))
     if not question:
         return None, None, {}, None
@@ -637,6 +672,7 @@ def apps_codegen(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], 
 
 
 def codesearchnet_explain(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute codesearchnet explain operation."""
     code = clean_text(row.get("code"))
     comment = clean_text(row.get("comment"))
     if not code or not comment:
@@ -650,6 +686,7 @@ def codesearchnet_explain(row: dict[str, Any]) -> tuple[str | None, Any, dict[st
 
 
 def xlam_tool_call(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute xlam tool call operation."""
     query = clean_text(row.get("query"))
     tools = clean_text(row.get("tools"))
     if not query or not tools:
@@ -666,6 +703,7 @@ User request:
 
 
 def spider_sql(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute spider sql operation."""
     schema = clean_text(row.get("db_schema"))
     question = clean_text(row.get("question"))
     if not schema or not question:
@@ -682,6 +720,7 @@ Question:
 
 
 def oasst_prompt(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute oasst prompt operation."""
     if row.get("role") != "prompter" or row.get("lang") != "en":
         return None, None, {}, None
     text = clean_text(row.get("text"))
@@ -691,6 +730,7 @@ def oasst_prompt(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], 
 
 
 def dolly_instruction(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute dolly instruction operation."""
     instruction = clean_text(row.get("instruction"))
     context = clean_text(row.get("context"))
     if not instruction:
@@ -702,6 +742,7 @@ def dolly_instruction(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, A
 
 
 def gsm8k_reasoning(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute gsm8k reasoning operation."""
     question = clean_text(row.get("question"))
     if not question:
         return None, None, {}, None
@@ -710,6 +751,7 @@ def gsm8k_reasoning(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any
 
 
 def xsum_summarize(row: dict[str, Any]) -> tuple[str | None, Any, dict[str, Any], str | None]:
+    """Execute xsum summarize operation."""
     document = clean_text(row.get("document"))
     if not document:
         return None, None, {}, None

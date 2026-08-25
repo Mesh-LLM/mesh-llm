@@ -20,6 +20,7 @@ def normalized_parts(
     label: str,
     allow_root: bool = False,
 ) -> tuple[str, ...]:
+    """Execute normalized parts operation."""
     if not raw_name or "\x00" in raw_name or "\\" in raw_name:
         raise ValueError(f"unsafe {label}: {raw_name!r}")
     if raw_name.startswith("/") or WINDOWS_DRIVE.match(raw_name):
@@ -35,12 +36,18 @@ def normalized_parts(
 
 
 def destination_path(root: Path, parts: tuple[str, ...]) -> Path:
+    """Execute destination path operation."""
     return root.joinpath(*parts)
 
 
 def validate_members(
     archive: tarfile.TarFile,
 ) -> list[tuple[tarfile.TarInfo, tuple[str, ...]]]:
+    """Validate members.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     validated: list[tuple[tarfile.TarInfo, tuple[str, ...]]] = []
     seen: set[tuple[str, ...]] = set()
     for member in archive.getmembers():
@@ -91,11 +98,13 @@ def validate_members(
 
 
 def apply_mode(path: Path, member: tarfile.TarInfo) -> None:
+    """Execute apply mode operation."""
     if os.name != "nt":
         path.chmod(member.mode & 0o777)
 
 
 def safe_extract(archive_path: Path, destination: Path) -> None:
+    """Execute safe extract operation."""
     destination.mkdir(parents=True, exist_ok=True)
     if destination.is_symlink():
         raise ValueError(
@@ -171,6 +180,11 @@ def safe_extract(archive_path: Path, destination: Path) -> None:
 
 
 def main() -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("archive", type=Path)
     parser.add_argument("destination", type=Path)

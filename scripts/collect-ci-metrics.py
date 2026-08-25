@@ -38,6 +38,7 @@ MIN_HEURISTIC_SAMPLES = 3
 
 
 def pick(data: dict[str, Any], *names: str, default: Any = None) -> Any:
+    """Execute pick operation."""
     for name in names:
         if name in data:
             return data[name]
@@ -45,6 +46,7 @@ def pick(data: dict[str, Any], *names: str, default: Any = None) -> Any:
 
 
 def timestamp(value: Any) -> dt.datetime | None:
+    """Execute timestamp operation."""
     if not isinstance(value, str) or not value:
         return None
     value = value[:-1] + "+00:00" if value.endswith("Z") else value
@@ -59,6 +61,7 @@ def timestamp(value: Any) -> dt.datetime | None:
 
 
 def elapsed(start: dt.datetime | None, end: dt.datetime | None) -> float | None:
+    """Execute elapsed operation."""
     if start is None or end is None:
         return None
     seconds = (end - start).total_seconds()
@@ -66,6 +69,7 @@ def elapsed(start: dt.datetime | None, end: dt.datetime | None) -> float | None:
 
 
 def percentile(values: list[float], quantile: float) -> float:
+    """Execute percentile operation."""
     position = (len(values) - 1) * quantile
     low, high = math.floor(position), math.ceil(position)
     if low == high:
@@ -74,6 +78,7 @@ def percentile(values: list[float], quantile: float) -> float:
 
 
 def summarize(values: list[float | None]) -> dict[str, float | int | None]:
+    """Execute summarize operation."""
     samples = sorted(value for value in values if value is not None)
     if not samples:
         return {
@@ -87,6 +92,7 @@ def summarize(values: list[float | None]) -> dict[str, float | int | None]:
         }
 
     def rounded(value: float) -> float:
+        """Execute rounded operation."""
         return round(value, 3)
 
     return {
@@ -101,6 +107,7 @@ def summarize(values: list[float | None]) -> dict[str, float | int | None]:
 
 
 def normalize_step(raw: dict[str, Any]) -> dict[str, Any]:
+    """Execute normalize step operation."""
     started = timestamp(pick(raw, "started_at", "startedAt"))
     completed = timestamp(pick(raw, "completed_at", "completedAt"))
     return {
@@ -124,6 +131,7 @@ def _number(value: Any) -> float | None:
 
 
 def normalize_job(raw: dict[str, Any]) -> dict[str, Any]:
+    """Execute normalize job operation."""
     labels = pick(raw, "labels", "runner_labels", default=[])
     raw_steps = pick(raw, "steps", default=[])
     steps = []
@@ -175,6 +183,7 @@ def normalize_job(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_run(raw: dict[str, Any]) -> dict[str, Any]:
+    """Execute normalize run operation."""
     if not isinstance(raw.get("jobs"), list):
         run_id = pick(raw, "id", "databaseId", "database_id", default="unknown")
         raise ValueError(
@@ -211,6 +220,11 @@ def normalize_run(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_runs(path: str) -> list[dict[str, Any]]:
+    """Load runs from source.
+
+    Returns:
+        Loaded data.
+    """
     if path == "-":
         data = json.load(sys.stdin)
     else:
@@ -226,6 +240,7 @@ def load_runs(path: str) -> list[dict[str, Any]]:
 
 
 def gh_json(arguments: list[str]) -> Any:
+    """Execute gh json operation."""
     command = ["gh", *arguments]
     try:
         result = subprocess.run(
@@ -246,6 +261,11 @@ def gh_json(arguments: list[str]) -> Any:
 
 
 def fetch_jobs(repository: str, run_id: int) -> list[dict[str, Any]]:
+    """Get jobs.
+
+    Returns:
+        Retrieved value.
+    """
     jobs: list[dict[str, Any]] = []
     page = 1
     while True:
@@ -274,6 +294,11 @@ def fetch_jobs(repository: str, run_id: int) -> list[dict[str, Any]]:
 
 
 def fetch_exact_run(repository: str, run_id: int) -> dict[str, Any]:
+    """Get exact run.
+
+    Returns:
+        Retrieved value.
+    """
     run = gh_json(
         [
             "run",
@@ -292,6 +317,11 @@ def fetch_exact_run(repository: str, run_id: int) -> dict[str, Any]:
 
 
 def fetch_runs(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Get runs.
+
+    Returns:
+        Retrieved value.
+    """
     if args.run_id:
         return [fetch_exact_run(args.repo, run_id) for run_id in args.run_id]
     command = [
@@ -438,6 +468,7 @@ def runner_dimensions(
 
 
 def observation(run: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
+    """Execute observation operation."""
     duration = elapsed(job["started"], job["completed"])
     dependency_wait = job["dependency_wait_seconds"]
     if dependency_wait is None:
@@ -492,6 +523,7 @@ def observation(run: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
 
 
 def included(run: dict[str, Any], requested: str) -> tuple[bool, str]:
+    """Execute included operation."""
     if run["status"] != "completed":
         return False, "not_completed"
     if requested in ("all", "completed") or run["conclusion"] == requested:
@@ -788,6 +820,7 @@ def analyze(
     source: dict[str, Any],
     labels: dict[str, str],
 ) -> dict[str, Any]:
+    """Execute analyze operation."""
     selected = []
     skipped = collections.Counter()
     for run in runs:
@@ -1246,6 +1279,7 @@ def analyze(
 
 
 def human(seconds: float | int | None) -> str:
+    """Execute human operation."""
     if seconds is None:
         return "n/a"
     total = int(round(seconds))
@@ -1257,10 +1291,12 @@ def human(seconds: float | int | None) -> str:
 
 
 def markdown_escape(value: Any) -> str:
+    """Execute markdown escape operation."""
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
 def render_markdown(report: dict[str, Any], top: int) -> str:
+    """Render output for markdown."""
     workflow = report["workflow"]
     jobs = report["jobs"]
     lines = [
@@ -1431,6 +1467,7 @@ def render_markdown(report: dict[str, Any], top: int) -> str:
 
 
 def write(path: str, content: str) -> None:
+    """Save write to destination."""
     if path == "-":
         sys.stdout.write(content)
         return
@@ -1440,6 +1477,7 @@ def write(path: str, content: str) -> None:
 
 
 def labels(values: list[str]) -> dict[str, str]:
+    """Execute labels operation."""
     result = {}
     for value in values:
         key, separator, label = value.partition("=")
@@ -1450,6 +1488,11 @@ def labels(values: list[str]) -> dict[str, str]:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse and validate args.
+
+    Returns:
+        Parsed result.
+    """
     parser = argparse.ArgumentParser(
         description="Collect read-only GitHub Actions timing and runner metrics."
     )
@@ -1487,6 +1530,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str]) -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     args = parse_args(argv)
     try:
         if args.input:

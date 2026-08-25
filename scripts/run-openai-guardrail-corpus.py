@@ -27,6 +27,7 @@ TIMEOUT_SECS = 60
 
 @dataclass(frozen=True)
 class CorpusCase:
+    """Represents CorpusCase functionality."""
     case_id: str
     category: str
     prompt: str
@@ -66,6 +67,7 @@ STRICT_SCHEMA: dict[str, Any] = {
 
 
 def expected_server_mode(guardrail_mode: str) -> str:
+    """Execute expected server mode operation."""
     return {
         "off": "disabled",
         "metrics": "metrics",
@@ -74,6 +76,11 @@ def expected_server_mode(guardrail_mode: str) -> str:
 
 
 def build_corpus() -> list[CorpusCase]:
+    """Create corpus.
+
+    Returns:
+        Created object.
+    """
     return [
         CorpusCase(
             case_id="streaming-pass-through",
@@ -146,6 +153,7 @@ def build_corpus() -> list[CorpusCase]:
 
 
 def base_request(case: CorpusCase, *, model: str, guardrail_mode: str) -> dict[str, Any]:
+    """Execute base request operation."""
     request = {
         "model": model,
         "messages": [{"role": "user", "content": case.prompt}],
@@ -157,12 +165,14 @@ def base_request(case: CorpusCase, *, model: str, guardrail_mode: str) -> dict[s
 
 
 def fake_latency_ms(case_id: str, trial_index: int, guardrail_mode: str) -> float:
+    """Execute fake latency ms operation."""
     digest = hashlib.sha256(f"{guardrail_mode}:{case_id}:{trial_index}".encode("utf-8")).digest()
     sample = int.from_bytes(digest[:2], "big")
     return 4.0 + (sample % 2400) / 100.0
 
 
 def runtime_available(base_url: str) -> bool:
+    """Run runtime available operation."""
     if base_url.startswith("fake://"):
         return False
     request = urllib.request.Request(
@@ -178,6 +188,7 @@ def runtime_available(base_url: str) -> bool:
 
 
 def read_stream_text(response: Any) -> str:
+    """Execute read stream text operation."""
     parts: list[str] = []
     while True:
         line = response.readline()
@@ -199,6 +210,7 @@ def read_stream_text(response: Any) -> str:
 
 
 def live_case_result(base_url: str, case: CorpusCase, request_body: dict[str, Any]) -> dict[str, Any]:
+    """Execute live case result operation."""
     payload = json.dumps(request_body).encode("utf-8")
     url = f"{base_url.rstrip('/')}/chat/completions"
     req = urllib.request.Request(
@@ -258,6 +270,7 @@ def live_case_result(base_url: str, case: CorpusCase, request_body: dict[str, An
 
 
 def fake_case_result(case: CorpusCase, trial_index: int, guardrail_mode: str) -> dict[str, Any]:
+    """Execute fake case result operation."""
     ok = case.expected_outcome != "unsupported_real_tools_plus_strict_structured"
     latency_ms = fake_latency_ms(case.case_id, trial_index, guardrail_mode)
     return {
@@ -269,11 +282,13 @@ def fake_case_result(case: CorpusCase, trial_index: int, guardrail_mode: str) ->
 
 
 def summarize_latencies(samples: list[float]) -> dict[str, float]:
+    """Execute summarize latencies operation."""
     ordered = sorted(samples)
     if not ordered:
         return {"min": 0.0, "mean": 0.0, "p50": 0.0, "p95": 0.0, "max": 0.0}
 
     def percentile(index: float) -> float:
+        """Execute percentile operation."""
         if len(ordered) == 1:
             return ordered[0]
         position = index * (len(ordered) - 1)
@@ -292,6 +307,7 @@ def summarize_latencies(samples: list[float]) -> dict[str, float]:
 
 
 def run_corpus(base_url: str, model: str, guardrail_mode: str, trials: int) -> dict[str, Any]:
+    """Run corpus operation."""
     corpus = build_corpus()
     live_mode = runtime_available(base_url)
     backend_mode = "live" if live_mode else "fake"
@@ -366,6 +382,11 @@ def run_corpus(base_url: str, model: str, guardrail_mode: str, trials: int) -> d
 
 
 def main() -> None:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)

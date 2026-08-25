@@ -12,12 +12,15 @@ from typing import Sequence
 
 
 def creationflags_for_platform(is_windows: bool) -> int:
+    """Execute creationflags_for_platform operation."""
+
     if not is_windows:
         return 0
     return getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
 def command_for_platform(command: Sequence[str], *, is_windows: bool) -> list[str]:
+    """Execute command_for_platform operation."""
     prepared = list(command)
     if prepared[:1] == ["--"]:
         prepared = prepared[1:]
@@ -34,6 +37,7 @@ def command_for_platform(command: Sequence[str], *, is_windows: bool) -> list[st
 def launch(
     command: Sequence[str], pid_file: Path, log_file: Path, *, is_windows: bool
 ) -> int:
+    """Execute launch operation."""
     with log_file.open("ab", buffering=0) as log_handle:
         process = subprocess.Popen(
             command_for_platform(command, is_windows=is_windows),
@@ -46,6 +50,7 @@ def launch(
 
 
 def request_ctrl_break(pid: int) -> None:
+    """Execute request_ctrl_break operation."""
     ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
     if ctrl_break is None:
         raise RuntimeError("CTRL_BREAK_EVENT is only available on Windows")
@@ -53,6 +58,7 @@ def request_ctrl_break(pid: int) -> None:
 
 
 def is_running(pid: int, *, is_windows: bool) -> bool:
+    """Execute is_running operation."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -69,6 +75,7 @@ def is_running(pid: int, *, is_windows: bool) -> bool:
 
 
 def force_stop(pid: int) -> None:
+    """Execute force_stop operation."""
     subprocess.run(
         ["taskkill.exe", "/PID", str(pid), "/T", "/F"],
         check=False,
@@ -78,6 +85,7 @@ def force_stop(pid: int) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Execute parse_args operation."""
     parser = argparse.ArgumentParser()
     subcommands = parser.add_subparsers(dest="command", required=True)
 
@@ -94,6 +102,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Execute main operation."""
     args = parse_args()
     if args.command == "run":
         if not args.program or args.program == ["--"]:

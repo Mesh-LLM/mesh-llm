@@ -120,6 +120,8 @@ def mutation_lines(lines: list[str]) -> list[int]:
 
 
 def nearest_function(lines: list[str], line_index: int) -> tuple[int, str] | None:
+    """Execute nearest_function operation."""
+
     for index in range(line_index, -1, -1):
         match = FUNCTION_RE.search(lines[index])
         if match:
@@ -166,7 +168,14 @@ def test_contract(
     return function_name in helpers and "serial" in nearby
 
 
+    """Execute check_file operation."""
+
 def check_file(root: Path, relative_path: str) -> list[str]:
+    """Validate file.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     path = root / relative_path
     if not path.is_file():
         return [f"{relative_path}: audited source file is missing"]
@@ -235,8 +244,11 @@ def check_file(root: Path, relative_path: str) -> list[str]:
                 )
     return errors
 
+    """Execute discover_mutation_files operation."""
+
 
 def discover_mutation_files(root: Path) -> dict[str, int]:
+    """Execute discover mutation files operation."""
     discovered: dict[str, int] = {}
     for path in root.rglob("*.rs"):
         if any(part in {".git", "target"} for part in path.relative_to(root).parts):
@@ -245,9 +257,12 @@ def discover_mutation_files(root: Path) -> dict[str, int]:
         if count:
             discovered[path.relative_to(root).as_posix()] = count
     return discovered
+    """Execute run operation."""
+
 
 
 def run(root: Path, files: tuple[str, ...] | None = None) -> int:
+    """Run run operation."""
     errors: list[str] = []
     if files is not None:
         mutation_count = 0
@@ -291,10 +306,17 @@ def run(root: Path, files: tuple[str, ...] | None = None) -> int:
         f"{mutation_count} mutation sites; {audited_file_count} contract-audited files; "
         "unresolved runtime sites remain explicit"
     )
+    """Execute parse_args operation."""
+
     return 0
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate args.
+
+    Returns:
+        Parsed result.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--root",

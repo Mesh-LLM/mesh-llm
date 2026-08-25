@@ -27,6 +27,7 @@ VALID_AGENT_SMOKES = ("opencode", "pi", "goose")
 
 
 class CommandSpec(NamedTuple):
+    """Represents CommandSpec functionality."""
     name: str
     command: list[str]
     env: dict[str, str]
@@ -35,6 +36,7 @@ class CommandSpec(NamedTuple):
 
 
 class CommandResult(NamedTuple):
+    """Represents CommandResult functionality."""
     name: str
     status: str
     exit_code: int
@@ -43,6 +45,7 @@ class CommandResult(NamedTuple):
 
 
 class ProbeResult(NamedTuple):
+    """Represents ProbeResult functionality."""
     model: str | None
     attempt: int | None
     phase: str
@@ -56,6 +59,7 @@ class ProbeResult(NamedTuple):
 
 
 class AttestationResult(NamedTuple):
+    """Represents AttestationResult functionality."""
     status: str
     ok: bool
     binary: str | None
@@ -68,6 +72,7 @@ class AttestationResult(NamedTuple):
 
 
 def repo_root() -> Path:
+    """Execute repo root operation."""
     return Path(__file__).resolve().parents[1]
 
 
@@ -77,6 +82,7 @@ def strip_think_tags(text: str) -> str:
 
 
 def normalize_v1_base(base_url: str) -> str:
+    """Execute normalize v1 base operation."""
     base = base_url.strip().rstrip("/")
     if not base:
         raise ValueError("base URL is empty")
@@ -86,10 +92,20 @@ def normalize_v1_base(base_url: str) -> str:
 
 
 def parse_csv(value: str) -> list[str]:
+    """Parse and validate csv.
+
+    Returns:
+        Parsed result.
+    """
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
 def parse_models(value: str) -> list[str]:
+    """Parse and validate models.
+
+    Returns:
+        Parsed result.
+    """
     models = parse_csv(value)
     if not models:
         raise ValueError("at least one model is required")
@@ -97,6 +113,11 @@ def parse_models(value: str) -> list[str]:
 
 
 def parse_agent_smokes(value: str) -> list[str]:
+    """Parse and validate agent smokes.
+
+    Returns:
+        Parsed result.
+    """
     requested = parse_csv(value)
     unknown = sorted(set(requested) - set(VALID_AGENT_SMOKES))
     if unknown:
@@ -117,6 +138,11 @@ def build_plan(
     mesh_binary: str | None,
     release_attestation_expected_status: str | None,
 ) -> dict[str, Any]:
+    """Create plan.
+
+    Returns:
+        Created object.
+    """
     specs = build_command_specs(
         base_url=base_url,
         models=models,
@@ -182,6 +208,11 @@ def build_command_specs(
     skip_streaming: bool,
     timeout: float,
 ) -> list[CommandSpec]:
+    """Create command specs.
+
+    Returns:
+        Created object.
+    """
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
     base = normalize_v1_base(base_url)
@@ -279,6 +310,7 @@ def _agent_smoke_spec(smoke: str, base_url: str, output_dir: Path) -> CommandSpe
 
 
 def run_commands(specs: Iterable[CommandSpec], output_dir: Path) -> list[CommandResult]:
+    """Run commands operation."""
     results: list[CommandResult] = []
     for spec in specs:
         result = run_command(spec, output_dir)
@@ -292,6 +324,7 @@ def run_commands(specs: Iterable[CommandSpec], output_dir: Path) -> list[Command
 
 
 def run_command(spec: CommandSpec, output_dir: Path) -> CommandResult:
+    """Run command operation."""
     log_path = output_dir / spec.log
     log_path.parent.mkdir(parents=True, exist_ok=True)
     if spec.prerequisite and shutil.which(spec.prerequisite) is None:
@@ -350,6 +383,7 @@ def run_surface_probes(
     timeout: float,
     include_streaming: bool,
 ) -> list[ProbeResult]:
+    """Run surface probes operation."""
     base = normalize_v1_base(base_url)
     results: list[ProbeResult] = []
 
@@ -371,6 +405,7 @@ def run_surface_probes(
 
 
 def run_models_probe(base_url: str, timeout: float) -> ProbeResult:
+    """Run models probe operation."""
     started = time.monotonic()
     status_code = None
     try:
@@ -384,6 +419,7 @@ def run_models_probe(base_url: str, timeout: float) -> ProbeResult:
 
 
 def run_chat_probe(base_url: str, model: str, attempt: int, timeout: float) -> ProbeResult:
+    """Run chat probe operation."""
     started = time.monotonic()
     status_code = None
     actual_model = None
@@ -415,6 +451,7 @@ def run_chat_probe(base_url: str, model: str, attempt: int, timeout: float) -> P
 
 
 def run_stream_chat_probe(base_url: str, model: str, attempt: int, timeout: float) -> ProbeResult:
+    """Run stream chat probe operation."""
     started = time.monotonic()
     status_code = None
     ttft_ms = None
@@ -467,6 +504,11 @@ def run_stream_chat_probe(base_url: str, model: str, attempt: int, timeout: floa
 
 
 def build_chat_request(model: str, attempt: int, stream: bool) -> dict[str, Any]:
+    """Create chat request.
+
+    Returns:
+        Created object.
+    """
     sentinel = "STREAM_OK" if stream else "STABILITY_OK"
     body: dict[str, Any] = {
         "model": model,
@@ -491,6 +533,11 @@ def build_chat_request(model: str, attempt: int, stream: bool) -> dict[str, Any]
 
 
 def get_json(base_url: str, path: str, timeout: float) -> tuple[dict[str, Any], int]:
+    """Get json.
+
+    Returns:
+        Retrieved value.
+    """
     request = urllib.request.Request(f"{base_url}{path}", method="GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -510,6 +557,7 @@ def post_json(
     payload: dict[str, Any],
     timeout: float,
 ) -> tuple[dict[str, Any], int]:
+    """Execute post json operation."""
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}{path}",
@@ -535,6 +583,7 @@ def post_json_stream(
     payload: dict[str, Any],
     timeout: float,
 ) -> tuple[list[dict[str, Any]], int, int | None]:
+    """Execute post json stream operation."""
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}{path}",
@@ -563,6 +612,7 @@ def post_json_stream(
 
 
 def decode_json_object(body: bytes) -> dict[str, Any]:
+    """Execute decode json object operation."""
     try:
         decoded = json.loads(body)
     except json.JSONDecodeError as exc:
@@ -574,6 +624,11 @@ def decode_json_object(body: bytes) -> dict[str, Any]:
 
 
 def parse_sse_lines(lines: Iterable[str]) -> Iterable[dict[str, Any]]:
+    """Parse and validate sse lines.
+
+    Returns:
+        Parsed result.
+    """
     for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith(":") or not line.startswith("data:"):
@@ -591,6 +646,7 @@ def parse_sse_lines(lines: Iterable[str]) -> Iterable[dict[str, Any]]:
 
 
 def first_message_content(response: dict[str, Any]) -> str:
+    """Execute first message content operation."""
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
         raise ValueError("response had no choices")
@@ -607,6 +663,7 @@ def first_message_content(response: dict[str, Any]) -> str:
 
 
 def stream_content(chunks: Iterable[dict[str, Any]]) -> str:
+    """Execute stream content operation."""
     parts: list[str] = []
     saw_choice = False
     for chunk in chunks:
@@ -629,6 +686,11 @@ def stream_content(chunks: Iterable[dict[str, Any]]) -> str:
 
 
 def validate_sentinel(content: str, sentinel: str) -> None:
+    """Validate sentinel.
+
+    Raises:
+        ValidationError: If validation fails.
+    """
     cleaned = strip_think_tags(content)
     if cleaned != sentinel and sentinel not in cleaned:
         raise ValueError(f"expected exactly {sentinel}, got {content!r}")
@@ -667,6 +729,7 @@ def write_evidence(
     probe_results: list[ProbeResult] | None = None,
     attestation_result: AttestationResult | None = None,
 ) -> None:
+    """Save evidence to destination."""
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = dict(plan)
     manifest["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -686,6 +749,7 @@ def write_evidence(
 
 
 def summarize_results(results: Iterable[CommandResult]) -> dict[str, Any]:
+    """Execute summarize results operation."""
     rows = list(results)
     passed = sum(1 for row in rows if row.status == "PASS")
     failed = sum(1 for row in rows if row.status == "FAIL")
@@ -702,6 +766,7 @@ def summarize_results(results: Iterable[CommandResult]) -> dict[str, Any]:
 
 
 def summarize_probe_results(results: Iterable[ProbeResult]) -> dict[str, Any]:
+    """Execute summarize probe results operation."""
     rows = list(results)
     passed = sum(1 for row in rows if row.ok)
     failed = sum(1 for row in rows if not row.ok)
@@ -717,6 +782,7 @@ def summarize_probe_results(results: Iterable[ProbeResult]) -> dict[str, Any]:
 
 
 def default_attestation_result() -> AttestationResult:
+    """Execute default attestation result operation."""
     return AttestationResult(
         status="not_configured",
         ok=True,
@@ -726,6 +792,7 @@ def default_attestation_result() -> AttestationResult:
 
 
 def summarize_attestation_result(result: AttestationResult | None) -> dict[str, Any]:
+    """Execute summarize attestation result operation."""
     attestation = result or default_attestation_result()
     return {
         "ok": attestation.ok,
@@ -743,6 +810,7 @@ def summarize_evidence(
     probe_results: Iterable[ProbeResult],
     attestation_result: AttestationResult | None = None,
 ) -> dict[str, Any]:
+    """Execute summarize evidence operation."""
     commands = summarize_results(command_results)
     probes = summarize_probe_results(probe_results)
     attestation = summarize_attestation_result(attestation_result)
@@ -768,6 +836,7 @@ def render_summary_markdown(
     probe_results: Iterable[ProbeResult],
     attestation_result: AttestationResult | None,
 ) -> str:
+    """Render output for summary markdown."""
     commands = summary.get("commands", {})
     probes = summary.get("probes", {})
     attestation = attestation_result or default_attestation_result()
@@ -834,6 +903,11 @@ def _summary_timing_row(label: str, summary: dict[str, Any]) -> str:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate args.
+
+    Returns:
+        Parsed result.
+    """
     parser = argparse.ArgumentParser(
         description=(
             "Run repeatable mesh-llm stability checks and write manifest.json, "
@@ -877,6 +951,7 @@ def inspect_release_attestation(
     public_key_file: str | None,
     expected_status: str | None,
 ) -> AttestationResult:
+    """Execute inspect release attestation operation."""
     if not binary:
         return default_attestation_result()
 
@@ -932,6 +1007,7 @@ def inspect_release_attestation(
 
 
 def default_base_url() -> str:
+    """Execute default base url operation."""
     for name in ("MESH_STABILITY_BASE_URL", "MESH_AGENT_BASE_URL", "MESH_OPENCODE_BASE_URL"):
         value = os.environ.get(name)
         if value:
@@ -943,6 +1019,11 @@ def default_base_url() -> str:
 
 
 def main() -> int:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     try:
         args = parse_args()
         models = parse_models(args.models)
@@ -1000,6 +1081,7 @@ def print_human_summary(
     probe_results: Iterable[ProbeResult],
     attestation_result: AttestationResult | None,
 ) -> None:
+    """Render output for human summary."""
     print(f"nightly stability: {summary['passed']}/{summary['total']} steps passed", flush=True)
     print(f"results: {output_dir}", flush=True)
     attestation = attestation_result or default_attestation_result()
@@ -1028,6 +1110,7 @@ def print_human_summary(
 
 
 def shell_join(command: Iterable[str]) -> str:
+    """Execute shell join operation."""
     return " ".join(_shell_quote(part) for part in command)
 
 

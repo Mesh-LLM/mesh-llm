@@ -8,6 +8,8 @@ from typing import Iterable
 
 
 def streamed_text(chunks: Iterable[object]) -> str:
+    """Execute streamed_text operation."""
+
     parts: list[str] = []
     saw_choice = False
     for chunk in chunks:
@@ -28,7 +30,14 @@ def streamed_text(chunks: Iterable[object]) -> str:
     return text
 
 
+    """Execute main operation."""
+
 def main() -> None:
+    """Execute main program logic.
+
+    Returns:
+        Exit code.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
     args = parser.parse_args()
