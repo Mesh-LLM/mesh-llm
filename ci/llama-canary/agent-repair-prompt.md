@@ -15,10 +15,16 @@ in those skills are hard requirements for this repair, not suggestions.
    A `.git/rebase-apply` state may be left behind; use `git am --show-current-patch`
    and `git am --3way --continue`/`--abort` to inspect the conflict.
 
-2. **Fix the queue.** Rebase the offending patches in
-   `third_party/llama.cpp/patches/` onto the new upstream. Keep the series
-   ordered, keep every patch that still applies unchanged, and make the
-   minimal semantic fix in the broken ones. Regenerate the series so
+2. **Fix the queue — follow `llama-patch-changes`, do not loop on `git am`.**
+   If a patch fails to apply, `git am --3way` retry alone is not an acceptable
+   resolution: a conflict means upstream refactored code a patch owns, and the
+   skill's deliberate queue rewrite is the required path. Resolve the conflict
+   on a llama.cpp branch (base on upstream `ggml-org/llama.cpp` `master` at the
+   canary target SHA), reconstruct capability-owned commits, verify the
+   reconstructed head is tree-identical to the intended final checkout, then
+   regenerate the series with `git format-patch` per the skill. Keep the series
+   ordered, keep every patch that still applies unchanged, and make the minimal
+   semantic fix in the broken ones. Regenerate the series so
    `scripts/prepare-llama.sh` runs clean end to end.
 
 3. **Build.** `scripts/build-llama.sh` then
