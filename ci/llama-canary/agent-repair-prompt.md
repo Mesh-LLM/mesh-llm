@@ -4,6 +4,12 @@ You are running on the `family-certify` self-hosted runner inside a mesh-llm
 checkout. The nightly llama-upstream canary failed to apply our patch queue in
 `third_party/llama.cpp/patches/` onto the new upstream pin. Your job:
 
+**Before touching the queue, read the repo skills and follow them:**
+`.agents/skills/llama-patch-changes/SKILL.md` (queue edits, upstream pin,
+prepare/build flow, patch ownership boundaries) and, when a patch changes the
+stage ABI, `.agents/skills/llama-stage-patch-changes/SKILL.md`. The boundaries
+in those skills are hard requirements for this repair, not suggestions.
+
 1. **Reproduce.** Run `scripts/prepare-llama.sh "$(cat .deps/llama-canary-target-sha)"`
    and capture which patch fails to apply (`git -C .deps/llama.cpp am --3way ...`).
    A `.git/rebase-apply` state may be left behind; use `git am --show-current-patch`
