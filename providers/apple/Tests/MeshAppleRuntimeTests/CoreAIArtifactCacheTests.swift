@@ -2,8 +2,10 @@ import Testing
 
 @testable import MeshAppleRuntime
 
-@Test func coreAIArtifactReferenceDefaultsToMain() {
-  #expect(CoreAIArtifactReference("meshllm/example") == CoreAIArtifactReference("meshllm/example@main"))
+@Test func coreAIArtifactReferenceRejectsMutableRevisions() {
+  #expect(CoreAIArtifactReference("meshllm/example") == nil)
+  #expect(CoreAIArtifactReference("meshllm/example@main") == nil)
+  #expect(CoreAIArtifactReference("meshllm/example@release-1") == nil)
 }
 
 @Test func coreAIArtifactReferenceKeepsPinnedRevision() {
@@ -15,6 +17,8 @@ import Testing
 
 @Test func coreAIArtifactReferenceRejectsUnsafeValues() {
   #expect(CoreAIArtifactReference("meshllm/example@../main") == nil)
+  #expect(CoreAIArtifactReference("meshllm/example@0123456789abcdef") == nil)
+  #expect(CoreAIArtifactReference("meshllm/example@\(String(repeating: "٠", count: 40))") == nil)
   #expect(CoreAIArtifactReference("https://huggingface.co/meshllm/example") == nil)
   #expect(CoreAIArtifactReference("meshllm/example/") == nil)
 }

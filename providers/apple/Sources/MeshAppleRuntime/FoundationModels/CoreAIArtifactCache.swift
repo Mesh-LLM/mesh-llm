@@ -7,19 +7,22 @@ struct CoreAIArtifactReference: Equatable, Sendable {
 
   init?(_ value: String) {
     let parts = value.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: true)
-    guard let repositoryPart = parts.first,
+    guard parts.count == 2,
+          let repositoryPart = parts.first,
           repositoryPart.split(separator: "/").count == 2,
           !repositoryPart.hasPrefix("/"),
           !repositoryPart.hasSuffix("/"),
           repositoryPart.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "/" || $0 == "-" || $0 == "." || $0 == "_" })
     else { return nil }
-    let revisionPart = parts.dropFirst().first.map(String.init) ?? "main"
-    guard !revisionPart.isEmpty,
-          !revisionPart.contains("/"),
-          revisionPart.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." || $0 == "_" })
+    guard let revisionPart = parts.dropFirst().first.map(String.init) else { return nil }
+    let revisionBytes = revisionPart.utf8
+    guard revisionBytes.count == 40 || revisionBytes.count == 64,
+          revisionBytes.allSatisfy({ byte in
+            (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 70) || (byte >= 97 && byte <= 102)
+          })
     else { return nil }
     repository = String(repositoryPart)
-    revision = revisionPart
+    revision = revisionPart.lowercased()
   }
 
   var cacheKey: String {
@@ -110,7 +113,7 @@ struct CoreAIArtifactCache {
   }
 
   private func downloadData(path: String) async throws -> Data {
-    let response = try await URLSession.shared.data(from: remoteURL(path: path))
+    let response = try await URLSession.shared.data(from: try remoteURL(path: path))
     guard (response.1 as? HTTPURLResponse)?.statusCode == 200 else {
       throw CoreAIArtifactCacheError.downloadFailed(path)
     }

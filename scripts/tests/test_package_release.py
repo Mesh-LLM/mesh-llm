@@ -312,7 +312,11 @@ class PackageReleaseTests(unittest.TestCase):
                 encoding="utf-8",
             )
             result = run_bash(
-                f'write_product_manifest "{bundle}" "{host}" "{runtime}" "v0.73.1" "cpu"',
+                (
+                    f'PROVIDER_RUNTIME_BUNDLES=("{provider}"); '
+                    f'write_product_manifest "{bundle}" "{host}" "{runtime}" '
+                    '"v0.73.1" "cpu"'
+                ),
                 {},
             )
             self.assertNotEqual(result.returncode, 0)
@@ -342,7 +346,11 @@ class PackageReleaseTests(unittest.TestCase):
                 encoding="utf-8",
             )
             result = run_bash(
-                f'write_product_manifest "{bundle}" "{host}" "{runtime}" "v0.73.1" "cpu"',
+                (
+                    f'PROVIDER_RUNTIME_BUNDLES=("{provider}"); '
+                    f'write_product_manifest "{bundle}" "{host}" "{runtime}" '
+                    '"v0.73.1" "cpu"'
+                ),
                 {},
             )
             self.assertNotEqual(result.returncode, 0)

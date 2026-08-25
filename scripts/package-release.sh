@@ -192,7 +192,7 @@ write_product_manifest() {
 
     local provider_args=()
     local provider_runtime
-    for provider_runtime in "${PROVIDER_RUNTIME_BUNDLES[@]}"; do
+    for provider_runtime in ${PROVIDER_RUNTIME_BUNDLES[@]+"${PROVIDER_RUNTIME_BUNDLES[@]}"}; do
         provider_args+=(--provider-runtime "$provider_runtime")
     done
 
@@ -680,13 +680,13 @@ copy_and_verify_precomposed_product() {
     discover_bundled_provider_runtimes "$bundle_dir"
     local provider_runtime
     local provider_kind
-    for provider_runtime in "${PROVIDER_RUNTIME_BUNDLES[@]}"; do
+    for provider_runtime in ${PROVIDER_RUNTIME_BUNDLES[@]+"${PROVIDER_RUNTIME_BUNDLES[@]}"}; do
         verify_provider_runtime_contract "$provider_runtime"
         provider_kind="$(provider_runtime_coordinates "$provider_runtime/provider-runtime.json" | cut -f1)"
         verify_provider_runtime_release_policy "$provider_runtime" "$provider_kind"
     done
     local provider_args=()
-    for provider_runtime in "${PROVIDER_RUNTIME_BUNDLES[@]}"; do
+    for provider_runtime in ${PROVIDER_RUNTIME_BUNDLES[@]+"${PROVIDER_RUNTIME_BUNDLES[@]}"}; do
         provider_args+=(--provider-runtime "$provider_runtime")
     done
     "$(python_bin)" "$SCRIPT_DIR/compose-product-bundle.py" \

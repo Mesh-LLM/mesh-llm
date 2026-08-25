@@ -109,10 +109,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     } catch let failure as HTTPFailure {
       sendError(failure, over: connection)
     } catch let failure as AppleRuntimeFailure {
-      sendError(
-        HTTPFailure(status: 400, code: failure.code, message: failure.message),
-        over: connection
-      )
+      sendError(httpFailure(from: failure), over: connection)
     } catch {
       sendError(
         HTTPFailure(status: 500, code: "internal_error", message: String(describing: error)),
@@ -307,16 +304,15 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
       let failure = (error as? AppleRuntimeFailure)
         ?? AppleRuntimeFailure(
           code: "internal_error", message: String(describing: error), retryable: false)
-      let payload: [String: Any] = [
-        "error": ["code": failure.code, "message": failure.message, "retryable": failure.retryable]
-      ]
-      if let data = try? JSONSerialization.data(withJSONObject: payload),
-        let json = String(data: data, encoding: .utf8)
-      {
-        let errorResponse = "data: \(json)\n\ndata: [DONE]\n\n"
+      if let data = streamErrorData(failure) {
         connection.send(
-          content: Data(errorResponse.utf8), contentContext: .finalMessage, isComplete: true,
-          completion: .idempotent)
+          content: data,
+          contentContext: .finalMessage,
+          isComplete: true,
+          completion: .idempotent
+        )
+      } else {
+        connection.cancel()
       }
       return
     }
@@ -367,11 +363,12 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
   }
 
   private func sendError(_ failure: HTTPFailure, over connection: NWConnection) {
-    let object = [
+    let object: [String: Any] = [
       "error": [
         "message": failure.message,
         "type": "apple_runtime_error",
         "code": failure.code,
+        "retryable": failure.retryable,
       ]
     ]
     guard let body = try? JSONSerialization.data(withJSONObject: object) else {
@@ -442,6 +439,7 @@ private final class HTTPRequestReader: @unchecked Sendable {
   private let completion: @Sendable (HTTPRequest) -> Void
   private let failure: @Sendable (any Error) -> Void
   private var buffer = Data()
+  private var timeoutTask: Task<Void, Never>?
 
   init(
     connection: NWConnection,
@@ -451,6 +449,18 @@ private final class HTTPRequestReader: @unchecked Sendable {
     self.connection = connection
     self.completion = completion
     self.failure = failure
+    timeoutTask = Task { [weak connection] in
+      do {
+        try await Task.sleep(for: .seconds(10))
+      } catch {
+        return
+      }
+      connection?.cancel()
+    }
+  }
+
+  deinit {
+    timeoutTask?.cancel()
   }
 
   func receive() {
@@ -461,14 +471,17 @@ private final class HTTPRequestReader: @unchecked Sendable {
       }
       do {
         if let request = try HTTPRequest.parse(self.buffer) {
+          self.timeoutTask?.cancel()
           self.completion(request)
           return
         }
       } catch {
+        self.timeoutTask?.cancel()
         self.failure(error)
         return
       }
       if isComplete || error != nil {
+        self.timeoutTask?.cancel()
         self.connection.cancel()
         return
       }
@@ -477,7 +490,8 @@ private final class HTTPRequestReader: @unchecked Sendable {
   }
 }
 
-private struct HTTPRequest: Sendable {
+struct HTTPRequest: Sendable {
+  static let maximumRequestHeaderBytes = 64 * 1_024
   private static let maximumRequestBodyBytes = 8 * 1_048_576
   let method: String
   let path: String
@@ -485,7 +499,23 @@ private struct HTTPRequest: Sendable {
 
   static func parse(_ data: Data) throws -> HTTPRequest? {
     let separator = Data("\r\n\r\n".utf8)
-    guard let headerRange = data.range(of: separator) else { return nil }
+    guard let headerRange = data.range(of: separator) else {
+      guard data.count <= Self.maximumRequestHeaderBytes else {
+        throw HTTPFailure(
+          status: 431,
+          code: "headers_too_large",
+          message: "Request headers are too large"
+        )
+      }
+      return nil
+    }
+    guard headerRange.lowerBound <= Self.maximumRequestHeaderBytes else {
+      throw HTTPFailure(
+        status: 431,
+        code: "headers_too_large",
+        message: "Request headers are too large"
+      )
+    }
     let headerData = data[..<headerRange.lowerBound]
     guard let header = String(data: headerData, encoding: .utf8) else {
       throw HTTPFailure(status: 400, code: "invalid_headers", message: "Headers are not UTF-8")
@@ -592,8 +622,35 @@ private struct OpenAIChatRequest: Decodable, Sendable {
   }
 }
 
-private struct HTTPFailure: Error {
+struct HTTPFailure: Error {
   let status: Int
   let code: String
   let message: String
+  let retryable: Bool
+
+  init(status: Int, code: String, message: String, retryable: Bool = false) {
+    self.status = status
+    self.code = code
+    self.message = message
+    self.retryable = retryable
+  }
+}
+
+func httpFailure(from failure: AppleRuntimeFailure) -> HTTPFailure {
+  HTTPFailure(
+    status: failure.code == "provider_busy" ? 429 : 400,
+    code: failure.code,
+    message: failure.message,
+    retryable: failure.retryable
+  )
+}
+
+func streamErrorData(_ failure: AppleRuntimeFailure) -> Data? {
+  let payload: [String: Any] = [
+    "error": ["code": failure.code, "message": failure.message, "retryable": failure.retryable]
+  ]
+  guard let data = try? JSONSerialization.data(withJSONObject: payload),
+    let json = String(data: data, encoding: .utf8)
+  else { return nil }
+  return Data("data: \(json)\n\ndata: [DONE]\n\n".utf8)
 }

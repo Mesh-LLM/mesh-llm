@@ -1283,9 +1283,11 @@ mod tests {
                 .map(|name| (os(name), os("value")))
                 .chain(std::iter::once((os("UNLISTED_VAR"), os("value")))),
         );
-        assert!(scrubbed.iter().all(|(name, _)| {
-            PROVIDER_ENV_ALLOWLIST.contains(&name.to_str().unwrap())
-        }));
+        assert!(
+            scrubbed
+                .iter()
+                .all(|(name, _)| { PROVIDER_ENV_ALLOWLIST.contains(&name.to_str().unwrap()) })
+        );
         assert_eq!(scrubbed.len(), PROVIDER_ENV_ALLOWLIST.len());
     }
 }

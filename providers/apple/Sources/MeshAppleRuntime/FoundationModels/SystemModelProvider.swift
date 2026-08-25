@@ -44,7 +44,7 @@ public struct FixtureLookupTool: Tool {
 
 public actor SystemModelProvider {
   private let model: SystemLanguageModel
-  private var preparedSession: LanguageModelSession?
+  private var preparedSession = SingleUsePreparedSession<LanguageModelSession>()
 
   public init() {
     model = .default
@@ -92,7 +92,7 @@ public actor SystemModelProvider {
     try requireAvailable()
     let session = LanguageModelSession(model: model)
     session.prewarm(promptPrefix: promptPrefix.map(Prompt.init))
-    preparedSession = session
+    preparedSession.store(session)
   }
 
   public func generate(
@@ -105,14 +105,19 @@ public actor SystemModelProvider {
       instructions: request.instructions,
       maximumResponseTokens: request.maximumResponseTokens
     )
-    let session = LanguageModelSession(
-      model: model,
-      instructions: request.instructions
-    )
-    if let preparedSession, request.instructions == nil {
-      self.preparedSession = nil
+    // LanguageModelSession retains transcript state. A prewarmed session may
+    // serve one request, but it must never be reused after generation because
+    // later callers share this provider process.
+    let session: LanguageModelSession
+    if request.instructions == nil, let prewarmed = preparedSession.take() {
+      session = prewarmed
+    } else {
+      session = LanguageModelSession(
+        model: model,
+        instructions: request.instructions
+      )
+      session.prewarm(promptPrefix: Prompt(request.prompt))
     }
-    session.prewarm(promptPrefix: Prompt(request.prompt))
     let options = GenerationOptions(
       temperature: request.temperature,
       maximumResponseTokens: request.maximumResponseTokens
@@ -278,6 +283,19 @@ public actor SystemModelProvider {
       inputTokens: inputTokens,
       maximumResponseTokens: maximumResponseTokens
     )
+  }
+}
+
+struct SingleUsePreparedSession<Session> {
+  private var session: Session?
+
+  mutating func store(_ session: Session) {
+    self.session = session
+  }
+
+  mutating func take() -> Session? {
+    defer { session = nil }
+    return session
   }
 }
 

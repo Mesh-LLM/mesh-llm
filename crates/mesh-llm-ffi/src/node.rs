@@ -27,8 +27,8 @@ use crate::model_types::{
 };
 use crate::native_runtime_types::EventListener;
 use crate::request_types::{
-    ChatRequestNative, ClientStatus, ConsoleOptionsNative, ModelNative, ProviderRuntimeOptionsNative,
-    PublicMeshQuery, ResponsesRequestNative,
+    ChatRequestNative, ClientStatus, ConsoleOptionsNative, ModelNative,
+    ProviderRuntimeOptionsNative, PublicMeshQuery, ResponsesRequestNative,
 };
 use crate::runtime_blocking::block_on;
 

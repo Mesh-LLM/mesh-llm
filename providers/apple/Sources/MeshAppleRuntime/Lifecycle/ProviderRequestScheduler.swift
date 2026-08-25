@@ -1,11 +1,32 @@
 import Foundation
 
 public actor ProviderRequestScheduler {
+  private enum Acquisition {
+    case granted
+    case cancelled
+    case overloaded
+  }
+
   private var occupied = false
   private var waiterOrder: [UUID] = []
-  private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+  private var waiters: [UUID: CheckedContinuation<Acquisition, Never>] = [:]
+  private let maximumQueuedRequests: Int
+  private let permitHandoffHook: (@Sendable () async -> Void)?
 
-  public init() {}
+  public init(maximumQueuedRequests: Int = 64) {
+    precondition(maximumQueuedRequests >= 0)
+    self.maximumQueuedRequests = maximumQueuedRequests
+    permitHandoffHook = nil
+  }
+
+  init(
+    maximumQueuedRequests: Int = 64,
+    permitHandoffHook: @escaping @Sendable () async -> Void
+  ) {
+    precondition(maximumQueuedRequests >= 0)
+    self.maximumQueuedRequests = maximumQueuedRequests
+    self.permitHandoffHook = permitHandoffHook
+  }
 
   public func snapshot() -> AppleProviderLoad {
     AppleProviderLoad(
@@ -18,8 +39,23 @@ public actor ProviderRequestScheduler {
   public func withPermit<T: Sendable>(
     _ operation: @Sendable () async throws -> T
   ) async throws -> T {
-    try await acquire()
+    try Task.checkCancellation()
+    switch await acquire() {
+    case .cancelled:
+      throw CancellationError()
+    case .overloaded:
+      throw AppleRuntimeFailure(
+        code: "provider_busy",
+        message: "Apple provider request queue is full",
+        retryable: true
+      )
+    case .granted:
+      break
+    }
     do {
+      if let permitHandoffHook {
+        await permitHandoffHook()
+      }
       try Task.checkCancellation()
       let result = try await operation()
       release()
@@ -30,41 +66,42 @@ public actor ProviderRequestScheduler {
     }
   }
 
-  private func acquire() async throws {
-    try Task.checkCancellation()
+  private func acquire() async -> Acquisition {
+    if Task.isCancelled {
+      return .cancelled
+    }
     if !occupied {
       occupied = true
-      return
+      return .granted
+    }
+    if waiters.count >= maximumQueuedRequests {
+      return .overloaded
     }
     let id = UUID()
-    do {
-      try await withTaskCancellationHandler {
-        try await withCheckedThrowingContinuation { continuation in
-          waiterOrder.append(id)
-          waiters[id] = continuation
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        if Task.isCancelled {
+          continuation.resume(returning: .cancelled)
+          return
         }
-        try Task.checkCancellation()
-      } onCancel: {
-        Task { await self.cancelWaiter(id) }
+        waiterOrder.append(id)
+        waiters[id] = continuation
       }
-    } catch is CancellationError {
-      if occupied {
-        release()
-      }
-      throw CancellationError()
+    } onCancel: {
+      Task { await self.cancelWaiter(id) }
     }
   }
 
   private func cancelWaiter(_ id: UUID) {
     waiterOrder.removeAll { $0 == id }
-    waiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+    waiters.removeValue(forKey: id)?.resume(returning: .cancelled)
   }
 
   private func release() {
     while let id = waiterOrder.first {
       waiterOrder.removeFirst()
       if let continuation = waiters.removeValue(forKey: id) {
-        continuation.resume()
+        continuation.resume(returning: .granted)
         return
       }
     }

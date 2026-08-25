@@ -266,14 +266,16 @@ fn extract_entry(
                 output.display()
             )
         })?;
-    let mut limited_reader = entry.take(*remaining_budget);
+    let mut limited_reader = (&mut entry).take(*remaining_budget);
     let bytes_written = std::io::copy(&mut limited_reader, &mut file)?;
-    if bytes_written > *remaining_budget {
-        bail!("provider runtime archive exceeds the expanded size limit");
-    }
     *remaining_budget = remaining_budget.saturating_sub(bytes_written);
-    if limited_reader.limit() == 0 && entry.bytes().next().is_some() {
-        bail!("provider runtime archive exceeds the expanded size limit");
+    let exhausted_budget = limited_reader.limit() == 0;
+    drop(limited_reader);
+    if exhausted_budget {
+        let mut overflow = [0_u8; 1];
+        if entry.read(&mut overflow)? != 0 {
+            bail!("provider runtime archive exceeds the expanded size limit");
+        }
     }
     file.flush()?;
     apply_zip_permissions(&output, entry.unix_mode())?;

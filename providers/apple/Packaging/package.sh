@@ -36,6 +36,13 @@ if [[ -n "$COREAI_MODEL_ROOT" || -n "$COREAI_MODEL_REF" || -n "$COREAI_MODEL_ID"
         echo "Core AI model resources must not contain symlinks" >&2
         exit 2
     }
+    if [[ -n "$COREAI_MODEL_REF" ]]; then
+        [[ "$COREAI_MODEL_REF" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+@([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$ ]] || {
+            echo "MESH_APPLE_COREAI_MODEL_REF must be owner/repository@<40-or-64-character-commit-digest>" >&2
+            exit 2
+        }
+        coreai_revision="${COREAI_MODEL_REF##*@}"
+    fi
     if [[ -z "$COREAI_MODEL_ID" && -n "$COREAI_MODEL_REF" ]]; then
         COREAI_MODEL_ID="${COREAI_MODEL_REF%@*}"
     fi
