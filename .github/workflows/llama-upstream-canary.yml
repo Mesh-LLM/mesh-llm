@@ -41,7 +41,16 @@ jobs:
       # HF_HOME/HF_HUB_CACHE so `hf download` is only a cache-miss backstop.
       CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'Nemotron 3 Ultra Free' }}
     steps:
+      # Pin checkout content to the default branch even for a manual
+      # dispatch: a dispatcher can select a feature ref, and this job runs
+      # repository scripts plus the repair agent with write-capable repo
+      # access on the persistent self-hosted runner. `persist-credentials:
+      # false` keeps the checkout token away from everything executed; the
+      # pin-push step below is the only place a token is injected.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          persist-credentials: false
 
       - name: Verify runner toolchain
         run: |
@@ -125,6 +134,11 @@ jobs:
       - name: Commit upstream pin to main
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success'
         run: |
+          set -euo pipefail
+          # The verified SHA lives under .deps; write it into the durable pin
+          # before committing so the commit step never reports a push that
+          # did not happen.
+          scripts/update-llama-pin.sh
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add third_party/llama.cpp/upstream.txt
@@ -133,7 +147,9 @@ jobs:
             exit 0
           fi
           git commit -m "Update llama.cpp upstream pin"
-          git push origin HEAD:refs/heads/main
+          git push "https://x-access-token:${PIN_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/main
+        env:
+          PIN_PUSH_TOKEN: ${{ github.token }}
 
       - name: Report upstream pin update
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success'

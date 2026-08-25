@@ -35,6 +35,11 @@ Correctness options:
   --skip-correctness          skip all correctness/state lanes
   --skip-dtype                skip dtype matrix
   --skip-state                skip state handoff
+  --require-lanes             fail if any correctness/speculative lane is
+                              skipped (a skipped lane means required
+                              inputs were not supplied); the build lane is
+                              exempt because --skip-build is a deliberate
+                              caller decision
 
 Speculative options:
   --draft-model GGUF          draft GGUF for draft speculative lanes
@@ -119,6 +124,7 @@ SKIP_BUILD=0
 SKIP_CORRECTNESS=0
 SKIP_DTYPE=0
 SKIP_STATE=0
+REQUIRE_LANES=0
 CORPUS="target/bench-corpora/smoke/corpus.jsonl"
 CORPUS_LIMIT=""
 SPEC_WINDOW="8"
@@ -159,7 +165,8 @@ while [[ $# -gt 0 ]]; do
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-correctness) SKIP_CORRECTNESS=1; shift ;;
     --skip-dtype) SKIP_DTYPE=1; shift ;;
-    --skip-state) SKIP_STATE=1; shift ;;
+      --skip-state) SKIP_STATE=1; shift ;;
+      --require-lanes) REQUIRE_LANES=1; shift ;;
     --corpus) CORPUS="$2"; shift 2 ;;
     --corpus-limit) CORPUS_LIMIT="$2"; shift 2 ;;
     --spec-window) SPEC_WINDOW="$2"; shift 2 ;;
@@ -188,6 +195,10 @@ if [[ -z "$FAMILY" || -z "$TARGET_MODEL" ]]; then
   usage
   exit 2
 fi
+
+# Reserved flags captured above for forward compatibility with the mesh-llm
+# import; referenced here so their capture is deliberate.
+: "${DECODE_TIMEOUT}" "${EXTRA_ARGS[*]:-}"
 
 TARGET_MODEL_PATH="$(abs_path "$TARGET_MODEL")"
 if [[ ! -f "$TARGET_MODEL_PATH" ]]; then
@@ -727,4 +738,13 @@ FAILED_COUNT="$(jq -s '[.[] | select(.status == "fail")] | length' "$COMMANDS_JS
 if (( FAILED_COUNT > 0 )); then
   echo "failed lanes: $FAILED_COUNT"
   exit 1
+fi
+
+if (( REQUIRE_LANES != 0 )); then
+  mapfile -t SKIPPED_LANES < <(jq -sr '.[] | select(.status == "skipped" and .name != "build") | .name' "$COMMANDS_JSONL")
+  if (( ${#SKIPPED_LANES[@]} > 0 )); then
+    echo "promised certification lanes were skipped (missing required inputs):" >&2
+    printf '  %s\n' "${SKIPPED_LANES[@]}" >&2
+    exit 1
+  fi
 fi

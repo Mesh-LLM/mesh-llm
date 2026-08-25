@@ -86,13 +86,21 @@ resolve_model() {
 }
 
 run_certify() {
-  local family="$1" target="$2" model_id="$3" split_layer="$4" layer_end="$5"
+  local family="$1" target="$2" model_id="$3" split_layer="$4" layer_end="$5" draft="$6"
   local extra=()
   (( SKIP_BUILD == 1 )) && extra+=("--skip-build")
+  # Two distinct interior cut points so the chain lane (exactly two split
+  # indexes) always has valid inputs; distinct from each other and from 0.
+  local chain_a=$(( layer_end / 3 ))
+  local chain_b=$(( ( layer_end * 2 ) / 3 ))
+  if (( chain_b == chain_a || chain_a < 1 )); then
+    chain_a=1
+    chain_b=2
+  fi
   TOTAL=$((TOTAL + 1))
-  echo "==> family-certify: family=$family split=$split_layer model=$(basename "$target")"
+  echo "==> family-certify: family=$family split=$split_layer draft=$(basename "$draft") model=$(basename "$target")"
   if (( DRY_RUN == 1 )); then
-    echo "scripts/family-certify.sh --family '$family' --target-model '$target' --model-id '$model_id' --split-layer '$split_layer' --layer-end '$layer_end' ${extra[*]:-}"
+    echo "scripts/family-certify.sh --family '$family' --target-model '$target' --model-id '$model_id' --split-layer '$split_layer' --layer-end '$layer_end' --splits '$chain_a,$chain_b' --draft-model '$draft' --require-lanes ${extra[*]:-}"
     return 0
   fi
   if ! "$ROOT/scripts/family-certify.sh" \
@@ -101,6 +109,9 @@ run_certify() {
       --model-id "$model_id" \
       --split-layer "$split_layer" \
       --layer-end "$layer_end" \
+      --splits "$chain_a,$chain_b" \
+      --draft-model "$draft" \
+      --require-lanes \
       "${extra[@]}"; then
     FAILURES+=("$family@split=$split_layer")
   fi
@@ -110,7 +121,7 @@ run_manifest() {
   local manifest="$1"
   [[ -f "$manifest" ]] || { echo "missing manifest: $manifest" >&2; exit 1; }
 
-  while IFS='|' read -r family repo file selector sweep_period layer_end _notes; do
+  while IFS='|' read -r family repo file selector sweep_period layer_end _notes draft_repo draft_file; do
     [[ -z "$family" || "$family" == \#* ]] && continue
     if [[ -z "$family" || -z "$repo" || -z "$file" || -z "$sweep_period" || -z "$layer_end" ]]; then
       echo "malformed row in $manifest: $family|$repo|$file" >&2
@@ -131,9 +142,28 @@ run_manifest() {
     fi
     local model_id="$repo:$selector"
 
+    # Draft model for the speculative lane: per-row override via optional
+    # draft_repo|draft_file manifest columns; defaults to self-draft (the
+    # target GGUF is its own draft) so the lane always runs with declared
+    # inputs instead of silently skipping.
+    local draft="$target"
+    if [[ -n "$draft_repo" && -n "$draft_file" ]]; then
+      if (( DRY_RUN == 0 )); then
+        draft="$(resolve_model "$draft_repo" "$draft_file")"
+        if [[ -z "$draft" || ! -f "$draft" ]]; then
+          echo "failed to resolve draft $draft_repo/$draft_file from the HF cache or hub" >&2
+          FAILURES+=("$family(draft-missing)")
+          TOTAL=$((TOTAL + 1))
+          continue
+        fi
+      else
+        draft="<hf-cache>/$draft_repo/$draft_file"
+      fi
+    fi
+
     # Fixed mid-range split for the base parity + dtype lanes.
     local base_split=$(( layer_end / 2 ))
-    run_certify "$family" "$target" "$model_id" "$base_split" "$layer_end"
+    run_certify "$family" "$target" "$model_id" "$base_split" "$layer_end" "$draft"
 
     if [[ "$sweep_period" != "0" ]]; then
       # Boundary sweep: every cut offset mod the interleaving period, one
@@ -144,7 +174,7 @@ run_manifest() {
         cuts=0
         for (( cut = offset; cut < layer_end && cuts < SWEEP_MAX_CUTS; cut += sweep_period )); do
           (( cut == base_split )) && continue
-          run_certify "$family" "$target" "$model_id" "$cut" "$layer_end"
+          run_certify "$family" "$target" "$model_id" "$cut" "$layer_end" "$draft"
           cuts=$((cuts + 1))
         done
       done

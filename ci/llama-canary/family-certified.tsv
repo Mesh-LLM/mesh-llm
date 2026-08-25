@@ -13,7 +13,11 @@
 #   sweep_period   | interleave period for boundary sweeps; 0 = no sweep (dense/pure-MoE)
 #   layer_end      | final layer for staged correctness lanes
 #   notes
-# family|repo|file|selector|sweep_period|layer_end|notes
+#   draft_repo     | optional HF repo for the speculative draft model
+#   draft_file     | optional GGUF inside draft_repo; when both are empty the
+#                   | battery self-drafts (target GGUF is its own draft) so the
+#                   | speculative lane always runs
+# family|repo|file|selector|sweep_period|layer_end|notes|draft_repo|draft_file
 qwen3-dense|Qwen/Qwen3-0.6B-GGUF|Qwen3-0.6B-Q8_0.gguf|Q8_0|0|28|core prod dense baseline
 llama|bartowski/Llama-3.2-1B-Instruct-GGUF|Llama-3.2-1B-Instruct-Q4_K_M.gguf|Q4_K_M|0|16|prod dense (covers olmo2 arch, trimmed)
 glm47-flash|unsloth/GLM-4.7-Flash-GGUF|GLM-4.7-Flash-Q4_K_M.gguf|Q4_K_M|0|46|prod MLA path shared with deepseek2
