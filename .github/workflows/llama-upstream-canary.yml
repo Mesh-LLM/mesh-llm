@@ -50,8 +50,8 @@ jobs:
       # A persistent runner can retain a CMake cache from a different host
       # architecture. Build every canary in a run-unique directory, and feed
       # that exact native closure to all Rust, smoke, and battery commands.
-      LLAMA_BUILD_DIR: ${{ runner.temp }}/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}
-      LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}
+      LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}
+      LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}
       LLAMA_STAGE_BACKEND: metal
       # Models are never cached through GitHub Actions cache. The
       # family-certify runner ships a large pre-warmed HF cache exported as

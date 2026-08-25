@@ -28,11 +28,11 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("force_certify:", workflow)
         self.assertIn("FORCE_CERTIFY:", workflow)
         self.assertIn(
-            "LLAMA_BUILD_DIR: ${{ runner.temp }}/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}",
+            "LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}",
             workflow,
         )
         self.assertIn(
-            "LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}",
+            "LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}",
             workflow,
         )
         self.assertIn("LLAMA_STAGE_BACKEND: metal", workflow)
