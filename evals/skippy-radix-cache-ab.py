@@ -346,6 +346,33 @@ def json_events(path: Path, event_name: str) -> list[dict[str, Any]]:
     return events
 
 
+def wait_for_json_events(
+    path: Path,
+    event_name: str,
+    expected_count: int,
+    process: subprocess.Popen[str],
+    timeout_seconds: float = 30.0,
+) -> list[dict[str, Any]]:
+    """Wait until asynchronous server telemetry reaches a known boundary."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        events = json_events(path, event_name)
+        if len(events) >= expected_count:
+            return events
+        return_code = process.poll()
+        if return_code is not None:
+            raise RuntimeError(
+                f"server exited with code {return_code} while waiting for "
+                f"{event_name}: observed {len(events)}/{expected_count} events"
+            )
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"timed out waiting for {event_name}: "
+                f"observed {len(events)}/{expected_count} events"
+            )
+        time.sleep(0.01)
+
+
 def attributes(event: dict[str, Any]) -> dict[str, Any]:
     value = event.get("attributes")
     return value if isinstance(value, dict) else {}
@@ -479,6 +506,7 @@ def run_server_cell(
                     # their own branches and can otherwise turn the next level
                     # into a cache-capacity test instead of a matched A/B.
                     if cache_enabled:
+                        warmup_event_start = len(json_events(log_path, SUMMARY_EVENT))
                         warmup_requests, _ = harness.run_openai_concurrent_requests(
                             warmup_prompt, case.model_id, 1, 1, output_tokens, port, request_args
                         )
@@ -487,7 +515,15 @@ def run_server_cell(
                                 f"{cell_name} {scenario}/n{concurrency} warmup failed: "
                                 f"{warmup_requests[0]}"
                             )
-                    event_start = len(json_events(log_path, SUMMARY_EVENT))
+                        events = wait_for_json_events(
+                            log_path,
+                            SUMMARY_EVENT,
+                            warmup_event_start + 1,
+                            process,
+                        )
+                        event_start = len(events)
+                    else:
+                        event_start = len(json_events(log_path, SUMMARY_EVENT))
                     request_count = max(requests_per_level, concurrency)
                     if scenario == "divergent":
                         measured_prompts = [
@@ -528,8 +564,13 @@ def run_server_cell(
                         prompt_hash = hashlib.sha256(measured_prompt.encode()).hexdigest()
                         for request in measured:
                             request["prompt_sha256"] = prompt_hash
-                    log.flush()
-                    events = json_events(log_path, SUMMARY_EVENT)
+                    expected_summaries = sum("error" not in row for row in measured)
+                    events = wait_for_json_events(
+                        log_path,
+                        SUMMARY_EVENT,
+                        event_start + expected_summaries,
+                        process,
+                    )
                     measured_events = events[event_start:]
                     observations.append(
                         {

@@ -4,6 +4,8 @@ import importlib.util
 import json
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -77,6 +79,54 @@ def cell(
 
 
 class RadixCacheAbTest(unittest.TestCase):
+    def test_waits_for_delayed_summary_telemetry(self) -> None:
+        class Process:
+            @staticmethod
+            def poll() -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+            log.write_text("")
+
+            def emit() -> None:
+                time.sleep(0.02)
+                log.write_text(json.dumps({"event": BENCH.SUMMARY_EVENT}) + "\n")
+
+            writer = threading.Thread(target=emit)
+            writer.start()
+            events = BENCH.wait_for_json_events(
+                log,
+                BENCH.SUMMARY_EVENT,
+                1,
+                Process(),
+                timeout_seconds=1,
+            )
+            writer.join()
+
+        self.assertEqual(len(events), 1)
+
+    def test_fails_explicitly_when_summary_telemetry_never_arrives(self) -> None:
+        class Process:
+            @staticmethod
+            def poll() -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+            log.write_text("")
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "observed 0/1 events",
+            ):
+                BENCH.wait_for_json_events(
+                    log,
+                    BENCH.SUMMARY_EVENT,
+                    1,
+                    Process(),
+                    timeout_seconds=0.01,
+                )
+
     def test_stage_config_offloads_model_layers_explicitly(self) -> None:
         case = BENCH.ModelCase(
             key="test",
