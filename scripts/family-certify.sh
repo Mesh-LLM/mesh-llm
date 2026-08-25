@@ -165,8 +165,8 @@ while [[ $# -gt 0 ]]; do
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-correctness) SKIP_CORRECTNESS=1; shift ;;
     --skip-dtype) SKIP_DTYPE=1; shift ;;
-      --skip-state) SKIP_STATE=1; shift ;;
-      --require-lanes) REQUIRE_LANES=1; shift ;;
+    --skip-state) SKIP_STATE=1; shift ;;
+    --require-lanes) REQUIRE_LANES=1; shift ;;
     --corpus) CORPUS="$2"; shift 2 ;;
     --corpus-limit) CORPUS_LIMIT="$2"; shift 2 ;;
     --spec-window) SPEC_WINDOW="$2"; shift 2 ;;

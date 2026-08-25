@@ -109,7 +109,7 @@ run_battery() {
   # Runs the certification battery; prints the summary line and returns the
   # battery exit code. Log path is echoed for the caller.
   local log=".deps/llama-canary-repair-battery.log"
-  if scripts/skippy-family-battery.sh --skip-build >"$log" 2>&1; then
+  if scripts/skippy-family-battery.sh >"$log" 2>&1; then
     tail -n 2 "$log"
     return 0
   fi
@@ -152,7 +152,7 @@ battery output (tail):
 
 %s
 
-Re-run scripts/skippy-family-battery.sh --skip-build yourself to confirm your
+Re-run scripts/skippy-family-battery.sh yourself to confirm your
 fix, commit to %s, and push to the PR.' \
     "$UPSTREAM_SHA" "$turn" "$MAX_REPAIR_TURNS" "$BRANCH" "$(battery_summary "$BATTERY_LOG")" "$BRANCH")"
   echo "agent repair turn $turn finished; verifying queue applies..."

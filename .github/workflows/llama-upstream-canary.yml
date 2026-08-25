@@ -9,6 +9,7 @@ on:
       - "third_party/llama.cpp/patches/**"
       - "third_party/llama.cpp/upstream.txt"
       - "ci/llama-canary/**"
+      - "scripts/family-certify.sh"
       - "scripts/skippy-family-battery.sh"
       - "scripts/llama-canary-agent-repair.sh"
       - ".github/workflows/llama-upstream-canary.yml"
@@ -100,7 +101,7 @@ jobs:
 
       - name: Build stage runtime crates
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true'
-        run: cargo check -p skippy-ffi -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p llama-spec-bench
+        run: cargo build -p skippy-ffi -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p llama-spec-bench
 
       - name: Skippy smoke tests
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
@@ -183,7 +184,7 @@ jobs:
           scripts/llama-canary-agent-repair.sh "$new_sha"
 
       - name: Report patch-queue failure
-        if: steps.prepare.outcome == 'failure' && steps.agent_repair.outcome == 'failure'
+        if: failure() && steps.prepare.outcome == 'failure' && steps.agent_repair.outcome == 'failure'
         run: |
           {
             echo "## llama.cpp patch queue failed to apply"

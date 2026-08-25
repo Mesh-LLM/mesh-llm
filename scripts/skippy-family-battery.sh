@@ -9,9 +9,10 @@ set -euo pipefail
 # the family's interleaving period.
 #
 # Models are NEVER cached through GitHub Actions cache. The family-certify
-# runner ships a large pre-warmed HF cache; `hf download` (which honors
-# HF_HUB_CACHE / HF_HOME, falling back to the runner's HF_CACHE) is only a
-# cache-miss backstop.
+# runner ships a large pre-warmed, read-only HF cache. When HF_CACHE is set,
+# model resolution is forced offline so a cache miss fails without attempting
+# to mutate the shared NFS cache. Local runs without HF_CACHE may download into
+# their normal user cache.
 #
 # Usage:
 #   scripts/skippy-family-battery.sh [--manifest PATH] [--skip-build] [--dry-run]
@@ -30,7 +31,8 @@ usage: scripts/skippy-family-battery.sh [options]
 options:
   --manifest PATH           certification manifest;
                             default: ci/llama-canary/family-certified.tsv
-  --skip-build              pass --skip-build to family-certify.sh
+  --skip-build              skip the one-time certification binary build;
+                            required binaries must already exist
   --dry-run                 print the certification commands only
   -h, --help                show this help
 EOF
@@ -56,8 +58,9 @@ fi
 # pre-warmed Hugging Face cache. Normalize it into the variables `hf` and
 # the parity tooling already honor, so downloads only happen on misses.
 if [[ -n "${HF_CACHE:-}" ]]; then
-  export HF_HOME="${HF_HOME:-$HF_CACHE}"
-  export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_CACHE/hub}"
+  export HF_HOME="$HF_CACHE"
+  export HF_HUB_CACHE="$HF_CACHE/hub"
+  export HF_HUB_OFFLINE=1
 fi
 
 require_cmd() {
@@ -73,22 +76,50 @@ require_cmd jq
 FAILURES=()
 TOTAL=0
 
-# resolve_model REPO FILE -> prints local path, downloading on cache miss
+# resolve_model REPO FILE -> prints a local path. On the family-certify runner,
+# HF_HUB_OFFLINE=1 makes a missing pre-warmed artifact a hard, read-only miss.
+# Local runs without HF_CACHE retain the normal hf download behavior.
 resolve_model() {
   local repo="$1" file="$2"
-  local out
-  out="$(hf download "$repo" "$file" 2>/dev/null | sed -n 's/^path=//p' | tail -n 1)"
+  local out raw
+  if ! raw="$(hf download "$repo" "$file" 2>/dev/null)"; then
+    return 0
+  fi
+  out="$(printf '%s\n' "$raw" | sed -n 's/^path=//p' | tail -n 1)"
   if [[ -z "$out" ]]; then
     # newer hub-cli versions print the bare path
-    out="$(hf download "$repo" "$file" 2>/dev/null | tail -n 1)"
+    out="$(printf '%s\n' "$raw" | tail -n 1)"
   fi
   printf '%s\n' "$out"
 }
 
+build_certification_binaries() {
+  local bins=(skippy-correctness skippy-server llama-spec-bench)
+  local bin
+
+  if (( DRY_RUN == 1 )); then
+    if (( SKIP_BUILD == 0 )); then
+      echo "env LLAMA_STAGE_BUILD_DIR='<repo>/.deps/llama-build/build-stage-abi-static' cargo build -p skippy-correctness -p skippy-server -p llama-spec-bench"
+    fi
+    return 0
+  fi
+
+  if (( SKIP_BUILD == 0 )); then
+    env LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$ROOT/.deps/llama-build/build-stage-abi-static}" \
+      cargo build -p skippy-correctness -p skippy-server -p llama-spec-bench
+    return 0
+  fi
+
+  for bin in "${bins[@]}"; do
+    if [[ ! -x "$ROOT/target/debug/$bin" ]]; then
+      echo "--skip-build requires existing binary: $ROOT/target/debug/$bin" >&2
+      return 1
+    fi
+  done
+}
+
 run_certify() {
   local family="$1" target="$2" model_id="$3" split_layer="$4" layer_end="$5" draft="$6"
-  local extra=()
-  (( SKIP_BUILD == 1 )) && extra+=("--skip-build")
   # Two distinct interior cut points so the chain lane (exactly two split
   # indexes) always has valid inputs; distinct from each other and from 0.
   local chain_a=$(( layer_end / 3 ))
@@ -100,7 +131,7 @@ run_certify() {
   TOTAL=$((TOTAL + 1))
   echo "==> family-certify: family=$family split=$split_layer draft=$(basename "$draft") model=$(basename "$target")"
   if (( DRY_RUN == 1 )); then
-    echo "scripts/family-certify.sh --family '$family' --target-model '$target' --model-id '$model_id' --split-layer '$split_layer' --layer-end '$layer_end' --splits '$chain_a,$chain_b' --draft-model '$draft' --require-lanes ${extra[*]:-}"
+    echo "scripts/family-certify.sh --family '$family' --target-model '$target' --model-id '$model_id' --split-layer '$split_layer' --layer-end '$layer_end' --splits '$chain_a,$chain_b' --draft-model '$draft' --require-lanes --skip-build"
     return 0
   fi
   if ! "$ROOT/scripts/family-certify.sh" \
@@ -112,7 +143,7 @@ run_certify() {
       --splits "$chain_a,$chain_b" \
       --draft-model "$draft" \
       --require-lanes \
-      "${extra[@]}"; then
+      --skip-build; then
     FAILURES+=("$family@split=$split_layer")
   fi
 }
@@ -182,6 +213,7 @@ run_manifest() {
   done < <(grep -v '^[[:space:]]*#' "$manifest")
 }
 
+build_certification_binaries
 run_manifest "$MANIFEST"
 
 echo

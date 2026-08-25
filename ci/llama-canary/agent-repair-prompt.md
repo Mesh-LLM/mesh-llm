@@ -30,7 +30,8 @@ in those skills are hard requirements for this repair, not suggestions.
 3. **Build.** `scripts/build-llama.sh` then
    `cargo check -p skippy-ffi -p skippy-runtime -p skippy-server`.
 
-4. **Certify.** `scripts/skippy-family-battery.sh --skip-build`.
+4. **Certify.** `scripts/skippy-family-battery.sh`. The battery builds its
+   correctness binaries once, then reuses them for every family lane.
    All lanes must pass. Do not weaken a failing lane; if a model is genuinely
    broken by upstream, revert to fixing our patches or flag it in the PR body.
    The wrapper re-runs the battery itself after your turn; if lanes fail you
@@ -44,8 +45,9 @@ in those skills are hard requirements for this repair, not suggestions.
    <short-sha>` describing the conflicts hit and the resolution per patch.
 
 Notes:
-- Models come from the runner's pre-warmed HF cache (`HF_CACHE`); `hf download`
-  is only a miss backstop. Never add GitHub Actions model caching.
+- Models come from the runner's pre-warmed, read-only HF cache (`HF_CACHE`). A
+  missing model is a hard failure; never download into that cache or add GitHub
+  Actions model caching.
 - Do not modify files outside `third_party/llama.cpp/patches/` unless the
   Rust ABI mirrors in `crates/` genuinely need to track a patch ABI change
   (bump `PREPARE_SCHEMA`/ABI version together in that case).
