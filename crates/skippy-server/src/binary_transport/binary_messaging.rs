@@ -326,6 +326,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
             let kv = kv.clone();
             let telemetry = telemetry.clone();
             let warm_downstream = warm_downstream.clone();
+            let worker_shutdown = shutdown.clone();
             let prediction_returns = prediction_returns.clone();
             let prediction_return_sinks = prediction_return_sinks.clone();
             let worker_control = Arc::new(ConnectionWorkerControl::default());
@@ -363,6 +364,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         &config,
                         &warm_downstream,
                         downstream_connect_timeout_secs,
+                        &worker_shutdown,
                     )?;
                     if let Some(stream) = downstream.as_ref() {
                         task_control
@@ -409,6 +411,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         }
         Ok(())
     })();
+    shutdown.store(true, Ordering::SeqCst);
     finish_connection_workers(accept_result, connection_workers)
 }
 
@@ -446,9 +449,14 @@ mod shutdown_tests {
         let mut workers = ConnectionWorkers::default();
         workers.push(ConnectionWorker { control, task });
 
-        let started = std::time::Instant::now();
-        workers.shutdown().unwrap();
-        assert!(started.elapsed() < Duration::from_secs(1));
+        let (cleanup_tx, cleanup_rx) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let _ = cleanup_tx.send(workers.shutdown());
+        });
+        cleanup_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("active worker cleanup must complete within one second")
+            .unwrap();
         drop(client);
     }
 
