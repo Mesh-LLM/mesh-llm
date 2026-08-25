@@ -418,8 +418,11 @@ permission.
 ## Providers and variables
 
 GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
-`windows-2022`. Depot labels are selected only by `select-ci-runners`; no
-workflow accepts a raw provider label. Trusted main Linux requires
+`windows-2022`. Central policy also exposes the Xcode 27-capable `macos27`
+label as `runner_macos_apple` for the follow-on Apple-provider platform row;
+this prerequisite does not route an existing row to it. Depot labels are
+selected only by `select-ci-runners`; no workflow accepts a raw provider label.
+Trusted main Linux requires
 `DEPOT_RUNNERS_ENABLED=true`. An exact same-repository PR revision may use the
 time-bounded exception only when `DEPOT_PR_RUNNERS_ENABLED=true` and both
 `DEPOT_PR_APPROVED_REF` and `DEPOT_PR_APPROVED_SHA` match; it expires on

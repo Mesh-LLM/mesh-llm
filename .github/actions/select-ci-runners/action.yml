@@ -90,6 +90,9 @@ outputs:
   runner_macos:
     description: macOS runner label selected by the centralized provider policy.
     value: ${{ steps.select.outputs.runner_macos }}
+  runner_macos_apple:
+    description: Apple Foundation Models-capable macOS runner label selected by the centralized provider policy.
+    value: ${{ steps.select.outputs.runner_macos_apple }}
   runner_windows:
     description: Windows runner label selected by the centralized provider policy.
     value: ${{ steps.select.outputs.runner_windows }}
@@ -288,6 +291,7 @@ runs:
           runner_macos=macos-15
           runner_windows=windows-2022
         fi
+        runner_macos_apple=macos27
 
         {
           echo "depot_enabled=$depot_enabled"
@@ -303,5 +307,6 @@ runs:
           echo "runner_arm_8=$runner_arm_8"
           echo "runner_arm_16=$runner_arm_16"
           echo "runner_macos=$runner_macos"
+          echo "runner_macos_apple=$runner_macos_apple"
           echo "runner_windows=$runner_windows"
         } >> "$GITHUB_OUTPUT"
