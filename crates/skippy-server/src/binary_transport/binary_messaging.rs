@@ -424,6 +424,7 @@ mod shutdown_tests {
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
+            mpsc,
         },
         thread,
         time::Duration,
@@ -470,9 +471,17 @@ mod shutdown_tests {
         let mut workers = ConnectionWorkers::default();
         workers.push(ConnectionWorker { control, task });
 
-        let error = finish_connection_workers(Err(anyhow!("accept failed")), workers)
-            .expect_err("accept failure must be returned after worker cleanup");
+        let (cleanup_tx, cleanup_rx) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let result = finish_connection_workers(Err(anyhow!("accept failed")), workers);
+            let _ = cleanup_tx.send(result);
+        });
+
+        let result = cleanup_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("active worker cleanup must complete within one second");
         assert!(finished.load(Ordering::Acquire));
+        let error = result.expect_err("accept failure must be returned after worker cleanup");
         assert!(format!("{error:#}").contains("accept failed"));
         drop(client);
     }
