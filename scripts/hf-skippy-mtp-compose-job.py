@@ -39,6 +39,7 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 TARGET_SUBDIR = "UD-Q4_K_XL"
@@ -62,9 +63,28 @@ def ensure_build_tools() -> None:
         run("cargo", "install", "just", "--locked")
 
 
-def ensure_python_deps() -> None:
+def pip_install(*args: str) -> None:
+    """Install into the *running* interpreter.
+
+    `uv run` executes this script in an ephemeral venv whose `python3` may not
+    be the `pip` on PATH (and uv venvs ship without pip), so resolve every
+    install and invocation through sys.executable.
+    """
+    if shutil.which("uv") is not None:
+        run("uv", "pip", "install", "--python", sys.executable, *args)
+        return
+    run(sys.executable, "-m", "ensurepip", "--upgrade")
+    run(sys.executable, "-m", "pip", "install", *args)
+
+
+def ensure_python_deps(llama_root: Path | None = None) -> None:
     # torch is only needed for the converter; CPU wheel keeps the image small.
-    run("pip", "install", "--quiet", "torch", "--index-url", "https://download.pytorch.org/whl/cpu")
+    pip_install("torch", "--index-url", "https://download.pytorch.org/whl/cpu")
+    if llama_root is not None:
+        # The pinned converter also needs gguf/sentencepiece/etc. from its own
+        # requirements file; torch above already satisfies its torch entry.
+        reqs = llama_root / "requirements" / "requirements-convert_hf_to_gguf.txt"
+        pip_install("-r", str(reqs))
 
 
 def prepare_repos(args: argparse.Namespace) -> tuple[Path, Path]:
@@ -93,7 +113,7 @@ def convert_mtp(llama_root: Path, args: argparse.Namespace, work: Path) -> Path:
     out_dir = work / "mtp"
     out_dir.mkdir(parents=True, exist_ok=True)
     run(
-        "python3", str(llama_root / "convert_hf_to_gguf.py"),
+        sys.executable, str(llama_root / "convert_hf_to_gguf.py"),
         args.mtp_source,
         "--mtp",
         "--outtype", "bf16",
@@ -175,8 +195,8 @@ def main() -> None:
     os.environ.setdefault("HF_HOME", str(Path(args.work_dir) / "hf-home"))
     os.environ.setdefault("HF_XET_CACHE", "/tmp/hf-xet")
     ensure_build_tools()
-    ensure_python_deps()
     mesh_root, llama_root = prepare_repos(args)
+    ensure_python_deps(llama_root)
     binary = build_skippy_quantize(mesh_root)
     work = Path(args.work_dir)
     work.mkdir(parents=True, exist_ok=True)
