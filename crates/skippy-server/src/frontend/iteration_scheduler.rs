@@ -166,6 +166,8 @@ impl IterationScheduler {
             queue_capacity,
         );
         let iteration_interval = scheduler_config.iteration_interval;
+        let max_consecutive_prefill_iterations =
+            scheduler_config.max_consecutive_prefill_iterations;
         let kv_capacity_tokens = scheduler_config
             .memory_components
             .first()
@@ -186,6 +188,10 @@ impl IterationScheduler {
                 (
                     "skippy.scheduler.max_active_sequences".to_string(),
                     json!(scheduler_lane_count),
+                ),
+                (
+                    "skippy.scheduler.max_consecutive_prefill_iterations".to_string(),
+                    json!(max_consecutive_prefill_iterations),
                 ),
             ]),
         );
@@ -1208,6 +1214,9 @@ fn build_scheduler_config(
         } else {
             usize::MAX
         },
+        // Preserve phase-homogeneous native batches while bounding the time a
+        // newly admitted prefill can block already-live decode sequences.
+        max_consecutive_prefill_iterations: 1,
         // Native execution already provides a collection window: requests
         // submitted while one mixed batch is running are drained before the
         // next plan. An additional fixed sleep is pure N=1 latency and makes
@@ -1265,6 +1274,7 @@ mod tests {
         assert_eq!(config.max_waiting_sequences, 64);
         assert_eq!(config.max_tokens_per_iteration, 2048);
         assert_eq!(config.prefill_chunk_tokens, 128);
+        assert_eq!(config.max_consecutive_prefill_iterations, 1);
         assert_eq!(config.memory_components[0].capacity_bytes, 131_072);
         assert_eq!(config.memory_components[1].bytes_per_sequence, 1024);
         assert_eq!(config.memory_components[1].capacity_bytes, 65_536);

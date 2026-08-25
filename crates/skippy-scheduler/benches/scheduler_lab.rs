@@ -15,6 +15,7 @@ const BENCH_REPETITIONS: usize = 200;
 struct Scenario {
     name: String,
     requests: Vec<SimRequest>,
+    max_consecutive_prefill_iterations: usize,
 }
 
 fn main() {
@@ -24,12 +25,16 @@ fn main() {
         "scenario\trequests\tmakespan_ms\trequest_s\tp95_queue_ms\tp50_ttft_ms\tp95_ttft_ms\tp95_latency_ms\tp95_max_itl_ms\tmean_batch\tmean_token_occupancy_pct\tprefill_iterations\tdecode_iterations\tmixed_iterations\tbench_us_per_run"
     );
     for scenario in scenarios() {
-        let report = simulate(config.clone(), cost, scenario.requests.clone())
+        let scenario_config = SchedulerConfig {
+            max_consecutive_prefill_iterations: scenario.max_consecutive_prefill_iterations,
+            ..config.clone()
+        };
+        let report = simulate(scenario_config.clone(), cost, scenario.requests.clone())
             .unwrap_or_else(|error| panic!("{}: {error}", scenario.name));
         let started = Instant::now();
         for _ in 0..BENCH_REPETITIONS {
             black_box(
-                simulate(config.clone(), cost, scenario.requests.clone())
+                simulate(scenario_config.clone(), cost, scenario.requests.clone())
                     .unwrap_or_else(|error| panic!("{}: {error}", scenario.name)),
             );
         }
@@ -44,15 +49,23 @@ fn scenarios() -> Vec<Scenario> {
         scenarios.push(Scenario {
             name: format!("cold-burst-n{concurrency}"),
             requests: burst_requests(concurrency, 4_096, 32, 0),
+            max_consecutive_prefill_iterations: usize::MAX,
         });
         scenarios.push(Scenario {
             name: format!("warm-divergent-n{concurrency}"),
             requests: burst_requests(concurrency, 4_096, 32, 4_080),
+            max_consecutive_prefill_iterations: usize::MAX,
         });
     }
     scenarios.push(Scenario {
         name: "staggered-prefill".to_string(),
         requests: staggered_prefill_requests(),
+        max_consecutive_prefill_iterations: usize::MAX,
+    });
+    scenarios.push(Scenario {
+        name: "staggered-prefill-bounded".to_string(),
+        requests: staggered_prefill_requests(),
+        max_consecutive_prefill_iterations: 1,
     });
     scenarios
 }

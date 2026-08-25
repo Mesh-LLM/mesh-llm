@@ -29,6 +29,7 @@ pub struct Scheduler {
     active: BTreeMap<String, Sequence>,
     component_used_bytes: Vec<u64>,
     metrics: SchedulerMetrics,
+    consecutive_prefill_iterations: usize,
 }
 
 impl Scheduler {
@@ -40,6 +41,7 @@ impl Scheduler {
             waiting: VecDeque::new(),
             active: BTreeMap::new(),
             metrics: SchedulerMetrics::default(),
+            consecutive_prefill_iterations: 0,
         }
     }
 
@@ -81,11 +83,21 @@ impl Scheduler {
         // but combining a long prefill with live decode rows changes dense
         // model outputs. Give chunked prefill/recompute one iteration, then
         // resume decode for all active sequences on the next iteration.
-        let run_prefill_phase = ids.iter().any(|id| {
+        let has_prefill = ids.iter().any(|id| {
             self.active
                 .get(id)
                 .is_some_and(|sequence| sequence.prefill_cursor < sequence.recompute_tokens().len())
         });
+        let has_live_decode = ids.iter().any(|id| {
+            self.active.get(id).is_some_and(|sequence| {
+                sequence.prefill_cursor >= sequence.recompute_tokens().len()
+                    && sequence.pending_decode_token().is_some()
+            })
+        });
+        let run_prefill_phase = has_prefill
+            && (!has_live_decode
+                || self.consecutive_prefill_iterations
+                    < self.config.max_consecutive_prefill_iterations);
 
         for id in ids {
             if budget == 0 {
@@ -96,6 +108,9 @@ impl Scheduler {
             };
             let replay = sequence.recompute_tokens();
             if sequence.prefill_cursor < replay.len() {
+                if !run_prefill_phase {
+                    continue;
+                }
                 if prefill_sequences >= self.config.max_prefill_sequences_per_iteration {
                     continue;
                 }
@@ -147,6 +162,24 @@ impl Scheduler {
                 plan.token_count += 1;
                 budget -= 1;
             }
+        }
+
+        if plan
+            .work
+            .iter()
+            .any(|work| work.phase != IterationPhase::Decode)
+        {
+            self.consecutive_prefill_iterations = if has_live_decode {
+                self.consecutive_prefill_iterations.saturating_add(1)
+            } else {
+                0
+            };
+        } else if plan
+            .work
+            .iter()
+            .any(|work| work.phase == IterationPhase::Decode)
+        {
+            self.consecutive_prefill_iterations = 0;
         }
 
         plan
@@ -460,6 +493,37 @@ mod tests {
                 .iter()
                 .all(|work| work.sequence_id != "decode" || work.phase != IterationPhase::Recompute)
         );
+    }
+
+    #[test]
+    fn bounded_prefill_iterations_allow_live_decode_progress() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_tokens_per_iteration: 8,
+            prefill_chunk_tokens: 4,
+            max_consecutive_prefill_iterations: 1,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("decode", 2, 4)).unwrap();
+        let initial = scheduler.plan_iteration();
+        scheduler.complete_iteration(&initial, &[42]);
+        scheduler.submit(sequence("prefill", 8, 4)).unwrap();
+
+        let prefill = scheduler.plan_iteration();
+        assert_eq!(prefill.work.len(), 1);
+        assert_eq!(prefill.work[0].sequence_id, "prefill");
+        assert_eq!(prefill.work[0].phase, IterationPhase::Prefill);
+        scheduler.complete_iteration(&prefill, &[-1]);
+
+        let decode = scheduler.plan_iteration();
+        assert_eq!(decode.work.len(), 1);
+        assert_eq!(decode.work[0].sequence_id, "decode");
+        assert_eq!(decode.work[0].phase, IterationPhase::Decode);
+        scheduler.complete_iteration(&decode, &[43]);
+
+        let resumed_prefill = scheduler.plan_iteration();
+        assert_eq!(resumed_prefill.work.len(), 1);
+        assert_eq!(resumed_prefill.work[0].sequence_id, "prefill");
+        assert_eq!(resumed_prefill.work[0].phase, IterationPhase::Prefill);
     }
 
     #[test]

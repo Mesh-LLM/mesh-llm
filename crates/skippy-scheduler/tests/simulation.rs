@@ -49,6 +49,34 @@ fn staggered_prefill_exposes_decode_head_of_line_blocking() {
 }
 
 #[test]
+fn bounded_prefill_iterations_reduce_decode_head_of_line_blocking() {
+    let unbounded = simulate(
+        SchedulerConfig::default(),
+        RuntimeCostModel::default(),
+        staggered_prefill_requests(),
+    )
+    .unwrap();
+    let bounded = simulate(
+        SchedulerConfig {
+            max_consecutive_prefill_iterations: 1,
+            ..SchedulerConfig::default()
+        },
+        RuntimeCostModel::default(),
+        staggered_prefill_requests(),
+    )
+    .unwrap();
+
+    assert_eq!(bounded.mixed_iterations, 0);
+    assert!(
+        bounded
+            .request("decoder")
+            .max_inter_token_gap_us
+            .saturating_mul(4)
+            < unbounded.request("decoder").max_inter_token_gap_us
+    );
+}
+
+#[test]
 fn concurrent_burst_uses_batches_and_completes_every_request() {
     let report = simulate(
         SchedulerConfig::default(),

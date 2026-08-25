@@ -40,6 +40,9 @@ pub struct SchedulerConfig {
     pub max_tokens_per_iteration: usize,
     pub prefill_chunk_tokens: usize,
     pub max_prefill_sequences_per_iteration: usize,
+    /// Maximum prefill/recompute iterations allowed while decode work is live.
+    /// `usize::MAX` preserves unbounded prefill-first scheduling.
+    pub max_consecutive_prefill_iterations: usize,
     pub iteration_interval: Duration,
     pub memory_components: Vec<MemoryComponent>,
 }
@@ -54,6 +57,7 @@ impl SchedulerConfig {
             .prefill_chunk_tokens
             .clamp(1, self.max_tokens_per_iteration);
         self.max_prefill_sequences_per_iteration = self.max_prefill_sequences_per_iteration.max(1);
+        self.max_consecutive_prefill_iterations = self.max_consecutive_prefill_iterations.max(1);
         self
     }
 }
@@ -67,6 +71,7 @@ impl Default for SchedulerConfig {
             max_tokens_per_iteration: 2048,
             prefill_chunk_tokens: 256,
             max_prefill_sequences_per_iteration: usize::MAX,
+            max_consecutive_prefill_iterations: usize::MAX,
             iteration_interval: Duration::from_millis(2),
             memory_components: Vec::new(),
         }
