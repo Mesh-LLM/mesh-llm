@@ -35,7 +35,7 @@ use skippy_runtime::{
 
 use super::socket::{
     connect_downstream_socket, connect_downstream_socket_cancellable, downstream_source_ip,
-    resolve_downstream_endpoint,
+    resolve_downstream_endpoint, resolve_downstream_endpoint_cancellable,
 };
 
 const CLIENT_READY_HELLO_ENV: &str = "SKIPPY_STAGE_CLIENT_READY_HELLO";
@@ -541,9 +541,12 @@ fn connect_binary_downstream_inner(
         .endpoint
         .strip_prefix("tcp://")
         .unwrap_or(&peer.endpoint);
-    let downstream_addr = resolve_downstream_endpoint(endpoint)?;
     let source_ip = downstream_source_ip(config)?;
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
+    let downstream_addr = match shutdown {
+        Some(shutdown) => resolve_downstream_endpoint_cancellable(endpoint, deadline, shutdown)?,
+        None => resolve_downstream_endpoint(endpoint)?,
+    };
     let mut last_error = None;
     loop {
         if let Some(shutdown) = shutdown {

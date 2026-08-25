@@ -4267,15 +4267,15 @@
   ],
   "crates/skippy-server/src/binary_transport/socket.rs": [
     {
-      "line": 77,
+      "line": 135,
       "macro_name": "eprintln!"
     },
     {
-      "line": 131,
+      "line": 189,
       "macro_name": "eprintln!"
     },
     {
-      "line": 169,
+      "line": 227,
       "macro_name": "eprintln!"
     }
   ],
