@@ -1519,6 +1519,19 @@ mod tests {
             }
             .run();
         });
+        let (worker_blocked, worker_blocked_rx) = std_mpsc::sync_channel(0);
+        let (release_worker, release_worker_rx) = std_mpsc::sync_channel(0);
+        commands
+            .send(SchedulerCommand::ExecuteRuntime(RuntimeOperation {
+                label: "panic-test-gate",
+                run: Box::new(move |_| {
+                    worker_blocked.send(()).unwrap();
+                    release_worker_rx.recv().unwrap();
+                }),
+            }))
+            .unwrap();
+        worker_blocked_rx.recv().unwrap();
+
         let (reply, events) = std_mpsc::channel();
         commands
             .send(SchedulerCommand::Submit(ScheduledRequest {
@@ -1536,6 +1549,7 @@ mod tests {
                 run: Box::new(|_| panic!("injected scheduler worker panic")),
             }))
             .unwrap();
+        release_worker.send(()).unwrap();
 
         let SchedulerEvent::Error(error) = events.recv().unwrap() else {
             panic!("expected contained worker panic to fail the request");
