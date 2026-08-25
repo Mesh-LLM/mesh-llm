@@ -40,6 +40,7 @@ AUDITED_FILES = (
     "crates/mesh-llm-host-runtime/src/models/artifact_transfer.rs",
     "crates/mesh-llm-host-runtime/src/models/delete_tests.rs",
     "crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs",
+    "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs",
     "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/package_download.rs",
     "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/cache_management.rs",
     "crates/model-hf/src/store/local.rs",
@@ -79,6 +80,7 @@ KNOWN_UNAUDITED_MUTATION_COUNTS = {
 DEFERRED_FILES = {
     "crates/skippy-runtime/src/logging.rs",
     "crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs",
+    "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs",
     "crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",
 }
 

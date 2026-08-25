@@ -32,6 +32,7 @@ pub(crate) fn configure_metal_pipeline_cache(model_id: &str) {
     // initializes the Metal backend, and before concurrent runtime work can
     // access the process environment. The load entrypoints enforce this by
     // calling here at the top of model load.
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(GGML_METAL_PIPELINE_CACHE_DIR, dir) };
 }
 

@@ -132,10 +132,7 @@ jobs:
         timeout-minutes: 45
         env:
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
-        run: |
-          set -euo pipefail
-          export MODEL_DIR="${HF_CACHE:?HF_CACHE not exported}/skippy-ci-smoke-models"
-          scripts/skippy-ci-smoke.sh
+        run: scripts/skippy-ci-smoke.sh
 
       - name: Supported-families certification battery (parity gate)
         id: battery

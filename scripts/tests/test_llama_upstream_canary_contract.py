@@ -10,6 +10,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "llama-upstream-canary.yml"
 BATTERY = ROOT / "scripts" / "skippy-family-battery.sh"
+SMOKE = ROOT / "scripts" / "skippy-ci-smoke.sh"
+FAMILY_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.tsv"
 
 
 def _step_block(workflow: str, name: str) -> str:
@@ -51,6 +53,31 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         condition = _step_block(workflow, "Report patch-queue failure")
         self.assertIn("failure()", condition)
         self.assertIn("steps.agent_repair.outcome == 'failure'", condition)
+
+    def test_smoke_uses_read_only_prewarmed_family_cache(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        smoke_step = _step_block(workflow, "Skippy smoke tests")
+        self.assertNotIn("MODEL_DIR", smoke_step)
+
+        smoke = SMOKE.read_text(encoding="utf-8")
+        self.assertIn('DENSE_MODEL_REPO="${DENSE_MODEL_REPO:-Qwen/Qwen3-0.6B-GGUF}"', smoke)
+        self.assertIn(
+            'RECURRENT_MODEL_REPO="${RECURRENT_MODEL_REPO:-tiiuae/Falcon-H1-1.5B-Instruct-GGUF}"',
+            smoke,
+        )
+        self.assertIn('HF_HUB_CACHE="$HF_CACHE/hub"', smoke)
+        self.assertIn("HF_HUB_OFFLINE=1", smoke)
+        self.assertIn('hf download "$repo" "$file"', smoke)
+
+        manifest = FAMILY_MANIFEST.read_text(encoding="utf-8")
+        self.assertIn(
+            "qwen3-dense|Qwen/Qwen3-0.6B-GGUF|Qwen3-0.6B-Q8_0.gguf|", manifest
+        )
+        self.assertIn(
+            "falcon-h1|tiiuae/Falcon-H1-1.5B-Instruct-GGUF|"
+            "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf|",
+            manifest,
+        )
 
 
 class SkippyFamilyBatteryTests(unittest.TestCase):
