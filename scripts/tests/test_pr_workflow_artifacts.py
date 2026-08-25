@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 PLATFORM = WORKFLOWS / "ci-platform-checks-slice.yml"
 NON_VALIDATION_PR_WORKFLOWS = {"pr_auto_assign.yml", "pr_cleanup.yml"}
-OPT_IN_PR_VALIDATION_WORKFLOWS = {"skippy-radix-cache-benchmark.yml"}
 
 
 def workflow_triggers(path: Path) -> set[str]:
@@ -91,12 +90,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             if {"pull_request", "pull_request_target"} & workflow_triggers(path)
         }
         self.assertTrue(NON_VALIDATION_PR_WORKFLOWS <= pr_attached)
-        self.assertTrue(OPT_IN_PR_VALIDATION_WORKFLOWS <= pr_attached)
-        actual = (
-            pr_attached
-            - NON_VALIDATION_PR_WORKFLOWS
-            - OPT_IN_PR_VALIDATION_WORKFLOWS
-        )
+        actual = pr_attached - NON_VALIDATION_PR_WORKFLOWS
         self.assertEqual(set(expected), actual)
         orchestrator = self.workflow("ci-orchestrator.yml")
         self.assertNotIn("pull_request:", orchestrator)
@@ -115,22 +109,6 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             )
             self.assertNotIn("paths:", workflow)
             self.assertNotIn("createWorkflowDispatch", workflow)
-
-    def test_opt_in_radix_benchmark_is_same_repo_and_label_gated(self):
-        workflow = self.workflow("skippy-radix-cache-benchmark.yml")
-        self.assertIn("pull_request:", workflow)
-        self.assertIn(
-            "github.event.pull_request.head.repo.full_name == github.repository",
-            workflow,
-        )
-        self.assertIn(
-            "contains(github.event.pull_request.labels.*.name, 'radix-cache-benchmark')",
-            workflow,
-        )
-        self.assertIn('CMAKE_BUILD_PARALLEL_LEVEL: "4"', workflow)
-        self.assertIn("LLAMA_STAGE_CUDA_ARCHITECTURES: native", workflow)
-        self.assertNotIn("just with-lld env", workflow)
-        self.assertIn("if-no-files-found: warn", workflow)
 
     def test_main_validation_has_exactly_five_focused_entrypoints(self):
         expected = {
