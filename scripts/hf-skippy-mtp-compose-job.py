@@ -52,9 +52,9 @@ def run(*command: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
 
 def ensure_build_tools() -> None:
     required = ("git", "curl", "cmake", "c++")
-    if any(shutil.which(tool) is None for tool in required):
+    if any(shutil.which(tool) is None for tool in required) or shutil.which("ld.lld") is None:
         run("apt-get", "update")
-        run("apt-get", "install", "-y", "build-essential", "cmake", "curl", "git", "pkg-config")
+        run("apt-get", "install", "-y", "build-essential", "cmake", "curl", "git", "pkg-config", "lld")
     if shutil.which("cargo") is None:
         run("sh", "-c", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y")
         os.environ["PATH"] = f"{Path.home() / '.cargo' / 'bin'}:{os.environ['PATH']}"
