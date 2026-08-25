@@ -33,6 +33,9 @@ in those skills are hard requirements for this repair, not suggestions.
 4. **Certify.** `scripts/skippy-family-battery.sh --skip-build`.
    All lanes must pass. Do not weaken a failing lane; if a model is genuinely
    broken by upstream, revert to fixing our patches or flag it in the PR body.
+   The wrapper re-runs the battery itself after your turn; if lanes fail you
+   will get the failure output in a follow-up repair turn — the loop only
+   ends when the wrapper's own battery run passes.
 
 5. **Commit & PR.** Work on branch `llama-canary/patch-queue-fix`. Commit the
    patch-queue changes with a `fix(llama): rebase patch queue onto upstream
