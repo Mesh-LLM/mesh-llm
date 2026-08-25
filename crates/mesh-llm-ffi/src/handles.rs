@@ -8,6 +8,8 @@ use mesh_llm_sdk::node::MeshNode;
 
 #[cfg(feature = "embedded-runtime")]
 use mesh_llm_sdk::embedded_runtime::EmbeddedServingController;
+#[cfg(feature = "embedded-runtime")]
+use mesh_llm_sdk::provider_host::ProviderHost;
 
 #[derive(uniffi::Object)]
 pub struct MeshClientHandle {
@@ -25,4 +27,11 @@ pub struct MeshNodeHandle {
 pub struct ConsoleHandle {
     pub(crate) inner: Mutex<Option<mesh_llm_sdk::console::ConsoleServerHandle>>,
     pub(crate) url: String,
+}
+
+#[derive(uniffi::Object)]
+pub struct ProviderHostHandle {
+    #[cfg(feature = "embedded-runtime")]
+    pub(crate) host: tokio::sync::Mutex<Option<ProviderHost>>,
+    pub(crate) api_base_url: String,
 }

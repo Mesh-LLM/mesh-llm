@@ -38,6 +38,9 @@
     "x64"
   ],
   "license": "MIT OR Apache-2.0",
+  "optionalDependencies": {
+    "@mesh-llm/apple-runtime-darwin-arm64": "0.72.1"
+  },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/",

@@ -18,6 +18,15 @@ pub struct ConsoleOptionsNative {
 }
 
 #[derive(uniffi::Record)]
+pub struct ProviderRuntimeOptionsNative {
+    pub bundle_roots: Vec<String>,
+    pub release_manifest: Option<String>,
+    pub cache_dir: Option<String>,
+    pub allow_download: bool,
+    pub startup_timeout_ms: u64,
+}
+
+#[derive(uniffi::Record)]
 pub struct PublicMeshQuery {
     pub model: Option<String>,
     pub min_vram_gb: Option<f64>,

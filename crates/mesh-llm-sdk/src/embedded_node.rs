@@ -6,7 +6,7 @@ pub use mesh_llm_embedded_runtime::{
     EmbeddedMeshAdmissionConfig, EmbeddedMeshDiscoveryMode, EmbeddedMeshHttpConfig,
     EmbeddedMeshLogFormat, EmbeddedMeshNetworkConfig, EmbeddedMeshNodeConfig, EmbeddedMeshNodeMode,
     EmbeddedMeshRequirementsConfig, EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig,
-    EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
+    EmbeddedProviderRuntimeConfig, EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
 };
 
 pub type MeshNodeStatus = mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus;
@@ -305,6 +305,35 @@ impl MeshNodeBuilder {
         self
     }
 
+    pub fn provider_runtime_root(mut self, path: impl Into<PathBuf>) -> Self {
+        self.inner = self.inner.provider_runtime_root(path);
+        self
+    }
+
+    pub fn provider_runtime_roots<I, P>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        self.inner = self.inner.provider_runtime_roots(paths);
+        self
+    }
+
+    pub fn provider_runtime_release_manifest(mut self, path: impl Into<PathBuf>) -> Self {
+        self.inner = self.inner.provider_runtime_release_manifest(path);
+        self
+    }
+
+    pub fn provider_runtime_cache_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.inner = self.inner.provider_runtime_cache_dir(path);
+        self
+    }
+
+    pub fn allow_provider_runtime_downloads(mut self, allowed: bool) -> Self {
+        self.inner = self.inner.allow_provider_runtime_downloads(allowed);
+        self
+    }
+
     pub fn log_format(mut self, format: EmbeddedMeshLogFormat) -> Self {
         self.inner = self.inner.log_format(format);
         self
@@ -414,6 +443,7 @@ mod tests {
             .serve()
             .model("unsloth/Qwen3-0.6B-GGUF:Q4_K_M")
             .auto_join_public_mesh()
+            .provider_runtime_root("/app/Resources/provider-runtimes/apple")
             .api_port(19447)
             .console_port(13141)
             .build();
@@ -430,6 +460,10 @@ mod tests {
         );
         assert_eq!(config.http.api_port, 19447);
         assert_eq!(config.http.console_port, 13141);
+        assert_eq!(
+            config.provider_runtimes.bundle_roots,
+            vec![PathBuf::from("/app/Resources/provider-runtimes/apple")]
+        );
     }
 
     #[test]

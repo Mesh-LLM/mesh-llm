@@ -140,9 +140,13 @@ impl Drop for EmbeddedServeHandle {
 pub async fn start_embedded_node(
     mut config: EmbeddedMeshNodeConfig,
 ) -> Result<EmbeddedServeHandle> {
-    embedded_startup::prepare_embedded_native_runtime(&config.mode)?;
+    embedded_startup::prepare_embedded_native_runtime(
+        &config.mode,
+        !config.serving.models.is_empty(),
+    )?;
     let isolated_config = prepare_isolated_config(&mut config)?;
     embedded_logging::validate_embedded_config(config.storage.config_path.as_deref())?;
+    embedded_logging::initialize_embedded_logging(config.storage.config_path.as_deref()).await?;
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
     let runtime_options = embedded_runtime_options(&config, Some(control_rx));
     let api_base_url = format!("http://127.0.0.1:{}/v1", config.http.api_port);
@@ -261,6 +265,13 @@ fn embedded_runtime_options(
         config_path: config.storage.config_path.clone(),
         log_format: config.log_format.into(),
         headless: !config.http.console_ui,
+        provider_runtimes: crate::runtime::ProviderRuntimeDiscoveryOptions {
+            bundle_roots: config.provider_runtimes.bundle_roots.clone(),
+            release_manifest: config.provider_runtimes.release_manifest.clone(),
+            cache_dir: config.provider_runtimes.cache_dir.clone(),
+            allow_download: config.provider_runtimes.allow_download,
+            inherit_environment: false,
+        },
         control_rx,
     }
 }
@@ -810,6 +821,10 @@ mod tests {
             .trust_owner("owner-b")
             .min_node_version("0.65.0")
             .signed_join_tokens(true)
+            .provider_runtime_root("/app/Resources/provider-runtimes/apple")
+            .provider_runtime_release_manifest("/app/Resources/provider-runtimes.json")
+            .provider_runtime_cache_dir("/tmp/mesh-provider-cache")
+            .allow_provider_runtime_downloads(true)
             .build();
         let options = embedded_runtime_options(&config, None);
 
@@ -823,6 +838,20 @@ mod tests {
         assert_embedded_runtime_admission_options(&options);
         assert_eq!(options.log_format, mesh_llm_events::LogFormat::Json);
         assert!(options.headless);
+        assert_eq!(
+            options.provider_runtimes.bundle_roots,
+            vec![PathBuf::from("/app/Resources/provider-runtimes/apple")]
+        );
+        assert_eq!(
+            options.provider_runtimes.release_manifest.as_deref(),
+            Some(Path::new("/app/Resources/provider-runtimes.json"))
+        );
+        assert_eq!(
+            options.provider_runtimes.cache_dir.as_deref(),
+            Some(Path::new("/tmp/mesh-provider-cache"))
+        );
+        assert!(options.provider_runtimes.allow_download);
+        assert!(!options.provider_runtimes.inherit_environment);
     }
 
     fn assert_embedded_runtime_network_options(options: &crate::runtime::EmbeddedRuntimeOptions) {

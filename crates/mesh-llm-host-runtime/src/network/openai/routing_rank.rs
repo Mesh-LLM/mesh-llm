@@ -78,7 +78,15 @@ struct RankedTarget<T> {
     candidate: T,
     context_length: Option<u32>,
     throughput: Option<TargetThroughputRank>,
+    load: Option<mesh_llm_types::mesh::ModelRuntimeLoad>,
 }
+
+type ProviderRankCandidate<T> = (
+    T,
+    Option<u32>,
+    Option<TargetThroughputRank>,
+    Option<mesh_llm_types::mesh::ModelRuntimeLoad>,
+);
 
 const LOCAL_THROUGHPUT_PRECEDENCE_SAMPLES: u64 = 3;
 const TARGET_THROUGHPUT_MAX_SCORE_SAMPLES: u64 = 32;
@@ -103,12 +111,25 @@ fn target_throughput_rank_key(throughput: Option<TargetThroughputRank>) -> (bool
 
 fn sort_ranked_targets<T>(targets: &mut [RankedTarget<T>]) {
     targets.sort_by(|a, b| {
-        target_throughput_rank_key(b.throughput)
-            .cmp(&target_throughput_rank_key(a.throughput))
+        target_load_rank_key(a.load)
+            .cmp(&target_load_rank_key(b.load))
+            .then_with(|| {
+                target_throughput_rank_key(b.throughput)
+                    .cmp(&target_throughput_rank_key(a.throughput))
+            })
             .then_with(|| a.index.cmp(&b.index))
     });
 }
 
+fn target_load_rank_key(load: Option<mesh_llm_types::mesh::ModelRuntimeLoad>) -> (u8, u32, u32) {
+    match load {
+        Some(load) if !load.saturated() => (0, load.queued_requests, load.active_requests),
+        None => (1, 0, 0),
+        Some(load) => (2, load.queued_requests, load.active_requests),
+    }
+}
+
+#[cfg(test)]
 pub(super) fn reorder_candidates_by_context_and_throughput<T: Clone>(
     candidates: &[(T, Option<u32>, Option<TargetThroughputRank>)],
     required_tokens: Option<u32>,
@@ -122,6 +143,7 @@ pub(super) fn reorder_candidates_by_context_and_throughput<T: Clone>(
                 candidate: candidate.clone(),
                 context_length: *context_length,
                 throughput: *throughput,
+                load: None,
             },
         )
         .collect::<Vec<_>>();
@@ -146,6 +168,54 @@ pub(super) fn reorder_candidates_by_context_and_throughput<T: Clone>(
         return Vec::new();
     }
 
+    sort_ranked_targets(&mut adequate);
+    sort_ranked_targets(&mut unknown);
+    adequate
+        .into_iter()
+        .chain(unknown)
+        .map(|ranked| ranked.candidate)
+        .collect()
+}
+
+fn reorder_candidates_by_context_load_and_throughput<T: Clone>(
+    candidates: &[ProviderRankCandidate<T>],
+    required_tokens: Option<u32>,
+) -> Vec<T> {
+    let ranked = candidates
+        .iter()
+        .enumerate()
+        .map(
+            |(index, (candidate, context_length, throughput, load))| RankedTarget {
+                index,
+                candidate: candidate.clone(),
+                context_length: *context_length,
+                throughput: *throughput,
+                load: *load,
+            },
+        )
+        .collect::<Vec<_>>();
+    reorder_ranked_candidates(ranked, required_tokens)
+}
+
+fn reorder_ranked_candidates<T: Clone>(
+    ranked: Vec<RankedTarget<T>>,
+    required_tokens: Option<u32>,
+) -> Vec<T> {
+    let Some(required_tokens) = required_tokens else {
+        let mut ranked = ranked;
+        sort_ranked_targets(&mut ranked);
+        return ranked.into_iter().map(|ranked| ranked.candidate).collect();
+    };
+
+    let mut adequate = Vec::new();
+    let mut unknown = Vec::new();
+    for ranked in ranked {
+        match ranked.context_length {
+            Some(value) if value >= required_tokens => adequate.push(ranked),
+            Some(_) => {}
+            None => unknown.push(ranked),
+        }
+    }
     sort_ranked_targets(&mut adequate);
     sort_ranked_targets(&mut unknown);
     adequate
@@ -215,9 +285,10 @@ pub(super) async fn order_remote_hosts_by_context(
             *host,
             node.peer_model_context_length(*host, model).await,
             remote_target_throughput_rank(node, model, *host).await,
+            node.peer_model_runtime_load(*host, model).await,
         ));
     }
-    reorder_candidates_by_context_and_throughput(&candidates, required_tokens)
+    reorder_candidates_by_context_load_and_throughput(&candidates, required_tokens)
 }
 
 pub(super) async fn order_targets_by_context(
@@ -241,9 +312,36 @@ pub(super) async fn order_targets_by_context(
             }
             _ => local_target_throughput_rank(node, model, target),
         };
-        candidates.push((target.clone(), context_length, throughput));
+        let load = match target {
+            election::InferenceTarget::Local(_) => node.local_model_runtime_load(model).await,
+            election::InferenceTarget::Remote(peer_id) => {
+                node.peer_model_runtime_load(*peer_id, model).await
+            }
+            election::InferenceTarget::None => None,
+        };
+        candidates.push((target.clone(), context_length, throughput, load));
     }
-    reorder_candidates_by_context_and_throughput(&candidates, required_tokens)
+    reorder_candidates_by_context_load_and_throughput(&candidates, required_tokens)
+}
+
+pub(super) async fn preferred_provider_target(
+    node: &mesh::Node,
+    model: &str,
+    ordered_candidates: &[election::InferenceTarget],
+) -> Option<election::InferenceTarget> {
+    for candidate in ordered_candidates {
+        let load = match candidate {
+            election::InferenceTarget::Local(_) => node.local_model_runtime_load(model).await,
+            election::InferenceTarget::Remote(peer_id) => {
+                node.peer_model_runtime_load(*peer_id, model).await
+            }
+            election::InferenceTarget::None => None,
+        };
+        if load.is_some() {
+            return ordered_candidates.first().cloned();
+        }
+    }
+    None
 }
 
 pub(super) fn move_target_first<T: PartialEq>(targets: &mut [T], target: &T) -> bool {
@@ -564,6 +662,26 @@ mod tests {
         );
 
         assert_eq!(ordered, vec![2, 1]);
+    }
+
+    #[test]
+    fn provider_load_prefers_idle_then_unknown_then_saturated() {
+        let load = |active, queued| mesh_llm_types::mesh::ModelRuntimeLoad {
+            max_concurrent_requests: 1,
+            active_requests: active,
+            queued_requests: queued,
+        };
+        let ordered = reorder_candidates_by_context_load_and_throughput(
+            &[
+                (1u8, Some(4096), None, Some(load(1, 2))),
+                (2u8, Some(4096), None, None),
+                (3u8, Some(4096), None, Some(load(0, 0))),
+                (4u8, Some(4096), None, Some(load(1, 0))),
+            ],
+            Some(2048),
+        );
+
+        assert_eq!(ordered, vec![3, 2, 4, 1]);
     }
 
     #[test]

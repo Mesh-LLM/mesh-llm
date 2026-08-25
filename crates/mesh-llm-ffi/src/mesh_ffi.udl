@@ -21,6 +21,9 @@ namespace mesh_ffi {
     MeshNodeHandle create_auto_node(string owner_keypair_bytes_hex, PublicMeshQuery query);
 
     [Throws=FfiError]
+    ProviderHostHandle start_provider_host(ProviderRuntimeOptionsNative options);
+
+    [Throws=FfiError]
     sequence<PublicMesh> discover_public_meshes(PublicMeshQuery query);
 
     string generate_owner_keypair_hex();
@@ -51,6 +54,24 @@ namespace mesh_ffi {
         string? active_mesh_version,
         NativeRuntimePruneModeNative mode
     );
+};
+
+dictionary ProviderRuntimeOptionsNative {
+    sequence<string> bundle_roots;
+    string? release_manifest;
+    string? cache_dir;
+    boolean allow_download;
+    u64 startup_timeout_ms;
+};
+
+interface ProviderHostHandle {
+    string api_base_url();
+
+    [Throws=FfiError]
+    string status_json();
+
+    [Throws=FfiError]
+    void stop();
 };
 
 [Error]

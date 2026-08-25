@@ -3992,6 +3992,7 @@ dependencies = [
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
  "mesh-llm-protocol",
+ "mesh-llm-provider-runtime",
  "mesh-llm-routing",
  "mesh-llm-runtime-install",
  "mesh-llm-system",
@@ -4170,6 +4171,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-provider-runtime"
+version = "0.76.0-rc7"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "futures-util",
+ "reqwest 0.12.28",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "zip",
+]
+
+[[package]]
 name = "mesh-llm-release-footer"
 version = "0.76.0-rc7"
 dependencies = [
@@ -4222,6 +4240,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

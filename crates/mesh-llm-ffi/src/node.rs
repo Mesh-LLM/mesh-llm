@@ -1,4 +1,6 @@
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "embedded-runtime")]
+use std::{path::PathBuf, time::Duration};
 
 use mesh_llm_sdk::node as sdk_node;
 use mesh_llm_sdk::node::{MeshNode, create_auto_node as sdk_create_auto_node};
@@ -6,6 +8,8 @@ use mesh_llm_sdk::{InviteToken, RequestId};
 
 #[cfg(feature = "embedded-runtime")]
 use mesh_llm_sdk::embedded_runtime::{EmbeddedChatMessage, EmbeddedServingController};
+#[cfg(feature = "embedded-runtime")]
+use mesh_llm_sdk::provider_host::{ProviderHost, ProviderHostConfig};
 
 use crate::errors::{
     FfiError, map_mesh_api_error, map_model_error, map_serving_error, map_stream_error,
@@ -13,7 +17,7 @@ use crate::errors::{
 #[cfg(feature = "embedded-runtime")]
 use crate::events::ClientEvent;
 use crate::events::EventListenerBridge;
-use crate::handles::{ConsoleHandle, MeshNodeHandle};
+use crate::handles::{ConsoleHandle, MeshNodeHandle, ProviderHostHandle};
 use crate::identity::parse_owner_keypair;
 use crate::model_types::{
     CleanupPolicy, CleanupResult, DeleteModelOptions, DeleteModelResult, DevicePolicy,
@@ -23,8 +27,8 @@ use crate::model_types::{
 };
 use crate::native_runtime_types::EventListener;
 use crate::request_types::{
-    ChatRequestNative, ClientStatus, ConsoleOptionsNative, ModelNative, PublicMeshQuery,
-    ResponsesRequestNative,
+    ChatRequestNative, ClientStatus, ConsoleOptionsNative, ModelNative, ProviderRuntimeOptionsNative,
+    PublicMeshQuery, ResponsesRequestNative,
 };
 use crate::runtime_blocking::block_on;
 
@@ -397,4 +401,85 @@ fn new_request_id() -> String {
 
     static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
     format!("local-{}", NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+#[uniffi::export]
+pub fn start_provider_host(
+    options: ProviderRuntimeOptionsNative,
+) -> Result<Arc<ProviderHostHandle>, FfiError> {
+    #[cfg(not(feature = "embedded-runtime"))]
+    {
+        let _ = options;
+        Err(FfiError::ServingUnsupported(
+            "this native library was built without embedded-runtime support".to_string(),
+        ))
+    }
+    #[cfg(feature = "embedded-runtime")]
+    {
+        let host = block_on(ProviderHost::start(provider_host_config(options)))
+            .map_err(|error| FfiError::HostUnavailable(error.to_string()))?;
+        let api_base_url = host.api_base_url().to_string();
+        Ok(Arc::new(ProviderHostHandle {
+            host: tokio::sync::Mutex::new(Some(host)),
+            api_base_url,
+        }))
+    }
+}
+
+#[uniffi::export]
+impl ProviderHostHandle {
+    pub fn api_base_url(&self) -> String {
+        self.api_base_url.clone()
+    }
+
+    pub fn status_json(&self) -> Result<String, FfiError> {
+        #[cfg(not(feature = "embedded-runtime"))]
+        return Err(FfiError::ServingUnsupported(
+            "this native library was built without embedded-runtime support".to_string(),
+        ));
+        #[cfg(feature = "embedded-runtime")]
+        block_on(async {
+            let host = self.host.lock().await;
+            let host = host
+                .as_ref()
+                .ok_or_else(|| FfiError::HostUnavailable("provider host is stopped".to_string()))?;
+            host.status()
+                .await
+                .map(|status| status.to_string())
+                .map_err(|error| FfiError::HostUnavailable(error.to_string()))
+        })
+    }
+
+    pub fn stop(&self) -> Result<(), FfiError> {
+        #[cfg(not(feature = "embedded-runtime"))]
+        return Err(FfiError::ServingUnsupported(
+            "this native library was built without embedded-runtime support".to_string(),
+        ));
+        #[cfg(feature = "embedded-runtime")]
+        block_on(async {
+            let host = self.host.lock().await.take();
+            if let Some(host) = host {
+                host.stop()
+                    .await
+                    .map_err(|error| FfiError::HostUnavailable(error.to_string()))?;
+            }
+            Ok(())
+        })
+    }
+}
+
+#[cfg(feature = "embedded-runtime")]
+fn provider_host_config(options: ProviderRuntimeOptionsNative) -> ProviderHostConfig {
+    ProviderHostConfig {
+        bundle_roots: options
+            .bundle_roots
+            .into_iter()
+            .filter_map(|path| non_empty_path(Some(path)))
+            .map(PathBuf::from)
+            .collect(),
+        release_manifest: non_empty_path(options.release_manifest).map(PathBuf::from),
+        cache_dir: non_empty_path(options.cache_dir).map(PathBuf::from),
+        allow_download: options.allow_download,
+        startup_timeout: Duration::from_millis(options.startup_timeout_ms.max(1)),
+    }
 }

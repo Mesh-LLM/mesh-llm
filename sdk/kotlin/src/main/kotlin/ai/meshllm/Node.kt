@@ -14,12 +14,15 @@ import uniffi.mesh_ffi.EventListener as FfiEventListener
 import uniffi.mesh_ffi.MeshClientHandleInterface
 import uniffi.mesh_ffi.MeshNodeHandleInterface
 import uniffi.mesh_ffi.ModelNative
+import uniffi.mesh_ffi.ProviderHostHandleInterface
+import uniffi.mesh_ffi.ProviderRuntimeOptionsNative
 import uniffi.mesh_ffi.ResponsesRequestNative
 import uniffi.mesh_ffi.createAutoClient as ffiCreateAutoClient
 import uniffi.mesh_ffi.createAutoNode as ffiCreateAutoNode
 import uniffi.mesh_ffi.createClient as ffiCreateClient
 import uniffi.mesh_ffi.createNode as ffiCreateNode
 import uniffi.mesh_ffi.discoverPublicMeshes as ffiDiscoverPublicMeshes
+import uniffi.mesh_ffi.startProviderHost as ffiStartProviderHost
 import java.io.File
 import java.nio.file.Files
 
@@ -72,6 +75,115 @@ data class ConsoleOptions(
     val port: UShort? = null,
     val listenAll: Boolean = false,
 )
+
+data class ProviderRuntimeOptions(
+    val bundleRoots: List<File>,
+    val releaseManifest: File? = null,
+    val cacheDir: File? = null,
+    val allowDownload: Boolean = false,
+    val startupTimeoutMs: ULong = 30_000UL,
+    internal val cleanupBundleRoots: List<File> = emptyList(),
+) {
+    companion object {
+        fun packagedAppleSystem(
+            destination: File? = null,
+            cacheDir: File? = null,
+            allowDownload: Boolean = false,
+        ): ProviderRuntimeOptions {
+            val root = ProviderRuntimeAssets.extractPackagedApple(destination)
+            return ProviderRuntimeOptions(
+                bundleRoots = listOf(root),
+                cacheDir = cacheDir,
+                allowDownload = allowDownload,
+                cleanupBundleRoots = if (destination == null) listOf(root) else emptyList(),
+            )
+        }
+    }
+}
+
+object ProviderRuntimeAssets {
+    private const val RESOURCE_ROOT = "mesh-llm/provider-runtimes/apple"
+    private const val MANIFEST = "$RESOURCE_ROOT/manifest.txt"
+
+    fun extractPackagedApple(destination: File? = null): File {
+        val target = destination ?: Files.createTempDirectory("mesh-llm-apple-provider-").toFile()
+        val loader = Thread.currentThread().contextClassLoader
+            ?: ProviderRuntimeAssets::class.java.classLoader
+        val entries = loader.getResourceAsStream(MANIFEST)?.bufferedReader()?.use { reader ->
+            reader.readLines().map(String::trim).filter(String::isNotEmpty)
+        } ?: error("Packaged Apple provider runtime is missing from the MeshLLM JVM resources.")
+
+        check(!target.exists() || target.listFiles().isNullOrEmpty()) {
+            "Provider runtime extraction destination must be empty: ${target.absolutePath}"
+        }
+        target.mkdirs()
+        entries.forEach { relativePath ->
+            requireSafeProviderRuntimePath(relativePath)
+            val output = target.resolve(relativePath)
+            output.parentFile?.mkdirs()
+            loader.getResourceAsStream("$RESOURCE_ROOT/$relativePath")?.use { input ->
+                output.outputStream().use { destinationStream ->
+                    input.copyTo(destinationStream)
+                }
+            } ?: error("Packaged Apple provider runtime file is missing: $relativePath")
+        }
+        check(target.resolve("provider-runtime.json").isFile) {
+            "Packaged Apple provider runtime did not include provider-runtime.json"
+        }
+        target.resolve("bin/mesh-apple-runtime").setExecutable(true, true)
+        return target
+    }
+
+    private fun requireSafeProviderRuntimePath(relativePath: String) {
+        require(relativePath.isNotBlank()) { "Provider runtime path must not be blank" }
+        require(!relativePath.startsWith("/") && !relativePath.contains("\\")) {
+            "Provider runtime path must be relative: $relativePath"
+        }
+        require(relativePath.split('/').none { it == ".." || it.isBlank() }) {
+            "Provider runtime path must stay inside the carrier resource: $relativePath"
+        }
+    }
+}
+
+class ProviderHost private constructor(
+    private val handle: ProviderHostHandleInterface,
+    private val cleanupBundleRoots: List<File>,
+) {
+    val apiBaseUrl: String get() = handle.apiBaseUrl()
+
+    suspend fun statusJson(): String = withContext(Dispatchers.IO) { handle.statusJson() }
+
+    suspend fun stop(): Unit = withContext(Dispatchers.IO) {
+        try {
+            handle.stop()
+        } finally {
+            cleanupBundleRoots.forEach(File::deleteRecursively)
+        }
+    }
+
+    companion object {
+        suspend fun start(options: ProviderRuntimeOptions): ProviderHost =
+            withContext(Dispatchers.IO) {
+                try {
+                    ProviderHost(
+                        ffiStartProviderHost(
+                            ProviderRuntimeOptionsNative(
+                                bundleRoots = options.bundleRoots.map { it.absolutePath },
+                                releaseManifest = options.releaseManifest?.absolutePath,
+                                cacheDir = options.cacheDir?.absolutePath,
+                                allowDownload = options.allowDownload,
+                                startupTimeoutMs = options.startupTimeoutMs,
+                            )
+                        ),
+                        options.cleanupBundleRoots,
+                    )
+                } catch (error: Throwable) {
+                    options.cleanupBundleRoots.forEach(File::deleteRecursively)
+                    throw error
+                }
+            }
+    }
+}
 
 object ConsoleAssets {
     private const val RESOURCE_ROOT = "mesh-llm/console"

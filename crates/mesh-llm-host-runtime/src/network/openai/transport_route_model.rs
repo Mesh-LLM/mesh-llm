@@ -84,13 +84,25 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     }
     route_observer.route_selected(Some(model));
 
-    let selection = crate::network::affinity::select_model_target_from_candidates(
+    let mut selection = crate::network::affinity::select_model_target_from_candidates(
         targets,
         &ordered_candidates,
         model,
         request.body_json.as_ref(),
         affinity,
     );
+    // A plain load-balanced pick may be redirected to a preferred provider host
+    // (e.g. an Apple Core AI sidecar); an affinity/sticky decision is authoritative.
+    if !selection.affinity_selected
+        && let Some(preferred) = crate::network::openai::routing_rank::preferred_provider_target(
+            &node,
+            model,
+            &ordered_candidates,
+        )
+        .await
+    {
+        selection.target = preferred;
+    }
     if matches!(selection.target, election::InferenceTarget::None) {
         return send_route_model_none_target(&node, tcp_stream, model, route_observer).await;
     }

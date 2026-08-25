@@ -338,6 +338,7 @@ mod tests {
             target: target.clone(),
             learn_prefix_hash: None,
             cached_target: None,
+            affinity_selected: false,
         };
         let prepared: PreparedTargets = PreparedTargets {
             ordered: vec![target],

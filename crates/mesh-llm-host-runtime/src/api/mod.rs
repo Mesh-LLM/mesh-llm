@@ -73,7 +73,7 @@ use self::status::{
     OpenAiGuardrailsPayload, RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload,
     RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
     build_runtime_stage_payloads, build_runtime_status_payload, derive_daemon_state,
-    runtime_stage_state_label, runtime_stage_wire_dtype_label,
+    enrich_provider_runtime_models, runtime_stage_state_label, runtime_stage_wire_dtype_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
@@ -557,14 +557,15 @@ impl MeshApi {
     }
 
     async fn runtime_status(&self) -> RuntimeStatusPayload {
-        let (runtime_status, openai_guardrails) = {
+        let (runtime_status, openai_guardrails, node) = {
             let inner = self.inner.lock().await;
             (
                 inner.runtime_data_collector.runtime_status_snapshot(),
                 inner.openai_guardrails.clone(),
+                inner.node.clone(),
             )
         };
-        build_runtime_status_payload(
+        let mut payload = build_runtime_status_payload(
             runtime_status.primary_model.as_deref().unwrap_or_default(),
             runtime_status.primary_backend,
             openai_guardrails,
@@ -572,7 +573,10 @@ impl MeshApi {
             runtime_status.llama_ready,
             runtime_status.llama_port,
             runtime_data::runtime_process_payloads(&runtime_status.local_processes),
-        )
+        );
+        let provider_runtimes = node.local_model_runtime_descriptors().await;
+        enrich_provider_runtime_models(&mut payload.models, &provider_runtimes);
+        payload
     }
 
     async fn runtime_processes(&self) -> RuntimeProcessesPayload {
@@ -904,9 +908,7 @@ impl MeshApi {
             runtime_status.llama_port,
             local_processes.clone(),
         );
-        node.refresh_stage_runtime_statuses(std::time::Duration::from_secs(2))
-            .await;
-        runtime.stages = build_runtime_stage_payloads(node.stage_runtime_statuses().await);
+        enrich_runtime_observations(&node, &mut runtime).await;
 
         let wakeable_nodes = wakeable_inventory.status_snapshot().await;
         let hardware = runtime_data_collector
@@ -921,14 +923,8 @@ impl MeshApi {
         append_external_inference_models(&mut hosted_models, &plugin_models);
         let peers = node.peers().await;
 
-        let local_serving = local_processes
-            .iter()
-            .any(|process| matches!(process.status.as_str(), "serving" | "ready"));
-        let plugin_ingress = !plugin_models.is_empty();
-        let proxying = plugin_ingress
-            || peers
-                .iter()
-                .any(|peer| !peer.http_routable_models().is_empty());
+        let (local_serving, plugin_ingress, proxying) =
+            runtime_serving_activity(&local_processes, &plugin_models, &peers);
         let lifecycle_instances = build_lifecycle_instances(&local_processes);
         let has_terminal_failure = lifecycle_instances
             .iter()
@@ -1014,6 +1010,30 @@ impl MeshApi {
         inner.runtime_data_producer.mark_status_dirty();
         inner.sse_clients.retain(|tx| !tx.is_closed());
     }
+}
+
+async fn enrich_runtime_observations(node: &mesh::Node, runtime: &mut RuntimeStatusPayload) {
+    let provider_runtimes = node.local_model_runtime_descriptors().await;
+    enrich_provider_runtime_models(&mut runtime.models, &provider_runtimes);
+    node.refresh_stage_runtime_statuses(std::time::Duration::from_secs(2))
+        .await;
+    runtime.stages = build_runtime_stage_payloads(node.stage_runtime_statuses().await);
+}
+
+fn runtime_serving_activity(
+    local_processes: &[RuntimeProcessPayload],
+    plugin_models: &[String],
+    peers: &[mesh::PeerInfo],
+) -> (bool, bool, bool) {
+    let local_serving = local_processes
+        .iter()
+        .any(|process| matches!(process.status.as_str(), "serving" | "ready"));
+    let plugin_ingress = !plugin_models.is_empty();
+    let proxying = plugin_ingress
+        || peers
+            .iter()
+            .any(|peer| !peer.http_routable_models().is_empty());
+    (local_serving, plugin_ingress, proxying)
 }
 
 fn build_lifecycle_instances(

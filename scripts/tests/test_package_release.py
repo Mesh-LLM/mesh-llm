@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import pathlib
@@ -64,6 +65,34 @@ class PackageReleaseTests(unittest.TestCase):
         )
         return runtime
 
+    def provider_runtime(
+        self,
+        bundle: pathlib.Path,
+        runtime_id: str = "meshllm-apple-runtime-darwin-arm64",
+    ) -> pathlib.Path:
+        provider = bundle / "provider-runtimes" / "apple" / runtime_id
+        (provider / "bin").mkdir(parents=True)
+        executable = provider / "bin" / "mesh-apple-runtime"
+        executable.write_bytes(b"provider")
+        executable.chmod(0o755)
+        (provider / "provider-runtime.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "runtime": {
+                        "id": runtime_id,
+                        "version": "0.1.0",
+                        "provider_kind": "apple",
+                        "protocol_version": "0.1",
+                        "entrypoint": "bin/mesh-apple-runtime",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return provider
+
     def test_selects_exact_platform_and_backend(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -123,6 +152,69 @@ class PackageReleaseTests(unittest.TestCase):
             self.assertEqual(
                 manifest["runtime"]["path"], "native-runtimes/linux-cpu"
             )
+
+    def test_product_manifest_attests_embedded_provider_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "mesh-bundle"
+            runtime_root = bundle / "native-runtimes"
+            host = bundle / "mesh-llm"
+            bundle.mkdir()
+            host.write_bytes(b"host")
+            runtime = self.runtime(runtime_root, "linux-cpu", "cpu")
+            provider = self.provider_runtime(bundle)
+            result = run_bash(
+                (
+                    f'PROVIDER_RUNTIME_BUNDLES=("{provider}"); '
+                    f'write_product_manifest "{bundle}" "{host}" "{runtime}" '
+                    '"v0.73.1" "cpu"'
+                ),
+                {},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(
+                (bundle / "product-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                manifest["provider_runtimes"],
+                [
+                    {
+                        "id": "meshllm-apple-runtime-darwin-arm64",
+                        "manifest_sha256": hashlib.sha256(
+                            (provider / "provider-runtime.json").read_bytes()
+                        ).hexdigest(),
+                        "path": (
+                            "provider-runtimes/apple/"
+                            "meshllm-apple-runtime-darwin-arm64"
+                        ),
+                        "protocol_version": "0.1",
+                        "provider_kind": "apple",
+                        "sha256": manifest["provider_runtimes"][0]["sha256"],
+                        "version": "0.1.0",
+                    }
+                ],
+            )
+
+    def test_product_manifest_rejects_provider_outside_canonical_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "mesh-bundle"
+            runtime_root = bundle / "native-runtimes"
+            host = bundle / "mesh-llm"
+            bundle.mkdir()
+            host.write_bytes(b"host")
+            runtime = self.runtime(runtime_root, "linux-cpu", "cpu")
+            provider = self.provider_runtime(bundle)
+            wrong_path = bundle / "provider-runtimes" / "wrong"
+            provider.rename(wrong_path)
+            result = run_bash(
+                (
+                    f'PROVIDER_RUNTIME_BUNDLES=("{wrong_path}"); '
+                    f'write_product_manifest "{bundle}" "{host}" "{runtime}" '
+                    '"v0.73.1" "cpu"'
+                ),
+                {},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("path mismatch", result.stderr)
 
     def test_rejects_product_runtime_backend_mismatch_before_manifest_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

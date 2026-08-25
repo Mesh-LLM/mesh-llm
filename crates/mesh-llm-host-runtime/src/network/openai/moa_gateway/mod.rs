@@ -66,6 +66,9 @@ async fn degrade_to_single_model(
     if candidates.is_empty() {
         candidates = node.serving_models().await;
     }
+    // Explicit-only provider models (e.g. Apple Core AI) must never be picked as
+    // an automatic single-model degrade target; they are only served when named.
+    candidates.retain(|m| !crate::network::openai::provider_policy::is_explicit_only_model(m));
     let runtimes = node.all_model_runtime_descriptors().await;
     let Some(target) =
         context_selection::select_degrade_model(candidates, &runtimes, required_tokens)

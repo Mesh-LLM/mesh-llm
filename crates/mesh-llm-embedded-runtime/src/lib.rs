@@ -6,9 +6,10 @@ pub use mesh_llm_host_runtime::sdk::{
     EmbeddedMeshHttpConfig, EmbeddedMeshLogFormat, EmbeddedMeshNetworkConfig,
     EmbeddedMeshNodeBuilder, EmbeddedMeshNodeConfig, EmbeddedMeshNodeHandle, EmbeddedMeshNodeMode,
     EmbeddedMeshNodeStatus, EmbeddedMeshRequirementsConfig, EmbeddedMeshServingConfig,
-    EmbeddedMeshStorageConfig, EmbeddedServeConfig, EmbeddedServeHandle, EmbeddedServeMode,
-    EmbeddedServeStatus, EmbeddedServingController, EmbeddedTrustPolicy,
-    SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, start_embedded_node, start_embedded_serve,
+    EmbeddedMeshStorageConfig, EmbeddedProviderRuntimeConfig, EmbeddedServeConfig,
+    EmbeddedServeHandle, EmbeddedServeMode, EmbeddedServeStatus, EmbeddedServingController,
+    EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, start_embedded_node,
+    start_embedded_serve,
 };
 
 pub mod config {

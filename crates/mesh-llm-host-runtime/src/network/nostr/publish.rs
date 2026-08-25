@@ -545,8 +545,27 @@ async fn collect_actually_serving_models(
     peers: &[crate::mesh::PeerInfo],
 ) -> Vec<String> {
     let mut serving = Vec::new();
+    let local_hosted_models = node.hosted_models().await;
+    let local_provider_models = node
+        .local_model_runtime_descriptors()
+        .await
+        .into_iter()
+        .filter(|runtime| runtime.ready && runtime.provider_kind.is_some())
+        .map(|runtime| runtime.model_name)
+        .collect::<std::collections::HashSet<_>>();
     if matches!(node.role().await, crate::mesh::NodeRole::Host { .. }) {
-        extend_unique(&mut serving, node.hosted_models().await);
+        extend_unique(&mut serving, local_hosted_models.clone());
+    } else {
+        // Public-mesh admission can assign a provider-backed Apple host the
+        // Worker role. Those runtimes still accept HTTP inference directly and
+        // must be present in the publisher's listing.
+        extend_unique(
+            &mut serving,
+            local_hosted_models
+                .into_iter()
+                .filter(|model| local_provider_models.contains(model))
+                .collect(),
+        );
     }
     for peer in peers {
         if matches!(peer.role, crate::mesh::NodeRole::Host { .. }) {

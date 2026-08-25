@@ -12,6 +12,7 @@ members = [
     "crates/mesh-llm-hardware-profile",
     "crates/mesh-llm-identity",
     "crates/mesh-llm-native-runtime",
+    "crates/mesh-llm-provider-runtime",
     "crates/mesh-llm-protocol",
     "crates/mesh-llm-release-footer",
     "crates/mesh-llm-routing",

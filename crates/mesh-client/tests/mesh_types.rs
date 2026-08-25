@@ -34,6 +34,11 @@ fn model_runtime_descriptor_not_ready_by_default() {
         identity_hash: None,
         context_length: None,
         ready: false,
+        provider_kind: None,
+        model_version: None,
+        max_concurrent_requests: None,
+        active_requests: None,
+        queued_requests: None,
     };
     assert!(d.advertised_context_length().is_none());
 }
@@ -45,6 +50,11 @@ fn model_runtime_descriptor_ready_returns_context_length() {
         identity_hash: None,
         context_length: Some(4096),
         ready: true,
+        provider_kind: None,
+        model_version: None,
+        max_concurrent_requests: None,
+        active_requests: None,
+        queued_requests: None,
     };
     assert_eq!(d.advertised_context_length(), Some(4096));
 }

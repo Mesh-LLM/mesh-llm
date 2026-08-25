@@ -3,10 +3,10 @@ use super::{
     LocalRuntimeModelHandle, LocalRuntimeModelStartSpec, ManagedModelController, ModelIntent,
     ModelTargetReconciliationAction, ModelTargetReconciliationCandidate,
     ModelTargetReconciliationCapacityState, ModelTargetReconciliationInput,
-    ModelTargetReconciliationPolicy, ModelTargetReconciliationState, RunAutoRuntimeLoopContext,
-    RunAutoRuntimeState, RuntimeCapacityReservation, RuntimeEvent, RuntimeInstanceRegistry,
-    RuntimeOperationalEvent, RuntimeOptions, RuntimeUnloadCandidate, RuntimeUnloadOwner,
-    ShutdownRuntimeLoadedModelsContext, StartupModelSpec, StartupReadyReporter,
+    ModelTargetReconciliationPolicy, ModelTargetReconciliationState, ProviderSupervisorHandle,
+    RunAutoRuntimeLoopContext, RunAutoRuntimeState, RuntimeCapacityReservation, RuntimeEvent,
+    RuntimeInstanceRegistry, RuntimeOperationalEvent, RuntimeOptions, RuntimeUnloadCandidate,
+    RuntimeUnloadOwner, ShutdownRuntimeLoadedModelsContext, StartupModelSpec, StartupReadyReporter,
     add_runtime_local_target, add_serving_assignment, find_remote_catalog_model_exact_blocking,
     local_process_payload, next_runtime_instance_id, plan_model_target_reconciliation,
     publish_runtime_llama_slots, publish_runtime_llama_unavailable,
@@ -85,6 +85,7 @@ pub(super) struct RunAutoShutdownContext<'a> {
     pub(super) runtime_data_producer: Option<&'a crate::runtime_data::RuntimeDataProducer>,
     pub(super) dashboard_context_usage: &'a DashboardContextUsage,
     pub(super) runtime: Option<std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
+    pub(super) provider_supervisor: Option<ProviderSupervisorHandle>,
 }
 
 pub(super) struct RunAutoRuntimeLifecycleContext<'a> {
@@ -115,6 +116,7 @@ pub(super) struct RunAutoRuntimeLifecycleContext<'a> {
     pub(super) interactive_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub(super) lan_bootstrap_tasks: LanBootstrapTasks,
     pub(super) runtime: Option<std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
+    pub(super) provider_supervisor: Option<ProviderSupervisorHandle>,
 }
 
 pub(super) async fn run_auto_reconcile_model_targets(ctx: &mut RunAutoRuntimeLoopContext<'_>) {

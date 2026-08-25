@@ -41,6 +41,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
             identity_hash: Some("sha256:abc123".into()),
             context_length: Some(32768),
             ready: true,
+            ..Default::default()
         }],
         owner_attestation: None,
         release_attestation_summary: crate::ReleaseAttestationSummary::default(),

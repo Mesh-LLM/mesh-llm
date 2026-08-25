@@ -19,6 +19,7 @@ pub(crate) mod model_reconciliation;
 mod operational_logging;
 mod options;
 mod plugin_host_role;
+mod provider_supervisor;
 mod proxy;
 mod publication;
 mod release_attestation;
@@ -87,6 +88,10 @@ use self::model_lifecycle::*;
 pub(crate) use self::operational_logging::{
     NativeSkippyOperationalEvent, RuntimeOperationalEvent, record_native_skippy_operational_event,
     record_runtime_operational_event, record_runtime_operational_event_with_context,
+};
+pub(crate) use self::provider_supervisor::ProviderRuntimeDiscoveryOptions;
+pub(crate) use self::provider_supervisor::{
+    ProviderSupervisorContext, ProviderSupervisorHandle, start_apple_provider_supervisor,
 };
 use self::publication::*;
 pub use self::run_auto::load_resolved_plugins;

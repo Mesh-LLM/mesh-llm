@@ -107,6 +107,16 @@ pub struct RuntimeModelPayload {
     pub port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_length: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_requests: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queued_requests: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

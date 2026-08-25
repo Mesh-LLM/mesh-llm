@@ -103,11 +103,42 @@ pub struct ModelRuntimeDescriptor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_length: Option<u32>,
     pub ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_requests: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queued_requests: Option<u32>,
 }
 
 impl ModelRuntimeDescriptor {
     pub fn advertised_context_length(&self) -> Option<u32> {
         self.ready.then_some(self.context_length).flatten()
+    }
+
+    pub fn provider_load(&self) -> Option<ModelRuntimeLoad> {
+        Some(ModelRuntimeLoad {
+            max_concurrent_requests: self.max_concurrent_requests?,
+            active_requests: self.active_requests.unwrap_or_default(),
+            queued_requests: self.queued_requests.unwrap_or_default(),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ModelRuntimeLoad {
+    pub max_concurrent_requests: u32,
+    pub active_requests: u32,
+    pub queued_requests: u32,
+}
+
+impl ModelRuntimeLoad {
+    pub const fn saturated(self) -> bool {
+        self.active_requests >= self.max_concurrent_requests
     }
 }
 

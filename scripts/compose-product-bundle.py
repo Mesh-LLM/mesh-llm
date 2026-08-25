@@ -30,6 +30,18 @@ class RuntimeManifest(TypedDict):
     build: NotRequired[BuildData]
 
 
+class ProviderRuntimeData(TypedDict):
+    id: str
+    version: str
+    provider_kind: str
+    protocol_version: str
+
+
+class ProviderRuntimeManifest(TypedDict):
+    schema_version: int
+    runtime: ProviderRuntimeData
+
+
 def expected_backend_kind(backend: str) -> str:
     return BACKEND_KIND_ALIASES.get(backend, backend)
 
@@ -82,6 +94,7 @@ def compose_manifest(
     runtime: Path,
     version: str,
     backend: str,
+    provider_runtimes: list[Path],
 ) -> dict[str, object]:
     version = version.removeprefix("v")
     runtime_manifest_path = runtime / "manifest.json"
@@ -97,7 +110,7 @@ def compose_manifest(
             f"expected {version}"
         )
     validate_runtime_backend(runtime_id, runtime_manifest, runtime_data, backend)
-    return {
+    manifest: dict[str, object] = {
         "schema_version": 2,
         "contract": "mesh-llm-product-v2",
         "mesh_version": version,
@@ -113,6 +126,56 @@ def compose_manifest(
             "manifest_sha256": file_sha256(runtime_manifest_path),
         },
     }
+    if provider_runtimes:
+        manifest["provider_runtimes"] = compose_provider_runtimes(
+            bundle, provider_runtimes
+        )
+    return manifest
+
+
+def compose_provider_runtimes(
+    bundle: Path, provider_runtimes: list[Path]
+) -> list[dict[str, str]]:
+    composed: list[dict[str, str]] = []
+    coordinates: set[tuple[str, str]] = set()
+    for provider_runtime in sorted(provider_runtimes):
+        manifest_path = provider_runtime / "provider-runtime.json"
+        provider_manifest: ProviderRuntimeManifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        if provider_manifest["schema_version"] != 1:
+            raise ValueError(
+                f"unsupported provider runtime schema in {manifest_path}: "
+                f"{provider_manifest['schema_version']}"
+            )
+        runtime_data = provider_manifest["runtime"]
+        runtime_id = runtime_data["id"]
+        provider_kind = runtime_data["provider_kind"]
+        coordinate = (runtime_id, runtime_data["version"])
+        if coordinate in coordinates:
+            raise ValueError(
+                f"duplicate provider runtime coordinate {runtime_id}@{runtime_data['version']}"
+            )
+        coordinates.add(coordinate)
+        expected_path = Path("provider-runtimes") / provider_kind / runtime_id
+        actual_path = provider_runtime.relative_to(bundle)
+        if actual_path != expected_path:
+            raise ValueError(
+                f"provider runtime {runtime_id} path mismatch: found "
+                f"{actual_path.as_posix()}, expected {expected_path.as_posix()}"
+            )
+        composed.append(
+            {
+                "id": runtime_id,
+                "version": runtime_data["version"],
+                "provider_kind": provider_kind,
+                "protocol_version": runtime_data["protocol_version"],
+                "path": actual_path.as_posix(),
+                "sha256": tree_sha256(provider_runtime),
+                "manifest_sha256": file_sha256(manifest_path),
+            }
+        )
+    return composed
 
 
 def parse_args() -> argparse.Namespace:
@@ -122,6 +185,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--backend", required=True)
+    parser.add_argument(
+        "--provider-runtime",
+        action="append",
+        default=[],
+        type=Path,
+        help="Provider runtime bundle embedded in the composed product (repeatable).",
+    )
     parser.add_argument(
         "--check",
         action="store_true",
@@ -133,7 +203,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     manifest = compose_manifest(
-        args.bundle, args.host, args.runtime, args.version, args.backend
+        args.bundle,
+        args.host,
+        args.runtime,
+        args.version,
+        args.backend,
+        args.provider_runtime,
     )
     manifest_path = args.bundle / "product-manifest.json"
     if args.check:

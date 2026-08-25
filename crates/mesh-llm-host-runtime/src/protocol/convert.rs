@@ -332,6 +332,11 @@ fn runtime_descriptor_to_proto(
         identity_hash: descriptor.identity_hash.clone(),
         context_length: descriptor.context_length,
         ready: descriptor.ready,
+        provider_kind: descriptor.provider_kind.clone(),
+        model_version: descriptor.model_version.clone(),
+        max_concurrent_requests: descriptor.max_concurrent_requests,
+        active_requests: descriptor.active_requests,
+        queued_requests: descriptor.queued_requests,
     }
 }
 
@@ -343,6 +348,11 @@ fn proto_runtime_descriptor_to_local(
         identity_hash: descriptor.identity_hash.clone(),
         context_length: descriptor.context_length,
         ready: descriptor.ready,
+        provider_kind: descriptor.provider_kind.clone(),
+        model_version: descriptor.model_version.clone(),
+        max_concurrent_requests: descriptor.max_concurrent_requests,
+        active_requests: descriptor.active_requests,
+        queued_requests: descriptor.queued_requests,
     }
 }
 

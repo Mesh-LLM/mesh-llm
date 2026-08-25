@@ -954,6 +954,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
             identity_hash: Some("identity-hash".to_string()),
             context_length: Some(32768),
             ready: true,
+            ..Default::default()
         }],
         owner_attestation: None,
         genesis_policy: None,

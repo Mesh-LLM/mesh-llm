@@ -28,7 +28,7 @@ mod runtime_blocking;
 pub use client::{create_auto_client, create_client};
 pub use errors::FfiError;
 pub use events::ClientEvent;
-pub use handles::{ConsoleHandle, MeshClientHandle, MeshNodeHandle};
+pub use handles::{ConsoleHandle, MeshClientHandle, MeshNodeHandle, ProviderHostHandle};
 pub use identity::generate_owner_keypair_hex;
 pub use model_types::{
     CapabilityLevel, CleanupPolicy, CleanupResult, DeleteModelOptions, DeleteModelResult,
@@ -47,9 +47,9 @@ pub use native_runtime_types::{
     NativeRuntimeProgressListener, NativeRuntimePruneModeNative, NativeRuntimePruneResultNative,
     NativeRuntimeVerificationPolicyNative,
 };
-pub use node::{create_auto_node, create_node};
+pub use node::{create_auto_node, create_node, start_provider_host};
 pub use public_mesh::discover_public_meshes;
 pub use request_types::{
     ChatMessageNative, ChatRequestNative, ClientStatus, ConsoleOptionsNative, ModelNative,
-    PublicMesh, PublicMeshQuery, ResponsesRequestNative,
+    ProviderRuntimeOptionsNative, PublicMesh, PublicMeshQuery, ResponsesRequestNative,
 };

@@ -666,6 +666,26 @@ async fn route_request(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
     if let Some(model_name) = effective_model {
+        if let Some(provider_targets) = provider_mesh_targets(ctx, model_name).await {
+            if !request.is_tokenize_request() && provider_targets.candidates(model_name).len() > 1 {
+                request.ensure_body_json();
+            }
+            let routed = proxy::route_model_request(
+                ctx.node.clone(),
+                tcp_stream,
+                &provider_targets,
+                model_name,
+                request,
+                proxy::RouteModelRequestContext {
+                    required_tokens,
+                    affinity: ctx.affinity,
+                    route_observer,
+                },
+            )
+            .await;
+            return routed;
+        }
+
         // Model explicitly requested. Check local candidates first.
         if !has_available_candidates(ctx.targets, model_name) {
             return route_missing_local_model(
@@ -713,6 +733,60 @@ async fn route_request(
         )
         .await
     }
+}
+
+async fn provider_mesh_targets(
+    ctx: &IngressRouteContext<'_>,
+    model_name: &str,
+) -> Option<election::ModelTargets> {
+    let local_candidates = ctx.targets.candidates(model_name);
+    let remote_hosts = ctx.node.hosts_for_model(model_name).await;
+    let local_provider = ctx
+        .node
+        .local_model_runtime_load(model_name)
+        .await
+        .is_some();
+    let mut remote_provider = false;
+    for peer_id in &remote_hosts {
+        if ctx
+            .node
+            .peer_model_runtime_load(*peer_id, model_name)
+            .await
+            .is_some()
+        {
+            remote_provider = true;
+            break;
+        }
+    }
+    if !local_provider && !remote_provider {
+        return None;
+    }
+
+    let candidates = merge_provider_candidates(&local_candidates, &remote_hosts);
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut targets = ctx.targets.clone();
+    targets.targets.insert(model_name.to_string(), candidates);
+    Some(targets)
+}
+
+fn merge_provider_candidates(
+    local_candidates: &[election::InferenceTarget],
+    remote_hosts: &[iroh::EndpointId],
+) -> Vec<election::InferenceTarget> {
+    let mut candidates = local_candidates
+        .iter()
+        .filter(|target| !matches!(target, election::InferenceTarget::None))
+        .cloned()
+        .collect::<Vec<_>>();
+    for peer_id in remote_hosts {
+        let target = election::InferenceTarget::Remote(*peer_id);
+        if !candidates.contains(&target) {
+            candidates.push(target);
+        }
+    }
+    candidates
 }
 
 async fn prepare_auto_route_decision(

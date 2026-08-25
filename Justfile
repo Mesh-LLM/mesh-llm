@@ -1,5 +1,7 @@
 # Distributed LLM Inference — build & run tasks
 
+mod apple 'providers/apple/Justfile'
+
 llama_dir := env("MESH_LLM_LLAMA_DIR", ".deps/llama.cpp")
 llama_build_root := env("MESH_LLM_LLAMA_BUILD_ROOT", ".deps/llama-build")
 mesh_dir := "crates/mesh-llm"

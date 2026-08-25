@@ -32,6 +32,7 @@ type ModelProvider = { label: string; Icon: LucideIcon }
 type ModelIconStyle = CSSProperties & { '--model-card-icon-color': string }
 
 const MODEL_PROVIDERS: ModelProvider[] = [
+  { label: 'Apple', Icon: Cpu },
   { label: 'Cohere', Icon: Sparkles },
   { label: 'Z.ai', Icon: BrainCircuit },
   { label: 'OpenAI', Icon: Sparkles },

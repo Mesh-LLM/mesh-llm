@@ -7,6 +7,8 @@ import ai.meshllm.InviteToken
 import ai.meshllm.LoadModelOptions
 import ai.meshllm.NativeRuntime
 import ai.meshllm.Node
+import ai.meshllm.ProviderHost
+import ai.meshllm.ProviderRuntimeOptions
 import ai.meshllm.UnloadModelOptions
 import kotlinx.coroutines.runBlocking
 import uniffi.mesh_ffi.DevicePolicy
@@ -16,6 +18,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 fun main(args: Array<String>) = runBlocking {
+    val providerRoot = System.getenv("MESH_APPLE_PROVIDER_ROOT")
+    if (providerRoot != null) {
+        runProviderHost(providerRoot)
+        return@runBlocking
+    }
     val modelRef = System.getenv("MESH_SDK_MODEL_REF")
     val inviteToken = args.firstOrNull { !it.startsWith("--") } ?: modelRef?.let { "local-kotlin-example" } ?: run {
         System.err.println("Usage: ExampleMain <invite_token>")
@@ -74,6 +81,26 @@ fun main(args: Array<String>) = runBlocking {
     } finally {
         node.stop()
         println("[disconnect] ok")
+    }
+}
+
+private suspend fun runProviderHost(providerRoot: String) {
+    val readyFile = System.getenv("MESH_APPLE_SDK_READY_FILE")?.let(::File)
+        ?: error("MESH_APPLE_SDK_READY_FILE is required")
+    val stopFile = System.getenv("MESH_APPLE_SDK_STOP_FILE")?.let(::File)
+        ?: error("MESH_APPLE_SDK_STOP_FILE is required")
+    val host = ProviderHost.start(
+        ProviderRuntimeOptions(bundleRoots = listOf(File(providerRoot)))
+    )
+    readyFile.writeText(
+        "{\"carrier\":\"kotlin-jvm\",\"apiBaseUrl\":\"${host.apiBaseUrl}\"}\n"
+    )
+    try {
+        while (!stopFile.exists()) {
+            kotlinx.coroutines.delay(100)
+        }
+    } finally {
+        host.stop()
     }
 }
 

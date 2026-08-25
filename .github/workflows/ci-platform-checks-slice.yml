@@ -188,3 +188,14 @@ jobs:
           cargo test --locked -p model-artifact --lib
           cargo test --locked -p mesh-llm-host-runtime --lib
           cargo test --locked -p mesh-llm --lib
+      - name: Install just
+        if: ${{ matrix.check.kind == 'unit' }}
+        uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
+        with:
+          tool: just
+      - name: Build and test the Apple provider
+        if: ${{ matrix.check.kind == 'unit' }}
+        run: |
+          set -euo pipefail
+          just apple::build
+          just apple::test

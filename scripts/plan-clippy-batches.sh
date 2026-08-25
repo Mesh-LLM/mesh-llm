@@ -23,6 +23,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-identity"
   "mesh-llm-log-store"
   "mesh-llm-native-runtime"
+  "mesh-llm-provider-runtime"
   "mesh-llm-protocol"
   "mesh-llm-release-footer"
   "mesh-llm-routing"
@@ -166,6 +167,7 @@ weights = {
     "mesh-llm-system": 3,
     "mesh-llm-runtime-install": 2,
     "mesh-llm-native-runtime": 2,
+    "mesh-llm-provider-runtime": 1,
     "mesh-llm-hardware-profile": 1,
     "mesh-llm-routing": 2,
     "mesh-llm-sdk": 2,

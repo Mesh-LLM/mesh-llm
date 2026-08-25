@@ -258,6 +258,11 @@ message ModelRuntimeDescriptor {
   optional string identity_hash = 2;
   optional uint32 context_length = 3;
   bool ready = 4;
+  optional string provider_kind = 5;          // Whole-model provider, e.g. "apple"; absent for native runtimes
+  optional string model_version = 6;          // Provider-defined resolved model generation
+  optional uint32 max_concurrent_requests = 7;
+  optional uint32 active_requests = 8;
+  optional uint32 queued_requests = 9;
 }
 
 message ModelMoeInfo {

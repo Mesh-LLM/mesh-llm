@@ -132,7 +132,7 @@ pub(crate) fn assert_mixed_version_peer_ignores_missing_release_attestation() {
 }
 
 #[test]
-fn advertised_model_throughput_roundtrips_through_proto_announcement() {
+fn advertised_throughput_and_provider_load_roundtrip_through_proto_announcement() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xAC; 32]).public());
     let expected_hints = vec![crate::network::metrics::ModelThroughputHint {
         model_name: "qwen".to_string(),
@@ -170,7 +170,17 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         experts_summary: None,
         available_model_sizes: HashMap::new(),
         served_model_descriptors: vec![],
-        served_model_runtime: vec![],
+        served_model_runtime: vec![crate::mesh::ModelRuntimeDescriptor {
+            model_name: "qwen".to_string(),
+            context_length: Some(4_096),
+            ready: true,
+            provider_kind: Some("apple".to_string()),
+            model_version: Some("27.0".to_string()),
+            max_concurrent_requests: Some(1),
+            active_requests: Some(1),
+            queued_requests: Some(2),
+            ..Default::default()
+        }],
         owner_attestation: None,
         genesis_policy: None,
         release_attestation: None,
@@ -195,6 +205,10 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
 
     let mut proto_pa = local_ann_to_proto_ann(&ann);
     assert_eq!(proto_pa.advertised_model_throughput.len(), 1);
+    assert_eq!(
+        proto_pa.served_model_runtime[0].provider_kind.as_deref(),
+        Some("apple")
+    );
     assert_eq!(proto_pa.advertised_model_throughput[0].model_name, "qwen");
     assert_eq!(
         proto_pa.advertised_model_throughput[0].avg_tokens_per_second_milli,
@@ -214,6 +228,14 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
 
     let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
     assert_eq!(roundtripped.advertised_model_throughput, expected_hints);
+    assert_eq!(
+        roundtripped.served_model_runtime[0].provider_load(),
+        Some(mesh_llm_types::mesh::ModelRuntimeLoad {
+            max_concurrent_requests: 1,
+            active_requests: 1,
+            queued_requests: 2,
+        })
+    );
 }
 
 #[test]

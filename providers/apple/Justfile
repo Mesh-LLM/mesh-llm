@@ -1,0 +1,118 @@
+apple_root := justfile_directory() / "providers/apple"
+
+# Build the experimental Apple runtime.
+build:
+    @swift package resolve --package-path "{{ apple_root }}"
+    @"{{ apple_root }}/Packaging/prepare-coreai.sh"
+    @swift build --package-path "{{ apple_root }}"
+
+# Run deterministic Apple runtime unit tests.
+test:
+    @swift package resolve --package-path "{{ apple_root }}"
+    @"{{ apple_root }}/Packaging/prepare-coreai.sh"
+    @swift test --package-path "{{ apple_root }}"
+
+# Run one Apple runtime CLI command.
+run *ARGS: build
+    @swift run --skip-build --package-path "{{ apple_root }}" mesh-apple-runtime {{ ARGS }}
+
+# Exercise live model availability, generation, tools, and cancellation.
+live: build
+    @"{{ apple_root }}/QA/live.sh"
+
+# Build and sign the carrier-neutral Apple runtime package.
+package:
+    @"{{ apple_root }}/Packaging/package.sh"
+
+# Prepare a pinned Hugging Face SafeTensors model as a verified Core AI bundle.
+prepare *ARGS:
+    @cd "{{ apple_root }}/../.." && python3 scripts/apple-coreai-prepare.py {{ ARGS }}
+
+# Build a Developer ID signed and notarized provider artifact. The caller must
+# supply MESH_APPLE_RUNTIME_CODESIGN_IDENTITY and MESH_APPLE_RUNTIME_NOTARY_PROFILE.
+release-package runtime_version archive_url:
+    @MESH_APPLE_RUNTIME_RELEASE=1 \
+      MESH_APPLE_RUNTIME_VERSION="{{ runtime_version }}" \
+      MESH_APPLE_RUNTIME_ARCHIVE_URL="{{ archive_url }}" \
+      "{{ apple_root }}/Packaging/package.sh"
+
+# Compose a local release-shaped product with the ad-hoc provider for Golden Gate QA.
+product mesh_version output="target/apple-runtime/product":
+    @just --justfile "{{ apple_root }}/../../Justfile" release-build
+    @just --justfile "{{ apple_root }}/../../Justfile" apple::package
+    @MESH_LLM_PROVIDER_RUNTIME_ROOT="{{ apple_root }}/../../target/apple-runtime/package" \
+      MESH_RELEASE_ALLOW_UNNOTARIZED_PROVIDER_RUNTIME=1 \
+      "{{ apple_root }}/../../scripts/package-release.sh" \
+      "{{ mesh_version }}" "{{ apple_root }}/../../{{ output }}"
+
+# Compose a public-release product from one notarized Apple provider artifact.
+release-product mesh_version runtime_version archive_url output="dist":
+    @just --justfile "{{ apple_root }}/../../Justfile" release-build
+    @just --justfile "{{ apple_root }}/../../Justfile" \
+      apple::release-package "{{ runtime_version }}" "{{ archive_url }}"
+    @MESH_LLM_PROVIDER_RUNTIME_ROOT="{{ apple_root }}/../../target/apple-runtime/package" \
+      "{{ apple_root }}/../../scripts/package-release.sh" \
+      "{{ mesh_version }}" "{{ apple_root }}/../../{{ output }}"
+
+# Validate the packaged executable-provider manifest with the shared Rust contract.
+contract: package
+    @just with-lld cargo run --quiet -p mesh-llm-provider-runtime --example inspect -- \
+      "{{ apple_root }}/../../target/apple-runtime/package/meshllm-apple-runtime-darwin-arm64"
+
+# Exercise models, completion, streaming, tools, and disconnect cancellation over REST.
+rest: package
+    @"{{ apple_root }}/QA/rest.sh"
+
+# Serve apple/system through MeshLLM's normal OpenAI API under host-owned lifecycle.
+mesh: package
+    @just --justfile "{{ apple_root }}/../../Justfile" build
+    @"{{ apple_root }}/QA/mesh.sh"
+
+# Route apple/system through two private-mesh nodes and verify additive load gossip.
+private-mesh: package
+    @just --justfile "{{ apple_root }}/../../Justfile" build
+    @"{{ apple_root }}/QA/private-mesh.sh"
+
+# Prove packaged-product auto-discovery with no provider bundle/index override.
+product-smoke mesh_version output="target/apple-runtime/product":
+    @MESH_APPLE_RUNTIME_PRODUCT_VERSION="{{ mesh_version }}" \
+      MESH_APPLE_RUNTIME_PRODUCT_OUTPUT="{{ apple_root }}/../../{{ output }}" \
+      "{{ apple_root }}/QA/product.sh"
+
+# Build the release-shaped product and then run its auto-discovery smoke.
+product-qa mesh_version output="target/apple-runtime/product":
+    @just --justfile "{{ apple_root }}/../../Justfile" \
+      apple::product "{{ mesh_version }}" "{{ output }}"
+    @just --justfile "{{ apple_root }}/../../Justfile" \
+      apple::product-smoke "{{ mesh_version }}" "{{ output }}"
+
+# Drive the Apple provider through typed Rust SDK carrier configuration.
+rust-sdk: package
+    @"{{ apple_root }}/QA/rust-sdk.sh"
+
+# Copy the exact signed sidecar into SwiftPM, npm, and JVM package resources.
+sdk-package: package
+    @"{{ apple_root }}/../../scripts/package-sdk-provider-runtime.sh" --sdk all
+
+# Run Swift, Node/Electron, and Kotlin/JVM through one REST conformance suite.
+sdk-carriers: package
+    @"{{ apple_root }}/QA/sdk-carriers.sh"
+
+# Verify one signed runtime from CLI, Swift, Node, and JVM carrier layouts.
+carriers: package
+    @"{{ apple_root }}/QA/carriers.sh"
+
+# Run generation from a transient per-user launchd agent.
+launchd: package
+    @"{{ apple_root }}/QA/launchd.sh"
+
+# Capture Foundation Models and Core AI traces and assert ANE activity.
+instruments: package
+    @"{{ apple_root }}/QA/instruments.sh"
+
+# Kill a supervisor mid-generation and prove the runtime exits.
+orphan: package
+    @"{{ apple_root }}/QA/orphan.sh"
+
+# Run the complete experimental Apple runtime validation suite.
+qa: test live rest mesh private-mesh carriers sdk-carriers launchd instruments orphan

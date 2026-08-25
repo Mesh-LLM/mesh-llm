@@ -1101,6 +1101,7 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     let routing_metrics = node.routing_metrics();
     let with_caps: Vec<router::RoutingCandidate<'_>> = served
         .iter()
+        .filter(|name| !super::provider_policy::is_explicit_only_model(name))
         .map(|name| {
             let caps = capabilities_for_model(name, descriptors);
             let (tps_hint, throughput_samples) = routing_metrics

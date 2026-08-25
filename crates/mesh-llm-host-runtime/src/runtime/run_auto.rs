@@ -5,7 +5,8 @@ use super::status::mesh_guardrail_mode_to_openai;
 use super::{
     AutoRuntimeNodeSetup, BootstrapProxyStopTx, DashboardContextUsage, ManagedModelController,
     ModelTargetReconciliationPolicy, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
-    PreparedRuntimeStartup, RunAutoAdditionalModelsContext, RunAutoConsoleStateContext,
+    PreparedRuntimeStartup, ProviderRuntimeDiscoveryOptions, ProviderSupervisorContext,
+    ProviderSupervisorHandle, RunAutoAdditionalModelsContext, RunAutoConsoleStateContext,
     RunAutoRuntimeLifecycleContext, RunAutoServingSurface, RunAutoServingSurfaceContext,
     RuntimeCapacityLedger, RuntimeDashboardSnapshotProvider, RuntimeEvent, RuntimeInstanceRegistry,
     RuntimeModelHandleEntry, RuntimeOperationalEvent, RuntimeOptions,
@@ -23,7 +24,8 @@ use super::{
     runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
     setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
     spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
+    start_apple_provider_supervisor, start_run_auto_bootstrap_proxy, startup_local_model_loop,
+    swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -117,6 +119,7 @@ pub(crate) struct EmbeddedRuntimeOptions {
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) log_format: LogFormat,
     pub(crate) headless: bool,
+    pub(crate) provider_runtimes: ProviderRuntimeDiscoveryOptions,
     pub(crate) control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 }
 
@@ -172,7 +175,7 @@ pub(super) fn write_runtime_owner_metadata(
 
 pub(crate) async fn run() -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(RuntimeOptions::default(), None, None, None).await
+    run_runtime_cli(RuntimeOptions::default(), None, None, None, None).await
 }
 
 pub(crate) async fn run_cli(
@@ -181,7 +184,7 @@ pub(crate) async fn run_cli(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(options, explicit_surface, legacy_warning, None).await
+    run_runtime_cli(options, explicit_surface, legacy_warning, None, None).await
 }
 
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
@@ -191,8 +194,16 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
 
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
+    let provider_runtimes = options.provider_runtimes.clone();
     let options = options_from_embedded_options(options);
-    run_runtime_cli(options, Some(surface), None, control_rx).await
+    run_runtime_cli(
+        options,
+        Some(surface),
+        None,
+        control_rx,
+        Some(provider_runtimes),
+    )
+    .await
 }
 
 pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
@@ -243,6 +254,7 @@ pub(super) async fn run_runtime_cli(
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    provider_runtimes: Option<ProviderRuntimeDiscoveryOptions>,
 ) -> Result<()> {
     options.validate_discovery_mode_args()?;
 
@@ -349,6 +361,7 @@ pub(super) async fn run_runtime_cli(
         runtime,
         auto_join_candidates,
         embedded_control_rx,
+        provider_runtimes,
     })
     .await
 }
@@ -1288,6 +1301,46 @@ pub(super) struct RunAutoContext {
     pub(super) auto_join_candidates: Vec<(String, Option<String>)>,
     pub(super) embedded_control_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    pub(super) provider_runtimes: Option<ProviderRuntimeDiscoveryOptions>,
+}
+
+async fn start_provider_for_openai_surface(
+    is_client: bool,
+    context: ProviderSupervisorContext,
+    discovery: Option<&ProviderRuntimeDiscoveryOptions>,
+    requested_model_id: Option<&str>,
+    tunnel_mgr: &tunnel::Manager,
+    api_port: u16,
+) -> Option<ProviderSupervisorHandle> {
+    if is_client {
+        return None;
+    }
+    let supervisor = start_apple_provider_supervisor(context, discovery, requested_model_id).await;
+    if supervisor.is_some() {
+        // Provider-only hosts have no GGUF startup loop to register the API
+        // port. Provider gossip begins only after the sidecar is healthy.
+        tunnel_mgr.set_http_port(api_port);
+    }
+    supervisor
+}
+
+fn startup_specs_for_provider(
+    startup_specs: &[StartupModelSpec],
+    provider_supervisor: Option<&ProviderSupervisorHandle>,
+) -> Vec<StartupModelSpec> {
+    let Some(provider) = provider_supervisor else {
+        return startup_specs.to_vec();
+    };
+    startup_specs
+        .iter()
+        .filter(|spec| {
+            !provider
+                .model_ids
+                .iter()
+                .any(|model_id| spec.model_ref.to_string_lossy() == *model_id)
+        })
+        .cloned()
+        .collect()
 }
 
 #[expect(
@@ -1305,6 +1358,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         runtime,
         auto_join_candidates,
         mut embedded_control_rx,
+        provider_runtimes,
     } = ctx;
     let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
@@ -1471,6 +1525,20 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     .await?;
 
     let primary_model_name = requested_model_names.first().cloned().unwrap_or_default();
+    let provider_supervisor = start_provider_for_openai_surface(
+        is_client,
+        ProviderSupervisorContext {
+            target_tx: target_tx.clone(),
+            dashboard_processes: runtime_state.dashboard_processes.clone(),
+            console_state: console_state.clone(),
+            node: node.clone(),
+        },
+        provider_runtimes.as_ref(),
+        requested_model_names.first().map(String::as_str),
+        &tunnel_mgr,
+        api_port,
+    )
+    .await;
     let startup_ready_reporter = StartupReadyReporter::new_with_failure_policy(
         &requested_model_names,
         primary_model_name.clone(),
@@ -1500,6 +1568,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         spawn_run_auto_discovery_publisher(&options, &node, console_state.as_ref()).await;
 
     let runtime_data_producer = runtime_data_producer_for_console(console_state.as_ref()).await;
+
     run_auto_runtime_loop_and_shutdown(RunAutoRuntimeLifecycleContext {
         options: &options,
         config: &config,
@@ -1520,7 +1589,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
-        startup_specs: &startup_specs,
+        startup_specs: &startup_specs_for_provider(&startup_specs, provider_supervisor.as_ref()),
         tunnel_mgr: &tunnel_mgr,
         skippy_telemetry: &skippy_telemetry,
         api_port,
@@ -1528,6 +1597,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         interactive_started,
         lan_bootstrap_tasks,
         runtime,
+        provider_supervisor,
     })
     .await;
     if let Some(summary) = startup_ready_reporter.fail_fast_summary() {

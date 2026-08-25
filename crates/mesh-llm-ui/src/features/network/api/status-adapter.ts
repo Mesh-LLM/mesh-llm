@@ -1,5 +1,5 @@
 import { DASHBOARD_HARNESS } from '@/features/app-tabs/data'
-import type { StatusPayload, PeerInfo, GpuInfo, ServingModelEntry } from '@/lib/api/types'
+import type { StatusPayload, PeerInfo, GpuInfo, ServingModelEntry, ProviderRuntimeInfo } from '@/lib/api/types'
 import { isPublicMesh } from '@/lib/api/mesh-visibility'
 import { gpuRatedVramGB } from '@/lib/vram'
 import type {
@@ -115,6 +115,16 @@ function finiteMetric(value: number | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
+function providerLoadPct(
+  runtimes:
+    Array<Pick<ProviderRuntimeInfo, 'max_concurrent_requests' | 'active_requests' | 'queued_requests'>> | undefined
+): number | undefined {
+  const capacity = runtimes?.reduce((sum, runtime) => sum + finiteMetric(runtime.max_concurrent_requests), 0) ?? 0
+  if (capacity <= 0) return undefined
+  const active = runtimes?.reduce((sum, runtime) => sum + finiteMetric(runtime.active_requests), 0) ?? 0
+  return Math.min(Math.max(Math.round((active / capacity) * 100), 0), 100)
+}
+
 function gpuTotalVramGb(gpus?: GpuInfo[]): number | null {
   if (!gpus?.length) return null
 
@@ -153,7 +163,7 @@ function adaptPeer(peer: PeerInfo, fallbackIndex: number): Peer {
     latencySource: peer.latency_source ?? null,
     latencyAgeMs: peer.latency_age_ms ?? null,
     latencyObserverId: peer.latency_observer_id ?? null,
-    loadPct: peer.load_pct ?? 0,
+    loadPct: peer.load_pct ?? providerLoadPct(peer.provider_runtimes) ?? 0,
     shortId: id.slice(0, 8),
     version: peer.version,
     vramGB: peerVramGb(peer),
@@ -192,7 +202,7 @@ function adaptSelfPeer(payload: StatusPayload): Peer {
     latencySource: null,
     latencyAgeMs: null,
     latencyObserverId: null,
-    loadPct: payload.load_pct ?? 0,
+    loadPct: payload.load_pct ?? providerLoadPct(payload.runtime?.models) ?? 0,
     shortId: payload.node_id.slice(0, 8),
     role: 'you' as const,
     nodeState: effectiveState,

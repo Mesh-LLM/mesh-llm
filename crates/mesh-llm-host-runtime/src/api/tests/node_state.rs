@@ -152,6 +152,7 @@ fn derive_peer_state_prefers_client_role() {
         identity_hash: None,
         context_length: Some(8192),
         ready: true,
+        ..Default::default()
     }];
 
     assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Client);
@@ -168,6 +169,7 @@ fn derive_peer_state_returns_serving_for_ready_runtime() {
         identity_hash: None,
         context_length: Some(8192),
         ready: true,
+        ..Default::default()
     }];
 
     assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Serving);
@@ -182,6 +184,7 @@ fn derive_peer_state_returns_loading_for_assigned_but_unready_peer() {
         identity_hash: None,
         context_length: None,
         ready: false,
+        ..Default::default()
     }];
 
     assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Loading);

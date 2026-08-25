@@ -130,6 +130,13 @@ pub struct TargetSelection {
     pub learn_prefix_hash: Option<u64>,
     /// Cached target used for this request, when one was available.
     pub cached_target: Option<InferenceTarget>,
+    /// True when an explicit/stored affinity decision must outrank live load.
+    ///
+    /// Consumers that layer provider-preference routing on top of affinity use
+    /// this to decide whether they may override the target with a preferred
+    /// provider host: an affinity/sticky selection is authoritative and must not
+    /// be overridden, whereas a plain load-balanced pick may be.
+    pub affinity_selected: bool,
 }
 
 /// Remote-target ordering and prefix-learning metadata.
@@ -266,6 +273,7 @@ pub fn select_model_target_from_keys(
             target: ModelTargets::pick_sticky_from(candidates, session_hash),
             learn_prefix_hash: None,
             cached_target: None,
+            affinity_selected: true,
         };
     }
 
@@ -275,6 +283,7 @@ pub fn select_model_target_from_keys(
                 target: target.clone(),
                 learn_prefix_hash: Some(prefix_hash),
                 cached_target: Some(target),
+                affinity_selected: true,
             };
         }
 
@@ -283,6 +292,7 @@ pub fn select_model_target_from_keys(
                 target: ModelTargets::pick_sticky_from(candidates, prefix_hash),
                 learn_prefix_hash: Some(prefix_hash),
                 cached_target: None,
+                affinity_selected: true,
             };
         }
 
@@ -292,6 +302,7 @@ pub fn select_model_target_from_keys(
                 target: ModelTargets::pick_sticky_from(candidates, sticky_hash),
                 learn_prefix_hash: Some(prefix_hash),
                 cached_target: None,
+                affinity_selected: true,
             };
         }
 
@@ -299,6 +310,7 @@ pub fn select_model_target_from_keys(
             target: targets.pick_from(candidates),
             learn_prefix_hash: Some(prefix_hash),
             cached_target: None,
+            affinity_selected: false,
         };
     }
 
@@ -308,6 +320,7 @@ pub fn select_model_target_from_keys(
             target: ModelTargets::pick_sticky_from(candidates, sticky_hash),
             learn_prefix_hash: None,
             cached_target: None,
+            affinity_selected: true,
         };
     }
 
@@ -315,6 +328,7 @@ pub fn select_model_target_from_keys(
         target: targets.pick_from(candidates),
         learn_prefix_hash: None,
         cached_target: None,
+        affinity_selected: false,
     }
 }
 

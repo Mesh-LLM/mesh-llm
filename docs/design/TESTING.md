@@ -404,6 +404,72 @@ mesh-llm serve --model Qwen2.5-32B --join <TOKEN>
 - Both nodes run solo (no split) — each is its own host
 - API works from both nodes on `:9337`
 
+### 2a. Two Apple providers on a private mesh (experimental)
+
+This test requires two Apple silicon Macs running macOS Golden Gate with the
+system model available. On each Mac, build the host and an ad-hoc local QA
+provider (release products must use the signed/notarized artifact instead):
+
+```bash
+just build
+just apple::package
+export MESH_LLM_PROVIDER_RUNTIME_BUNDLE_DIR="$PWD/target/apple-runtime/package/meshllm-apple-runtime-darwin-arm64"
+export MESH_LLM_APPLE_PROVIDER_ALLOW_AD_HOC=1
+export APPLE_MODEL_ID="$(jq -r '.runtime.models[0].id' "$MESH_LLM_PROVIDER_RUNTIME_BUNDLE_DIR/provider-runtime.json")"
+```
+
+Start Mac A, copy the private invite token from its structured startup output,
+then join Mac B with distinct local ports:
+
+```bash
+# Mac A
+target/debug/mesh-llm --log-format json serve --headless --port 9337 --console 3131
+
+# Mac B
+target/debug/mesh-llm --log-format json serve --headless --port 9447 --console 3141 --join <TOKEN>
+```
+
+From either Mac, verify the rolling and resolved IDs and their provider load
+(replace `APPLE_MODEL_ID` with the ID in `provider-runtime.json`):
+
+```bash
+curl -s http://127.0.0.1:9337/v1/models | jq '.data[] |
+  select(.id == env.APPLE_MODEL_ID or (.id | startswith(env.APPLE_MODEL_ID + "@"))) |
+  {id, metadata}'
+
+curl -s http://127.0.0.1:3131/api/status | jq '{
+  local: [.runtime.models[] | select(.provider_kind == "apple")],
+  peers: [.peers[] | {id, provider_runtimes}]
+}'
+
+curl -s http://127.0.0.1:9337/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"'"$APPLE_MODEL_ID"'","messages":[{"role":"user","content":"Reply with exactly: private mesh ready"}],"max_tokens":32}' | jq .
+```
+
+Required evidence:
+
+- both Macs advertise the same packaged Apple model identity and resolved generation;
+- a request whose Apple-counted instructions, prompt, tool/schema material,
+  and requested output exceed 4,096 tokens fails before generation with
+  `context_exceeded` and does not consume the provider slot indefinitely;
+- every provider reports `max_concurrent_requests=1`, with active and queued
+  counts changing under concurrent requests;
+- an idle provider ranks before a saturated provider, while repeated requests
+  with the same affinity key remain on their healthy selected Mac;
+- killing one `mesh-apple-runtime` withdraws both of that Mac's routes; a
+  request that has not started streaming can retry the other Mac, but an
+  interrupted stream fails rather than being spliced;
+- restarting the sidecar restores its advertisement and capacity;
+- requests with `model=auto` or `model=mesh` never choose the experimental Apple model;
+- repeating Mac A with `--publish` leaves Apple provider descriptors absent
+  from peer gossip and public discovery; and
+- a released older peer can join and route using the model name while safely
+  ignoring the additive provider/load fields.
+
+The single-host `just apple::mesh` recipe remains the fast prerequisite smoke
+for completion, SSE, tools, cancellation, supervisor restart, and cleanup.
+
 ### 3. Two GPU nodes, forced split
 
 ```bash

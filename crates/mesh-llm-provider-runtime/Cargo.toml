@@ -1,0 +1,28 @@
+[package]
+name = "mesh-llm-provider-runtime"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Executable provider runtime artifact, resolution, and installation contract for MeshLLM"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dirs = "6.0.0"
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["stream"] }
+semver = "1"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "io-util"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

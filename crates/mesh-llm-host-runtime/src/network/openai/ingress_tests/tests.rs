@@ -856,3 +856,23 @@ fn disconnect_is_dropped_and_cannot_audit_model_access_as_success() {
         proxy::RouteDispatchOutcome::Responded(200)
     ));
 }
+
+#[test]
+fn provider_candidates_combine_local_runtime_and_remote_replicas() {
+    let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let candidates = merge_provider_candidates(
+        &[
+            election::InferenceTarget::None,
+            election::InferenceTarget::Local(41_001),
+        ],
+        &[peer_id, peer_id],
+    );
+
+    assert_eq!(
+        candidates,
+        vec![
+            election::InferenceTarget::Local(41_001),
+            election::InferenceTarget::Remote(peer_id),
+        ]
+    );
+}

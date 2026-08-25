@@ -102,6 +102,69 @@ class Console {
   }
 }
 
+class ProviderHost {
+  constructor(handle) {
+    this._handle = handle
+  }
+
+  static async start(options) {
+    if (!options || !Array.isArray(options.bundleRoots)) {
+      throw new Error('ProviderHost.start requires ProviderRuntimeOptions.bundleRoots')
+    }
+    const handle = await native.ProviderHost.start(JSON.stringify({
+      bundleRoots: options.bundleRoots,
+      releaseManifest: options.releaseManifest || null,
+      cacheDir: options.cacheDir || null,
+      allowDownload: options.allowDownload === true,
+      startupTimeoutMs: options.startupTimeoutMs || 30000
+    }))
+    return new ProviderHost(handle)
+  }
+
+  get apiBaseUrl() {
+    return this._handle.apiBaseUrl
+  }
+
+  async status() {
+    return parse(await this._handle.statusJson())
+  }
+
+  stop() {
+    return this._handle.stop()
+  }
+}
+
+function packagedAppleSystemProvider(options = {}) {
+  return {
+    bundleRoots: [options.rootDir || packagedAppleRuntimeRoot()],
+    releaseManifest: options.releaseManifest,
+    cacheDir: options.cacheDir,
+    allowDownload: options.allowDownload === true,
+    startupTimeoutMs: options.startupTimeoutMs || 30000
+  }
+}
+
+function packagedAppleRuntimeRoot() {
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') {
+    throw new Error('apple/system requires Apple silicon running macOS Golden Gate')
+  }
+  try {
+    return require('@mesh-llm/apple-runtime-darwin-arm64').runtimeRoot
+  } catch (error) {
+    const developmentRoot = path.join(__dirname, 'apple-runtime-darwin-arm64', 'runtime')
+    try {
+      require.resolve(path.join(developmentRoot, 'provider-runtime.json'))
+      return developmentRoot
+    } catch (_) {
+      throw new Error(
+        'Packaged Apple provider runtime is missing. Install ' +
+        '@mesh-llm/apple-runtime-darwin-arm64 or pass rootDir explicitly.',
+        { cause: error }
+      )
+    }
+  }
+}
+
 class Node {
   constructor(handle) {
     this._handle = handle
@@ -234,6 +297,8 @@ module.exports = {
   Client,
   Console,
   Node,
+  ProviderHost,
+  packagedAppleSystemProvider,
   generateOwnerKeypairHex: native.generateOwnerKeypairHex,
   currentMeshVersion: nativeRuntime.currentMeshVersion,
   currentSkippyAbiVersion: nativeRuntime.currentSkippyAbiVersion,
