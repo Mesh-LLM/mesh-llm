@@ -400,8 +400,8 @@ pub(crate) fn open_prediction_return_stream(
     _timeout_secs: u64,
 ) -> Result<TcpStream> {
     let endpoint = driver_stage_endpoint(config, topology)?;
-    let return_addr = resolve_downstream_endpoint(endpoint)?;
     let source_ip = downstream_source_ip(config)?;
+    let return_addr = resolve_downstream_endpoint(endpoint, source_ip)?;
     open_return_sink_once(
         return_addr,
         source_ip,
@@ -424,8 +424,8 @@ pub(crate) fn open_downstream_prediction_return_stream(
         .as_ref()
         .ok_or_else(|| anyhow!("direct prediction return requires downstream stage"))?;
     let endpoint = strip_tcp_prefix(&downstream.endpoint);
-    let return_addr = resolve_downstream_endpoint(endpoint)?;
     let source_ip = downstream_source_ip(config)?;
+    let return_addr = resolve_downstream_endpoint(endpoint, source_ip)?;
     open_return_sink_once(
         return_addr,
         source_ip,

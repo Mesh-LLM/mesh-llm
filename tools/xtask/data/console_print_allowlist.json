@@ -4205,27 +4205,27 @@
   ],
   "crates/skippy-server/src/binary_transport/binary_messaging.rs": [
     {
-      "line": 206,
+      "line": 300,
       "macro_name": "eprintln!"
     },
     {
-      "line": 210,
+      "line": 310,
       "macro_name": "println!"
     },
     {
-      "line": 231,
+      "line": 333,
       "macro_name": "eprintln!"
     },
     {
-      "line": 245,
+      "line": 353,
       "macro_name": "eprintln!"
     },
     {
-      "line": 253,
+      "line": 361,
       "macro_name": "eprintln!"
     },
     {
-      "line": 301,
+      "line": 415,
       "macro_name": "eprintln!"
     }
   ],
@@ -4263,31 +4263,31 @@
   ],
   "crates/skippy-server/src/binary_transport/preconnect.rs": [
     {
-      "line": 45,
+      "line": 74,
       "macro_name": "eprintln!"
     },
     {
-      "line": 55,
+      "line": 87,
       "macro_name": "eprintln!"
     }
   ],
   "crates/skippy-server/src/binary_transport/socket.rs": [
     {
-      "line": 52,
+      "line": 150,
       "macro_name": "eprintln!"
     },
     {
-      "line": 101,
+      "line": 204,
       "macro_name": "eprintln!"
     },
     {
-      "line": 139,
+      "line": 242,
       "macro_name": "eprintln!"
     }
   ],
   "crates/skippy-server/src/binary_transport/stage_execution.rs": [
     {
-      "line": 211,
+      "line": 290,
       "macro_name": "eprintln!"
     }
   ],

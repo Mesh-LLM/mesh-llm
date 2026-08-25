@@ -107,7 +107,9 @@ scripts/plan-ci.py is the only eligibility implementation. It reads the
 JSON-compatible manifests and validates their schema and dependency graph.
 Unknown paths and malformed inputs fail closed. CI-control and
 runner-infrastructure changes fail open to control rows and all supported
-product rows.
+product rows. Paths that map only to documentation plus `ci-control` are the
+exception. They keep the profile base and add only `runner-contract`, without
+forcing product rows.
 
 Each plan contains:
 
@@ -123,14 +125,16 @@ Profiles are closed and event-derived:
 
 | Profile | Selection |
 | --- | --- |
-| pr-draft | Quality, affected Rust signal, directly owned web/product rows, core smoke only |
+| pr-draft | No build slices; stable planner/gate results only, except CI-control or runner-infrastructure fail-open |
 | pr-ready | Complete targeted rows for direct domains and affected Rust dependents |
 | main | Every workspace crate and every supported product/platform/backend/SDK row |
 | manual-full | Main-equivalent non-publishing dispatch |
 
-The selected PR row is semantically identical to main. Only plan membership,
-trust-derived cache mode, short-lived artifact namespace, provider label and
-optional trusted credentials may differ.
+The selected ready-PR row is semantically identical to main. Draft PRs select
+no build row. Only plan membership, bounded parallelism, worker budgets
+(`total_max_workers` is 10 for `pr-ready` and 18 for `main`), trust-derived
+cache mode, short-lived artifact namespace, provider label and optional trusted
+credentials may differ.
 
 ## Slice catalog
 

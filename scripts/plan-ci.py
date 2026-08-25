@@ -466,6 +466,15 @@ def _select_rows(
     sdk_rows = _row_map(slices, "sdk_rows")
     smoke_rows = _row_map(slices, "smoke_rows")
 
+    if profile == "pr-draft" and not force_all_rows:
+        return {
+            "hosts": [],
+            "runtime_products": [],
+            "platform_checks": [],
+            "sdk": [],
+            "smoke": [],
+        }
+
     if force_all_rows:
         runtime_ids = list(runtime_rows)
         platform_ids = list(platform_rows)
@@ -615,10 +624,13 @@ def _select_slices(
         slice_id: ["profile:base"] for slice_id in selected
     }
     domain_rules = {rule["domain"]: rule["slices"] for rule in slices["domain_rules"]}
-    for domain in domains:
-        for slice_id in domain_rules[domain]:
-            selected.add(slice_id)
-            reasons.setdefault(slice_id, []).append(f"domain:{domain}")
+    if profile != "pr-draft" or (
+        "ci-control" in domains and documentation_only
+    ):
+        for domain in domains:
+            for slice_id in domain_rules[domain]:
+                selected.add(slice_id)
+                reasons.setdefault(slice_id, []).append(f"domain:{domain}")
 
     force_all_rows = bool(profile_definition["all_rows"])
     if ("ci-control" in domains and not documentation_only) or "runner-infra" in domains:

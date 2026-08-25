@@ -350,8 +350,10 @@ source commit.
   diagnostics; it cannot receive a push, PR, or workflow-run event.
 
 Main/manual profiles enumerate every workspace crate exactly once and all
-supported product/SDK rows. PR profiles select affected or directly owned rows
-from that same catalog.
+supported product/SDK rows. Ready PR profiles select affected or directly owned
+rows from that same catalog. Draft PR profiles select no build rows unless the
+changed paths require the documented CI-control or runner-infrastructure
+fail-open policy.
 
 ## Artifact and cache owners
 

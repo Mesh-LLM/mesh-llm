@@ -1,9 +1,12 @@
 use std::{
     collections::BTreeMap,
     env,
-    io::{self, Write},
+    io::{self, Read, Write},
     net::TcpStream,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -30,10 +33,14 @@ use skippy_runtime::{
     RuntimeActivationDType, RuntimeActivationLayout, SamplingConfig,
 };
 
-use super::socket::{connect_downstream_socket, downstream_source_ip, resolve_downstream_endpoint};
+use super::socket::{
+    connect_downstream_socket, connect_downstream_socket_cancellable, downstream_source_ip,
+    resolve_downstream_endpoint, resolve_downstream_endpoint_cancellable,
+};
 
 const CLIENT_READY_HELLO_ENV: &str = "SKIPPY_STAGE_CLIENT_READY_HELLO";
 const CLIENT_READY_HELLO_OPT_IN_PEEK_MS: u64 = 500;
+const DOWNSTREAM_SHUTDOWN_POLL: Duration = Duration::from_millis(100);
 
 pub(in crate::binary_transport) fn warm_downstream_preconnect_enabled() -> bool {
     warm_downstream_preconnect_enabled_from(
@@ -50,6 +57,7 @@ fn warm_downstream_preconnect_enabled_from(value: Option<&str>) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(in crate::binary_transport) fn take_warm_or_connect_downstream(
     config: &StageConfig,
     warm_downstream: &Arc<Mutex<Option<TcpStream>>>,
@@ -68,10 +76,28 @@ pub(in crate::binary_transport) fn take_warm_or_connect_downstream(
     }
 }
 
+fn take_warm_or_connect_downstream_cancellable(
+    config: &StageConfig,
+    warm_downstream: &Arc<Mutex<Option<TcpStream>>>,
+    timeout: Duration,
+    shutdown: &AtomicBool,
+) -> Result<Option<TcpStream>> {
+    ensure_downstream_acquisition_active(shutdown)?;
+    let warm = warm_downstream
+        .lock()
+        .map_err(|_| anyhow!("warm downstream lock poisoned"))?
+        .take();
+    match warm {
+        Some(stream) if warm_downstream_is_healthy(&stream)? => Ok(Some(stream)),
+        Some(_) | None => connect_binary_downstream_cancellable(config, timeout, shutdown),
+    }
+}
+
 pub(in crate::binary_transport) fn take_ready_downstream(
     config: &StageConfig,
     warm_downstream: &Arc<Mutex<Option<TcpStream>>>,
     timeout_secs: u64,
+    shutdown: &AtomicBool,
 ) -> Result<Option<TcpStream>> {
     if config.downstream.is_none() {
         return Ok(None);
@@ -79,21 +105,24 @@ pub(in crate::binary_transport) fn take_ready_downstream(
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
     let mut last_error = None;
     loop {
+        ensure_downstream_acquisition_active(shutdown)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
         }
-        match take_warm_or_connect_downstream(config, warm_downstream, remaining) {
+        match take_warm_or_connect_downstream_cancellable(
+            config,
+            warm_downstream,
+            remaining,
+            shutdown,
+        ) {
             Ok(Some(mut stream)) => {
                 let handshake_remaining = deadline.saturating_duration_since(Instant::now());
                 if handshake_remaining.is_zero() {
                     last_error = Some(anyhow!("downstream ready deadline expired after connect"));
                     continue;
                 }
-                match complete_downstream_ready(
-                    &mut stream,
-                    handshake_remaining.min(Duration::from_secs(10)),
-                ) {
+                match complete_downstream_ready(&mut stream, deadline, shutdown) {
                     Ok(()) => return Ok(Some(stream)),
                     Err(error) => last_error = Some(error),
                 }
@@ -101,9 +130,10 @@ pub(in crate::binary_transport) fn take_ready_downstream(
             Ok(None) => return Ok(None),
             Err(error) => last_error = Some(error),
         }
+        ensure_downstream_acquisition_active(shutdown)?;
         let retry_sleep = deadline
             .saturating_duration_since(Instant::now())
-            .min(Duration::from_millis(100));
+            .min(DOWNSTREAM_SHUTDOWN_POLL);
         if !retry_sleep.is_zero() {
             thread::sleep(retry_sleep);
         }
@@ -116,7 +146,25 @@ pub(in crate::binary_transport) fn take_ready_downstream(
         )))
 }
 
-fn complete_downstream_ready(stream: &mut TcpStream, timeout: Duration) -> Result<()> {
+fn ensure_downstream_acquisition_active(shutdown: &AtomicBool) -> Result<()> {
+    if shutdown.load(Ordering::Acquire) {
+        bail!("downstream acquisition cancelled during shutdown");
+    }
+    Ok(())
+}
+
+fn complete_downstream_ready(
+    stream: &mut TcpStream,
+    deadline: Instant,
+    shutdown: &AtomicBool,
+) -> Result<()> {
+    ensure_downstream_acquisition_active(shutdown)?;
+    let timeout = deadline
+        .saturating_duration_since(Instant::now())
+        .min(DOWNSTREAM_SHUTDOWN_POLL);
+    if timeout.is_zero() {
+        bail!("downstream ready deadline expired before handshake");
+    }
     stream
         .set_write_timeout(Some(timeout))
         .context("set downstream ready write timeout")?;
@@ -129,8 +177,39 @@ fn complete_downstream_ready(stream: &mut TcpStream, timeout: Duration) -> Resul
     stream
         .set_read_timeout(Some(timeout))
         .context("set downstream ready timeout")?;
-    let result = skippy_protocol::binary::recv_ready(&mut *stream)
-        .context("downstream binary stage did not become ready");
+    let result = (|| -> Result<()> {
+        let mut bytes = [0_u8; 4];
+        let mut offset = 0;
+        while offset < bytes.len() {
+            ensure_downstream_acquisition_active(shutdown)?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                bail!("downstream ready deadline expired during handshake");
+            }
+            stream
+                .set_read_timeout(Some(remaining.min(DOWNSTREAM_SHUTDOWN_POLL)))
+                .context("update downstream ready timeout")?;
+            match stream.read(&mut bytes[offset..]) {
+                Ok(0) => bail!("downstream binary stage closed before becoming ready"),
+                Ok(read) => offset += read,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => {
+                    return Err(error).context("read downstream binary stage ready handshake");
+                }
+            }
+        }
+        if i32::from_le_bytes(bytes) != READY_MAGIC {
+            bail!("downstream binary stage ready magic mismatch");
+        }
+        Ok(())
+    })()
+    .context("downstream binary stage did not become ready");
     stream
         .set_read_timeout(None)
         .context("clear downstream ready timeout")?;
@@ -436,6 +515,25 @@ pub(crate) fn connect_binary_downstream(
     config: &StageConfig,
     timeout: Duration,
 ) -> Result<Option<TcpStream>> {
+    connect_binary_downstream_inner(config, timeout, None)
+}
+
+pub(crate) fn connect_binary_downstream_cancellable(
+    config: &StageConfig,
+    timeout: Duration,
+    shutdown: &AtomicBool,
+) -> Result<Option<TcpStream>> {
+    connect_binary_downstream_inner(config, timeout, Some(shutdown))
+}
+
+fn connect_binary_downstream_inner(
+    config: &StageConfig,
+    timeout: Duration,
+    shutdown: Option<&AtomicBool>,
+) -> Result<Option<TcpStream>> {
+    if let Some(shutdown) = shutdown {
+        ensure_downstream_acquisition_active(shutdown)?;
+    }
     let Some(peer) = config.downstream.as_ref() else {
         return Ok(None);
     };
@@ -443,29 +541,48 @@ pub(crate) fn connect_binary_downstream(
         .endpoint
         .strip_prefix("tcp://")
         .unwrap_or(&peer.endpoint);
-    let downstream_addr = resolve_downstream_endpoint(endpoint)?;
     let source_ip = downstream_source_ip(config)?;
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
+    let downstream_addr = match shutdown {
+        Some(shutdown) => {
+            resolve_downstream_endpoint_cancellable(endpoint, source_ip, deadline, shutdown)?
+        }
+        None => resolve_downstream_endpoint(endpoint, source_ip)?,
+    };
     let mut last_error = None;
     loop {
+        if let Some(shutdown) = shutdown {
+            ensure_downstream_acquisition_active(shutdown)?;
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
         }
-        match connect_downstream_socket(
-            downstream_addr,
-            source_ip,
-            remaining.min(Duration::from_secs(2)),
-        ) {
+        let connect_timeout = remaining.min(Duration::from_secs(2));
+        let result = match shutdown {
+            Some(shutdown) => connect_downstream_socket_cancellable(
+                downstream_addr,
+                source_ip,
+                connect_timeout,
+                shutdown,
+            ),
+            None => connect_downstream_socket(downstream_addr, source_ip, connect_timeout),
+        };
+        match result {
             Ok(stream) => {
                 stream.set_nodelay(true).ok();
                 return Ok(Some(stream));
             }
             Err(error) => {
                 last_error = Some(anyhow!(error));
-                let retry_sleep = deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(Duration::from_millis(500));
+                let retry_sleep =
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(if shutdown.is_some() {
+                            DOWNSTREAM_SHUTDOWN_POLL
+                        } else {
+                            Duration::from_millis(500)
+                        });
                 if !retry_sleep.is_zero() {
                     thread::sleep(retry_sleep);
                 }
@@ -888,6 +1005,11 @@ mod tests {
         io,
         net::{Shutdown, TcpListener, TcpStream},
         os::fd::AsRawFd,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
         thread,
         time::{Duration, Instant},
     };
@@ -988,7 +1110,8 @@ mod tests {
         config.downstream.as_mut().unwrap().endpoint = endpoint;
         let warm = std::sync::Arc::new(std::sync::Mutex::new(None));
 
-        let ready = take_ready_downstream(&config, &warm, 2)
+        let shutdown = AtomicBool::new(false);
+        let ready = take_ready_downstream(&config, &warm, 2, &shutdown)
             .unwrap()
             .expect("downstream should be present");
 
@@ -1009,13 +1132,40 @@ mod tests {
         let warm = std::sync::Arc::new(std::sync::Mutex::new(None));
 
         let started = Instant::now();
-        let error = take_ready_downstream(&config, &warm, 1).unwrap_err();
+        let shutdown = AtomicBool::new(false);
+        let error = take_ready_downstream(&config, &warm, 1, &shutdown).unwrap_err();
         let elapsed = started.elapsed();
 
         assert!(error.to_string().contains("did not become ready"));
         assert!(elapsed >= Duration::from_millis(800));
         assert!(elapsed < Duration::from_millis(1500));
         server.join().unwrap();
+    }
+
+    #[test]
+    fn downstream_acquisition_stops_when_shutdown_is_requested() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap().to_string();
+        let mut config = prefix_cache_test_config();
+        config.downstream.as_mut().unwrap().endpoint = endpoint;
+        let warm = Arc::new(Mutex::new(None));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let task_shutdown = shutdown.clone();
+        let (result_tx, result_rx) = mpsc::sync_channel(1);
+        let task = thread::spawn(move || {
+            let result = take_ready_downstream(&config, &warm, 30, &task_shutdown);
+            let _ = result_tx.send(result);
+        });
+
+        let (_unready_downstream, _) = listener.accept().unwrap();
+        shutdown.store(true, Ordering::Release);
+        let error = result_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("downstream acquisition must stop within one second")
+            .unwrap_err();
+
+        assert!(error.to_string().contains("cancelled during shutdown"));
+        task.join().unwrap();
     }
 
     #[test]

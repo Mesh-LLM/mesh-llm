@@ -71,6 +71,36 @@ class PlanCiTests(unittest.TestCase):
             },
         )
 
+    def test_draft_profile_skips_build_slices_for_regular_changes(self) -> None:
+        payload = fixture("runtime.json")
+        payload.update({"profile": "pr-draft", "event_name": "pull_request"})
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        self.assertEqual(plan["required_slices"], [])
+        self.assertTrue(all(not rows for rows in plan["matrices"].values()))
+
+    def test_draft_docs_and_ci_control_keeps_runner_contract_without_rows(self) -> None:
+        payload = fixture("docs-only.json")
+        payload.update(
+            {
+                "profile": "pr-draft",
+                "changed_files": ["CONTRIBUTING.md", ".github/README.md"],
+            }
+        )
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        self.assertEqual(plan["domains"], ["ci-control", "docs"])
+        self.assertTrue(plan["signals"]["docs_only"])
+        self.assertTrue(plan["signals"]["runner_contract_required"])
+        self.assertEqual(plan["required_slices"], ["runner-contract"])
+        self.assertEqual(
+            plan["reasons"]["runner-contract"],
+            ["domain:ci-control"],
+        )
+        self.assertTrue(all(not rows for rows in plan["matrices"].values()))
+
     def test_runtime_change_separates_direct_and_affected_crates(self) -> None:
         plan = PLANNER.build_plan(fixture("runtime.json"), root=ROOT)
 

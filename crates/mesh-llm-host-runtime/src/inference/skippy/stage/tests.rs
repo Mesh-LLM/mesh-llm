@@ -10,6 +10,58 @@ use anyhow::{Result, anyhow};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
 use tokio::sync::{Mutex as TokioMutex, oneshot};
 
+#[tokio::test]
+async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
+    let handle = spawn_stage_control_loop(None, super::super::SkippyTelemetryOptions::default());
+    let sender = handle.sender();
+
+    tokio::time::timeout(Duration::from_secs(1), handle.shutdown())
+        .await
+        .expect("stage control shutdown should be bounded")
+        .expect("stage control shutdown should succeed");
+    let (resp, _rx) = oneshot::channel();
+    assert!(
+        sender
+            .send(StageControlCommand {
+                request: StageControlRequest::Status(StageStatusFilter {
+                    topology_id: None,
+                    run_id: None,
+                    stage_id: None,
+                }),
+                resp,
+            })
+            .is_err(),
+        "shutdown must close the stage control command channel"
+    );
+}
+
+#[tokio::test]
+async fn stage_control_shutdown_interrupts_an_active_request() {
+    let state = StageControlState::default();
+    let preparations = Arc::clone(&state.preparations);
+    let preparations_guard = preparations.lock().await;
+    let handle = spawn_stage_control_loop_with_state(state);
+    let (resp, _rx) = oneshot::channel();
+    handle
+        .sender()
+        .send(StageControlCommand {
+            request: StageControlRequest::StatusUpdate(preparation_status_from_load(
+                &load_request(),
+                StagePreparationState::Assigned,
+                None,
+            )),
+            resp,
+        })
+        .expect("control command accepted");
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    tokio::time::timeout(Duration::from_secs(1), handle.shutdown())
+        .await
+        .expect("shutdown must interrupt the active request")
+        .expect("stage control shutdown should succeed");
+    drop(preparations_guard);
+}
+
 fn load_request() -> StageLoadRequest {
     StageLoadRequest {
         topology_id: "topology-a".to_string(),
@@ -356,10 +408,45 @@ async fn binary_stage_ready_probe_waits_for_wire_handshake() {
     });
 
     let started = Instant::now();
-    wait_for_binary_stage_ready(bind_addr, Duration::from_secs(2))
+    let mut probe = start_binary_stage_ready_probe(bind_addr, Duration::from_secs(2));
+    (&mut probe.handle)
         .await
+        .expect("join readiness probe")
         .unwrap();
     assert!(started.elapsed() >= Duration::from_millis(50));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind_addr = listener.local_addr().unwrap();
+    let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+        accepted_tx.send(()).unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+    });
+
+    let state = StageControlState {
+        readiness_probe: Some(start_binary_stage_ready_probe(
+            bind_addr,
+            Duration::from_secs(900),
+        )),
+        ..Default::default()
+    };
+    let handle = spawn_stage_control_loop_with_state(state);
+    accepted_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("readiness probe connected to silent stage");
+
+    tokio::time::timeout(Duration::from_secs(3), handle.shutdown())
+        .await
+        .expect("shutdown must not wait for the readiness deadline")
+        .expect("stage control shutdown should succeed");
+
+    release_tx.send(()).unwrap();
     server.join().unwrap();
 }
 

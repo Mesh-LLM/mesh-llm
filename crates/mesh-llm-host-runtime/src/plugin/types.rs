@@ -168,6 +168,21 @@ pub struct PluginCapabilityProvider {
     pub detail: Option<String>,
 }
 
+impl PluginCapabilityProvider {
+    /// Return a copy safe to serialize across a network boundary.
+    ///
+    /// Provider health details can echo the HTTP endpoint URL that was
+    /// probed, including URL userinfo or sensitive query parameters. The
+    /// provider projection has no address of its own, so only the embedded
+    /// URLs in `detail` need redaction.
+    pub(crate) fn redacted_for_network(mut self) -> Self {
+        if let Some(detail) = self.detail.as_deref() {
+            self.detail = Some(crate::logging::policy::redact_urls_in_text(detail));
+        }
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct InferenceEndpointRoute {
     pub plugin_name: String,
@@ -254,5 +269,47 @@ mod tests {
         let address = "/usr/local/bin/my-mcp-server --flag value";
         let redacted = summary_with(Some(address), None).redacted_for_network();
         assert_eq!(redacted.address.as_deref(), Some(address));
+    }
+
+    #[test]
+    fn provider_health_detail_url_credentials_are_redacted_for_network() {
+        let provider = PluginCapabilityProvider {
+            capability: "chat".into(),
+            plugin_name: "demo".into(),
+            plugin_status: "running".into(),
+            endpoint_id: Some("chat".into()),
+            available: true,
+            detail: Some("GET https://alice:s3cret@host/v1/models?api_key=abc123 -> 200 OK".into()),
+        }
+        .redacted_for_network();
+        let detail = provider.detail.expect("detail present");
+        assert!(
+            !detail.contains("alice:s3cret"),
+            "userinfo leaked: {detail}"
+        );
+        assert!(!detail.contains("abc123"), "api_key leaked: {detail}");
+        assert!(detail.contains("host"), "host lost: {detail}");
+    }
+
+    #[test]
+    fn punctuation_delimited_detail_url_credentials_are_redacted_for_network() {
+        let provider = PluginCapabilityProvider {
+            capability: "chat".into(),
+            plugin_name: "demo".into(),
+            plugin_status: "running".into(),
+            endpoint_id: Some("chat".into()),
+            available: true,
+            detail: Some("GET (https://alice:s3cret@host/v1) -> 200 OK".into()),
+        }
+        .redacted_for_network();
+        let detail = provider.detail.expect("detail present");
+        assert!(
+            !detail.contains("alice:s3cret"),
+            "userinfo leaked: {detail}"
+        );
+        assert!(
+            detail.contains("(https://[REDACTED]@host/v1)"),
+            "URL punctuation lost: {detail}"
+        );
     }
 }

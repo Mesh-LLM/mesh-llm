@@ -68,9 +68,9 @@ pub(crate) use resolver::{
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use stage::{
     LayerRange, SourceModelKind, StageCancelPrepareRequest, StageControlCommand,
-    StageControlRequest, StageControlResponse, StageCoordinatorClaim, StageCoordinatorClaimAck,
-    StageInventoryRequest, StageLayerInventory, StageLoadRequest, StagePackagePrefetcher,
-    StagePeerDescriptor, StagePreparationState, StagePreparationStatus,
+    StageControlHandle, StageControlRequest, StageControlResponse, StageCoordinatorClaim,
+    StageCoordinatorClaimAck, StageInventoryRequest, StageLayerInventory, StageLoadRequest,
+    StagePackagePrefetcher, StagePeerDescriptor, StagePreparationState, StagePreparationStatus,
     StagePrepareAcceptedResponse, StagePrepareRequest, StageReadyResponse, StageRuntimeState,
     StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest, StageWireDType,
     spawn_stage_control_loop, stage_load_timeout,

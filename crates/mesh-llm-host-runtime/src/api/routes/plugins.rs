@@ -209,7 +209,13 @@ async fn handle_endpoints(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Re
 
 async fn handle_providers(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     match state.plugin_capability_providers().await {
-        Ok(providers) => respond_json(stream, 200, &providers).await?,
+        Ok(providers) => {
+            let providers = providers
+                .into_iter()
+                .map(|provider| provider.redacted_for_network())
+                .collect::<Vec<_>>();
+            respond_json(stream, 200, &providers).await?
+        }
         Err(err) => respond_error(stream, 500, &err.to_string()).await?,
     }
     Ok(())
@@ -225,7 +231,7 @@ async fn handle_provider(
         .map(|value| value.into_owned())
         .unwrap_or_else(|_| capability.to_string());
     match state.plugin_provider_for_capability(&capability).await {
-        Ok(Some(provider)) => respond_json(stream, 200, &provider).await?,
+        Ok(Some(provider)) => respond_json(stream, 200, &provider.redacted_for_network()).await?,
         Ok(None) => {
             respond_error(
                 stream,
@@ -969,6 +975,33 @@ mod tests {
             .await
             .unwrap();
         String::from_utf8(response_bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn provider_routes_redact_credentials_from_health_details() {
+        let plugin_manager = plugin::PluginManager::for_test_summaries(Vec::new());
+        plugin_manager.set_test_capability_providers(vec![
+            crate::plugin::PluginCapabilityProvider {
+                capability: "chat".into(),
+                plugin_name: "demo".into(),
+                plugin_status: "running".into(),
+                endpoint_id: Some("chat".into()),
+                available: true,
+                detail: Some(
+                    "GET https://alice:s3cret@host/v1/models?api_key=abc123 -> 200 OK".into(),
+                ),
+            },
+        ]);
+        let state = build_test_api_with_plugin_manager(plugin_manager).await;
+
+        for path in ["/api/plugins/providers", "/api/plugins/providers/chat"] {
+            let response = call_plugins_route(&state, "GET", path, "").await;
+            assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+            let body = response_body(&response);
+            assert!(!body.contains("alice:s3cret"), "userinfo leaked: {body}");
+            assert!(!body.contains("abc123"), "api_key leaked: {body}");
+            assert!(body.contains("host"), "host lost: {body}");
+        }
     }
 
     fn response_body(response: &str) -> &str {

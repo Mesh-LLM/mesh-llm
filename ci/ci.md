@@ -196,15 +196,16 @@ Profiles are closed and event-derived:
 
 | Profile | Selection |
 | --- | --- |
-| `pr-draft` | Quality plus the smallest useful affected signal; core smoke is the only smoke row |
+| `pr-draft` | No build slices; stable planner/gate results only (CI-control and runner-infrastructure changes still fail open) |
 | `pr-ready` | Complete targeted rows for directly owned domains and affected Rust dependents |
 | `main` | All workspace, product, platform, backend, smoke and SDK rows |
 | `manual-full` | Main-equivalent non-publishing validation on dispatch |
 
-The selected PR row uses the same build commands, profile semantics, artifact
-contract and verification as the corresponding main row. Trust-derived
-placement, cache mode, artifact namespace and optional credentials may differ,
-along with row selection and bounded parallelism.
+The selected ready-PR row uses the same build commands, profile semantics,
+artifact contract and verification as the corresponding main row. Draft PRs
+select no build rows. Trust-derived placement, cache mode, artifact namespace
+and optional credentials may differ, along with row selection and bounded
+parallelism.
 
 ## Slice catalog
 
