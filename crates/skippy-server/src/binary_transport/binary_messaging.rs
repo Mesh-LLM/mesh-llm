@@ -18,7 +18,7 @@ use super::{
     decode_batcher::DecodeFrameBatcher,
     direct_return::{PredictionReturnHub, PredictionReturnSinks},
     options::BinaryStageOptions,
-    preconnect::spawn_downstream_preconnector,
+    preconnect::DownstreamPreconnector,
 };
 use crate::{
     cli::ServeBinaryArgs,
@@ -196,9 +196,6 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
     );
     telemetry.emit("stage.binary_server_start", lifecycle_attrs(&config));
     let warm_downstream = Arc::new(Mutex::new(None));
-    if warm_downstream_preconnect_enabled() {
-        spawn_downstream_preconnector(config.clone(), warm_downstream.clone(), shutdown.clone());
-    }
     let runtime = load_runtime_with_overrides(
         &config,
         &RuntimeLaunchOverrides {
@@ -292,6 +289,12 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
             }
         });
     }
+    let _downstream_preconnector = warm_downstream_preconnect_enabled()
+        .then(|| {
+            DownstreamPreconnector::spawn(config.clone(), warm_downstream.clone(), shutdown.clone())
+        })
+        .transpose()
+        .context("spawn downstream preconnector")?;
     println!(
         "skippy-server listening: binary={} stage_id={} layer_range={}..{} activation_width={} dtype={:?}",
         bind_addr,

@@ -6,7 +6,6 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -34,7 +33,10 @@ use skippy_runtime::{
     RuntimeActivationDType, RuntimeActivationLayout, SamplingConfig,
 };
 
-use super::socket::{connect_downstream_socket, downstream_source_ip, resolve_downstream_endpoint};
+use super::socket::{
+    connect_downstream_socket, connect_downstream_socket_cancellable, downstream_source_ip,
+    resolve_downstream_endpoint,
+};
 
 const CLIENT_READY_HELLO_ENV: &str = "SKIPPY_STAGE_CLIENT_READY_HELLO";
 const CLIENT_READY_HELLO_OPT_IN_PEEK_MS: u64 = 500;
@@ -55,6 +57,7 @@ fn warm_downstream_preconnect_enabled_from(value: Option<&str>) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(in crate::binary_transport) fn take_warm_or_connect_downstream(
     config: &StageConfig,
     warm_downstream: &Arc<Mutex<Option<TcpStream>>>,
@@ -80,28 +83,13 @@ fn take_warm_or_connect_downstream_cancellable(
     shutdown: &AtomicBool,
 ) -> Result<Option<TcpStream>> {
     ensure_downstream_acquisition_active(shutdown)?;
-    let config = config.clone();
-    let warm_downstream = warm_downstream.clone();
-    let (result_tx, result_rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let result = take_warm_or_connect_downstream(&config, &warm_downstream, timeout);
-        let _ = result_tx.send(result);
-    });
-
-    let deadline = Instant::now() + timeout;
-    loop {
-        ensure_downstream_acquisition_active(shutdown)?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            bail!("downstream connection attempt exceeded its deadline");
-        }
-        match result_rx.recv_timeout(remaining.min(DOWNSTREAM_SHUTDOWN_POLL)) {
-            Ok(result) => return result,
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                bail!("downstream connection attempt ended without a result");
-            }
-        }
+    let warm = warm_downstream
+        .lock()
+        .map_err(|_| anyhow!("warm downstream lock poisoned"))?
+        .take();
+    match warm {
+        Some(stream) if warm_downstream_is_healthy(&stream)? => Ok(Some(stream)),
+        Some(_) | None => connect_binary_downstream_cancellable(config, timeout, shutdown),
     }
 }
 
@@ -527,6 +515,25 @@ pub(crate) fn connect_binary_downstream(
     config: &StageConfig,
     timeout: Duration,
 ) -> Result<Option<TcpStream>> {
+    connect_binary_downstream_inner(config, timeout, None)
+}
+
+pub(crate) fn connect_binary_downstream_cancellable(
+    config: &StageConfig,
+    timeout: Duration,
+    shutdown: &AtomicBool,
+) -> Result<Option<TcpStream>> {
+    connect_binary_downstream_inner(config, timeout, Some(shutdown))
+}
+
+fn connect_binary_downstream_inner(
+    config: &StageConfig,
+    timeout: Duration,
+    shutdown: Option<&AtomicBool>,
+) -> Result<Option<TcpStream>> {
+    if let Some(shutdown) = shutdown {
+        ensure_downstream_acquisition_active(shutdown)?;
+    }
     let Some(peer) = config.downstream.as_ref() else {
         return Ok(None);
     };
@@ -539,24 +546,38 @@ pub(crate) fn connect_binary_downstream(
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
     let mut last_error = None;
     loop {
+        if let Some(shutdown) = shutdown {
+            ensure_downstream_acquisition_active(shutdown)?;
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
         }
-        match connect_downstream_socket(
-            downstream_addr,
-            source_ip,
-            remaining.min(Duration::from_secs(2)),
-        ) {
+        let connect_timeout = remaining.min(Duration::from_secs(2));
+        let result = match shutdown {
+            Some(shutdown) => connect_downstream_socket_cancellable(
+                downstream_addr,
+                source_ip,
+                connect_timeout,
+                shutdown,
+            ),
+            None => connect_downstream_socket(downstream_addr, source_ip, connect_timeout),
+        };
+        match result {
             Ok(stream) => {
                 stream.set_nodelay(true).ok();
                 return Ok(Some(stream));
             }
             Err(error) => {
                 last_error = Some(anyhow!(error));
-                let retry_sleep = deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(Duration::from_millis(500));
+                let retry_sleep =
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(if shutdown.is_some() {
+                            DOWNSTREAM_SHUTDOWN_POLL
+                        } else {
+                            Duration::from_millis(500)
+                        });
                 if !retry_sleep.is_zero() {
                     thread::sleep(retry_sleep);
                 }

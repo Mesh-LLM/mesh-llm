@@ -1,6 +1,7 @@
 use std::{
     io,
     net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
+    sync::atomic::{AtomicBool, Ordering},
     sync::mpsc,
     thread,
     time::Duration,
@@ -42,10 +43,34 @@ pub(crate) fn connect_downstream_socket(
     source_ip: Option<IpAddr>,
     timeout: Duration,
 ) -> io::Result<TcpStream> {
+    connect_downstream_socket_inner(downstream_addr, source_ip, timeout, None)
+}
+
+pub(crate) fn connect_downstream_socket_cancellable(
+    downstream_addr: SocketAddr,
+    source_ip: Option<IpAddr>,
+    timeout: Duration,
+    shutdown: &AtomicBool,
+) -> io::Result<TcpStream> {
+    connect_downstream_socket_inner(downstream_addr, source_ip, timeout, Some(shutdown))
+}
+
+fn connect_downstream_socket_inner(
+    downstream_addr: SocketAddr,
+    source_ip: Option<IpAddr>,
+    timeout: Duration,
+    shutdown: Option<&AtomicBool>,
+) -> io::Result<TcpStream> {
     let mut errors = Vec::new();
 
     macro_rules! try_connect {
-        ($mode:literal, $connect:expr_2021) => {
+        ($mode:literal, $connect:expr_2021) => {{
+            if shutdown.is_some_and(|shutdown| shutdown.load(Ordering::Acquire)) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "downstream connection cancelled during shutdown",
+                ));
+            }
             match $connect {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {
@@ -56,7 +81,7 @@ pub(crate) fn connect_downstream_socket(
                     errors.push(format!("{} failed: {error}", $mode));
                 }
             }
-        };
+        }};
     }
 
     try_connect!(
@@ -71,14 +96,19 @@ pub(crate) fn connect_downstream_socket(
         "source-bound",
         connect_bound_with_timeout(downstream_addr, source_ip, timeout, false)
     );
-    try_connect!(
-        "blocking-source-bound",
-        connect_blocking_with_timeout(downstream_addr, source_ip, timeout, false)
-    );
-    try_connect!(
-        "blocking-route-selected",
-        connect_route_selected_blocking_with_timeout(downstream_addr, source_ip, timeout)
-    );
+    // The blocking fallbacks spawn helper threads that cannot be interrupted.
+    // Keep them only on the legacy non-cancellable path so shutdown never
+    // returns while a downstream acquisition helper is still running.
+    if shutdown.is_none() {
+        try_connect!(
+            "blocking-source-bound",
+            connect_blocking_with_timeout(downstream_addr, source_ip, timeout, false)
+        );
+        try_connect!(
+            "blocking-route-selected",
+            connect_route_selected_blocking_with_timeout(downstream_addr, source_ip, timeout)
+        );
+    }
 
     Err(io::Error::other(errors.join("; ")))
 }
@@ -289,5 +319,29 @@ pub(super) fn sockaddr_ip(addr: *const libc::sockaddr) -> Option<IpAddr> {
             Some(IpAddr::V6(addr.sin6_addr.s6_addr.into()))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::connect_downstream_socket_cancellable;
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        sync::atomic::AtomicBool,
+        time::Duration,
+    };
+
+    #[test]
+    fn cancelled_downstream_connect_does_not_start_an_attempt() {
+        let shutdown = AtomicBool::new(true);
+        let error = connect_downstream_socket_cancellable(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 9)),
+            None,
+            Duration::from_secs(30),
+            &shutdown,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     }
 }
