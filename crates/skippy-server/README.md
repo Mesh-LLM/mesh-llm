@@ -15,7 +15,7 @@ mesh/openai-frontend; diagnostic and benchmark clients may connect directly to
 the first stage.
 
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
-tip, and activations flow through the stage chain. Stage protocol generation 4
+tip, and activations flow through the stage chain. Stage protocol generation 5
 is a compatibility-breaking contract: prediction-bearing replies return
 directly from the final/readout tip to the driver-facing stage instead of being
 relayed back through intermediate stages. Middle-out is the prefill optimization
@@ -103,11 +103,11 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-4 stage protocol.
+- `serve-binary` participates in the breaking generation-5 stage protocol.
   Stage compatibility requires `stage-generation-5`; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
-  generation-4 topology.
+  generation-5 topology.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
@@ -123,7 +123,7 @@ deadline handling.
   `/v1/completions` using the shared `openai-frontend` crate for a local
   final/single-stage config with no downstream peer. Split serving uses
   embedded stage-0 OpenAI serving from `serve-binary --openai-bind-addr` because
-  generation-4 prediction returns flow directly from the final stage to stage 0.
+  generation-5 prediction returns flow directly from the final stage to stage 0.
   The older standalone `serve-openai --first-stage-addr` adapter is no longer
   supported. `--model-id` is the exact served model id to advertise
   and accept, for example `org/repo:Q4_K_M`; it is not parsed as stage topology.

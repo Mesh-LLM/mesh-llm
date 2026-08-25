@@ -42,7 +42,7 @@ chain alone makes the hot path six hops, or about 60 ms before compute.
 
 ## Generation 4 Direct Prediction Return and Verify Retirement
 
-Stage protocol generation 4 is a compatibility-breaking change. A peer is stage
+Stage protocol generation 5 is a compatibility-breaking change. A peer is stage
 compatible only when it advertises both `skippy-stage/2` and
 `stage-generation-5`. Prediction-bearing messages return
 directly from the final/readout stage to the driver-facing stage. Intermediate stages
