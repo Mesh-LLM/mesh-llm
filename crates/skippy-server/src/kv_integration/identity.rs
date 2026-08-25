@@ -145,7 +145,7 @@ impl KvStageIntegration {
         let checkpoint = near_tail
             .saturating_sub(stride)
             .max(self.checkpoint_policy.min_tokens);
-        (checkpoint < token_count).then(|| {
+        (checkpoint > 0 && checkpoint < token_count).then(|| {
             self.prefill_identity(config, base, token_start, &token_ids[..checkpoint as usize])
         })
     }
@@ -337,5 +337,26 @@ mod tests {
 
         assert_eq!(hit.matched_tokens, 2214);
         assert_eq!(hit.value.page_id, recorded.page_id);
+    }
+
+    #[test]
+    fn exact_shared_checkpoint_rejects_empty_zero_minimum_checkpoint() {
+        let config = StageConfig {
+            kv_cache: Some(StageKvCacheConfig {
+                payload: StageKvCachePayload::KvRecurrent,
+                min_tokens: 0,
+                shared_prefix_stride_tokens: 128,
+                ..test_config().kv_cache.expect("test cache config")
+            }),
+            ..test_config()
+        };
+        let kv = KvStageIntegration::from_config(&config)
+            .unwrap()
+            .expect("cache enabled");
+
+        assert!(
+            kv.exact_shared_checkpoint_identity(&config, &test_base(), 0, &[1])
+                .is_none()
+        );
     }
 }

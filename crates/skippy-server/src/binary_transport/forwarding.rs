@@ -32,10 +32,10 @@ pub(crate) fn forwarded_stage_message_timed(
     wire_dtype: WireActivationDType,
     activation_width: i32,
 ) -> Result<ForwardedStageMessage> {
-    // A non-first stage must always compute the *full* incoming token range.
-    // Suffix-only execution after a partial cache hit is permitted only on the
-    // stage that owns layer 0 (see `executable_token_ids` in
-    // `binary_messaging/connection.rs`), because the forwarded header keeps
+    // A stage with a downstream consumer must compute the *full* incoming token
+    // range unless it owns layer 0. Suffix-only execution after a partial cache
+    // hit is also safe on a final stage with no downstream consumer (see
+    // `prefill_execution.rs`). The forwarded header keeps
     // `incoming.token_count` and downstream stages attend over the whole
     // range. If a later stage ever emitted a short frame, the next stage would
     // attend over a prefix it never received and produce plausible-looking but

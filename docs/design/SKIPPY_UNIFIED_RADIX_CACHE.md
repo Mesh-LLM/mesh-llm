@@ -7,9 +7,9 @@ cutover in PR #1420 at `3c0f43d4d53361fcdd9eee849824e9392bab522a`.
 
 Skippy will use one namespace-aware compressed token radix tree for production
 prefix reuse. A logical node may own a `ResidentKv` payload, a `KvRecurrent`
-checkpoint, or both. The radix implementation becomes the only production
-prefix index before this change lands; the current sparse record ladder and
-flat page-id maps are removed rather than kept as a fallback.
+checkpoint, or both. With this change the radix implementation becomes the only
+production prefix index; the current sparse record ladder and flat page-id maps
+are removed rather than kept as a fallback.
 
 This PR is the device/in-process cache layer. File-backed L3 storage is a
 separate follow-on stacked on stable radix node and payload semantics.

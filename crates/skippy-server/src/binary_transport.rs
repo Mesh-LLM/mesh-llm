@@ -6,6 +6,7 @@ pub(crate) mod forwarding;
 mod kv_eviction;
 mod options;
 mod preconnect;
+mod prefill_execution;
 mod restore_prefill_decode;
 mod socket;
 mod stage_execution;
