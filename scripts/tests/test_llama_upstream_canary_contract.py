@@ -27,6 +27,15 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('- "scripts/family-certify.sh"', workflow)
         self.assertIn("force_certify:", workflow)
         self.assertIn("FORCE_CERTIFY:", workflow)
+        self.assertIn(
+            "LLAMA_BUILD_DIR: ${{ runner.temp }}/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}",
+            workflow,
+        )
+        self.assertIn(
+            "LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}",
+            workflow,
+        )
+        self.assertIn("LLAMA_STAGE_BACKEND: metal", workflow)
 
         build = _step_block(workflow, "Build stage runtime crates")
         self.assertIn("cargo build", build)

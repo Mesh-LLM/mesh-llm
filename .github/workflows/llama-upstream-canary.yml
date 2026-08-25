@@ -47,6 +47,12 @@ jobs:
       LLAMA_UPSTREAM_CANARY_SMOKE: ${{ vars.LLAMA_UPSTREAM_CANARY_SMOKE || '1' }}
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      # A persistent runner can retain a CMake cache from a different host
+      # architecture. Build every canary in a run-unique directory, and feed
+      # that exact native closure to all Rust, smoke, and battery commands.
+      LLAMA_BUILD_DIR: ${{ runner.temp }}/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}
+      LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}
+      LLAMA_STAGE_BACKEND: metal
       # Models are never cached through GitHub Actions cache. The
       # family-certify runner ships a large pre-warmed HF cache exported as
       # HF_CACHE; scripts/skippy-family-battery.sh normalizes it into
