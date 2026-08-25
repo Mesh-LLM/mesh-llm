@@ -41,7 +41,10 @@ battery (`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR
 on `llama-canary/patch-queue-fix`. After each agent turn the repair script
 itself runs the battery and, on failure, loops certify -> agent fix ->
 recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the job only
-succeeds when the wrapper's own battery run passes. The upstream pin commit to
+succeeds when the wrapper's own battery run passes. Every outcome (battery
+green, queue still broken, battery exhausted) posts a status comment on the
+repair PR — creating the PR (or a fallback issue) itself if the agent did
+not. The upstream pin commit to
 `main` is gated on the battery passing.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
