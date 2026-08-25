@@ -14,9 +14,9 @@ use std::time::Duration;
 use mesh_llm_events::logging::identifiers::EventId;
 use mesh_llm_log_store::{
     ARTIFACT_CAPTURE_DISABLED_PRIVACY_UNAVAILABLE, ArtifactContent, ArtifactRecord,
-    ArtifactRedactor, AuditEntryFilters, AuditEntryRow, Clock as StoreClock, EventRecord,
-    FailOpenArtifactCapture, LogStore, LogStoreError, Page, PageQuery, ProxyQuery, ProxyRecord,
-    QueryPage, RealClock, RequestQuery, RequestRecord,
+    ArtifactRedactor, AuditEntryDetail, AuditEntryFilters, AuditEntryRow, Clock as StoreClock,
+    EventRecord, FailOpenArtifactCapture, LogStore, LogStoreError, Page, PageQuery, ProxyQuery,
+    ProxyRecord, QueryPage, RealClock, RequestQuery, RequestRecord, RequestRecordWithCaller,
 };
 #[cfg(test)]
 use mesh_llm_log_store::{ArtifactCaptureDisabledReason, ArtifactCaptureOutcome};
@@ -82,8 +82,8 @@ pub(crate) struct LoggingRuntimeStatus {
 }
 
 /// Stable, path-free explanation for metadata availability. Schema versions
-/// are safe to expose to trusted-local clients and make upgrade/downgrade
-/// failures actionable without leaking the database location or SQLite text.
+/// are safe to expose to trusted-local clients without leaking the database
+/// location or SQLite text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LoggingMetadataState {
     Ready,
@@ -759,12 +759,33 @@ impl LoggingRuntimeState {
         RawMeshRemoteSuppressionLease::acquire(Arc::clone(&self.raw_mesh_owners), request_id)
     }
 
+    pub(crate) fn attribute_remote_tunneled_request(
+        &self,
+        request_id: mesh_llm_events::logging::identifiers::RequestId,
+        metadata: RequestSummaryMetadata,
+    ) -> Option<super::RawMeshRemoteAttributionLease> {
+        if self.retired.load(Ordering::Acquire) {
+            return None;
+        }
+        let service = self.service.as_ref()?;
+        if !service.is_startable() {
+            return None;
+        }
+        super::RawMeshRemoteAttributionLease::acquire(
+            service,
+            Arc::clone(&self.raw_mesh_owners),
+            request_id,
+            metadata,
+        )
+    }
+
     /// Register one already-parsed management API request with bounded
     /// metadata. Disabled, unavailable, and retired logging stay fail-open.
     pub(crate) fn register_management_request(
         &self,
         request_id: mesh_llm_events::logging::identifiers::RequestId,
         method_route: &'static str,
+        source_addr: Option<std::net::SocketAddr>,
     ) -> Option<ManagementRequestLifecycle> {
         if self.retired.load(Ordering::Acquire) {
             return None;
@@ -773,11 +794,15 @@ impl LoggingRuntimeState {
         if !service.is_startable() {
             return None;
         }
-        Some(ManagementRequestLifecycle::register(
-            service,
-            request_id,
-            method_route,
-        ))
+        Some(match source_addr {
+            Some(source_addr) => ManagementRequestLifecycle::register_with_source_addr(
+                service,
+                request_id,
+                method_route,
+                source_addr,
+            ),
+            None => ManagementRequestLifecycle::register(service, request_id, method_route),
+        })
     }
 
     /// Record one static operational audit without exposing the service to

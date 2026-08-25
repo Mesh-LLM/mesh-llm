@@ -6,6 +6,9 @@ use openai_frontend::{
 
 use super::*;
 
+mod audit;
+mod audit_sanitization;
+
 #[test]
 fn export_route_classifies_before_method_validation() {
     let get_route = classify_mutating_route(Some("/api/logs/requests/export"), "GET")
@@ -139,6 +142,91 @@ async fn list_merges_active_and_durable_without_duplicate_ids() {
 }
 
 #[test]
+fn route_exclusions_apply_to_every_merged_active_and_durable_page() {
+    // Given
+    let (_temp, state) = runtime();
+    let store = state.store().expect("store");
+    for (request_id, route, created_at) in [
+        ("durable-visible", Some("responses"), "2026-08-03T00:00:01Z"),
+        (
+            "durable-hidden-management",
+            Some("management_get_status"),
+            "2026-08-03T00:00:02Z",
+        ),
+        (
+            "durable-hidden-models",
+            Some("models"),
+            "2026-08-03T00:00:03Z",
+        ),
+    ] {
+        store
+            .insert_summary(
+                request_id, None, route, None, None, created_at, None, None, None,
+            )
+            .expect("seed durable summary");
+    }
+    let active = [
+        (
+            "active-hidden-management",
+            Some("management_post"),
+            "2026-08-03T00:00:04Z",
+        ),
+        ("active-visible-null", None, "2026-08-03T00:00:05Z"),
+        (
+            "active-visible-chat",
+            Some("chat_completions"),
+            "2026-08-03T00:00:06Z",
+        ),
+        (
+            "active-hidden-models",
+            Some("models"),
+            "2026-08-03T00:00:07Z",
+        ),
+    ]
+    .map(|(request_id, route, created_at)| RequestSummaryEntry {
+        request_id: request_id.to_string(),
+        state: "active".to_string(),
+        created_at: created_at.to_string(),
+        terminal_at: None,
+        metadata: crate::logging::RequestSummaryMetadata::from_parts(route, None, None, None),
+    })
+    .to_vec();
+    let facade = state.query_facade().expect("query facade");
+    let base_path =
+        "/api/logs/requests?limit=1&exclude_route=models&exclude_route_prefix=management_";
+
+    // When
+    let first = list_requests_blocking(
+        facade.clone(),
+        active.clone(),
+        parse::request_query(base_path).expect("parse first page"),
+    )
+    .expect("list first page");
+    let first_cursor = first.next_cursor.expect("first page cursor");
+    let second = list_requests_blocking(
+        facade.clone(),
+        active.clone(),
+        parse::request_query(&format!("{base_path}&cursor={first_cursor}"))
+            .expect("parse second page"),
+    )
+    .expect("list second page");
+    let second_cursor = second.next_cursor.expect("second page cursor");
+    let third = list_requests_blocking(
+        facade,
+        active,
+        parse::request_query(&format!("{base_path}&cursor={second_cursor}"))
+            .expect("parse third page"),
+    )
+    .expect("list third page");
+
+    // Then
+    assert_eq!(first.items[0].request_id(), "active-visible-chat");
+    assert_eq!(second.items[0].request_id(), "active-visible-null");
+    assert_eq!(third.items[0].request_id(), "durable-visible");
+    assert!(third.next_cursor.is_none());
+}
+
+#[test]
 fn active_request_time_bounds_compare_instants_within_the_boundary_second() {
     let (_temp, state) = runtime();
     let entries = [
@@ -241,6 +329,11 @@ async fn active_request_uses_registered_metadata_before_durable_persistence() {
             None,
             None,
             None,
+        )
+        .with_caller_identity(
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            Some("192.0.2.42:11204"),
+            Some(crate::logging::CallerPathType::RemoteQuicHttp),
         ),
     );
     service.merge_request_metadata(
@@ -277,8 +370,77 @@ async fn active_request_uses_registered_metadata_before_durable_persistence() {
     assert_eq!(json["items"][0]["model"], "acme/model");
     assert_eq!(json["items"][0]["provider"], "mesh");
     assert_eq!(json["items"][0]["engine"], "raw_ingress");
+    assert_eq!(
+        json["items"][0]["callerEndpointId"],
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    );
+    assert_eq!(json["items"][0]["callerAddr"], "192.0.2.42:11204");
+    assert_eq!(json["items"][0]["callerPathType"], "remote_quic_http");
     assert_eq!(json["items"][0]["source"], "active");
     drop(guard);
+}
+
+#[tokio::test]
+async fn active_and_durable_api_json_expose_endpoint_only_caller_without_path_fields() {
+    let (_temp, state) = runtime();
+    let service = state.service_for_test().expect("logging service");
+    let active_request_id = RequestId::new();
+    let durable_request_id = RequestId::new();
+    let active_endpoint_id = "ad".repeat(32);
+    let durable_endpoint_id = "ae".repeat(32);
+    let (active_guard, _) = service.register_request_with_metadata(
+        active_request_id,
+        crate::logging::RequestSummaryMetadata::from_parts(
+            Some("responses"),
+            Some("active-model"),
+            None,
+            None,
+        )
+        .with_caller_identity(Some(&active_endpoint_id), None, None),
+    );
+    let (durable_guard, _) = service.register_request_with_metadata(
+        durable_request_id,
+        crate::logging::RequestSummaryMetadata::from_parts(
+            Some("responses"),
+            Some("durable-model"),
+            None,
+            None,
+        )
+        .with_caller_identity(Some(&durable_endpoint_id), None, None),
+    );
+    service
+        .transition_terminal(
+            durable_request_id,
+            &durable_guard,
+            crate::logging::TerminalOutcome::Completed,
+        )
+        .expect("durable request terminalizes");
+    assert!(service.pump_sync().await > 0);
+
+    let active_page = list_requests(
+        &state,
+        "/api/logs/requests?source=active&model=active-model",
+    )
+    .await
+    .expect("active endpoint-only request");
+    let durable_page = list_requests(
+        &state,
+        "/api/logs/requests?source=durable&model=durable-model&outcome=completed",
+    )
+    .await
+    .expect("durable endpoint-only request");
+
+    for (page, endpoint_id) in [
+        (active_page, active_endpoint_id.as_str()),
+        (durable_page, durable_endpoint_id.as_str()),
+    ] {
+        let json = serde_json::to_value(page).expect("request page JSON");
+        assert_eq!(json["items"].as_array().expect("items").len(), 1);
+        assert_eq!(json["items"][0]["callerEndpointId"], endpoint_id);
+        assert!(json["items"][0].get("callerAddr").is_none());
+        assert!(json["items"][0].get("callerPathType").is_none());
+    }
+    drop(active_guard);
 }
 
 #[tokio::test]
@@ -345,6 +507,11 @@ async fn registered_metadata_is_persisted_and_durably_filterable_without_fabrica
             None,
             None,
             None,
+        )
+        .with_caller_identity(
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            None,
+            Some(crate::logging::CallerPathType::Relay),
         ),
     );
     service.merge_request_metadata(
@@ -388,6 +555,12 @@ async fn registered_metadata_is_persisted_and_durably_filterable_without_fabrica
     assert_eq!(json["items"][0]["model"], "acme/model");
     assert_eq!(json["items"][0]["provider"], "mesh");
     assert_eq!(json["items"][0]["engine"], "raw_ingress");
+    assert_eq!(
+        json["items"][0]["callerEndpointId"],
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    );
+    assert!(json["items"][0].get("callerAddr").is_none());
+    assert_eq!(json["items"][0]["callerPathType"], "relay");
     assert_eq!(json["items"][0]["source"], "durable");
 
     let absent_detail = request_detail(&state, &absent.as_uuid().to_string())
@@ -398,6 +571,9 @@ async fn registered_metadata_is_persisted_and_durably_filterable_without_fabrica
     assert_eq!(absent_json["model"], serde_json::Value::Null);
     assert_eq!(absent_json["provider"], serde_json::Value::Null);
     assert_eq!(absent_json["engine"], serde_json::Value::Null);
+    assert!(absent_json.get("callerEndpointId").is_none());
+    assert!(absent_json.get("callerAddr").is_none());
+    assert!(absent_json.get("callerPathType").is_none());
 }
 
 #[tokio::test]
@@ -455,250 +631,4 @@ async fn detail_and_related_routes_are_typed_and_keep_envelope_private() {
     assert!(json.contains("admitted"));
     assert!(!json.contains("never-expose"));
     assert!(!json.contains("payload_json"));
-}
-
-#[tokio::test]
-async fn audit_list_returns_sparse_dto_and_never_exposes_detail_json() {
-    let (_temp, state) = runtime();
-    let store = state.store().expect("store");
-    for (entry_id, occurred_at) in [
-        (
-            "00000000-0000-4000-8000-000000000001",
-            "2026-01-01T00:00:00Z",
-        ),
-        (
-            "00000000-0000-4000-8000-000000000002",
-            "2026-01-01T00:00:01Z",
-        ),
-    ] {
-        store
-            .insert_audit_entry(
-                entry_id,
-                None,
-                occurred_at,
-                "runtime",
-                "startup_complete",
-                Some(r#"{"severity":"info","secret":"SENTINEL-AUDIT-SECRET"}"#),
-            )
-            .expect("seed audit row");
-    }
-
-    let page = list_audits(&state, "/api/logs/audit?limit=10")
-        .await
-        .expect("list audits");
-    let json = serde_json::to_value(page).expect("serialize page");
-    let items = json["items"].as_array().expect("items");
-    assert_eq!(items.len(), 2);
-    let item = &items[0];
-    assert_eq!(item["entryId"], "00000000-0000-4000-8000-000000000002");
-    assert_eq!(item["occurredAt"], "2026-01-01T00:00:01.000000000Z");
-    assert_eq!(item["source"], "runtime");
-    assert_eq!(item["code"], "startup_complete");
-    assert_eq!(item["severity"], "info");
-    let first_sequence = items[0]["sequence"].as_u64().expect("positive sequence");
-    let second_sequence = items[1]["sequence"].as_u64().expect("positive sequence");
-    assert!(first_sequence > 0);
-    assert!(second_sequence > 0);
-    assert_ne!(first_sequence, second_sequence);
-    assert!(!json.to_string().contains("SENTINEL-AUDIT-SECRET"));
-    assert!(items.iter().all(|item| item.get("detailJson").is_none()));
-    assert!(!json.to_string().contains("requestId"));
-}
-
-#[tokio::test]
-async fn audit_pagination_resumes_correctly_with_next_cursor() {
-    let (_temp, state) = runtime();
-    let store = state.store().expect("store");
-    for i in 1..=3 {
-        store
-            .insert_audit_entry(
-                &format!("00000000-0000-4000-8000-00000000000{i}"),
-                None,
-                &format!("2026-01-01T00:00:0{i}Z"),
-                "cli",
-                &format!("action-{i}"),
-                None,
-            )
-            .expect("seed audit row");
-    }
-
-    let first = list_audits(&state, "/api/logs/audit?limit=1")
-        .await
-        .expect("first page");
-    let first_json = serde_json::to_value(&first).expect("serialize first page");
-    let cursor = first.next_cursor.expect("has next cursor");
-    assert_eq!(first_json["items"].as_array().expect("items").len(), 1);
-
-    let second = list_audits(&state, &format!("/api/logs/audit?limit=1&cursor={cursor}"))
-        .await
-        .expect("second page");
-    let second_json = serde_json::to_value(&second).expect("serialize second page");
-    assert_eq!(second_json["items"].as_array().expect("items").len(), 1);
-    assert_ne!(
-        second_json["items"][0]["entryId"], first_json["items"][0]["entryId"],
-        "cursor should advance to a different row"
-    );
-}
-
-#[tokio::test]
-async fn audit_filters_by_source() {
-    let (_temp, state) = runtime();
-    let store = state.store().expect("store");
-    store
-        .insert_audit_entry(
-            "00000000-0000-4000-8000-000000000010",
-            None,
-            "2026-01-01T00:00:00Z",
-            "mesh",
-            "peer_joined",
-            None,
-        )
-        .expect("seed mesh row");
-    store
-        .insert_audit_entry(
-            "00000000-0000-4000-8000-000000000011",
-            None,
-            "2026-01-01T00:00:01Z",
-            "runtime",
-            "startup_complete",
-            None,
-        )
-        .expect("seed runtime row");
-
-    let page = list_audits(&state, "/api/logs/audit?source=mesh&limit=10")
-        .await
-        .expect("filter by source");
-    let json = serde_json::to_value(page).expect("serialize page");
-    assert_eq!(json["items"].as_array().expect("items").len(), 1);
-    assert_eq!(json["items"][0]["source"], "mesh");
-}
-
-#[tokio::test]
-async fn audit_filters_by_severity() {
-    let (_temp, state) = runtime();
-    let store = state.store().expect("store");
-    store
-        .insert_audit_entry(
-            "00000000-0000-4000-8000-000000000020",
-            None,
-            "2026-01-01T00:00:00Z",
-            "logging_service",
-            "health_check",
-            Some(r#"{"severity":"info"}"#),
-        )
-        .expect("seed info row");
-    store
-        .insert_audit_entry(
-            "00000000-0000-4000-8000-000000000021",
-            None,
-            "2026-01-01T00:00:01Z",
-            "logging_service",
-            "disk_pressure",
-            Some(r#"{"severity":"warning"}"#),
-        )
-        .expect("seed warning row");
-
-    let page = list_audits(&state, "/api/logs/audit?severity=warning&limit=10")
-        .await
-        .expect("filter by severity");
-    let json = serde_json::to_value(page).expect("serialize page");
-    assert_eq!(json["items"].as_array().expect("items").len(), 1);
-    assert_eq!(json["items"][0]["severity"], "warning");
-}
-
-#[tokio::test]
-async fn audit_list_exposes_typed_context_without_arbitrary_detail() {
-    let (_temp, state) = runtime();
-    state
-        .store()
-        .expect("store")
-        .insert_audit_entry(
-            "00000000-0000-4000-8000-000000000022",
-            None,
-            "2026-08-12T12:00:00Z",
-            "runtime",
-            "runtime_model_ready",
-            Some(
-                r#"{"severity":"info","context_version":1,"subject_kind":"model","subject_id":"local-gguf/sha256-safe","operation_id":"runtime-7","outcome":"ready","duration_ms":42,"secret":"SENTINEL-AUDIT-SECRET"}"#,
-            ),
-        )
-        .expect("seed typed audit row");
-
-    let page = list_audits(&state, "/api/logs/audit?limit=10")
-        .await
-        .expect("list typed audit row");
-    let json = serde_json::to_value(page).expect("serialize page");
-    let row = &json["items"][0];
-    assert_eq!(row["contextVersion"], 1);
-    assert_eq!(row["subjectKind"], "model");
-    assert_eq!(row["subjectId"], "local-gguf/sha256-safe");
-    assert_eq!(row["operationId"], "runtime-7");
-    assert_eq!(row["outcome"], "ready");
-    assert_eq!(row["durationMs"], 42);
-    assert!(!json.to_string().contains("SENTINEL-AUDIT-SECRET"));
-}
-
-#[tokio::test]
-async fn audit_filters_by_inclusive_canonical_time_bounds_before_pagination() {
-    let (_temp, state) = runtime();
-    let store = state.store().expect("store");
-    for (suffix, occurred_at) in [
-        (30, "2026-01-01T00:00:00Z"),
-        (31, "2026-01-02T00:00:00Z"),
-        (32, "2026-01-03T00:00:00Z"),
-    ] {
-        store
-            .insert_audit_entry(
-                &format!("00000000-0000-4000-8000-{suffix:012}"),
-                None,
-                occurred_at,
-                "runtime",
-                "bounded_action",
-                None,
-            )
-            .expect("seed bounded audit row");
-    }
-
-    let page = list_audits(
-        &state,
-        "/api/logs/audit?limit=1&from=2026-01-02T00%3A00%3A00Z&to=2026-01-02T00%3A00%3A00Z",
-    )
-    .await
-    .expect("filter by inclusive bounds");
-    let json = serde_json::to_value(page).expect("serialize page");
-    assert_eq!(json["items"].as_array().expect("items").len(), 1);
-    assert_eq!(
-        json["items"][0]["occurredAt"],
-        "2026-01-02T00:00:00.000000000Z"
-    );
-    assert!(json["nextCursor"].is_null());
-}
-
-#[tokio::test]
-async fn audit_rejects_invalid_query_parameters() {
-    let (_temp, state) = runtime();
-
-    for path in [
-        "/api/logs/audit?limit=0",
-        "/api/logs/audit?limit=101",
-        "/api/logs/audit?limit=abc",
-        "/api/logs/audit?source=bogus",
-        "/api/logs/audit?severity=bogus",
-        "/api/logs/audit?cursor=garbage",
-        "/api/logs/audit?from=not-a-time",
-        "/api/logs/audit?to=2026-01-01T00%3A00%3A00Z&from=2026-01-02T00%3A00%3A00Z",
-        "/api/logs/audit?unknown=1",
-    ] {
-        let result = list_audits(&state, path).await;
-        assert!(result.is_err(), "expected error for invalid query: {path}");
-    }
-}
-
-#[tokio::test]
-async fn audit_unmatched_path_returns_not_found() {
-    assert!(matches!(classify("/api/logs/audit/extra"), Route::Unknown));
-    assert!(matches!(
-        classify("/api/logs/audit/sub/path"),
-        Route::Unknown
-    ));
 }

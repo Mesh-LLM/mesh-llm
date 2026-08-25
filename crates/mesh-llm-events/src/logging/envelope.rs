@@ -80,6 +80,7 @@ impl CanonicalPresentationContext {
                 | "management_get_other"
                 | "management_post"
                 | "management_put"
+                | "management_patch"
                 | "management_delete"
                 | "management_other",
             ) => "management",
@@ -127,6 +128,7 @@ fn closed_route(value: &str) -> Option<String> {
             | "management_get_other"
             | "management_post"
             | "management_put"
+            | "management_patch"
             | "management_delete"
             | "management_other"
     );
@@ -142,11 +144,15 @@ pub fn closed_source(value: &str) -> Option<String> {
 }
 
 /// Trim, uppercase, and accept only the closed HTTP method vocabulary
-/// (`GET` | `POST` | `PUT` | `DELETE` | `OTHER`). Unknown or empty methods are
+/// (`GET` | `POST` | `PUT` | `PATCH` | `DELETE` | `OTHER`). Unknown or empty methods are
 /// discarded rather than echoed to a console.
 pub fn closed_method(value: &str) -> Option<String> {
     let value = value.trim().to_ascii_uppercase();
-    matches!(value.as_str(), "GET" | "POST" | "PUT" | "DELETE" | "OTHER").then_some(value)
+    matches!(
+        value.as_str(),
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OTHER"
+    )
+    .then_some(value)
 }
 
 /// Current canonical logging schema version. Bump on additive changes to the envelope shape.

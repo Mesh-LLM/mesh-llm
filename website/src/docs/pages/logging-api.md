@@ -14,6 +14,10 @@ This is an operator API, not an inference API. Applications should continue to
 use the [OpenAI-compatible API](/docs/pages/openai-compatible-api/) on port
 `9337` for inference.
 
+In the embedded Logs console, ledger search accepts either a full endpoint ID
+or the abbreviated form shown in the interface, such as `9f0c…bb04`, for
+request caller identities and mesh-peer audit subjects.
+
 ## Scope and trust boundary
 
 Every `/api/logs` and `/api/logs/**` route requires a trusted local caller. A
@@ -30,6 +34,10 @@ A bearer token, a trusted DNS name, or network reachability does not replace
 these checks. If a local reverse proxy is used, it must connect from loopback
 and preserve a trusted local `Host` and `Origin`. Rejected requests receive the
 normal typed `403 forbidden` response before the logging store is touched.
+
+The ledger and its bounded export API remain trusted-local. Audit and request
+records are not read by OTLP exporters or telemetry surveys, advertised in
+gossip, replicated, or otherwise sent to peer nodes.
 
 Examples below assume:
 
@@ -100,19 +108,36 @@ modify, or reuse a cursor with different filters. Unless noted otherwise,
 `GET /api/logs/requests` merges the bounded active snapshot with durable
 history. An active request takes precedence over a durable row with the same
 ID. Its response contains `requestId`, `outcome`, `createdAt`, optional
-`terminalAt`, `route`, `model`, `provider`, `engine`, and `statusCode`, plus a
-`source` of `active` or `durable`.
+`terminalAt`, `route`, `model`, `provider`, `engine`, `statusCode`,
+`callerEndpointId`, `callerAddr`, and `callerPathType`, plus a `source` of
+`active` or `durable`.
+
+Caller fields are observational and optional. The vocabulary is `"local_http"`,
+`"remote_quic_http"`, and `"relay"`. A direct remote HTTP path uses
+`callerPathType: "remote_quic_http"` and includes the observed peer address
+when available. A relay path uses `"relay"` and omits `callerAddr`; a relay
+server address is never substituted. Local management requests use
+`"local_http"` and have no mesh endpoint ID. Caller fields are absent when
+attribution was not observed, rather than being fabricated. Skippy stage streams have no top-level
+request ID and therefore never create request-summary rows. Staged QUIC is
+represented as authenticated QUIC audit evidence, not as a synthetic request
+row.
+
+Authentication can establish `callerEndpointId` when the selected path was not
+observed or its value was not recognized. Such a request omits `callerAddr` and
+`callerPathType`; the API does not infer `"remote_quic_http"` or `"relay"`.
+Endpoint-only identity is not a fourth caller path type.
 
 Supported query parameters:
 
-| Parameter | Values |
-|---|---|
-| `limit`, `cursor`, `sort` | Keyset pagination controls; request listing defaults to `sort=desc`. |
-| `from`, `to` | Inclusive RFC 3339 creation-time bounds. |
-| `route`, `model`, `provider`, `engine` | Exact metadata matches, each at most 128 bytes. |
-| `status` | HTTP status from 100 through 599. |
-| `outcome` | `active`, `completed`, `failed`, `rejected`, `cancelled`, or `dropped`. |
-| `source` | `active` or `durable`; omit it to merge both sources. |
+| Parameter                              | Values                                                                  |
+| -------------------------------------- | ----------------------------------------------------------------------- |
+| `limit`, `cursor`, `sort`              | Keyset pagination controls; request listing defaults to `sort=desc`.    |
+| `from`, `to`                           | Inclusive RFC 3339 creation-time bounds.                                |
+| `route`, `model`, `provider`, `engine` | Exact metadata matches, each at most 128 bytes.                         |
+| `status`                               | HTTP status from 100 through 599.                                       |
+| `outcome`                              | `active`, `completed`, `failed`, `rejected`, `cancelled`, or `dropped`. |
+| `source`                               | `active` or `durable`; omit it to merge both sources.                   |
 
 Unknown or duplicate parameters are rejected rather than ignored.
 
@@ -147,10 +172,55 @@ reduced to scheme, host, and port; credentials, paths, query strings, and
 fragments are not returned.
 
 `GET /api/logs/audit` returns sparse operational audit entries with `entryId`,
-`occurredAt`, `source`, `code`, and optional `severity`. It accepts `limit`,
-`cursor`, `source`, and `severity`. Sources are `logging_service`, `runtime`,
-`mesh`, `cli`, or `logs_api`; severities are `info`, `warning`, or `error`. Audit responses
-contain no request ID, detail JSON, or free-form message.
+`occurredAt`, `source`, `code`, and optional `severity`, `contextVersion`,
+`subjectKind`, `subjectId`, `remoteAddr`, `pathType`, `operationId`, `requestId`,
+`reasonCode`, `outcome`, `durationMs`, and `numericSummaries`. It accepts
+`limit`, `cursor`, `source`, and `severity`. Sources are `logging_service`,
+`runtime`, `mesh`, `cli`, or `logs_api`; severities are `info`, `warning`, or
+`error`. CLI audit entries may also contain the optional `commandSummary`.
+It is a bounded parsed-command projection, never raw argv: positional values,
+paths, URLs, credentials, model and plugin names, identifiers, and reasons are
+redacted or omitted. It accepts at most 32 tokens and 256 characters, rejects
+control text, and retains only fixed command vocabulary plus explicitly supplied
+numeric or enum values in their approved option contexts. Entries may omit it
+when attribution was not observed. Audit responses contain no
+arbitrary detail JSON or free-form message; malformed summaries are omitted at
+every REST and SSE projection boundary.
+
+For mesh-peer audits, `subjectId` is the authenticated endpoint ID. Direct
+paths can include the observed peer `remoteAddr`; relay paths omit it and never
+expose the relay server as the peer. `pathType` is absent when no live path was
+available, and entries can omit typed context fields when that context was not
+observed. Authenticated
+Skippy stage connections use `mesh_quic_inbound_accepted` for this peer/path
+evidence before stage stream dispatch.
+
+### Exact mesh audit contract
+
+| Code                                   | Outcome                    | Reason                                                                                                                                                                                                                                                        | Numeric summaries                                                            | Duration owner                       |
+| -------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------ |
+| `gossip_direct_peer_promoted`          | `promoted`                 | none                                                                                                                                                                                                                                                          | `direct_peers`                                                               | none                                 |
+| `gossip_peer_removed`                  | `removed`                  | `stale_direct_and_transitive`, `heartbeat_unreachable`, `peer_down_probe_failed`, `closed_connection_no_address`, `reconnect_failed`, `recovered_gossip_failed`, `clean_shutdown`, or `tunnel_open_failed`                                                    | `direct_peers`                                                               | none                                 |
+| `gossip_policy_rejected`               | `rejected`                 | `owner_attestation_required`, `owner_attestation_expired`, `owner_attestation_invalid`, `owner_attestation_node_mismatch`, `owner_revoked`, `owner_attestation_revoked`, `owner_node_revoked`, `owner_attestation_protocol_unsupported`, or `owner_untrusted` | none                                                                         | none                                 |
+| `gossip_incompatible_version_rejected` | `rejected`                 | `protocol_version_unsupported`                                                                                                                                                                                                                                | `peer_gen`, `local_gen`                                                      | none                                 |
+| `mesh_quic_inbound_accepted`           | `accepted` or `readmitted` | none                                                                                                                                                                                                                                                          | negotiated family `protocol_gen` (`4` for the current Skippy stage protocol) | none                                 |
+| `mesh_control_connection_accepted`     | `accepted`                 | none                                                                                                                                                                                                                                                          | `protocol_gen`                                                               | none                                 |
+| `mesh_control_alpn_rejected`           | `rejected`                 | `alpn_unsupported`                                                                                                                                                                                                                                            | none                                                                         | none                                 |
+| `mesh_quic_handler_failed`             | `failed`                   | `capacity` or `internal`                                                                                                                                                                                                                                      | none                                                                         | QUIC handler boundary, when timed    |
+| `mesh_control_handler_failed`          | `failed`                   | `capacity` or `internal`                                                                                                                                                                                                                                      | none                                                                         | control handler boundary, when timed |
+
+`gossip_incompatible_version_rejected` is emitted when a direct peer is
+rejected during admission for an incompatible version. A transitive
+announcement below the local version floor is dropped without emitting this
+event.
+
+`mesh_auto_join_succeeded` and `mesh_auto_join_failed` remain generic,
+context-free entries. Pre-authentication failures may be sparse because peer
+identity is unavailable before authentication completes. Direct paths may
+include the observed address. Relay paths use `pathType: "relay"` and omit
+`remoteAddr`, never substituting the relay address. Entries may omit typed
+context when it was not observed. Audit and request records remain trusted-local only, with no
+OTLP export, gossip advertisement, or peer replication.
 
 ## Live SSE
 
@@ -177,6 +247,11 @@ GET /api/logs/events?audit=true&source=runtime&severity=warning
 Audit mode accepts `source`, `severity`, and its cursor, but not lifecycle
 channels or filters.
 
+`audit_entry` frames use the same sparse projection as `GET /api/logs/audit`,
+including optional `commandSummary`. Live and replay frames enforce the same
+redaction, token, control-character, and length contract as durable rows; a
+malformed persisted or internal summary is omitted instead of being streamed.
+
 Each accepted connection first receives matching entries retained after its
 cursor, then live updates. Lifecycle event IDs use the v1 vector form
 `v1:<requests>.<operations>.<system>`, for example `v1:42.7.3`. Audit event IDs
@@ -186,12 +261,12 @@ newer position so reconnects do not move backwards.
 
 The stream emits:
 
-| SSE event | Meaning |
-|---|---|
-| `log_event` | A privacy-safe lifecycle projection. |
-| `audit_entry` | A sparse audit projection in audit mode. |
-| `replay_gap` | Requested entries have left the bounded replay window. |
-| `stream_error` | One retained entry could not be projected safely; its code is `invalid_event`. |
+| SSE event      | Meaning                                                                        |
+| -------------- | ------------------------------------------------------------------------------ |
+| `log_event`    | A privacy-safe lifecycle projection.                                           |
+| `audit_entry`  | A sparse audit projection in audit mode.                                       |
+| `replay_gap`   | Requested entries have left the bounded replay window.                         |
+| `stream_error` | A retained entry could not be projected safely (`invalid_event`), or durable audit reconciliation failed (`audit_reconcile_failed`). |
 
 If a client lags but the relevant entries remain in replay, the session catches
 up from that buffer. If entries have been evicted, `replay_gap` identifies the
@@ -200,6 +275,13 @@ best-effort durable cursor. Recover lifecycle history from
 `GET /api/logs/requests` and then the per-request event routes; recover audit
 history from `GET /api/logs/audit`. Resume SSE from the gap frame's event ID
 after the REST reconciliation.
+
+For `stream_error`, `invalid_event` means one retained entry could not be
+projected safely. `audit_reconcile_failed` means durable audit reconciliation
+failed. Clients preserve the `a1:` cursor, mark audit data stale, hydrate it
+authoritatively through `GET /api/logs/audit`, then resume or reconnect the
+audit stream. Audit recovery is fail-open: it does not fail inference or the
+original request.
 
 Each frame is capped at 16 KiB. A connection has a 64-frame handoff queue,
 receives a keepalive every 15 seconds, and is disconnected when writes remain
@@ -323,7 +405,7 @@ An operator who has a dead-letter delivery ID can request a new bounded attempt
 cycle with `POST /api/logs/webhooks/{deliveryId}/retry`:
 
 ```json
-{"reason":"receiver recovered"}
+{ "reason": "receiver recovered" }
 ```
 
 The response outcome is `scheduled` or, for an idempotent repeat,
@@ -357,21 +439,26 @@ Across REST, SSE, status, export, audit, and webhook surfaces:
 REST errors have one stable envelope:
 
 ```json
-{"error":{"code":"invalid_query","message":"limit must be between 1 and 100"}}
+{
+  "error": {
+    "code": "invalid_query",
+    "message": "limit must be between 1 and 100"
+  }
+}
 ```
 
 Clients should branch on `error.code`; messages are explanatory, not a parsing
 contract.
 
-| HTTP status | Stable codes |
-|---|---|
-| 400 | `invalid_request`, `invalid_query`, `invalid_cursor`, `cursor_expired`, `invalid_id`, `invalid_webhook_delivery_id` |
-| 403 | `forbidden`, `artifact_export_forbidden` |
-| 404 | `not_found` |
-| 405 | `method_not_allowed` |
-| 406 | `not_acceptable` |
-| 409 | `maintenance_conflict`, `request_active`, `webhook_not_retryable` |
-| 503 | `export_timed_out`, `maintenance_cancelled`, `logging_unavailable`, `store_unavailable` |
+| HTTP status | Stable codes                                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| 400         | `invalid_request`, `invalid_query`, `invalid_cursor`, `cursor_expired`, `invalid_id`, `invalid_webhook_delivery_id` |
+| 403         | `forbidden`, `artifact_export_forbidden`                                                                            |
+| 404         | `not_found`                                                                                                         |
+| 405         | `method_not_allowed`                                                                                                |
+| 406         | `not_acceptable`                                                                                                    |
+| 409         | `maintenance_conflict`, `request_active`, `webhook_not_retryable`                                                   |
+| 503         | `artifact_deletion_unavailable`, `export_timed_out`, `maintenance_cancelled`, `logging_schema_incompatible`, `logging_unavailable`, `store_unavailable` |
 
 Methods, request bodies, query keys, duplicate parameters, identifiers, and
 enum values are validated strictly. A store or audit failure does not cause
@@ -411,26 +498,26 @@ dead_letter_retention_secs = 259200
 application-state root. It must not be empty, traverse out of its scope, name a
 protected system/root directory, or be world-writable when it already exists.
 
-| Field | Allowed range | Apply behavior |
-|---|---:|---|
-| `logging.enabled` | Boolean, default `true` | Restart |
-| `logging.application_state_root` | Safe private path | Restart |
-| `logging.summary_line_limit` | 1–65,536 | Restart |
-| `logging.event_buffer_size` | 50–100,000 | Restart |
-| `logging.retention_ttl_secs` | 3,600–7,776,000 seconds | Live |
-| `logging.retention_max_rows` | 1–1,000,000 terminal summaries | Restart |
-| `logging.replay_capacity` | 1–10,000 events | Live |
-| `logging.queue_capacity` | 64–131,072 entries | Restart |
-| `logging.artifact.capture_mode` | `metadata_only` or `redacted_artifacts` | Restart |
-| `logging.artifact.byte_limit_bytes` | 1 KiB–16 MiB | Restart |
-| `logging.artifact.aggregate_limit_bytes` | 512 KiB–500 MiB | Restart |
-| `logging.export_limit_bytes` | 64 KiB–100 MiB | Restart |
-| `logging.cleanup_cadence_secs` | 300–86,400 seconds | Restart |
-| `logging.webhook.enabled` | Boolean, default `false` | Restart |
-| `logging.webhook.url` | Valid constrained HTTP(S) URL | Restart |
-| `logging.webhook.max_attempts` | 1–20 | Restart |
-| `logging.webhook.timeout_secs` | 1–60 seconds | Restart |
-| `logging.webhook.dead_letter_retention_secs` | 3,600–1,555,200 seconds | Restart |
+| Field                                        |                           Allowed range | Apply behavior |
+| -------------------------------------------- | --------------------------------------: | -------------- |
+| `logging.enabled`                            |                 Boolean, default `true` | Restart        |
+| `logging.application_state_root`             |                       Safe private path | Restart        |
+| `logging.summary_line_limit`                 |                                1–65,536 | Restart        |
+| `logging.event_buffer_size`                  |                              50–100,000 | Restart        |
+| `logging.retention_ttl_secs`                 |                 3,600–7,776,000 seconds | Live           |
+| `logging.retention_max_rows`                 |          1–1,000,000 terminal summaries | Restart        |
+| `logging.replay_capacity`                    |                         1–10,000 events | Live           |
+| `logging.queue_capacity`                     |                      64–131,072 entries | Restart        |
+| `logging.artifact.capture_mode`              | `metadata_only` or `redacted_artifacts` | Restart        |
+| `logging.artifact.byte_limit_bytes`          |                            1 KiB–16 MiB | Restart        |
+| `logging.artifact.aggregate_limit_bytes`     |                         512 KiB–500 MiB | Restart        |
+| `logging.export_limit_bytes`                 |                          64 KiB–100 MiB | Restart        |
+| `logging.cleanup_cadence_secs`               |                      300–86,400 seconds | Restart        |
+| `logging.webhook.enabled`                    |                Boolean, default `false` | Restart        |
+| `logging.webhook.url`                        |           Valid constrained HTTP(S) URL | Restart        |
+| `logging.webhook.max_attempts`               |                                    1–20 | Restart        |
+| `logging.webhook.timeout_secs`               |                            1–60 seconds | Restart        |
+| `logging.webhook.dead_letter_retention_secs` |                 3,600–1,555,200 seconds | Restart        |
 
 `logging.retention_ttl_secs` and `logging.replay_capacity` are the only logging
 settings currently applied to a running service. Other changes are validated
@@ -448,3 +535,18 @@ must continue to tolerate absent and unknown fields. SSE IDs beginning with
 `v1:` and `a1:` version only the local replay cursor syntax; they are not Mesh
 protocol versions. Persist cursors only for reconnect/recovery and handle
 `replay_gap` instead of assuming replay retention is permanent.
+
+### Log-store schema and recovery
+
+The durable log store uses one complete schema version, `1`. The forward
+migration registry is intentionally empty. The API reports an unknown or
+incompatible store with `logging_schema_incompatible` and typed details in
+`schema_version` and `supported_schema_version`.
+
+Mesh does not automatically migrate, reset, or delete an unknown schema. The
+store is left unchanged, logging metadata becomes unavailable, and inference
+remains available. The database is not modified while the schema is unknown.
+Recover by updating or restoring a compatible build. To
+start new history instead, stop Mesh and move or back up `log_store.db`,
+`log_store.db-wal`, and `log_store.db-shm` together before restarting. Do not
+edit `PRAGMA user_version`.

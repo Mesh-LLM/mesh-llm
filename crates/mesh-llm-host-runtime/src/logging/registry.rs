@@ -321,6 +321,29 @@ impl RequestRegistry {
         })
     }
 
+    pub(crate) fn merge_authenticated_remote_caller(
+        &self,
+        request_id: &str,
+        metadata: RequestSummaryMetadata,
+    ) -> Option<RequestSummaryEntry> {
+        let mut active = self.active.lock().expect("registry mutex poisoned");
+        if let Some(entry) = active.get_mut(request_id) {
+            return entry
+                .metadata
+                .merge_authenticated_remote_caller(metadata)
+                .then(|| entry.clone());
+        }
+        drop(active);
+
+        let mut recent = self.recent.lock().expect("registry mutex poisoned");
+        recent.get_mut(request_id).and_then(|entry| {
+            entry
+                .metadata
+                .merge_authenticated_remote_caller(metadata)
+                .then(|| entry.clone())
+        })
+    }
+
     /// Atomically move an active request to recent while retaining metadata
     /// merged before its terminal transition.
     pub(crate) fn terminalize(

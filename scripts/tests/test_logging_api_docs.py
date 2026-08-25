@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PAGE = ROOT / "website" / "src" / "docs" / "pages" / "logging-api.md"
+OPERATOR_GUIDE = ROOT / "docs" / "LOGGING.md"
 DOCS_NAV = ROOT / "website" / "src" / "_data" / "docs.js"
 API_REFERENCE = ROOT / "website" / "src" / "docs" / "pages" / "api-reference.md"
 
@@ -101,10 +102,66 @@ class LoggingApiDocumentationTests(unittest.TestCase):
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, page)
 
+    def test_stream_error_audit_recovery_contract_is_anchored(self) -> None:
+        for document in (PAGE, OPERATOR_GUIDE):
+            with self.subTest(document=document):
+                text = document.read_text(encoding="utf-8")
+                for anchor in (
+                    "invalid_event",
+                    "audit_reconcile_failed",
+                    "a1:",
+                    "GET /api/logs/audit",
+                ):
+                    self.assertIn(anchor, text)
+
     def test_page_is_linked_from_developer_navigation_and_api_reference(self) -> None:
         expected_url = "/docs/pages/logging-api/"
         self.assertIn(expected_url, DOCS_NAV.read_text(encoding="utf-8"))
         self.assertIn(expected_url, API_REFERENCE.read_text(encoding="utf-8"))
+
+    def test_incompatible_version_audit_scope_is_explicit_in_authored_docs(self) -> None:
+        for document in (OPERATOR_GUIDE, PAGE):
+            with self.subTest(document=document):
+                text = document.read_text(encoding="utf-8")
+                normalized = re.sub(r"\s+", " ", text.lower())
+                self.assertIn("`gossip_incompatible_version_rejected` is emitted when a direct peer is", text)
+                self.assertIn("A transitive\nannouncement below the local version floor is dropped without emitting this", text)
+
+    def test_schema_incompatibility_contract_is_typed_and_version_neutral(self) -> None:
+        for document in (OPERATOR_GUIDE, PAGE):
+            with self.subTest(document=document):
+                text = document.read_text(encoding="utf-8")
+                normalized = re.sub(r"\s+", " ", text.lower())
+                for term in (
+                    "logging_schema_incompatible",
+                    "schema_version",
+                    "supported_schema_version",
+                    "left unchanged",
+                    "inference remains available",
+                    "log_store.db-wal",
+                    "log_store.db-shm",
+                    "PRAGMA user_version",
+                ):
+                    self.assertIn(term.lower(), normalized)
+                self.assertRegex(normalized, r"logging metadata (?:is|becomes) unavailable")
+                self.assertNotRegex(normalized, r"legacy (rows|entries)|previously retained|older schema|newer schema")
+
+    def test_stable_503_table_lists_all_codes(self) -> None:
+        page = self.page()
+        row = re.search(r"^\|\s*503\s*\|\s*([^|]+?)\s*\|\s*$", page, flags=re.MULTILINE)
+        self.assertIsNotNone(row, "the stable 503 error-code table row must exist")
+        assert row is not None
+        self.assertEqual(
+            set(re.findall(r"`([^`]+)`", row.group(1))),
+            {
+                "artifact_deletion_unavailable",
+                "export_timed_out",
+                "maintenance_cancelled",
+                "logging_unavailable",
+                "store_unavailable",
+                "logging_schema_incompatible",
+            },
+        )
 
 
 if __name__ == "__main__":

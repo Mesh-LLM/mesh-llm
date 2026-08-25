@@ -2,11 +2,12 @@
 //! and peer list management (add/remove/update).
 
 use super::{
-    DEAD_PEER_TTL, DisplayLatencySource, InviteTokenMaterial, MeshOperationalEvent, ModelDemand,
-    ModelRuntimeDescriptor, Node, NodeRole, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS,
-    PeerAnnouncement, PeerInfo, ServedModelDescriptor, SignedNodeOwnership, connect_mesh,
-    elapsed_ms_u64, emit_mesh_info, infer_remote_served_descriptors, parse_invite_token,
-    record_mesh_operational_event,
+    DEAD_PEER_TTL, DisplayLatencySource, InviteTokenMaterial, MeshOperationalEvent,
+    MeshPeerRemovalReason, MeshPolicyRejectionReason, ModelDemand, ModelRuntimeDescriptor, Node,
+    NodeRole, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS, PeerAnnouncement, PeerInfo,
+    ServedModelDescriptor, SignedNodeOwnership, connect_mesh, elapsed_ms_u64, emit_mesh_info,
+    infer_remote_served_descriptors, mesh_peer_operational_context, parse_invite_token,
+    record_mesh_operational_event, record_mesh_operational_event_with_context,
 };
 use crate::crypto::{OwnershipSummary, verify_node_ownership};
 use crate::mesh::peer_state::{PropagatedLatencyObservation, policy_accepts_peer};
@@ -519,7 +520,12 @@ impl Node {
                 );
             }
             if self
-                .add_peer_after_direct_requirements_validated(remote, addr.clone(), ann)
+                .add_peer_after_direct_requirements_validated(
+                    remote,
+                    addr.clone(),
+                    ann,
+                    context.negotiated_protocol_generation,
+                )
                 .await
             {
                 if let Some(ref their_id) = ann.mesh_id {
@@ -884,8 +890,14 @@ impl Node {
             let _ = self.peer_change_tx.send(admitted_count);
         }
         drop(state);
-        if newly_rejected {
-            record_mesh_operational_event(MeshOperationalEvent::GossipPolicyRejected);
+        if newly_rejected
+            && let Some(reason) =
+                MeshPolicyRejectionReason::from_ownership_status(&owner_summary.status)
+        {
+            record_mesh_operational_event_with_context(
+                MeshOperationalEvent::GossipPolicyRejected(reason),
+                mesh_peer_operational_context(id, self.authenticated_peer_path(id).await),
+            );
         }
         true
     }
@@ -971,7 +983,11 @@ impl Node {
             .count();
         drop(state);
         self.capture_peer_observation("peer_direct_add", &peer, "direct", None);
-        record_mesh_operational_event(MeshOperationalEvent::GossipDirectPeerPromoted);
+        record_mesh_operational_event_with_context(
+            MeshOperationalEvent::GossipDirectPeerPromoted,
+            mesh_peer_operational_context(id, self.authenticated_peer_path(id).await)
+                .numeric_summary("direct_peers", count as u64),
+        );
         let _ = self.peer_change_tx.send(count);
         self.emit_plugin_mesh_event(
             crate::plugin::proto::mesh_event::Kind::PeerUp,
@@ -1571,7 +1587,7 @@ impl Node {
 
         Ok(())
     }
-    pub(super) async fn remove_peer(&self, id: EndpointId) {
+    pub(super) async fn remove_peer(&self, id: EndpointId, reason: MeshPeerRemovalReason) {
         let mut state = self.state.lock().await;
         // Always clear any rejection-tracking entry so the map stays bounded.
         state.policy_rejected_peers.remove(&id);
@@ -1598,14 +1614,18 @@ impl Node {
             self.capture_peer_lifecycle_event(PeerLifecycleCaptureEvent {
                 event: "peer_removed",
                 peer: id,
-                reason: "remove_peer",
+                reason: reason.reason_code(),
                 reporter: None,
                 last_seen_age_ms: Some(last_seen_age_ms),
                 last_mentioned_age_ms: Some(last_mentioned_age_ms),
                 had_connection: Some(had_connection),
                 bridge_id,
             });
-            record_mesh_operational_event(MeshOperationalEvent::GossipPeerRemoved);
+            record_mesh_operational_event_with_context(
+                MeshOperationalEvent::GossipPeerRemoved(reason),
+                mesh_peer_operational_context(id, peer.selected_path)
+                    .numeric_summary("direct_peers", count as u64),
+            );
             let _ = self.peer_change_tx.send(count);
             self.emit_plugin_mesh_event(
                 crate::plugin::proto::mesh_event::Kind::PeerDown,
@@ -1651,8 +1671,13 @@ impl Node {
             }
             return;
         }
-        self.add_peer_after_direct_requirements_validated(id, addr, ann)
-            .await;
+        self.add_peer_after_direct_requirements_validated(
+            id,
+            addr,
+            ann,
+            negotiated_protocol_generation,
+        )
+        .await;
     }
 
     pub(crate) async fn add_peer_after_direct_requirements_validated(
@@ -1660,6 +1685,7 @@ impl Node {
         id: EndpointId,
         addr: EndpointAddr,
         ann: &PeerAnnouncement,
+        _negotiated_protocol_generation: Option<u32>,
     ) -> bool {
         // Reject ingest from peers below the supported version floor. They
         // are not added to local state, do not appear in /api/status, and
@@ -1671,7 +1697,10 @@ impl Node {
                 id.fmt_short(),
                 ann.version
             );
-            record_mesh_operational_event(MeshOperationalEvent::GossipIncompatibleVersionRejected);
+            record_mesh_operational_event_with_context(
+                MeshOperationalEvent::GossipIncompatibleVersionRejected,
+                mesh_peer_operational_context(id, self.authenticated_peer_path(id).await),
+            );
             self.remove_disallowed_peer(id).await;
             return false;
         }

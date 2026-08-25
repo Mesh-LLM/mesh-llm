@@ -28,7 +28,9 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
         _ => mesh_llm_commands::operational_logging::command_family(cmd),
     };
     let command_boundary =
-        mesh_llm_commands::operational_logging::CommandDispatchBoundary::start_family(family);
+        mesh_llm_commands::operational_logging::CommandDispatchBoundary::start_with_cli(
+            cli, family,
+        );
     let result = dispatch_command(cli, cmd).await;
     command_boundary.finish(&result);
     result?;

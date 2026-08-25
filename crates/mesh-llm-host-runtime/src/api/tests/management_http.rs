@@ -62,11 +62,140 @@ async fn management_health_is_a_json_liveness_response() {
     .await;
     server.await.unwrap().unwrap();
 
-    assert!(response.starts_with("HTTP/1.1 200 OK"), "response: {response}");
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "response: {response}"
+    );
     assert!(response.contains("Content-Type: application/json"));
     assert_eq!(json_body(&response)["status"], "ok");
     assert_eq!(json_body(&response)["mesh"]["status"], "standalone");
     assert_eq!(json_body(&response)["serving"]["status"], "idle");
+}
+
+#[tokio::test]
+#[serial]
+async fn trusted_local_management_mutation_persists_the_tcp_caller_address() {
+    let root = tempfile::tempdir().expect("temporary logging root");
+    let config = mesh_llm_config::LoggingConfig {
+        enabled: true,
+        application_state_root: Some(root.path().to_path_buf()),
+        ..Default::default()
+    };
+    crate::initialize_logging_foundation(&config).await;
+
+    let state = build_test_mesh_api().await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind management listener");
+    let address = listener.local_addr().expect("management listener address");
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept management caller");
+        handle_request(stream, &state).await
+    });
+    let request_id = mesh_llm_events::logging::identifiers::RequestId::new();
+    let body = r#""active""#;
+    let request = format!(
+        "PUT /api/runtime/activity/override HTTP/1.1\r\nHost: localhost\r\nx-request-id: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        request_id.as_uuid(),
+        body.len(),
+        body,
+    );
+    let mut client = TcpStream::connect(address)
+        .await
+        .expect("connect management caller");
+    let caller_addr = client
+        .local_addr()
+        .expect("management caller address")
+        .to_string();
+    client
+        .write_all(request.as_bytes())
+        .await
+        .expect("write management mutation");
+    client.shutdown().await.expect("finish management request");
+    let mut response = Vec::new();
+    client
+        .read_to_end(&mut response)
+        .await
+        .expect("read management response");
+    server
+        .await
+        .expect("management task joins")
+        .expect("request");
+    assert!(
+        String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200 OK"),
+        "trusted-local mutation succeeds"
+    );
+
+    let logging = crate::logging_runtime_state().expect("installed logging runtime");
+    let request_key = request_id.as_uuid().to_string();
+    let active = logging
+        .service_for_test()
+        .expect("logging service")
+        .registry_ref()
+        .get_recent(&request_key)
+        .expect("active request summary");
+    assert_eq!(active.metadata.caller_addr(), Some(caller_addr.as_str()));
+    assert_eq!(active.metadata.caller_path_type(), Some("local_http"));
+    logging.pump_persistence_for_test().await;
+    let durable = logging
+        .store()
+        .expect("metadata store")
+        .query_request_with_caller(&request_key)
+        .expect("durable request query")
+        .expect("durable request summary");
+    assert_eq!(durable.caller_addr.as_deref(), Some(caller_addr.as_str()));
+    assert_eq!(durable.caller_path_type.as_deref(), Some("local_http"));
+    assert!(durable.caller_endpoint_id.is_none());
+}
+
+#[tokio::test]
+#[serial]
+async fn logs_and_read_only_management_routes_never_self_record() {
+    let root = tempfile::tempdir().expect("temporary logging root");
+    let config = mesh_llm_config::LoggingConfig {
+        enabled: true,
+        application_state_root: Some(root.path().to_path_buf()),
+        ..Default::default()
+    };
+    crate::initialize_logging_foundation(&config).await;
+    let state = build_test_mesh_api().await;
+
+    let mut request_ids = Vec::new();
+    for path in ["/api/logs/requests", "/api/status"] {
+        let request_id = mesh_llm_events::logging::identifiers::RequestId::new();
+        let (address, server) = spawn_management_test_server(state.clone()).await;
+        let response = send_management_request(
+            address,
+            format!(
+                "GET {path} HTTP/1.1\r\nHost: localhost\r\nx-request-id: {}\r\n\r\n",
+                request_id.as_uuid()
+            ),
+        )
+        .await;
+        server
+            .await
+            .expect("management task joins")
+            .expect("request");
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "response: {response}"
+        );
+        request_ids.push(request_id);
+    }
+
+    let service = crate::logging_runtime_state()
+        .expect("installed logging runtime")
+        .service_for_test()
+        .expect("logging service");
+    for request_id in request_ids {
+        assert!(
+            service
+                .registry_ref()
+                .get_recent(&request_id.as_uuid().to_string())
+                .is_none(),
+            "excluded route must not register a lifecycle"
+        );
+    }
 }
 
 #[tokio::test]
@@ -81,7 +210,10 @@ async fn management_health_remains_available_in_headless_mode() {
     .await;
     server.await.unwrap().unwrap();
 
-    assert!(response.starts_with("HTTP/1.1 200 OK"), "response: {response}");
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "response: {response}"
+    );
     assert_eq!(json_body(&response)["status"], "ok");
 }
 
@@ -113,14 +245,13 @@ async fn management_health_reports_client_worker_and_serving_modes() {
     .await;
     server.await.unwrap().unwrap();
     assert_eq!(json_body(&worker_response)["mode"], "worker");
-    assert_eq!(
-        json_body(&worker_response)["serving"]["status"],
-        "idle"
-    );
+    assert_eq!(json_body(&worker_response)["serving"]["status"], "idle");
 
     state.update(true, true).await;
-    node.set_role(crate::mesh::NodeRole::Host { http_port: 9337 }).await;
-    node.set_hosted_models(vec!["served-model".to_string()]).await;
+    node.set_role(crate::mesh::NodeRole::Host { http_port: 9337 })
+        .await;
+    node.set_hosted_models(vec!["served-model".to_string()])
+        .await;
     let (address, server) = spawn_management_test_server(state).await;
     let serving_response = send_management_request(
         address,
@@ -323,7 +454,8 @@ async fn management_health_reports_cached_plugin_models_for_serving_host() {
     let plugin_manager = build_inference_endpoint_plugin_manager(&["plugin-model"]).await;
     let state = build_test_mesh_api_with_plugin_manager(3131, plugin_manager).await;
     let node = state.node().await;
-    node.set_role(crate::mesh::NodeRole::Host { http_port: 9337 }).await;
+    node.set_role(crate::mesh::NodeRole::Host { http_port: 9337 })
+        .await;
 
     let (address, server) = spawn_management_test_server(state).await;
     let response = send_management_request(

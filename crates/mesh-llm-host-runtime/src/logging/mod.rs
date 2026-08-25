@@ -51,12 +51,12 @@ pub(crate) use openai_lifecycle::{
 };
 pub use persistence::LogStoreSink;
 pub(crate) use raw_mesh_lifecycle::{
-    ProxyAttemptFinish, RawMeshLifecycleOwners, RawMeshProxyAttempt, RawMeshRemoteSuppressionLease,
-    RawMeshRequestLifecycle,
+    ProxyAttemptFinish, RawMeshLifecycleOwners, RawMeshProxyAttempt, RawMeshRemoteAttributionLease,
+    RawMeshRemoteSuppressionLease, RawMeshRequestLifecycle,
 };
 pub use registry::{ActiveRequestSnapshot, RegistryConfig, RequestRegistry, RequestSummaryEntry};
 pub(crate) use registry::{RequestSummaryEventSnapshots, RequestSummarySnapshot};
-pub(crate) use request_metadata::RequestSummaryMetadata;
+pub(crate) use request_metadata::{CallerPathType, RequestSummaryMetadata};
 #[cfg(test)]
 pub use runtime_state::ArtifactCaptureRequest;
 pub(crate) use runtime_state::LoggingQueryFacade;
@@ -66,8 +66,8 @@ pub use sequences::SequenceGenerators;
 pub(crate) use service::ArtifactUnavailableReason;
 pub use service::{
     ArtifactCaptureEntry, ArtifactPersistenceStatus, Clock, LoggingService,
-    OperationalAuditContext, OperationalAuditRecord, OperationalAuditSeverity,
-    OperationalAuditSubjectKind, PersistSink, ServiceConfig, SystemClock,
+    OperationalAuditContext, OperationalAuditPathType, OperationalAuditRecord,
+    OperationalAuditSeverity, OperationalAuditSubjectKind, PersistSink, ServiceConfig, SystemClock,
 };
 pub(crate) use webhook_delivery::{
     RandomWebhookJitter, ReqwestWebhookTransport, SystemWebhookWorkerClock, WebhookDeliveryWorker,

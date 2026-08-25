@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use mesh_llm_log_store::{ArtifactRecord, EventRecord, LogStoreError, RequestRecord};
+use mesh_llm_log_store::{ArtifactRecord, EventRecord, LogStoreError, RequestRecordWithCaller};
 use serde::Serialize;
 use tokio::net::TcpStream;
 
@@ -90,7 +90,7 @@ fn build_export(
     let request_ids = page
         .items
         .iter()
-        .map(|record| record.request_id.clone())
+        .map(|record| record.request.request_id.clone())
         .collect::<Vec<_>>();
     // Each item may consume at most the complete export row budget. Fetch one
     // extra child per owner so a partial child window remains detectable while
@@ -122,7 +122,7 @@ fn build_export(
             set_resume_cursor(&mut export);
             break;
         }
-        let request_id = record.request_id.clone();
+        let request_id = record.request.request_id.clone();
         let built = export_item(
             ExportItemInput {
                 record,
@@ -219,7 +219,7 @@ fn set_resume_cursor(export: &mut ExportDto) {
 }
 
 struct ExportItemInput {
-    record: RequestRecord,
+    record: RequestRecordWithCaller,
     event_records: Vec<EventRecord>,
     artifact_records: Vec<ArtifactRecord>,
     child_row_limit: usize,

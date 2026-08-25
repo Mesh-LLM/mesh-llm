@@ -33,8 +33,8 @@ pub use crypto::{
     verify_release_attestation,
 };
 pub use logging::{
-    LoggingRuntimeState, OperationalAuditContext, OperationalAuditRecord, OperationalAuditSeverity,
-    OperationalAuditSubjectKind,
+    LoggingRuntimeState, OperationalAuditContext, OperationalAuditPathType, OperationalAuditRecord,
+    OperationalAuditSeverity, OperationalAuditSubjectKind,
 };
 pub use mesh::requirements::{
     BootstrapStatus, DIRECT_NODE_ADMISSION_PROOF_MAX_CLOCK_SKEW_MS, DirectNodeAdmissionProof,
