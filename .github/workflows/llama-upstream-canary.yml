@@ -18,10 +18,16 @@ on:
       upstream_sha:
         description: "Optional llama.cpp upstream SHA to validate instead of origin/master"
         required: false
+      queue_ref:
+        description: "Optional branch/ref whose patch queue is validated (default: main). Non-main refs run report-only: the credentialed pin-push step is skipped."
+        required: false
 
-# This workflow checks out and executes trusted default-branch content only
-# (schedule/dispatch/main push). It must never be triggered from a PR ref: it
-# runs on the persistent `family-certify` self-hosted runner.
+# This workflow checks out and executes trusted default-branch content by
+# default (schedule/dispatch/main push). A maintainer may explicitly dispatch
+# it against a named same-repository feature ref via `queue_ref` to validate
+# that branch's patch queue before merge; those runs are report-only (no
+# credentialed pin push). It must never be triggered from a PR ref: it runs on
+# the persistent `family-certify` self-hosted runner.
 permissions:
   contents: write
   pull-requests: write
@@ -41,16 +47,23 @@ jobs:
       # HF_CACHE; scripts/skippy-family-battery.sh normalizes it into
       # HF_HOME/HF_HUB_CACHE so `hf download` is only a cache-miss backstop.
       CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'Nemotron 3 Ultra Free' }}
+      # Resolved patch-queue ref: default branch unless a maintainer
+      # explicitly dispatches with `queue_ref`. The pin-push step is gated on
+      # this being `main`, so write credentials only ever reach runs whose
+      # checked-out content is the trusted default branch.
+      QUEUE_REF: ${{ inputs.queue_ref || 'main' }}
     steps:
-      # Pin checkout content to the default branch even for a manual
-      # dispatch: a dispatcher can select a feature ref, and this job runs
-      # repository scripts plus the repair agent with write-capable repo
-      # access on the persistent self-hosted runner. `persist-credentials:
-      # false` keeps the checkout token away from everything executed; the
-      # pin-push step below is the only place a token is injected.
+      # Checkout content is normally pinned to the default branch even for a
+      # manual dispatch: a dispatcher can select a feature ref, and this job
+      # runs repository scripts plus the repair agent on the persistent
+      # self-hosted runner. The only exception is an explicit maintainer
+      # `queue_ref` dispatch, which validates a named same-repo branch
+      # report-only. `persist-credentials: false` keeps the checkout token
+      # away from everything executed; the pin-push step below is the only
+      # place a token is injected, and it is restricted to `QUEUE_REF == main`.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: main
+          ref: ${{ env.QUEUE_REF }}
           persist-credentials: false
 
       - name: Verify runner toolchain
@@ -131,9 +144,11 @@ jobs:
             > /tmp/llama-upstream-pr.md
 
       # The pin commit is gated on the full family battery passing: parity is
-      # the certification, cargo check alone is not.
+      # the certification, cargo check alone is not. It is further restricted
+      # to trusted default-branch checkouts: a `queue_ref` feature-branch
+      # dispatch never receives the write token, so its result is report-only.
       - name: Commit upstream pin to main
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success' && env.QUEUE_REF == 'main'
         run: |
           set -euo pipefail
           # The verified SHA lives under .deps; write it into the durable pin
@@ -153,7 +168,7 @@ jobs:
           PIN_PUSH_TOKEN: ${{ github.token }}
 
       - name: Report upstream pin update
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success' && env.QUEUE_REF == 'main'
         run: |
           {
             echo "## llama.cpp upstream pin update"
@@ -163,15 +178,29 @@ jobs:
             cat /tmp/llama-upstream-pr.md
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Report report-only canary result
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'true' && steps.battery.outcome == 'success' && env.QUEUE_REF != 'main'
+        run: |
+          {
+            echo "## llama.cpp upstream canary (report-only, queue_ref=$QUEUE_REF)"
+            echo
+            echo "The patch queue on \`$QUEUE_REF\` passed the tiered family battery against the new upstream. No pin was pushed: credentialed writes are restricted to \`main\` checkouts."
+            echo
+            cat /tmp/llama-upstream-pr.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Patch queue failed to apply onto the new upstream: hand the queue to
       # the opencode agent (default model: Nemotron 3 Ultra Free) to rebase
       # the patches, run the family battery, and open or reuse a repair PR.
       # The repair script re-runs the battery itself and loops certify ->
       # agent fix -> recertify (CANARY_REPAIR_MAX_TURNS, default 2), so this
-      # step needs headroom for multiple full battery runs.
+      # step needs headroom for multiple full battery runs. It uses the
+      # runner's persistent git/gh credentials, so it is restricted to trusted
+      # default-branch checkouts; a `queue_ref` branch dispatch reports the
+      # apply failure instead of repairing it.
       - name: Agent repair of the patch queue
         id: agent_repair
-        if: steps.prepare.outcome == 'failure'
+        if: steps.prepare.outcome == 'failure' && env.QUEUE_REF == 'main'
         timeout-minutes: 900
         env:
           DISPATCH_UPSTREAM_SHA: ${{ github.event.inputs.upstream_sha }}
@@ -191,6 +220,16 @@ jobs:
             echo
             echo "The automated opencode repair (\`$CANARY_AGENT_MODEL\`) did not produce a green family battery."
             echo "Inspect the run logs and the repair PR on \`llama-canary/patch-queue-fix\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Report patch-queue failure (report-only canary)
+        if: steps.prepare.outcome == 'failure' && env.QUEUE_REF != 'main'
+        run: |
+          {
+            echo "## llama.cpp patch queue failed to apply (report-only, queue_ref=$QUEUE_REF)"
+            echo
+            echo "The patch queue on \`$QUEUE_REF\` does not apply onto the requested upstream. Automated repair is restricted to \`main\` checkouts; rebase the queue on the branch."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
