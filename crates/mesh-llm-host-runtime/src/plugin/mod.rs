@@ -1213,7 +1213,7 @@ impl PluginManager {
                 continue;
             }
             let result = plugin
-                .send_channel_message(proto::ChannelMessage {
+                .try_send_channel_message(proto::ChannelMessage {
                     channel: channel.to_string(),
                     source_peer_id: String::new(),
                     target_peer_id: plugin_id.clone(),
@@ -1451,9 +1451,7 @@ fn aggregate_broadcast_results(results: Vec<(String, Result<()>)>) -> Result<()>
     let attempted = results.len();
     let failures: Vec<String> = results
         .into_iter()
-        .filter_map(|(plugin_id, result)| {
-            result.err().map(|error| format!("{plugin_id}: {error}"))
-        })
+        .filter_map(|(plugin_id, result)| result.err().map(|error| format!("{plugin_id}: {error}")))
         .collect();
     if failures.is_empty() {
         Ok(())
@@ -1635,17 +1633,17 @@ mod tests {
 
         assert!(error.contains("2 of 4"), "error was: {error}");
         assert!(error.contains("beta: channel closed"), "error was: {error}");
-        assert!(error.contains("gamma: send timed out"), "error was: {error}");
+        assert!(
+            error.contains("gamma: send timed out"),
+            "error was: {error}"
+        );
         assert!(!error.contains("alpha"), "error was: {error}");
         assert!(!error.contains("delta"), "error was: {error}");
     }
 
     #[test]
     fn aggregate_broadcast_results_is_ok_when_every_plugin_succeeds() {
-        let results = vec![
-            ("alpha".to_string(), Ok(())),
-            ("beta".to_string(), Ok(())),
-        ];
+        let results = vec![("alpha".to_string(), Ok(())), ("beta".to_string(), Ok(()))];
 
         assert!(aggregate_broadcast_results(results).is_ok());
     }

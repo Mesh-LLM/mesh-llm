@@ -636,6 +636,38 @@ impl ExternalPlugin {
         .await
     }
 
+    /// Fire-and-forget variant of [`Self::send_channel_message`] for
+    /// delivery paths that must never block the caller on plugin
+    /// backpressure — backs `openai_exchange::OpenAiExchangeChannel::publish`,
+    /// whose own doc comment already promises fire-and-forget delivery.
+    /// `send_channel_message` (via `send_unsolicited`) awaits
+    /// `outbound_tx.send()` on the bounded(256) per-plugin channel, which
+    /// blocks the caller once that channel is full; this uses `try_send`
+    /// instead, so a plugin that is behind on its queue — or not running at
+    /// all — is skipped rather than stalling whatever request triggered the
+    /// broadcast. Deliberately skips [`Self::ensure_running`] too: this is a
+    /// broadcast to whatever is already up, not a reason to lazily start a
+    /// plugin.
+    pub(crate) async fn try_send_channel_message(
+        &self,
+        message: proto::ChannelMessage,
+    ) -> Result<()> {
+        let runtime = self.runtime.lock().await;
+        let runtime = runtime
+            .as_ref()
+            .with_context(|| format!("Plugin '{}' is not running", self.spec.name))?;
+        let envelope = proto::Envelope {
+            protocol_version: PROTOCOL_VERSION,
+            plugin_id: self.spec.name.clone(),
+            request_id: 0,
+            payload: Some(proto::envelope::Payload::ChannelMessage(message)),
+        };
+        runtime
+            .outbound_tx
+            .try_send(envelope)
+            .with_context(|| format!("Plugin '{}' outbound queue is full", self.spec.name))
+    }
+
     pub(crate) async fn send_bulk_transfer_message(
         &self,
         message: proto::BulkTransferMessage,
@@ -1225,5 +1257,83 @@ mod tests {
             super::super::PluginWebUiStateKind::PluginNotRunning
         );
         assert_eq!(summary.web_ui.pages.len(), 1);
+    }
+
+    /// `send_channel_message` awaits capacity on the bounded outbound
+    /// channel and so blocks the caller once it's full — the exact failure
+    /// mode `try_send_channel_message` exists to avoid for fire-and-forget
+    /// delivery (see `plugin::openai_exchange::OpenAiExchangeChannel::publish`).
+    /// This fills a bounded(1) queue, keeps the receiver alive (so the
+    /// channel is genuinely full, not closed), and confirms the blocking
+    /// sibling still blocks (sanity-checking the fixture) while the
+    /// `try_send` variant returns immediately with an error instead.
+    #[tokio::test]
+    async fn try_send_channel_message_does_not_block_on_a_full_outbound_queue() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let plugin = plugin_for_spec(plugin_spec(
+            &temp_dir,
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            Some("web"),
+        ));
+        let child = sleeping_test_command()
+            .kill_on_drop(true)
+            .spawn()
+            .expect("sleep process should start for outbound-queue test");
+        let (outbound_tx, outbound_rx) = mpsc::channel(1);
+        *plugin.runtime.lock().await = Some(PluginRuntime {
+            generation: 1,
+            _child: child,
+            outbound_tx: outbound_tx.clone(),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        });
+        outbound_tx
+            .try_send(proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: "demo".to_string(),
+                request_id: 0,
+                payload: None,
+            })
+            .expect("first send fills the bounded(1) queue");
+
+        let blocking_sibling_still_pending = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            plugin.send_channel_message(proto::ChannelMessage::default()),
+        )
+        .await
+        .is_err();
+        assert!(
+            blocking_sibling_still_pending,
+            "fixture sanity check: send_channel_message must still block on a full queue"
+        );
+
+        // Bounded by an outer timeout so a regression to blocking behavior
+        // fails this test instead of hanging the whole suite forever —
+        // nothing ever drains `outbound_rx` in this test.
+        let started = std::time::Instant::now();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            plugin.try_send_channel_message(proto::ChannelMessage::default()),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        let result = outcome.unwrap_or_else(|_| {
+            panic!(
+                "try_send_channel_message must return immediately instead of awaiting \
+                 queue capacity; still pending after {elapsed:?}"
+            )
+        });
+        assert!(
+            result.is_err(),
+            "a full outbound queue must be reported, not silently dropped"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "try_send_channel_message must return immediately instead of awaiting \
+             queue capacity, took {elapsed:?}"
+        );
+
+        drop(outbound_rx);
     }
 }

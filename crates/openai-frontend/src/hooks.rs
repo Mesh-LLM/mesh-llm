@@ -161,6 +161,27 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
     ) -> Option<CapsuleMarker> {
         None
     }
+
+    /// Whether this policy reads the `request` argument passed to
+    /// [`Self::on_chat_completion_terminal`] or
+    /// [`Self::capsule_marker_for_response`]. Both fire after the backend
+    /// has already taken the effective request by value, so
+    /// `HookedOpenAiBackend` must clone it up front to still have one to
+    /// hand them — a clone that copies real bytes (message content, inline
+    /// media) on every non-streaming completion regardless of whether
+    /// either hook looks at it. [`Self::on_effective_chat_completion`]
+    /// doesn't need this: it runs before that move, on `&request` directly.
+    ///
+    /// Defaults to `true` (always clone) so a policy that starts reading
+    /// the post-dispatch request keeps getting the real one without also
+    /// having to remember to flip this. A policy that only implements the
+    /// pre-dispatch hooks — or ignores `request` in the post-dispatch ones —
+    /// can override this to `false` to skip the clone; in that case the two
+    /// post-dispatch hooks still fire, but with a default/empty
+    /// `ChatCompletionRequest` in place of the real one.
+    fn observes_dispatched_request(&self) -> bool {
+        true
+    }
 }
 
 /// The route information available to a hook at dispatch time.
@@ -248,14 +269,23 @@ impl OpenAiBackend for HookedOpenAiBackend {
         self.hooks
             .on_effective_chat_completion(&request, &route)
             .await;
+        // Only clone the effective request when a hook actually observes it
+        // after dispatch — `chat_completion_with_context` below takes
+        // `request` by value, so without a hook that needs the post-dispatch
+        // copy, moving the original straight in (no clone) is enough.
+        let dispatched_request = if self.hooks.observes_dispatched_request() {
+            request.clone()
+        } else {
+            ChatCompletionRequest::default()
+        };
         let mut result = self
             .backend
-            .chat_completion_with_context(request.clone(), context)
+            .chat_completion_with_context(request, context)
             .await;
         if let Ok(response) = &mut result
             && let Some(marker) = self
                 .hooks
-                .capsule_marker_for_response(&request, &*response)
+                .capsule_marker_for_response(&dispatched_request, &*response)
                 .await
         {
             response.capsule_marker = Some(marker);
@@ -272,7 +302,7 @@ impl OpenAiBackend for HookedOpenAiBackend {
             }
         };
         self.hooks
-            .on_chat_completion_terminal(&request, &exchange_id, &terminal)
+            .on_chat_completion_terminal(&dispatched_request, &exchange_id, &terminal)
             .await;
         result
     }
@@ -1110,6 +1140,79 @@ mod tests {
             .expect("terminal fired");
         let marker = seen.expect("marker visible inside on_chat_completion_terminal");
         assert_eq!(marker.capsule_id, "capsule-fixed");
+    }
+
+    #[derive(Default)]
+    struct RequestSnapshotPolicy {
+        consumes: bool,
+        model_seen_at_terminal: Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl OpenAiHookPolicy for RequestSnapshotPolicy {
+        async fn on_chat_completion_terminal(
+            &self,
+            request: &ChatCompletionRequest,
+            _exchange_id: &str,
+            _outcome: &ChatCompletionOutcome<'_>,
+        ) {
+            *self.model_seen_at_terminal.lock().unwrap() = Some(request.model.clone());
+        }
+
+        fn observes_dispatched_request(&self) -> bool {
+            self.consumes
+        }
+    }
+
+    #[tokio::test]
+    async fn observes_dispatched_request_true_gets_the_real_post_dispatch_request() {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let policy = Arc::new(RequestSnapshotPolicy {
+            consumes: true,
+            ..Default::default()
+        });
+        let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+
+        let response = hooked
+            .chat_completion(request_for("gpt-mesh"))
+            .await
+            .expect("backend call succeeds");
+
+        assert_eq!(response.model, "gpt-mesh");
+        assert_eq!(
+            policy.model_seen_at_terminal.lock().unwrap().clone(),
+            Some("gpt-mesh".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn observes_dispatched_request_false_skips_the_clone_and_sees_a_default_request() {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let policy = Arc::new(RequestSnapshotPolicy {
+            consumes: false,
+            ..Default::default()
+        });
+        let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+
+        // The backend still dispatches the real request (the response model
+        // proves it); only the post-dispatch hook snapshot is skipped.
+        let response = hooked
+            .chat_completion(request_for("gpt-mesh"))
+            .await
+            .expect("backend call succeeds");
+        assert_eq!(response.model, "gpt-mesh");
+
+        // An empty model here (not "gpt-mesh") proves HookedOpenAiBackend
+        // handed the hook a default placeholder instead of cloning the real
+        // request, matching the `observes_dispatched_request = false` contract.
+        assert_eq!(
+            policy.model_seen_at_terminal.lock().unwrap().clone(),
+            Some(String::new())
+        );
     }
 
     #[tokio::test]
