@@ -554,12 +554,13 @@ fn ensure_node<'a, R, E>(
         .expect("new split radix child should exist")
 }
 
-/// Find the longest query prefix backed by any unreferenced resident sequence.
+/// Find the longest query prefix backed by any resident sequence.
 ///
 /// Unlike recurrent checkpoints, native resident KV can be sliced when copied:
 /// a cached sequence for `[1, 2, 3, 4]` can restore `[1, 2]` for a request that
-/// diverges at token 3. The radix path therefore remains useful even when the
-/// payload sits below the exact common-prefix boundary.
+/// diverges at token 3. Native restore only reads the stored resident source,
+/// so multiple restores may hold references concurrently; eviction remains
+/// blocked until every reference is released.
 fn resident_backing_prefix<R, E>(
     root: &RadixNode<R, E>,
     tokens: &[i32],
@@ -570,12 +571,7 @@ fn resident_backing_prefix<R, E>(
     let mut path = Vec::new();
     let mut best = None;
 
-    if node
-        .components
-        .resident
-        .as_ref()
-        .is_some_and(|entry| entry.active_refs == 0)
-    {
+    if node.components.resident.is_some() {
         best = Some((0, Vec::new()));
     }
 
@@ -608,12 +604,7 @@ fn resident_backing_prefix<R, E>(
         remaining = &remaining[common..];
         path.extend_from_slice(&child.edge);
         node = child;
-        if node
-            .components
-            .resident
-            .as_ref()
-            .is_some_and(|entry| entry.active_refs == 0)
-        {
+        if node.components.resident.is_some() {
             best = Some((consumed, path.clone()));
         }
     }
@@ -630,12 +621,7 @@ fn nearest_resident_descendant<R, E>(
     node: &RadixNode<R, E>,
     node_path: &[i32],
 ) -> Option<Vec<i32>> {
-    if node
-        .components
-        .resident
-        .as_ref()
-        .is_some_and(|entry| entry.active_refs == 0)
-    {
+    if node.components.resident.is_some() {
         return Some(node_path.to_vec());
     }
     for child in node.children.values() {
@@ -1088,20 +1074,34 @@ mod tests {
     }
 
     #[test]
-    fn active_references_protect_entries_from_lru_eviction() {
+    fn concurrent_resident_readers_share_source_and_protect_it_from_eviction() {
         let mut cache = UnifiedRadixCache::<&str, &str>::new();
         cache.insert_resident("stage", &[1], 10, "old").unwrap();
         cache.insert_resident("stage", &[2], 20, "new").unwrap();
 
-        let acquired = cache
+        let first = cache
             .acquire_resident("stage", &[1, 9])
-            .expect("resident acquire");
-        assert_eq!(acquired.active_refs, 1);
+            .expect("first resident acquire");
+        assert_eq!(first.active_refs, 1);
+        let second = cache
+            .acquire_resident("stage", &[1, 8])
+            .expect("second resident acquire");
+        assert_eq!(second.active_refs, 2);
+        assert_eq!(
+            cache
+                .lookup_resident("stage", &[1, 7])
+                .expect("active resident remains probe-visible")
+                .active_refs,
+            2
+        );
         let evicted = cache.evict_lru_resident().expect("unreferenced victim");
         assert_eq!(evicted.tokens, vec![2]);
         assert_eq!(evicted.value, "new");
         assert_eq!(cache.stats().resident_evictions, 1);
 
+        assert!(cache.release_resident("stage", &[1]));
+        assert!(cache.evict_lru_resident().is_none());
+        assert_eq!(cache.stats().resident_active_refs, 1);
         assert!(cache.release_resident("stage", &[1]));
         assert!(!cache.release_resident("stage", &[1]));
         assert_eq!(cache.evict_lru_resident().unwrap().value, "old");
