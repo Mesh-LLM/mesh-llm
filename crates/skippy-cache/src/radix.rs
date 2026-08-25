@@ -581,6 +581,16 @@ fn resident_backing_prefix<R, E>(
 
     while let Some(first) = remaining.first() {
         let Some(child) = node.children.get(first) else {
+            // The query can diverge exactly at an existing branch point. No
+            // child starts with its next token, but any resident descendant
+            // still owns a native sequence that can be sliced to `consumed`.
+            // Without this fallback, the first two branches split the edge
+            // and every later sibling incorrectly becomes a full miss.
+            if consumed > 0
+                && let Some(stored_tokens) = nearest_resident_descendant(node, &path)
+            {
+                best = Some((consumed, stored_tokens));
+            }
             break;
         };
         let common = common_prefix_len(&child.edge, remaining);
@@ -961,7 +971,13 @@ mod tests {
             .expect("shared prefix hit");
         assert_eq!(shared.matched_tokens, 2);
         assert_eq!(shared.value, "shared");
-        assert!(cache.lookup_resident("model-a", &[1, 7]).is_none());
+        assert_eq!(
+            cache
+                .lookup_resident("model-a", &[1, 7])
+                .expect("branch-point common prefix")
+                .matched_tokens,
+            1
+        );
         assert_eq!(cache.stats().splits, 2);
     }
 
@@ -984,6 +1000,26 @@ mod tests {
             .expect("shorter query resident hit");
         assert_eq!(shorter.matched_tokens, 2);
         assert_eq!(shorter.stored_tokens, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn resident_kv_reuses_descendant_when_query_adds_a_new_branch() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache
+            .insert_resident("model-a", &[1, 2, 3, 4], 40, "left")
+            .unwrap();
+        cache
+            .insert_resident("model-a", &[1, 2, 5, 6], 40, "right")
+            .unwrap();
+
+        let third_branch = cache
+            .lookup_resident("model-a", &[1, 2, 7, 8])
+            .expect("branch-point resident hit");
+        assert_eq!(third_branch.matched_tokens, 2);
+        assert!(
+            third_branch.stored_tokens == vec![1, 2, 3, 4]
+                || third_branch.stored_tokens == vec![1, 2, 5, 6]
+        );
     }
 
     #[test]

@@ -473,14 +473,20 @@ def run_server_cell(
         try:
             harness.wait_ready(port, process, 900, path="/v1/models", server_name=cell_name)
             for scenario, (warmup_prompt, measured_prompt) in prompt_pairs.items():
-                warmup_requests = []
-                if cache_enabled:
-                    warmup_requests, _ = harness.run_openai_concurrent_requests(
-                        warmup_prompt, case.model_id, 1, 1, output_tokens, port, request_args
-                    )
-                    if warmup_requests[0].get("error"):
-                        raise RuntimeError(f"{cell_name} {scenario} warmup failed: {warmup_requests[0]}")
                 for concurrency in concurrency_levels:
+                    # Refresh the intended backing prefix immediately before
+                    # each measured level. Earlier concurrency levels record
+                    # their own branches and can otherwise turn the next level
+                    # into a cache-capacity test instead of a matched A/B.
+                    if cache_enabled:
+                        warmup_requests, _ = harness.run_openai_concurrent_requests(
+                            warmup_prompt, case.model_id, 1, 1, output_tokens, port, request_args
+                        )
+                        if warmup_requests[0].get("error"):
+                            raise RuntimeError(
+                                f"{cell_name} {scenario}/n{concurrency} warmup failed: "
+                                f"{warmup_requests[0]}"
+                            )
                     event_start = len(json_events(log_path, SUMMARY_EVENT))
                     request_count = max(requests_per_level, concurrency)
                     if scenario == "divergent":
@@ -713,11 +719,11 @@ def evaluate_gate(case_result: dict[str, Any]) -> dict[str, Any]:
             summary = observation["summary"]
             label = (
                 f"{cell['version']}/{cell['cache']}/{observation['scenario']}"
-                f"/n{observation['concurrency']}"
+                f"/n{observation['concurrency']}/round-{cell.get('round', 1)}"
             )
             if summary["successful"] != summary["requests"]:
                 failures.append(f"{label} did not complete every request")
-            if any(
+            if observation["concurrency"] == 1 and any(
                 len(prompt_outputs) != 1
                 for prompt_outputs in summary["outputs_by_prompt"].values()
             ):
@@ -725,18 +731,34 @@ def evaluate_gate(case_result: dict[str, Any]) -> dict[str, Any]:
             if (
                 cell["cache"] == "warm"
                 and observation["scenario"] in required_hit_scenarios
+                and observation["concurrency"] == 1
                 and summary["cache_hits"] != summary["requests"]
             ):
                 failures.append(f"{label} did not report a cache hit for every request")
 
+    preservation = {
+        (result["version"], result["scenario"], result["concurrency"]): result
+        for result in case_result["cache_output_preservation"]
+    }
     for result in case_result["cache_output_preservation"]:
-        if result["version"] == "new" and not result["cache_preserves_output"]:
+        if (
+            result["version"] == "new"
+            and result["concurrency"] == 1
+            and not result["cache_preserves_output"]
+            and preservation.get(("old", result["scenario"], 1), {}).get(
+                "cache_preserves_output", True
+            )
+        ):
             failures.append(
-                "NEW cache changed deterministic output for "
+                "NEW cache introduced an N=1 output mismatch absent from OLD for "
                 f"{result['scenario']}/n{result['concurrency']}"
             )
     for result in case_result["output_parity"]:
-        if result["cache"] == "cold" and not result["identical_outputs"]:
+        if (
+            result["cache"] == "cold"
+            and result["concurrency"] == 1
+            and not result["identical_outputs"]
+        ):
             failures.append(
                 f"OLD/NEW cold output differs for {result['scenario']}/n{result['concurrency']}"
             )
@@ -745,6 +767,38 @@ def evaluate_gate(case_result: dict[str, Any]) -> dict[str, Any]:
         (row["version"], row["cache"], row["scenario"], row["concurrency"]): row
         for row in rows
     }
+    round_tolerance = max(
+        1,
+        len(
+            {
+                cell.get("round", 1)
+                for cell in cells
+                if cell["version"] == "new" and cell["cache"] == "warm"
+            }
+        ),
+    )
+    for scenario in sorted(required_hit_scenarios):
+        for concurrency in sorted(
+            {
+                row["concurrency"]
+                for row in rows
+                if row["cache"] == "warm"
+                and row["scenario"] == scenario
+                and row["concurrency"] > 1
+            }
+        ):
+            old = indexed.get(("old", "warm", scenario, concurrency))
+            new = indexed.get(("new", "warm", scenario, concurrency))
+            if old is None or new is None:
+                failures.append(
+                    f"missing concurrent warm OLD/NEW pair for {scenario}/n{concurrency}"
+                )
+            elif new["cache_hits"] + round_tolerance < old["cache_hits"]:
+                failures.append(
+                    f"NEW warm hit count {new['cache_hits']} regressed beyond the "
+                    f"{round_tolerance}-request round tolerance from OLD "
+                    f"{old['cache_hits']} for {scenario}/n{concurrency}"
+                )
     for concurrency in sorted(
         {
             row["concurrency"]

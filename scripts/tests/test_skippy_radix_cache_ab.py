@@ -25,22 +25,27 @@ def load_module():
 BENCH = load_module()
 
 
-def summary(output: str, ttft: float, cache_hits: int = 1) -> dict:
+def summary(
+    output: str,
+    ttft: float,
+    cache_hits: int = 1,
+    requests: int = 1,
+) -> dict:
     return {
-        "requests": 1,
-        "successful": 1,
+        "requests": requests,
+        "successful": requests,
         "cache_hits": cache_hits,
-        "cache_misses": 1 - cache_hits,
+        "cache_misses": requests - cache_hits,
         "matched_prefix_tokens_median": 100,
         "suffix_prefill_tokens_median": 5,
         "ttft_ms_p50": ttft,
         "ttft_ms_p99": ttft,
         "tpot_ms_p50": 2.0,
-        "matched_prefix_tokens": [100],
-        "suffix_prefill_tokens": [5],
-        "ttft_ms": [ttft],
-        "tpot_ms": [2.0],
-        "outputs": [output],
+        "matched_prefix_tokens": [100] * requests,
+        "suffix_prefill_tokens": [5] * requests,
+        "ttft_ms": [ttft] * requests,
+        "tpot_ms": [2.0] * requests,
+        "outputs": [output] * requests,
         "outputs_by_prompt": {"prompt": [output]},
     }
 
@@ -52,16 +57,20 @@ def cell(
     ttft: float,
     scenario: str = "divergent",
     cache_hits: int = 1,
+    concurrency: int = 1,
+    requests: int = 1,
+    round_number: int = 1,
 ) -> dict:
     return {
         "version": version,
         "cache": cache,
+        "round": round_number,
         "suspect_log_lines": [],
         "observations": [
             {
                 "scenario": scenario,
-                "concurrency": 1,
-                "summary": summary(output, ttft, cache_hits),
+                "concurrency": concurrency,
+                "summary": summary(output, ttft, cache_hits, requests),
             }
         ],
     }
@@ -179,6 +188,89 @@ class RadixCacheAbTest(unittest.TestCase):
             "cache_output_preservation": BENCH.cache_preservation(rows),
         }
         self.assertEqual(BENCH.evaluate_gate(case_result), {"passed": True, "failures": []})
+
+    def test_concurrent_gate_tolerates_one_transient_miss_per_round(self) -> None:
+        cells = []
+        for round_number in (1, 2):
+            for version, hits in (("old", 4), ("new", 3)):
+                for cache in ("cold", "warm"):
+                    cells.append(
+                        cell(
+                            version,
+                            cache,
+                            "correct",
+                            25 if cache == "warm" else 100,
+                            cache_hits=hits if cache == "warm" else 0,
+                            concurrency=4,
+                            requests=4,
+                            round_number=round_number,
+                        )
+                    )
+        rows = BENCH.aggregate(cells)
+        case_result = {
+            "case": {"payload": "resident-kv"},
+            "cells": cells,
+            "aggregate": rows,
+            "output_parity": BENCH.parity(rows),
+            "cache_output_preservation": BENCH.cache_preservation(rows),
+        }
+        self.assertEqual(BENCH.evaluate_gate(case_result), {"passed": True, "failures": []})
+
+    def test_concurrent_gate_rejects_hit_regression_beyond_round_tolerance(self) -> None:
+        cells = []
+        for round_number in (1, 2):
+            for version, hits in (("old", 4), ("new", 2)):
+                for cache in ("cold", "warm"):
+                    cells.append(
+                        cell(
+                            version,
+                            cache,
+                            "correct",
+                            25 if cache == "warm" else 100,
+                            cache_hits=hits if cache == "warm" else 0,
+                            concurrency=4,
+                            requests=4,
+                            round_number=round_number,
+                        )
+                    )
+        rows = BENCH.aggregate(cells)
+        case_result = {
+            "case": {"payload": "resident-kv"},
+            "cells": cells,
+            "aggregate": rows,
+            "output_parity": BENCH.parity(rows),
+            "cache_output_preservation": BENCH.cache_preservation(rows),
+        }
+        gate = BENCH.evaluate_gate(case_result)
+        self.assertFalse(gate["passed"])
+        self.assertTrue(
+            any(
+                "regressed beyond the 2-request round tolerance" in failure
+                for failure in gate["failures"]
+            )
+        )
+
+    def test_new_n1_output_mismatch_only_fails_when_old_preserves_output(self) -> None:
+        def gate_for_old_warm(old_warm_output: str) -> dict:
+            cells = [
+                cell("old", "cold", "baseline", 100),
+                cell("old", "warm", old_warm_output, 25),
+                cell("new", "cold", "baseline", 100),
+                cell("new", "warm", "changed", 20),
+            ]
+            rows = BENCH.aggregate(cells)
+            return BENCH.evaluate_gate(
+                {
+                    "case": {"payload": "resident-kv"},
+                    "cells": cells,
+                    "aggregate": rows,
+                    "output_parity": BENCH.parity(rows),
+                    "cache_output_preservation": BENCH.cache_preservation(rows),
+                }
+            )
+
+        self.assertFalse(gate_for_old_warm("baseline")["passed"])
+        self.assertTrue(gate_for_old_warm("changed")["passed"])
 
 
 if __name__ == "__main__":
