@@ -22,9 +22,14 @@ if ! command -v opencode >/dev/null 2>&1; then
   echo "opencode CLI not found on runner; install opencode-ai on the family-certify image" >&2
   exit 1
 fi
+# Credentials: either an explicit API key env var, or an opencode CLI that has
+# been logged in on the runner (`opencode auth login`), which `opencode run`
+# picks up from its own auth store.
 if [[ -z "${OPENCODE_API_KEY:-}" && -z "${NEMOTRON_API_KEY:-}" ]]; then
-  echo "no agent credentials (OPENCODE_API_KEY/NEMOTRON_API_KEY) configured on runner" >&2
-  exit 1
+  if [[ ! -s "${HOME}/.local/share/opencode/auth.json" ]] && ! opencode auth list 2>/dev/null | grep -Eq '[1-9][0-9]* credentials'; then
+    echo "no agent credentials: set OPENCODE_API_KEY/NEMOTRON_API_KEY or run 'opencode auth login' on the runner" >&2
+    exit 1
+  fi
 fi
 
 cd "$ROOT"
