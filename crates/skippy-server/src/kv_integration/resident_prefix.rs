@@ -236,7 +236,7 @@ impl KvStageIntegration {
             sequences.release(seq_id);
             return Err(error);
         }
-        insert_saved_resident(
+        let inserted = insert_saved_resident(
             &mut radix,
             &mut sequences,
             identity.namespace.clone(),
@@ -249,6 +249,22 @@ impl KvStageIntegration {
             },
             |seq_id| runtime.drop_resident_prefix_sequence(session_id, seq_id),
         )?;
+        if !inserted {
+            let existing = radix
+                .resident_exact(&identity.namespace, &identity.token_ids[..token_count])
+                .context("occupied resident radix entry disappeared after rejected insert")?;
+            let stats = radix.stats();
+            return Ok(Some(ResidentPrefixRecord {
+                page_id: existing.value.page_id,
+                token_count,
+                seq_id: existing.value.seq_id,
+                stored: false,
+                evicted_entries,
+                evicted_tokens,
+                entries: stats.resident_entries,
+                resident_tokens: stats.resident_tokens,
+            }));
+        }
         let stats = radix.stats();
         Ok(Some(ResidentPrefixRecord {
             page_id: identity.page_id.clone(),
@@ -288,15 +304,14 @@ fn insert_saved_resident(
     logical_bytes: u64,
     entry: RadixResidentEntry,
     mut drop_native: impl FnMut(i32) -> Result<()>,
-) -> Result<()> {
+) -> Result<bool> {
     let seq_id = entry.seq_id;
-    match radix.insert_resident(namespace, tokens, logical_bytes, entry) {
-        Ok(replaced) => {
-            debug_assert!(
-                replaced.is_none(),
-                "exact radix entry was checked under lock"
-            );
-            Ok(())
+    match radix.insert_resident_if_vacant(namespace, tokens, logical_bytes, entry) {
+        Ok(None) => Ok(true),
+        Ok(Some(rejected)) => {
+            drop_native(rejected.seq_id)?;
+            sequences.release(rejected.seq_id);
+            Ok(false)
         }
         Err(error) => {
             if let Err(native_error) = drop_native(seq_id) {
@@ -421,5 +436,51 @@ mod proactive_eviction_tests {
         assert_eq!(dropped, Some(seq_id));
         assert_eq!(sequences.allocate().unwrap(), seq_id);
         assert_eq!(radix.stats().resident_entries, 0);
+    }
+
+    #[test]
+    fn duplicate_saved_resident_preserves_existing_native_sequence() {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(4);
+        let existing_seq_id = sequences.allocate().unwrap();
+        radix
+            .insert_resident(
+                "stage",
+                &[1, 2, 3],
+                3,
+                RadixResidentEntry {
+                    page_id: "existing".to_string(),
+                    seq_id: existing_seq_id,
+                    token_count: 3,
+                },
+            )
+            .unwrap();
+        let duplicate_seq_id = sequences.allocate().unwrap();
+        let mut dropped = None;
+
+        let inserted = insert_saved_resident(
+            &mut radix,
+            &mut sequences,
+            "stage".to_string(),
+            &[1, 2, 3],
+            3,
+            RadixResidentEntry {
+                page_id: "duplicate".to_string(),
+                seq_id: duplicate_seq_id,
+                token_count: 3,
+            },
+            |seq_id| {
+                dropped = Some(seq_id);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(!inserted);
+        assert_eq!(dropped, Some(duplicate_seq_id));
+        let existing = radix.resident_exact("stage", &[1, 2, 3]).unwrap();
+        assert_eq!(existing.value.page_id, "existing");
+        assert_eq!(existing.value.seq_id, existing_seq_id);
+        assert_eq!(sequences.allocate().unwrap(), duplicate_seq_id);
     }
 }

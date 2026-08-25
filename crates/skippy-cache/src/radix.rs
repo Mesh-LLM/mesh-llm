@@ -140,9 +140,19 @@ impl<R, E> UnifiedRadixCache<R, E> {
         value: R,
     ) -> Result<Option<R>> {
         validate_tokens(tokens)?;
+        let namespace = namespace.into();
+        if self
+            .roots
+            .get(&namespace)
+            .and_then(|root| node_at(root, tokens))
+            .and_then(|node| node.components.resident.as_ref())
+            .is_some_and(|entry| entry.active_refs > 0)
+        {
+            bail!("cannot replace an active resident radix entry");
+        }
         self.clock = self.clock.saturating_add(1);
         let last_used = self.clock;
-        let node = self.ensure_node(namespace.into(), tokens);
+        let node = self.ensure_node(namespace, tokens);
         Ok(node
             .components
             .resident
@@ -153,6 +163,39 @@ impl<R, E> UnifiedRadixCache<R, E> {
                 active_refs: 0,
             })
             .map(|entry| entry.value))
+    }
+
+    /// Insert a resident component without replacing an existing native
+    /// backing sequence. Returns the rejected value when the key is occupied.
+    pub fn insert_resident_if_vacant(
+        &mut self,
+        namespace: impl Into<String>,
+        tokens: &[i32],
+        logical_bytes: u64,
+        value: R,
+    ) -> Result<Option<R>> {
+        validate_tokens(tokens)?;
+        let namespace = namespace.into();
+        if self
+            .roots
+            .get(&namespace)
+            .and_then(|root| node_at(root, tokens))
+            .and_then(|node| node.components.resident.as_ref())
+            .is_some()
+        {
+            return Ok(Some(value));
+        }
+        self.clock = self.clock.saturating_add(1);
+        let last_used = self.clock;
+        let node = self.ensure_node(namespace, tokens);
+        debug_assert!(node.components.resident.is_none());
+        node.components.resident = Some(ComponentEntry {
+            value,
+            logical_bytes,
+            last_used,
+            active_refs: 0,
+        });
+        Ok(None)
     }
 
     pub fn insert_recurrent(
@@ -1107,6 +1150,31 @@ mod tests {
         assert_eq!(cache.evict_lru_resident().unwrap().value, "old");
         assert_eq!(cache.stats().resident_evictions, 2);
         assert_eq!(cache.stats().namespaces, 0);
+    }
+
+    #[test]
+    fn occupied_resident_insert_cannot_replace_a_live_native_source() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache.insert_resident("stage", &[1], 10, "old").unwrap();
+        cache.acquire_resident("stage", &[1]).unwrap();
+
+        assert_eq!(
+            cache
+                .insert_resident("stage", &[1], 20, "replacement")
+                .unwrap_err()
+                .to_string(),
+            "cannot replace an active resident radix entry"
+        );
+        assert_eq!(
+            cache
+                .insert_resident_if_vacant("stage", &[1], 20, "rejected")
+                .unwrap(),
+            Some("rejected")
+        );
+        let existing = cache.lookup_resident("stage", &[1]).unwrap();
+        assert_eq!(existing.value, "old");
+        assert_eq!(existing.active_refs, 1);
+        assert!(cache.release_resident("stage", &[1]));
     }
 
     #[test]
