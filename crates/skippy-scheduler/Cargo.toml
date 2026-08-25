@@ -8,6 +8,14 @@ repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 categories = ["concurrency", "artificial-intelligence"]
 
+[features]
+scheduler-lab = ["skippy-runtime/dynamic-native-runtime"]
+
 [dependencies]
 skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc7" }
 thiserror = "2"
+
+[[bench]]
+name = "scheduler_lab"
+harness = false
+required-features = ["scheduler-lab"]
