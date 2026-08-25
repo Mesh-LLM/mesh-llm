@@ -38,15 +38,20 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("LLAMA_STAGE_BACKEND: metal", workflow)
         self.assertNotIn("mozilla-actions/sccache-action", workflow)
         self.assertNotIn("SCCACHE_GHA_ENABLED", workflow)
-        self.assertIn(
-            'SCCACHE_C_CUSTOM_CACHE_BUSTER: "family-certify-darwin-arm64"', workflow
-        )
+        self.assertNotIn("SCCACHE_C_CUSTOM_CACHE_BUSTER", workflow)
+        self.assertIn('RUSTC_WRAPPER: ""', workflow)
+        self.assertIn('LLAMA_STAGE_USE_SCCACHE: "0"', workflow)
+        self.assertNotIn("Show sccache stats", workflow)
 
         build = _step_block(workflow, "Build stage runtime crates")
         self.assertIn("cargo build", build)
         self.assertIn("steps.sha.outputs.certify == 'true'", build)
         for package in ("skippy-correctness", "skippy-server", "llama-spec-bench"):
             self.assertIn(f"-p {package}", build)
+
+        architecture = _step_block(workflow, "Verify native archive architecture")
+        self.assertIn('lipo -archs "$archive"', architecture)
+        self.assertIn('[[ "$arches" != "arm64" ]]', architecture)
 
         battery = _step_block(
             workflow, "Supported-families certification battery (parity gate)"

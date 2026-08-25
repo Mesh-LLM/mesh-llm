@@ -45,11 +45,11 @@ jobs:
     timeout-minutes: 960
     env:
       LLAMA_UPSTREAM_CANARY_SMOKE: ${{ vars.LLAMA_UPSTREAM_CANARY_SMOKE || '1' }}
-      RUSTC_WRAPPER: "sccache"
-      # Use the persistent runner's local sccache only. The GitHub backend
-      # previously served Intel C/C++ objects to this arm64 runner because
-      # AppleClang's implicit host architecture was absent from the key.
-      SCCACHE_C_CUSTOM_CACHE_BUSTER: "family-certify-darwin-arm64"
+      # Certification must compile the native closure for this arm64 runner.
+      # Both the former GitHub backend and the persistent runner-local cache
+      # have served Intel objects for AppleClang's implicit host target.
+      RUSTC_WRAPPER: ""
+      LLAMA_STAGE_USE_SCCACHE: "0"
       # A persistent runner can retain a CMake cache from a different host
       # architecture. Build every canary in a run-unique directory, and feed
       # that exact native closure to all Rust, smoke, and battery commands.
@@ -85,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for cmd in cargo just sccache jq python3 cmake ninja hf opencode gh; do
+          for cmd in cargo just sccache jq python3 cmake ninja hf opencode gh lipo; do
             if ! command -v "$cmd" >/dev/null 2>&1; then
               echo "missing on family-certify image: $cmd" >&2
               missing=1
@@ -129,6 +129,17 @@ jobs:
       - name: Build patched llama.cpp ABI
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
         run: scripts/build-llama.sh
+
+      - name: Verify native archive architecture
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
+        run: |
+          set -euo pipefail
+          archive="${LLAMA_STAGE_BUILD_DIR:?}/src/libllama.a"
+          arches="$(lipo -archs "$archive")"
+          if [[ "$arches" != "arm64" ]]; then
+            echo "canary native archive must be arm64, got: $arches" >&2
+            exit 1
+          fi
 
       - name: Build stage runtime crates
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
@@ -258,7 +269,3 @@ jobs:
             echo "The patch queue on \`$QUEUE_REF\` does not apply onto the requested upstream. Automated repair is restricted to \`main\` checkouts; rebase the queue on the branch."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
-
-      - name: Show sccache stats
-        if: ${{ !cancelled() }}
-        run: sccache --show-stats || true
