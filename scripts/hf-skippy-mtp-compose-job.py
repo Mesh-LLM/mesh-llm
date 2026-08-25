@@ -103,6 +103,30 @@ def build_skippy_quantize(mesh_root: Path) -> Path:
     return mesh_root / "target" / "release" / "skippy-quantize"
 
 
+def stage_converter_input(args: argparse.Namespace, work: Path) -> Path:
+    """Build a converter-readable model dir for the MTP head.
+
+    The MTPv2 repo ships weights + config only — no tokenizer — so the
+    converter input symlinks the mounted weights and pulls the tokenizer
+    files from the full base-model repo.
+    """
+    staged = work / "mtp-src"
+    staged.mkdir(parents=True, exist_ok=True)
+    for src in sorted(Path(args.mtp_source).iterdir()):
+        if src.is_file():
+            dst = staged / src.name
+            if not dst.exists():
+                dst.symlink_to(src)
+    from huggingface_hub import hf_hub_download
+
+    for filename in ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json"):
+        path = hf_hub_download(args.tokenizer_source, filename, token=os.environ.get("HF_TOKEN"))
+        dst = staged / filename
+        if not dst.exists():
+            dst.symlink_to(path)
+    return staged
+
+
 def convert_mtp(llama_root: Path, args: argparse.Namespace, work: Path) -> Path:
     """MTPv2 SafeTensors -> standalone MTP draft GGUF via the pinned converter.
 
@@ -112,17 +136,18 @@ def convert_mtp(llama_root: Path, args: argparse.Namespace, work: Path) -> Path:
     """
     out_dir = work / "mtp"
     out_dir.mkdir(parents=True, exist_ok=True)
+    out_gguf = out_dir / "mtp-nemotron-mtpv2.gguf"
+    staged = stage_converter_input(args, work)
     run(
         sys.executable, str(llama_root / "convert_hf_to_gguf.py"),
-        args.mtp_source,
+        str(staged),
         "--mtp",
         "--outtype", "bf16",
-        "--outdir", str(out_dir),
+        "--outfile", str(out_gguf),
     )
-    drafts = sorted(out_dir.glob("mtp-*.gguf"))
-    if len(drafts) != 1:
-        raise FileNotFoundError(f"expected exactly one mtp-*.gguf in {out_dir}, found {drafts}")
-    return drafts[0]
+    if not out_gguf.is_file():
+        raise FileNotFoundError(f"converter did not produce {out_gguf}")
+    return out_gguf
 
 
 def target_shards(args: argparse.Namespace) -> list[Path]:
@@ -179,6 +204,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target-source", default="/mnt/target-src")
     parser.add_argument("--mtp-source", default="/mnt/mtpv2")
+    parser.add_argument("--tokenizer-source",
+                        default="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16")
     parser.add_argument("--composite-repo",
                         default="meshllm/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_XL-MTPv2-GGUF")
     parser.add_argument("--target-basename", default="NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_XL")
