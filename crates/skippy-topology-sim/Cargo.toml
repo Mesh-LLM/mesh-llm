@@ -1,0 +1,17 @@
+[package]
+name = "skippy-topology-sim"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Scenario-driven placement simulator for the performance-aware topology planner"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+
+[dependencies]
+thiserror = "2"
+skippy-coordinator = { path = "../skippy-coordinator" }
+serde.workspace = true
+toml = "0.9"
+
+[dev-dependencies]
+serde_json.workspace = true

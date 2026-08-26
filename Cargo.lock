@@ -7584,6 +7584,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "skippy-topology-sim"
+version = "0.76.0-rc7"
+dependencies = [
+ "serde",
+ "serde_json",
+ "skippy-coordinator",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -54,6 +54,17 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) target_decode_tpot_ms: Option<u32>,
     pub(super) minimum_nodes: usize,
     pub(super) nodes: Vec<SplitTopologyPlanNode>,
+    pub(super) edges: Vec<SplitTopologyPlanEdge>,
+    pub(super) activation_frame_bytes: u64,
+}
+
+/// Directed link measurement carried into the coordinator planner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SplitTopologyPlanEdge {
+    pub(super) source_node_id: String,
+    pub(super) target_node_id: String,
+    pub(super) rtt_ms: u32,
+    pub(super) large_frame_mib_per_s: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -155,6 +166,17 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
         context_length_override: input.context_length_override,
         parallel_lanes_override: input.parallel_lanes_override,
         target_decode_tpot_ms: input.target_decode_tpot_ms,
+        edges: input
+            .edges
+            .into_iter()
+            .map(|edge| skippy_coordinator::topology::TopologyEdge {
+                source_node_id: edge.source_node_id,
+                target_node_id: edge.target_node_id,
+                rtt_ms: edge.rtt_ms,
+                large_frame_mib_per_s: edge.large_frame_mib_per_s,
+            })
+            .collect(),
+        activation_frame_bytes: input.activation_frame_bytes,
     }
 }
 
@@ -380,7 +402,49 @@ fn runtime_slice_plan_input(
                 sustained_compute_gflop_per_s: participant.sustained_compute_gflop_per_s,
             })
             .collect(),
+        edges: participant_edges(participants),
+        // Activation frame at the package's wire dtype (f16 default): one
+        // activation_width vector of two-byte elements per token hop.
+        activation_frame_bytes: u64::from(package.activation_width) * 2,
     }
+}
+
+/// Directed edge measurements between participants: self's direct RTT to
+/// each peer (from the coordinator's vantage), plus peer-observed
+/// propagated latency between peer pairs when the mesh has relayed one.
+/// Bandwidth is not yet measured per edge, so it stays `None` (latency-only
+/// edges) until edge probing lands.
+fn participant_edges(participants: &[SplitParticipant]) -> Vec<SplitTopologyPlanEdge> {
+    let mut edges = Vec::new();
+    for (index, source) in participants.iter().enumerate() {
+        for target in participants.iter().skip(index + 1) {
+            let Some(rtt_ms) = source
+                .rtt_ms
+                .into_iter()
+                .chain(target.rtt_ms.into_iter())
+                .min()
+            else {
+                continue;
+            };
+            let (forward, reverse) = (
+                SplitTopologyPlanEdge {
+                    source_node_id: source.node_id.to_string(),
+                    target_node_id: target.node_id.to_string(),
+                    rtt_ms,
+                    large_frame_mib_per_s: None,
+                },
+                SplitTopologyPlanEdge {
+                    source_node_id: target.node_id.to_string(),
+                    target_node_id: source.node_id.to_string(),
+                    rtt_ms,
+                    large_frame_mib_per_s: None,
+                },
+            );
+            edges.push(forward);
+            edges.push(reverse);
+        }
+    }
+    edges
 }
 
 fn package_layer_weight_bytes(package: &skippy::SkippyPackageIdentity) -> Vec<u64> {

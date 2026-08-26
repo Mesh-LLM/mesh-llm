@@ -171,6 +171,7 @@ fn fit_locked_candidate(
         },
         minimum_remaining_vram,
         total_remaining_vram,
+        modeled_decode_tpot_us: None,
     })
 }
 
@@ -207,6 +208,8 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
+            edges: Vec::new(),
+            activation_frame_bytes: 0,
         }
     }
 

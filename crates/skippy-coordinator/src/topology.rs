@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 mod locked;
 
@@ -47,6 +48,27 @@ pub struct TopologyPlanningInput {
     pub context_length_override: Option<u32>,
     pub parallel_lanes_override: Option<usize>,
     pub target_decode_tpot_ms: Option<u32>,
+    /// Directed node-pair link measurements. An empty vector keeps the
+    /// legacy hop-count × worst-RTT network estimate, so callers without
+    /// edge data reproduce today's behavior exactly.
+    pub edges: Vec<TopologyEdge>,
+    /// Activation frame size in bytes sent per token between stages at the
+    /// package's wire dtype (`activation_width × dtype size`). Used only for
+    /// edge transfer-time terms when edge bandwidth is known; `0` disables
+    /// bandwidth terms (latency-only edges).
+    pub activation_frame_bytes: u64,
+}
+
+/// Directed link measurement between two candidate stage nodes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopologyEdge {
+    pub source_node_id: String,
+    pub target_node_id: String,
+    /// Round-trip latency in milliseconds for this direction.
+    pub rtt_ms: u32,
+    /// Large-frame (activation-sized) throughput in MiB/s. `None` when the
+    /// edge has latency data but no bandwidth measurement yet.
+    pub large_frame_mib_per_s: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -362,6 +384,10 @@ struct CandidatePlan {
     plan: TopologyPlan,
     minimum_remaining_vram: u64,
     total_remaining_vram: u128,
+    /// Modeled per-token decode time (max stage service time + network) in
+    /// microseconds; present only when every node in the subset reports
+    /// sustained bandwidth. Drives candidate preference when comparable.
+    modeled_decode_tpot_us: Option<u128>,
 }
 
 impl Ord for CandidatePlan {
@@ -436,7 +462,7 @@ fn fit_candidate(
     // node to its memory ceiling. Any missing signal falls back to the exact
     // capacity-greedy walk below, so signal-less fleets keep bit-identical
     // placement.
-    if let Some(spans) = perf_balanced_spans(
+    if let Some((spans, bottleneck_us)) = perf_balanced_spans(
         &layer_weights,
         &layer_required_bytes,
         &capacities,
@@ -464,7 +490,10 @@ fn fit_candidate(
         }
         debug_assert_eq!(next_layer, input.layer_count);
 
-        let estimated_decode_network_ms_per_token = estimate_decode_network_ms_per_token(nodes);
+        let estimated_decode_network_ms_per_token =
+            candidate_network_ms_per_token(&stages, nodes, input);
+        let modeled_decode_tpot_us =
+            bottleneck_us.checked_add(network_us_from_ms(estimated_decode_network_ms_per_token));
         return Some(CandidatePlan {
             plan: TopologyPlan {
                 context_length,
@@ -478,6 +507,7 @@ fn fit_candidate(
             },
             minimum_remaining_vram,
             total_remaining_vram,
+            modeled_decode_tpot_us,
         });
     }
 
@@ -522,7 +552,8 @@ fn fit_candidate(
         return None;
     }
 
-    let estimated_decode_network_ms_per_token = estimate_decode_network_ms_per_token(nodes);
+    let estimated_decode_network_ms_per_token =
+        candidate_network_ms_per_token(&stages, nodes, input);
     Some(CandidatePlan {
         plan: TopologyPlan {
             context_length,
@@ -536,6 +567,7 @@ fn fit_candidate(
         },
         minimum_remaining_vram,
         total_remaining_vram,
+        modeled_decode_tpot_us: None,
     })
 }
 
@@ -559,6 +591,13 @@ fn candidate_has_required_stage0(
 }
 
 fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
+    if let (Some(candidate_tpot), Some(current_tpot)) = (
+        candidate.modeled_decode_tpot_us,
+        current.modeled_decode_tpot_us,
+    ) && candidate_tpot != current_tpot
+    {
+        return candidate_tpot < current_tpot;
+    }
     let candidate_estimate = candidate
         .plan
         .estimated_decode_network_ms_per_token
@@ -584,6 +623,15 @@ fn latency_candidate_ordering(
     right: &CandidatePlan,
     input: &TopologyPlanningInput,
 ) -> Ordering {
+    // With complete bandwidth signals the modeled decode TPOT subsumes the
+    // network estimate (it includes network time); prefer it when both
+    // candidates carry it. Mixed-signal comparisons keep the legacy order.
+    if let (Some(left_tpot), Some(right_tpot)) =
+        (left.modeled_decode_tpot_us, right.modeled_decode_tpot_us)
+        && left_tpot != right_tpot
+    {
+        return right_tpot.cmp(&left_tpot);
+    }
     let left_estimate = left
         .plan
         .estimated_decode_network_ms_per_token
@@ -617,6 +665,108 @@ fn estimate_decode_network_ms_per_token(nodes: &[UsableNode]) -> Option<u32> {
         .filter_map(|node| node.stage_transfer_latency_ms)
         .max()?;
     Some(hop_latency.saturating_mul(nodes.len() as u32))
+}
+
+/// Network time for one decode step across the pipeline stages, in
+/// microseconds, from directed edge measurements. Each hop is charged its
+/// measured RTT plus the activation-frame transfer time when the edge also
+/// reports bandwidth. Hops are matched directed-first, then by their reverse
+/// edge, then fall back to that node's coordinator RTT; an unmatched hop
+/// with no fallback aborts edge-based estimation (caller keeps the legacy
+/// estimate). Returns `None` when the input carries no edge data at all.
+fn pipeline_network_time_us(
+    stages: &[TopologyStagePlan],
+    nodes: &[UsableNode],
+    input: &TopologyPlanningInput,
+) -> Option<u128> {
+    if input.edges.is_empty() {
+        return None;
+    }
+    if stages.len() < 2 {
+        return Some(0);
+    }
+    let rtt_by_node: HashMap<&str, u32> = nodes
+        .iter()
+        .filter_map(|node| {
+            node.stage_transfer_latency_ms
+                .map(|rtt| (node.node_id.as_str(), rtt))
+        })
+        .collect();
+    // Charge one hop: directed edge first, then the reverse edge (same pair,
+    // measured), then the endpoint nodes' coordinator RTT. An unmatched hop
+    // with no fallback aborts edge-based estimation.
+    let hop_rtt_ms = |source: &TopologyStagePlan, target: &TopologyStagePlan| -> Option<u32> {
+        let edge = input
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.source_node_id == source.node_id && edge.target_node_id == target.node_id
+            })
+            .or_else(|| {
+                input.edges.iter().find(|edge| {
+                    edge.source_node_id == target.node_id && edge.target_node_id == source.node_id
+                })
+            });
+        edge.map(|edge| edge.rtt_ms).or_else(|| {
+            rtt_by_node
+                .get(target.node_id.as_str())
+                .copied()
+                .or_else(|| rtt_by_node.get(source.node_id.as_str()).copied())
+        })
+    };
+    let hop_transfer_us = |source: &TopologyStagePlan, target: &TopologyStagePlan| -> u128 {
+        let bandwidth = input
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.source_node_id == source.node_id && edge.target_node_id == target.node_id
+            })
+            .or_else(|| {
+                input.edges.iter().find(|edge| {
+                    edge.source_node_id == target.node_id && edge.target_node_id == source.node_id
+                })
+            })
+            .and_then(|edge| edge.large_frame_mib_per_s);
+        match bandwidth {
+            Some(bandwidth) if bandwidth > 0 && input.activation_frame_bytes > 0 => {
+                u128::from(input.activation_frame_bytes) * 1_048_576
+                    / (u128::from(bandwidth) * 1_000_000)
+            }
+            _ => 0,
+        }
+    };
+    let mut total_us = 0u128;
+    for window in stages.windows(2) {
+        let rtt_ms = hop_rtt_ms(&window[0], &window[1])?;
+        total_us += u128::from(rtt_ms) * 1_000;
+        total_us += hop_transfer_us(&window[0], &window[1]);
+    }
+    // The final stage returns predictions to stage 0 — charge that hop too,
+    // matching the legacy estimate's per-node accounting.
+    let last = stages.last().expect("stages.len() >= 2");
+    let first = stages.first().expect("stages.len() >= 2");
+    let return_rtt_ms = hop_rtt_ms(last, first)?;
+    total_us += u128::from(return_rtt_ms) * 1_000;
+    total_us += hop_transfer_us(last, first);
+    Some(total_us)
+}
+
+/// Usable per-candidate network estimate in whole milliseconds: the
+/// edge-based model when available, else the legacy hop-count estimate.
+fn candidate_network_ms_per_token(
+    stages: &[TopologyStagePlan],
+    nodes: &[UsableNode],
+    input: &TopologyPlanningInput,
+) -> Option<u32> {
+    match pipeline_network_time_us(stages, nodes, input) {
+        Some(us) => Some(u32::try_from(us / 1_000).unwrap_or(u32::MAX)),
+        None => estimate_decode_network_ms_per_token(nodes),
+    }
+}
+
+/// Convert whole milliseconds to microseconds without overflow.
+fn network_us_from_ms(ms: Option<u32>) -> u128 {
+    u128::from(ms.unwrap_or(0)) * 1_000
 }
 
 fn decode_tpot_target_met(estimate: Option<u32>, target: Option<u32>) -> Option<bool> {
@@ -710,7 +860,7 @@ fn perf_balanced_spans(
     linearized_required_bytes: &[u64],
     capacities: &[UsableNode],
     layer_count: usize,
-) -> Option<Vec<usize>> {
+) -> Option<(Vec<usize>, u128)> {
     if capacities.is_empty() || layer_weights.len() != layer_count {
         return None;
     }
@@ -798,7 +948,7 @@ fn perf_balanced_spans(
         boundary = previous;
     }
     spans.reverse();
-    Some(spans)
+    Some((spans, best_max))
 }
 
 fn max_contiguous_layers_from(
@@ -879,6 +1029,8 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
+            edges: Vec::new(),
+            activation_frame_bytes: 0,
         }
     }
 
@@ -896,6 +1048,8 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
+            edges: Vec::new(),
+            activation_frame_bytes: 0,
         }
     }
 
@@ -905,6 +1059,100 @@ mod tests {
 
     fn qwen_nodes(count: usize, gib: u64) -> Vec<TopologyNode> {
         (0..count).map(|index| qwen_node(index, gib)).collect()
+    }
+
+    #[test]
+    fn edge_data_replaces_hop_count_estimate() {
+        // Two latency-aware nodes with 5 ms coordinator RTT each. Without
+        // edges the legacy estimate is hop_count x max RTT = 10 ms. With
+        // directed edges at 5 ms each the edge model also yields 10 ms here,
+        // but with an asymmetric edge (2 ms) the edge model must charge the
+        // honest per-hop latency (2 + 5 = 7 ms), not 2 x max(5) = 10 ms.
+        let mut planning = input(vec![latency_node("a", 48, 5), latency_node("b", 48, 5)]);
+        planning.minimum_nodes = 2;
+        let legacy = plan_topology(&planning).expect("legacy plan");
+        planning.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 5,
+            large_frame_mib_per_s: None,
+        }];
+        let symmetric = plan_topology(&planning).expect("symmetric edge plan");
+        planning.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 2,
+            large_frame_mib_per_s: None,
+        }];
+        let asymmetric = plan_topology(&planning).expect("asymmetric edge plan");
+        assert_eq!(
+            legacy.estimated_decode_network_ms_per_token,
+            Some(10),
+            "legacy estimate is hop count x max RTT"
+        );
+        assert_eq!(
+            symmetric.estimated_decode_network_ms_per_token,
+            Some(10),
+            "symmetric edges sum forward + return hop RTT"
+        );
+        assert_eq!(
+            asymmetric.estimated_decode_network_ms_per_token,
+            Some(4),
+            "asymmetric edge charges forward + reverse-matched return (2 + 2)"
+        );
+    }
+
+    #[test]
+    fn edge_bandwidth_charges_activation_transfer_time() {
+        // Same topology as above; the edge now reports 1 MiB/s large-frame
+        // bandwidth with a 1 MiB activation frame: transfer adds ~1.05 s
+        // per token hop, dwarfing latency and failing a 33 ms TPOT target.
+        let mut planning = input(vec![latency_node("a", 48, 5), latency_node("b", 48, 5)]);
+        planning.minimum_nodes = 2;
+        planning.target_decode_tpot_ms = Some(33);
+        planning.activation_frame_bytes = 1024 * 1024;
+        planning.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 5,
+            large_frame_mib_per_s: Some(1),
+        }];
+        let plan = plan_topology(&planning).expect("plan");
+        assert!(
+            plan.estimated_decode_network_ms_per_token.unwrap_or(0) > 1_000,
+            "slow edge bandwidth must charge activation transfer time"
+        );
+        assert_eq!(plan.decode_tpot_target_met, Some(false));
+    }
+
+    #[test]
+    fn missing_edge_falls_back_to_node_rtt() {
+        // Edge data exists for one hop only; the unmatched hop falls back to
+        // the node's coordinator RTT instead of aborting the estimate.
+        let mut planning = input(vec![
+            latency_node("a", 48, 5),
+            latency_node("b", 48, 7),
+            latency_node("c", 48, 9),
+        ]);
+        planning.minimum_nodes = 3;
+        planning.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 1,
+            large_frame_mib_per_s: None,
+        }];
+        let plan = plan_topology(&planning).expect("plan");
+        // a->b edge (1 ms) + b->c fallback to c's 9 ms RTT + c->a return
+        // fallback to a's 5 ms RTT = 15 ms.
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(15));
+    }
+
+    #[test]
+    fn empty_edges_keep_legacy_estimate() {
+        let mut planning = input(vec![latency_node("a", 48, 5), latency_node("b", 48, 5)]);
+        planning.minimum_nodes = 2;
+        let plan = plan_topology(&planning).expect("plan");
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(10));
     }
 
     #[test]
@@ -1047,6 +1295,8 @@ mod tests {
             context_length_override: Some(65_536),
             parallel_lanes_override: Some(LANES),
             target_decode_tpot_ms: None,
+            edges: Vec::new(),
+            activation_frame_bytes: 0,
         };
         let layer_weights = layer_weight_bytes(&request);
         let kv_per_layer = request.kv_bytes_per_token.div_ceil(u64::from(LAYERS));
