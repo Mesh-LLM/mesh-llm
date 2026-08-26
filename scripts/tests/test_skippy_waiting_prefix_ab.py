@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -41,6 +43,29 @@ def cell(version: str, ttft_ms: float | None) -> dict:
 
 
 class WaitingPrefixAbTest(unittest.TestCase):
+    def test_reads_a_deterministic_prompt_manifest(self) -> None:
+        document = {
+            "metadata": {"dataset_revision": "abc123"},
+            "prompts": [
+                {"family": "one", "prompt": "shared one"},
+                {"family": "two", "prompt": "shared two"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prompts.json"
+            path.write_text(json.dumps(document))
+            prompts, metadata = BENCH.read_prompt_manifest(path)
+
+        self.assertEqual(prompts, document["prompts"])
+        self.assertEqual(metadata, document["metadata"])
+
+    def test_rejects_an_empty_prompt_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prompts.json"
+            path.write_text('{"metadata": {}, "prompts": []}')
+            with self.assertRaisesRegex(ValueError, "at least one prompt"):
+                BENCH.read_prompt_manifest(path)
+
     def test_failed_rounds_keep_nullable_percentiles_in_report(self) -> None:
         rows = BENCH.aggregate([cell("old", None), cell("new", 5)])
 

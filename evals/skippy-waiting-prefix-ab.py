@@ -77,6 +77,28 @@ def interleaved_prompts(families: int, requests_per_family: int, blocks: int) ->
     return prompts
 
 
+def read_prompt_manifest(path: Path) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    document = json.loads(path.read_text())
+    if not isinstance(document, dict) or not isinstance(document.get("prompts"), list):
+        raise ValueError("prompt manifest must be an object with a prompts list")
+    prompts = []
+    for index, item in enumerate(document["prompts"]):
+        if not isinstance(item, dict):
+            raise ValueError(f"prompt manifest item {index} must be an object")
+        family, prompt = item.get("family"), item.get("prompt")
+        if not isinstance(family, str) or not family:
+            raise ValueError(f"prompt manifest item {index} needs a nonempty family")
+        if not isinstance(prompt, str) or not prompt:
+            raise ValueError(f"prompt manifest item {index} needs a nonempty prompt")
+        prompts.append({"family": family, "prompt": prompt})
+    if not prompts:
+        raise ValueError("prompt manifest must contain at least one prompt")
+    metadata = document.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("prompt manifest metadata must be an object")
+    return prompts, metadata
+
+
 def percentile(values: list[float], quantile: float) -> float | None:
     if not values:
         return None
@@ -433,6 +455,11 @@ def main() -> int:
     parser.add_argument("--families", type=int, default=2)
     parser.add_argument("--requests-per-family", type=int, default=6)
     parser.add_argument("--prefix-blocks", type=int, default=192)
+    parser.add_argument(
+        "--prompt-manifest",
+        type=Path,
+        help="JSON object with metadata and a deterministic prompts list",
+    )
     parser.add_argument("--output-tokens", type=int, default=64)
     parser.add_argument("--ctx-size", type=int, default=65536)
     parser.add_argument("--lanes", type=int, default=12)
@@ -463,7 +490,23 @@ def main() -> int:
     if len(cases) != 1:
         parser.error("case file must contain exactly one model")
     case = cases[0]
-    prompts = interleaved_prompts(args.families, args.requests_per_family, args.prefix_blocks)
+    prompt_manifest_metadata: dict[str, Any] = {}
+    if args.prompt_manifest is not None:
+        prompt_manifest = args.prompt_manifest.resolve()
+        if not prompt_manifest.is_file():
+            parser.error(f"prompt manifest not found: {prompt_manifest}")
+        try:
+            prompts, prompt_manifest_metadata = read_prompt_manifest(prompt_manifest)
+        except (json.JSONDecodeError, OSError, ValueError) as error:
+            parser.error(f"invalid prompt manifest: {error}")
+    else:
+        prompt_manifest = None
+        prompts = interleaved_prompts(args.families, args.requests_per_family, args.prefix_blocks)
+    family_request_counts: dict[str, int] = {}
+    for prompt in prompts:
+        family = prompt["family"]
+        family_request_counts[family] = family_request_counts.get(family, 0) + 1
+    requests_per_family = set(family_request_counts.values())
     if args.admission_concurrency == 0:
         args.admission_concurrency = len(prompts)
     if args.admission_concurrency < len(prompts):
@@ -497,9 +540,17 @@ def main() -> int:
             "model_path": str(case.model_path),
             "model_sha256": harness.model_sha256(case.model_path),
             "rounds": args.rounds,
-            "families": args.families,
-            "requests_per_family": args.requests_per_family,
+            "families": len(family_request_counts),
+            "requests_per_family": (
+                requests_per_family.pop() if len(requests_per_family) == 1 else None
+            ),
+            "family_request_counts": family_request_counts,
             "prefix_blocks": args.prefix_blocks,
+            "prompt_manifest": str(prompt_manifest) if prompt_manifest is not None else None,
+            "prompt_manifest_sha256": (
+                sha256(prompt_manifest) if prompt_manifest is not None else None
+            ),
+            "prompt_manifest_metadata": prompt_manifest_metadata,
             "output_tokens": args.output_tokens,
             "lanes": args.lanes,
             "admission_concurrency": args.admission_concurrency,
