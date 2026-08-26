@@ -93,6 +93,13 @@ HF profiles require their exact generated prompt manifest, while synthetic
 profiles reject external manifests. The result records the profile name and
 catalog SHA alongside binary, model, and prompt-manifest hashes.
 
+The same replay is also the capacity-policy certificate. The runner combines
+pre-admission and post-record resident eviction telemetry into per-round token
+and entry totals, reports fail-closed capacity rejections, and retains the new
+planner's predicted recomputation cost. This lets a stacked capacity change be
+compared against the preceding scheduler binary without changing the pinned
+requests or silently treating legacy proactive eviction as zero.
+
 The eviction-pressure certificate requires every request to succeed and, at
 minimum, a 50,000-token suffix-prefill baseline and eight family switches so a
 drifted non-pressure workload cannot pass. It then requires 10% improvements

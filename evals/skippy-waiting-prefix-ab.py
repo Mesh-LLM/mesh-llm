@@ -28,6 +28,8 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 SUMMARY_EVENT = "stage.openai_generation_summary"
+KV_CAPACITY_EVENT = "stage.openai_kv_capacity_decision"
+KV_RECORD_EVENT = "stage.openai_kv_record_decision"
 DEFAULT_FIXTURE_CATALOG = REPO / "evals/skippy-scheduler-fixtures.json"
 
 
@@ -272,17 +274,52 @@ def attributes(event: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def summarize(requests: list[dict[str, Any]], events: list[dict[str, Any]], makespan_ms: float) -> dict[str, Any]:
+def summarize(
+    requests: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    capacity_events: list[dict[str, Any]],
+    record_events: list[dict[str, Any]],
+    makespan_ms: float,
+) -> dict[str, Any]:
     successful = [row for row in requests if "error" not in row]
     attrs = [attributes(event) for event in events]
+    capacity_attrs = [attributes(event) for event in capacity_events]
+    record_attrs = [attributes(event) for event in record_events]
     statuses = [str(row.get("skippy.kv.status", "unknown")) for row in attrs]
+    capacity_observed = any("skippy.kv.capacity_status" in row for row in capacity_attrs)
+    capacity_statuses = [
+        str(row.get("skippy.kv.capacity_status", "legacy")) for row in capacity_attrs
+    ]
 
     def numeric(key: str) -> list[float]:
         return [float(row[key]) for row in attrs if isinstance(row.get(key), (int, float))]
 
+    def capacity_numeric(key: str) -> list[float]:
+        return [
+            float(row[key])
+            for row in capacity_attrs
+            if isinstance(row.get(key), (int, float))
+        ]
+
     ttft = [float(row["ttft_ms"]) for row in successful]
     matched = numeric("skippy.kv.matched_prefix_tokens")
     suffix = numeric("skippy.kv.suffix_prefill_tokens")
+    capacity_evicted_tokens = capacity_numeric("skippy.kv.capacity_evicted_tokens")
+    capacity_evicted_entries = capacity_numeric("skippy.kv.capacity_evicted_entries")
+    predicted_recompute_cost = capacity_numeric("skippy.kv.capacity_predicted_recompute_cost")
+    proactive = [
+        row for row in record_attrs if row.get("skippy.kv.decision") == "proactive_eviction"
+    ]
+    proactive_evicted_tokens = [
+        float(row["skippy.kv.proactive_evicted_tokens"])
+        for row in proactive
+        if isinstance(row.get("skippy.kv.proactive_evicted_tokens"), (int, float))
+    ]
+    proactive_evicted_entries = [
+        float(row["skippy.kv.proactive_evicted_entries"])
+        for row in proactive
+        if isinstance(row.get("skippy.kv.proactive_evicted_entries"), (int, float))
+    ]
     service_order = sorted(successful, key=lambda row: row["first_token_ms"])
     family_order = [str(row["family"]) for row in service_order]
     switches = sum(left != right for left, right in zip(family_order, family_order[1:]))
@@ -296,6 +333,14 @@ def summarize(requests: list[dict[str, Any]], events: list[dict[str, Any]], make
         "usage_cached_requests": sum(int(row.get("cached_tokens", 0)) > 0 for row in successful),
         "matched_prefix_tokens_total": sum(matched),
         "suffix_prefill_tokens_total": sum(suffix),
+        "capacity_rejections": capacity_statuses.count("rejected"),
+        "resident_evicted_tokens_total": sum(capacity_evicted_tokens)
+        + sum(proactive_evicted_tokens),
+        "resident_evicted_entries_total": sum(capacity_evicted_entries)
+        + sum(proactive_evicted_entries),
+        "predicted_recompute_cost_total": (
+            sum(predicted_recompute_cost) if capacity_observed else None
+        ),
         "ttft_ms_p50": percentile(ttft, 0.50),
         "ttft_ms_p95": percentile(ttft, 0.95),
         "makespan_ms": makespan_ms,
@@ -361,6 +406,8 @@ def run_cell(
         try:
             harness.wait_ready(port, process, 900, path="/v1/models", server_name=version)
             event_start = len(radix.json_events(log_path, SUMMARY_EVENT))
+            capacity_event_start = len(radix.json_events(log_path, KV_CAPACITY_EVENT))
+            record_event_start = len(radix.json_events(log_path, KV_RECORD_EVENT))
             requests, makespan_ms = run_requests(
                 prompts,
                 case.model_id,
@@ -376,6 +423,10 @@ def run_cell(
                 event_start + expected,
                 process,
             )[event_start:]
+            capacity_events = radix.json_events(log_path, KV_CAPACITY_EVENT)[
+                capacity_event_start:
+            ]
+            record_events = radix.json_events(log_path, KV_RECORD_EVENT)[record_event_start:]
         finally:
             process.terminate()
             try:
@@ -390,7 +441,7 @@ def run_cell(
         "config": str(config_path),
         "log": str(log_path),
         "requests": requests,
-        "summary": summarize(requests, events, makespan_ms),
+        "summary": summarize(requests, events, capacity_events, record_events, makespan_ms),
     }
 
 
@@ -411,6 +462,12 @@ def aggregate(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "successful": sum(int(row["successful"]) for row in summaries),
                 "cache_hits_median": median("cache_hits"),
                 "suffix_prefill_tokens_median": median("suffix_prefill_tokens_total"),
+                "capacity_rejections": sum(
+                    int(row["capacity_rejections"]) for row in summaries
+                ),
+                "resident_evicted_tokens_median": median("resident_evicted_tokens_total"),
+                "resident_evicted_entries_median": median("resident_evicted_entries_total"),
+                "predicted_recompute_cost_median": median("predicted_recompute_cost_total"),
                 "ttft_ms_p50_median": median("ttft_ms_p50"),
                 "ttft_ms_p95_median": median("ttft_ms_p95"),
                 "makespan_ms_median": median("makespan_ms"),
@@ -568,6 +625,22 @@ def report(rows: list[dict[str, Any]], acceptance: dict[str, Any] | None = None)
                 "",
             ]
         )
+    old_evicted = old["resident_evicted_tokens_median"]
+    new_evicted = new["resident_evicted_tokens_median"]
+    if old_evicted is not None and new_evicted is not None:
+        eviction_ceiling = max(old_evicted, new_evicted, 1)
+        lines.extend(
+            [
+                "```mermaid",
+                "xychart-beta",
+                '    title "Resident KV tokens evicted (lower is better)"',
+                '    x-axis ["Before", "After"]',
+                f'    y-axis "tokens" 0 --> {int(eviction_ceiling * 1.1)}',
+                f"    bar [{old_evicted:.0f}, {new_evicted:.0f}]",
+                "```",
+                "",
+            ]
+        )
     lines.extend(
         [
         "| Metric | Before | After | Delta |",
@@ -577,6 +650,10 @@ def report(rows: list[dict[str, Any]], acceptance: dict[str, Any] | None = None)
     metrics = (
         ("Cache hits / round", "cache_hits_median", False),
         ("Suffix prefill tokens / round", "suffix_prefill_tokens_median", True),
+        ("Capacity rejections", "capacity_rejections", True),
+        ("Resident KV evicted tokens / round", "resident_evicted_tokens_median", True),
+        ("Resident KV evicted entries / round", "resident_evicted_entries_median", True),
+        ("Predicted recompute cost / round", "predicted_recompute_cost_median", True),
         ("Family switches / round", "family_switches_median", True),
         ("TTFT p50 ms", "ttft_ms_p50_median", True),
         ("TTFT p95 ms", "ttft_ms_p95_median", True),

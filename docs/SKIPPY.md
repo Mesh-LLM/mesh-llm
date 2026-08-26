@@ -459,6 +459,14 @@ agentic eviction-pressure profiles in
 is inference-free; periodic hardware runs fetch and verify the pinned Hugging
 Face corpus in the shared cache and never vendor trajectory data.
 
+Resident-KV admission is capacity-aware: active sessions and referenced cache
+entries are non-evictable, while releasable prefixes are ranked by estimated
+recomputation cost per KV token. Admission preserves a hard decode watermark,
+evicts through a larger healthy watermark to avoid churn, and rejects with an
+explicit deficit when pinned pressure makes the request impossible. The first
+cost proxy is prefix tokens multiplied by local stage layers; calibrated stage
+duration is the planned replacement.
+
 Example shape:
 
 ```toml

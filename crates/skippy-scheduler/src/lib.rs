@@ -5,6 +5,7 @@
 //! native ABI requests.
 
 mod cache_policy;
+mod capacity;
 mod config;
 mod engine;
 mod sequence;
@@ -13,6 +14,10 @@ mod telemetry;
 pub use cache_policy::{
     CacheAffinity, CacheAwareCandidate, StageCacheAffinity, order_cache_aware_candidates,
     select_cache_aware_candidate,
+};
+pub use capacity::{
+    CapacityDemand, CapacityPlan, ComponentCapacitySnapshot, EvictableCacheEntry,
+    plan_component_capacity,
 };
 pub use config::{MemoryComponent, SchedulerConfig};
 pub use engine::{AdmissionError, Scheduler, SchedulerSnapshot};

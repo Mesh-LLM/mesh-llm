@@ -34,6 +34,10 @@ def cell(version: str, ttft_ms: float | None) -> dict:
             "successful": int(ttft_ms is not None),
             "cache_hits": 0,
             "suffix_prefill_tokens_total": 0,
+            "capacity_rejections": 0,
+            "resident_evicted_tokens_total": 0,
+            "resident_evicted_entries_total": 0,
+            "predicted_recompute_cost_total": 0,
             "ttft_ms_p50": ttft_ms,
             "ttft_ms_p95": ttft_ms,
             "makespan_ms": 10,
@@ -44,6 +48,54 @@ def cell(version: str, ttft_ms: float | None) -> dict:
 
 
 class WaitingPrefixAbTest(unittest.TestCase):
+    def test_summary_combines_capacity_and_legacy_proactive_evictions(self) -> None:
+        requests = [
+            {
+                "request_id": 0,
+                "family": "one",
+                "first_token_ms": 5.0,
+                "ttft_ms": 5.0,
+                "tokens_predicted": 2,
+                "cached_tokens": 0,
+            }
+        ]
+        summary_events = [
+            {
+                "attributes": {
+                    "skippy.kv.status": "miss",
+                    "skippy.kv.suffix_prefill_tokens": 10,
+                }
+            }
+        ]
+        capacity_events = [
+            {
+                "attributes": {
+                    "skippy.kv.capacity_status": "evicted",
+                    "skippy.kv.capacity_evicted_tokens": 6,
+                    "skippy.kv.capacity_evicted_entries": 1,
+                    "skippy.kv.capacity_predicted_recompute_cost": 24,
+                }
+            }
+        ]
+        record_events = [
+            {
+                "attributes": {
+                    "skippy.kv.decision": "proactive_eviction",
+                    "skippy.kv.proactive_evicted_tokens": 4,
+                    "skippy.kv.proactive_evicted_entries": 1,
+                }
+            }
+        ]
+
+        summary = BENCH.summarize(
+            requests, summary_events, capacity_events, record_events, 10.0
+        )
+
+        self.assertEqual(summary["resident_evicted_tokens_total"], 10)
+        self.assertEqual(summary["resident_evicted_entries_total"], 2)
+        self.assertEqual(summary["predicted_recompute_cost_total"], 24)
+        self.assertEqual(summary["capacity_rejections"], 0)
+
     def test_warm_profile_accepts_the_measured_neutral_boundary(self) -> None:
         catalog = json.loads((REPO / "evals/skippy-scheduler-fixtures.json").read_text())
         profile = catalog["profiles"]["warm-affinity"]
