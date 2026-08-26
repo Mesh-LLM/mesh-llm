@@ -7,11 +7,18 @@
 //! plan with the same cost model the planner uses, so planner decisions can
 //! be asserted against expectations ("a 2x-bandwidth node receives ~2x the
 //! layers", "a slow link rejects the TPOT target") in CI without a cluster.
+//!
+//! The [`execution`](execution) layer adds a discrete pipeline model over a
+//! chosen plan: per-stage service times from streamed weight bytes and
+//! measured bandwidth, per-hop latency + activation transfer, serial vs
+//! pipelined decode regimes, calibrated against `docs/BENCHMARKS.md`.
 
 use serde::Deserialize;
 use skippy_coordinator::topology::{
     TopologyEdge, TopologyNode, TopologyPlanningInput, plan_topology,
 };
+
+pub mod execution;
 
 /// One candidate node in a scenario.
 #[derive(Clone, Debug, Deserialize)]
@@ -41,6 +48,20 @@ pub struct ScenarioModel {
     pub native_context_length: u32,
     #[serde(default)]
     pub activation_frame_bytes: u64,
+    /// Fraction of weight bytes actually streamed per token (MoE active
+    /// experts / dense). 1.0 (default) = dense; the GLM-4.7-Flash anchor
+    /// implies ~0.34. Only used by the execution layer, not placement.
+    #[serde(default)]
+    pub active_weight_fraction: Option<f64>,
+    /// Calibration knob: fixed per-stage per-token software overhead
+    /// (dispatch, kernel launch, sync) in milliseconds. Execution layer only.
+    #[serde(default)]
+    pub per_stage_overhead_ms: f64,
+    /// Calibration knob: fixed per-hop per-token software overhead (QUIC
+    /// stream, copies, scheduling) in milliseconds, on top of RTT and
+    /// activation transfer. Execution layer only.
+    #[serde(default)]
+    pub per_hop_overhead_ms: f64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
