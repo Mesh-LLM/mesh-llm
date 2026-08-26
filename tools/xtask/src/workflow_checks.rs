@@ -14,7 +14,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     let readme = fs::read_to_string(repo_root.join("README.md"))?;
     let contributing = fs::read_to_string(repo_root.join("CONTRIBUTING.md"))?;
     let release = fs::read_to_string(repo_root.join("RELEASE.md"))?;
-    let justfile = fs::read_to_string(repo_root.join("Justfile"))?;
+    let release_package_source = fs::read_to_string(repo_root.join("just/release-bundle.just"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
     let ci_workflow = fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))?;
     let pr_workflows = ["quality", "website", "linux", "macos", "windows"]
@@ -91,7 +91,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
         &readme,
         &contributing,
         &release,
-        &justfile,
+        &release_package_source,
         &ci_docs,
         &depot_docs,
     )?;
@@ -137,7 +137,7 @@ fn check_documentation_invariants(
     readme: &str,
     contributing: &str,
     release: &str,
-    justfile: &str,
+    release_package_source: &str,
     ci_docs: &str,
     depot_docs: &str,
 ) -> DynResult<()> {
@@ -158,9 +158,9 @@ fn check_documentation_invariants(
             "RELEASE Windows publish note",
         ),
         (
-            justfile,
+            release_package_source,
             "cargo run -p xtask -- repo-consistency release-targets",
-            "Justfile release consistency command",
+            "Imported Just release consistency command",
         ),
         (
             contributing,
