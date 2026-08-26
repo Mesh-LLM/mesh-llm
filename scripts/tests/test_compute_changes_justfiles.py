@@ -54,6 +54,30 @@ def classify(diff: RevisionDiff) -> bool:
 
 
 class ComputeChangesJustfileTests(unittest.TestCase):
+    def test_standalone_quantize_recipe_changes_are_backend_relevant(self) -> None:
+        recipes = (
+            "skippy-quantize-standalone-build",
+            "skippy-quantize-standalone-release-build",
+        )
+        for recipe in recipes:
+            with self.subTest(recipe=recipe), tempfile.TemporaryDirectory() as directory:
+                repository = Path(directory)
+                subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+                justfile = repository / "Justfile"
+                justfile.write_text(f"import 'just/skippy.just'\n", encoding="utf-8")
+                skippy = repository / "just"
+                skippy.mkdir()
+                source = f'{recipe} backend="cpu":\n    printf base\n'
+                skippy_file = skippy / "skippy.just"
+                skippy_file.write_text(source, encoding="utf-8")
+                base = commit(repository, "base")
+                skippy_file.write_text(source.replace("printf base", "printf changed"), encoding="utf-8")
+                head = commit(repository, "backend recipe")
+
+                self.assertTrue(
+                    classify(RevisionDiff(repository, base, head, "just/skippy.just"))
+                )
+
     def test_recipe_sources_cover_light_backend_added_deleted_and_root_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
