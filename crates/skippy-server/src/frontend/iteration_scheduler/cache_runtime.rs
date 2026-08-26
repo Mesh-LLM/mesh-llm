@@ -2,6 +2,8 @@ use super::RuntimeOperation;
 use skippy_scheduler::{CacheAffinity, CacheAwareCandidate, order_cache_aware_candidates};
 use std::sync::Arc;
 
+pub(super) type CacheAffinityRefresh = Box<dyn Fn() -> CacheAffinity + Send>;
+
 pub(super) struct CacheAwareRuntimeOperation {
     pub(super) operation: RuntimeOperation,
     affinity: CacheAffinity,
@@ -9,6 +11,8 @@ pub(super) struct CacheAwareRuntimeOperation {
     priority: u64,
     enqueued_turn: u64,
     order: u64,
+    refresh_affinity: Option<CacheAffinityRefresh>,
+    stale_affinity_fallback: bool,
 }
 
 pub(super) struct CacheRuntimeTelemetry {
@@ -17,6 +21,7 @@ pub(super) struct CacheRuntimeTelemetry {
     pub(super) age_turns: u64,
     pub(super) stage_hits: usize,
     pub(super) cache_epoch: u64,
+    pub(super) stale_affinity_fallback: bool,
 }
 
 pub(super) struct CacheRuntimeQueue {
@@ -50,6 +55,7 @@ impl CacheRuntimeQueue {
         affinity: CacheAffinity,
         prompt_tokens: Arc<[i32]>,
         priority: u64,
+        refresh_affinity: Option<CacheAffinityRefresh>,
     ) {
         let order = self.next_order;
         self.next_order = self.next_order.saturating_add(1);
@@ -60,6 +66,8 @@ impl CacheRuntimeQueue {
             priority,
             enqueued_turn: self.turn,
             order,
+            refresh_affinity,
+            stale_affinity_fallback: false,
         });
         self.order_dirty = true;
     }
@@ -71,6 +79,7 @@ impl CacheRuntimeQueue {
     pub(super) fn pop_next(
         &mut self,
     ) -> Option<(CacheAwareRuntimeOperation, CacheRuntimeTelemetry)> {
+        self.refresh_affinities();
         self.reorder_if_dirty();
         let queued = self.operations.pop()?;
         let affinity = &queued.affinity;
@@ -89,8 +98,23 @@ impl CacheRuntimeQueue {
                 .map(|stage| stage.cache_epoch)
                 .max()
                 .unwrap_or(0),
+            stale_affinity_fallback: queued.stale_affinity_fallback,
         };
         Some((queued, telemetry))
+    }
+
+    fn refresh_affinities(&mut self) {
+        for queued in &mut self.operations {
+            let Some(refresh) = queued.refresh_affinity.as_ref() else {
+                continue;
+            };
+            let refreshed = refresh();
+            if refreshed != queued.affinity {
+                queued.affinity = refreshed;
+                queued.stale_affinity_fallback = true;
+                self.order_dirty = true;
+            }
+        }
     }
 
     fn reorder_if_dirty(&mut self) {
@@ -113,18 +137,29 @@ impl CacheRuntimeQueue {
             self.aging_cost_per_turn,
             self.group_waiting_prefixes,
         );
+        if !is_complete_permutation(&order, self.operations.len()) {
+            self.order_dirty = false;
+            return;
+        }
         let mut pending = self.operations.drain(..).map(Some).collect::<Vec<_>>();
         self.operations = order
             .into_iter()
             .rev()
-            .map(|index| {
-                pending[index]
-                    .take()
-                    .expect("ordered cache runtime operation must exist")
-            })
+            .filter_map(|index| pending[index].take())
             .collect();
         self.order_dirty = false;
     }
+}
+
+fn is_complete_permutation(order: &[usize], len: usize) -> bool {
+    if order.len() != len {
+        return false;
+    }
+    let mut seen = vec![false; len];
+    order
+        .iter()
+        .copied()
+        .all(|index| index < len && !std::mem::replace(&mut seen[index], true))
 }
 
 pub(super) fn should_serve_cache_runtime(
@@ -172,6 +207,7 @@ mod tests {
             CacheAffinity::default(),
             Arc::from([0]),
             0,
+            None,
         );
         queue.enqueue(
             operation(&selected, "hot"),
@@ -184,6 +220,7 @@ mod tests {
             }),
             Arc::from([1]),
             0,
+            None,
         );
 
         (queue.pop_next().unwrap().0.operation.run)(&fake_runtime());
@@ -202,19 +239,26 @@ mod tests {
             CacheAffinity::default(),
             Arc::from([9, 9, 9]),
             0,
+            None,
         );
+        queue.advance_turn();
         queue.enqueue(
             operation(&selected, "shared-a"),
             CacheAffinity::default(),
             Arc::from([1, 2, 3]),
             0,
+            None,
         );
+        queue.advance_turn();
         queue.enqueue(
             operation(&selected, "shared-b"),
             CacheAffinity::default(),
             Arc::from([1, 2, 4]),
             0,
+            None,
         );
+        // Production advances the scheduler turn before selecting work.
+        queue.advance_turn();
 
         (queue.pop_next().unwrap().0.operation.run)(&fake_runtime());
         (queue.pop_next().unwrap().0.operation.run)(&fake_runtime());
@@ -223,6 +267,47 @@ mod tests {
         assert_eq!(selected_rx.recv().unwrap(), "shared-a");
         assert_eq!(selected_rx.recv().unwrap(), "shared-b");
         assert_eq!(selected_rx.recv().unwrap(), "unique");
+    }
+
+    #[test]
+    fn stale_affinity_is_refreshed_before_selection() {
+        let (selected, selected_rx) = mpsc::channel();
+        let mut queue = CacheRuntimeQueue::new(4_096, true);
+        queue.enqueue(
+            operation(&selected, "stale-hot"),
+            CacheAffinity::from_stage(StageCacheAffinity {
+                stage_index: 0,
+                matched_tokens: 32,
+                prefill_cost_per_token: 1,
+                restore_cost: 0,
+                cache_epoch: 1,
+            }),
+            Arc::from([9]),
+            0,
+            Some(Box::new(CacheAffinity::default)),
+        );
+        queue.enqueue(
+            operation(&selected, "fresh-hot"),
+            CacheAffinity::default(),
+            Arc::from([1]),
+            0,
+            Some(Box::new(|| {
+                CacheAffinity::from_stage(StageCacheAffinity {
+                    stage_index: 0,
+                    matched_tokens: 64,
+                    prefill_cost_per_token: 1,
+                    restore_cost: 0,
+                    cache_epoch: 2,
+                })
+            })),
+        );
+
+        let (queued, telemetry) = queue.pop_next().unwrap();
+        (queued.operation.run)(&fake_runtime());
+
+        assert_eq!(selected_rx.recv().unwrap(), "fresh-hot");
+        assert!(telemetry.stale_affinity_fallback);
+        assert_eq!(telemetry.cache_epoch, 2);
     }
 
     fn fake_runtime() -> std::sync::Arc<std::sync::Mutex<crate::runtime_state::RuntimeState>> {

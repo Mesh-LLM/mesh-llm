@@ -1,6 +1,8 @@
 mod cache_runtime;
 
-use self::cache_runtime::{CacheRuntimeQueue, CacheRuntimeTelemetry, should_serve_cache_runtime};
+use self::cache_runtime::{
+    CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry, should_serve_cache_runtime,
+};
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::generation_queue_full_error;
@@ -144,7 +146,13 @@ enum SchedulerCommand {
     Submit(ScheduledRequest),
     ExecuteIteration(DirectIteration),
     ExecuteRuntime(RuntimeOperation),
-    ExecuteCacheAwareRuntime(RuntimeOperation, CacheAffinity, Arc<[i32]>, u64),
+    ExecuteCacheAwareRuntime(
+        RuntimeOperation,
+        CacheAffinity,
+        Arc<[i32]>,
+        u64,
+        Option<CacheAffinityRefresh>,
+    ),
     Cancel(String),
     Shutdown,
 }
@@ -456,6 +464,7 @@ impl IterationScheduler {
         affinity: CacheAffinity,
         prompt_tokens: Arc<[i32]>,
         priority: u64,
+        refresh_affinity: Option<CacheAffinityRefresh>,
         operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
     ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
     where
@@ -467,6 +476,7 @@ impl IterationScheduler {
             affinity,
             prompt_tokens,
             priority,
+            refresh_affinity,
         ))?;
         result.recv().map_err(|error| {
             OpenAiError::backend(format!("iteration scheduler stopped: {error}"))
@@ -587,9 +597,15 @@ impl SchedulerWorker {
                 affinity,
                 prompt_tokens,
                 priority,
+                refresh_affinity,
             ) => {
-                self.cache_runtime_queue
-                    .enqueue(operation, affinity, prompt_tokens, priority);
+                self.cache_runtime_queue.enqueue(
+                    operation,
+                    affinity,
+                    prompt_tokens,
+                    priority,
+                    refresh_affinity,
+                );
             }
             SchedulerCommand::Cancel(id) => self.cancel(&id),
             SchedulerCommand::Shutdown => {}
@@ -657,6 +673,10 @@ impl SchedulerWorker {
                 attrs.insert(
                     "skippy.scheduler.cache_epoch".to_string(),
                     json!(cache.cache_epoch),
+                );
+                attrs.insert(
+                    "skippy.scheduler.cache_stale_fallback".to_string(),
+                    json!(cache.stale_affinity_fallback),
                 );
             }
             telemetry.emit_debug("stage.scheduler_feature_runtime", attrs);
@@ -1199,7 +1219,7 @@ impl SchedulerWorker {
                     let _ = request.reply.send(Err(error.clone()));
                 }
                 SchedulerCommand::ExecuteRuntime(_)
-                | SchedulerCommand::ExecuteCacheAwareRuntime(_, _, _, _)
+                | SchedulerCommand::ExecuteCacheAwareRuntime(_, _, _, _, _)
                 | SchedulerCommand::Cancel(_)
                 | SchedulerCommand::Shutdown => {}
             }

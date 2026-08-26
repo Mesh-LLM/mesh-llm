@@ -50,6 +50,7 @@ fn main() {
         let bench_us = started.elapsed().as_secs_f64() * 1_000_000.0 / BENCH_REPETITIONS as f64;
         print_report(&mut output, &scenario.name, &report, bench_us);
     }
+    output.flush().expect("flush scheduler lab report");
 }
 
 fn scenarios() -> Vec<Scenario> {

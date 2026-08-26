@@ -113,6 +113,12 @@ impl Sequence {
         tokens
     }
 
+    pub(crate) fn recompute_token_count(&self) -> usize {
+        self.prompt_tokens
+            .len()
+            .saturating_add(self.generated_tokens.len().saturating_sub(1))
+    }
+
     pub(crate) fn pending_decode_token(&self) -> Option<i32> {
         self.generated_tokens.last().copied()
     }

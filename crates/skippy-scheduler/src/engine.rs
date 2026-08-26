@@ -97,11 +97,11 @@ impl Scheduler {
         let has_prefill = ids.iter().any(|id| {
             self.active
                 .get(id)
-                .is_some_and(|sequence| sequence.prefill_cursor < sequence.recompute_tokens().len())
+                .is_some_and(|sequence| sequence.prefill_cursor < sequence.recompute_token_count())
         });
         let has_live_decode = ids.iter().any(|id| {
             self.active.get(id).is_some_and(|sequence| {
-                sequence.prefill_cursor >= sequence.recompute_tokens().len()
+                sequence.prefill_cursor >= sequence.recompute_token_count()
                     && sequence.pending_decode_token().is_some()
             })
         });
@@ -372,15 +372,13 @@ impl Scheduler {
                 self.config.cache_aging_cost_per_iteration,
                 self.config.group_waiting_prefixes,
             );
-            let mut waiting = self.waiting.drain(..).map(Some).collect::<Vec<_>>();
-            self.waiting = order
-                .into_iter()
-                .map(|index| {
-                    waiting[index]
-                        .take()
-                        .expect("ordered scheduler candidate must exist")
-                })
-                .collect();
+            if is_complete_permutation(&order, self.waiting.len()) {
+                let mut waiting = self.waiting.drain(..).map(Some).collect::<Vec<_>>();
+                self.waiting = order
+                    .into_iter()
+                    .filter_map(|index| waiting[index].take())
+                    .collect();
+            }
             self.waiting_order_dirty = false;
         }
         while let Some(mut sequence) = self.waiting.pop_front() {
@@ -467,6 +465,17 @@ impl Scheduler {
         self.metrics.active_sequences = self.active.len();
         self.metrics.waiting_sequences = self.waiting.len();
     }
+}
+
+fn is_complete_permutation(order: &[usize], len: usize) -> bool {
+    if order.len() != len {
+        return false;
+    }
+    let mut seen = vec![false; len];
+    order
+        .iter()
+        .copied()
+        .all(|index| index < len && !std::mem::replace(&mut seen[index], true))
 }
 
 fn contiguous_positions(start: usize, count: usize) -> Vec<i32> {

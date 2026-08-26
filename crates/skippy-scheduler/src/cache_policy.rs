@@ -1,5 +1,11 @@
 use std::collections::BTreeMap;
 
+/// Requests whose cache-plus-aging scores differ by fewer than this many
+/// scheduler turns remain eligible for waiting-prefix grouping. The band keeps
+/// locality reachable for naturally staggered arrivals without allowing a
+/// prefix group to outrank materially older or more valuable work.
+const PREFIX_GROUPING_SCORE_BAND_TURNS: u64 = 4;
+
 /// Cache work saved at one split-model stage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageCacheAffinity {
@@ -65,9 +71,9 @@ pub struct CacheAwareCandidate<'a> {
 ///
 /// Equal-priority requests gain `aging_cost_per_turn` for every turn they wait,
 /// which bounds starvation even when hot-prefix requests keep arriving. The
-/// final locality tie-break builds an ephemeral radix order over waiting
-/// prompts and visits the heaviest shared-prefix subtrees first. It never
-/// touches the materialized cache or its LRU recency.
+/// Within a four-turn score band, the locality tie-break builds an ephemeral
+/// radix order over waiting prompts and visits the heaviest shared-prefix
+/// subtrees first. It never touches the materialized cache or its LRU recency.
 pub fn order_cache_aware_candidates<'a>(
     candidates: impl IntoIterator<Item = CacheAwareCandidate<'a>>,
     current_turn: u64,
@@ -95,23 +101,53 @@ pub fn order_cache_aware_candidates<'a>(
         .map(|(position, candidate)| (candidate, dfs_ranks[position]))
         .collect::<Vec<_>>();
     ranked.sort_by(|(left, left_dfs_rank), (right, right_dfs_rank)| {
+        let left_score = effective_score(left, current_turn, aging_cost_per_turn);
+        let right_score = effective_score(right, current_turn, aging_cost_per_turn);
         right
             .priority
             .cmp(&left.priority)
             .then_with(|| {
-                effective_score(right, current_turn, aging_cost_per_turn).cmp(&effective_score(
-                    left,
-                    current_turn,
-                    aging_cost_per_turn,
-                ))
+                if group_waiting_prefixes {
+                    grouping_score(right, current_turn, aging_cost_per_turn).cmp(&grouping_score(
+                        left,
+                        current_turn,
+                        aging_cost_per_turn,
+                    ))
+                } else {
+                    right_score.cmp(&left_score)
+                }
             })
-            .then_with(|| left_dfs_rank.cmp(right_dfs_rank))
+            .then_with(|| {
+                if group_waiting_prefixes && left.prompt_tokens != right.prompt_tokens {
+                    left_dfs_rank.cmp(right_dfs_rank)
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .then_with(|| right_score.cmp(&left_score))
             .then_with(|| left.order.cmp(&right.order))
     });
     ranked
         .into_iter()
         .map(|(candidate, _)| candidate.index)
         .collect()
+}
+
+fn grouping_score(
+    candidate: &CacheAwareCandidate<'_>,
+    current_turn: u64,
+    aging_cost_per_turn: u64,
+) -> u64 {
+    let width = aging_cost_per_turn
+        .max(1)
+        .saturating_mul(PREFIX_GROUPING_SCORE_BAND_TURNS);
+    let age = current_turn.saturating_sub(candidate.enqueued_turn);
+    let banded_age = age.saturating_add(PREFIX_GROUPING_SCORE_BAND_TURNS.saturating_sub(1))
+        / PREFIX_GROUPING_SCORE_BAND_TURNS;
+    candidate
+        .affinity
+        .estimated_saved_cost()
+        .saturating_add(banded_age.saturating_mul(width))
 }
 
 /// Select the first candidate from [`order_cache_aware_candidates`].
@@ -349,6 +385,82 @@ mod tests {
         );
 
         assert_eq!(ordered, [1, 2, 0]);
+    }
+
+    #[test]
+    fn dfs_weight_groups_staggered_arrivals_within_score_band() {
+        let affinity = CacheAffinity::default();
+        let ordered = order_cache_aware_candidates(
+            [
+                CacheAwareCandidate {
+                    index: 0,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[9, 9, 9],
+                    enqueued_turn: 0,
+                    order: 0,
+                },
+                CacheAwareCandidate {
+                    index: 1,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[1, 2, 3],
+                    enqueued_turn: 1,
+                    order: 1,
+                },
+                CacheAwareCandidate {
+                    index: 2,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[1, 2, 4],
+                    enqueued_turn: 2,
+                    order: 2,
+                },
+            ],
+            3,
+            4_096,
+            true,
+        );
+
+        assert_eq!(ordered, [1, 2, 0]);
+    }
+
+    #[test]
+    fn materially_older_work_precedes_prefix_group() {
+        let affinity = CacheAffinity::default();
+        let ordered = order_cache_aware_candidates(
+            [
+                CacheAwareCandidate {
+                    index: 0,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[9, 9, 9],
+                    enqueued_turn: 0,
+                    order: 0,
+                },
+                CacheAwareCandidate {
+                    index: 1,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[1, 2, 3],
+                    enqueued_turn: 9,
+                    order: 1,
+                },
+                CacheAwareCandidate {
+                    index: 2,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[1, 2, 4],
+                    enqueued_turn: 10,
+                    order: 2,
+                },
+            ],
+            10,
+            4_096,
+            true,
+        );
+
+        assert_eq!(ordered[0], 0);
     }
 
     #[test]

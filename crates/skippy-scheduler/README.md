@@ -33,17 +33,22 @@ a per-stage vector so split stages can score their own hits independently.
 Equal-priority waiting work is ranked by estimated prefill work saved minus
 restore cost. Each scheduler turn adds an aging credit, so a cold request
 eventually outranks newly arriving hot-prefix requests. Explicit request
-priority remains the primary ordering key. The KV-enabled server path applies
-the same policy to restore/prefill runtime operations and alternates those turns
-with live decode work; native batches remain phase-homogeneous.
+priority remains the primary ordering key, so aging bounds starvation only
+within one priority level. The KV-enabled server path applies the same policy to
+restore/prefill runtime operations and alternates those operations with live
+decode work at operation boundaries; one native restore plus suffix-prefill may
+still delay decode for the duration of that operation. Native batches remain
+phase-homogeneous.
 
-After priority, materialized-cache value, and aging, an ephemeral waiting-request
-radix groups equal-value prompts by weighted DFS order. Heavier shared-prefix
-subtrees run together, allowing the first cold request to materialize reusable
-KV before its peers execute. The ordering is computed once for a drained queue,
-so the group remains adjacent across the server's alternating cache-runtime and
-decode turns. This request radix is scheduling-only and never changes unified
-cache recency.
+After priority, an ephemeral waiting-request radix groups prompts within a
+four-turn cache-plus-aging score band by weighted DFS order. Heavier
+shared-prefix subtrees run together, allowing the first cold request to
+materialize reusable KV before its peers execute, while materially older or
+more valuable work remains ahead. The server refreshes materialized affinity
+immediately before each selection; an epoch or match change replaces the stale
+enqueue-time score and is emitted as stale-fallback telemetry. New arrivals may
+re-rank the remaining queue. This request radix is scheduling-only and never
+changes unified-cache recency.
 
 ## License
 

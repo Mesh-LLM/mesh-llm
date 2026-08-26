@@ -14,6 +14,27 @@ pub struct ResidentPrefixEviction {
     pub evicted_tokens: u64,
 }
 
+struct ResidentRadixLease {
+    radix: std::sync::Arc<
+        std::sync::Mutex<
+            skippy_cache::UnifiedRadixCache<super::RadixResidentEntry, super::RadixExactEntry>,
+        >,
+    >,
+    namespace: String,
+    stored_tokens: Vec<i32>,
+}
+
+impl Drop for ResidentRadixLease {
+    fn drop(&mut self) {
+        let released = self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .release_resident(&self.namespace, &self.stored_tokens);
+        debug_assert!(released, "resident radix acquire/release must balance");
+    }
+}
+
 impl KvStageIntegration {
     pub fn probe_resident_prefix(
         &self,
@@ -22,7 +43,10 @@ impl KvStageIntegration {
         if !self.should_lookup() || self.payload != StagePrefixCachePayload::ResidentKv {
             return None;
         }
-        let radix = self.radix.lock().expect("radix cache lock poisoned");
+        let radix = self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let radix_hit = radix.peek_resident(&identity.namespace, &identity.token_ids)?;
         let entries = radix.stats().resident_entries;
         Some(ResidentPrefixRestore {
@@ -47,15 +71,19 @@ impl KvStageIntegration {
             let radix_hit = self
                 .radix
                 .lock()
-                .expect("radix cache lock poisoned")
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .acquire_resident(&identity.namespace, &identity.token_ids);
             let Some(radix_hit) = radix_hit else {
                 continue;
             };
-            let page_id = radix_hit.value.page_id.as_str();
+            let _lease = ResidentRadixLease {
+                radix: std::sync::Arc::clone(&self.radix),
+                namespace: identity.namespace.clone(),
+                stored_tokens: radix_hit.stored_tokens.clone(),
+            };
+            let page_id = radix_hit.value.page_id.clone();
             let token_count = radix_hit.matched_tokens.min(token_ids.len());
             if token_count == 0 {
-                self.release_resident_radix_entry(&identity.namespace, &radix_hit.stored_tokens);
                 continue;
             }
             let restore = runtime.restore_resident_prefix(
@@ -63,16 +91,15 @@ impl KvStageIntegration {
                 radix_hit.value.seq_id,
                 &token_ids[..token_count],
             );
-            self.release_resident_radix_entry(&identity.namespace, &radix_hit.stored_tokens);
             restore?;
             return Ok(Some(ResidentPrefixRestore {
-                page_id: page_id.to_string(),
+                page_id,
                 token_count,
                 seq_id: radix_hit.value.seq_id,
                 entries: self
                     .radix
                     .lock()
-                    .expect("radix cache lock poisoned")
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .stats()
                     .resident_entries,
             }));
@@ -91,7 +118,10 @@ impl KvStageIntegration {
         if self.payload != StagePrefixCachePayload::ResidentKv {
             return Ok(ResidentPrefixEviction::default());
         }
-        let mut radix = self.radix.lock().expect("radix cache lock poisoned");
+        let mut radix = self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut sequences = self
             .resident_sequences
             .lock()
@@ -135,7 +165,7 @@ impl KvStageIntegration {
         let resident_tokens = self
             .radix
             .lock()
-            .expect("radix cache lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .stats()
             .resident_tokens;
         let target_tokens = proactive_resident_eviction_target(
@@ -145,15 +175,6 @@ impl KvStageIntegration {
             decode_batch_tokens,
         );
         self.evict_resident_prefix_for_tokens(runtime, session_id, target_tokens)
-    }
-
-    fn release_resident_radix_entry(&self, namespace: &str, stored_tokens: &[i32]) {
-        let released = self
-            .radix
-            .lock()
-            .expect("radix cache lock poisoned")
-            .release_resident(namespace, stored_tokens);
-        debug_assert!(released, "resident radix acquire/release must balance");
     }
 
     pub fn record_resident_prefix(
@@ -190,7 +211,10 @@ impl KvStageIntegration {
         let mut evicted_entries = 0usize;
         let mut evicted_tokens = 0u64;
         let seq_id = {
-            let mut radix = self.radix.lock().expect("radix cache lock poisoned");
+            let mut radix = self
+                .radix
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut sequences = self
                 .resident_sequences
                 .lock()
@@ -243,7 +267,10 @@ impl KvStageIntegration {
                 .release(seq_id);
             return Err(error);
         }
-        let mut radix = self.radix.lock().expect("radix cache lock poisoned");
+        let mut radix = self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut sequences = self
             .resident_sequences
             .lock()
@@ -445,6 +472,46 @@ mod proactive_eviction_tests {
         assert!(removed.is_none());
         assert!(!dropped);
         assert_eq!(radix.stats().resident_entries, 1);
+    }
+
+    #[test]
+    fn resident_lease_releases_reference_during_unwind() {
+        let radix =
+            std::sync::Arc::new(std::sync::Mutex::new(skippy_cache::UnifiedRadixCache::new()));
+        radix
+            .lock()
+            .unwrap()
+            .insert_resident(
+                "stage",
+                &[1, 2, 3],
+                3,
+                RadixResidentEntry {
+                    page_id: "page".to_string(),
+                    seq_id: 1,
+                    token_count: 3,
+                },
+            )
+            .unwrap();
+        let hit = radix
+            .lock()
+            .unwrap()
+            .acquire_resident("stage", &[1, 2, 3])
+            .unwrap();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+            let radix = std::sync::Arc::clone(&radix);
+            move || {
+                let _lease = ResidentRadixLease {
+                    radix,
+                    namespace: "stage".to_string(),
+                    stored_tokens: hit.stored_tokens,
+                };
+                panic!("restore panicked");
+            }
+        }));
+
+        assert!(result.is_err());
+        assert!(radix.lock().unwrap().lru_resident_candidate().is_some());
     }
 
     #[test]
