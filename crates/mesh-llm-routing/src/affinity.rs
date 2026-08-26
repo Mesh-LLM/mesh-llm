@@ -62,7 +62,7 @@ pub struct RoutingKeys {
     pub session_hash: Option<u64>,
     /// Stable prompt/tool scaffold hash, when one was found.
     pub prefix_hash: Option<u64>,
-    /// Hash used for deterministic sticky routing.
+    /// Hash used for explicit deterministic session routing.
     pub sticky_hash: Option<u64>,
 }
 
@@ -209,7 +209,10 @@ pub fn routing_keys(
         }
         found.then_some(hash)
     });
-    let sticky_hash = session_hash.or(prefix_hash);
+    // Cache locality must not become an implicit sticky policy. Without a
+    // caller-provided session hint, stale or absent cache evidence falls back
+    // to the normal load-aware target picker.
+    let sticky_hash = session_hash;
 
     RoutingKeys {
         session_hash,
@@ -579,6 +582,67 @@ mod tests {
 
         assert_eq!(selection.target, cached);
         assert_eq!(selection.cache_target, Some(cached));
+    }
+
+    #[test]
+    fn missing_cache_evidence_uses_normal_load_aware_fallback() {
+        let first = remote(1);
+        let second = remote(2);
+        let mut targets = ModelTargets::default();
+        targets
+            .targets
+            .insert("qwen".to_string(), vec![first.clone(), second.clone()]);
+        let body = parse_body(
+            r#"{"messages":[{"role":"system","content":"agent"},{"role":"user","content":"task"}]}"#,
+        );
+        let keys = routing_keys(
+            Some(&body),
+            &["prompt_cache_key", "user", "session_id"],
+            true,
+        );
+        let affinity = AffinityRouter::with_config(true, true);
+        let candidates = targets.candidates("qwen");
+
+        assert!(keys.prefix_hash.is_some());
+        assert_eq!(keys.sticky_hash, None);
+        assert_eq!(
+            select_model_target_from_keys(&targets, &candidates, &keys, &affinity, None).target,
+            first
+        );
+        assert_eq!(
+            select_model_target_from_keys(&targets, &candidates, &keys, &affinity, None).target,
+            second
+        );
+    }
+
+    #[test]
+    fn explicit_session_hint_remains_sticky_without_cache_evidence() {
+        let first = remote(1);
+        let second = remote(2);
+        let mut targets = ModelTargets::default();
+        targets
+            .targets
+            .insert("qwen".to_string(), vec![first.clone(), second.clone()]);
+        let body = parse_body(
+            r#"{"prompt_cache_key":"session-a","messages":[{"role":"user","content":"task"}]}"#,
+        );
+        let keys = routing_keys(
+            Some(&body),
+            &["prompt_cache_key", "user", "session_id"],
+            true,
+        );
+        let affinity = AffinityRouter::with_config(true, true);
+        let candidates = targets.candidates("qwen");
+        let expected = ModelTargets::pick_sticky_from(
+            &candidates,
+            keys.session_hash.expect("explicit session hash"),
+        );
+
+        assert_eq!(keys.sticky_hash, keys.session_hash);
+        assert_eq!(
+            select_model_target_from_keys(&targets, &candidates, &keys, &affinity, None).target,
+            expected
+        );
     }
 
     #[test]
