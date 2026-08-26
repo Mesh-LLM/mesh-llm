@@ -188,7 +188,8 @@ mod tests {
         let keys_b = routing_keys(Some(&req_b));
 
         assert_ne!(keys_a.prefix_hash, keys_b.prefix_hash);
-        assert_ne!(keys_a.sticky_hash, keys_b.sticky_hash);
+        assert_eq!(keys_a.sticky_hash, None);
+        assert_eq!(keys_b.sticky_hash, None);
     }
 
     #[test]

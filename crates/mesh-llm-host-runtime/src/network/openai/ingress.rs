@@ -665,6 +665,7 @@ async fn route_request(
     required_tokens: Option<u32>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
+    prepare_cache_routing_body(request, effective_model);
     if let Some(model_name) = effective_model {
         // Model explicitly requested. Check local candidates first.
         if !has_available_candidates(ctx.targets, model_name) {
@@ -680,9 +681,6 @@ async fn route_request(
         }
 
         // Local candidates available — route normally.
-        if !request.is_tokenize_request() && ctx.targets.candidates(model_name).len() > 1 {
-            request.ensure_body_json();
-        }
         proxy::route_model_request(
             ctx.node.clone(),
             tcp_stream,
@@ -712,6 +710,19 @@ async fn route_request(
             },
         )
         .await
+    }
+}
+
+fn prepare_cache_routing_body(
+    request: &mut proxy::BufferedHttpRequest,
+    effective_model: Option<&str>,
+) {
+    // Cache routing and provider-confirmed local receipts need the same
+    // prefix key even when this node currently has only one eligible target.
+    // The body is already bounded and buffered at ingress; parsing here does
+    // not change the forwarded bytes.
+    if effective_model.is_some() && !request.is_tokenize_request() {
+        request.ensure_body_json();
     }
 }
 

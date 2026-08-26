@@ -11,7 +11,9 @@ use crate::network::openai::automatic;
 use crate::network::openai::transport as proxy;
 use mesh_llm_events::logging::identifiers::RequestId;
 
-use super::super::ingress::{AutoRouteResolution, resolve_auto_routed_model};
+use super::super::ingress::{
+    AutoRouteResolution, prepare_cache_routing_body, resolve_auto_routed_model,
+};
 
 /// A served model with the given capabilities, ready for the media filter.
 fn descriptor(model: &str, vision: bool, audio: bool) -> mesh::ServedModelDescriptor {
@@ -78,6 +80,18 @@ fn text_body(model: Option<&str>) -> serde_json::Value {
         body["model"] = serde_json::json!(model);
     }
     body
+}
+
+#[test]
+fn generation_body_is_parsed_for_cache_evidence_with_one_target() {
+    let model = "local-model";
+    let mut request = request_with_body(Some(model), &text_body(Some(model)));
+    assert!(request.body_json.is_none());
+
+    prepare_cache_routing_body(&mut request, Some(model));
+
+    assert!(request.body_json.is_some());
+    assert!(crate::network::affinity::cache_prefix_hash(request.body_json.as_ref()).is_some());
 }
 
 fn image_body(model: &str) -> serde_json::Value {
