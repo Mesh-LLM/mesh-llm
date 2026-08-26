@@ -632,32 +632,22 @@ def launch_cell(
         key=lambda row: int(row.get("llama_stage.prefill_token_count", 0)),
         reverse=True,
     )[: args.prefills]
+
+    def median_attribute(name: str) -> float | None:
+        values = [int(row[name]) for row in measured_prefills if name in row]
+        return statistics.median(values) if values else None
+
     summary = summarize_requests(requests, wall_ms, events, args.n_batch)
     summary.update(
         {
-            "prefill_chunk_count_median": (
-                statistics.median(
-                    int(row["llama_stage.prefill_chunk_count"])
-                    for row in measured_prefills
-                )
-                if measured_prefills
-                else None
+            "prefill_chunk_count_median": median_attribute(
+                "llama_stage.prefill_chunk_count"
             ),
-            "prefill_max_chunk_size_median": (
-                statistics.median(
-                    int(row["llama_stage.prefill_max_chunk_size"])
-                    for row in measured_prefills
-                )
-                if measured_prefills
-                else None
+            "prefill_max_chunk_size_median": median_attribute(
+                "llama_stage.prefill_max_chunk_size"
             ),
-            "prefill_bottleneck_stage_median": (
-                statistics.median(
-                    int(row["llama_stage.prefill_bottleneck_stage_index"])
-                    for row in measured_prefills
-                )
-                if measured_prefills
-                else None
+            "prefill_bottleneck_stage_median": median_attribute(
+                "llama_stage.prefill_bottleneck_stage_index"
             ),
         }
     )
