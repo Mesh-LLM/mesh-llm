@@ -15,7 +15,7 @@ pub(crate) const GGUF_TYPE_UINT64: u32 = 10;
 pub(crate) const GGUF_TYPE_INT64: u32 = 11;
 pub(crate) const GGUF_TYPE_FLOAT64: u32 = 12;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GgufKv {
     ArrayBool {
         key: String,

@@ -100,7 +100,8 @@ pub(crate) fn run_compose_mtp(args: ComposeMtpArgs) -> Result<()> {
     let metadata_shard = match (args.metadata_shard.as_ref(), args.metadata_output.as_ref()) {
         (Some(source), Some(output)) => {
             let mut metadata = read_gguf_file_info(source)?;
-            let patched = plan_metadata(&mut metadata.kv, &kv_overrides, args.no_bump_block_count);
+            let patched = plan_metadata(&mut metadata.kv, &kv_overrides, args.no_bump_block_count)?;
+            bump_split_tensors_count(&mut metadata.kv, appended.len())?;
             write_patched_metadata_shard(source, output, &metadata)?;
             block_count = patched;
             Some(output.display().to_string())
@@ -111,7 +112,8 @@ pub(crate) fn run_compose_mtp(args: ComposeMtpArgs) -> Result<()> {
     // the plan to the last shard too would double-bump it, and split shards
     // carry only split.* KV anyway.
     if metadata_shard.is_none() {
-        block_count = plan_metadata(&mut target.kv, &kv_overrides, args.no_bump_block_count);
+        block_count = plan_metadata(&mut target.kv, &kv_overrides, args.no_bump_block_count)?;
+        bump_split_tensors_count(&mut target.kv, appended.len())?;
     }
     let appended_bytes = write_composite(
         &args.target_shard,
@@ -163,28 +165,53 @@ fn plan_metadata(
     target_kv: &mut Vec<GgufKv>,
     overrides: &[(String, u32)],
     no_bump: bool,
-) -> Option<u32> {
+) -> Result<Option<u32>> {
     for (key, value) in overrides {
-        apply_override(target_kv, key, *value);
+        apply_override(target_kv, key, *value)?;
     }
     let block_count_kv = target_kv
         .iter_mut()
-        .find(|kv| kv.key().ends_with(".block_count"))?;
-    let value = block_count_kv.u32_value_mut()?;
+        .find(|kv| kv.key().ends_with(".block_count"));
+    let Some(block_count_kv) = block_count_kv else {
+        return Ok(None);
+    };
+    let value = block_count_kv
+        .u32_value_mut()
+        .context("block_count exists but is not a u32 value")?;
     if !no_bump {
         *value += 1;
     }
-    Some(*value)
+    Ok(Some(*value))
 }
 
-fn apply_override(target_kv: &mut Vec<GgufKv>, key: &str, value: u32) {
+fn apply_override(target_kv: &mut Vec<GgufKv>, key: &str, value: u32) -> Result<()> {
     if let Some(kv) = target_kv.iter_mut().find(|kv| kv.key() == key) {
-        if let Some(slot) = kv.u32_value_mut() {
-            *slot = value;
-        }
-        return;
+        let slot = kv.u32_value_mut().with_context(|| {
+            format!("--set-kv {key:?} exists but is not a u32 value; refusing to overwrite")
+        })?;
+        *slot = value;
+        return Ok(());
     }
     target_kv.push(GgufKv::u32(key, value));
+    Ok(())
+}
+
+/// llama.cpp tracks the global tensor total across shards in
+/// `split.tensors.count`; appended MTP tensors must be accounted for there or
+/// the loader rejects the composite as inconsistent with the tensor names.
+fn bump_split_tensors_count(target_kv: &mut [GgufKv], added: usize) -> Result<()> {
+    for kv in target_kv.iter_mut() {
+        if kv.key() != "split.tensors.count" {
+            continue;
+        }
+        let slot = kv
+            .u32_value_mut()
+            .context("split.tensors.count exists but is not a u32 value; refusing to rewrite it")?;
+        *slot = slot
+            .checked_add(u32::try_from(added).context("appended tensor count does not fit in u32")?)
+            .context("split.tensors.count overflows u32")?;
+    }
+    Ok(())
 }
 
 fn prepare_mtp_tensors(mtp: &GgufFileInfo, mtp_block: u32) -> Result<Vec<TensorEntry>> {
@@ -344,8 +371,14 @@ fn read_kv_array<R: Read>(reader: &mut R, key: String) -> Result<GgufKv> {
         },
         _ => {
             let element_size = array_element_size(element_type)?;
-            let mut bytes = vec![0_u8; len * element_size];
-            reader.read_exact(&mut bytes)?;
+            // `write_kv` emits only the scalar type tag for `GgufKv::Raw`, so
+            // the array header (element type + count) must be preserved inside
+            // `bytes` or the following KV entries shift on round-trip.
+            let mut bytes = Vec::with_capacity(12 + len * element_size);
+            bytes.extend_from_slice(&element_type.to_le_bytes());
+            bytes.extend_from_slice(&(len as u64).to_le_bytes());
+            bytes.resize(12 + len * element_size, 0);
+            reader.read_exact(&mut bytes[12..])?;
             GgufKv::Raw {
                 key,
                 value_type: GGUF_TYPE_ARRAY,
@@ -644,14 +677,16 @@ mod tests {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    /// Minimal GGUF v2 writer for fixtures: one KV, F32 tensors, 32B alignment.
-    fn write_fixture_gguf(path: &Path, kv: GgufKv, tensors: &[(&str, Vec<u32>, Vec<u8>)]) {
+    /// Minimal GGUF v2 writer for fixtures: F32 tensors, 32B alignment.
+    fn write_fixture_gguf(path: &Path, kv: &[GgufKv], tensors: &[(&str, Vec<u32>, Vec<u8>)]) {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(GGUF_MAGIC);
         put_u32(&mut bytes, 2);
         put_u64(&mut bytes, tensors.len() as u64);
-        put_u64(&mut bytes, 1);
-        write_kv(&mut bytes, &kv).unwrap();
+        put_u64(&mut bytes, kv.len() as u64);
+        for kv in kv {
+            write_kv(&mut bytes, kv).unwrap();
+        }
         for (name, dims, _) in tensors {
             put_string(&mut bytes, name);
             put_u32(&mut bytes, dims.len() as u32);
@@ -667,7 +702,7 @@ mod tests {
             (data_start - bytes.len() as u64) as usize,
         ));
         // Patch offsets relative to data start, append data with alignment.
-        let cursor = 24 + serialized_kv_len(&kv);
+        let cursor = 24 + kv.iter().map(serialized_kv_len).sum::<usize>();
         let mut data_cursor = 0_u64;
         for (index, (name, dims, data)) in tensors.iter().enumerate() {
             let entry_len = 8 + name.len() + 4 + 8 * dims.len() + 4 + 8;
@@ -723,7 +758,7 @@ mod tests {
         let output_path = dir.path("composite.gguf");
         write_fixture_gguf(
             &target_path,
-            GgufKv::u32("nemotron.block_count", 88),
+            &[GgufKv::u32("nemotron.block_count", 88)],
             &[
                 (
                     "blk.0.attn.weight",
@@ -735,7 +770,7 @@ mod tests {
         );
         write_fixture_gguf(
             &mtp_path,
-            GgufKv::u32("nemotron.block_count", 1),
+            &[GgufKv::u32("nemotron.block_count", 1)],
             &[("blk.0.nextn.eh_proj.weight", vec![4], vec![7_u8; 16])],
         );
 
@@ -799,12 +834,12 @@ mod tests {
         let output_path = dir.path("out.gguf");
         write_fixture_gguf(
             &target_path,
-            GgufKv::u32("arch.block_count", 2),
+            &[GgufKv::u32("arch.block_count", 2)],
             &[("blk.0.weight", vec![2], vec![9_u8; 8])],
         );
         write_fixture_gguf(
             &mtp_path,
-            GgufKv::u32("arch.block_count", 1),
+            &[GgufKv::u32("arch.block_count", 1)],
             &[("blk.0.nextn.weight", vec![2], vec![5_u8; 8])],
         );
         run_compose_mtp(ComposeMtpArgs {
@@ -836,7 +871,7 @@ mod tests {
         let mtp_path = dir.path("mtp.gguf");
         write_fixture_gguf(
             &mtp_path,
-            GgufKv::u32("arch.block_count", 1),
+            &[GgufKv::u32("arch.block_count", 1)],
             &[("blk.7.nextn.weight", vec![2], vec![1_u8; 8])],
         );
         let mtp = read_gguf_file_info(&mtp_path).unwrap();
@@ -844,7 +879,7 @@ mod tests {
         // Drafts already positioned at the target block are accepted verbatim.
         write_fixture_gguf(
             &mtp_path,
-            GgufKv::u32("arch.block_count", 1),
+            &[GgufKv::u32("arch.block_count", 1)],
             &[("blk.88.nextn.weight", vec![2], vec![1_u8; 8])],
         );
         let mtp = read_gguf_file_info(&mtp_path).unwrap();
@@ -860,17 +895,25 @@ mod tests {
         let mtp_path = dir.path("mtp.gguf");
         let patched_first = dir.path("composite-00001-of-00002.gguf");
         let composite_last = dir.path("composite-00002-of-00002.gguf");
-        // Shard 1 carries the global KV (block_count, tokenizer-ish string)
-        // and no tensors; shard 2 carries tensors with split-only KV.
-        write_fixture_gguf(&first_path, GgufKv::u32("arch.block_count", 88), &[]);
+        // Shard 1 carries the global KV (block_count, tokenizer-ish string,
+        // global split tensor count) and no tensors; shard 2 carries tensors
+        // with split-only KV.
+        write_fixture_gguf(
+            &first_path,
+            &[
+                GgufKv::u32("arch.block_count", 88),
+                GgufKv::u32("split.tensors.count", 1),
+            ],
+            &[],
+        );
         write_fixture_gguf(
             &last_path,
-            GgufKv::u32("split.no", 1),
+            &[GgufKv::u32("split.no", 1)],
             &[("blk.87.weight", vec![2], vec![3_u8; 8])],
         );
         write_fixture_gguf(
             &mtp_path,
-            GgufKv::u32("arch.block_count", 1),
+            &[GgufKv::u32("arch.block_count", 1)],
             &[("blk.0.nextn.weight", vec![2], vec![5_u8; 8])],
         );
         run_compose_mtp(ComposeMtpArgs {
@@ -896,6 +939,9 @@ mod tests {
         };
         assert_eq!(get("arch.block_count"), Some(89));
         assert_eq!(get("arch.nextn_predict_layers"), Some(1));
+        // The appended MTP tensor must be accounted for in the global split
+        // tensor total or llama.cpp rejects the composite shards.
+        assert_eq!(get("split.tensors.count"), Some(2));
         assert!(patched.tensors.is_empty());
 
         // Last shard: split KV untouched (no block_count to double-bump),
@@ -920,6 +966,68 @@ mod tests {
                 .kv
                 .iter()
                 .all(|kv| kv.key() != "arch.nextn_predict_layers")
+        );
+    }
+
+    #[test]
+    fn raw_array_metadata_round_trips_with_array_header() {
+        let dir = TempDir::new("rawarray");
+        let target_path = dir.path("target.gguf");
+        let mtp_path = dir.path("mtp.gguf");
+        let output_path = dir.path("out.gguf");
+        // Raw u16 array (no typed variant) followed by a regular u32 KV; a
+        // lost array header would shift every following metadata entry.
+        let raw_array = GgufKv::Raw {
+            key: "arch.raw_u16_array".to_string(),
+            value_type: GGUF_TYPE_ARRAY,
+            bytes: {
+                let mut bytes = GGUF_TYPE_UINT16.to_le_bytes().to_vec();
+                bytes.extend_from_slice(&2_u64.to_le_bytes());
+                bytes.extend_from_slice(&[0xAB, 0xCD, 0xEF, 0x01]);
+                bytes
+            },
+        };
+        write_fixture_gguf(
+            &target_path,
+            &[raw_array.clone(), GgufKv::u32("arch.block_count", 1)],
+            &[("blk.0.weight", vec![2], vec![9_u8; 8])],
+        );
+        write_fixture_gguf(
+            &mtp_path,
+            &[GgufKv::u32("arch.block_count", 1)],
+            &[("blk.0.nextn.weight", vec![2], vec![5_u8; 8])],
+        );
+        run_compose_mtp(ComposeMtpArgs {
+            target_shard: target_path,
+            mtp_gguf: mtp_path,
+            output: output_path.clone(),
+            mtp_block: 1,
+            metadata_shard: None,
+            metadata_output: None,
+            set_kv: vec![],
+            no_bump_block_count: true,
+            json: false,
+        })
+        .unwrap();
+        let composite = read_gguf_file_info(&output_path).unwrap();
+        assert!(composite.kv.contains(&raw_array));
+        assert!(
+            composite
+                .kv
+                .iter()
+                .any(|kv| matches!(kv, GgufKv::U32 { key, value: 1 } if key == "arch.block_count"))
+        );
+    }
+
+    #[test]
+    fn set_kv_override_errors_on_non_u32_existing_key() {
+        let mut kv = vec![GgufKv::u64("arch.block_count", 88)];
+        assert!(apply_override(&mut kv, "arch.block_count", 89).is_err());
+        // New keys are still appended.
+        assert!(apply_override(&mut kv, "arch.nextn_predict_layers", 1).is_ok());
+        assert!(
+            kv.iter()
+                .any(|item| item.key() == "arch.nextn_predict_layers")
         );
     }
 }
