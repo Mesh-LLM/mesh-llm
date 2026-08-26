@@ -4,6 +4,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 
@@ -32,6 +33,28 @@ class MixedPrefillDecodeAbTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertIn("context-block-0000", first)
         self.assertIn("Request 2", first)
+
+    def test_stage_config_connects_two_stage_topology(self):
+        args = Namespace(
+            split_layer=14,
+            model_id="test-model",
+            model=Path("/tmp/model.gguf"),
+            model_sha256="abc123",
+            ctx_size=32768,
+            lanes=12,
+            n_batch=1024,
+            n_ubatch=256,
+            n_gpu_layers=999,
+        )
+
+        stage0 = BENCH.stage_config(args, 0, 0, 14, 9000, 9001)
+        stage1 = BENCH.stage_config(args, 1, 14, 27, 9001, 9000)
+
+        self.assertEqual(stage0["downstream"]["endpoint"], "tcp://127.0.0.1:9001")
+        self.assertIsNone(stage0["upstream"])
+        self.assertEqual(stage1["upstream"]["endpoint"], "tcp://127.0.0.1:9000")
+        self.assertIsNone(stage1["downstream"])
+        self.assertEqual(stage0["layer_end"], stage1["layer_start"])
 
     def test_prompt_manifest_preserves_trace_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -69,6 +92,26 @@ class MixedPrefillDecodeAbTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "nonempty prompt"):
                 BENCH.read_prompt_manifest(path)
+
+    def test_scheduler_events_accept_feature_telemetry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stage-0.log"
+            path.write_text(
+                json.dumps(
+                    {
+                        "event": "stage.scheduler_feature_iteration",
+                        "attributes": {"skippy.scheduler.token_count": 7},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            events = BENCH.scheduler_events(path)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["skippy.scheduler.token_count"], 7)
+        self.assertEqual(events[0]["_event"], "stage.scheduler_feature_iteration")
 
     def test_paired_intervals_are_deterministic(self):
         base = {metric: float(index + 1) for index, metric in enumerate(BENCH.METRICS)}
