@@ -47,6 +47,14 @@ class PlanCiTests(unittest.TestCase):
 
         self.assertEqual([], unmatched)
 
+    def test_imported_justfiles_use_existing_rust_ownership(self) -> None:
+        payload = fixture("docs-only.json")
+        payload["changed_files"] = ["just/build.just"]
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        self.assertEqual(plan["domains"], ["rust"])
+
     def test_docs_only_selects_the_fast_quality_slice(self) -> None:
         plan = PLANNER.build_plan(fixture("docs-only.json"), root=ROOT)
 
