@@ -41,7 +41,7 @@ The request-local N-gram index contains committed target history only.
 Optimistic suffixes may be queried to extend the current branch, but they are
 never inserted into the index before target acceptance.
 
-## Stage Protocol v11
+## Stage Protocol v12
 
 `STAGE_STATE_VERSION` is `12`, and `VerifyWindow` is message kind `21`.
 Every verification request carries:
