@@ -920,6 +920,18 @@ impl StageOpenAiBackend {
                         let draft = draft_guard
                             .as_deref_mut()
                             .expect("fallback requires a draft guard");
+                        // Propose from the token sync_to_context left
+                        // unmaterialized rather than from `current`. The two
+                        // agree today, but only by an invariant maintained
+                        // across the whole decode loop; depending on it here
+                        // would make a slip silent KV corruption instead of
+                        // an error.
+                        debug_assert_eq!(context_tokens.last(), Some(&current));
+                        let Some(&propose_from) = context_tokens.last() else {
+                            return Err(openai_backend_error(anyhow::anyhow!(
+                                "draft fallback requires a non-empty context"
+                            )));
+                        };
                         draft
                             .sync_to_context(&context_tokens)
                             .map_err(openai_backend_error)?;
@@ -931,7 +943,7 @@ impl StageOpenAiBackend {
                             .max(2)
                             .min(native_mtp_remaining);
                         let draft_tokens = draft
-                            .propose(current, budget)
+                            .propose(propose_from, budget)
                             .map_err(openai_backend_error)?;
                         speculative_stats.fallback_draft_proposals += 1;
                         speculative_stats.fallback_draft_tokens += draft_tokens.len();

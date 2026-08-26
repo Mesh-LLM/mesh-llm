@@ -179,11 +179,14 @@ impl DraftRunner {
     ) -> Result<Vec<i32>> {
         let mut tokens = Vec::with_capacity(max_tokens);
         for _ in 0..max_tokens {
-            self.synced.record_proposal_step(current);
+            // Record after the step succeeds: a failed decode must not leave
+            // the state claiming a token the session does not hold.
+            let stepped_from = current;
             current = self
                 .session
                 .decode_step(current)
                 .context("draft decode step")?;
+            self.synced.record_proposal_step(stepped_from);
             tokens.push(current);
         }
         Ok(tokens)
