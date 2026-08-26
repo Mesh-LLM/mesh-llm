@@ -57,15 +57,29 @@ pub fn plan_component_capacity(
     snapshot: &ComponentCapacitySnapshot,
     demand: CapacityDemand,
 ) -> CapacityPlan {
-    let minimum_free = demand.minimum_free_units.min(snapshot.capacity_units);
-    let target_free = demand
-        .target_free_units
-        .max(minimum_free)
-        .min(snapshot.capacity_units);
     let protected_units = snapshot
         .active_units
         .saturating_add(snapshot.pinned_cache_units)
         .saturating_add(demand.request_units);
+    // A decode-batch watermark is a hint derived from the serving
+    // configuration. It may be larger than a small runtime's entire KV pool;
+    // when it fills or exceeds the pool, cap it at the space that can actually
+    // remain after the non-evictable work and this request. Otherwise a request
+    // that fits in the pool is rejected before any evictable cache can be
+    // considered. A smaller configured watermark remains a hard minimum.
+    let available_free = snapshot.capacity_units.saturating_sub(protected_units);
+    let minimum_free = if demand.minimum_free_units >= snapshot.capacity_units {
+        available_free
+    } else {
+        demand.minimum_free_units
+    };
+    let target_free = if demand.target_free_units >= snapshot.capacity_units {
+        available_free
+    } else {
+        demand.target_free_units
+    }
+    .max(minimum_free)
+    .min(snapshot.capacity_units);
     let protected_with_minimum = protected_units.saturating_add(minimum_free);
     if protected_with_minimum > snapshot.capacity_units {
         return CapacityPlan {
@@ -162,6 +176,74 @@ mod tests {
 
         assert!(!plan.admitted);
         assert_eq!(plan.admission_deficit_units, 5);
+        assert!(plan.victim_ids.is_empty());
+    }
+
+    #[test]
+    fn admits_a_request_that_fits_when_watermarks_exceed_the_pool() {
+        let plan = plan_component_capacity(
+            &ComponentCapacitySnapshot {
+                component: "kv-cells".into(),
+                capacity_units: 256,
+                active_units: 0,
+                pinned_cache_units: 0,
+                evictable_entries: Vec::new(),
+            },
+            CapacityDemand {
+                request_units: 39,
+                minimum_free_units: 512,
+                target_free_units: 1024,
+            },
+        );
+
+        assert!(plan.admitted);
+        assert_eq!(plan.projected_free_units, 217);
+        assert_eq!(plan.admission_deficit_units, 0);
+        assert!(plan.victim_ids.is_empty());
+    }
+
+    #[test]
+    fn admits_a_request_when_minimum_watermark_matches_pool_capacity() {
+        let plan = plan_component_capacity(
+            &ComponentCapacitySnapshot {
+                component: "kv-cells".into(),
+                capacity_units: 256,
+                active_units: 0,
+                pinned_cache_units: 0,
+                evictable_entries: Vec::new(),
+            },
+            CapacityDemand {
+                request_units: 39,
+                minimum_free_units: 256,
+                target_free_units: 256,
+            },
+        );
+
+        assert!(plan.admitted);
+        assert_eq!(plan.projected_free_units, 217);
+        assert_eq!(plan.required_eviction_units, 0);
+        assert_eq!(plan.admission_deficit_units, 0);
+    }
+
+    #[test]
+    fn still_rejects_when_non_evictable_work_exceeds_the_pool() {
+        let plan = plan_component_capacity(
+            &ComponentCapacitySnapshot {
+                component: "kv-cells".into(),
+                capacity_units: 256,
+                active_units: 200,
+                pinned_cache_units: 0,
+                evictable_entries: vec![entry("evictable", 100, 100, 0)],
+            },
+            CapacityDemand {
+                request_units: 57,
+                minimum_free_units: 512,
+                target_free_units: 1024,
+            },
+        );
+
+        assert!(!plan.admitted);
+        assert_eq!(plan.admission_deficit_units, 1);
         assert!(plan.victim_ids.is_empty());
     }
 
