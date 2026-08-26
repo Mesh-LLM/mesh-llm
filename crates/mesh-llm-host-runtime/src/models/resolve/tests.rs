@@ -167,6 +167,9 @@ fn synthetic_local_gguf_ref_for_test(path: &Path) -> String {
 async fn bare_name_resolves_from_remote_catalog() {
     let query = "RemoteOnlyResolverFallbackModel-Q4_K_M";
     let source_file = "RemoteOnlyResolverFallbackModel-Q4_K_M.gguf";
+    let cache = tempfile::tempdir().unwrap();
+    let downloaded = cache.path().join(source_file);
+    std::fs::write(&downloaded, b"gguf").unwrap();
 
     let _catalog_guard =
         crate::models::remote_catalog::set_catalog_entries_for_test(vec![remote_catalog_entry(
@@ -177,14 +180,17 @@ async fn bare_name_resolves_from_remote_catalog() {
         )]);
     let _download_guard = catalog::set_download_hf_assets_label_override(
         query.to_string(),
-        Arc::new(move |_| Ok(vec![PathBuf::from(format!("/tmp/{source_file}"))])),
+        Arc::new({
+            let downloaded = downloaded.clone();
+            move |_| Ok(vec![downloaded.clone()])
+        }),
     );
 
     let resolved = resolve_model_spec_with_progress(Path::new(query), false)
         .await
         .unwrap();
 
-    assert_eq!(resolved, PathBuf::from(format!("/tmp/{source_file}")));
+    assert_eq!(resolved, downloaded);
 }
 
 #[tokio::test]
@@ -192,6 +198,9 @@ async fn bare_name_resolves_from_remote_catalog() {
 async fn bare_name_resolution_prefers_remote_catalog_over_baked_catalog() {
     let query = "Qwen3-8B-Q4_K_M";
     let source_file = "RemotePreferred-Q4_K_M.gguf";
+    let cache = tempfile::tempdir().unwrap();
+    let downloaded = cache.path().join(source_file);
+    std::fs::write(&downloaded, b"gguf").unwrap();
     let _catalog_guard =
         crate::models::remote_catalog::set_catalog_entries_for_test(vec![remote_catalog_entry(
             query,
@@ -201,14 +210,17 @@ async fn bare_name_resolution_prefers_remote_catalog_over_baked_catalog() {
         )]);
     let _download_guard = catalog::set_download_hf_assets_label_override(
         "Remote Preferred Catalog Model".to_string(),
-        Arc::new(move |_| Ok(vec![PathBuf::from(format!("/tmp/{source_file}"))])),
+        Arc::new({
+            let downloaded = downloaded.clone();
+            move |_| Ok(vec![downloaded.clone()])
+        }),
     );
 
     let resolved = resolve_model_spec_with_progress(Path::new(query), false)
         .await
         .unwrap();
 
-    assert_eq!(resolved, PathBuf::from(format!("/tmp/{source_file}")));
+    assert_eq!(resolved, downloaded);
 }
 
 #[test]
@@ -805,6 +817,13 @@ fn format_huggingface_display_ref_uses_selector_for_split_gguf() {
 #[serial]
 async fn download_exact_ref_bf16_shorthand_downloads_full_split_model() {
     let fixture = load_gemma_live_fixture();
+    let cache = tempfile::tempdir().unwrap();
+    let bf16_dir = cache.path().join("BF16");
+    let shard_one = bf16_dir.join("gemma-4-31B-it-BF16-00001-of-00002.gguf");
+    let shard_two = bf16_dir.join("gemma-4-31B-it-BF16-00002-of-00002.gguf");
+    std::fs::create_dir_all(&bf16_dir).unwrap();
+    std::fs::write(&shard_one, b"gguf-one").unwrap();
+    std::fs::write(&shard_two, b"gguf-two").unwrap();
     let _siblings_guard = RepoSiblingEntriesOverrideGuard::set(Arc::new({
         let repo = fixture.repo.clone();
         let siblings = fixture
@@ -832,11 +851,10 @@ async fn download_exact_ref_bf16_shorthand_downloads_full_split_model() {
     }));
     let _download_guard = catalog::set_download_hf_assets_label_override(
         "unsloth/gemma-4-31B-it-GGUF:BF16".to_string(),
-        Arc::new(|_| {
-            Ok(vec![
-                PathBuf::from("/tmp/BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf"),
-                PathBuf::from("/tmp/BF16/gemma-4-31B-it-BF16-00002-of-00002.gguf"),
-            ])
+        Arc::new({
+            let shard_one = shard_one.clone();
+            let shard_two = shard_two.clone();
+            move |_| Ok(vec![shard_one.clone(), shard_two.clone()])
         }),
     );
 
@@ -844,10 +862,7 @@ async fn download_exact_ref_bf16_shorthand_downloads_full_split_model() {
         .await
         .unwrap();
 
-    assert_eq!(
-        resolved,
-        PathBuf::from("/tmp/BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf")
-    );
+    assert_eq!(resolved, shard_one);
     assert_eq!(
         *planned.lock().unwrap(),
         vec![

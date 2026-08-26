@@ -34,6 +34,8 @@ pub(super) fn request_query(path: &str) -> Result<RequestListQuery, LogsError> {
         from: None,
         to: None,
         route: None,
+        exclude_route: None,
+        exclude_route_prefix: None,
         model: None,
         provider: None,
         engine: None,
@@ -49,6 +51,8 @@ pub(super) fn request_query(path: &str) -> Result<RequestListQuery, LogsError> {
             "from" => query.from = Some(timestamp(&value)?),
             "to" => query.to = Some(timestamp(&value)?),
             "route" => query.route = Some(filter(value)?),
+            "exclude_route" => query.exclude_route = Some(filter(value)?),
+            "exclude_route_prefix" => query.exclude_route_prefix = Some(filter(value)?),
             "model" => query.model = Some(filter(value)?),
             "provider" => query.provider = Some(filter(value)?),
             "engine" => query.engine = Some(filter(value)?),
@@ -128,6 +132,8 @@ struct CleanupPreviewBody {
     to: Option<String>,
     #[serde(default)]
     route: Option<String>,
+    #[serde(default)]
+    exclude_route: Option<String>,
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
@@ -232,7 +238,8 @@ pub(super) fn cleanup_preview_request(
             .as_deref()
             .map(mesh_llm_log_store::CleanupOutcome::try_from)
             .transpose()?,
-    )?;
+    )?
+    .with_exclude_route(body.exclude_route)?;
     let scope = mesh_llm_log_store::CleanupScope::new(
         mesh_llm_log_store::MaintenanceTimestamp::try_from(cutoff.as_str())?,
         body.request_limit,
@@ -594,6 +601,31 @@ mod tests {
     }
 
     #[test]
+    fn parses_and_validates_request_route_exclusions() {
+        // Given / When
+        let query = request_query(
+            "/api/logs/requests?exclude_route=models&exclude_route_prefix=management_",
+        )
+        .expect("parse route exclusions");
+
+        // Then
+        assert_eq!(query.store.exclude_route.as_deref(), Some("models"));
+        assert_eq!(
+            query.store.exclude_route_prefix.as_deref(),
+            Some("management_")
+        );
+        for path in [
+            "/api/logs/requests?exclude_route=",
+            "/api/logs/requests?exclude_route_prefix=%00",
+        ] {
+            assert!(matches!(
+                request_query(path),
+                Err(LogsError::InvalidQuery(_))
+            ));
+        }
+    }
+
+    #[test]
     fn export_requires_a_bounded_reason_and_durable_scope() {
         assert!(matches!(
             export_request("/api/logs/requests/export", r#"{"reason":""}"#),
@@ -619,7 +651,7 @@ mod tests {
     fn cleanup_parsing_normalizes_and_rejects_unbounded_input_before_store_access() {
         let operation_id = uuid::Uuid::new_v4();
         let body = format!(
-            r#"{{"operationId":"{operation_id}","cutoffBefore":"2026-08-03T01:00:00+01:00","requestLimit":1,"source":"durable","from":"2026-08-01T01:00:00+01:00","to":"2026-08-03T00:00:00Z","route":"route-a","model":"Qwen/Qwen3","provider":"mesh","engine":"skippy","outcome":"completed","reason":"operator cleanup"}}"#
+            r#"{{"operationId":"{operation_id}","cutoffBefore":"2026-08-03T01:00:00+01:00","requestLimit":1,"source":"durable","from":"2026-08-01T01:00:00+01:00","to":"2026-08-03T00:00:00Z","route":"route-a","excludeRoute":"models","model":"Qwen/Qwen3","provider":"mesh","engine":"skippy","outcome":"completed","reason":"operator cleanup"}}"#
         );
         let preview = cleanup_preview_request("/api/logs/cleanup/preview", &body)
             .expect("bounded cleanup preview");
@@ -638,6 +670,7 @@ mod tests {
             Some("2026-08-03T00:00:00.000000000Z")
         );
         assert_eq!(preview.scope.filters().model(), Some("Qwen/Qwen3"));
+        assert_eq!(preview.scope.filters().exclude_route(), Some("models"));
         assert_eq!(
             preview.scope.filters().outcome(),
             Some(mesh_llm_log_store::CleanupOutcome::Completed)

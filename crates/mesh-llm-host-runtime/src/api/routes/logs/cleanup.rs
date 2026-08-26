@@ -49,6 +49,8 @@ struct CleanupScopeDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     route: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    exclude_route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<String>,
@@ -146,6 +148,7 @@ impl CleanupScopeDto {
             from: filters.from().map(str::to_owned),
             to: filters.to().map(str::to_owned),
             route: filters.route().map(str::to_owned),
+            exclude_route: filters.exclude_route().map(str::to_owned),
             model: filters.model().map(str::to_owned),
             provider: filters.provider().map(str::to_owned),
             engine: filters.engine().map(str::to_owned),

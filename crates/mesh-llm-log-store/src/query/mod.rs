@@ -4,8 +4,11 @@
 //! parsing, active-registry merging, and artifact-content authorization belong
 //! to later host/API layers.
 
+mod records;
 mod related;
 mod requests;
+
+pub use records::{RequestRecord, RequestRecordWithCaller};
 
 use chrono::DateTime;
 
@@ -67,6 +70,8 @@ pub struct RequestQuery {
     pub from: Option<String>,
     pub to: Option<String>,
     pub route: Option<String>,
+    pub exclude_route: Option<String>,
+    pub exclude_route_prefix: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
     pub engine: Option<String>,
@@ -79,7 +84,14 @@ impl RequestQuery {
     pub fn validate(&self) -> Result<(), LogStoreError> {
         validate_limit(self.limit)?;
         validate_time_range(self.from.as_deref(), self.to.as_deref())?;
-        for value in [&self.route, &self.model, &self.provider, &self.engine] {
+        for value in [
+            &self.route,
+            &self.exclude_route,
+            &self.exclude_route_prefix,
+            &self.model,
+            &self.provider,
+            &self.engine,
+        ] {
             validate_filter(value.as_deref())?;
         }
         Ok(())
@@ -116,19 +128,6 @@ impl ProxyQuery {
         }
         Ok(())
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RequestRecord {
-    pub request_id: String,
-    pub outcome: String,
-    pub created_at: String,
-    pub terminal_at: Option<String>,
-    pub route: Option<String>,
-    pub model: Option<String>,
-    pub provider: Option<String>,
-    pub engine: Option<String>,
-    pub status_code: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

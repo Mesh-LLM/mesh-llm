@@ -24,6 +24,10 @@ const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CHUNKED_WIRE_BYTES: usize = MAX_BODY_BYTES * 6 + 64 * 1024;
 const MAX_OBJECT_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_OBJECT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 pub(super) const MAX_HEADERS: usize = 64;
+const CRLF: &[u8] = b"\r\n";
+const LF: &[u8] = b"\n";
+const CRLF_HEADER_TERMINATOR: &[u8] = b"\r\n\r\n";
+const LF_HEADER_TERMINATOR: &[u8] = b"\n\n";
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HttpReadLimits {
@@ -648,6 +652,65 @@ pub(crate) fn canonical_request_id_from_header_prefix(prefix: &[u8]) -> Option<R
         Ok(httparse::Status::Complete(_)) => canonical_request_id_from_headers(request.headers),
         Ok(httparse::Status::Partial) | Err(_) => None,
     }
+}
+
+pub(crate) fn http_header_terminator(prefix: &[u8]) -> Option<(usize, &'static [u8])> {
+    let crlf = prefix
+        .windows(CRLF_HEADER_TERMINATOR.len())
+        .position(|window| window == CRLF_HEADER_TERMINATOR)
+        .map(|offset| (offset + CRLF_HEADER_TERMINATOR.len(), CRLF));
+    let lf = prefix
+        .windows(LF_HEADER_TERMINATOR.len())
+        .position(|window| window == LF_HEADER_TERMINATOR)
+        .map(|offset| (offset + LF_HEADER_TERMINATOR.len(), LF));
+
+    match (crlf, lf) {
+        (Some(crlf), Some(lf)) => Some(if crlf.0 <= lf.0 { crlf } else { lf }),
+        (Some(terminator), None) | (None, Some(terminator)) => Some(terminator),
+        (None, None) => None,
+    }
+}
+
+pub(crate) fn ensure_canonical_request_id_in_header_prefix(
+    mut prefix: Vec<u8>,
+) -> (Vec<u8>, Option<RequestId>) {
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut request = httparse::Request::new(&mut headers_buf);
+    let Ok(httparse::Status::Complete(header_end)) = request.parse(&prefix) else {
+        return (prefix, None);
+    };
+    if header_end > MAX_HEADER_BYTES {
+        return (prefix, None);
+    }
+
+    let request_id_header_count = request
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("x-request-id"))
+        .count();
+    if let Some(request_id) = canonical_request_id_from_headers(request.headers) {
+        return (prefix, Some(request_id));
+    }
+    if request_id_header_count != 0 || request.headers.len() >= MAX_HEADERS {
+        return (prefix, None);
+    }
+
+    let Some((terminator_end, line_ending)) = http_header_terminator(&prefix[..header_end]) else {
+        return (prefix, None);
+    };
+    if terminator_end != header_end {
+        return (prefix, None);
+    }
+
+    let request_id = RequestId::new();
+    let mut header = format!("x-request-id: {}", request_id.as_uuid()).into_bytes();
+    header.extend_from_slice(line_ending);
+    if header_end.saturating_add(header.len()) > MAX_HEADER_BYTES {
+        return (prefix, None);
+    }
+    let insertion_offset = header_end - line_ending.len();
+    prefix.splice(insertion_offset..insertion_offset, header);
+    (prefix, Some(request_id))
 }
 
 /// Parse the private raw-lifecycle assertion from a complete, bounded HTTP

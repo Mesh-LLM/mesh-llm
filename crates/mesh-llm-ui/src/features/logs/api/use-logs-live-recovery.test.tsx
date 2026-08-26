@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
 import { act, renderHook } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useLogsLiveRecovery, type LogsEventSourceFactory } from '@/features/logs/api/use-logs-live-recovery'
 import type { LogsLedgerSearch } from '@/features/logs/lib/log-search'
 import {
   REQUEST_A,
   REQUEST_B,
+  DeferredHydration,
   FakeEventSource,
   auditData,
   eventData,
@@ -17,6 +18,11 @@ import {
 } from './use-logs-live-recovery.test-fixtures'
 
 describe('useLogsLiveRecovery', () => {
+  afterEach(() => {
+    if (vi.isFakeTimers()) vi.clearAllTimers()
+    vi.useRealTimers()
+  })
+
   it('preserves lifecycle gap recovery when the initial hydration is still in flight', async () => {
     let resolveInitial: (() => void) | undefined
     let calls = 0
@@ -99,6 +105,76 @@ describe('useLogsLiveRecovery', () => {
 
     expect(hydrateAudit).toHaveBeenCalledTimes(1)
     expect(result.current.state).toBe('connected')
+  })
+
+  it('isolates audit hydration ownership across effect reruns', async () => {
+    // Given
+    const hydrationA = new DeferredHydration()
+    const hydrationB = new DeferredHydration()
+    const queuedHydrationB = new DeferredHydration()
+    const hydrate = vi.fn(async () => undefined)
+    const hydrateAuditA = vi.fn(() => hydrationA.promise)
+    let hydrationBCalls = 0
+    const hydrateAuditB = vi.fn(() => {
+      hydrationBCalls += 1
+      return hydrationBCalls === 1 ? hydrationB.promise : queuedHydrationB.promise
+    })
+    const sourcesA: FakeEventSource[] = []
+    const sourcesB: FakeEventSource[] = []
+    const factoryA: LogsEventSourceFactory = (url) => {
+      const source = new FakeEventSource(url)
+      sourcesA.push(source)
+      return source
+    }
+    const factoryB: LogsEventSourceFactory = (url) => {
+      const source = new FakeEventSource(url)
+      sourcesB.push(source)
+      return source
+    }
+    const { rerender } = renderHook(
+      ({ hydrateAudit, eventSourceFactory }) =>
+        useLogsLiveRecovery({
+          enabled: false,
+          search: {},
+          hydrate,
+          auditEnabled: true,
+          hydrateAudit,
+          eventSourceFactory
+        }),
+      { initialProps: { hydrateAudit: hydrateAuditA, eventSourceFactory: factoryA } }
+    )
+    await flush()
+    act(() => sourcesA[0]?.emit('stream_error', JSON.stringify({ code: 'audit_reconcile_failed' }), 'a1:1'))
+    expect(hydrateAuditA).toHaveBeenCalledTimes(1)
+
+    // When
+    rerender({ hydrateAudit: hydrateAuditB, eventSourceFactory: factoryB })
+    act(() => sourcesB[0]?.emit('stream_error', JSON.stringify({ code: 'audit_reconcile_failed' }), 'a1:2'))
+
+    // Then
+    expect(hydrateAuditB).toHaveBeenCalledTimes(1)
+
+    // When
+    await act(async () => {
+      hydrationA.resolve()
+      await hydrationA.promise
+    })
+    await flush()
+    act(() => sourcesB[0]?.emit('stream_error', JSON.stringify({ code: 'invalid_event' }), 'a1:3'))
+
+    // Then
+    expect(hydrateAuditB).toHaveBeenCalledTimes(1)
+
+    // When
+    await act(async () => {
+      hydrationB.resolve()
+      await hydrationB.promise
+    })
+    await flush()
+
+    // Then
+    expect(hydrateAuditB).toHaveBeenCalledTimes(2)
+    expect(hydrate).not.toHaveBeenCalled()
   })
 
   it('accepts server-reconciled cross-process audit rows without browser polling', async () => {
@@ -238,6 +314,179 @@ describe('useLogsLiveRecovery', () => {
     expect(hydrateAudit).toHaveBeenCalledTimes(2)
   })
 
+  it('waits for terminal hydration after EOF before replacing the audit source exactly once', async () => {
+    // Given
+    vi.useFakeTimers()
+    const hydration = new DeferredHydration()
+    const hydrateAudit = vi.fn(() => hydration.promise)
+    const { hydrate, result, sources } = renderLive({ enabled: false, auditEnabled: true, hydrateAudit })
+    await flush()
+    const terminalSource = sources[0]
+    act(() => {
+      terminalSource?.open()
+      terminalSource?.emit('audit_entry', auditData(1), 'a1:1')
+    })
+    expect(result.current.state).toBe('connected')
+
+    // When
+    act(() => terminalSource?.emit('stream_error', JSON.stringify({ code: 'audit_reconcile_failed' }), 'a1:2'))
+
+    // Then
+    expect(result.current.state).toBe('stale')
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+    expect(hydrate).not.toHaveBeenCalled()
+    expect(sources).toHaveLength(1)
+
+    // When
+    act(() => terminalSource?.serverClose())
+
+    // Then
+    expect(terminalSource?.serverClosed).toBe(true)
+    expect(terminalSource?.closed).toBe(true)
+    expect(terminalSource?.closeCalls).toBe(1)
+    expect(sources).toHaveLength(1)
+    expect(result.current.state).toBe('stale')
+
+    act(() => terminalSource?.error())
+    expect(sources).toHaveLength(1)
+
+    // When
+    await act(async () => {
+      hydration.resolve()
+      await hydration.promise
+    })
+    await flush()
+
+    // Then
+    expect(sources).toHaveLength(2)
+    expect(sources[1]?.url).toBe('/api/logs/events?audit=1&cursor=a1%3A2')
+    act(() => {
+      sources[1]?.open()
+      terminalSource?.error()
+      terminalSource?.serverClose()
+    })
+    expect(result.current.state).toBe('connected')
+    expect(sources).toHaveLength(2)
+    expect(terminalSource?.closeCalls).toBe(1)
+
+    act(() => vi.advanceTimersByTime(5_000))
+    await flush()
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+    expect(hydrate).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('waits for terminal EOF when authoritative hydration succeeds first', async () => {
+    // Given
+    const hydration = new DeferredHydration()
+    const hydrateAudit = vi.fn(() => hydration.promise)
+    const { result, sources } = renderLive({ enabled: false, auditEnabled: true, hydrateAudit })
+    await flush()
+    const terminalSource = sources[0]
+    act(() => terminalSource?.open())
+    act(() => terminalSource?.emit('stream_error', JSON.stringify({ code: 'audit_reconcile_failed' }), 'a1:2'))
+
+    // When
+    await act(async () => {
+      hydration.resolve()
+      await hydration.promise
+    })
+    await flush()
+
+    // Then
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+    expect(result.current.state).toBe('stale')
+    expect(sources).toHaveLength(1)
+
+    act(() => terminalSource?.serverClose())
+    expect(terminalSource?.closed).toBe(true)
+    expect(terminalSource?.closeCalls).toBe(1)
+    expect(sources).toHaveLength(2)
+    expect(sources[1]?.url).toBe('/api/logs/events?audit=1&cursor=a1%3A2')
+
+    act(() => terminalSource?.error())
+    expect(sources).toHaveLength(2)
+    expect(terminalSource?.closeCalls).toBe(1)
+  })
+
+  it('falls back to polling when terminal audit hydration rejects before EOF', async () => {
+    // Given
+    vi.useFakeTimers()
+    const terminalHydration = new DeferredHydration()
+    let hydrationCalls = 0
+    const hydrateAudit = vi.fn(() => {
+      hydrationCalls += 1
+      return hydrationCalls === 1 ? terminalHydration.promise : Promise.resolve()
+    })
+    const { result, sources } = renderLive({ enabled: false, auditEnabled: true, hydrateAudit })
+    await flush()
+    const terminalSource = sources[0]
+    act(() => terminalSource?.open())
+    act(() => terminalSource?.emit('stream_error', JSON.stringify({ code: 'audit_reconcile_failed' }), 'a1:2'))
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+
+    // When
+    act(() => terminalHydration.reject(new Error('authoritative audit hydration failed')))
+    await flush()
+    expect(result.current.state).toBe('stale')
+    act(() => terminalSource?.serverClose())
+    await flush()
+    await flush()
+
+    // Then
+    expect(terminalSource?.closed).toBe(true)
+    expect(terminalSource?.closeCalls).toBe(1)
+    expect(result.current.state).toBe('polling')
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+
+    act(() => vi.advanceTimersByTime(4_999))
+    await flush()
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+    act(() => vi.advanceTimersByTime(1))
+    await flush()
+    expect(hydrateAudit).toHaveBeenCalledTimes(3)
+  })
+
+  it('falls back to polling when terminal audit EOF precedes hydration rejection', async () => {
+    // Given
+    vi.useFakeTimers()
+    const terminalHydration = new DeferredHydration()
+    let hydrationCalls = 0
+    const hydrateAudit = vi.fn(() => {
+      hydrationCalls += 1
+      return hydrationCalls === 1 ? terminalHydration.promise : Promise.resolve()
+    })
+    const { result, sources } = renderLive({ enabled: false, auditEnabled: true, hydrateAudit })
+    await flush()
+    const terminalSource = sources[0]
+    act(() => terminalSource?.open())
+    act(() => terminalSource?.emit('stream_error', JSON.stringify({ code: 'audit_reconcile_failed' }), 'a1:2'))
+    expect(hydrateAudit).toHaveBeenCalledTimes(1)
+
+    // When
+    act(() => terminalSource?.serverClose())
+    expect(terminalSource?.closed).toBe(true)
+    expect(terminalSource?.closeCalls).toBe(1)
+    act(() => terminalHydration.reject(new Error('authoritative audit hydration failed')))
+    await flush()
+    await flush()
+
+    // Then
+    expect(result.current.state).toBe('polling')
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+
+    act(() => vi.advanceTimersByTime(4_999))
+    await flush()
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+    act(() => vi.advanceTimersByTime(1))
+    await flush()
+    expect(hydrateAudit).toHaveBeenCalledTimes(3)
+  })
+
+  it('starts the test after fake-timer coverage with real timers', () => {
+    expect(vi.isFakeTimers()).toBe(false)
+  })
+
   it('does not re-hydrate when the audit stream fails to reconnect a second time while already polling', async () => {
     vi.useFakeTimers()
     const { hydrateAudit, result, sources } = renderLive({ enabled: false, auditEnabled: true })
@@ -248,18 +497,21 @@ describe('useLogsLiveRecovery', () => {
     expect(result.current.state).toBe('reconnecting')
     act(() => vi.advanceTimersByTime(1_000))
     await flush()
-    expect(result.current.state).toBe('polling')
+    expect(result.current.state).toBe('reconnecting')
     expect(hydrateAudit).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(1)
 
     // Native EventSource retries on its own schedule and calls onerror again on
     // every failed attempt. A second failure while already polling must not
     // re-enter startPolling and fire a duplicate hydrate — the reconciliation
     // interval from the first entry is still live and owns future refreshes.
     act(() => source?.error())
+    expect(result.current.state).toBe('reconnecting')
     act(() => vi.advanceTimersByTime(1_000))
     await flush()
-    expect(result.current.state).toBe('polling')
+    expect(result.current.state).toBe('reconnecting')
     expect(hydrateAudit).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(1)
 
     // The reconciliation interval from the first entry must still be the one
     // driving refreshes — the second failure should not have restarted or
@@ -267,6 +519,41 @@ describe('useLogsLiveRecovery', () => {
     act(() => vi.advanceTimersByTime(5_000))
     await flush()
     expect(hydrateAudit).toHaveBeenCalledTimes(2)
+
+    act(() => source?.open())
+    expect(result.current.state).toBe('connected')
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => vi.advanceTimersByTime(5_000))
+    await flush()
+    expect(hydrateAudit).toHaveBeenCalledTimes(2)
+    expect(sources).toHaveLength(1)
+    expect(source?.closed).toBe(false)
+  })
+
+  it('reports combined fallback polling until both lifecycle and audit timers reconnect', async () => {
+    vi.useFakeTimers()
+    const { result, sources } = renderLive({ auditEnabled: true })
+    await flush()
+    act(() => {
+      sources[0]?.open()
+      sources[1]?.open()
+      sources[0]?.error()
+      sources[1]?.error()
+    })
+
+    expect(result.current.state).toBe('reconnecting')
+    expect(result.current.fallbackPollingActive).toBe(false)
+
+    act(() => vi.advanceTimersByTime(1_000))
+    await flush()
+    expect(result.current.fallbackPollingActive).toBe(true)
+
+    act(() => sources[0]?.open())
+    expect(result.current.fallbackPollingActive).toBe(true)
+
+    act(() => sources[1]?.open())
+    expect(result.current.state).toBe('connected')
+    expect(result.current.fallbackPollingActive).toBe(false)
   })
 
   it('serializes route and reconnects while source remains unsupported', async () => {
@@ -495,13 +782,34 @@ describe('useLogsLiveRecovery', () => {
     const source = sources[0]
     act(() => source?.error())
     expect(result.current.state).toBe('reconnecting')
+    expect(result.current.fallbackPollingActive).toBe(false)
     act(() => vi.advanceTimersByTime(1_000))
-    expect(result.current.state).toBe('polling')
-    act(() => vi.advanceTimersByTime(15_000))
+    await flush()
+    expect(result.current.state).toBe('reconnecting')
+    expect(result.current.fallbackPollingActive).toBe(true)
+    expect(hydrate).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(1)
+
+    act(() => source?.error())
+    expect(result.current.state).toBe('reconnecting')
+    act(() => vi.advanceTimersByTime(1_000))
+    await flush()
+    expect(result.current.state).toBe('reconnecting')
+    expect(hydrate).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(1)
+
+    act(() => vi.advanceTimersByTime(5_000))
+    await flush()
+    expect(hydrate).toHaveBeenCalledTimes(2)
     expect(sources).toHaveLength(1)
     act(() => source?.open())
     expect(result.current.state).toBe('connected')
-    expect(hydrate.mock.calls.length).toBeLessThanOrEqual(2)
+    expect(result.current.fallbackPollingActive).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => vi.advanceTimersByTime(5_000))
+    await flush()
+    expect(hydrate).toHaveBeenCalledTimes(2)
+    expect(source?.closed).toBe(false)
   })
 
   it('pauses only future fallback interval hydrations without replacing the source or timer', async () => {

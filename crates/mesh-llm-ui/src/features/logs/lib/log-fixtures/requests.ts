@@ -5,6 +5,9 @@ import { HARNESS_REFERENCE_TIME, harnessTimestamp } from './support'
 
 export { HARNESS_REFERENCE_TIME }
 
+const DIRECT_CALLER_ID = '9f0c4cbe8cb7a8d5d577c20e50ef03fd2f63a2e7fd9897c155823bcbb281bb04'
+const RELAY_CALLER_ID = 'de2f01895ab34c2c8f5d97a703311f5c7279082eef191644c397d2175210aa9b'
+
 export const HARNESS_LOG_SCENARIO_IDS = {
   activeStream: LogRequestId.parse('10000000-0000-4000-8000-000000000001'),
   completedMesh: LogRequestId.parse('10000000-0000-4000-8000-000000000002'),
@@ -29,6 +32,9 @@ type RequestFixtureInput = {
   readonly engine: string | undefined
   readonly statusCode: number | undefined
   readonly source: LogSource
+  readonly callerEndpointId?: string
+  readonly callerAddr?: string
+  readonly callerPathType?: LogRequest['callerPathType']
 }
 
 function requestFixture(input: RequestFixtureInput): LogRequest {
@@ -42,7 +48,10 @@ function requestFixture(input: RequestFixtureInput): LogRequest {
     provider: input.provider,
     engine: input.engine,
     statusCode: input.statusCode,
-    source: input.source
+    source: input.source,
+    ...(input.callerEndpointId ? { callerEndpointId: input.callerEndpointId } : {}),
+    ...(input.callerAddr ? { callerAddr: input.callerAddr } : {}),
+    ...(input.callerPathType ? { callerPathType: input.callerPathType } : {})
   }
 }
 
@@ -57,7 +66,10 @@ const CORE_REQUESTS: readonly LogRequest[] = [
     provider: 'mesh',
     engine: 'raw_ingress',
     statusCode: undefined,
-    source: 'active'
+    source: 'active',
+    callerEndpointId: DIRECT_CALLER_ID,
+    callerAddr: '203.0.113.24:48712',
+    callerPathType: 'remote_quic_http'
   }),
   requestFixture({
     requestId: HARNESS_LOG_SCENARIO_IDS.completedMesh,
@@ -69,7 +81,10 @@ const CORE_REQUESTS: readonly LogRequest[] = [
     provider: 'openai_frontend',
     engine: 'chat_completion_stream',
     statusCode: 200,
-    source: 'durable'
+    source: 'durable',
+    callerEndpointId: DIRECT_CALLER_ID,
+    callerAddr: '203.0.113.24:48712',
+    callerPathType: 'remote_quic_http'
   }),
   requestFixture({
     requestId: HARNESS_LOG_SCENARIO_IDS.failedRetry,
@@ -81,7 +96,9 @@ const CORE_REQUESTS: readonly LogRequest[] = [
     provider: 'openai_frontend',
     engine: 'responses_stream',
     statusCode: 502,
-    source: 'durable'
+    source: 'durable',
+    callerEndpointId: RELAY_CALLER_ID,
+    callerPathType: 'relay'
   }),
   requestFixture({
     requestId: HARNESS_LOG_SCENARIO_IDS.rejectedAdmission,
@@ -129,7 +146,9 @@ const CORE_REQUESTS: readonly LogRequest[] = [
     provider: 'openai_frontend',
     engine: 'completion',
     statusCode: 200,
-    source: 'durable'
+    source: 'durable',
+    callerAddr: '127.0.0.1:54321',
+    callerPathType: 'local_http'
   }),
   requestFixture({
     requestId: HARNESS_LOG_SCENARIO_IDS.completedSparse,

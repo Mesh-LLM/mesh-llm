@@ -1,11 +1,7 @@
 use super::*;
 
-// ════════════════════════════════════
-//  MIGRATION TESTS
-// ════════════════════════════════════
-
 #[test]
-fn fresh_db_migrates_to_latest() {
+fn fresh_db_initializes_to_current_version() {
     let (store, _, _tmp) = open_store();
     assert_eq!(store.schema_version(), CURRENT_VERSION);
 }
@@ -137,12 +133,12 @@ fn sqlite_root_database_and_sidecars_have_only_current_user_acl() {
 }
 
 #[test]
-fn reopen_preserves_data_and_skips_migrations() {
+fn current_schema_reopen_preserves_data_without_schema_work() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let clock: Arc<dyn ClockTrait> = Arc::new(TestClock::default());
 
     // Insert data.
-    let store1 = LogStore::open(tmp.path(), clock.clone()).expect("open v1");
+    let store1 = LogStore::open(tmp.path(), clock.clone()).expect("open current schema");
     store1
         .insert_summary(
             "s-001",
@@ -173,7 +169,7 @@ fn reopen_preserves_data_and_skips_migrations() {
 }
 
 #[test]
-fn migrations_are_idempotent_on_reopen() {
+fn current_schema_is_a_noop_on_reopen() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let clock: Arc<dyn ClockTrait> = Arc::new(TestClock::default());
 
@@ -182,6 +178,123 @@ fn migrations_are_idempotent_on_reopen() {
         assert_eq!(s.schema_version(), CURRENT_VERSION);
         drop(s);
     }
+}
+
+#[test]
+fn unknown_nonempty_version_zero_is_rejected_before_database_mutation() {
+    assert_unknown_schema_rejected_before_mutation(0);
+}
+
+#[test]
+fn unknown_future_version_is_rejected_before_database_mutation() {
+    assert_unknown_schema_rejected_before_mutation(2);
+}
+
+#[test]
+fn markerless_identified_version_one_is_rejected_before_wal_or_schema_mutation() {
+    let root = tempfile::tempdir().expect("database root");
+    let database = root.path().join("log_store.db");
+    let connection = rusqlite::Connection::open(&database).expect("open fixture database");
+    connection
+        .execute_batch(
+            "CREATE TABLE sentinel (value TEXT NOT NULL); INSERT INTO sentinel VALUES ('kept');
+             PRAGMA application_id = 0x4D4C4F47; PRAGMA user_version = 1;",
+        )
+        .expect("seed forged schema");
+    drop(connection);
+
+    let clock: Arc<dyn ClockTrait> = Arc::new(TestClock::default());
+    let error = match LogStore::open(root.path(), clock) {
+        Ok(_) => panic!("markerless schema must fail closed"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        LogStoreError::SchemaIncompatible {
+            found: 1,
+            supported: 1
+        }
+    ));
+    assert!(!root.path().join("log_store.db-wal").exists());
+    assert!(!root.path().join("log_store.db-shm").exists());
+    let connection = rusqlite::Connection::open(database).expect("reopen fixture database");
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .expect("journal mode"),
+        "delete"
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT value FROM sentinel", [], |row| row
+                .get::<_, String>(0))
+            .expect("sentinel row"),
+        "kept"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("schema object count"),
+        1
+    );
+}
+
+fn assert_unknown_schema_rejected_before_mutation(version: u32) {
+    let root = tempfile::tempdir().expect("database root");
+    let database = root.path().join("log_store.db");
+    let connection = rusqlite::Connection::open(&database).expect("open fixture database");
+    connection
+        .execute_batch(&format!(
+            "CREATE TABLE sentinel (value TEXT NOT NULL); INSERT INTO sentinel VALUES ('kept'); PRAGMA user_version = {version};"
+        ))
+        .expect("seed unknown schema");
+    drop(connection);
+
+    let clock: Arc<dyn ClockTrait> = Arc::new(TestClock::default());
+    let error = match LogStore::open(root.path(), clock) {
+        Ok(_) => panic!("unknown schema must fail closed"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        LogStoreError::SchemaIncompatible { found, supported: 1 } if found == version
+    ));
+    let connection = rusqlite::Connection::open(database).expect("reopen fixture database");
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
+            .expect("schema version"),
+        version
+    );
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .expect("journal mode"),
+        "delete"
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT value FROM sentinel", [], |row| row
+                .get::<_, String>(0))
+            .expect("sentinel row"),
+        "kept"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN ('summaries', 'audit_entries')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("log table count"),
+        0
+    );
 }
 
 // ════════════════════════════════════

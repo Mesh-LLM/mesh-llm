@@ -5,6 +5,10 @@ records. It is separate from the public mesh, normal runtime status events,
 and OTLP telemetry. Open the Logs tab in the embedded console to inspect the
 request ledger, then select a row to open its detail view.
 
+Ledger search accepts either a full endpoint ID or the abbreviated form shown
+in the console, such as `9f0c…bb04`, for request caller identities and mesh-peer
+audit subjects.
+
 ## What is retained
 
 The logging service keeps compact request metadata in the node-local
@@ -36,6 +40,62 @@ Artifact content is deliberately conservative:
 The console renders diagnostic text as text. It does not render log content as
 HTML, and it never automatically downloads optional artifact content.
 
+### Caller and mesh-peer context
+
+Request summaries can include `callerEndpointId`, `callerAddr`, and
+`callerPathType`. Mesh operational audits can include `subjectKind`,
+`subjectId`, `remoteAddr`, and `pathType`, together with bounded outcome,
+reason, duration, and numeric-summary fields appropriate to the audit code.
+These fields are optional because local HTTP callers have no mesh endpoint ID,
+not every boundary has a live connection, and attribution is only recorded when
+the relevant caller or peer context was observed.
+
+The request caller vocabulary is `local_http`, `remote_quic_http`, and
+`relay`. Skippy stage connections and streams are transport work without a
+top-level request ID, so they never fabricate request-summary rows. Staged QUIC
+is represented as authenticated QUIC audit evidence, not as a synthetic request
+row. Its authenticated peer and selected direct/relay path appear on the local
+`mesh_quic_inbound_accepted` audit entry.
+
+An authenticated QUIC endpoint identity can be known even when the selected
+path was not observed or its value was not recognized. In that case the request
+summary keeps `callerEndpointId` and omits both `callerAddr` and
+`callerPathType`. It does not infer a direct or relay path. Endpoint-only caller
+identity is not a fourth caller path type.
+
+For a selected direct path, the ledger records `pathType: "direct"` and the
+observed socket address when it is available. For a relay path, it records
+`pathType: "relay"` and omits the address; it never substitutes a relay server
+address for the peer. When the relevant context was not observed, these fields
+remain absent rather than fabricating attribution.
+
+### Exact mesh audit contract
+
+| Code                                   | Outcome                    | Reason                                                                                                                                                                                                                                                        | Numeric summaries                                                            | Duration owner                       |
+| -------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------ |
+| `gossip_direct_peer_promoted`          | `promoted`                 | none                                                                                                                                                                                                                                                          | `direct_peers`                                                               | none                                 |
+| `gossip_peer_removed`                  | `removed`                  | `stale_direct_and_transitive`, `heartbeat_unreachable`, `peer_down_probe_failed`, `closed_connection_no_address`, `reconnect_failed`, `recovered_gossip_failed`, `clean_shutdown`, or `tunnel_open_failed`                                                    | `direct_peers`                                                               | none                                 |
+| `gossip_policy_rejected`               | `rejected`                 | `owner_attestation_required`, `owner_attestation_expired`, `owner_attestation_invalid`, `owner_attestation_node_mismatch`, `owner_revoked`, `owner_attestation_revoked`, `owner_node_revoked`, `owner_attestation_protocol_unsupported`, or `owner_untrusted` | none                                                                         | none                                 |
+| `gossip_incompatible_version_rejected` | `rejected`                 | `protocol_version_unsupported`                                                                                                                                                                                                                                | `peer_gen`, `local_gen`                                                      | none                                 |
+| `mesh_quic_inbound_accepted`           | `accepted` or `readmitted` | none                                                                                                                                                                                                                                                          | negotiated family `protocol_gen` (`4` for the current Skippy stage protocol) | none                                 |
+| `mesh_control_connection_accepted`     | `accepted`                 | none                                                                                                                                                                                                                                                          | `protocol_gen`                                                               | none                                 |
+| `mesh_control_alpn_rejected`           | `rejected`                 | `alpn_unsupported`                                                                                                                                                                                                                                            | none                                                                         | none                                 |
+| `mesh_quic_handler_failed`             | `failed`                   | `capacity` or `internal`                                                                                                                                                                                                                                      | none                                                                         | QUIC handler boundary, when timed    |
+| `mesh_control_handler_failed`          | `failed`                   | `capacity` or `internal`                                                                                                                                                                                                                                      | none                                                                         | control handler boundary, when timed |
+
+`gossip_incompatible_version_rejected` is emitted when a direct peer is
+rejected during admission for an incompatible version. A transitive
+announcement below the local version floor is dropped without emitting this
+event.
+
+`mesh_auto_join_succeeded` and `mesh_auto_join_failed` remain generic,
+context-free entries. Pre-authentication failures may be sparse because peer
+identity is unavailable before authentication completes. Direct paths may
+include the observed address. Relay paths use `pathType: "relay"` and omit the
+address, never substituting the relay address. Records may omit typed context
+when it was not observed. Audit and request records are trusted-local only, with no OTLP export,
+gossip advertisement, or peer replication.
+
 ## Local access model
 
 The log API is a trusted-local management surface. Every `/api/logs/**` route
@@ -43,6 +103,10 @@ requires a loopback caller and a trusted local Host and Origin when those
 headers are present. It is not advertised through mesh gossip and must not be
 put behind a public reverse proxy. Use the local embedded console rather than
 sharing its log routes with other users or nodes.
+
+Audit and request records remain node-local. No OTLP exporter or telemetry
+survey reads them, and no gossip or replication path sends them to peers. The
+bounded export API is also trusted-local and requires the same access checks.
 
 ### Invite tokens are public connection information
 
@@ -84,6 +148,13 @@ refresh. If the dedicated stream cannot stay connected, the console visibly
 enters reconnecting and then bounded polling mode until a stream connection is
 available again. A stale or polling indication means the REST ledger remains
 the authority; it does not mean a request has failed.
+
+SSE `stream_error` uses two stable codes. `invalid_event` means one retained
+entry could not be projected safely. `audit_reconcile_failed` means durable
+audit reconciliation failed. In the audit stream, clients preserve the `a1:`
+cursor, mark audit data stale, hydrate authoritatively through
+`GET /api/logs/audit`, then resume or reconnect. This recovery is fail-open,
+so it does not fail inference or the original request.
 
 ## Retention and maintenance
 
@@ -154,18 +225,29 @@ authoritative transition. The following matrix is the current support contract;
 it is intentionally narrower than every line that may appear in terminal or
 native debug output.
 
-| Owner | Captured now | Displayed in Logs |
-|---|---|---|
-| CLI dispatch | Parsed command start and terminal result, bounded parse failure, and normalized command family | Yes, with command family and outcome |
-| Host runtime | Startup, ready, shutdown start, and authoritative shutdown completion | Yes, with runtime subject context where available |
-| Model lifecycle | Resolve/load start, ready, load failure, unload start, unload completion/failure, and unexpected model exit at existing Rust-owned boundaries | Yes, with model and runtime-instance correlation |
-| Configuration and diagnostics | Existing apply and diagnostics outcomes | Yes |
-| Discovery, mesh, and local serving | Existing join/discovery, connection, readiness, and availability outcomes already owned by Rust | Yes |
-| OpenAI-compatible inference | Admission, route and attempts, stream boundaries, usage, terminal outcome, and optional request/response artifacts | Yes; payload bodies require `redacted_artifacts` and an explicit operator read |
-| Logging operations | Queue/persistence failures, cleanup/delete/export/retry operations, audited reads, and local authorization rejection | Yes; routine management records remain filterable |
+| Owner                              | Captured now                                                                                                                                  | Displayed in Logs                                                              |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| CLI dispatch                       | Parsed command start and terminal result, bounded parse failure, and normalized command family                                                | Yes, with command family and outcome                                           |
+| Host runtime                       | Startup, ready, shutdown start, and authoritative shutdown completion                                                                         | Yes, with runtime subject context where available                              |
+| Model lifecycle                    | Resolve/load start, ready, load failure, unload start, unload completion/failure, and unexpected model exit at existing Rust-owned boundaries | Yes, with model and runtime-instance correlation                               |
+| Configuration and diagnostics      | Existing apply and diagnostics outcomes                                                                                                       | Yes                                                                            |
+| Discovery, mesh, and local serving | Existing join/discovery, connection, readiness, and availability outcomes already owned by Rust                                               | Yes                                                                            |
+| OpenAI-compatible inference        | Admission, route and attempts, stream boundaries, usage, terminal outcome, and optional request/response artifacts                            | Yes; payload bodies require `redacted_artifacts` and an explicit operator read |
+| Logging operations                 | Queue/persistence failures, cleanup/delete/export/retry operations, audited reads, and local authorization rejection                          | Yes; routine management records remain filterable                              |
 
 The request ledger is canonical for inference lifecycle records. Operational
 logging does not emit duplicate audit rows for those same request events.
+
+CLI dispatch audits may include the optional `commandSummary` field. It is a
+bounded projection of the parsed command, not raw argv: positional values,
+paths, URLs, credentials, model and plugin names, identifiers, and reasons are
+represented by `[REDACTED]` or omitted. The summary is limited to 32 tokens and
+256 characters, rejects control text, and preserves only the fixed command
+vocabulary plus explicitly supplied numeric or enum values in their approved
+option contexts. Rows without this field remain valid when attribution was not
+observed. The same contract is enforced when records
+enter host context, durable storage, REST, live SSE, and replay SSE; malformed
+internal or persisted summaries are omitted rather than exposed.
 Streaming response artifacts are assembled only in `redacted_artifacts` mode,
 bounded by the configured artifact limit while frames arrive, and redacted
 before persistence. An incomplete stream or an over-limit stream is recorded
@@ -174,7 +256,7 @@ as explicitly unavailable rather than as a partial payload.
 Lower-level native runtime/model phases, stage and topology lifecycle, session
 and capacity events, tokenization/prefill/decode progress, KV/cache pressure,
 device degradation, and reducer-owned availability remain deferred to the
-future event pipeline in [`.omo/specs/event-system.md`](../.omo/specs/event-system.md).
+future event pipeline.
 Do not change the mesh protocol, Skippy ABI, native callbacks, or low-level
 runtime ownership solely to add logging hooks before that system is implemented.
 
@@ -183,12 +265,14 @@ runtime ownership solely to add logging hooks before that system is implemented.
 - **The Logs tab says unsupported.** The connected host predates the local log
   API or has it disabled. Upgrade or use a host that exposes the service; do
   not point the console at status/runtime SSE as a workaround.
-- **The Logs tab reports a database version mismatch.** Compare the database
-  and runtime schema versions shown in the warning. Update MeshLLM when the
-  database is newer, or restore/update to a build that recognizes an older
-  schema, then restart the node. The incompatible store is left unchanged and
-  inference remains available; repeated retries and manual database edits are
-  not recovery steps.
+- **The Logs tab reports `logging_schema_incompatible`.** The warning includes
+  typed `schema_version` and `supported_schema_version` details. Unknown or
+  incompatible schemas are left unchanged. Logging metadata is unavailable,
+  but inference remains available. Update or restore a compatible build. If
+  you intentionally start new history, stop the node and move or back up
+  `log_store.db`, `log_store.db-wal`, and `log_store.db-shm` together, then
+  restart. Do not edit `PRAGMA user_version`, retry until it changes, or
+  automatically migrate, reset, or delete an unknown schema.
 - **The ledger says reconnecting, polling, gap, or stale.** Check local host
   availability first. The page will hydrate from the request listing after a
   replay gap and uses bounded polling only while the dedicated stream is
@@ -199,11 +283,10 @@ runtime ownership solely to add logging hooks before that system is implemented.
 - **A maintenance operation is rejected.** Reopen the operation, request a
   fresh preview when required, review the scoped count, and provide a valid
   audit reason. Never bypass the preview by editing local log-store files.
-- **Rolling back a host.** Export the permitted, bounded operator view before
-  changing versions. An older binary may show the unsupported state and must
-  not be assumed to understand a newer local log store. Follow the release
-  rollback procedure for the binary and its application state; do not manually
-  copy or edit log database or artifact files.
+- **Rolling back a host.** Restore or update to a compatible build. If the
+  whole application state is moved, stop the node first and move or back up
+  `log_store.db`, `log_store.db-wal`, and `log_store.db-shm` together. Do not
+  edit individual database files or `PRAGMA user_version`.
 
 For the wire and UI contracts behind this guide, see the logging section of
 [the architecture notes](design/DESIGN.md#operator-request-logging) and the

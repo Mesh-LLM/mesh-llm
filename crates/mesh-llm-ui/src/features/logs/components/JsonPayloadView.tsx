@@ -1,26 +1,20 @@
 import { Copy } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { SegmentedControl, type SegmentedControlOption } from '@/components/ui/SegmentedControl'
 import { copyStateLabel } from '@/lib/copyStateLabel'
 import { useClipboardCopy } from '@/lib/useClipboardCopy'
 import { cn } from '@/lib/utils'
 
 export type JsonTokenType = 'key' | 'string' | 'number' | 'boolean' | 'null' | 'punctuation'
+export type JsonFormat = 'pretty' | 'raw'
 
 export type JsonPayloadViewProps = {
   readonly text: string
   readonly prettyText: string
+  readonly format: JsonFormat
   readonly ariaLabel?: string
   readonly className?: string
 }
-
-type JsonFormat = 'pretty' | 'raw'
-
-const JSON_FORMAT_OPTIONS = [
-  { value: 'pretty', label: 'Pretty', selectedTone: 'accent' },
-  { value: 'raw', label: 'Raw', selectedTone: 'accent' }
-] as const satisfies readonly SegmentedControlOption[]
 
 const JSON_TOKEN_PATTERN = /"(?:\\.|[^"\\])*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}[\],:]/g
 
@@ -64,12 +58,13 @@ function jsonTokenNodes(source: string): readonly ReactNode[] {
   return nodes
 }
 
-function isJsonFormat(value: string): value is JsonFormat {
-  return value === 'pretty' || value === 'raw'
-}
-
-export function JsonPayloadView({ text, prettyText, ariaLabel = 'JSON payload', className }: JsonPayloadViewProps) {
-  const [format, setFormat] = useState<JsonFormat>('pretty')
+export function JsonPayloadView({
+  text,
+  prettyText,
+  format,
+  ariaLabel = 'JSON payload',
+  className
+}: JsonPayloadViewProps) {
   const { copyState, copyText } = useClipboardCopy()
   const currentText = format === 'pretty' ? prettyText : text
   const lines = useMemo(() => currentText.split('\n'), [currentText])
@@ -78,17 +73,8 @@ export function JsonPayloadView({ text, prettyText, ariaLabel = 'JSON payload', 
     copyState === 'copied' ? ' JSON payload copied.' : copyState === 'failed' ? ' JSON payload copy failed.' : ''
 
   return (
-    <section aria-label={ariaLabel}>
-      <div className="flex min-w-max items-center justify-between gap-3 border-b border-border-soft bg-panel-strong px-3 py-2">
-        <SegmentedControl
-          ariaLabel="JSON format"
-          onValueChange={(value) => {
-            if (isJsonFormat(value)) setFormat(value)
-          }}
-          options={JSON_FORMAT_OPTIONS}
-          value={format}
-          variant="pill"
-        />
+    <section aria-label={ariaLabel} className="min-w-full w-max">
+      <div className="sticky left-0 flex w-[100cqw] items-center justify-end gap-3 border-b border-border-soft bg-panel-strong px-3 py-2">
         <Button
           aria-label="Copy JSON payload"
           className="ui-control h-7 gap-1.5 px-2 text-[length:var(--density-type-caption)]"

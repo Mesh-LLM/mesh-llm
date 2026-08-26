@@ -29,6 +29,7 @@ describe('DataTable', () => {
     }
     render(<TrackedDataTable columns={columns} data={rows} enablePagination />)
 
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
     await user.click(screen.getByRole('button', { name: /Name/i }))
     await user.click(await screen.findByRole('menuitem', { name: 'Asc' }))
 
@@ -38,15 +39,22 @@ describe('DataTable', () => {
     expect(renders).toBe(settledRenders)
     expect(renders).toBeLessThan(20)
     expect(screen.getByRole('button', { name: 'Name, sorted ascending' })).toBeInTheDocument()
+    expect(screen.getByText('row-10')).toBeInTheDocument()
   })
 
   it('settles after a page change instead of re-rendering in a loop', async () => {
     const user = userEvent.setup()
-    render(<DataTable columns={columns} data={rows} enablePagination />)
+    const { rerender } = render(<DataTable columns={columns} data={rows} enablePagination />)
 
     await user.click(screen.getByRole('button', { name: /Go to next page/ }))
     expect(screen.getByText('row-10')).toBeInTheDocument()
     expect(screen.queryByText('row-0')).not.toBeInTheDocument()
+
+    const refreshedRows = rows.map((row) => ({ ...row, name: `${row.name}-refreshed` }))
+    rerender(<DataTable columns={columns} data={refreshedRows} enablePagination />)
+
+    expect(screen.getByText('row-10-refreshed')).toBeInTheDocument()
+    expect(screen.queryByText('row-0-refreshed')).not.toBeInTheDocument()
   })
 
   it('settles while typing a filter instead of re-rendering in a loop', async () => {
@@ -65,6 +73,141 @@ describe('DataTable', () => {
     await act(async () => vi.advanceTimersByTime(100))
     expect(renders).toBe(settledRenders)
     expect(renders).toBeLessThan(20)
+  })
+
+  it('clamps to the final page when refreshed data shrinks', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<DataTable columns={columns} data={rows} enablePagination />)
+
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    expect(screen.getByText('row-20')).toBeInTheDocument()
+
+    rerender(<DataTable columns={columns} data={rows.slice(0, 15)} enablePagination />)
+
+    expect(screen.getByText('row-10')).toBeInTheDocument()
+    expect(screen.queryByText('row-0')).not.toBeInTheDocument()
+  })
+
+  it('never commits an impossible page while refreshed data shrinks', async () => {
+    const user = userEvent.setup()
+    const snapshots: Array<{ pageIndex: number; pageCount: number; rowCount: number }> = []
+    const { rerender } = render(
+      <DataTable columns={columns} data={rows} enablePagination>
+        {(table) => {
+          snapshots.push({
+            pageIndex: table.state.pagination.pageIndex,
+            pageCount: table.getPageCount(),
+            rowCount: table.getRowModel().rows.length
+          })
+          return null
+        }}
+      </DataTable>
+    )
+
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    rerender(
+      <DataTable columns={columns} data={rows.slice(0, 15)} enablePagination>
+        {(table) => {
+          snapshots.push({
+            pageIndex: table.state.pagination.pageIndex,
+            pageCount: table.getPageCount(),
+            rowCount: table.getRowModel().rows.length
+          })
+          return null
+        }}
+      </DataTable>
+    )
+
+    expect(snapshots).not.toContainEqual({ pageIndex: 2, pageCount: 2, rowCount: 0 })
+    expect(snapshots.at(-1)).toEqual({ pageIndex: 1, pageCount: 2, rowCount: 5 })
+  })
+
+  it('clamps to the final page when filtering reduces the page count', async () => {
+    const user = userEvent.setup()
+    render(<DataTable columns={columns} data={rows} enablePagination filterColumnId="name" />)
+
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    expect(screen.getByText('row-20')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Filter...'), 'row-1')
+
+    expect(screen.getByText('row-19')).toBeInTheDocument()
+    expect(screen.queryByText('row-0')).not.toBeInTheDocument()
+  })
+
+  it('never commits an impossible page while filtering reduces the page count', async () => {
+    const user = userEvent.setup()
+    const snapshots: Array<{ pageIndex: number; pageCount: number; rowCount: number }> = []
+    render(
+      <DataTable columns={columns} data={rows} enablePagination filterColumnId="name">
+        {(table) => {
+          snapshots.push({
+            pageIndex: table.state.pagination.pageIndex,
+            pageCount: table.getPageCount(),
+            rowCount: table.getRowModel().rows.length
+          })
+          return null
+        }}
+      </DataTable>
+    )
+
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    await user.type(screen.getByLabelText('Filter...'), 'row-1')
+
+    expect(snapshots).not.toContainEqual({ pageIndex: 2, pageCount: 2, rowCount: 0 })
+    expect(snapshots.at(-1)).toEqual({ pageIndex: 1, pageCount: 2, rowCount: 1 })
+  })
+
+  it('renders the valid empty page immediately when all data is removed', async () => {
+    const user = userEvent.setup()
+    const snapshots: Array<{ pageIndex: number; pageCount: number; rowCount: number }> = []
+    const { rerender } = render(
+      <DataTable columns={columns} data={rows} enablePagination>
+        {(table) => {
+          snapshots.push({
+            pageIndex: table.state.pagination.pageIndex,
+            pageCount: table.getPageCount(),
+            rowCount: table.getRowModel().rows.length
+          })
+          return null
+        }}
+      </DataTable>
+    )
+
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    rerender(
+      <DataTable columns={columns} data={[]} enablePagination>
+        {(table) => {
+          snapshots.push({
+            pageIndex: table.state.pagination.pageIndex,
+            pageCount: table.getPageCount(),
+            rowCount: table.getRowModel().rows.length
+          })
+          return null
+        }}
+      </DataTable>
+    )
+
+    expect(snapshots.at(-1)).toEqual({ pageIndex: 0, pageCount: 0, rowCount: 0 })
+    expect(screen.getByText('Page 0 of 0')).toBeInTheDocument()
+    expect(screen.getByText('No results.')).toBeInTheDocument()
+  })
+
+  it('clamps the current page when a larger page size reduces page count', async () => {
+    const user = userEvent.setup()
+    render(<DataTable columns={columns} data={rows} enablePagination />)
+
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    await user.click(screen.getByRole('button', { name: /Go to next page/ }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Rows per page' }), '25')
+
+    expect(screen.getByText('Page 1 of 1')).toBeInTheDocument()
+    expect(screen.getByText('row-0')).toBeInTheDocument()
   })
 
   it('reflects column visibility changes when the Columns menu is reopened', async () => {

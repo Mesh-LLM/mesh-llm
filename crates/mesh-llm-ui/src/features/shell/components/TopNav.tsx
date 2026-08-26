@@ -169,8 +169,8 @@ function PrimaryTabs({
   if (!supportsNavigationMenu) {
     return (
       <div className={cn('min-w-0', className)}>
-        <div className="md:hidden">{compactTabs}</div>
-        <nav aria-label="Primary" className="hidden min-w-0 flex-nowrap items-center gap-[var(--nav-tab-gap)] md:flex">
+        <div className="lg:hidden">{compactTabs}</div>
+        <nav aria-label="Primary" className="hidden min-w-0 flex-nowrap items-center gap-[var(--nav-tab-gap)] lg:flex">
           {visibleTabs.map((item) => {
             const active = tab === item.value
             const href = tabHrefs?.[item.value] ?? item.href
@@ -209,8 +209,8 @@ function PrimaryTabs({
 
   return (
     <div className={cn('min-w-0', className)}>
-      <div className="md:hidden">{compactTabs}</div>
-      <NavigationMenu.Root aria-label="Primary" className="hidden min-w-0 items-center md:flex">
+      <div className="lg:hidden">{compactTabs}</div>
+      <NavigationMenu.Root aria-label="Primary" className="hidden min-w-0 items-center lg:flex">
         <NavigationMenu.List className="m-0 flex min-w-0 flex-nowrap items-center gap-[var(--nav-tab-gap)] p-0">
           {visibleTabs.map((item) => {
             const active = tab === item.value
@@ -388,7 +388,7 @@ function ApiStatusChip({
         <button
           {...triggerProps}
           aria-label="API target instructions"
-          className="ui-control hidden h-[var(--nav-action-size)] min-w-0 items-center gap-[var(--nav-chip-gap)] rounded-[var(--radius)] border px-[var(--nav-chip-pad-x)] py-[var(--nav-chip-pad-y)] text-fg-dim md:flex"
+          className="ui-control hidden h-[var(--nav-action-size)] min-w-0 items-center gap-[var(--nav-chip-gap)] rounded-[var(--radius)] border px-[var(--nav-chip-pad-x)] py-[var(--nav-chip-pad-y)] text-fg-dim lg:flex"
           type="button"
         >
           <span className={cn('size-[var(--nav-chip-dot-size)] shrink-0 rounded-full', dotClass)} aria-hidden="true" />

@@ -34,6 +34,12 @@ describe('logsKeys.ledger', () => {
 
     expect(logsKeys.ledger(filteredQuery, 'live')).not.toEqual(logsKeys.ledger(REQUEST_QUERY, 'live'))
   })
+
+  it('includes the ledger route exclusions in the stable request cache key', () => {
+    expect(logsKeys.ledger(REQUEST_QUERY, 'live')).toContainEqual(
+      expect.objectContaining({ excludeRoute: 'models', excludeRoutePrefix: 'management_' })
+    )
+  })
 })
 
 describe('loadCompleteLedger', () => {
@@ -60,6 +66,8 @@ describe('loadCompleteLedger', () => {
         from: '2026-08-01T00:00:00Z',
         to: '2026-08-02T00:00:00Z',
         model: 'Qwen3',
+        excludeRoute: 'models',
+        excludeRoutePrefix: 'management_',
         cursor: undefined,
         limit: LEDGER_PAGE_SIZE
       },
@@ -71,6 +79,8 @@ describe('loadCompleteLedger', () => {
         from: '2026-08-01T00:00:00Z',
         to: '2026-08-02T00:00:00Z',
         model: 'Qwen3',
+        excludeRoute: 'models',
+        excludeRoutePrefix: 'management_',
         cursor: LogPageCursor.parse('page-2'),
         limit: LEDGER_PAGE_SIZE
       },
@@ -98,6 +108,9 @@ describe('loadCompleteLedger', () => {
     })
     if (result.state === 'supported') expect(result.value.nextCursor?.toString()).toBe('10')
     expect(listRequests).toHaveBeenCalledTimes(10)
+    for (const [query] of listRequests.mock.calls) {
+      expect(query).toMatchObject({ excludeRoute: 'models', excludeRoutePrefix: 'management_' })
+    }
   })
 
   it('stops safely when an empty page advertises a continuation cursor', async () => {

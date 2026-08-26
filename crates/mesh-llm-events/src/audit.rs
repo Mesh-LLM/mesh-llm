@@ -16,6 +16,7 @@ use uuid::Uuid;
 mod sanitization;
 
 use sanitization::redact_secrets;
+pub use sanitization::{SanitizedAuditDetailJson, SanitizedAuditScalar};
 
 /// Audit log format
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]

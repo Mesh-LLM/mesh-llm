@@ -9,6 +9,34 @@ const options = [
 ]
 
 describe('SegmentedControl', () => {
+  it.each(['buttons', 'pill'] as const)('uses a semantic focus ring for the %s variant', (variant) => {
+    // Given
+    render(
+      <SegmentedControl
+        ariaLabel="Test segmented"
+        name="test-segmented"
+        onValueChange={vi.fn()}
+        options={options}
+        value="on"
+        variant={variant}
+      />
+    )
+
+    // When
+    const selectedItem = screen.getByRole('radio', { name: 'On' })
+
+    // Then
+    expect(selectedItem).toHaveClass(
+      'focus-visible:outline-none',
+      'focus-visible:!ring-2',
+      'focus-visible:!ring-accent-contrast',
+      'focus-visible:!ring-offset-1',
+      'focus-visible:!ring-offset-background'
+    )
+    expect(selectedItem).not.toHaveClass('focus-visible:!ring-accent')
+    expect(selectedItem).not.toHaveClass('focus-visible:outline', 'focus-visible:outline-2')
+  })
+
   it('renders radio group with the given options', () => {
     render(
       <SegmentedControl
