@@ -378,7 +378,7 @@ fn runtime_slice_plan_input(
     participants: &[SplitParticipant],
     resources: SplitTopologyResourceInputs,
 ) -> SplitTopologyPlanInput {
-    SplitTopologyPlanInput {
+    let mut plan_input = SplitTopologyPlanInput {
         native_context_length: resources.native_context_length,
         layer_count: package.layer_count,
         model_weight_bytes: package.source_model_bytes,
@@ -406,7 +406,39 @@ fn runtime_slice_plan_input(
         // Activation frame at the package's wire dtype (f16 default): one
         // activation_width vector of two-byte elements per token hop.
         activation_frame_bytes: u64::from(package.activation_width) * 2,
+    };
+
+    if perf_aware_placement_disabled() {
+        // Escape hatch: strip performance signals and edge data so the
+        // planner reproduces capacity-only placement exactly.
+        for node in &mut plan_input.nodes {
+            node.sustained_mem_bandwidth_mib_per_s = None;
+            node.sustained_compute_gflop_per_s = None;
+        }
+        plan_input.edges = Vec::new();
+        plan_input.activation_frame_bytes = 0;
     }
+
+    plan_input
+}
+
+/// Whether performance-aware placement is disabled via the
+/// `MESH_TOPOLOGY_PERF_AWARE` escape hatch. Any of `0`, `false`, `off`, or
+/// `no` (case-insensitive) forces capacity-only placement and the legacy
+/// network estimate; unset or any other value keeps performance-aware
+/// behavior. Checked per planning attempt so operators can toggle without
+/// restarting a node's other state.
+fn perf_aware_placement_disabled() -> bool {
+    perf_aware_disabled_from_value(std::env::var("MESH_TOPOLOGY_PERF_AWARE").ok().as_deref())
+}
+
+fn perf_aware_disabled_from_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        )
+    })
 }
 
 /// Directed edge measurements between participants: self's direct RTT to
@@ -418,12 +450,7 @@ fn participant_edges(participants: &[SplitParticipant]) -> Vec<SplitTopologyPlan
     let mut edges = Vec::new();
     for (index, source) in participants.iter().enumerate() {
         for target in participants.iter().skip(index + 1) {
-            let Some(rtt_ms) = source
-                .rtt_ms
-                .into_iter()
-                .chain(target.rtt_ms.into_iter())
-                .min()
-            else {
+            let Some(rtt_ms) = source.rtt_ms.into_iter().chain(target.rtt_ms).min() else {
                 continue;
             };
             let (forward, reverse) = (
@@ -1041,5 +1068,29 @@ mod tests {
         assert!(reason.contains("participants ["));
         assert!(reason.contains("max_layers=0"));
         assert!(reason.contains("missing_model_source"));
+    }
+
+    #[test]
+    fn perf_aware_kill_switch_recognizes_disable_values() {
+        // Unset keeps perf-aware placement (default on).
+        assert!(!perf_aware_disabled_from_value(None));
+        // Exact disable spellings.
+        assert!(perf_aware_disabled_from_value(Some("0")));
+        assert!(perf_aware_disabled_from_value(Some("false")));
+        assert!(perf_aware_disabled_from_value(Some("off")));
+        assert!(perf_aware_disabled_from_value(Some("no")));
+        // Case-insensitive and whitespace-tolerant.
+        assert!(perf_aware_disabled_from_value(Some("OFF")));
+        assert!(perf_aware_disabled_from_value(Some("No")));
+        assert!(perf_aware_disabled_from_value(Some("  off  ")));
+        // Anything else — including enable spellings and garbage — keeps
+        // perf-aware placement; a typo'd value must not silently disable
+        // the feature.
+        assert!(!perf_aware_disabled_from_value(Some("1")));
+        assert!(!perf_aware_disabled_from_value(Some("true")));
+        assert!(!perf_aware_disabled_from_value(Some("on")));
+        assert!(!perf_aware_disabled_from_value(Some("yes")));
+        assert!(!perf_aware_disabled_from_value(Some("perf")));
+        assert!(!perf_aware_disabled_from_value(Some("")));
     }
 }
