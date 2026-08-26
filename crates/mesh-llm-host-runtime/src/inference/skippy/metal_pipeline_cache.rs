@@ -40,5 +40,6 @@ pub(crate) fn configure_metal_pipeline_cache() {
     // loaded (they read the variable at Metal backend initialization). The
     // shipped binary enforces this by calling from synchronous `main()`
     // bootstrap.
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(GGML_METAL_PIPELINE_CACHE_DIR, &dir) };
 }
