@@ -116,10 +116,10 @@ runtime-family coverage and reduce timing variance rather than exercise a
 third radix implementation.
 
 Cross-family graph, tensor-layout, dtype, parity, and hybrid-boundary coverage
-is supplied separately by the tiered family battery in
+is supplied separately by the policy-driven family battery in
 [PR #1436](https://github.com/Mesh-LLM/mesh-llm/pull/1436). Its checked-in
-manifests expand to 104 tier-1 lanes and 13 tier-2 lanes across dense, MLA, MoE,
-hybrid, and recurrent families; hybrid/recurrent rows sweep planner cut offsets
+policy currently certifies 32 pinned dense, MLA, MoE, hybrid, and recurrent
+family artifacts; hybrid/recurrent rows sweep planner cut offsets
 so first-layer-only detection defects cannot hide. That battery complements the
 cache-specific OLD/NEW measurements here rather than replacing them.
 

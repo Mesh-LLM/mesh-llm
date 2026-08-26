@@ -11,6 +11,7 @@ on:
       - "ci/llama-canary/**"
       - "scripts/family-certify.sh"
       - "scripts/skippy-family-battery.sh"
+      - "scripts/plan-family-battery.py"
       - "scripts/lib/family-outcome.sh"
       - "scripts/run-command-with-timeout.py"
       - "scripts/llama-canary-agent-repair.sh"
@@ -128,6 +129,22 @@ jobs:
             echo "certify=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Plan and verify family certification cache
+        id: family_plan
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
+        env:
+          FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          plan="target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
+          python3 scripts/plan-family-battery.py \
+            --manifest ci/llama-canary/family-certified.json \
+            --shard-count 1 \
+            --check-cache \
+            --cache-root "$HF_CACHE" \
+            --output "$plan" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Build patched llama.cpp ABI
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
         # The family-certify service can itself be launched under Rosetta.
@@ -168,7 +185,7 @@ jobs:
         timeout-minutes: 720
         env:
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: scripts/skippy-family-battery.sh --skip-build
+        run: scripts/skippy-family-battery.sh --skip-build --plan "${{ steps.family_plan.outputs.plan_path }}"
 
       - name: Upload supported-families battery evidence
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' }}
@@ -220,7 +237,7 @@ jobs:
           {
             echo "## llama.cpp upstream pin update"
             echo
-            echo "Pushed the validated upstream pin to \`main\` after the tiered family battery passed."
+            echo "Pushed the validated upstream pin to \`main\` after the policy-driven family battery passed."
             echo
             cat /tmp/llama-upstream-pr.md
           } >> "$GITHUB_STEP_SUMMARY"
@@ -242,7 +259,7 @@ jobs:
           {
             echo "## llama.cpp upstream canary (report-only, queue_ref=$QUEUE_REF)"
             echo
-            echo "The patch queue on \`$QUEUE_REF\` passed the tiered family battery against the new upstream. No pin was pushed: credentialed writes are restricted to \`main\` checkouts."
+            echo "The patch queue on \`$QUEUE_REF\` passed the policy-driven family battery against the new upstream. No pin was pushed: credentialed writes are restricted to \`main\` checkouts."
             echo
             cat /tmp/llama-upstream-pr.md
           } >> "$GITHUB_STEP_SUMMARY"

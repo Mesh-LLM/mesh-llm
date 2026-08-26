@@ -15,14 +15,22 @@ set -euo pipefail
 # to mutate the shared NFS cache. Local runs without HF_CACHE may download into
 # their normal user cache.
 #
+# Policy is owned by the versioned JSON manifest and resolved by
+# scripts/plan-family-battery.py. The planner enforces the four-lane minimum,
+# exact artifact revisions, and deterministic shards before this script loads
+# any model.
+#
 # Usage:
-#   scripts/skippy-family-battery.sh [--manifest PATH] [--families CSV]
+#   scripts/skippy-family-battery.sh [--manifest PATH] [--plan PATH]
+#     [--families CSV] [--shard-index N]
 #     [--preflight-only] [--skip-build] [--dry-run]
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="${FAMILY_BATTERY_BIN_DIR:-$ROOT/target/debug}"
 
-MANIFEST="$ROOT/ci/llama-canary/family-certified.tsv"
+MANIFEST="$ROOT/ci/llama-canary/family-certified.json"
+POLICY_PLAN=""
+SHARD_INDEX=""
 SKIP_BUILD=0
 DRY_RUN=0
 PREFLIGHT_ONLY=0
@@ -47,6 +55,8 @@ RESOLVED_MANIFEST="$ARTIFACT_DIR/resolved-models.tsv"
 SUMMARY_TSV="$ARTIFACT_DIR/summary.tsv"
 SUMMARY_MD="$ARTIFACT_DIR/summary.md"
 SPECULATIVE_CORPUS="$ROOT/crates/skippy-bench/corpora/speculative_coding_prompts.jsonl"
+PLANNER="$ROOT/scripts/plan-family-battery.py"
+POLICY_PLAN_COPY="$ARTIFACT_DIR/policy-plan.json"
 
 usage() {
   cat >&2 <<'EOF'
@@ -54,8 +64,10 @@ usage: scripts/skippy-family-battery.sh [options]
 
 options:
   --manifest PATH           certification manifest;
-                            default: ci/llama-canary/family-certified.tsv
+                            default: ci/llama-canary/family-certified.json
+  --plan PATH               consume a previously validated planner result
   --families CSV            run only these exact family labels
+  --shard-index N           run only one deterministic shard from the plan
   --preflight-only          resolve, pin, scan, and probe models without certification
   --skip-build              skip the one-time certification binary build;
                             required binaries must already exist
@@ -67,7 +79,9 @@ EOF
 while (( $# > 0 )); do
   case "$1" in
     --manifest) MANIFEST="$2"; shift ;;
+    --plan) POLICY_PLAN="$2"; shift ;;
     --families) FAMILY_FILTER="$2"; shift ;;
+    --shard-index) SHARD_INDEX="$2"; shift ;;
     --preflight-only) PREFLIGHT_ONLY=1 ;;
     --skip-build) SKIP_BUILD=1 ;;
     --dry-run) DRY_RUN=1 ;;
@@ -79,6 +93,14 @@ done
 
 if [[ ! -f "$MANIFEST" ]]; then
   echo "error: manifest not found: $MANIFEST" >&2
+  exit 1
+fi
+if [[ -n "$POLICY_PLAN" && -n "$FAMILY_FILTER" ]]; then
+  echo "--families cannot be combined with an existing --plan" >&2
+  exit 1
+fi
+if [[ -n "$SHARD_INDEX" && ! "$SHARD_INDEX" =~ ^[0-9]+$ ]]; then
+  echo "--shard-index must be a non-negative integer" >&2
   exit 1
 fi
 
@@ -101,6 +123,10 @@ require_cmd() {
 require_cmd hf
 require_cmd jq
 require_cmd python3
+if [[ ! -x "$PLANNER" ]]; then
+  echo "family battery planner is not executable: $PLANNER" >&2
+  exit 1
+fi
 
 for value in \
   "$SWEEP_MAX_CUTS" \
@@ -134,6 +160,60 @@ mkdir -p "$MODEL_SCAN_DIR" "$PREFLIGHT_DIR" "$CERT_DIR"
 printf 'family\tmodel_id\tsource_revision\tmodel_path\tmtp_layers\n' > "$MTP_CORPUS_TSV"
 printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|startup_timeout_secs\n' > "$RESOLVED_MANIFEST"
 
+prepare_policy_plan() {
+  local plan_args=(
+    "$PLANNER"
+    --manifest "$MANIFEST"
+    --output "$POLICY_PLAN_COPY"
+  )
+  if [[ -n "$POLICY_PLAN" ]]; then
+    if [[ ! -f "$POLICY_PLAN" ]]; then
+      echo "policy plan not found: $POLICY_PLAN" >&2
+      return 1
+    fi
+    if [[ "$POLICY_PLAN" != "$POLICY_PLAN_COPY" ]]; then
+      cp "$POLICY_PLAN" "$POLICY_PLAN_COPY"
+    fi
+  else
+    if [[ -n "$FAMILY_FILTER" ]]; then
+      plan_args+=(--families "$FAMILY_FILTER")
+    fi
+    # The persistent family runner is offline and read-only. Validate every
+    # exact snapshot/file before native compilation when the battery is run
+    # directly; the workflow performs the same gate and passes its plan in.
+    if [[ -n "${HF_CACHE:-}" ]]; then
+      plan_args+=(--check-cache --cache-root "$HF_CACHE")
+    fi
+    "${plan_args[@]}"
+  fi
+
+  python3 - "$MANIFEST" "$POLICY_PLAN_COPY" "$SHARD_INDEX" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+manifest_path, plan_path, shard_index = sys.argv[1:]
+manifest_sha = hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest()
+plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
+core = ["single-step", "chain", "dtype-matrix", "state-handoff"]
+if plan.get("schema_version") != 1:
+    raise SystemExit("policy plan has an unsupported schema_version")
+if plan.get("manifest_sha256") != manifest_sha:
+    raise SystemExit("policy plan does not match the checked-in manifest bytes")
+if plan.get("required_certification_lanes") != core:
+    raise SystemExit("policy plan does not preserve the four-lane certification contract")
+if not plan.get("selected_models"):
+    raise SystemExit("policy plan selected no models")
+if shard_index:
+    requested = int(shard_index)
+    if not any(shard.get("shard_index") == requested for shard in plan.get("shards", [])):
+        raise SystemExit(f"policy plan has no shard index {requested}")
+PY
+}
+
+prepare_policy_plan
+
 if [[ ! -s "$SPECULATIVE_CORPUS" ]] || ! jq -e -s '
     length > 0 and all(.[]; ((.prompt // .text) | type) == "string")
   ' "$SPECULATIVE_CORPUS" >/dev/null; then
@@ -150,11 +230,6 @@ PREFLIGHT_SPEC_TARGET=""
 PREFLIGHT_SPEC_DRAFT=""
 PREFLIGHT_SPEC_SIZE=0
 PREFLIGHT_FIRST_TARGET=""
-
-family_selected() {
-  local family="$1"
-  [[ -z "$FAMILY_FILTER" || ",$FAMILY_FILTER," == *",$family,"* ]]
-}
 
 snapshot_revision_from_path() {
   python3 - "$1" <<'PY'
@@ -186,7 +261,7 @@ record_preflight_outcome() {
     >> "$RESULTS_JSONL"
 }
 
-# resolve_model REPO FILE -> prints a local path. On the family-certify runner,
+# resolve_model REPO FILE [REVISION] -> prints a local path. On the family-certify runner,
 # HF_HUB_OFFLINE=1 makes a missing pre-warmed artifact a hard, read-only miss.
 # Local runs without HF_CACHE retain the normal hf download behavior.
 resolve_model() {
@@ -213,19 +288,18 @@ resolve_model() {
   printf '%s\n' "$out"
 }
 
-# Resolve through the cache's mutable ref once, capture the immutable snapshot
-# SHA, then resolve the file again by that SHA. All certification commands use
-# the returned snapshot path and the exact revision is written to artifacts.
+# Resolve only the immutable revision checked into the policy manifest. The
+# cheap workflow planner has already verified that this exact cache path exists;
+# `hf download --revision` remains the canonical cache lookup interface.
 resolve_pinned_model() {
-  local repo="$1" file="$2"
-  local initial revision pinned
-  initial="$(resolve_model "$repo" "$file")"
-  if [[ -z "$initial" || ! -f "$initial" ]]; then
-    return 1
-  fi
-  revision="$(snapshot_revision_from_path "$initial")" || return 1
+  local repo="$1" file="$2" revision="$3"
+  local pinned resolved_revision
   pinned="$(resolve_model "$repo" "$file" "$revision")"
   if [[ -z "$pinned" || ! -f "$pinned" ]]; then
+    return 1
+  fi
+  resolved_revision="$(snapshot_revision_from_path "$pinned")" || return 1
+  if [[ "$resolved_revision" != "$revision" ]]; then
     return 1
   fi
   printf '%s|%s\n' "$pinned" "$revision"
@@ -288,6 +362,7 @@ scan_model() {
   MODEL_HAS_MTP=0
   MODEL_SIZE_BYTES=0
   MODEL_MTP_LAYERS=""
+  MODEL_LAYER_COUNT=0
 
   if (( DRY_RUN == 1 )); then
     echo "$BIN_DIR/skippy-model-package inspect '$target' > '$scan_json'"
@@ -306,6 +381,7 @@ scan_model() {
   fi
 
   MODEL_SIZE_BYTES="$(jq '[.tensors[].byte_size] | add // 0' "$scan_json")"
+  MODEL_LAYER_COUNT="$(jq '[.tensors[] | select(.layer_index != null) | .layer_index] | unique | length' "$scan_json")"
   MODEL_MTP_LAYERS="$(jq -r '
     [.tensors[]
       | select(.layer_index != null)
@@ -498,33 +574,30 @@ run_certify() {
 }
 
 preflight_manifest() {
-  local manifest="$1"
-  [[ -f "$manifest" ]] || { echo "missing manifest: $manifest" >&2; exit 1; }
+  local plan="$1"
+  [[ -f "$plan" ]] || { echo "missing policy plan: $plan" >&2; exit 1; }
 
-  while IFS='|' read -r family repo file selector sweep_period layer_end notes draft_repo draft_file; do
-    [[ -z "$family" || "$family" == \#* ]] && continue
-    family_selected "$family" || continue
-    if [[ -z "$family" || -z "$repo" || -z "$file" || -z "$sweep_period" || -z "$layer_end" ]]; then
-      echo "malformed row in $manifest: $family|$repo|$file" >&2
+  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end notes draft_repo draft_revision draft_file expected_model_bytes expected_mtp_layers lane_csv speculative_policy; do
+    if [[ "$profile" != "full" ]]; then
+      echo "the local monolithic battery cannot execute profile $profile for $family" >&2
       exit 1
     fi
-    if { [[ -n "$draft_repo" ]] && [[ -z "$draft_file" ]]; } \
-      || { [[ -z "$draft_repo" ]] && [[ -n "$draft_file" ]]; }; then
-      echo "draft_repo and draft_file must either both be set or both be empty: $family" >&2
+    if [[ "$lane_csv" != "single-step,chain,dtype-matrix,state-handoff" ]]; then
+      echo "certified family $family does not preserve the four-lane contract" >&2
       exit 1
     fi
 
-    local target source_revision resolved model_id
+    local target resolved model_id
     model_id="$repo:$selector"
     if (( DRY_RUN == 0 )); then
-      if ! resolved="$(resolve_pinned_model "$repo" "$file")"; then
+      if ! resolved="$(resolve_pinned_model "$repo" "$file" "$source_revision")"; then
         echo "failed to resolve and pin $repo/$file from the HF cache or hub" >&2
         FAILURES+=("$family(model-pin)")
         PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
-        record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "harness" "failed to resolve an immutable cached snapshot for $repo/$file"
+        record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "harness" "failed to resolve checked-in immutable snapshot $source_revision for $repo/$file"
         continue
       fi
-      IFS='|' read -r target source_revision <<< "$resolved"
+      IFS='|' read -r target _ <<< "$resolved"
       if [[ -z "$PREFLIGHT_FIRST_TARGET" ]]; then
         PREFLIGHT_FIRST_TARGET="$target"
       fi
@@ -536,17 +609,44 @@ preflight_manifest() {
       PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
       continue
     fi
+    if (( DRY_RUN == 0 )); then
+      local actual_mtp_layers=0
+      if [[ -n "$MODEL_MTP_LAYERS" ]]; then
+        IFS=',' read -r -a mtp_layer_parts <<< "$MODEL_MTP_LAYERS"
+        actual_mtp_layers="${#mtp_layer_parts[@]}"
+      fi
+      if (( MODEL_LAYER_COUNT != layer_end )); then
+        echo "policy/runtime layer mismatch for $family: planned $layer_end, scanned $MODEL_LAYER_COUNT" >&2
+        FAILURES+=("$family(layer-range)")
+        PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+        record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "model-invalid" "planned runtime range $layer_end does not match scanned layer count $MODEL_LAYER_COUNT"
+        continue
+      fi
+      if (( actual_mtp_layers != expected_mtp_layers )); then
+        echo "policy/MTP mismatch for $family: planned $expected_mtp_layers, scanned $actual_mtp_layers" >&2
+        FAILURES+=("$family(mtp-policy)")
+        PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+        record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "model-invalid" "planned MTP layer count $expected_mtp_layers does not match scanned complete-head count $actual_mtp_layers"
+        continue
+      fi
+      if (( MODEL_SIZE_BYTES != expected_model_bytes )); then
+        echo "policy/model-size mismatch for $family: planned $expected_model_bytes, scanned $MODEL_SIZE_BYTES" >&2
+        FAILURES+=("$family(model-size)")
+        PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+        record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "model-invalid" "planned tensor bytes $expected_model_bytes do not match immutable artifact scan $MODEL_SIZE_BYTES"
+        continue
+      fi
+    fi
 
     # Only models with a complete native MTP/NextN tensor head join the
     # speculative cohort. Non-MTP models keep all core correctness and state
     # lanes, but do not run the unrelated self-draft benchmark.
-    local draft="" draft_revision=""
-    if (( MODEL_HAS_MTP == 1 )); then
+    local draft=""
+    if (( MODEL_HAS_MTP == 1 )) && [[ "$speculative_policy" == "mtp-if-present" ]]; then
       draft="$target"
-      draft_revision="$source_revision"
       if [[ -n "$draft_repo" && -n "$draft_file" ]]; then
         if (( DRY_RUN == 0 )); then
-          if ! resolved="$(resolve_pinned_model "$draft_repo" "$draft_file")"; then
+          if ! resolved="$(resolve_pinned_model "$draft_repo" "$draft_file" "$draft_revision")"; then
             echo "failed to resolve and pin draft $draft_repo/$draft_file" >&2
             FAILURES+=("$family(draft-pin)")
             PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
@@ -556,11 +656,11 @@ preflight_manifest() {
           IFS='|' read -r draft draft_revision <<< "$resolved"
         else
           draft="<hf-cache>/$draft_repo/$draft_file"
-          draft_revision="dry-run"
         fi
       else
         draft_repo="$repo"
         draft_file="$file"
+        draft_revision="$source_revision"
       fi
       if (( DRY_RUN == 0 )) && (( PREFLIGHT_SPEC_SIZE == 0 || MODEL_SIZE_BYTES < PREFLIGHT_SPEC_SIZE )); then
         PREFLIGHT_SPEC_FAMILY="$family"
@@ -579,7 +679,38 @@ preflight_manifest() {
     if (( DRY_RUN == 0 )); then
       record_preflight_outcome "model-preflight" "$family" "$model_id" "pass" "pass" "resolved immutable snapshot $source_revision; tensor scan complete"
     fi
-  done < <(grep -v '^[[:space:]]*#' "$manifest")
+  done < <(
+    jq -r --arg shard_index "$SHARD_INDEX" '
+      (if $shard_index == "" then
+         [.selected_models[].family]
+       else
+         [.shards[]
+          | select(.shard_index == ($shard_index | tonumber))
+          | .families[]]
+       end) as $selected
+      | .selected_models[]
+      | select(.family as $family | $selected | index($family))
+      | [
+          .family,
+          .profile,
+          .artifact.repo,
+          .artifact.revision,
+          .artifact.files[0],
+          .artifact.selector,
+          .execution.boundary_sweep_period,
+          .execution.layer_end,
+          .notes,
+          (.draft_artifact.repo // ""),
+          (.draft_artifact.revision // ""),
+          (.draft_artifact.files[0] // ""),
+          .resources.estimated_model_bytes,
+          .execution.mtp_layers,
+          (.certification_lanes | join(",")),
+          .execution.speculative_policy
+        ]
+      | join("|")
+    ' "$plan"
+  )
 
   local resolved_count=$(( $(wc -l < "$RESOLVED_MANIFEST") - 1 ))
   if (( resolved_count == 0 )); then
@@ -606,7 +737,7 @@ preflight_manifest() {
       return 1
     fi
     record_preflight_outcome "speculative-preflight" "$PREFLIGHT_SPEC_FAMILY" "mtp-corpus" "pass" "pass" "checked-in corpus consumed by one-token MTP speculative smoke"
-  elif [[ -z "$FAMILY_FILTER" ]]; then
+  elif [[ -z "$FAMILY_FILTER" && -z "$SHARD_INDEX" ]]; then
     record_preflight_outcome "speculative-preflight" "battery" "mtp-corpus" "fail" "harness" "full manifest contained no model with a complete native MTP/NextN tensor head"
     PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
     return 1
@@ -641,7 +772,7 @@ run_resolved_manifest() {
 }
 
 build_certification_binaries
-if ! preflight_manifest "$MANIFEST"; then
+if ! preflight_manifest "$POLICY_PLAN_COPY"; then
   echo "family battery preflight failed; no certification lane was started" >&2
 elif (( PREFLIGHT_ONLY == 0 )); then
   run_resolved_manifest "$RESOLVED_MANIFEST"
@@ -658,6 +789,10 @@ if (( DRY_RUN == 0 )); then
     echo "# Supported-families battery"
     echo
     echo "- Run ID: \`$BATTERY_RUN_ID\`"
+    echo "- Policy plan: \`$POLICY_PLAN_COPY\`"
+    if [[ -n "$SHARD_INDEX" ]]; then
+      echo "- Policy shard: \`$SHARD_INDEX\`"
+    fi
     echo "- Certifications: $TOTAL"
     echo "- MTP models: $(( $(wc -l < "$MTP_CORPUS_TSV") - 1 ))"
     echo "- Preflight failures: $PREFLIGHT_FAILURE_COUNT"
@@ -675,6 +810,7 @@ if (( DRY_RUN == 0 )); then
     echo "- Lane summary: \`$SUMMARY_TSV\`"
     echo "- MTP corpus: \`$MTP_CORPUS_TSV\`"
     echo "- Immutable resolved model manifest: \`$RESOLVED_MANIFEST\`"
+    echo "- Validated policy plan: \`$POLICY_PLAN_COPY\`"
     echo "- Environment preflight: \`$PREFLIGHT_DIR/environment.json\`"
     echo "- Certifications and logs: \`$CERT_DIR\`"
   } > "$SUMMARY_MD"

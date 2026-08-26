@@ -33,7 +33,14 @@ Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
 `llama-upstream-canary.yml` runs trusted default-branch content only on the
 persistent self-hosted `family-certify` runner group (tools come from the
-runner image; no GitHub Actions model caching). The runner's `.env` exports
+runner image; no GitHub Actions model caching). Before native compilation,
+`scripts/plan-family-battery.py` validates the versioned JSON family policy,
+the mandatory four-lane contract for every certified profile, and every exact
+artifact revision/file in the immutable local cache. It reads only the GGUF
+metadata header to require `*.block_count` to equal the planned runtime range
+before compilation. It emits deterministic
+bounded GitHub matrix shards; the current one-runner topology consumes one
+all-family shard while retaining the plan as evidence. The runner's `.env` exports
 `HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
 read-only; the cache is populated by a two-stage prewarm that downloads on
@@ -43,8 +50,10 @@ them once itself unless `--skip-build` is selected, in which case it verifies
 that every binary already exists. A manual dispatch may set `force_certify` to
 run build, smoke, and the full family battery when the upstream SHA is
 unchanged. Before any certification starts, every selected GGUF is resolved
-through the cached ref and then again through its immutable snapshot SHA. The
-preflight records the revisions, verifies all shard/tensor scans, disk
+directly by the immutable snapshot SHA checked into
+`ci/llama-canary/family-certified.json`. The runtime preflight records the
+revisions, verifies all shard/tensor scans and declared runtime/MTP layer
+counts/model bytes, disk
 headroom and certification ports, and runs one cheap MTP speculative-corpus
 smoke. Only GGUFs with a complete native MTP/NextN tensor head across all
 shards run `llama-spec-bench`; those rows also require native MTP draft

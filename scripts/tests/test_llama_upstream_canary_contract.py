@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import stat
@@ -11,8 +12,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "llama-upstream-canary.yml"
 BATTERY = ROOT / "scripts" / "skippy-family-battery.sh"
+BATTERY_PLANNER = ROOT / "scripts" / "plan-family-battery.py"
 SMOKE = ROOT / "scripts" / "skippy-ci-smoke.sh"
-FAMILY_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.tsv"
+FAMILY_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
 FAMILY_CERTIFY = ROOT / "scripts" / "family-certify.sh"
 FAMILY_OUTCOME = ROOT / "scripts" / "lib" / "family-outcome.sh"
 TIMEOUT_RUNNER = ROOT / "scripts" / "run-command-with-timeout.py"
@@ -54,6 +56,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('- "scripts/family-certify.sh"', workflow)
         self.assertIn('- "scripts/lib/family-outcome.sh"', workflow)
         self.assertIn('- "scripts/run-command-with-timeout.py"', workflow)
+        self.assertIn('- "scripts/plan-family-battery.py"', workflow)
         self.assertIn("force_certify:", workflow)
         self.assertIn("FORCE_CERTIFY:", workflow)
         self.assertIn(
@@ -78,6 +81,13 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             native_build,
         )
 
+        family_plan = _step_block(workflow, "Plan and verify family certification cache")
+        self.assertIn("python3 scripts/plan-family-battery.py", family_plan)
+        self.assertIn("--check-cache", family_plan)
+        self.assertIn('--cache-root "$HF_CACHE"', family_plan)
+        self.assertIn('--github-output "$GITHUB_OUTPUT"', family_plan)
+        self.assertLess(workflow.index(family_plan), workflow.index(native_build))
+
         build = _step_block(workflow, "Build stage runtime crates")
         self.assertIn("cargo build", build)
         self.assertIn("steps.sha.outputs.certify == 'true'", build)
@@ -97,7 +107,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         battery = _step_block(
             workflow, "Supported-families certification battery (parity gate)"
         )
-        self.assertIn("run: scripts/skippy-family-battery.sh --skip-build", battery)
+        self.assertIn("scripts/skippy-family-battery.sh --skip-build --plan", battery)
         self.assertIn("steps.sha.outputs.certify == 'true'", battery)
         self.assertIn("FAMILY_BATTERY_RUN_ID:", battery)
         self.assertIn("timeout-minutes: 720", battery)
@@ -153,16 +163,14 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("resolved-models.tsv", battery)
         self.assertIn("preflight_speculative_corpus", battery)
         self.assertIn("--skip-speculative", battery)
-        self.assertIn('if (( MODEL_HAS_MTP == 1 )); then', battery)
+        self.assertIn('if (( MODEL_HAS_MTP == 1 )) && [[ "$speculative_policy" == "mtp-if-present" ]]; then', battery)
 
-        manifest = FAMILY_MANIFEST.read_text(encoding="utf-8")
-        self.assertIn(
-            "qwen3-dense|Qwen/Qwen3-0.6B-GGUF|Qwen3-0.6B-Q8_0.gguf|", manifest
-        )
-        self.assertIn(
-            "falcon-h1|tiiuae/Falcon-H1-1.5B-Instruct-GGUF|"
-            "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf|",
-            manifest,
+        manifest = json.loads(FAMILY_MANIFEST.read_text(encoding="utf-8"))
+        by_family = {model["family"]: model for model in manifest["models"]}
+        self.assertEqual("Qwen/Qwen3-0.6B-GGUF", by_family["qwen3-dense"]["artifact"]["repo"])
+        self.assertEqual(
+            ["Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"],
+            by_family["falcon-h1"]["artifact"]["files"],
         )
 
     def test_state_handoff_restores_the_authoritative_continuation_position(self) -> None:
@@ -273,19 +281,15 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("--child-logs", certify[correctness_start:correctness_end])
 
     def test_nemotron_uses_a_non_broken_quantization(self) -> None:
-        manifest = FAMILY_MANIFEST.read_text(encoding="utf-8")
-        nemotron = next(
-            line for line in manifest.splitlines() if line.startswith("nemotron|")
+        manifest = json.loads(FAMILY_MANIFEST.read_text(encoding="utf-8"))
+        nemotron = next(model for model in manifest["models"] if model["family"] == "nemotron")
+        self.assertEqual(
+            "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+            nemotron["artifact"]["repo"],
         )
-        self.assertIn(
-            "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF", nemotron
-        )
-        self.assertIn("UD-Q4_K_M.gguf|Q4_K_M|", nemotron)
-        self.assertNotEqual(
-            "ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
-            nemotron.split("|")[1],
-        )
-        self.assertEqual("53", nemotron.split("|")[5])
+        self.assertIn("UD-Q4_K_M.gguf", nemotron["artifact"]["files"][0])
+        self.assertEqual("Q4_K_M", nemotron["artifact"]["selector"])
+        self.assertEqual(53, nemotron["execution"]["trunk_layers"] + nemotron["execution"]["mtp_layers"])
 
     def test_nemotron_final_mtp_stage_retains_shared_embeddings(self) -> None:
         patch = NEMOTRON_MTP_EMBEDDING_PATCH.read_text(encoding="utf-8")
@@ -298,28 +302,99 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("keep = tn.tensor == LLM_TENSOR_TOKEN_EMBD", patch)
 
     def test_glm45_air_runtime_range_includes_the_mtp_layer(self) -> None:
-        manifest = FAMILY_MANIFEST.read_text(encoding="utf-8")
-        glm45_air = next(
-            line for line in manifest.splitlines() if line.startswith("glm45-air|")
-        )
-        self.assertEqual("47", glm45_air.split("|")[5])
+        manifest = json.loads(FAMILY_MANIFEST.read_text(encoding="utf-8"))
+        glm45_air = next(model for model in manifest["models"] if model["family"] == "glm45-air")
+        self.assertEqual(46, glm45_air["execution"]["trunk_layers"])
+        self.assertEqual(1, glm45_air["execution"]["mtp_layers"])
+
+    def test_glm47_runtime_range_includes_blk_46(self) -> None:
+        manifest = json.loads(FAMILY_MANIFEST.read_text(encoding="utf-8"))
+        glm47 = next(model for model in manifest["models"] if model["family"] == "glm47-flash")
+        self.assertEqual(47, glm47["execution"]["trunk_layers"])
+        self.assertEqual(0, glm47["execution"]["mtp_layers"])
 
 
 class SkippyFamilyBatteryTests(unittest.TestCase):
+    @staticmethod
+    def _manifest(model: dict[str, object]) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "policy": {
+                "profiles": {
+                    "full": {
+                        "status": "certified",
+                        "oracle": "local-monolithic",
+                        "required_lanes": [
+                            "single-step",
+                            "chain",
+                            "dtype-matrix",
+                            "state-handoff",
+                        ],
+                    },
+                    "package-oracle": {
+                        "status": "certified",
+                        "oracle": "independent-trace",
+                        "required_lanes": [
+                            "single-step",
+                            "chain",
+                            "dtype-matrix",
+                            "state-handoff",
+                        ],
+                    },
+                    "graph-only": {
+                        "status": "provisional",
+                        "oracle": "none",
+                        "required_lanes": [
+                            "graph-parse",
+                            "tensor-ownership",
+                            "stage-load",
+                        ],
+                    },
+                },
+                "cadences": ["llama-bump", "manual-full", "nightly", "rotating"],
+            },
+            "models": [model],
+        }
+
+    @staticmethod
+    def _model(revision: str = "a" * 40) -> dict[str, object]:
+        return {
+            "family": "test-family",
+            "profile": "full",
+            "cadences": ["llama-bump", "manual-full"],
+            "artifact": {
+                "repo": "org/model",
+                "revision": revision,
+                "files": ["model.gguf"],
+                "selector": "Q4_K_M",
+            },
+            "execution": {
+                "trunk_layers": 6,
+                "mtp_layers": 0,
+                "boundary_sweep_period": 0,
+                "speculative_policy": "mtp-if-present",
+            },
+            "resources": {
+                "runner_role": "family-certify",
+                "cache_policy": "immutable-local",
+                "estimated_model_bytes": 1024,
+            },
+            "notes": "fixture",
+        }
+
     def _dry_run(self, *args: str) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             bin_dir = temp / "bin"
             bin_dir.mkdir()
-            for command in ("hf", "jq"):
+            for command in ("hf",):
                 executable = bin_dir / command
                 executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
                 executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
 
-            manifest = temp / "manifest.tsv"
+            manifest = temp / "manifest.json"
             manifest.write_text(
-                "test-family|org/model|model.gguf|Q4_K_M|0|6|fixture||\n",
-                encoding="utf-8",
+                json.dumps(self._manifest(self._model())) + "\n", encoding="utf-8"
             )
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
@@ -360,8 +435,8 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertIn("--family test-family", selected.stdout)
 
         omitted = self._dry_run("--families", "another-family")
-        self.assertEqual(1, omitted.returncode)
-        self.assertIn("preflight selected no model rows", omitted.stderr)
+        self.assertEqual(2, omitted.returncode)
+        self.assertIn("unknown selected families: another-family", omitted.stderr)
         self.assertNotIn("--family test-family", omitted.stdout)
 
     def test_skip_build_omits_the_one_time_build(self) -> None:
@@ -390,9 +465,44 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             hf = bin_dir / "hf"
             hf.write_text('#!/bin/sh\nprintf "path=%s\\n" "$FAKE_MODEL_PATH"\n', encoding="utf-8")
             inspect = bin_dir / "skippy-model-package"
+            complete_tensors = [
+                {
+                    "name": f"blk.{layer}.weight",
+                    "layer_index": layer,
+                    "role": "layer",
+                    "ggml_type": 1,
+                    "byte_size": 0,
+                }
+                for layer in range(5)
+            ] + [
+                {
+                    "name": "blk.5.nextn.eh_proj.weight",
+                    "layer_index": 5,
+                    "role": "layer",
+                    "ggml_type": 1,
+                    "byte_size": 1024,
+                },
+                {
+                    "name": "blk.5.nextn.enorm.weight",
+                    "layer_index": 5,
+                    "role": "layer",
+                    "ggml_type": 1,
+                    "byte_size": 0,
+                },
+                {
+                    "name": "blk.5.nextn.hnorm.weight",
+                    "layer_index": 5,
+                    "role": "layer",
+                    "ggml_type": 1,
+                    "byte_size": 0,
+                },
+            ]
+            complete_scan = json.dumps(
+                {"tensor_count": len(complete_tensors), "tensors": complete_tensors},
+                separators=(",", ":"),
+            )
             inspect.write_text(
-                "#!/bin/sh\n"
-                "printf '%s\\n' '{\"tensor_count\":3,\"tensors\":[{\"name\":\"blk.5.nextn.eh_proj.weight\",\"layer_index\":5,\"role\":\"layer\",\"ggml_type\":1,\"byte_size\":1024},{\"name\":\"blk.5.nextn.enorm.weight\",\"layer_index\":5,\"role\":\"layer\",\"ggml_type\":1,\"byte_size\":0},{\"name\":\"blk.5.nextn.hnorm.weight\",\"layer_index\":5,\"role\":\"layer\",\"ggml_type\":1,\"byte_size\":0}]}'\n",
+                f"#!/bin/sh\nprintf '%s\\n' '{complete_scan}'\n",
                 encoding="utf-8",
             )
             spec = bin_dir / "llama-spec-bench"
@@ -413,10 +523,23 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
                 path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
-            manifest = temp / "manifest.tsv"
+            model_policy = self._model(revision)
+            model_policy["family"] = "mtp-family"
+            model_policy["artifact"] = {
+                "repo": "org/mtp-model",
+                "revision": revision,
+                "files": ["model.gguf"],
+                "selector": "Q4_K_M",
+            }
+            model_policy["execution"] = {
+                "trunk_layers": 5,
+                "mtp_layers": 1,
+                "boundary_sweep_period": 0,
+                "speculative_policy": "mtp-if-present",
+            }
+            manifest = temp / "manifest.json"
             manifest.write_text(
-                "mtp-family|org/mtp-model|model.gguf|Q4_K_M|0|6|fixture||\n",
-                encoding="utf-8",
+                json.dumps(self._manifest(model_policy)) + "\n", encoding="utf-8"
             )
             artifacts = temp / "artifacts"
             env = os.environ.copy()
@@ -456,10 +579,13 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             self.assertIn("mtp-family", mtp_corpus)
             self.assertTrue((run_dir / "preflight" / "speculative-smoke.json").is_file())
 
+            incomplete_tensors = complete_tensors[:5] + [complete_tensors[5]]
+            incomplete_scan = json.dumps(
+                {"tensor_count": len(incomplete_tensors), "tensors": incomplete_tensors},
+                separators=(",", ":"),
+            )
             inspect.write_text(
-                "#!/bin/sh\n"
-                "printf '%s\\n' '{\"tensor_count\":1,\"tensors\":[{\"name\":\"blk.5.nextn.eh_proj.weight\",\"layer_index\":5,\"role\":\"layer\",\"ggml_type\":1,\"byte_size\":1024}]}'\n",
-                encoding="utf-8",
+                f"#!/bin/sh\nprintf '%s\\n' '{incomplete_scan}'\n", encoding="utf-8"
             )
             incomplete_artifacts = temp / "incomplete-artifacts"
             env["FAMILY_BATTERY_ARTIFACT_ROOT"] = str(incomplete_artifacts)

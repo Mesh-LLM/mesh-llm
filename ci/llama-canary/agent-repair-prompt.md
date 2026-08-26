@@ -31,7 +31,9 @@ in those skills are hard requirements for this repair, not suggestions.
    `cargo check -p skippy-ffi -p skippy-runtime -p skippy-server`.
 
 4. **Certify.** `scripts/skippy-family-battery.sh`. The battery builds its
-   correctness binaries once, then reuses them for every family lane.
+   correctness binaries once, then reuses them for every family lane. Its
+   versioned JSON policy planner first verifies every exact immutable cache
+   file and the mandatory four-lane contract; do not bypass that preflight.
    All lanes must pass. Do not weaken a failing lane; if a model is genuinely
    broken by upstream, revert to fixing our patches or flag it in the PR body.
    The wrapper re-runs the battery itself after your turn; if lanes fail you
