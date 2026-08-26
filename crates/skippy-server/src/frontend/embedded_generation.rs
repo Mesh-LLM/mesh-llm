@@ -28,6 +28,7 @@ use crate::frontend::{
     },
     prefill::{
         PrefillChunkObservation, drain_embedded_prefill_replies, drain_one_embedded_prefill_reply,
+        representative_prefill_compute_sample,
     },
 };
 use crate::telemetry::now_unix_nanos;
@@ -346,10 +347,15 @@ impl StageOpenAiBackend {
                     }
                     let chunk_stage0_compute_ms = stage0_timer.elapsed_ms();
                     prefill_stage0_compute_ms += chunk_stage0_compute_ms;
-                    if chunk_stage0_compute_ms > prefill_stage0_compute_max_ms {
-                        prefill_stage0_compute_max_ms = chunk_stage0_compute_ms;
-                        prefill_stage0_compute_max_tokens = chunk.len();
-                    }
+                    (
+                        prefill_stage0_compute_max_ms,
+                        prefill_stage0_compute_max_tokens,
+                    ) = representative_prefill_compute_sample(
+                        prefill_stage0_compute_max_ms,
+                        prefill_stage0_compute_max_tokens,
+                        chunk_stage0_compute_ms,
+                        chunk.len(),
+                    );
                     let forwarded = forwarded_stage_message(
                         request.config,
                         &message,
