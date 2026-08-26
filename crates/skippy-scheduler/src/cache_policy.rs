@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 /// Cache work saved at one split-model stage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageCacheAffinity {
@@ -53,39 +55,158 @@ pub struct CacheAwareCandidate<'a> {
     pub index: usize,
     pub priority: u64,
     pub affinity: &'a CacheAffinity,
+    pub prompt_tokens: &'a [i32],
     pub enqueued_turn: u64,
     pub order: u64,
 }
 
-/// Select the highest-priority, highest-value cache candidate.
+/// Order cache candidates by priority, saved work plus aging, then waiting
+/// prefix locality.
 ///
 /// Equal-priority requests gain `aging_cost_per_turn` for every turn they wait,
-/// which bounds starvation even when hot-prefix requests keep arriving.
+/// which bounds starvation even when hot-prefix requests keep arriving. The
+/// final locality tie-break builds an ephemeral radix order over waiting
+/// prompts and visits the heaviest shared-prefix subtrees first. It never
+/// touches the materialized cache or its LRU recency.
+pub fn order_cache_aware_candidates<'a>(
+    candidates: impl IntoIterator<Item = CacheAwareCandidate<'a>>,
+    current_turn: u64,
+    aging_cost_per_turn: u64,
+    group_waiting_prefixes: bool,
+) -> Vec<usize> {
+    let candidates = candidates.into_iter().collect::<Vec<_>>();
+    let mut dfs_ranks = vec![0usize; candidates.len()];
+    if group_waiting_prefixes {
+        let mut dfs_order = Vec::with_capacity(candidates.len());
+        append_dfs_weight_order(
+            &candidates,
+            (0..candidates.len()).collect(),
+            0,
+            &mut dfs_order,
+        );
+        for (rank, position) in dfs_order.into_iter().enumerate() {
+            dfs_ranks[position] = rank;
+        }
+    }
+
+    let mut ranked = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(position, candidate)| (candidate, dfs_ranks[position]))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|(left, left_dfs_rank), (right, right_dfs_rank)| {
+        right
+            .priority
+            .cmp(&left.priority)
+            .then_with(|| {
+                effective_score(right, current_turn, aging_cost_per_turn).cmp(&effective_score(
+                    left,
+                    current_turn,
+                    aging_cost_per_turn,
+                ))
+            })
+            .then_with(|| left_dfs_rank.cmp(right_dfs_rank))
+            .then_with(|| left.order.cmp(&right.order))
+    });
+    ranked
+        .into_iter()
+        .map(|(candidate, _)| candidate.index)
+        .collect()
+}
+
+/// Select the first candidate from [`order_cache_aware_candidates`].
 pub fn select_cache_aware_candidate<'a>(
     candidates: impl IntoIterator<Item = CacheAwareCandidate<'a>>,
     current_turn: u64,
     aging_cost_per_turn: u64,
+    group_waiting_prefixes: bool,
 ) -> Option<usize> {
-    candidates
-        .into_iter()
-        .max_by(|left, right| {
-            let left_age = current_turn.saturating_sub(left.enqueued_turn);
-            let right_age = current_turn.saturating_sub(right.enqueued_turn);
-            let left_score = left
-                .affinity
-                .estimated_saved_cost()
-                .saturating_add(left_age.saturating_mul(aging_cost_per_turn));
-            let right_score = right
-                .affinity
-                .estimated_saved_cost()
-                .saturating_add(right_age.saturating_mul(aging_cost_per_turn));
-            left.priority
-                .cmp(&right.priority)
-                .then_with(|| left_score.cmp(&right_score))
-                // Earlier enqueue order wins an exact tie.
-                .then_with(|| right.order.cmp(&left.order))
-        })
-        .map(|candidate| candidate.index)
+    order_cache_aware_candidates(
+        candidates,
+        current_turn,
+        aging_cost_per_turn,
+        group_waiting_prefixes,
+    )
+    .into_iter()
+    .next()
+}
+
+fn effective_score(
+    candidate: &CacheAwareCandidate<'_>,
+    current_turn: u64,
+    aging_cost_per_turn: u64,
+) -> u64 {
+    let age = current_turn.saturating_sub(candidate.enqueued_turn);
+    candidate
+        .affinity
+        .estimated_saved_cost()
+        .saturating_add(age.saturating_mul(aging_cost_per_turn))
+}
+
+/// Append a compressed-radix DFS order for candidate positions.
+///
+/// Common token runs are skipped before branching, so recursion depth follows
+/// radix branch points rather than prompt length.
+fn append_dfs_weight_order(
+    candidates: &[CacheAwareCandidate<'_>],
+    positions: Vec<usize>,
+    mut depth: usize,
+    output: &mut Vec<usize>,
+) {
+    if positions.len() <= 1 {
+        output.extend(positions);
+        return;
+    }
+
+    let common_limit = positions
+        .iter()
+        .map(|position| candidates[*position].prompt_tokens.len())
+        .min()
+        .unwrap_or(depth);
+    while depth < common_limit {
+        let token = candidates[positions[0]].prompt_tokens[depth];
+        if positions
+            .iter()
+            .all(|position| candidates[*position].prompt_tokens[depth] == token)
+        {
+            depth += 1;
+        } else {
+            break;
+        }
+    }
+
+    let mut terminal = Vec::new();
+    let mut children = BTreeMap::<i32, Vec<usize>>::new();
+    for position in positions {
+        match candidates[position].prompt_tokens.get(depth).copied() {
+            Some(token) => children.entry(token).or_default().push(position),
+            None => terminal.push(position),
+        }
+    }
+    let mut children = children.into_iter().collect::<Vec<_>>();
+    children.sort_by(|(left_token, left), (right_token, right)| {
+        right
+            .len()
+            .cmp(&left.len())
+            .then_with(|| {
+                minimum_enqueue_order(candidates, left)
+                    .cmp(&minimum_enqueue_order(candidates, right))
+            })
+            .then_with(|| left_token.cmp(right_token))
+    });
+    for (_, child) in children {
+        append_dfs_weight_order(candidates, child, depth.saturating_add(1), output);
+    }
+    terminal.sort_by_key(|position| candidates[*position].order);
+    output.extend(terminal);
+}
+
+fn minimum_enqueue_order(candidates: &[CacheAwareCandidate<'_>], positions: &[usize]) -> u64 {
+    positions
+        .iter()
+        .map(|position| candidates[*position].order)
+        .min()
+        .unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -112,6 +233,7 @@ mod tests {
                     index: 0,
                     priority: 0,
                     affinity: &cold,
+                    prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 0,
                     order: 0,
                 },
@@ -119,12 +241,14 @@ mod tests {
                     index: 1,
                     priority: 0,
                     affinity: &hot,
+                    prompt_tokens: &[4, 5, 6],
                     enqueued_turn: 0,
                     order: 1,
                 },
             ],
             0,
             10,
+            true,
         );
         assert_eq!(selected, Some(1));
     }
@@ -139,6 +263,7 @@ mod tests {
                     index: 0,
                     priority: 0,
                     affinity: &cold,
+                    prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 0,
                     order: 0,
                 },
@@ -146,12 +271,14 @@ mod tests {
                     index: 1,
                     priority: 0,
                     affinity: &hot,
+                    prompt_tokens: &[4, 5, 6],
                     enqueued_turn: 11,
                     order: 1,
                 },
             ],
             11,
             10,
+            true,
         );
         assert_eq!(selected, Some(0));
     }
@@ -166,6 +293,7 @@ mod tests {
                     index: 0,
                     priority: 1,
                     affinity: &cold,
+                    prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 0,
                     order: 0,
                 },
@@ -173,13 +301,164 @@ mod tests {
                     index: 1,
                     priority: 0,
                     affinity: &hot,
+                    prompt_tokens: &[4, 5, 6],
                     enqueued_turn: 0,
                     order: 1,
                 },
             ],
             0,
             10,
+            true,
         );
         assert_eq!(selected, Some(0));
+    }
+
+    #[test]
+    fn dfs_weight_groups_the_heaviest_equal_score_prefix_subtree() {
+        let affinity = CacheAffinity::default();
+        let ordered = order_cache_aware_candidates(
+            [
+                CacheAwareCandidate {
+                    index: 0,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[9, 9, 9],
+                    enqueued_turn: 0,
+                    order: 0,
+                },
+                CacheAwareCandidate {
+                    index: 1,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[1, 2, 3],
+                    enqueued_turn: 0,
+                    order: 1,
+                },
+                CacheAwareCandidate {
+                    index: 2,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[1, 2, 4],
+                    enqueued_turn: 0,
+                    order: 2,
+                },
+            ],
+            0,
+            10,
+            true,
+        );
+
+        assert_eq!(ordered, [1, 2, 0]);
+    }
+
+    #[test]
+    fn disabling_prefix_grouping_restores_enqueue_order() {
+        let affinity = CacheAffinity::default();
+        let ordered = order_cache_aware_candidates(
+            [
+                CacheAwareCandidate {
+                    index: 0,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[9, 9, 9],
+                    enqueued_turn: 0,
+                    order: 0,
+                },
+                CacheAwareCandidate {
+                    index: 1,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[1, 2, 3],
+                    enqueued_turn: 0,
+                    order: 1,
+                },
+                CacheAwareCandidate {
+                    index: 2,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &[1, 2, 4],
+                    enqueued_turn: 0,
+                    order: 2,
+                },
+            ],
+            0,
+            10,
+            false,
+        );
+
+        assert_eq!(ordered, [0, 1, 2]);
+    }
+
+    #[test]
+    fn materialized_cache_value_precedes_waiting_prefix_weight() {
+        let cold = affinity(0);
+        let hot = affinity(100);
+        let ordered = order_cache_aware_candidates(
+            [
+                CacheAwareCandidate {
+                    index: 0,
+                    priority: 0,
+                    affinity: &cold,
+                    prompt_tokens: &[1, 2, 3],
+                    enqueued_turn: 0,
+                    order: 0,
+                },
+                CacheAwareCandidate {
+                    index: 1,
+                    priority: 0,
+                    affinity: &cold,
+                    prompt_tokens: &[1, 2, 4],
+                    enqueued_turn: 0,
+                    order: 1,
+                },
+                CacheAwareCandidate {
+                    index: 2,
+                    priority: 0,
+                    affinity: &hot,
+                    prompt_tokens: &[9, 9, 9],
+                    enqueued_turn: 0,
+                    order: 2,
+                },
+            ],
+            0,
+            10,
+            true,
+        );
+
+        assert_eq!(ordered[0], 2);
+    }
+
+    #[test]
+    fn long_common_prefix_does_not_drive_recursion_depth() {
+        let affinity = CacheAffinity::default();
+        let mut left = vec![1; 100_000];
+        let mut right = left.clone();
+        left.push(2);
+        right.push(3);
+        let ordered = order_cache_aware_candidates(
+            [
+                CacheAwareCandidate {
+                    index: 0,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &left,
+                    enqueued_turn: 0,
+                    order: 0,
+                },
+                CacheAwareCandidate {
+                    index: 1,
+                    priority: 0,
+                    affinity: &affinity,
+                    prompt_tokens: &right,
+                    enqueued_turn: 0,
+                    order: 1,
+                },
+            ],
+            0,
+            10,
+            true,
+        );
+
+        assert_eq!(ordered, [0, 1]);
     }
 }

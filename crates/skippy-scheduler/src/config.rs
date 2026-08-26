@@ -46,6 +46,8 @@ pub struct SchedulerConfig {
     /// Fairness credit added to a waiting request on every scheduler turn.
     /// Cache-aware admission uses this to prevent cold-prefix starvation.
     pub cache_aging_cost_per_iteration: u64,
+    /// Group equal-value waiting requests by shared prompt-prefix subtree.
+    pub group_waiting_prefixes: bool,
     pub iteration_interval: Duration,
     pub memory_components: Vec<MemoryComponent>,
 }
@@ -77,6 +79,7 @@ impl Default for SchedulerConfig {
             max_prefill_sequences_per_iteration: usize::MAX,
             max_consecutive_prefill_iterations: usize::MAX,
             cache_aging_cost_per_iteration: 4_096,
+            group_waiting_prefixes: true,
             iteration_interval: Duration::from_millis(2),
             memory_components: Vec::new(),
         }

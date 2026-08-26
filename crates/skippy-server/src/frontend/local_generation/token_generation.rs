@@ -511,7 +511,7 @@ impl StageOpenAiBackend {
     ) -> OpenAiResult<()> {
         let prefill_timer = PhaseTimer::start();
         let prefill_tokens =
-            request.prompt_token_ids[..request.prompt_token_ids.len() - 1].to_vec();
+            Arc::<[i32]>::from(&request.prompt_token_ids[..request.prompt_token_ids.len() - 1]);
         let recurrent_cache_prefix_token_ids = request
             .recurrent_cache_prefix_token_ids
             .map(<[i32]>::to_vec);
@@ -520,7 +520,8 @@ impl StageOpenAiBackend {
                 .as_ref()
                 .map_or_else(skippy_scheduler::CacheAffinity::default, |kv| {
                     let base = self.local_kv_message_base(session_id, request.ids);
-                    let identities = kv.lookup_identities(&self.config, &base, 0, &prefill_tokens);
+                    let identities =
+                        kv.lookup_identities(&self.config, &base, 0, prefill_tokens.as_ref());
                     kv.peek_cache_affinity(&self.config, &identities)
                 });
         let scheduler_backend = self.clone();
@@ -530,13 +531,14 @@ impl StageOpenAiBackend {
         let outcome = self.iteration_scheduler.execute_cache_aware_runtime_timed(
             "feature-kv-restore-prefill-record",
             cache_affinity,
+            Arc::clone(&prefill_tokens),
             0,
             move |runtime| {
                 let outcome = scheduler_backend.restore_or_record_kv_on_runtime(
                     runtime,
                     &scheduler_ids,
                     &scheduler_session_id,
-                    &prefill_tokens,
+                    prefill_tokens.as_ref(),
                     recurrent_cache_prefix_token_ids.as_deref(),
                     &mut scheduler_cache_stats,
                 )?;

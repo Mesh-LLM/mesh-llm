@@ -37,6 +37,14 @@ priority remains the primary ordering key. The KV-enabled server path applies
 the same policy to restore/prefill runtime operations and alternates those turns
 with live decode work; native batches remain phase-homogeneous.
 
+After priority, materialized-cache value, and aging, an ephemeral waiting-request
+radix groups equal-value prompts by weighted DFS order. Heavier shared-prefix
+subtrees run together, allowing the first cold request to materialize reusable
+KV before its peers execute. The ordering is computed once for a drained queue,
+so the group remains adjacent across the server's alternating cache-runtime and
+decode turns. This request radix is scheduling-only and never changes unified
+cache recency.
+
 ## License
 
 Licensed under Apache-2.0.

@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use crate::{
     CacheAwareCandidate, IterationPhase, IterationPlan, IterationTelemetry, IterationWork,
-    SchedulerConfig, SchedulerMetrics, Sequence, SequenceStatus, select_cache_aware_candidate,
+    SchedulerConfig, SchedulerMetrics, Sequence, SequenceStatus, order_cache_aware_candidates,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -32,6 +32,7 @@ pub struct Scheduler {
     consecutive_prefill_iterations: usize,
     waiting_turn: u64,
     next_waiting_order: u64,
+    waiting_order_dirty: bool,
 }
 
 impl Scheduler {
@@ -46,6 +47,7 @@ impl Scheduler {
             consecutive_prefill_iterations: 0,
             waiting_turn: 0,
             next_waiting_order: 0,
+            waiting_order_dirty: false,
         }
     }
 
@@ -73,6 +75,7 @@ impl Scheduler {
         sequence.enqueue_order = self.next_waiting_order;
         self.next_waiting_order = self.next_waiting_order.saturating_add(1);
         self.waiting.push_back(sequence);
+        self.waiting_order_dirty = true;
         self.refresh_counts();
         Ok(())
     }
@@ -302,6 +305,7 @@ impl Scheduler {
             sequence.enqueue_order = self.next_waiting_order;
             self.next_waiting_order = self.next_waiting_order.saturating_add(1);
             self.waiting.push_front(sequence);
+            self.waiting_order_dirty = true;
             preempted.push(victim);
             self.metrics.preempted = self.metrics.preempted.saturating_add(1);
         }
@@ -340,6 +344,7 @@ impl Scheduler {
         }
         if let Some(index) = self.waiting.iter().position(|sequence| sequence.id == id) {
             self.waiting.remove(index);
+            self.waiting_order_dirty = true;
             self.metrics.cancelled = self.metrics.cancelled.saturating_add(1);
             self.refresh_counts();
             return true;
@@ -350,8 +355,8 @@ impl Scheduler {
     fn admit_waiting(&mut self) -> usize {
         let mut admitted = 0;
         let mut deferred = VecDeque::new();
-        while !self.waiting.is_empty() {
-            let index = select_cache_aware_candidate(
+        if self.waiting_order_dirty {
+            let order = order_cache_aware_candidates(
                 self.waiting
                     .iter()
                     .enumerate()
@@ -359,17 +364,26 @@ impl Scheduler {
                         index,
                         priority: sequence.priority,
                         affinity: &sequence.cache_affinity,
+                        prompt_tokens: &sequence.prompt_tokens,
                         enqueued_turn: sequence.enqueued_turn,
                         order: sequence.enqueue_order,
                     }),
                 self.waiting_turn,
                 self.config.cache_aging_cost_per_iteration,
-            )
-            .expect("non-empty scheduler queue must yield a cache-aware candidate");
-            let mut sequence = self
-                .waiting
-                .remove(index)
-                .expect("selected scheduler candidate must exist");
+                self.config.group_waiting_prefixes,
+            );
+            let mut waiting = self.waiting.drain(..).map(Some).collect::<Vec<_>>();
+            self.waiting = order
+                .into_iter()
+                .map(|index| {
+                    waiting[index]
+                        .take()
+                        .expect("ordered scheduler candidate must exist")
+                })
+                .collect();
+            self.waiting_order_dirty = false;
+        }
+        while let Some(mut sequence) = self.waiting.pop_front() {
             if self.active.len() >= self.config.max_active_sequences
                 || !self.can_reserve_memory(&sequence)
             {
@@ -582,6 +596,28 @@ mod tests {
         let plan = scheduler.plan_iteration();
         assert_eq!(plan.admitted, 1);
         assert_eq!(scheduler.snapshot().waiting_ids, vec!["b"]);
+    }
+
+    #[test]
+    fn admission_groups_the_heaviest_waiting_prefix_subtree() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 1,
+            ..SchedulerConfig::default()
+        });
+        scheduler
+            .submit(Sequence::new("unique".into(), vec![9, 9, 9], 1, None, 0))
+            .unwrap();
+        scheduler
+            .submit(Sequence::new("shared-a".into(), vec![1, 2, 3], 1, None, 0))
+            .unwrap();
+        scheduler
+            .submit(Sequence::new("shared-b".into(), vec![1, 2, 4], 1, None, 0))
+            .unwrap();
+
+        let plan = scheduler.plan_iteration();
+
+        assert_eq!(plan.admitted, 1);
+        assert_eq!(scheduler.snapshot().active_ids, ["shared-a"]);
     }
 
     #[test]

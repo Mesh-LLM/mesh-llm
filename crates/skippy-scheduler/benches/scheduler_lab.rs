@@ -2,6 +2,7 @@
 mod support;
 
 use std::hint::black_box;
+use std::io::{self, Write};
 use std::time::Instant;
 
 use skippy_scheduler::SchedulerConfig;
@@ -17,18 +18,24 @@ struct Scenario {
     requests: Vec<SimRequest>,
     max_consecutive_prefill_iterations: usize,
     max_active_sequences: usize,
+    group_waiting_prefixes: bool,
 }
 
 fn main() {
     let config = SchedulerConfig::default();
     let cost = RuntimeCostModel::default();
-    println!(
+    let stdout = io::stdout();
+    let mut output = io::BufWriter::new(stdout.lock());
+    writeln!(
+        output,
         "scenario\trequests\tmakespan_ms\trequest_s\tp95_queue_ms\tp50_ttft_ms\tp95_ttft_ms\tp95_latency_ms\tp95_max_itl_ms\tmean_batch\tmean_token_occupancy_pct\tprefill_iterations\tdecode_iterations\tmixed_iterations\tbench_us_per_run"
-    );
+    )
+    .expect("write scheduler lab header");
     for scenario in scenarios() {
         let scenario_config = SchedulerConfig {
             max_consecutive_prefill_iterations: scenario.max_consecutive_prefill_iterations,
             max_active_sequences: scenario.max_active_sequences,
+            group_waiting_prefixes: scenario.group_waiting_prefixes,
             ..config.clone()
         };
         let report = simulate(scenario_config.clone(), cost, scenario.requests.clone())
@@ -41,7 +48,7 @@ fn main() {
             );
         }
         let bench_us = started.elapsed().as_secs_f64() * 1_000_000.0 / BENCH_REPETITIONS as f64;
-        print_report(&scenario.name, &report, bench_us);
+        print_report(&mut output, &scenario.name, &report, bench_us);
     }
 }
 
@@ -53,12 +60,14 @@ fn scenarios() -> Vec<Scenario> {
             requests: burst_requests(concurrency, 4_096, 32, 0),
             max_consecutive_prefill_iterations: usize::MAX,
             max_active_sequences: 32,
+            group_waiting_prefixes: true,
         });
         scenarios.push(Scenario {
             name: format!("warm-divergent-n{concurrency}"),
             requests: burst_requests(concurrency, 4_096, 32, 4_080),
             max_consecutive_prefill_iterations: usize::MAX,
             max_active_sequences: 32,
+            group_waiting_prefixes: true,
         });
     }
     scenarios.push(Scenario {
@@ -66,12 +75,14 @@ fn scenarios() -> Vec<Scenario> {
         requests: staggered_prefill_requests(),
         max_consecutive_prefill_iterations: usize::MAX,
         max_active_sequences: 32,
+        group_waiting_prefixes: true,
     });
     scenarios.push(Scenario {
         name: "staggered-prefill-bounded".to_string(),
         requests: staggered_prefill_requests(),
         max_consecutive_prefill_iterations: 1,
         max_active_sequences: 32,
+        group_waiting_prefixes: true,
     });
     let mut radix = skippy_cache::UnifiedRadixCache::<&str, ()>::new();
     let cached_tokens = (0..3_072).collect::<Vec<i32>>();
@@ -99,17 +110,38 @@ fn scenarios() -> Vec<Scenario> {
         requests: fcfs,
         max_consecutive_prefill_iterations: 1,
         max_active_sequences: 1,
+        group_waiting_prefixes: true,
     });
     scenarios.push(Scenario {
         name: "radix-cache-aware".to_string(),
         requests: cache_aware,
         max_consecutive_prefill_iterations: 1,
         max_active_sequences: 1,
+        group_waiting_prefixes: true,
+    });
+    let waiting_prefix_requests = vec![
+        SimRequest::new("a-unique", 0, 4_096, 16).with_token_offset(10_000),
+        SimRequest::new("b-shared", 0, 4_096, 16),
+        SimRequest::new("c-shared", 0, 4_096, 16),
+    ];
+    scenarios.push(Scenario {
+        name: "waiting-prefix-fcfs".to_string(),
+        requests: waiting_prefix_requests.clone(),
+        max_consecutive_prefill_iterations: 1,
+        max_active_sequences: 1,
+        group_waiting_prefixes: false,
+    });
+    scenarios.push(Scenario {
+        name: "waiting-prefix-dfs".to_string(),
+        requests: waiting_prefix_requests,
+        max_consecutive_prefill_iterations: 1,
+        max_active_sequences: 1,
+        group_waiting_prefixes: true,
     });
     scenarios
 }
 
-fn print_report(name: &str, report: &SimulationReport, bench_us: f64) {
+fn print_report(output: &mut impl Write, name: &str, report: &SimulationReport, bench_us: f64) {
     let queue_wait = report
         .requests
         .values()
@@ -139,7 +171,8 @@ fn print_report(name: &str, report: &SimulationReport, bench_us: f64) {
                 .0,
         ),
     );
-    println!(
+    writeln!(
+        output,
         "{}\t{}\t{:.3}\t{:.2}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{:.2}",
         name,
         report.requests.len(),
@@ -156,7 +189,8 @@ fn print_report(name: &str, report: &SimulationReport, bench_us: f64) {
         report.decode_iterations,
         report.mixed_iterations,
         bench_us,
-    );
+    )
+    .expect("write scheduler lab report");
 }
 
 fn percentile(values: &[u64], percentile: usize) -> u64 {

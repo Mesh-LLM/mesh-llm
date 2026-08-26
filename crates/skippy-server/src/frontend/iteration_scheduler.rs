@@ -10,7 +10,7 @@ use skippy_protocol::StageConfig;
 use skippy_runtime::{ActivationFrame, SamplingConfig};
 use skippy_scheduler::{
     AdmissionError, CacheAffinity, CacheAwareCandidate, MemoryComponent, Scheduler,
-    SchedulerConfig, Sequence, select_cache_aware_candidate,
+    SchedulerConfig, Sequence, order_cache_aware_candidates,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
@@ -141,6 +141,7 @@ where
 struct CacheAwareRuntimeOperation {
     operation: RuntimeOperation,
     affinity: CacheAffinity,
+    prompt_tokens: Arc<[i32]>,
     priority: u64,
     enqueued_turn: u64,
     order: u64,
@@ -158,7 +159,7 @@ enum SchedulerCommand {
     Submit(ScheduledRequest),
     ExecuteIteration(DirectIteration),
     ExecuteRuntime(RuntimeOperation),
-    ExecuteCacheAwareRuntime(RuntimeOperation, CacheAffinity, u64),
+    ExecuteCacheAwareRuntime(RuntimeOperation, CacheAffinity, Arc<[i32]>, u64),
     Cancel(String),
     Shutdown,
 }
@@ -187,6 +188,7 @@ struct SchedulerWorker {
     requests: BTreeMap<String, RequestState>,
     direct_iterations: VecDeque<DirectIteration>,
     cache_runtime_operations: Vec<CacheAwareRuntimeOperation>,
+    cache_runtime_order_dirty: bool,
     commands: std_mpsc::Receiver<SchedulerCommand>,
     kv_capacity_tokens: usize,
     max_direct_batch_size: usize,
@@ -256,7 +258,7 @@ impl IterationScheduler {
                 ),
                 (
                     "skippy.scheduler.cache_policy".to_string(),
-                    json!("weighted_lpm_aging"),
+                    json!("weighted_lpm_aging_dfs_waiting_prefix"),
                 ),
             ]),
         );
@@ -270,6 +272,7 @@ impl IterationScheduler {
                     requests: BTreeMap::new(),
                     direct_iterations: VecDeque::new(),
                     cache_runtime_operations: Vec::new(),
+                    cache_runtime_order_dirty: false,
                     commands: receiver,
                     kv_capacity_tokens,
                     max_direct_batch_size: scheduler_lane_count.max(1),
@@ -468,6 +471,7 @@ impl IterationScheduler {
         &self,
         label: &'static str,
         affinity: CacheAffinity,
+        prompt_tokens: Arc<[i32]>,
         priority: u64,
         operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
     ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
@@ -478,6 +482,7 @@ impl IterationScheduler {
         self.enqueue_command(SchedulerCommand::ExecuteCacheAwareRuntime(
             runtime_operation,
             affinity,
+            prompt_tokens,
             priority,
         ))?;
         result.recv().map_err(|error| {
@@ -594,17 +599,24 @@ impl SchedulerWorker {
             SchedulerCommand::ExecuteRuntime(operation) => {
                 self.run_runtime_operation(operation, None);
             }
-            SchedulerCommand::ExecuteCacheAwareRuntime(operation, affinity, priority) => {
+            SchedulerCommand::ExecuteCacheAwareRuntime(
+                operation,
+                affinity,
+                prompt_tokens,
+                priority,
+            ) => {
                 let order = self.next_cache_order;
                 self.next_cache_order = self.next_cache_order.saturating_add(1);
                 self.cache_runtime_operations
                     .push(CacheAwareRuntimeOperation {
                         operation,
                         affinity,
+                        prompt_tokens,
                         priority,
                         enqueued_turn: self.cache_turn,
                         order,
                     });
+                self.cache_runtime_order_dirty = true;
             }
             SchedulerCommand::Cancel(id) => self.cancel(&id),
             SchedulerCommand::Shutdown => {}
@@ -630,23 +642,42 @@ impl SchedulerWorker {
     }
 
     fn run_cache_runtime_operation(&mut self) {
-        let Some(index) = select_cache_aware_candidate(
-            self.cache_runtime_operations
-                .iter()
-                .enumerate()
-                .map(|(index, queued)| CacheAwareCandidate {
-                    index,
-                    priority: queued.priority,
-                    affinity: &queued.affinity,
-                    enqueued_turn: queued.enqueued_turn,
-                    order: queued.order,
-                }),
-            self.cache_turn,
-            CACHE_AGING_COST_PER_TURN,
-        ) else {
+        if self.cache_runtime_operations.is_empty() {
             return;
-        };
-        let queued = self.cache_runtime_operations.remove(index);
+        }
+        if self.cache_runtime_order_dirty {
+            let order = order_cache_aware_candidates(
+                self.cache_runtime_operations
+                    .iter()
+                    .enumerate()
+                    .map(|(index, queued)| CacheAwareCandidate {
+                        index,
+                        priority: queued.priority,
+                        affinity: &queued.affinity,
+                        prompt_tokens: queued.prompt_tokens.as_ref(),
+                        enqueued_turn: queued.enqueued_turn,
+                        order: queued.order,
+                    }),
+                self.cache_turn,
+                CACHE_AGING_COST_PER_TURN,
+                true,
+            );
+            let mut pending = self
+                .cache_runtime_operations
+                .drain(..)
+                .map(Some)
+                .collect::<Vec<_>>();
+            self.cache_runtime_operations = order
+                .into_iter()
+                .map(|index| {
+                    pending[index]
+                        .take()
+                        .expect("ordered cache runtime operation must exist")
+                })
+                .collect();
+            self.cache_runtime_order_dirty = false;
+        }
+        let queued = self.cache_runtime_operations.remove(0);
         let age_turns = self.cache_turn.saturating_sub(queued.enqueued_turn);
         let affinity = queued.affinity;
         let cache_stage_hits = affinity
@@ -1250,7 +1281,7 @@ impl SchedulerWorker {
                     let _ = request.reply.send(Err(error.clone()));
                 }
                 SchedulerCommand::ExecuteRuntime(_)
-                | SchedulerCommand::ExecuteCacheAwareRuntime(_, _, _)
+                | SchedulerCommand::ExecuteCacheAwareRuntime(_, _, _, _)
                 | SchedulerCommand::Cancel(_)
                 | SchedulerCommand::Shutdown => {}
             }
@@ -1406,6 +1437,7 @@ fn build_scheduler_config(
         // newly admitted prefill can block already-live decode sequences.
         max_consecutive_prefill_iterations: 1,
         cache_aging_cost_per_iteration: CACHE_AGING_COST_PER_TURN,
+        group_waiting_prefixes: true,
         // Native execution already provides a collection window: requests
         // submitted while one mixed batch is running are drained before the
         // next plan. An additional fixed sleep is pure N=1 latency and makes
@@ -1479,6 +1511,7 @@ mod tests {
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
             cache_runtime_operations: Vec::new(),
+            cache_runtime_order_dirty: false,
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 2,
@@ -1585,6 +1618,7 @@ mod tests {
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
             cache_runtime_operations: Vec::new(),
+            cache_runtime_order_dirty: false,
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
@@ -1631,6 +1665,7 @@ mod tests {
                 requests: BTreeMap::new(),
                 direct_iterations: VecDeque::new(),
                 cache_runtime_operations: Vec::new(),
+                cache_runtime_order_dirty: false,
                 commands: receiver,
                 kv_capacity_tokens: 64,
                 max_direct_batch_size: 3,
@@ -1700,6 +1735,7 @@ mod tests {
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
             cache_runtime_operations: Vec::new(),
+            cache_runtime_order_dirty: true,
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
@@ -1729,6 +1765,7 @@ mod tests {
                     restore_cost: 0,
                     cache_epoch: 0,
                 }),
+                prompt_tokens: Arc::from([i32::try_from(order).unwrap_or(i32::MAX)]),
                 priority: 0,
                 enqueued_turn: 0,
                 order,
@@ -1746,6 +1783,65 @@ mod tests {
 
         assert_eq!(selected_rx.recv().unwrap(), "hot");
         assert_eq!(selected_rx.recv().unwrap(), "cold");
+    }
+
+    #[test]
+    fn cache_runtime_queue_keeps_shared_waiting_prefixes_adjacent() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let (_commands, receiver) = std_mpsc::channel();
+        let mut worker = SchedulerWorker {
+            runtime,
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_operations: Vec::new(),
+            cache_runtime_order_dirty: true,
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            telemetry: None,
+            last_served_direct: false,
+            last_served_cache_runtime: false,
+            cache_turn: 0,
+            next_cache_order: 3,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        };
+        let (selected, selected_rx) = std_mpsc::channel();
+        let operation = |label: &'static str, prompt_tokens: Arc<[i32]>, order| {
+            let selected = selected.clone();
+            CacheAwareRuntimeOperation {
+                operation: RuntimeOperation {
+                    label,
+                    run: Box::new(move |_| {
+                        selected.send(label).unwrap();
+                    }),
+                },
+                affinity: CacheAffinity::default(),
+                prompt_tokens,
+                priority: 0,
+                enqueued_turn: 0,
+                order,
+            }
+        };
+        worker
+            .cache_runtime_operations
+            .push(operation("unique", Arc::from([9, 9, 9]), 0));
+        worker
+            .cache_runtime_operations
+            .push(operation("shared-a", Arc::from([1, 2, 3]), 1));
+        worker
+            .cache_runtime_operations
+            .push(operation("shared-b", Arc::from([1, 2, 4]), 2));
+
+        worker.run_cache_runtime_operation();
+        worker.run_cache_runtime_operation();
+        worker.run_cache_runtime_operation();
+
+        assert_eq!(selected_rx.recv().unwrap(), "shared-a");
+        assert_eq!(selected_rx.recv().unwrap(), "shared-b");
+        assert_eq!(selected_rx.recv().unwrap(), "unique");
     }
 
     #[test]
@@ -1786,6 +1882,7 @@ mod tests {
                 requests: BTreeMap::new(),
                 direct_iterations: VecDeque::new(),
                 cache_runtime_operations: Vec::new(),
+                cache_runtime_order_dirty: false,
                 commands: receiver,
                 kv_capacity_tokens: 64,
                 max_direct_batch_size: 1,

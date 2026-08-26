@@ -11,7 +11,8 @@ mod sequence;
 mod telemetry;
 
 pub use cache_policy::{
-    CacheAffinity, CacheAwareCandidate, StageCacheAffinity, select_cache_aware_candidate,
+    CacheAffinity, CacheAwareCandidate, StageCacheAffinity, order_cache_aware_candidates,
+    select_cache_aware_candidate,
 };
 pub use config::{MemoryComponent, SchedulerConfig};
 pub use engine::{AdmissionError, Scheduler, SchedulerSnapshot};
