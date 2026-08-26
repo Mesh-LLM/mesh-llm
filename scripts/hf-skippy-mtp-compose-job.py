@@ -232,7 +232,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--composite-basename",
                         default="NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_XL-MTPv2")
     parser.add_argument("--mtp-block", type=int, default=88)
-    parser.add_argument("--work-dir", default="/data/mtp-compose")
+    # The bucket mount (/data) stalls bulk writes (job 8 froze at 136M/5.88G
+    # with the writer blocked in FUSE); keep heavy I/O on the container overlay.
+    parser.add_argument("--work-dir", default="/tmp/mtp-compose")
     parser.add_argument("--mesh-revision", required=True)
     return parser.parse_args()
 
