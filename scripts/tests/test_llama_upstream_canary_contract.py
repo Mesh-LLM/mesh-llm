@@ -12,6 +12,9 @@ WORKFLOW = ROOT / ".github" / "workflows" / "llama-upstream-canary.yml"
 BATTERY = ROOT / "scripts" / "skippy-family-battery.sh"
 SMOKE = ROOT / "scripts" / "skippy-ci-smoke.sh"
 FAMILY_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.tsv"
+FAMILY_CERTIFY = ROOT / "scripts" / "family-certify.sh"
+STATE_HANDOFF = ROOT / "crates" / "skippy-correctness" / "src" / "runner" / "state_handoff.rs"
+KV_PAGES = ROOT / "crates" / "skippy-runtime" / "src" / "kv_pages.rs"
 
 
 def _step_block(workflow: str, name: str) -> str:
@@ -52,7 +55,12 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         build = _step_block(workflow, "Build stage runtime crates")
         self.assertIn("cargo build", build)
         self.assertIn("steps.sha.outputs.certify == 'true'", build)
-        for package in ("skippy-correctness", "skippy-server", "llama-spec-bench"):
+        for package in (
+            "skippy-correctness",
+            "skippy-server",
+            "skippy-model-package",
+            "llama-spec-bench",
+        ):
             self.assertIn(f"-p {package}", build)
 
         architecture = _step_block(workflow, "Verify native archive architecture")
@@ -64,6 +72,13 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         )
         self.assertIn("run: scripts/skippy-family-battery.sh --skip-build", battery)
         self.assertIn("steps.sha.outputs.certify == 'true'", battery)
+        self.assertIn("FAMILY_BATTERY_RUN_ID:", battery)
+
+        upload = _step_block(workflow, "Upload supported-families battery evidence")
+        self.assertIn("if: ${{ !cancelled()", upload)
+        self.assertIn("actions/upload-artifact@", upload)
+        self.assertIn("target/family-battery/", upload)
+        self.assertIn("retention-days: 14", upload)
 
         capture = _step_block(workflow, "Capture upstream SHAs")
         self.assertIn('"$FORCE_CERTIFY" == "true"', capture)
@@ -99,6 +114,11 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 
         battery = BATTERY.read_text(encoding="utf-8")
         self.assertIn("'s/^[[:space:]]*path:[[:space:]]*//p'", battery)
+        self.assertIn("skippy-model-package\" inspect", battery)
+        self.assertIn('contains(".nextn.")', battery)
+        self.assertIn("--require-native-mtp-draft", battery)
+        self.assertIn("startup_timeout_for_bytes", battery)
+        self.assertIn("speculative_coding_prompts.jsonl", battery)
 
         manifest = FAMILY_MANIFEST.read_text(encoding="utf-8")
         self.assertIn(
@@ -109,6 +129,31 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf|",
             manifest,
         )
+
+    def test_state_handoff_restores_the_authoritative_continuation_position(self) -> None:
+        state_handoff = STATE_HANDOFF.read_text(encoding="utf-8")
+        self.assertIn(
+            "LocalStatePayload::FullState(bytes) => session.import_full_state_for_token_count(",
+            state_handoff,
+        )
+
+        kv_pages = KV_PAGES.read_text(encoding="utf-8")
+        full_state_start = kv_pages.index("pub fn import_full_state_for_token_count(")
+        full_state_end = kv_pages.index("pub fn export_kv_page(", full_state_start)
+        self.assertIn("self.set_position(token_count)", kv_pages[full_state_start:full_state_end])
+
+    def test_family_results_have_typed_failure_outcomes(self) -> None:
+        certify = FAMILY_CERTIFY.read_text(encoding="utf-8")
+        for outcome in (
+            "timeout",
+            "unsupported",
+            "model-invalid",
+            "harness",
+            "mismatch",
+            "runtime-error",
+        ):
+            self.assertIn(f"printf '{outcome}\\n'", certify)
+        self.assertIn("outcome:$outcome", certify)
 
 
 class SkippyFamilyBatteryTests(unittest.TestCase):
@@ -151,10 +196,10 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         commands = [
             line
             for line in result.stdout.splitlines()
-            if line.startswith("scripts/family-certify.sh ")
+            if line.startswith(str(FAMILY_CERTIFY) + " ")
         ]
         self.assertEqual(1, len(commands))
-        self.assertTrue(commands[0].endswith("--require-lanes --skip-build"))
+        self.assertTrue(commands[0].strip().endswith("--require-lanes --skip-build"))
 
     def test_skip_build_omits_the_one_time_build(self) -> None:
         result = self._dry_run("--skip-build")

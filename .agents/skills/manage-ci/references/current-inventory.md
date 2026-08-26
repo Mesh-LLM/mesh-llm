@@ -42,7 +42,12 @@ certification binaries before the manifest lanes; the family battery builds
 them once itself unless `--skip-build` is selected, in which case it verifies
 that every binary already exists. A manual dispatch may set `force_certify` to
 run build, smoke, and the full family battery when the upstream SHA is
-unchanged. On a
+unchanged. Every resolved GGUF is inspected for native MTP/NextN tensors;
+matching rows require the native MTP draft sideband and are listed in the
+battery's speculative corpus. Per-lane outcomes, manifests, summaries, model
+scans, and logs are uploaded for 14 days even when the battery fails. Stage
+readiness uses a recorded model-size-derived deadline rather than the
+correctness binary's fixed default. On a
 patch-apply failure it hands the queue to a non-interactive `opencode` agent
 (`LLAMA_CANARY_AGENT_MODEL`, default `Nemotron 3 Ultra Free`) which rebases
 `third_party/llama.cpp/patches`, runs the supported-families certification

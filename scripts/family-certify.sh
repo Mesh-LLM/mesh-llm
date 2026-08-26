@@ -35,6 +35,8 @@ Correctness options:
   --skip-correctness          skip all correctness/state lanes
   --skip-dtype                skip dtype matrix
   --skip-state                skip state handoff
+  --require-native-mtp-draft fail unless staged correctness returns a native
+                              MTP draft sideband
   --require-lanes             fail if any correctness/speculative lane is
                               skipped (a skipped lane means required
                               inputs were not supplied); the build lane is
@@ -43,7 +45,7 @@ Correctness options:
 
 Speculative options:
   --draft-model GGUF          draft GGUF for draft speculative lanes
-  --corpus JSONL              corpus path; default: target/bench-corpora/smoke/corpus.jsonl
+  --corpus JSONL              corpus path; default: checked-in speculative coding corpus
   --corpus-limit N            prompt limit for llama-spec-bench
   --spec-window N             speculative window; default: 8
   --max-tokens N              max new tokens per prompt; default: 24
@@ -124,8 +126,9 @@ SKIP_BUILD=0
 SKIP_CORRECTNESS=0
 SKIP_DTYPE=0
 SKIP_STATE=0
+REQUIRE_NATIVE_MTP_DRAFT=0
 REQUIRE_LANES=0
-CORPUS="target/bench-corpora/smoke/corpus.jsonl"
+CORPUS="crates/skippy-bench/corpora/speculative_coding_prompts.jsonl"
 CORPUS_LIMIT=""
 SPEC_WINDOW="8"
 MAX_TOKENS="24"
@@ -166,6 +169,7 @@ while [[ $# -gt 0 ]]; do
     --skip-correctness) SKIP_CORRECTNESS=1; shift ;;
     --skip-dtype) SKIP_DTYPE=1; shift ;;
     --skip-state) SKIP_STATE=1; shift ;;
+    --require-native-mtp-draft) REQUIRE_NATIVE_MTP_DRAFT=1; shift ;;
     --require-lanes) REQUIRE_LANES=1; shift ;;
     --corpus) CORPUS="$2"; shift 2 ;;
     --corpus-limit) CORPUS_LIMIT="$2"; shift 2 ;;
@@ -236,6 +240,8 @@ record_event() {
   local log="$4"
   local report="$5"
   local note="$6"
+  local outcome
+  outcome="$(classify_outcome "$status" "$log" "$note")"
   jq -n \
     --arg name "$name" \
     --arg status "$status" \
@@ -243,15 +249,50 @@ record_event() {
     --arg log "$log" \
     --arg report "$report" \
     --arg note "$note" \
+    --arg outcome "$outcome" \
     '{
       name:$name,
       status:$status,
+      outcome:$outcome,
       exit_code:$exit_code,
       log:($log | if length > 0 then . else null end),
       report:($report | if length > 0 then . else null end),
       note:($note | if length > 0 then . else null end)
     } | with_entries(select(.value != null))' \
     >> "$COMMANDS_JSONL"
+}
+
+classify_outcome() {
+  local status="$1"
+  local log="$2"
+  local note="$3"
+  if [[ "$status" == "pass" ]]; then
+    printf 'pass\n'
+    return
+  fi
+  if [[ "$status" == "skipped" ]]; then
+    printf 'skipped\n'
+    return
+  fi
+
+  local evidence="$note"
+  if [[ -n "$log" && -f "$log" ]]; then
+    evidence+=$'\n'
+    evidence+="$(tail -n 240 "$log")"
+  fi
+  if grep -Eqi 'timed out|timeout|did not become ready|deadline exceeded' <<<"$evidence"; then
+    printf 'timeout\n'
+  elif grep -Eqi 'unsupported:|not supported for this model architecture|unsupported model architecture' <<<"$evidence"; then
+    printf 'unsupported\n'
+  elif grep -Eqi 'missing tensor|tensor .* not found|failed to load model|model artifact.*invalid|invalid model artifact' <<<"$evidence"; then
+    printf 'model-invalid\n'
+  elif grep -Eqi 'mismatch|did not match|matches[=:][[:space:]]*false|token.*different' <<<"$evidence"; then
+    printf 'mismatch\n'
+  elif grep -Eqi 'no such file or directory|does not exist|requires --|corpus.*(missing|not found)|failed to resolve|command not found|required command not found' <<<"$evidence"; then
+    printf 'harness\n'
+  else
+    printf 'runtime-error\n'
+  fi
 }
 
 run_logged() {
@@ -338,6 +379,10 @@ correctness_common=(
   --prompt "$PROMPT"
   --stage-server-bin "$ROOT/target/debug/skippy-server"
 )
+native_mtp_args=()
+if (( REQUIRE_NATIVE_MTP_DRAFT != 0 )); then
+  native_mtp_args+=(--require-native-mtp-draft)
+fi
 if [[ -n "$MODEL_ID" ]]; then
   correctness_common+=(--model-id "$MODEL_ID")
 fi
@@ -365,6 +410,7 @@ else
       --stage1-bind-addr "127.0.0.1:$((PORT_BASE + 1))"
       --activation-wire-dtype "$WIRE_DTYPE"
       --report-out "$REPORT_DIR/single-step.json"
+      "${native_mtp_args[@]}"
     )
     if (( ALLOW_MISMATCH != 0 )); then
       single_args+=(--allow-mismatch)
@@ -389,6 +435,7 @@ else
         --stage2-bind-addr "127.0.0.1:$((PORT_BASE + 12))"
         --activation-wire-dtype "$WIRE_DTYPE"
         --report-out "$REPORT_DIR/chain.json"
+        "${native_mtp_args[@]}"
       )
       if (( ALLOW_MISMATCH != 0 )); then
         chain_args+=(--allow-mismatch)
@@ -410,6 +457,7 @@ else
       --stage1-bind-addr "127.0.0.1:$((PORT_BASE + 21))"
       --dtypes "$WIRE_DTYPES"
       --report-out "$REPORT_DIR/dtype-matrix.json"
+      "${native_mtp_args[@]}"
     )
     if (( STRICT_DTYPE == 0 )); then
       dtype_args+=(--allow-mismatch)
@@ -660,6 +708,8 @@ jq -n \
   --arg state_payload_kind "$STATE_PAYLOAD_KIND" \
   --arg prefix_token_count "$PREFIX_TOKEN_COUNT" \
   --arg cache_hit_repeats "$CACHE_HIT_REPEATS" \
+  --arg startup_timeout_secs "$STARTUP_TIMEOUT_SECS" \
+  --argjson require_native_mtp_draft "$REQUIRE_NATIVE_MTP_DRAFT" \
   --arg corpus "$(abs_path "$CORPUS")" \
   --arg capability_draft "$CAPABILITY_DRAFT_JSON" \
   --argjson commands "$(jq -s '.' "$COMMANDS_JSONL")" \
@@ -683,7 +733,9 @@ jq -n \
       wire_dtypes:$wire_dtypes,
       state_payload_kind:$state_payload_kind,
       prefix_token_count:($prefix_token_count | if length > 0 then . else null end),
-      cache_hit_repeats:$cache_hit_repeats
+      cache_hit_repeats:$cache_hit_repeats,
+      startup_timeout_secs:($startup_timeout_secs | if length > 0 then tonumber else null end),
+      require_native_mtp_draft:($require_native_mtp_draft == 1)
     },
     speculative:{corpus:$corpus},
     capability_draft:$capability_draft,
@@ -706,11 +758,11 @@ jq -n \
   echo
   echo "## Command Results"
   echo
-  echo "| Lane | Status | Exit | Report | Log | Note |"
-  echo "| --- | --- | ---: | --- | --- | --- |"
+  echo "| Lane | Status | Outcome | Exit | Report | Log | Note |"
+  echo "| --- | --- | --- | ---: | --- | --- | --- |"
   jq -r '
     . |
-    "| \(.name) | \(.status) | \(.exit_code) | " +
+    "| \(.name) | \(.status) | \(.outcome) | \(.exit_code) | " +
     (if .report then "`\(.report)`" else "" end) + " | " +
     (if .log then "`\(.log)`" else "" end) + " | " +
     (if .note then .note else "" end) + " |"

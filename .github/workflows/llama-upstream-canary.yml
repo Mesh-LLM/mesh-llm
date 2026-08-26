@@ -159,7 +159,18 @@ jobs:
         id: battery
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
         timeout-minutes: 300
+        env:
+          FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/skippy-family-battery.sh --skip-build
+
+      - name: Upload supported-families battery evidence
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-family-battery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/family-battery/${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Generate summary
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'

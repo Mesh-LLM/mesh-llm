@@ -5,6 +5,10 @@
 # the hybrid/recurrent boundary sweep. The KV-cache oracle is the in-run A/B
 # assertion carried by the state-handoff lane: --cache-hit-repeats 2 makes the
 # cached pass token-exact vs the uncached pass (state_handoff cache_hit_matches).
+# Before certification, the battery inspects every resolved GGUF tensor table.
+# Rows with `.nextn.` tensors are added to the emitted `mtp-corpus.tsv` and
+# must return native MTP draft sidebands in the staged correctness lanes.
+# Each row also receives a recorded model-size-aware stage-readiness deadline.
 # Columns (pipe-separated):
 #   family         | skippy family label used by scripts/family-certify.sh
 #   repo           | Hugging Face repo for the cert artifact (highest-download accessible repo per James 2026-08-25)

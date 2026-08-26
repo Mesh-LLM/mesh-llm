@@ -70,8 +70,7 @@ impl StageSession {
         token_count: u64,
     ) -> Result<()> {
         self.import_state(layer_start, layer_end, input)?;
-        self.token_count = self.token_count.max(token_count);
-        Ok(())
+        self.set_position(token_count)
     }
 
     pub fn export_full_state(&mut self, layer_start: i32, layer_end: i32) -> Result<Vec<u8>> {
@@ -141,8 +140,7 @@ impl StageSession {
         token_count: u64,
     ) -> Result<()> {
         self.import_full_state(layer_start, layer_end, input)?;
-        self.token_count = self.token_count.max(token_count);
-        Ok(())
+        self.set_position(token_count)
     }
 
     pub fn export_kv_page(
