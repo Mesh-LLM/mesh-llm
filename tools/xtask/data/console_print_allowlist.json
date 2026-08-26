@@ -3647,6 +3647,10 @@
     {
       "line": 104,
       "macro_name": "eprintln!"
+    },
+    {
+      "line": 331,
+      "macro_name": "eprintln!"
     }
   ],
   "crates/skippy-model-package/src/glm_dsa_generation_policy.rs": [
@@ -4173,27 +4177,31 @@
   ],
   "crates/skippy-runtime/src/tests.rs": [
     {
-      "line": 101,
+      "line": 104,
       "macro_name": "eprintln!"
     },
     {
-      "line": 123,
+      "line": 202,
       "macro_name": "eprintln!"
     },
     {
-      "line": 177,
+      "line": 224,
       "macro_name": "eprintln!"
     },
     {
-      "line": 243,
+      "line": 278,
       "macro_name": "eprintln!"
     },
     {
-      "line": 267,
+      "line": 344,
       "macro_name": "eprintln!"
     },
     {
-      "line": 356,
+      "line": 368,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 457,
       "macro_name": "eprintln!"
     }
   ],
@@ -4205,27 +4213,27 @@
   ],
   "crates/skippy-server/src/binary_transport/binary_messaging.rs": [
     {
-      "line": 300,
+      "line": 301,
       "macro_name": "eprintln!"
     },
     {
-      "line": 310,
+      "line": 311,
       "macro_name": "println!"
     },
     {
-      "line": 333,
+      "line": 334,
       "macro_name": "eprintln!"
     },
     {
-      "line": 353,
+      "line": 354,
       "macro_name": "eprintln!"
     },
     {
-      "line": 361,
+      "line": 362,
       "macro_name": "eprintln!"
     },
     {
-      "line": 415,
+      "line": 416,
       "macro_name": "eprintln!"
     }
   ],
@@ -4299,15 +4307,15 @@
   ],
   "crates/skippy-server/src/frontend/generation/persistent_lanes.rs": [
     {
-      "line": 276,
+      "line": 331,
       "macro_name": "eprintln!"
     },
     {
-      "line": 316,
+      "line": 371,
       "macro_name": "eprintln!"
     },
     {
-      "line": 324,
+      "line": 379,
       "macro_name": "eprintln!"
     }
   ],
@@ -4317,7 +4325,7 @@
       "macro_name": "println!"
     },
     {
-      "line": 276,
+      "line": 277,
       "macro_name": "println!"
     }
   ],

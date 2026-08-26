@@ -7,8 +7,8 @@ Subject: [PATCH 16/18] skippy: add mixed iteration batch execution ABI
  include/skippy/common.h        |  11 +-
  include/skippy/execution.h     |  60 +++++-
  src/skippy/abi.cpp             |   3 +-
- src/skippy/execution-batch.cpp | 341 +++++++++++++++++++++++++++++++++
- 4 files changed, 409 insertions(+), 6 deletions(-)
+ src/skippy/execution-batch.cpp | 340 +++++++++++++++++++++++++++++++++
+ 4 files changed, 408 insertions(+), 6 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 012aceb9a..e7f322abf 100644
@@ -135,7 +135,7 @@ diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 index a8694dbed..754b940dc 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
-@@ -23,6 +23,347 @@
+@@ -23,6 +23,346 @@
  
  
  extern "C" {

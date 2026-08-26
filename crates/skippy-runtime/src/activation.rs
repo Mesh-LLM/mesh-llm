@@ -242,46 +242,46 @@ impl StageSession {
         let mut request_outputs = Vec::with_capacity(requests.len());
         let mut samples = Vec::new();
         for (request_index, request) in requests.iter_mut().enumerate() {
-                let (predicted_token, output) = if request.phase == IterationBatchPhase::Decode {
-                    validate_serial_decode_request(request)?;
-                    request.session.decode_step_frame_sampled(
-                        request.token_ids[0],
+            let (predicted_token, output) = if request.phase == IterationBatchPhase::Decode {
+                validate_serial_decode_request(request)?;
+                request.session.decode_step_frame_sampled(
+                    request.token_ids[0],
+                    request.sampling,
+                    request.input,
+                    0,
+                )?
+            } else if request.sample_last {
+                if request.positions.is_empty() {
+                    request.session.prefill_chunk_frame_sampled(
+                        request.token_ids,
                         request.sampling,
                         request.input,
                         0,
                     )?
-                } else if request.sample_last {
-                    if request.positions.is_empty() {
-                        request.session.prefill_chunk_frame_sampled(
-                            request.token_ids,
-                            request.sampling,
-                            request.input,
-                            0,
-                        )?
-                    } else {
-                        request.session.prefill_chunk_frame_sampled_with_positions(
-                            request.token_ids,
-                            request.positions,
-                            request.sampling,
-                            request.input,
-                            0,
-                        )?
-                    }
                 } else {
-                    let output = if request.positions.is_empty() {
-                        request
-                            .session
-                            .prefill_chunk_frame(request.token_ids, request.input, 0)?
-                    } else {
-                        request.session.prefill_chunk_frame_with_positions(
-                            request.token_ids,
-                            request.positions,
-                            request.input,
-                            0,
-                        )?
-                    };
-                    (-1, output)
+                    request.session.prefill_chunk_frame_sampled_with_positions(
+                        request.token_ids,
+                        request.positions,
+                        request.sampling,
+                        request.input,
+                        0,
+                    )?
+                }
+            } else {
+                let output = if request.positions.is_empty() {
+                    request
+                        .session
+                        .prefill_chunk_frame(request.token_ids, request.input, 0)?
+                } else {
+                    request.session.prefill_chunk_frame_with_positions(
+                        request.token_ids,
+                        request.positions,
+                        request.input,
+                        0,
+                    )?
                 };
+                (-1, output)
+            };
             if request.sample_last {
                 samples.push(IterationSample {
                     request_index,
