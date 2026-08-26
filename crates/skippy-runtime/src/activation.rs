@@ -44,6 +44,12 @@ pub struct DecodeFrameBatchRequest<'a> {
     pub input: Option<&'a ActivationFrame>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IterationBatchPhase {
+    Prefill,
+    Decode,
+}
+
 pub struct IterationBatchRequest<'a> {
     pub session: &'a mut StageSession,
     pub token_ids: &'a [i32],
@@ -51,6 +57,7 @@ pub struct IterationBatchRequest<'a> {
     pub sampling: Option<&'a SamplingConfig>,
     pub input: Option<&'a ActivationFrame>,
     pub sample_last: bool,
+    pub phase: IterationBatchPhase,
 }
 
 impl StageSession {
@@ -109,21 +116,6 @@ impl StageSession {
         let mut output_bytes = vec![0_usize; requests.len()];
         let mut predicted_tokens = vec![-1_i32; requests.len()];
         let mut error = ptr::null_mut();
-        // Compute updated counts before the native call; validation must not leave
-        // any sessions in a desynced state if the native call fails.
-        let updated_counts = requests
-            .iter()
-            .map(|request| {
-                request
-                    .session
-                    .token_count
-                    .checked_add(
-                        u64::try_from(request.token_ids.len())
-                            .context("token count exceeds u64")?,
-                    )
-                    .context("session token count overflow")
-            })
-            .collect::<Result<Vec<_>>>()?;
         let status = unsafe {
             skippy_ffi::skippy_iteration_batch_sampled(
                 raw_requests.as_ptr(),
@@ -146,7 +138,27 @@ impl StageSession {
             free_error(error);
             return Self::iteration_batch_sampled_raw(requests, &output_bytes);
         }
+        if status == Status::Unsupported {
+            free_error(error);
+            return Self::iteration_batch_sampled_serial(requests);
+        }
         ensure_ok(status, error)?;
+        // The native call has already advanced every session, so compute all
+        // new counts before storing any: a mid-loop overflow error must not
+        // leave a subset of sessions updated and the rest desynced.
+        let updated_counts = requests
+            .iter()
+            .map(|request| {
+                request
+                    .session
+                    .token_count
+                    .checked_add(
+                        u64::try_from(request.token_ids.len())
+                            .context("token count exceeds u64")?,
+                    )
+                    .context("session token count overflow")
+            })
+            .collect::<Result<Vec<_>>>()?;
         for (request, updated) in requests.iter_mut().zip(updated_counts) {
             request.session.token_count = updated;
         }
@@ -166,6 +178,60 @@ impl StageSession {
                 }
             })
             .collect())
+    }
+
+    fn iteration_batch_sampled_serial(
+        requests: &mut [IterationBatchRequest<'_>],
+    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+        requests
+            .iter_mut()
+            .map(|request| {
+                let (predicted_token, output) = if request.phase == IterationBatchPhase::Decode {
+                    validate_serial_decode_request(request)?;
+                    request.session.decode_step_frame_sampled(
+                        request.token_ids[0],
+                        request.sampling,
+                        request.input,
+                        0,
+                    )?
+                } else if request.sample_last {
+                    if request.positions.is_empty() {
+                        request.session.prefill_chunk_frame_sampled(
+                            request.token_ids,
+                            request.sampling,
+                            request.input,
+                            0,
+                        )?
+                    } else {
+                        request.session.prefill_chunk_frame_sampled_with_positions(
+                            request.token_ids,
+                            request.positions,
+                            request.sampling,
+                            request.input,
+                            0,
+                        )?
+                    }
+                } else {
+                    let output = if request.positions.is_empty() {
+                        request
+                            .session
+                            .prefill_chunk_frame(request.token_ids, request.input, 0)?
+                    } else {
+                        request.session.prefill_chunk_frame_with_positions(
+                            request.token_ids,
+                            request.positions,
+                            request.input,
+                            0,
+                        )?
+                    };
+                    (-1, output)
+                };
+                Ok(DecodeFrameBatchOutput {
+                    predicted_token,
+                    output,
+                })
+            })
+            .collect()
     }
 
     pub fn prefill_chunk_frame(
@@ -631,18 +697,6 @@ impl StageSession {
         let mut output_bytes = vec![0_usize; requests.len()];
         let mut predicted_tokens = vec![0_i32; requests.len()];
         let mut error = ptr::null_mut();
-        // Compute updated counts before the native call; validation must not leave
-        // any sessions in a desynced state if the native call fails.
-        let updated_counts = requests
-            .iter()
-            .map(|request| {
-                request
-                    .session
-                    .token_count
-                    .checked_add(1)
-                    .context("session token count overflow")
-            })
-            .collect::<Result<Vec<_>>>()?;
         let status = unsafe {
             skippy_ffi::skippy_decode_step_frame_batch_sampled(
                 sessions.as_ptr(),
@@ -676,6 +730,19 @@ impl StageSession {
             return Self::decode_step_frame_batch_sampled_serial(requests);
         }
         ensure_ok(status, error)?;
+        // The native call has already advanced every session, so compute all
+        // new counts before storing any: a mid-loop overflow error must not
+        // leave a subset of sessions updated and the rest desynced.
+        let updated_counts = requests
+            .iter()
+            .map(|request| {
+                request
+                    .session
+                    .token_count
+                    .checked_add(1)
+                    .context("session token count overflow")
+            })
+            .collect::<Result<Vec<_>>>()?;
         for (request, updated) in requests.iter_mut().zip(updated_counts) {
             request.session.token_count = updated;
         }
@@ -949,10 +1016,42 @@ impl StageSession {
     }
 }
 
+fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result<()> {
+    anyhow::ensure!(
+        request.session.token_count() > 0,
+        "serial decode fallback requires an established session"
+    );
+    anyhow::ensure!(
+        request.token_ids.len() == 1,
+        "serial decode fallback requires exactly one token"
+    );
+    anyhow::ensure!(
+        request.sample_last,
+        "serial decode fallback requires sampling"
+    );
+    if let Some(position) = request.positions.first() {
+        anyhow::ensure!(
+            request.positions.len() == 1,
+            "serial decode fallback accepts at most one explicit position"
+        );
+        let position = u64::try_from(*position).context("decode position is negative")?;
+        anyhow::ensure!(
+            position == request.session.token_count(),
+            "serial decode position {position} does not match session position {}",
+            request.session.token_count()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::raw_input_frame;
+    use super::{
+        IterationBatchPhase, IterationBatchRequest, raw_input_frame, validate_serial_decode_request,
+    };
+    use crate::StageSession;
     use crate::{ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout};
+    use std::ptr;
 
     fn activation_desc(payload_bytes: u64) -> ActivationDesc {
         ActivationDesc {
@@ -996,5 +1095,68 @@ mod tests {
         assert_eq!(desc.unwrap().payload_bytes, 1);
         assert_eq!(payload, frame.payload.as_ptr().cast());
         Ok(())
+    }
+
+    #[test]
+    fn serial_decode_accepts_explicit_phase_and_matching_position() {
+        let mut session = StageSession {
+            raw: ptr::null_mut(),
+            token_count: 4,
+        };
+        let request = IterationBatchRequest {
+            session: &mut session,
+            token_ids: &[7],
+            positions: &[],
+            sampling: None,
+            input: None,
+            sample_last: true,
+            phase: IterationBatchPhase::Decode,
+        };
+
+        validate_serial_decode_request(&request).unwrap();
+    }
+
+    #[test]
+    fn serial_decode_rejects_invalid_decode_shapes() {
+        for (session_tokens, token_ids, positions, sample_last) in [
+            (0, &[7][..], &[][..], true),
+            (4, &[7, 8][..], &[][..], true),
+            (4, &[7][..], &[3][..], true),
+            (4, &[7][..], &[][..], false),
+        ] {
+            let mut session = StageSession {
+                raw: ptr::null_mut(),
+                token_count: session_tokens,
+            };
+            let request = IterationBatchRequest {
+                session: &mut session,
+                token_ids,
+                positions,
+                sampling: None,
+                input: None,
+                sample_last,
+                phase: IterationBatchPhase::Decode,
+            };
+
+            assert!(validate_serial_decode_request(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn one_token_prefill_tail_is_explicitly_not_decode() {
+        let mut session = StageSession {
+            raw: ptr::null_mut(),
+            token_count: 4,
+        };
+        let request = IterationBatchRequest {
+            session: &mut session,
+            token_ids: &[7],
+            positions: &[4],
+            sampling: None,
+            input: None,
+            sample_last: false,
+            phase: IterationBatchPhase::Prefill,
+        };
+        assert_eq!(request.phase, IterationBatchPhase::Prefill);
     }
 }

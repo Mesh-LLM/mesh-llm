@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
 use crate::{
-    IterationPhase, IterationPlan, IterationTelemetry, IterationWork, SchedulerConfig,
-    SchedulerMetrics, Sequence, SequenceStatus,
+    CacheAwareCandidate, IterationPhase, IterationPlan, IterationTelemetry, IterationWork,
+    SchedulerConfig, SchedulerMetrics, Sequence, SequenceStatus, order_cache_aware_candidates,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -29,6 +29,10 @@ pub struct Scheduler {
     active: BTreeMap<String, Sequence>,
     component_used_bytes: Vec<u64>,
     metrics: SchedulerMetrics,
+    consecutive_prefill_iterations: usize,
+    waiting_turn: u64,
+    next_waiting_order: u64,
+    waiting_order_dirty: bool,
 }
 
 impl Scheduler {
@@ -40,10 +44,14 @@ impl Scheduler {
             waiting: VecDeque::new(),
             active: BTreeMap::new(),
             metrics: SchedulerMetrics::default(),
+            consecutive_prefill_iterations: 0,
+            waiting_turn: 0,
+            next_waiting_order: 0,
+            waiting_order_dirty: false,
         }
     }
 
-    pub fn submit(&mut self, sequence: Sequence) -> Result<(), AdmissionError> {
+    pub fn submit(&mut self, mut sequence: Sequence) -> Result<(), AdmissionError> {
         if sequence.prompt_tokens.is_empty() {
             return Err(AdmissionError::EmptyPrompt);
         }
@@ -63,12 +71,17 @@ impl Scheduler {
         } else {
             self.metrics.prefix_misses = self.metrics.prefix_misses.saturating_add(1);
         }
+        sequence.enqueued_turn = self.waiting_turn;
+        sequence.enqueue_order = self.next_waiting_order;
+        self.next_waiting_order = self.next_waiting_order.saturating_add(1);
         self.waiting.push_back(sequence);
+        self.waiting_order_dirty = true;
         self.refresh_counts();
         Ok(())
     }
 
     pub fn plan_iteration(&mut self) -> IterationPlan {
+        self.waiting_turn = self.waiting_turn.saturating_add(1);
         let admitted = self.admit_waiting();
         let mut plan = IterationPlan {
             admitted,
@@ -81,11 +94,21 @@ impl Scheduler {
         // but combining a long prefill with live decode rows changes dense
         // model outputs. Give chunked prefill/recompute one iteration, then
         // resume decode for all active sequences on the next iteration.
-        let run_prefill_phase = ids.iter().any(|id| {
+        let has_prefill = ids.iter().any(|id| {
             self.active
                 .get(id)
-                .is_some_and(|sequence| sequence.prefill_cursor < sequence.recompute_tokens().len())
+                .is_some_and(|sequence| sequence.prefill_cursor < sequence.recompute_token_count())
         });
+        let has_live_decode = ids.iter().any(|id| {
+            self.active.get(id).is_some_and(|sequence| {
+                sequence.prefill_cursor >= sequence.recompute_token_count()
+                    && sequence.pending_decode_token().is_some()
+            })
+        });
+        let run_prefill_phase = has_prefill
+            && (!has_live_decode
+                || self.consecutive_prefill_iterations
+                    < self.config.max_consecutive_prefill_iterations);
 
         for id in ids {
             if budget == 0 {
@@ -96,6 +119,9 @@ impl Scheduler {
             };
             let replay = sequence.recompute_tokens();
             if sequence.prefill_cursor < replay.len() {
+                if !run_prefill_phase {
+                    continue;
+                }
                 if prefill_sequences >= self.config.max_prefill_sequences_per_iteration {
                     continue;
                 }
@@ -147,6 +173,24 @@ impl Scheduler {
                 plan.token_count += 1;
                 budget -= 1;
             }
+        }
+
+        if plan
+            .work
+            .iter()
+            .any(|work| work.phase != IterationPhase::Decode)
+        {
+            self.consecutive_prefill_iterations = if has_live_decode {
+                self.consecutive_prefill_iterations.saturating_add(1)
+            } else {
+                0
+            };
+        } else if plan
+            .work
+            .iter()
+            .any(|work| work.phase == IterationPhase::Decode)
+        {
+            self.consecutive_prefill_iterations = 0;
         }
 
         plan
@@ -258,7 +302,10 @@ impl Scheduler {
             };
             self.release_memory(&sequence);
             sequence.reset_for_recompute();
+            sequence.enqueue_order = self.next_waiting_order;
+            self.next_waiting_order = self.next_waiting_order.saturating_add(1);
             self.waiting.push_front(sequence);
+            self.waiting_order_dirty = true;
             preempted.push(victim);
             self.metrics.preempted = self.metrics.preempted.saturating_add(1);
         }
@@ -297,6 +344,7 @@ impl Scheduler {
         }
         if let Some(index) = self.waiting.iter().position(|sequence| sequence.id == id) {
             self.waiting.remove(index);
+            self.waiting_order_dirty = true;
             self.metrics.cancelled = self.metrics.cancelled.saturating_add(1);
             self.refresh_counts();
             return true;
@@ -307,6 +355,32 @@ impl Scheduler {
     fn admit_waiting(&mut self) -> usize {
         let mut admitted = 0;
         let mut deferred = VecDeque::new();
+        if self.waiting_order_dirty {
+            let order = order_cache_aware_candidates(
+                self.waiting
+                    .iter()
+                    .enumerate()
+                    .map(|(index, sequence)| CacheAwareCandidate {
+                        index,
+                        priority: sequence.priority,
+                        affinity: &sequence.cache_affinity,
+                        prompt_tokens: &sequence.prompt_tokens,
+                        enqueued_turn: sequence.enqueued_turn,
+                        order: sequence.enqueue_order,
+                    }),
+                self.waiting_turn,
+                self.config.cache_aging_cost_per_iteration,
+                self.config.group_waiting_prefixes,
+            );
+            if is_complete_permutation(&order, self.waiting.len()) {
+                let mut waiting = self.waiting.drain(..).map(Some).collect::<Vec<_>>();
+                self.waiting = order
+                    .into_iter()
+                    .filter_map(|index| waiting[index].take())
+                    .collect();
+            }
+            self.waiting_order_dirty = false;
+        }
         while let Some(mut sequence) = self.waiting.pop_front() {
             if self.active.len() >= self.config.max_active_sequences
                 || !self.can_reserve_memory(&sequence)
@@ -393,6 +467,17 @@ impl Scheduler {
     }
 }
 
+fn is_complete_permutation(order: &[usize], len: usize) -> bool {
+    if order.len() != len {
+        return false;
+    }
+    let mut seen = vec![false; len];
+    order
+        .iter()
+        .copied()
+        .all(|index| index < len && !std::mem::replace(&mut seen[index], true))
+}
+
 fn contiguous_positions(start: usize, count: usize) -> Vec<i32> {
     (start..start.saturating_add(count))
         .map(|position| i32::try_from(position).unwrap_or(i32::MAX))
@@ -463,6 +548,37 @@ mod tests {
     }
 
     #[test]
+    fn bounded_prefill_iterations_allow_live_decode_progress() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_tokens_per_iteration: 8,
+            prefill_chunk_tokens: 4,
+            max_consecutive_prefill_iterations: 1,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("decode", 2, 4)).unwrap();
+        let initial = scheduler.plan_iteration();
+        scheduler.complete_iteration(&initial, &[42]);
+        scheduler.submit(sequence("prefill", 8, 4)).unwrap();
+
+        let prefill = scheduler.plan_iteration();
+        assert_eq!(prefill.work.len(), 1);
+        assert_eq!(prefill.work[0].sequence_id, "prefill");
+        assert_eq!(prefill.work[0].phase, IterationPhase::Prefill);
+        scheduler.complete_iteration(&prefill, &[-1]);
+
+        let decode = scheduler.plan_iteration();
+        assert_eq!(decode.work.len(), 1);
+        assert_eq!(decode.work[0].sequence_id, "decode");
+        assert_eq!(decode.work[0].phase, IterationPhase::Decode);
+        scheduler.complete_iteration(&decode, &[43]);
+
+        let resumed_prefill = scheduler.plan_iteration();
+        assert_eq!(resumed_prefill.work.len(), 1);
+        assert_eq!(resumed_prefill.work[0].sequence_id, "prefill");
+        assert_eq!(resumed_prefill.work[0].phase, IterationPhase::Prefill);
+    }
+
+    #[test]
     fn admission_uses_effective_minimum_across_components() {
         let mut scheduler = Scheduler::new(SchedulerConfig {
             max_active_sequences: 8,
@@ -489,6 +605,28 @@ mod tests {
         let plan = scheduler.plan_iteration();
         assert_eq!(plan.admitted, 1);
         assert_eq!(scheduler.snapshot().waiting_ids, vec!["b"]);
+    }
+
+    #[test]
+    fn admission_groups_the_heaviest_waiting_prefix_subtree() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 1,
+            ..SchedulerConfig::default()
+        });
+        scheduler
+            .submit(Sequence::new("unique".into(), vec![9, 9, 9], 1, None, 0))
+            .unwrap();
+        scheduler
+            .submit(Sequence::new("shared-a".into(), vec![1, 2, 3], 1, None, 0))
+            .unwrap();
+        scheduler
+            .submit(Sequence::new("shared-b".into(), vec![1, 2, 4], 1, None, 0))
+            .unwrap();
+
+        let plan = scheduler.plan_iteration();
+
+        assert_eq!(plan.admitted, 1);
+        assert_eq!(scheduler.snapshot().active_ids, ["shared-a"]);
     }
 
     #[test]
@@ -599,5 +737,50 @@ mod tests {
             scheduler.snapshot().component_used_bytes,
             vec![("kv".into(), 0)]
         );
+    }
+
+    #[test]
+    fn repeated_component_preemption_preserves_aging_credit() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 1,
+            cache_aging_cost_per_iteration: 10,
+            memory_components: vec![MemoryComponent {
+                name: "kv".into(),
+                capacity_bytes: 2,
+                resident_bytes: 0,
+                bytes_per_token: 1,
+                bytes_per_sequence: 0,
+            }],
+            ..SchedulerConfig::default()
+        });
+        let hot_affinity = crate::CacheAffinity::from_stage(crate::StageCacheAffinity {
+            stage_index: 0,
+            matched_tokens: 1,
+            prefill_cost_per_token: 80,
+            restore_cost: 0,
+            cache_epoch: 0,
+        });
+        scheduler
+            .submit(sequence("cold", 2, 4).with_admission_tokens(1))
+            .unwrap();
+        scheduler.plan_iteration();
+        scheduler.waiting_turn = 10;
+
+        for hot_id in ["hot-a", "hot-b"] {
+            assert_eq!(scheduler.preempt_for_component_pressure(&[3]), ["cold"]);
+            scheduler.preempt_for_component_pressure(&[0]);
+            scheduler
+                .submit(
+                    sequence(hot_id, 2, 4)
+                        .with_admission_tokens(1)
+                        .with_cache_affinity(hot_affinity.clone()),
+                )
+                .unwrap();
+
+            scheduler.plan_iteration();
+
+            assert_eq!(scheduler.snapshot().active_ids, ["cold"]);
+            assert_eq!(scheduler.sequence("cold").unwrap().enqueued_turn, 0);
+        }
     }
 }

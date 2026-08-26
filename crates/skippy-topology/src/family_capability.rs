@@ -366,11 +366,6 @@ pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectati
         recurrent_or_hybrid: false,
     },
     StageRuntimeFamilyExpectation {
-        llama_architecture: "glm-dsa",
-        family_id: "glm_dsa",
-        recurrent_or_hybrid: false,
-    },
-    StageRuntimeFamilyExpectation {
         llama_architecture: "grok",
         family_id: "grok",
         recurrent_or_hybrid: false,

@@ -1,8 +1,26 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 264cb724353f4922a715979e0254fcc4b0104541 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 07/15] Add Skippy activation frame handling
+Subject: [PATCH 06/18] Add Skippy activation frame handling
 
+---
+ include/skippy/activation.h      |  44 ++
+ src/skippy/activation.cpp        | 964 +++++++++++++++++++++++++++++++
+ src/skippy/activation_internal.h |  90 +++
+ src/skippy/activation_layout.cpp | 414 +++++++++++++
+ src/skippy/activation_scopes.h   | 134 +++++
+ src/skippy/glm_dsa.cpp           | 857 +++++++++++++++++++++++++++
+ src/skippy/glm_dsa.h             |  14 +
+ src/skippy/graph_filter_scope.h  |  44 ++
+ 8 files changed, 2561 insertions(+)
+ create mode 100644 include/skippy/activation.h
+ create mode 100644 src/skippy/activation.cpp
+ create mode 100644 src/skippy/activation_internal.h
+ create mode 100644 src/skippy/activation_layout.cpp
+ create mode 100644 src/skippy/activation_scopes.h
+ create mode 100644 src/skippy/glm_dsa.cpp
+ create mode 100644 src/skippy/glm_dsa.h
+ create mode 100644 src/skippy/graph_filter_scope.h
 
 diff --git a/include/skippy/activation.h b/include/skippy/activation.h
 new file mode 100644
@@ -56,7 +74,7 @@ index 000000000..3611898ea
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 new file mode 100644
-index 000000000..1f8ac850a
+index 000000000..4b208cd4b
 --- /dev/null
 +++ b/src/skippy/activation.cpp
 @@ -0,0 +1,964 @@
@@ -1682,10 +1700,10 @@ index 000000000..440db0aef
 +};
 diff --git a/src/skippy/glm_dsa.cpp b/src/skippy/glm_dsa.cpp
 new file mode 100644
-index 000000000..699277afe
+index 000000000..7ce838ee1
 --- /dev/null
 +++ b/src/skippy/glm_dsa.cpp
-@@ -0,0 +1,958 @@
+@@ -0,0 +1,857 @@
 +#include "skippy/environment.h"
 +#include "skippy/glm_dsa.h"
 +#include "skippy/runtime_types.h"
@@ -1939,106 +1957,6 @@ index 000000000..699277afe
 +    return static_cast<int>(parsed);
 +}
 +
-+static void skippy_glm_dsa_log_direct_sparse_decision_for_tensor(
-+        const skippy_glm_dsa_op_timing & timing,
-+        const ggml_tensor * tensor,
-+        skippy_glm_dsa_op_kind kind) {
-+    if (!skippy_glm_dsa_direct_sparse_decision_log_enabled() || tensor == nullptr) {
-+        return;
-+    }
-+
-+    const ggml_tensor * top_k = nullptr;
-+    bool use_direct = false;
-+    if (kind == SKIPPY_GLM_DSA_OP_DSA_SPARSE_ATTN && tensor->op == GGML_OP_DSA_SPARSE_ATTN) {
-+        top_k = tensor->src[4];
-+        use_direct = true;
-+    } else if ((kind == SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK || kind == SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD) &&
-+               tensor->op == GGML_OP_DSA_SPARSE_MASK) {
-+        top_k = tensor->src[1];
-+    } else {
-+        return;
-+    }
-+
-+    char group_name[SKIPPY_GLM_DSA_TIMING_GROUP_NAME_SIZE] = {};
-+    skippy_glm_dsa_group_name_for_tensor(tensor->name, group_name, sizeof(group_name));
-+    const int layer = skippy_glm_dsa_layer_from_group_name(group_name);
-+    const int64_t sparse_batch = top_k != nullptr ? top_k->ne[1] : -1;
-+    const int64_t sparse_streams = top_k != nullptr ? top_k->ne[2] : -1;
-+    const uint32_t prefill_cap = skippy_glm_dsa_direct_sparse_prefill_max_tokens();
-+    const bool prefill_enabled = skippy_glm_dsa_direct_sparse_prefill_enabled();
-+    const ggml_tensor * dense_mask_shape = nullptr;
-+    if (tensor->op == GGML_OP_DSA_SPARSE_ATTN) {
-+        dense_mask_shape = tensor->src[3];
-+    } else if (tensor->op == GGML_OP_DSA_SPARSE_MASK) {
-+        dense_mask_shape = tensor;
-+    }
-+    const uint64_t dense_mask_bytes = dense_mask_shape != nullptr ? ggml_nbytes(dense_mask_shape) : 0;
-+    const uint64_t dense_mask_limit = skippy_glm_dsa_dense_sparse_mask_max_bytes();
-+    const int64_t sparse_kv = dense_mask_shape != nullptr ? dense_mask_shape->ne[1] : -1;
-+    const int64_t sparse_top_k = top_k != nullptr ? top_k->ne[0] : -1;
-+    const int64_t decode_max_top_k = skippy_glm_dsa_direct_sparse_decode_max_top_k();
-+    const int64_t kv_topk_ratio = sparse_top_k > 0 ? sparse_kv / sparse_top_k : 0;
-+    const bool direct_enabled = use_direct || skippy_glm_dsa_direct_sparse_attn_enabled();
-+    const bool decode_shape =
-+            sparse_streams > 0 &&
-+            sparse_batch == 1 &&
-+            timing.token_count == static_cast<size_t>(sparse_streams);
-+    const bool prefill_shape =
-+            prefill_enabled &&
-+            sparse_batch >= 1 &&
-+            sparse_batch <= static_cast<int64_t>(prefill_cap);
-+    const bool large_prefill_shape =
-+            prefill_enabled &&
-+            skippy_glm_dsa_unproven_large_direct_sparse_prefill_enabled() &&
-+            sparse_batch > static_cast<int64_t>(prefill_cap) &&
-+            dense_mask_bytes > dense_mask_limit;
-+    const bool token_shape_allowed = decode_shape || prefill_shape || large_prefill_shape;
-+    const bool direct_top_k_too_large =
-+            decode_shape &&
-+            sparse_top_k > decode_max_top_k;
-+    const char * phase =
-+            decode_shape ? "decode" :
-+            (prefill_shape || large_prefill_shape) ? "prefill" :
-+            "other";
-+    const char * selector_reason =
-+            use_direct && decode_shape ? "decode" :
-+            use_direct && prefill_shape ? "short_prefill" :
-+            use_direct && large_prefill_shape ? "dense_mask_guard_large_prefill" :
-+            !direct_enabled ? "direct_sparse_disabled" :
-+            !token_shape_allowed ? "token_shape_not_allowed" :
-+            direct_top_k_too_large ? "direct_sparse_top_k_too_large" :
-+            !use_direct ? "dense_mask_fallback" :
-+            "unknown";
-+
-+    LLAMA_LOG_INFO(
-+            "skippy: glm_dsa_direct_sparse_decision layer=%d ubatch_tokens=%lld sparse_batch=%lld sparse_streams=%lld prefill_cap=%lld decode_max_top_k=%lld sparse_kv=%lld sparse_top_k=%lld min_kv_topk_ratio=%lld kv_topk_ratio=%lld dense_mask_bytes=%llu dense_mask_limit=%llu phase=%s selector_reason=%s direct_enabled=%d prefill_enabled=%d decode_shape=%d prefill_shape=%d large_prefill_shape=%d token_shape_allowed=%d backend_sparse_supported=%d kq_b_ok=%d sinks_ok=%d alibi_ok=%d soft_cap_ok=%d use_direct=%d\n",
-+            layer,
-+            static_cast<long long>(timing.token_count),
-+            static_cast<long long>(sparse_batch),
-+            static_cast<long long>(sparse_streams),
-+            static_cast<long long>(prefill_cap),
-+            static_cast<long long>(decode_max_top_k),
-+            static_cast<long long>(sparse_kv),
-+            static_cast<long long>(sparse_top_k),
-+            0LL,
-+            static_cast<long long>(kv_topk_ratio),
-+            static_cast<unsigned long long>(dense_mask_bytes),
-+            static_cast<unsigned long long>(dense_mask_limit),
-+            phase,
-+            selector_reason,
-+            direct_enabled ? 1 : 0,
-+            prefill_enabled ? 1 : 0,
-+            decode_shape ? 1 : 0,
-+            prefill_shape ? 1 : 0,
-+            large_prefill_shape ? 1 : 0,
-+            token_shape_allowed ? 1 : 0,
-+            1,
-+            1,
-+            1,
-+            1,
-+            1,
-+            use_direct ? 1 : 0);
-+}
 +
 +static skippy_glm_dsa_op_group * skippy_glm_dsa_op_timing_group(
 +        skippy_glm_dsa_op_timing & timing,
@@ -2432,7 +2350,6 @@ index 000000000..699277afe
 +        timing.stats[kind].elapsed_us += elapsed_us;
 +        skippy_glm_dsa_record_group_timing(timing, kind, tensor->name, elapsed_us);
 +        skippy_glm_dsa_record_hot_tensor(timing, kind, tensor, elapsed_us);
-+        skippy_glm_dsa_log_direct_sparse_decision_for_tensor(timing, tensor, kind);
 +    }
 +    skippy_glm_dsa_trace_tensor(timing, kind, tensor);
 +    timing.pending_kind = SKIPPY_GLM_DSA_OP_UNKNOWN;
@@ -2716,3 +2633,4 @@ index 000000000..581be3ffd
 +
 -- 
 2.54.0 (Apple Git-157)
+

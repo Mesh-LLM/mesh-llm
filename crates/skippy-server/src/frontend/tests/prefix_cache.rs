@@ -36,6 +36,43 @@ fn proactive_eviction_attrs_are_bounded_and_request_free() {
 }
 
 #[test]
+fn resident_capacity_rejection_is_side_effect_free_and_retryable() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let mut runtime = crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(
+        config.lane_count,
+        8,
+    );
+    let before = runtime.session_stats();
+
+    let first = kv
+        .admit_resident_capacity(&mut runtime, "request", 9, 1, 1)
+        .unwrap();
+    let second = kv
+        .admit_resident_capacity(&mut runtime, "request", 9, 1, 1)
+        .unwrap();
+    let recovered = kv
+        .admit_resident_capacity(&mut runtime, "request", 4, 1, 1)
+        .unwrap();
+
+    assert!(!first.admitted);
+    assert!(recovered.admitted);
+    assert_eq!(second.active_tokens, first.active_tokens);
+    assert_eq!(
+        second.admission_deficit_tokens,
+        first.admission_deficit_tokens
+    );
+    assert_eq!(runtime.session_stats(), before);
+
+    let response = crate::frontend::local_generation::resident_capacity_admission_error(&first)
+        .into_response();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers().get("retry-after").unwrap(), "1");
+}
+
+#[test]
 fn openai_cache_stats_default_to_disabled() {
     let stats = GenerationCacheStats::default();
 

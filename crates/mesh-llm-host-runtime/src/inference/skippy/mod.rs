@@ -7,6 +7,7 @@ mod hash_cache;
 mod hooks;
 mod kv_cache;
 mod materialization;
+pub(crate) mod metal_pipeline_cache;
 mod package;
 mod resolver;
 mod stage;

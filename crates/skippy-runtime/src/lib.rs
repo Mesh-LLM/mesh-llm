@@ -19,7 +19,7 @@ mod runtime_events;
 mod session;
 mod types;
 
-pub use activation::{DecodeFrameBatchRequest, IterationBatchRequest};
+pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest};
 pub use config::{
     FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
     LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, MtpSource, RuntimeConfig,

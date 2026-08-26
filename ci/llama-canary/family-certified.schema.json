@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mesh-llm.dev/schemas/family-certified.schema.json",
+  "title": "MeshLLM supported-family certification policy",
+  "$comment": "The schema validates transport shape. scripts/plan-family-battery.py additionally enforces the four-lane certified-profile invariant, exact profile semantics, unique families, safe artifact paths, and deterministic sharding.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "policy", "models"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profiles", "cadences"],
+      "properties": {
+        "profiles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["full", "package-oracle", "graph-only"],
+          "properties": {
+            "full": {"$ref": "#/$defs/profile"},
+            "package-oracle": {"$ref": "#/$defs/profile"},
+            "graph-only": {"$ref": "#/$defs/profile"}
+          }
+        },
+        "cadences": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "llama-bump"},
+            {"const": "manual-full"},
+            {"const": "nightly"},
+            {"const": "rotating"}
+          ],
+          "items": false
+        }
+      }
+    },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/model"}
+    }
+  },
+  "$defs": {
+    "singleLine": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\r\\n\\t|]+$"
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "oracle", "required_lanes"],
+      "properties": {
+        "status": {"enum": ["certified", "provisional"]},
+        "oracle": {"enum": ["local-monolithic", "independent-trace", "none"]},
+        "required_lanes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/singleLine"}
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "revision", "files", "file_integrity", "selector"],
+      "properties": {
+        "repo": {"type": "string", "pattern": "^[^/\\r\\n\\t]+/[^/\\r\\n\\t]+$"},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/singleLine"}
+        },
+        "file_integrity": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["size_bytes", "blob_id"],
+            "properties": {
+              "size_bytes": {"type": "integer", "minimum": 1},
+              "blob_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          }
+        },
+        "selector": {"$ref": "#/$defs/singleLine"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "profile",
+        "cadences",
+        "artifact",
+        "execution",
+        "resources",
+        "notes"
+      ],
+      "properties": {
+        "family": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "profile": {"enum": ["full", "package-oracle", "graph-only"]},
+        "cadences": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["llama-bump", "manual-full", "nightly", "rotating"]}
+        },
+        "artifact": {"$ref": "#/$defs/artifact"},
+        "draft_artifact": {"$ref": "#/$defs/artifact"},
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "trunk_layers",
+            "mtp_layers",
+            "activation_width",
+            "boundary_sweep_period",
+            "speculative_policy"
+          ],
+          "properties": {
+            "trunk_layers": {"type": "integer", "minimum": 1},
+            "mtp_layers": {"type": "integer", "minimum": 0},
+            "activation_width": {"type": "integer", "minimum": 1},
+            "boundary_sweep_period": {"type": "integer", "minimum": 0},
+            "speculative_policy": {"enum": ["mtp-if-present", "disabled"]}
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runner_role", "cache_policy", "estimated_model_bytes"],
+          "properties": {
+            "runner_role": {"const": "family-certify"},
+            "cache_policy": {"const": "immutable-local"},
+            "estimated_model_bytes": {"type": "integer", "minimum": 1},
+            "startup_timeout_secs": {"type": "integer", "minimum": 180, "maximum": 900}
+          }
+        },
+        "notes": {"$ref": "#/$defs/singleLine"}
+      }
+    }
+  }
+}

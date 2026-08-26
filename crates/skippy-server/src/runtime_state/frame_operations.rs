@@ -345,6 +345,7 @@ impl RuntimeState {
                     sampling: request.sampling,
                     input: request.input,
                     sample_last: request.sample_last,
+                    phase: request.phase,
                 })
                 .collect::<Vec<_>>();
             StageSession::iteration_batch_sampled(&mut iteration_requests)

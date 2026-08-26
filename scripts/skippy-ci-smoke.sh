@@ -18,20 +18,20 @@ WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/skippy-ci-smoke}"
 REPORT_DIR="${WORK_DIR}/reports"
 MODEL_DIR="${MODEL_DIR:-${WORK_DIR}/models}"
 
-DENSE_MODEL_REPO="${DENSE_MODEL_REPO:-jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF}"
-DENSE_MODEL_FILE="${DENSE_MODEL_FILE:-SmolLM2-135M-Instruct.Q4_K_M.gguf}"
-DENSE_MODEL_SELECTOR="${DENSE_MODEL_SELECTOR:-Q4_K_M}"
+DENSE_MODEL_REPO="${DENSE_MODEL_REPO:-Qwen/Qwen3-0.6B-GGUF}"
+DENSE_MODEL_FILE="${DENSE_MODEL_FILE:-Qwen3-0.6B-Q8_0.gguf}"
+DENSE_MODEL_SELECTOR="${DENSE_MODEL_SELECTOR:-Q8_0}"
 DENSE_MODEL_ID="${DENSE_MODEL_ID:-${DENSE_MODEL_REPO}:${DENSE_MODEL_SELECTOR}}"
 DENSE_MODEL_PATH="${DENSE_MODEL_PATH:-}"
 
-RECURRENT_MODEL_REPO="${RECURRENT_MODEL_REPO:-tiiuae/Falcon-H1-0.5B-Instruct-GGUF}"
-RECURRENT_MODEL_FILE="${RECURRENT_MODEL_FILE:-Falcon-H1-0.5B-Instruct-Q4_K_M.gguf}"
+RECURRENT_MODEL_REPO="${RECURRENT_MODEL_REPO:-tiiuae/Falcon-H1-1.5B-Instruct-GGUF}"
+RECURRENT_MODEL_FILE="${RECURRENT_MODEL_FILE:-Falcon-H1-1.5B-Instruct-Q4_K_M.gguf}"
 RECURRENT_MODEL_SELECTOR="${RECURRENT_MODEL_SELECTOR:-Q4_K_M}"
 RECURRENT_MODEL_ID="${RECURRENT_MODEL_ID:-${RECURRENT_MODEL_REPO}:${RECURRENT_MODEL_SELECTOR}}"
 RECURRENT_MODEL_PATH="${RECURRENT_MODEL_PATH:-}"
 
-CTX_SIZE="${CTX_SIZE:-384}"
-PROMPT_CTX_SIZE="${PROMPT_CTX_SIZE:-768}"
+CTX_SIZE="${CTX_SIZE:-8192}"
+PROMPT_CTX_SIZE="${PROMPT_CTX_SIZE:-$CTX_SIZE}"
 STATE_PREFIX_TOKENS="${STATE_PREFIX_TOKENS:-128}"
 PROMPT_PREFILL_CHUNK_SIZE="${PROMPT_PREFILL_CHUNK_SIZE:-128}"
 PROMPT_MAX_NEW_TOKENS="${PROMPT_MAX_NEW_TOKENS:-8}"
@@ -129,22 +129,46 @@ download_model() {
   local repo="$1"
   local file="$2"
   local out_dir="$3"
-  mkdir -p "$out_dir"
-  local cached_path="${out_dir}/${file}"
-  if [[ -s "$cached_path" ]]; then
-    echo "using cached ${repo}/${file} at ${cached_path}" >&2
-    printf '%s\n' "$cached_path"
-    return 0
-  fi
-  echo "downloading ${repo}/${file}" >&2
   local output path
-  output="$(run_with_timeout "download ${repo}/${file}" hf download "$repo" "$file" --local-dir "$out_dir")"
-  path="$(printf '%s\n' "$output" | sed -n 's/^path=//p' | tail -n 1)"
+
+  if [[ -n "${HF_CACHE:-}" ]]; then
+    # The family-certify runner's cache is shared over NFS. Resolve artifacts
+    # from that pre-warmed cache without creating local-dir metadata or locks;
+    # a miss must fail instead of mutating shared storage during certification.
+    output="$(
+      HF_HOME="$HF_CACHE" \
+      HF_HUB_CACHE="$HF_CACHE/hub" \
+      HF_HUB_OFFLINE=1 \
+        run_with_timeout "resolve cached ${repo}/${file}" hf download "$repo" "$file"
+    )"
+  else
+    mkdir -p "$out_dir"
+    local cached_path="${out_dir}/${file}"
+    if [[ -s "$cached_path" ]]; then
+      echo "using cached ${repo}/${file} at ${cached_path}" >&2
+      printf '%s\n' "$cached_path"
+      return 0
+    fi
+    echo "downloading ${repo}/${file}" >&2
+    output="$(run_with_timeout "download ${repo}/${file}" hf download "$repo" "$file" --local-dir "$out_dir")"
+  fi
+
+  path="$(
+    printf '%s\n' "$output" \
+      | sed -n \
+        -e 's/^path=//p' \
+        -e 's/^[[:space:]]*path:[[:space:]]*//p' \
+      | tail -n 1
+  )"
   if [[ -z "$path" ]]; then
-    path="${out_dir}/${file}"
+    if [[ -n "${HF_CACHE:-}" ]]; then
+      path="$(printf '%s\n' "$output" | tail -n 1)"
+    else
+      path="${out_dir}/${file}"
+    fi
   fi
   if [[ ! -f "$path" ]]; then
-    echo "downloaded model path not found: $path" >&2
+    echo "resolved model path not found: $path" >&2
     printf '%s\n' "$output" >&2
     exit 1
   fi

@@ -118,6 +118,23 @@ pub use runtime::{
     MeshGuardrailMode, RuntimeOptions, RuntimeSurface, console_session_mode_for_runtime_surface,
 };
 
+/// Configure the ggml Metal pipeline cache directory.
+///
+/// Point the patched ggml Metal backend at a process-wide on-disk pipeline
+/// cache before any native runtime library is loaded. Embedded hosts and
+/// binaries must call this exactly once from synchronous bootstrap, before
+/// the Tokio runtime is constructed; see
+/// `inference::skippy::metal_pipeline_cache` for the full contract. An
+/// explicit `GGML_METAL_PIPELINE_CACHE_DIR` set by the user wins.
+///
+/// # Safety
+///
+/// The caller must ensure no other thread can read or write the process
+/// environment for the duration of this call.
+pub unsafe fn configure_metal_pipeline_cache() {
+    unsafe { inference::skippy::metal_pipeline_cache::configure_metal_pipeline_cache() }
+}
+
 pub async fn run() -> Result<()> {
     initialize_host_runtime().await?;
     runtime::run().await

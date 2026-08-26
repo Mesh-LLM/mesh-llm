@@ -31,13 +31,43 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
-`llama-upstream-canary.yml` runs trusted default-branch content only on the
-persistent self-hosted `family-certify` runner group (tools come from the
-runner image; no GitHub Actions model caching). The runner's `.env` exports
+`llama-upstream-canary.yml` runs only on its daily schedule or an explicit
+manual dispatch; it is not ordinary push or PR CI. It executes trusted
+default-branch content only on the persistent self-hosted `family-certify`
+runner group (tools come from the runner image; no GitHub Actions model
+caching). Before native compilation,
+`scripts/plan-family-battery.py` validates the versioned JSON family policy,
+the mandatory four-lane contract for every certified profile, and every exact
+artifact revision/file in the immutable local cache. It reads only GGUF
+metadata headers, requires each artifact to have at least one metadata-bearing
+shard, and requires every shard that carries `*.block_count` and
+`*.embedding_length` to equal the planned runtime range and activation width
+before compilation. It emits
+deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
+all-family shard while retaining the plan as evidence. The runner's `.env` exports
 `HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
 read-only; the cache is populated by a two-stage prewarm that downloads on
-local disk and moves each repo to NFS). On a
+local disk and moves each repo to NFS). The workflow builds its four
+certification binaries before the manifest lanes; the family battery builds
+them once itself unless `--skip-build` is selected, in which case it verifies
+that every binary already exists. A manual dispatch may set `force_certify` to
+run build, smoke, and the full family battery when the upstream SHA is
+unchanged. Before any certification starts, every selected GGUF is resolved
+directly by the immutable snapshot SHA checked into
+`ci/llama-canary/family-certified.json`. The runtime preflight records the
+revisions, verifies all shard/tensor scans and declared runtime/MTP layer
+counts/model bytes, disk
+headroom and certification ports, and runs one cheap MTP speculative-corpus
+smoke. Only GGUFs with a complete native MTP/NextN tensor head across all
+shards run `llama-spec-bench`; those rows also require native MTP draft
+sidebands in staged correctness. Per-lane
+outcomes, immutable model manifests, summaries, model scans, preflight
+evidence, and logs are uploaded for 14 days even when the battery fails. Stage
+readiness uses a declared per-model override or a model-size-derived deadline,
+each complete certification has
+a portable process-group wall-clock limit, and the workflow's outer battery
+ceiling is 12 hours. On a
 patch-apply failure it hands the queue to a non-interactive `opencode` agent
 (`LLAMA_CANARY_AGENT_MODEL`, default `Nemotron 3 Ultra Free`) which rebases
 `third_party/llama.cpp/patches`, runs the supported-families certification

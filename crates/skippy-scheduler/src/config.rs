@@ -40,6 +40,14 @@ pub struct SchedulerConfig {
     pub max_tokens_per_iteration: usize,
     pub prefill_chunk_tokens: usize,
     pub max_prefill_sequences_per_iteration: usize,
+    /// Maximum prefill/recompute iterations allowed while decode work is live.
+    /// `usize::MAX` preserves unbounded prefill-first scheduling.
+    pub max_consecutive_prefill_iterations: usize,
+    /// Fairness credit added to a waiting request on every scheduler turn.
+    /// Cache-aware admission uses this to prevent cold-prefix starvation.
+    pub cache_aging_cost_per_iteration: u64,
+    /// Group equal-value waiting requests by shared prompt-prefix subtree.
+    pub group_waiting_prefixes: bool,
     pub iteration_interval: Duration,
     pub memory_components: Vec<MemoryComponent>,
 }
@@ -54,6 +62,8 @@ impl SchedulerConfig {
             .prefill_chunk_tokens
             .clamp(1, self.max_tokens_per_iteration);
         self.max_prefill_sequences_per_iteration = self.max_prefill_sequences_per_iteration.max(1);
+        self.max_consecutive_prefill_iterations = self.max_consecutive_prefill_iterations.max(1);
+        self.cache_aging_cost_per_iteration = self.cache_aging_cost_per_iteration.max(1);
         self
     }
 }
@@ -67,6 +77,9 @@ impl Default for SchedulerConfig {
             max_tokens_per_iteration: 2048,
             prefill_chunk_tokens: 256,
             max_prefill_sequences_per_iteration: usize::MAX,
+            max_consecutive_prefill_iterations: usize::MAX,
+            cache_aging_cost_per_iteration: 4_096,
+            group_waiting_prefixes: true,
             iteration_interval: Duration::from_millis(2),
             memory_components: Vec::new(),
         }

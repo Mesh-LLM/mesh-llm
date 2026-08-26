@@ -22,6 +22,7 @@ use crate::kv_proto::{
 };
 
 mod activation;
+mod cache_affinity;
 mod config;
 mod exact_state;
 mod identity;
@@ -33,6 +34,7 @@ pub use records::{
     RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore, ResidentPrefixRecord,
     ResidentPrefixRestore,
 };
+pub use resident_prefix::{ResidentCapacityDecision, ResidentPrefixEviction};
 
 /// Return a bounded, stable telemetry class without exporting error text.
 ///
@@ -174,6 +176,9 @@ pub(crate) struct RadixResidentEntry {
     pub(crate) page_id: String,
     pub(crate) seq_id: i32,
     pub(crate) token_count: u64,
+    /// Deterministic first-order estimate of work needed to recreate this
+    /// entry: cached tokens multiplied by stage-local layer count.
+    pub(crate) recompute_cost: u64,
 }
 
 #[derive(Debug, Clone)]

@@ -8,10 +8,10 @@ use anyhow::{Context, Result, bail};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
-    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, IterationBatchRequest,
-    MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft, RuntimeConfig,
-    RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel, StageSession,
-    TokenSignal, parse_cache_type,
+    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, IterationBatchPhase,
+    IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft,
+    RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel,
+    StageSession, TokenSignal, parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -124,6 +124,7 @@ pub struct RuntimeIterationBatchRequest<'a> {
     pub sampling: Option<&'a SamplingConfig>,
     pub input: Option<&'a ActivationFrame>,
     pub sample_last: bool,
+    pub phase: IterationBatchPhase,
 }
 
 #[derive(Debug, Clone)]
@@ -142,12 +143,17 @@ impl RuntimeState {
     /// this must not be used to drive inference.
     #[cfg(test)]
     pub(crate) fn new_modelless_for_test(lane_count: u32) -> Self {
+        Self::new_modelless_with_capacity_for_test(lane_count, 0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_modelless_with_capacity_for_test(lane_count: u32, ctx_size: u32) -> Self {
         Self {
             model: StageModel::new_dummy(),
             layer_start: 0,
             layer_end: 1,
             lane_count,
-            ctx_size: 0,
+            ctx_size,
             next_lane_index: 0,
             free_lane_indices: Vec::new(),
             sessions: BTreeMap::new(),

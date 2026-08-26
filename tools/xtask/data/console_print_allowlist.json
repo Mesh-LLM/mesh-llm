@@ -2789,11 +2789,11 @@
   ],
   "crates/mesh-llm/src/main.rs": [
     {
-      "line": 63,
+      "line": 74,
       "macro_name": "eprintln!"
     },
     {
-      "line": 70,
+      "line": 81,
       "macro_name": "eprintln!"
     }
   ],
@@ -3633,7 +3633,7 @@
   ],
   "crates/skippy-correctness/src/runner/native_mtp.rs": [
     {
-      "line": 210,
+      "line": 250,
       "macro_name": "println!"
     }
   ],
@@ -4359,27 +4359,27 @@
   ],
   "crates/skippy-server/src/runtime_state.rs": [
     {
-      "line": 528,
+      "line": 534,
       "macro_name": "eprintln!"
     },
     {
-      "line": 608,
+      "line": 614,
       "macro_name": "eprintln!"
     },
     {
-      "line": 650,
+      "line": 656,
       "macro_name": "eprintln!"
     },
     {
-      "line": 687,
+      "line": 693,
       "macro_name": "eprintln!"
     },
     {
-      "line": 691,
+      "line": 697,
       "macro_name": "eprintln!"
     },
     {
-      "line": 696,
+      "line": 702,
       "macro_name": "eprintln!"
     }
   ],

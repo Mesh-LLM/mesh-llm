@@ -1,8 +1,30 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 91aa5f2931b806293af5fa40133d7f23cf8a1523 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 17:06:42 +1000
-Subject: [PATCH 05/15] Add Skippy model lifecycle and package support
+Subject: [PATCH 04/18] Add Skippy model lifecycle and package support
 
+---
+ src/skippy/devices.cpp                  | 106 +++
+ src/skippy/environment.h                |  49 ++
+ src/skippy/model_lifecycle.cpp          | 124 ++++
+ src/skippy/model_load_config.cpp        | 138 ++++
+ src/skippy/model_load_config_internal.h |  22 +
+ src/skippy/model_loading.cpp            | 929 ++++++++++++++++++++++++
+ src/skippy/model_loading_internal.h     |  29 +
+ src/skippy/model_package.cpp            | 727 ++++++++++++++++++
+ src/skippy/runtime_support.h            |  28 +
+ src/skippy/runtime_types.h              | 133 ++++
+ 10 files changed, 2285 insertions(+)
+ create mode 100644 src/skippy/devices.cpp
+ create mode 100644 src/skippy/environment.h
+ create mode 100644 src/skippy/model_lifecycle.cpp
+ create mode 100644 src/skippy/model_load_config.cpp
+ create mode 100644 src/skippy/model_load_config_internal.h
+ create mode 100644 src/skippy/model_loading.cpp
+ create mode 100644 src/skippy/model_loading_internal.h
+ create mode 100644 src/skippy/model_package.cpp
+ create mode 100644 src/skippy/runtime_support.h
+ create mode 100644 src/skippy/runtime_types.h
 
 diff --git a/src/skippy/devices.cpp b/src/skippy/devices.cpp
 new file mode 100644
@@ -478,7 +500,7 @@ new file mode 100644
 index 000000000..dd21a313f
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,929 @@
+@@ -0,0 +1,930 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -1019,6 +1041,7 @@ index 000000000..dd21a313f
 +            model->arch != LLM_ARCH_GEMMA4 &&
 +            model->arch != LLM_ARCH_GLM_DSA &&
 +            model->arch != LLM_ARCH_GLM4 &&
++            model->arch != LLM_ARCH_GLM4_MOE &&
 +            model->arch != LLM_ARCH_DEEPSEEK2 &&
 +            model->arch != LLM_ARCH_DEEPSEEK2OCR &&
 +            model->arch != LLM_ARCH_FALCON_H1 &&
@@ -2351,4 +2374,3 @@ index 000000000..c20c52e71
 +
 -- 
 2.54.0 (Apple Git-157)
-

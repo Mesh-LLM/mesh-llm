@@ -1,4 +1,4 @@
-huggingface_hub[cli]
+huggingface_hub[cli]>=1.1.0
 langchain-openai
 litellm
 openai

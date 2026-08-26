@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "profiles": {
+      "full": {
+        "status": "certified",
+        "oracle": "local-monolithic",
+        "required_lanes": ["single-step", "chain", "dtype-matrix", "state-handoff"]
+      },
+      "package-oracle": {
+        "status": "certified",
+        "oracle": "independent-trace",
+        "required_lanes": ["single-step", "chain", "dtype-matrix", "state-handoff"]
+      },
+      "graph-only": {
+        "status": "provisional",
+        "oracle": "none",
+        "required_lanes": ["graph-parse", "tensor-ownership", "stage-load"]
+      }
+    },
+    "cadences": ["llama-bump", "manual-full", "nightly", "rotating"]
+  },
+  "models": [
+    {
+      "family": "qwen3-dense",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "Qwen/Qwen3-0.6B-GGUF", "revision": "23749fefcc72300e3a2ad315e1317431b06b590a", "files": ["Qwen3-0.6B-Q8_0.gguf"], "file_integrity": {"Qwen3-0.6B-Q8_0.gguf": {"size_bytes": 639446688, "blob_id": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"}}, "selector": "Q8_0"},
+      "execution": {"trunk_layers": 28, "mtp_layers": 0, "activation_width": 1024, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 633495552},
+      "notes": "core production dense baseline"
+    },
+    {
+      "family": "llama",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/Llama-3.2-1B-Instruct-GGUF", "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c", "files": ["Llama-3.2-1B-Instruct-Q4_K_M.gguf"], "file_integrity": {"Llama-3.2-1B-Instruct-Q4_K_M.gguf": {"size_bytes": 807694464, "blob_id": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 16, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 799862912},
+      "notes": "production dense baseline; covers the trimmed olmo2 architecture path"
+    },
+    {
+      "family": "glm47-flash",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/GLM-4.7-Flash-GGUF", "revision": "0d32489ecb9db6d2a4fc93bd27ef01519f95474d", "files": ["GLM-4.7-Flash-Q4_K_M.gguf"], "file_integrity": {"GLM-4.7-Flash-Q4_K_M.gguf": {"size_bytes": 18312339808, "blob_id": "29837ed2c0fc5f51981adf8ac8083fcf80743c598381f13e9f06cbad0498b174"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 47, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 18302863872},
+      "notes": "production MLA path shared with deepseek2; tensors span blk.0 through blk.46"
+    },
+    {
+      "family": "glm4",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/glm-4-9b-chat-GGUF", "revision": "74a33eafa149550a60bff0fdafcdd34caa6df9f0", "files": ["glm-4-9b-chat-Q4_K_M.gguf"], "file_integrity": {"glm-4-9b-chat-Q4_K_M.gguf": {"size_bytes": 6250926848, "blob_id": "aa6cb8f5ef0a70399bdbf92eef566c26c6017ee0b131a424b65b5c757f1c81a2"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 40, "mtp_layers": 0, "activation_width": 4096, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 6244892672},
+      "notes": "production dense GLM path"
+    },
+    {
+      "family": "glm45-air",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/GLM-4.5-Air-GGUF", "revision": "506d64aa8c5cfe9dbbf00bc7a15739438f83204d", "files": ["Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf", "Q4_K_M/GLM-4.5-Air-Q4_K_M-00002-of-00002.gguf"], "file_integrity": {"Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf": {"size_bytes": 50000746752, "blob_id": "3e7e5d25a6db33b7c90f8c5203d6f490d6c0a4f04a46f228af0e33727db5df5e"}, "Q4_K_M/GLM-4.5-Air-Q4_K_M-00002-of-00002.gguf": {"size_bytes": 22975001632, "blob_id": "ac6e50523d45c53faf3bf72d8fe109f3dd54bc6abe98a7773a3636112ead82a6"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 46, "mtp_layers": 1, "activation_width": 4096, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 72966388736},
+      "notes": "GLM4.5 MoE lineage; 46 trunk layers plus one MTP runtime layer; two shards"
+    },
+    {
+      "family": "deepseek2",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF", "revision": "8f248fa2072348f77a8bc37754e470de1f61866e", "files": ["DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"], "file_integrity": {"DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf": {"size_bytes": 10364416768, "blob_id": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 27, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 10360420352},
+      "notes": "production MLA path"
+    },
+    {
+      "family": "gpt-oss",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "ggml-org/gpt-oss-20b-GGUF", "revision": "ef9b12f2ff56c69cf32153a02784e7a3c88bf524", "files": ["gpt-oss-20b-MXFP4.gguf"], "file_integrity": {"gpt-oss-20b-MXFP4.gguf": {"size_bytes": 12109566624, "blob_id": "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901"}}, "selector": "MXFP4"},
+      "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 2880, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 12096558336},
+      "notes": "MoE plus MXFP4; only quantization shipped"
+    },
+    {
+      "family": "qwen3-moe",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF", "revision": "eea7b2be5805a5f151f8847ede8e5f9a9284bf77", "files": ["Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"], "file_integrity": {"Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf": {"size_bytes": 18556686752, "blob_id": "6c997b8af17debdfb01d890214400ccbab00db6acc0ba8da5de1cc906c4774d0"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 18550716416},
+      "notes": "production MoE; graph_max_nodes budget lane"
+    },
+    {
+      "family": "qwen2-moe",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "RichardErkhov/Qwen_-_Qwen1.5-MoE-A2.7B-Chat-gguf", "revision": "947580e7b3904cd4081810d0efec4520a75609c7", "files": ["Qwen1.5-MoE-A2.7B-Chat.Q4_K_M.gguf"], "file_integrity": {"Qwen1.5-MoE-A2.7B-Chat.Q4_K_M.gguf": {"size_bytes": 9496236768, "blob_id": "3dcfb1032781788bf373edb49b888fcac5b6093ea0fe0edf5e23a977390b3eea"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 9490282496},
+      "notes": "small MoE architecture probe"
+    },
+    {
+      "family": "falcon-h1",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF", "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a", "files": ["Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"], "file_integrity": {"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf": {"size_bytes": 944786656, "blob_id": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 4, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 942121232},
+      "notes": "hybrid boundary sweep"
+    },
+    {
+      "family": "jamba2",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/ai21labs_AI21-Jamba2-3B-GGUF", "revision": "02d70acd708332ec4e78e9ceefe116851a307411", "files": ["ai21labs_AI21-Jamba2-3B-Q4_K_M.gguf"], "file_integrity": {"ai21labs_AI21-Jamba2-3B-Q4_K_M.gguf": {"size_bytes": 1932696448, "blob_id": "fa0876fa152f38689cefd6d498907d6255cf515780d65b16346d3190df6a0794"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 28, "mtp_layers": 0, "activation_width": 2560, "boundary_sweep_period": 6, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 1931112448},
+      "notes": "hybrid boundary sweep"
+    },
+    {
+      "family": "kimi-linear",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF", "revision": "228dbe476e5a02091624a19068f4c962caa8a1c5", "files": ["moonshotai_Kimi-Linear-48B-A3B-Instruct-IQ2_XS.gguf"], "file_integrity": {"moonshotai_Kimi-Linear-48B-A3B-Instruct-IQ2_XS.gguf": {"size_bytes": 13897237408, "blob_id": "883be5561005ed6558c3f9d58d33bd9df818ea41c18086a49769047278953c0e"}}, "selector": "IQ2_XS"},
+      "execution": {"trunk_layers": 27, "mtp_layers": 0, "activation_width": 2304, "boundary_sweep_period": 4, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 13890288384},
+      "notes": "hybrid 3:1 interleave; canonical boundary-sweep model"
+    },
+    {
+      "family": "qwen3-next",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/Qwen_Qwen3-Next-80B-A3B-Thinking-GGUF", "revision": "c36ac5f15be18742fcd09baa61d48dfc016aae79", "files": ["Qwen_Qwen3-Next-80B-A3B-Thinking-IQ2_XS.gguf"], "file_integrity": {"Qwen_Qwen3-Next-80B-A3B-Thinking-IQ2_XS.gguf": {"size_bytes": 22217422720, "blob_id": "ece0ffe31891d1a0f1993565db4a977ae6d862d0ae2e45fc7282ff0a06cf5d5d"}}, "selector": "IQ2_XS"},
+      "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 4, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 22211435520},
+      "notes": "hybrid three-linear-to-one-attention path"
+    },
+    {
+      "family": "nemotron",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF", "revision": "f2d3fe3694501008786e81e5f20360cbf715496a", "files": ["NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf"], "file_integrity": {"NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf": {"size_bytes": 25266255936, "blob_id": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 52, "mtp_layers": 1, "activation_width": 2688, "boundary_sweep_period": 2, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 25258358528},
+      "notes": "hybrid Mamba2 plus attention MoE; replacement for the invalid all-zero head_count_kv artifact"
+    },
+    {
+      "family": "mamba",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "Felladrin/gguf-mamba-130m-hf", "revision": "83ef2222e1a0437d26bda213537afc195a53b3ad", "files": ["mamba-130m-hf.Q4_K_M.gguf"], "file_integrity": {"mamba-130m-hf.Q4_K_M.gguf": {"size_bytes": 103576544, "blob_id": "2784131bc0546f802bcb720cbc77d26c174c85514400cc645507146ad95f07da"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 768, "boundary_sweep_period": 2, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 101794800},
+      "notes": "cheap recurrent boundary sweep"
+    },
+    {
+      "family": "mamba2",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/falcon-mamba-7b-GGUF", "revision": "1236a076ebddbcfcbd6ba0fe310d473d20527f11", "files": ["falcon-mamba-7b-Q4_K_M.gguf"], "file_integrity": {"falcon-mamba-7b-Q4_K_M.gguf": {"size_bytes": 4204230656, "blob_id": "ef8ba78a1fd0b0fd1d1c966acc5f4c043b12fbbd7044f4d9aad82e6b7a51e0a7"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 64, "mtp_layers": 0, "activation_width": 4096, "boundary_sweep_period": 2, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 4201906176},
+      "notes": "Mamba2 SSM canonical path"
+    },
+    {
+      "family": "rwkv6",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "latestissue/rwkv-6-finch-1b6-gguf", "revision": "9f4420bafb8fe463599b9983d81e12e1868c3746", "files": ["rwkv-6-finch-1b6-Q4_0.gguf"], "file_integrity": {"rwkv-6-finch-1b6-Q4_0.gguf": {"size_bytes": 992738848, "blob_id": "7b345728c3792f0168a615bd529a319d63f8becb760090330ce583a24f55e46b"}}, "selector": "Q4_0"},
+      "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 1, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 991330304},
+      "notes": "recurrent v_first sideband crossing"
+    },
+    {
+      "family": "rwkv7",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "Mungert/RWKV7-Goose-World3-2.9B-HF-GGUF", "revision": "e85c69858772a4d6b481d99e1e49910dad48e123", "files": ["RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf"], "file_integrity": {"RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf": {"size_bytes": 2314884576, "blob_id": "bfcb5b239cf99ac4a590d7163266bbe3bb14f41d221ad6f7a2bf602b610211b0"}}, "selector": "Q4_K"},
+      "execution": {"trunk_layers": 32, "mtp_layers": 0, "activation_width": 2560, "boundary_sweep_period": 1, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 2313461760},
+      "notes": "recurrent; only real RWKV7 World3 GGUF"
+    },
+    {
+      "family": "granite-hybrid",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "ibm-granite/granite-4.0-h-350m-GGUF", "revision": "a864f823cce6e6048b5752e2816fe7a23987d790", "files": ["granite-4.0-h-350m-Q4_K_M.gguf"], "file_integrity": {"granite-4.0-h-350m-Q4_K_M.gguf": {"size_bytes": 222662560, "blob_id": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 32, "mtp_layers": 0, "activation_width": 768, "boundary_sweep_period": 3, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 219091712},
+      "notes": "cheap hybrid boundary sweep"
+    },
+    {
+      "family": "granite-dense",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/ibm-granite_granite-3.2-2b-instruct-GGUF", "revision": "9be2c106c8c073f5a140ec03c8c7a6a6e72d097b", "files": ["ibm-granite_granite-3.2-2b-instruct-Q4_K_M.gguf"], "file_integrity": {"ibm-granite_granite-3.2-2b-instruct-Q4_K_M.gguf": {"size_bytes": 1545296512, "blob_id": "e1b915b0849becf4fdda188dee7b09cbebbfabd71c6f3f2b75dd3eca0a8fded1"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 40, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 1543549872},
+      "notes": "dense Granite path"
+    },
+    {
+      "family": "lfm2",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "LiquidAI/LFM2-350M-GGUF", "revision": "8fdc9d526b7ed346b19257551b05816c7912ecc2", "files": ["LFM2-350M-Q4_K_M.gguf"], "file_integrity": {"LFM2-350M-Q4_K_M.gguf": {"size_bytes": 229309376, "blob_id": "a4d000c7064bd3b2e42c6845836286a899a4e79cf1791da1a6797b58d575957d"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 16, "mtp_layers": 0, "activation_width": 1024, "boundary_sweep_period": 2, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 226925568},
+      "notes": "cheap hybrid boundary sweep"
+    },
+    {
+      "family": "laguna",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "poolside/Laguna-XS-2.1-GGUF", "revision": "1a37c0a5fb8c7a18e6106decb6be6327d1b63fa6", "files": ["Laguna-XS-2.1-Q4_K_M.gguf"], "file_integrity": {"Laguna-XS-2.1-Q4_K_M.gguf": {"size_bytes": 20274300032, "blob_id": "1ac7079101fca5a6df8c5a7523a3c30ea7d1c0e4b1258090e7d6d4039287f6cb"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 40, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 20270574592},
+      "notes": "dense explicit poolside row"
+    },
+    {
+      "family": "qwen2-vl",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/Qwen2-VL-2B-Instruct-GGUF", "revision": "2160e265f926e84e84dbb1c73e623b5324b23707", "files": ["Qwen2-VL-2B-Instruct-Q4_K_M.gguf"], "file_integrity": {"Qwen2-VL-2B-Instruct-Q4_K_M.gguf": {"size_bytes": 986047232, "blob_id": "4ef095263343fc1237e8ca879790bb262bcf209f082e0a9bfce219b7ece55e8b"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 28, "mtp_layers": 0, "activation_width": 1536, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 980097536},
+      "notes": "multimodal sideband path"
+    },
+    {
+      "family": "qwen3-vl",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/Qwen3-VL-8B-Instruct-GGUF", "revision": "b93a7ee713758252c555be4210c00540df954dc2", "files": ["Qwen3-VL-8B-Instruct-Q4_K_M.gguf"], "file_integrity": {"Qwen3-VL-8B-Instruct-Q4_K_M.gguf": {"size_bytes": 5027785568, "blob_id": "108e7ff92b78eefd3db4741885104acba514255c11b617d3c7b197a5f46efe89"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 36, "mtp_layers": 0, "activation_width": 4096, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 5021827072, "startup_timeout_secs": 600},
+      "notes": "multimodal path; ggml-org repository is gated"
+    },
+    {
+      "family": "gemma2",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "google/gemma-2-2b-it-GGUF", "revision": "67803c710cb0c89bae2047a5f50a2481c9339d24", "files": ["2b_it_v2.gguf"], "file_integrity": {"2b_it_v2.gguf": {"size_bytes": 10463413632, "blob_id": "8fc1a799613b873edd085ffcf33fd710077daf03833ead29e136cca9b528ecb6"}}, "selector": "2b_it_v2"},
+      "execution": {"trunk_layers": 26, "mtp_layers": 0, "activation_width": 2304, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 10457367552},
+      "notes": "dense; only file in repository; gemma3 path trimmed"
+    },
+    {
+      "family": "phi3",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "microsoft/Phi-3-mini-4k-instruct-gguf", "revision": "a64113399c2f6b8ad3e11c394733a2ddadaa7f33", "files": ["Phi-3-mini-4k-instruct-q4.gguf"], "file_integrity": {"Phi-3-mini-4k-instruct-q4.gguf": {"size_bytes": 2393231072, "blob_id": "8a83c7fb9049a9b2e92266fa7ad04933bb53aa1e85136b7b30f1b8000ff2edef"}}, "selector": "q4"},
+      "execution": {"trunk_layers": 32, "mtp_layers": 0, "activation_width": 3072, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 2392493568},
+      "notes": "dense Phi3 path"
+    },
+    {
+      "family": "phi4",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/phi-4-GGUF", "revision": "5110b7771e8166d5530e73346a15aea096a8cb99", "files": ["phi-4-Q4_K_M.gguf"], "file_integrity": {"phi-4-Q4_K_M.gguf": {"size_bytes": 8890306112, "blob_id": "01e1f25b3e6931054c6c2227b06f4969828434eebc299e8e171f55dab6814485"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 40, "mtp_layers": 0, "activation_width": 5120, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 8886743040},
+      "notes": "dense; Microsoft repository does not publish Q4_K_M"
+    },
+    {
+      "family": "falcon-dense",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "maddes8cht/tiiuae-falcon-7b-instruct-gguf", "revision": "56d71fbb3ea040a1d35459013bd2688613075668", "files": ["tiiuae-falcon-7b-instruct-Q4_K_M.gguf"], "file_integrity": {"tiiuae-falcon-7b-instruct-Q4_K_M.gguf": {"size_bytes": 4975385792, "blob_id": "6f6c886ed07d4f6133a4dd7f8b799764ed719c50973d96816b2ac5ff3ada9913"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 32, "mtp_layers": 0, "activation_width": 4544, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 4972826368},
+      "notes": "dense Falcon path"
+    },
+    {
+      "family": "internlm2",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "Felladrin/gguf-internlm2-chat-1_8b", "revision": "cdd579415ed57fca8af5c5e09b35ee5124449876", "files": ["internlm2-chat-1_8b.F16.gguf"], "file_integrity": {"internlm2-chat-1_8b.F16.gguf": {"size_bytes": 3780559520, "blob_id": "377e44d5967ea2a51570fbc28448dd8693d0139c73b13b9e773fad783f7bd957"}}, "selector": "F16"},
+      "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 3778420736},
+      "notes": "dense InternLM2 path"
+    },
+    {
+      "family": "mistral-small",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF", "revision": "b750ec2299225e492f1bd27cab88a0a595fa848f", "files": ["Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf"], "file_integrity": {"Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf": {"size_bytes": 14333922848, "blob_id": "a3cc56310807ed0d145eaf9f018ccda9ae7ad8edb41ec870aa2454b0d4700b3c"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 40, "mtp_layers": 0, "activation_width": 5120, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 14326026240},
+      "notes": "dense; relabelled from mistral3"
+    },
+    {
+      "family": "cohere2",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "bartowski/c4ai-command-r7b-12-2024-GGUF", "revision": "bfc7a934c45cb839d84c8ca01d87f1cfa51aaa3f", "files": ["c4ai-command-r7b-12-2024-Q4_K_M.gguf"], "file_integrity": {"c4ai-command-r7b-12-2024-Q4_K_M.gguf": {"size_bytes": 5057009792, "blob_id": "0653c1915f7e4819a980deea8e9ba86b0a78cbb283712785cbf091c3ffbe3b13"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 32, "mtp_layers": 0, "activation_width": 4096, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 5046091776},
+      "notes": "dense Cohere2 path"
+    },
+    {
+      "family": "smollm3",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "ggml-org/SmolLM3-3B-GGUF", "revision": "4965cb60b150737b68a0408c36aeefb65078f894", "files": ["SmolLM3-Q4_K_M.gguf"], "file_integrity": {"SmolLM3-Q4_K_M.gguf": {"size_bytes": 1915305312, "blob_id": "8334b850b7bd46238c16b0c550df2138f0889bf433809008cc17a8b05761863e"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 36, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 1907462144},
+      "notes": "dense SmolLM3 path"
+    }
+  ]
+}

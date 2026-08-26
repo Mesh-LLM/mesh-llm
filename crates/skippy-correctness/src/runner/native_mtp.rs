@@ -1,7 +1,8 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use model_artifact::gguf::scan_gguf_compact_meta;
+use model_ref::split_gguf_shard_info;
 use serde::Serialize;
 use skippy_protocol::binary::StageReply;
 use skippy_runtime::ModelInfo;
@@ -166,13 +167,52 @@ pub(crate) fn native_mtp_preflight_model_path(runtime: &RuntimeArgs) -> &Path {
 pub(crate) fn native_mtp_artifact_summary(model_path: &Path) -> Result<NativeMtpArtifactSummary> {
     let meta = scan_gguf_compact_meta(model_path)
         .with_context(|| format!("inspect GGUF metadata for {}", model_path.display()))?;
-    let info = ModelInfo::open(model_path)
-        .with_context(|| format!("inspect GGUF tensors for {}", model_path.display()))?;
-    let tensors = info.tensors()?;
+    let mut tensor_names = Vec::new();
+    for shard_path in native_mtp_artifact_paths(model_path)? {
+        let info = ModelInfo::open(&shard_path)
+            .with_context(|| format!("inspect GGUF tensors for {}", shard_path.display()))?;
+        tensor_names.extend(info.tensors()?.into_iter().map(|tensor| tensor.name));
+    }
     Ok(native_mtp_artifact_summary_from_names(
         meta.nextn_predict_layers,
-        tensors.iter().map(|tensor| tensor.name.as_str()),
+        tensor_names.iter().map(String::as_str),
     ))
+}
+
+fn native_mtp_artifact_paths(model_path: &Path) -> Result<Vec<PathBuf>> {
+    let Some(file_name) = model_path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(vec![model_path.to_path_buf()]);
+    };
+    let Some(shard) = split_gguf_shard_info(file_name) else {
+        return Ok(vec![model_path.to_path_buf()]);
+    };
+    let total = shard
+        .total
+        .parse::<usize>()
+        .with_context(|| format!("parse GGUF shard total from {file_name}"))?;
+    if total == 0 {
+        bail!("split GGUF {file_name} declares zero shards");
+    }
+    let parent = model_path.parent().unwrap_or_else(|| Path::new(""));
+    let width = shard.part.len();
+    let mut paths = Vec::with_capacity(total);
+    for part in 1..=total {
+        let path = parent.join(format!(
+            "{}-{part:0width$}-of-{}.gguf",
+            shard.prefix,
+            shard.total,
+            width = width
+        ));
+        if !path.is_file() {
+            bail!(
+                "split GGUF {} is missing sibling {}",
+                model_path.display(),
+                path.display()
+            );
+        }
+        paths.push(path);
+    }
+    Ok(paths)
 }
 
 fn native_mtp_artifact_summary_from_names<'a>(
@@ -450,5 +490,38 @@ mod tests {
             summary.missing_reasons(),
             vec!["*.nextn_predict_layers > 0"]
         );
+    }
+
+    #[test]
+    fn native_mtp_artifact_paths_include_every_split_gguf_shard() {
+        let dir = std::env::temp_dir().join(format!(
+            "skippy-correctness-native-mtp-shards-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create split GGUF test directory");
+        for part in 1..=2 {
+            std::fs::write(
+                dir.join(format!("Model-Q4_K_M-{part:05}-of-00002.gguf")),
+                b"",
+            )
+            .expect("write split GGUF fixture");
+        }
+
+        let paths = native_mtp_artifact_paths(&dir.join("Model-Q4_K_M-00001-of-00002.gguf"))
+            .expect("resolve split GGUF paths");
+        let names = paths
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "Model-Q4_K_M-00001-of-00002.gguf",
+                "Model-Q4_K_M-00002-of-00002.gguf",
+            ]
+        );
+
+        std::fs::remove_dir_all(dir).expect("remove split GGUF test directory");
     }
 }

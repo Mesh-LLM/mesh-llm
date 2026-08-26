@@ -15,6 +15,7 @@ const DEFAULT_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() {
     prepare_model_download_directories();
+    configure_metal_pipeline_cache();
 
     let worker_stack_size = configured_worker_stack_size();
     // MESH_TOKIO_STACK_SIZE intentionally constrains only Tokio workers. CI
@@ -24,6 +25,16 @@ fn main() {
         run_main_with_runtime(worker_stack_size)
     });
     std::process::exit(exit_code);
+}
+
+/// Configure the ggml Metal pipeline cache before the Tokio runtime is
+/// constructed and before any native runtime library can be loaded. The
+/// env mutation is only sound while the process is single-threaded; see
+/// `mesh_llm_host_runtime::configure_metal_pipeline_cache`.
+fn configure_metal_pipeline_cache() {
+    // SAFETY: `main` calls this synchronously before creating the application
+    // thread or Tokio runtime, so no other thread can access the environment.
+    unsafe { mesh_llm_host_runtime::configure_metal_pipeline_cache() };
 }
 
 fn configured_worker_stack_size() -> usize {
