@@ -7,7 +7,7 @@ mod hash_cache;
 mod hooks;
 mod kv_cache;
 mod materialization;
-mod metal_pipeline_cache;
+pub(crate) mod metal_pipeline_cache;
 mod package;
 mod resolver;
 mod stage;
@@ -798,6 +798,7 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
+        metal_pipeline_cache::configure_metal_pipeline_cache(&runtime_options.config.model_id);
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
@@ -901,6 +902,7 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
+        metal_pipeline_cache::configure_metal_pipeline_cache(&runtime_options.config.model_id);
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;

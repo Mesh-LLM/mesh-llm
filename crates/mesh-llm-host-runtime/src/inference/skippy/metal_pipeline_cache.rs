@@ -12,13 +12,28 @@ const GGML_METAL_PIPELINE_CACHE_DIR: &str = "GGML_METAL_PIPELINE_CACHE_DIR";
 /// later models reuse the already-compiled pipelines. An explicit value set by
 /// the user is always left untouched.
 pub(crate) fn configure_metal_pipeline_cache(model_id: &str) {
+    configure_metal_pipeline_cache_in_dir(&sanitize_model_id(model_id));
+}
+
+/// Configure the pipeline cache before the native runtime libraries are
+/// loaded. The patched ggml Metal backend reads
+/// `GGML_METAL_PIPELINE_CACHE_DIR` when the native library initializes, which
+/// happens at runtime-library load — before any model id is known. The
+/// archive file itself is fingerprint-keyed (device, ggml version, kernel
+/// sources), so a process-wide scope is safe; per-model configuration later
+/// in model load is a no-op once this has run.
+pub(crate) fn configure_metal_pipeline_cache_before_native_load() {
+    configure_metal_pipeline_cache_in_dir("shared");
+}
+
+fn configure_metal_pipeline_cache_in_dir(scope: &str) {
     if std::env::var_os(GGML_METAL_PIPELINE_CACHE_DIR).is_some() {
         return;
     }
 
     let dir = crate::models::mesh_llm_cache_dir()
         .join("metal")
-        .join(sanitize_model_id(model_id));
+        .join(scope);
     if let Err(err) = fs::create_dir_all(&dir) {
         tracing::warn!(
             target: "mesh_llm::inference::skippy::metal_pipeline_cache",
@@ -28,12 +43,13 @@ pub(crate) fn configure_metal_pipeline_cache(model_id: &str) {
         return;
     }
 
-    // SAFETY: UNSAFE CONTRACT — must run before the first native model open
-    // initializes the Metal backend, and before concurrent runtime work can
-    // access the process environment. The load entrypoints enforce this by
-    // calling here at the top of model load.
+    // SAFETY: UNSAFE CONTRACT — must run before the native runtime libraries
+    // are loaded (they read the variable at Metal backend initialization) and
+    // before concurrent runtime work can access the process environment. The
+    // native runtime load path and model load entrypoints enforce this by
+    // calling here before the corresponding native initialization.
     // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var(GGML_METAL_PIPELINE_CACHE_DIR, dir) };
+    unsafe { std::env::set_var(GGML_METAL_PIPELINE_CACHE_DIR, &dir) };
 }
 
 /// Reduce a model id (e.g. `org/name-GGUF:Q4`) to a safe single path segment.
