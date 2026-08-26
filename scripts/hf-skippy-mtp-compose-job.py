@@ -120,18 +120,23 @@ def stage_converter_input(args: argparse.Namespace, work: Path) -> Path:
     """Build a converter-readable model dir for the MTP head.
 
     The MTPv2 repo ships weights + config only — no tokenizer — so the
-    converter input symlinks the mounted weights and pulls the tokenizer
-    files from the full base-model repo.
+    tokenizer files are pulled from the full base-model repo. The weights are
+    downloaded to local disk rather than read through the read-only model
+    mount: two consecutive jobs stalled at exactly 138M/5.88G while the
+    converter read mmap'd safetensors off /mnt/mtpv2 (first SIGBUS, then a
+    hang until the job timeout), so the mount is not reliable for bulk reads.
     """
+    from huggingface_hub import hf_hub_download, snapshot_download
+
     staged = work / "mtp-src"
     staged.mkdir(parents=True, exist_ok=True)
-    for src in sorted(Path(args.mtp_source).iterdir()):
-        if src.is_file():
-            dst = staged / src.name
-            if not dst.exists():
-                dst.symlink_to(src)
-    from huggingface_hub import hf_hub_download
-
+    mount_repo = os.environ.get("MTP_MOUNT_REPO", "nvidia/Nemotron-3-Super-120B-A12B-BF16-MTPv2")
+    snapshot_download(
+        mount_repo,
+        local_dir=str(staged),
+        allow_patterns=["*.safetensors", "*.json"],
+        token=os.environ.get("HF_TOKEN"),
+    )
     for filename in ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json"):
         path = hf_hub_download(args.tokenizer_source, filename, token=os.environ.get("HF_TOKEN"))
         dst = staged / filename
