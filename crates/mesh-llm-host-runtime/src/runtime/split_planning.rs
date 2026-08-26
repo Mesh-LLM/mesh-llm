@@ -441,16 +441,18 @@ fn perf_aware_disabled_from_value(value: Option<&str>) -> bool {
     })
 }
 
-/// Directed edge measurements between participants: self's direct RTT to
-/// each peer (from the coordinator's vantage), plus peer-observed
-/// propagated latency between peer pairs when the mesh has relayed one.
-/// Bandwidth is not yet measured per edge, so it stays `None` (latency-only
-/// edges) until edge probing lands.
+/// Directed edge measurements between participants. Each pair's RTT is
+/// synthesized from coordinator-observed participant RTTs (the mesh does
+/// not yet relay peer-to-peer pair measurements): when either side is
+/// unobserved the pair takes the observed side's value, and when both are
+/// observed the pair takes the conservative `max` so the estimate can
+/// never underestimate a real hop. Bandwidth is not yet measured per
+/// edge, so it stays `None` (latency-only) until edge probing lands.
 fn participant_edges(participants: &[SplitParticipant]) -> Vec<SplitTopologyPlanEdge> {
     let mut edges = Vec::new();
     for (index, source) in participants.iter().enumerate() {
         for target in participants.iter().skip(index + 1) {
-            let Some(rtt_ms) = source.rtt_ms.into_iter().chain(target.rtt_ms).min() else {
+            let Some(rtt_ms) = source.rtt_ms.into_iter().chain(target.rtt_ms).max() else {
                 continue;
             };
             let (forward, reverse) = (
