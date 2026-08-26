@@ -137,9 +137,20 @@ prefill_ms         = Σ_i ( stage_time_ms(i) + edge_time_ms(i) )              # 
 Pipeline TPOT is the max, not the sum: stages process consecutive tokens
 concurrently in steady state. `pipeline_tpot` replaces
 `estimated_decode_network_ms_per_token`; the 33 ms target check carries over
-unchanged. Confidence weights degrade each term toward today's behavior as
-`metric_age_ms` grows, so absent signals reproduce current placement exactly
-— the safe fallback.
+unchanged.
+
+**As-built (PR #1454):** decode is modeled as weight-streaming only
+(`weight_bytes / sustained_mem_bw`, integer microseconds); the compute term
+and KV-touch term are plumbed-but-unused pending calibration against
+BENCHMARKS.md. Missing signals are **all-or-nothing per candidate**: a
+subset missing any node's bandwidth keeps the exact capacity-greedy span
+assignment and the legacy `hop_count × max-RTT` estimate; a missing edge
+bandwidth contributes zero transfer time (latency-only hop); an unmatched
+hop falls back to node RTT. Canonical units: sustained bandwidth MiB/s
+(1 MiB = 1_048_576 bytes), edge bandwidth MiB/s, all modeled times integer
+microseconds; conversions happen once at parse (GB/s → MiB/s, TFLOP/s →
+GFLOP/s). Metric-age/confidence decay is designed (below) but **not yet
+implemented** — current signals are un-aged measurements.
 
 ## Search algorithm
 
@@ -155,8 +166,11 @@ performance to scoring and ordering:
    VRAM-descending order.
 4. **Span assignment**: replace greedy largest-fit with DP over contiguous
    layer boundaries that minimizes `pipeline_tpot_ms` subject to per-node
-   memory ceilings. `O(layers × nodes)` per candidate — tractable at current
-   scales (≤ ~100 layers, ≤ ~8 nodes).
+   memory ceilings. The recurrence compares every prior boundary, so a
+   candidate costs `O(layers² × nodes)` — at current scales (≤ ~100 layers,
+   ≤ ~8 nodes) that is ≤ ~80K comparisons per candidate, trivially cheap;
+   Knuth-style optimization could reduce it to `O(layers × nodes)` if
+   fleets grow.
 5. **Score lexicographically**: correctness → SLO met → objective-specific
    performance (TPOT or throughput) → context/lane utility → confidence and
    headroom → deterministic tie-breaks (existing `latency_candidate_ordering`

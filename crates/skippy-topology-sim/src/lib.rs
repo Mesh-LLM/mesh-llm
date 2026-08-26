@@ -65,10 +65,20 @@ pub struct Scenario {
 pub enum ScenarioError {
     #[error("scenario parse error: {0}")]
     Parse(#[from] toml::de::Error),
+    #[error(
+        "unknown top-level scenario key `{key}` — links must be declared as `[links.\"a -> b\"]` tables, not top-level keys"
+    )]
+    UnknownTopLevelKey { key: String },
 }
 
 impl Scenario {
     pub fn from_toml(input: &str) -> Result<Self, ScenarioError> {
+        let value: toml::Value = toml::from_str(input)?;
+        for key in value.as_table().into_iter().flat_map(|table| table.keys()) {
+            if !matches!(key.as_str(), "nodes" | "links" | "model" | "workload") {
+                return Err(ScenarioError::UnknownTopLevelKey { key: key.clone() });
+            }
+        }
         Ok(toml::from_str(input)?)
     }
 
@@ -161,10 +171,10 @@ vram_bytes = 51539607552
 sustained_mem_bandwidth_mib_per_s = 273000
 sustained_compute_gflop_per_s = 17000
 
-["alpha -> beta"]
+[links."alpha -> beta"]
 rtt_ms = 2
 
-["beta -> alpha"]
+[links."beta -> alpha"]
 rtt_ms = 2
 
 [model]
@@ -177,6 +187,38 @@ native_context_length = 65536
 minimum_nodes = 2
 target_decode_tpot_ms = 33
 "#;
+
+    #[test]
+    fn link_tables_outside_links_fail_loudly() {
+        // `["a -> b"]` at top level parses as a quoted *key* named
+        // "a -> b", not a links entry — historically this silently
+        // dropped the link. The schema now rejects unknown top-level
+        // keys so misdeclared links cannot hide.
+        let scenario = r#"
+[nodes.alpha]
+vram_bytes = 68719476736
+sustained_mem_bandwidth_mib_per_s = 546000
+
+[nodes.beta]
+vram_bytes = 51539607552
+sustained_mem_bandwidth_mib_per_s = 273000
+
+["alpha -> beta"]
+rtt_ms = 2
+
+[model]
+layer_count = 40
+weight_bytes_per_layer = 1610612736
+kv_bytes_per_token = 4096
+native_context_length = 65536
+
+[workload]
+minimum_nodes = 2
+"#;
+        let error =
+            Scenario::from_toml(scenario).expect_err("misdeclared top-level link must be rejected");
+        assert!(error.to_string().contains("unknown top-level scenario key"));
+    }
 
     #[test]
     fn heterogeneous_bandwidth_pair_proportions_layers() {

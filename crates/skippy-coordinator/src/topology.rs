@@ -729,8 +729,8 @@ fn pipeline_network_time_us(
             .and_then(|edge| edge.large_frame_mib_per_s);
         match bandwidth {
             Some(bandwidth) if bandwidth > 0 && input.activation_frame_bytes > 0 => {
-                u128::from(input.activation_frame_bytes) * 1_048_576
-                    / (u128::from(bandwidth) * 1_000_000)
+                u128::from(input.activation_frame_bytes) * 1_000_000
+                    / (u128::from(bandwidth) * 1_048_576)
             }
             _ => 0,
         }
@@ -840,8 +840,9 @@ fn modeled_stage_time_us(node: &UsableNode, weight_bytes: u64) -> Option<u128> {
     if bandwidth == 0 {
         return None;
     }
-    // bytes / (MiB/s) = seconds; scale to microseconds via MiB.
-    Some(u128::from(weight_bytes) * 1_048_576 / (bandwidth * 1_000_000))
+    // bytes / (MiB/s) = seconds: convert MiB→bytes in the denominator and
+    // scale seconds→microseconds in the numerator.
+    Some(u128::from(weight_bytes) * 1_000_000 / (bandwidth * 1_048_576))
 }
 
 /// Performance-aware contiguous span assignment via DP over layer boundaries.
