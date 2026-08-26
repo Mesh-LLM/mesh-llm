@@ -47,8 +47,11 @@ pub struct CapacityPlan {
 /// cache entries to recompute until the target free-space watermark is met.
 ///
 /// Pinned cache units are never candidates. Entries are ordered by
-/// recomputation cost per released unit, then total cost, recency, and stable
-/// identity. The plan rejects only when active + pinned + request + minimum
+/// recomputation cost per released unit, then recency, total cost, and stable
+/// identity. Recency precedes total cost when density ties because uniform
+/// per-token stage costs would otherwise prefer small, recently used prefixes
+/// over cold entries that are less likely to be restored again. The plan
+/// rejects only when active + pinned + request + minimum
 /// headroom cannot fit even after every evictable entry is released.
 pub fn plan_component_capacity(
     snapshot: &ComponentCapacitySnapshot,
@@ -122,8 +125,8 @@ fn compare_eviction_value(left: &EvictableCacheEntry, right: &EvictableCacheEntr
     u128::from(left.recompute_cost)
         .saturating_mul(u128::from(right_units))
         .cmp(&u128::from(right.recompute_cost).saturating_mul(u128::from(left_units)))
-        .then_with(|| left.recompute_cost.cmp(&right.recompute_cost))
         .then_with(|| left.last_used.cmp(&right.last_used))
+        .then_with(|| left.recompute_cost.cmp(&right.recompute_cost))
         .then_with(|| left.id.cmp(&right.id))
 }
 
@@ -187,6 +190,32 @@ mod tests {
         assert_eq!(plan.evicted_units, 30);
         assert_eq!(plan.predicted_recompute_cost, 30);
         assert_eq!(plan.projected_free_units, 20);
+    }
+
+    #[test]
+    fn equal_cost_density_prefers_cold_entries_before_smaller_hot_entries() {
+        let plan = plan_component_capacity(
+            &ComponentCapacitySnapshot {
+                component: "kv-cells".into(),
+                capacity_units: 100,
+                active_units: 30,
+                pinned_cache_units: 0,
+                evictable_entries: vec![
+                    entry("cold-large", 30, 300, 1),
+                    entry("hot-small", 10, 100, 2),
+                ],
+            },
+            CapacityDemand {
+                request_units: 20,
+                minimum_free_units: 10,
+                target_free_units: 20,
+            },
+        );
+
+        assert!(plan.admitted);
+        assert_eq!(plan.victim_ids, ["cold-large"]);
+        assert_eq!(plan.evicted_units, 30);
+        assert_eq!(plan.predicted_recompute_cost, 300);
     }
 
     #[test]
