@@ -69,10 +69,6 @@ mod dynamic {
         if skippy_runtime::native_runtime_loaded() {
             return Ok(None);
         }
-        // The patched ggml Metal backend reads GGML_METAL_PIPELINE_CACHE_DIR
-        // when the native libraries initialize, so the cache must be
-        // configured before the libraries are loaded.
-        crate::inference::skippy::metal_pipeline_cache::configure_metal_pipeline_cache_before_native_load();
         let cache = default_native_runtime_cache()?;
         let local_runtimes =
             crate::system::native_runtime_install::discover_local_native_runtimes(&[], &cache)?;
@@ -105,7 +101,6 @@ mod dynamic {
     pub(crate) async fn try_load_installed_native_runtime(
         startup_selection: NativeRuntimeStartupSelection,
     ) -> Result<Option<LoadedNativeRuntime>> {
-        crate::inference::skippy::metal_pipeline_cache::configure_metal_pipeline_cache_before_native_load();
         try_load_installed_native_runtime_with(
             skippy_runtime::native_runtime_loaded,
             default_native_runtime_cache,

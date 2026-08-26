@@ -563,7 +563,6 @@ impl SkippyModelHandle {
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
-        metal_pipeline_cache::configure_metal_pipeline_cache(&options.model_id);
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         let stage_config = single_stage_config(&options)?;
         let mtp_source = Self::resolved_mtp_source(
@@ -648,7 +647,6 @@ impl SkippyModelHandle {
         model_open_event_reporter: Option<NativeModelOpenEventReporter>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
-        metal_pipeline_cache::configure_metal_pipeline_cache(&options.model_id);
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         let stage_config = single_stage_config(&options)?;
         let mtp_source = Self::resolved_mtp_source(
@@ -798,7 +796,6 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
-        metal_pipeline_cache::configure_metal_pipeline_cache(&runtime_options.config.model_id);
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
@@ -902,7 +899,6 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
-        metal_pipeline_cache::configure_metal_pipeline_cache(&runtime_options.config.model_id);
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;

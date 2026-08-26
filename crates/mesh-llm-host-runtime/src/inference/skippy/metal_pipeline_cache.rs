@@ -4,36 +4,27 @@ use std::fs;
 /// on-disk `MTLBinaryArchive` cache of compiled compute pipeline states.
 const GGML_METAL_PIPELINE_CACHE_DIR: &str = "GGML_METAL_PIPELINE_CACHE_DIR";
 
-/// Point the native Metal backend at a per-model on-disk pipeline cache,
-/// `~/.cache/mesh-llm/metal/<sanitized-model-id>`.
+/// Point the native Metal backend at a process-wide on-disk pipeline cache,
+/// `~/.cache/mesh-llm/metal/shared`.
 ///
-/// The Metal device, library, and pipeline set are process-global in ggml, so
-/// only the first configured model wins when several models share one process;
-/// later models reuse the already-compiled pipelines. An explicit value set by
-/// the user is always left untouched.
-pub(crate) fn configure_metal_pipeline_cache(model_id: &str) {
-    configure_metal_pipeline_cache_in_dir(&sanitize_model_id(model_id));
-}
-
-/// Configure the pipeline cache before the native runtime libraries are
-/// loaded. The patched ggml Metal backend reads
-/// `GGML_METAL_PIPELINE_CACHE_DIR` when the native library initializes, which
-/// happens at runtime-library load — before any model id is known. The
-/// archive file itself is fingerprint-keyed (device, ggml version, kernel
-/// sources), so a process-wide scope is safe; per-model configuration later
-/// in model load is a no-op once this has run.
-pub(crate) fn configure_metal_pipeline_cache_before_native_load() {
-    configure_metal_pipeline_cache_in_dir("shared");
-}
-
-fn configure_metal_pipeline_cache_in_dir(scope: &str) {
+/// The patched ggml Metal backend reads `GGML_METAL_PIPELINE_CACHE_DIR` when
+/// the native library initializes, which happens at runtime-library load —
+/// before any model id is known and before the first model open initializes
+/// the Metal backend. The archive file itself is fingerprint-keyed (device,
+/// ggml version, kernel sources), so a process-wide scope is safe. An
+/// explicit value set by the user is always left untouched.
+///
+/// Must be called exactly once from synchronous process bootstrap, before
+/// the Tokio runtime is constructed and before any native runtime library is
+/// loaded.
+pub(crate) fn configure_metal_pipeline_cache() {
     if std::env::var_os(GGML_METAL_PIPELINE_CACHE_DIR).is_some() {
         return;
     }
 
     let dir = crate::models::mesh_llm_cache_dir()
         .join("metal")
-        .join(scope);
+        .join("shared");
     if let Err(err) = fs::create_dir_all(&dir) {
         tracing::warn!(
             target: "mesh_llm::inference::skippy::metal_pipeline_cache",
@@ -43,48 +34,11 @@ fn configure_metal_pipeline_cache_in_dir(scope: &str) {
         return;
     }
 
-    // SAFETY: UNSAFE CONTRACT — must run before the native runtime libraries
-    // are loaded (they read the variable at Metal backend initialization) and
-    // before concurrent runtime work can access the process environment. The
-    // native runtime load path and model load entrypoints enforce this by
-    // calling here before the corresponding native initialization.
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: UNSAFE CONTRACT — callers must invoke this before the Tokio
+    // runtime is constructed (so no concurrent runtime work can access the
+    // process environment) and before the native runtime libraries are
+    // loaded (they read the variable at Metal backend initialization). The
+    // shipped binary enforces this by calling from synchronous `main()`
+    // bootstrap.
     unsafe { std::env::set_var(GGML_METAL_PIPELINE_CACHE_DIR, &dir) };
-}
-
-/// Reduce a model id (e.g. `org/name-GGUF:Q4`) to a safe single path segment.
-fn sanitize_model_id(model_id: &str) -> String {
-    let mut out = String::with_capacity(model_id.len());
-    let mut last_was_replacement = false;
-    for ch in model_id.chars() {
-        let keep = ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.');
-        if keep {
-            out.push(ch);
-            last_was_replacement = false;
-        } else if !last_was_replacement {
-            out.push('_');
-            last_was_replacement = true;
-        }
-    }
-    let trimmed = out.trim_matches('_').to_string();
-    if trimmed.is_empty() {
-        "model".to_string()
-    } else {
-        trimmed.chars().take(128).collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sanitizes_repo_style_ids_to_path_segments() {
-        assert_eq!(
-            sanitize_model_id("meta-llama/Llama-3.1-8B"),
-            "meta-llama_Llama-3.1-8B"
-        );
-        assert_eq!(sanitize_model_id("model/Q4_K_M::gguf"), "model_Q4_K_M_gguf");
-        assert_eq!(sanitize_model_id("///"), "model");
-    }
 }
