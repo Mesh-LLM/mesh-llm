@@ -388,8 +388,13 @@ source commit.
   closure; the planner owns signals and final matrix selection.
 - Each `pr_*.yml` workflow checks out the default branch for canonical planning,
   projects one bounded lane, and calls its matching default-branch lane as a
-  nested reusable workflow. Jobs and logs remain attached to five focused PR
-  runs rather than one monolithic graph.
+  nested reusable workflow. The protected planner action extracts only
+  `ci/ownership.yml` and `ci/slices.yml` from the validated immutable PR source
+  SHA into a unique runner-temp directory. It treats those manifests as data;
+  planner code, Cargo workspace discovery, and affected-crate operations remain
+  rooted in the protected checkout. Missing or non-regular source manifests
+  fail planning. Jobs and logs remain attached to five focused PR runs rather
+  than one monolithic graph.
 - Each `main_*.yml` workflow plans the exhaustive main profile at the pushed
   SHA, projects one bounded lane, and calls its matching same-commit lane as a
   nested reusable workflow. Routine main jobs and logs therefore remain
