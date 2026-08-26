@@ -71,6 +71,25 @@ def wait_openai(port: int, process: subprocess.Popen[str], timeout: float) -> No
     raise TimeoutError(f"timed out waiting for OpenAI endpoint: {last_error}")
 
 
+def wait_binary(port: int, process: subprocess.Popen[str], timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    last_error = "no attempts made"
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"downstream stage exited with status {process.returncode}")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1) as stream:
+                stream.settimeout(1)
+                ready = stream.recv(4)
+                if ready == (0x5352_4459).to_bytes(4, "little"):
+                    return
+                last_error = f"unexpected ready bytes: {ready.hex()}"
+        except OSError as error:
+            last_error = str(error)
+        time.sleep(0.25)
+    raise TimeoutError(f"timed out waiting for downstream stage: {last_error}")
+
+
 def stop(process: subprocess.Popen[str] | None) -> None:
     if process is None or process.poll() is not None:
         return
@@ -123,17 +142,42 @@ def read_prompt_manifest(path: Path) -> tuple[list[dict[str, Any]], dict[str, An
     return prompts, metadata
 
 
-def write_config(args: argparse.Namespace, path: Path, port: int) -> None:
+def stage_config(
+    args: argparse.Namespace,
+    stage_index: int,
+    layer_start: int,
+    layer_end: int,
+    port: int,
+    peer_port: int | None,
+) -> dict[str, Any]:
+    upstream = None
+    downstream = None
+    if stage_index == 0 and peer_port is not None:
+        downstream = {
+            "stage_id": "stage-1",
+            "stage_index": 1,
+            "endpoint": f"tcp://127.0.0.1:{peer_port}",
+        }
+    elif stage_index == 1 and peer_port is not None:
+        upstream = {
+            "stage_id": "stage-0",
+            "stage_index": 0,
+            "endpoint": f"tcp://127.0.0.1:{peer_port}",
+        }
     config = {
         "run_id": "skippy-mixed-prefill-decode-ab",
-        "topology_id": "skippy-mixed-prefill-decode-ab-local",
+        "topology_id": (
+            "skippy-mixed-prefill-decode-ab-two-stage"
+            if args.split_layer is not None
+            else "skippy-mixed-prefill-decode-ab-local"
+        ),
         "model_id": args.model_id,
         "model_path": str(args.model.resolve()),
         "source_model_sha256": args.model_sha256,
-        "stage_id": "stage-0",
-        "stage_index": 0,
-        "layer_start": 0,
-        "layer_end": args.layer_end,
+        "stage_id": f"stage-{stage_index}",
+        "stage_index": stage_index,
+        "layer_start": layer_start,
+        "layer_end": layer_end,
         "ctx_size": args.ctx_size,
         "lane_count": args.lanes,
         "n_batch": args.n_batch,
@@ -144,10 +188,42 @@ def write_config(args: argparse.Namespace, path: Path, port: int) -> None:
         "filter_tensors_on_load": True,
         "load_mode": "runtime-slice",
         "bind_addr": f"127.0.0.1:{port}",
-        "upstream": None,
-        "downstream": None,
+        "upstream": upstream,
+        "downstream": downstream,
     }
-    path.write_text(json.dumps(config, indent=2) + "\n")
+    return config
+
+
+def write_configs(
+    args: argparse.Namespace,
+    cell_dir: Path,
+    stage0_port: int,
+    stage1_port: int | None,
+) -> tuple[Path, Path | None]:
+    stage0_path = cell_dir / "stage-0.json"
+    stage0_end = args.split_layer or args.layer_end
+    stage0_path.write_text(
+        json.dumps(stage_config(args, 0, 0, stage0_end, stage0_port, stage1_port), indent=2)
+        + "\n"
+    )
+    if stage1_port is None:
+        return stage0_path, None
+    stage1_path = cell_dir / "stage-1.json"
+    stage1_path.write_text(
+        json.dumps(
+            stage_config(
+                args,
+                1,
+                args.split_layer,
+                args.layer_end,
+                stage1_port,
+                stage0_port,
+            ),
+            indent=2,
+        )
+        + "\n"
+    )
+    return stage0_path, stage1_path
 
 
 def run_request(
@@ -258,7 +334,7 @@ def run_request(
         connection.close()
 
 
-def scheduler_events(path: Path) -> list[dict[str, Any]]:
+def event_attributes(path: Path, names: set[str]) -> list[dict[str, Any]]:
     events = []
     for line in path.read_text(errors="replace").splitlines():
         if not line.startswith("{"):
@@ -267,9 +343,19 @@ def scheduler_events(path: Path) -> list[dict[str, Any]]:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if event.get("event") == "stage.scheduler_iteration":
-            events.append(event.get("attributes", {}))
+        event_name = event.get("event")
+        if event_name in names:
+            attributes = dict(event.get("attributes", {}))
+            attributes["_event"] = event_name
+            events.append(attributes)
     return events
+
+
+def scheduler_events(path: Path) -> list[dict[str, Any]]:
+    return event_attributes(
+        path,
+        {"stage.scheduler_iteration", "stage.scheduler_feature_iteration"},
+    )
 
 
 def summarize_requests(
@@ -284,14 +370,23 @@ def summarize_requests(
     anchor_gaps = [gap for request in anchors for gap in request["content_gaps_ms"]]
     completion_tokens = sum(int(request["completion_tokens"]) for request in successful)
     token_counts = [
-        int(event.get("skippy.scheduler.prefill_tokens", 0))
-        + int(event.get("skippy.scheduler.recompute_tokens", 0))
-        + int(event.get("skippy.scheduler.decode_tokens", 0))
+        (
+            int(event.get("skippy.scheduler.prefill_tokens", 0))
+            + int(event.get("skippy.scheduler.recompute_tokens", 0))
+            + int(event.get("skippy.scheduler.decode_tokens", 0))
+        )
+        if event.get("_event") == "stage.scheduler_iteration"
+        else int(event.get("skippy.scheduler.token_count", 0))
         for event in events
+    ]
+    detailed_events = [
+        event
+        for event in events
+        if event.get("_event") == "stage.scheduler_iteration"
     ]
     mixed = [
         event
-        for event in events
+        for event in detailed_events
         if int(event.get("skippy.scheduler.decode_tokens", 0)) > 0
         and (
             int(event.get("skippy.scheduler.prefill_tokens", 0))
@@ -301,7 +396,7 @@ def summarize_requests(
     ]
     prefill_only = [
         event
-        for event in events
+        for event in detailed_events
         if int(event.get("skippy.scheduler.decode_tokens", 0)) == 0
         and (
             int(event.get("skippy.scheduler.prefill_tokens", 0))
@@ -311,7 +406,7 @@ def summarize_requests(
     ]
     decode_only = [
         event
-        for event in events
+        for event in detailed_events
         if int(event.get("skippy.scheduler.decode_tokens", 0)) > 0
         and int(event.get("skippy.scheduler.prefill_tokens", 0)) == 0
         and int(event.get("skippy.scheduler.recompute_tokens", 0)) == 0
@@ -338,6 +433,7 @@ def summarize_requests(
         "prefill_ttft_ms_p50": request_percentile(prefills, "ttft_ms", 0.50),
         "prefill_ttft_ms_p95": request_percentile(prefills, "ttft_ms", 0.95),
         "scheduler_iterations": len(events),
+        "scheduler_breakdown_available": bool(detailed_events),
         "mixed_iterations": len(mixed),
         "prefill_only_iterations": len(prefill_only),
         "decode_only_iterations": len(decode_only),
@@ -357,15 +453,14 @@ def launch_cell(
 ) -> dict[str, Any]:
     cell_dir = args.output_dir / f"round-{round_index + 1}-{version}"
     cell_dir.mkdir(parents=True, exist_ok=True)
-    binary_port, openai_port = free_port(), free_port()
-    config_path = cell_dir / "stage-0.json"
-    log_path = cell_dir / "server.log"
-    write_config(args, config_path, binary_port)
-    command = [
-        str(binary),
-        "serve-binary",
-        "--config",
-        str(config_path),
+    stage0_port, openai_port = free_port(), free_port()
+    stage1_port = free_port() if args.split_layer is not None else None
+    stage0_config, stage1_config = write_configs(
+        args, cell_dir, stage0_port, stage1_port
+    )
+    stage0_log_path = cell_dir / "stage-0.log"
+    stage1_log_path = cell_dir / "stage-1.log"
+    common = [
         "--activation-width",
         str(args.activation_width),
         "--activation-wire-dtype",
@@ -374,6 +469,15 @@ def launch_cell(
         str(args.lanes),
         "--telemetry-level",
         "debug",
+    ]
+    if stage1_config is not None:
+        common.extend(["--reply-credit-limit", "1", "--async-prefill-forward"])
+    stage0_command = [
+        str(binary),
+        "serve-binary",
+        "--config",
+        str(stage0_config),
+        *common,
         "--openai-bind-addr",
         f"127.0.0.1:{openai_port}",
         "--openai-generation-concurrency",
@@ -392,25 +496,48 @@ def launch_cell(
         str(args.prefill_adaptive_max),
     ]
     if version == "new" or not args.adaptive_target_new_only:
-        command.extend(
+        stage0_command.extend(
             ["--openai-prefill-adaptive-target-ms", str(args.adaptive_target_ms)]
         )
+    stage1_command = (
+        [str(binary), "serve-binary", "--config", str(stage1_config), *common]
+        if stage1_config is not None
+        else None
+    )
     environment = os.environ.copy()
     environment["LLAMA_STAGE_BUILD_DIR"] = str(native_build.resolve())
     environment["SKIPPY_TELEMETRY_STDERR"] = "1"
     environment["SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH"] = "1"
-    process = None
-    with log_path.open("w") as log:
+    stage0_process = None
+    stage1_process = None
+    with (
+        stage0_log_path.open("w") as stage0_log,
+        stage1_log_path.open("w") as stage1_log,
+    ):
         try:
-            process = subprocess.Popen(
-                command,
+            if stage1_command is not None:
+                stage1_process = subprocess.Popen(
+                    stage1_command,
+                    cwd=Path(__file__).resolve().parents[1],
+                    env=environment,
+                    text=True,
+                    stdout=stage1_log,
+                    stderr=subprocess.STDOUT,
+                )
+                wait_binary(
+                    stage1_port,
+                    stage1_process,
+                    args.startup_timeout_secs,
+                )
+            stage0_process = subprocess.Popen(
+                stage0_command,
                 cwd=Path(__file__).resolve().parents[1],
                 env=environment,
                 text=True,
-                stdout=log,
+                stdout=stage0_log,
                 stderr=subprocess.STDOUT,
             )
-            wait_openai(openai_port, process, args.startup_timeout_secs)
+            wait_openai(openai_port, stage0_process, args.startup_timeout_secs)
             warmup = run_request(
                 openai_port,
                 args.model_id,
@@ -426,7 +553,7 @@ def launch_cell(
             )
             if "error" in warmup:
                 raise RuntimeError(f"warmup request failed: {warmup['error']}")
-            warmup_iteration_count = len(scheduler_events(log_path))
+            warmup_iteration_count = len(scheduler_events(stage0_log_path))
             specs = []
             for index in range(args.anchors):
                 specs.append(
@@ -494,18 +621,58 @@ def launch_cell(
                 requests = [future.result() for future in futures]
             wall_ms = (time.monotonic() - epoch) * 1000.0
         finally:
-            stop(process)
-    events = scheduler_events(log_path)[warmup_iteration_count:]
+            stop(stage0_process)
+            stop(stage1_process)
+    events = scheduler_events(stage0_log_path)[warmup_iteration_count:]
+    prefill_events = event_attributes(
+        stage0_log_path, {"stage.openai_prefill"}
+    )[1:]
+    measured_prefills = sorted(
+        prefill_events,
+        key=lambda row: int(row.get("llama_stage.prefill_token_count", 0)),
+        reverse=True,
+    )[: args.prefills]
+    summary = summarize_requests(requests, wall_ms, events, args.n_batch)
+    summary.update(
+        {
+            "prefill_chunk_count_median": (
+                statistics.median(
+                    int(row["llama_stage.prefill_chunk_count"])
+                    for row in measured_prefills
+                )
+                if measured_prefills
+                else None
+            ),
+            "prefill_max_chunk_size_median": (
+                statistics.median(
+                    int(row["llama_stage.prefill_max_chunk_size"])
+                    for row in measured_prefills
+                )
+                if measured_prefills
+                else None
+            ),
+            "prefill_bottleneck_stage_median": (
+                statistics.median(
+                    int(row["llama_stage.prefill_bottleneck_stage_index"])
+                    for row in measured_prefills
+                )
+                if measured_prefills
+                else None
+            ),
+        }
+    )
     return {
         "round": round_index + 1,
         "version": version,
         "binary": str(binary),
         "binary_sha256": sha256(binary),
         "native_build": str(native_build),
-        "config": str(config_path),
-        "log": str(log_path),
+        "stage0_config": str(stage0_config),
+        "stage1_config": str(stage1_config) if stage1_config is not None else None,
+        "stage0_log": str(stage0_log_path),
+        "stage1_log": str(stage1_log_path) if stage1_config is not None else None,
         "requests": requests,
-        "summary": summarize_requests(requests, wall_ms, events, args.n_batch),
+        "summary": summary,
     }
 
 
@@ -524,6 +691,8 @@ METRICS = (
     "mixed_iterations",
     "mean_batch_tokens",
     "mean_token_occupancy",
+    "prefill_chunk_count_median",
+    "prefill_max_chunk_size_median",
 )
 
 
@@ -619,6 +788,8 @@ def markdown(
         ("Mixed iterations", "mixed_iterations"),
         ("Mean batch tokens", "mean_batch_tokens"),
         ("Token-budget occupancy", "mean_token_occupancy"),
+        ("Prefill chunks / request", "prefill_chunk_count_median"),
+        ("Maximum prefill chunk", "prefill_max_chunk_size_median"),
     ]
     chart_keys = [
         "makespan_ms",
@@ -715,6 +886,11 @@ def parse_args() -> argparse.Namespace:
         help="adaptive-ramp maximum chunk; defaults to n-ubatch",
     )
     parser.add_argument("--layer-end", type=int, required=True)
+    parser.add_argument(
+        "--split-layer",
+        type=int,
+        help="split into two local pipeline stages after this layer",
+    )
     parser.add_argument("--activation-width", type=int, required=True)
     parser.add_argument("--activation-wire-dtype", default="f16")
     parser.add_argument("--n-gpu-layers", type=int, default=999)
@@ -750,6 +926,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("anchors plus prefills must not exceed lanes")
     if args.n_ubatch > args.n_batch:
         parser.error("n-ubatch must not exceed n-batch")
+    if args.split_layer is not None and not 0 < args.split_layer < args.layer_end:
+        parser.error("split-layer must be within the model layer range")
     for name in (
         "prefill_adaptive_start",
         "prefill_adaptive_step",
@@ -870,6 +1048,7 @@ def main() -> int:
                 "prefill_adaptive_step": args.prefill_adaptive_step,
                 "prefill_adaptive_max": args.prefill_adaptive_max,
                 "layer_end": args.layer_end,
+                "split_layer": args.split_layer,
                 "activation_width": args.activation_width,
                 "adaptive_target_ms": args.adaptive_target_ms,
                 "adaptive_target_new_only": args.adaptive_target_new_only,
