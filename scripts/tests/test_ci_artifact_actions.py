@@ -966,6 +966,24 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
 
+    def test_sccache_seed_keys_include_imported_just_sources(self) -> None:
+        workflow_dir = ROOT / ".github" / "workflows"
+        workflows = (
+            "cache-warm-sccache.yml",
+            "ci-quality-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-rust-tests-slice.yml",
+            "ci-linux-runtime-slice.yml",
+        )
+
+        for workflow in workflows:
+            with self.subTest(workflow=workflow):
+                source = (workflow_dir / workflow).read_text(encoding="utf-8")
+                self.assertIn(
+                    "hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**')",
+                    source,
+                )
+
     def test_root_justfile_import_graph_changes_fail_open_to_backend_builds(self) -> None:
         action = self.read_action("compute-changes")
 
