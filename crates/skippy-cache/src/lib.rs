@@ -14,7 +14,9 @@ pub use payload::{
     CacheBlobStore, CacheBytes, CacheBytesReconstructStats, CacheDedupeStats, ExactStatePayload,
     ExactStatePayloadKind,
 };
-pub use radix::{RadixEviction, RadixMatch, UnifiedRadixCache, UnifiedRadixCacheStats};
+pub use radix::{
+    RadixEviction, RadixEvictionCandidate, RadixMatch, UnifiedRadixCache, UnifiedRadixCacheStats,
+};
 pub use resident::{
     ResidentActivationCache, ResidentActivationLookup, ResidentActivationRecordOutcome,
     ResidentActivationStats,

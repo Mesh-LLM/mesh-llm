@@ -81,6 +81,17 @@ pub struct RadixEviction<T> {
     pub value: T,
 }
 
+/// One unreferenced component that may be released by an external capacity
+/// planner. Selecting a candidate does not mutate recency or the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RadixEvictionCandidate<T> {
+    pub namespace: String,
+    pub tokens: Vec<i32>,
+    pub logical_bytes: u64,
+    pub last_used: u64,
+    pub value: T,
+}
+
 /// Aggregate metadata for the logical radix topology and its payloads.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UnifiedRadixCacheStats {
@@ -92,6 +103,7 @@ pub struct UnifiedRadixCacheStats {
     pub resident_tokens: u64,
     pub resident_logical_bytes: u64,
     pub resident_active_refs: u64,
+    pub resident_pinned_tokens: u64,
     pub recurrent_entries: usize,
     pub recurrent_logical_bytes: u64,
     pub recurrent_active_refs: u64,
@@ -279,12 +291,30 @@ impl<R, E> UnifiedRadixCache<R, E> {
 
     pub fn evict_lru_resident(&mut self) -> Option<RadixEviction<R>> {
         let victim = self.lru_victim(ComponentKind::ResidentKv)?;
-        let value = self.remove_resident(&victim.namespace, &victim.tokens)?;
+        self.evict_resident_candidate(&victim.namespace, &victim.tokens)
+    }
+
+    /// Remove one exact unreferenced resident candidate selected by an
+    /// external policy. Active references fail closed and remain resident.
+    pub fn evict_resident_candidate(
+        &mut self,
+        namespace: &str,
+        tokens: &[i32],
+    ) -> Option<RadixEviction<R>> {
+        let entry = node_at(self.roots.get(namespace)?, tokens)?
+            .components
+            .resident
+            .as_ref()?;
+        if entry.active_refs > 0 {
+            return None;
+        }
+        let logical_bytes = entry.logical_bytes;
+        let value = self.remove_resident(namespace, tokens)?;
         self.resident_evictions = self.resident_evictions.saturating_add(1);
         Some(RadixEviction {
-            namespace: victim.namespace,
-            tokens: victim.tokens,
-            logical_bytes: victim.logical_bytes,
+            namespace: namespace.to_string(),
+            tokens: tokens.to_vec(),
+            logical_bytes,
             value,
         })
     }
@@ -315,6 +345,12 @@ impl<R, E> UnifiedRadixCache<R, E> {
         stats
     }
 
+    /// Monotonic cache mutation/recency epoch used to identify stale
+    /// scheduler observations. Peeks deliberately do not advance it.
+    pub fn epoch(&self) -> u64 {
+        self.clock
+    }
+
     fn ensure_node(&mut self, namespace: String, tokens: &[i32]) -> &mut RadixNode<R, E> {
         let root = self.roots.entry(namespace).or_insert_with(RadixNode::root);
         ensure_node(root, tokens, &mut self.splits)
@@ -330,6 +366,33 @@ impl<R, E> UnifiedRadixCache<R, E> {
 }
 
 impl<R: Clone, E> UnifiedRadixCache<R, E> {
+    /// Snapshot all unreferenced resident entries for capacity planning.
+    pub fn resident_eviction_candidates(&self) -> Vec<RadixEvictionCandidate<R>> {
+        let mut candidates = Vec::new();
+        for (namespace, root) in &self.roots {
+            collect_resident_eviction_candidates(namespace, root, &mut Vec::new(), &mut candidates);
+        }
+        candidates
+    }
+
+    /// Find the resident prefix without changing recency or active references.
+    /// Scheduler scans must not make merely considered entries look hot.
+    pub fn peek_resident(&self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<R>> {
+        let root = self.roots.get(namespace)?;
+        let (matched_tokens, stored_tokens) = resident_backing_prefix(root, tokens)?;
+        let entry = node_at(root, &stored_tokens)?
+            .components
+            .resident
+            .as_ref()?;
+        Some(RadixMatch {
+            matched_tokens,
+            stored_tokens,
+            logical_bytes: entry.logical_bytes,
+            active_refs: entry.active_refs,
+            value: entry.value.clone(),
+        })
+    }
+
     pub fn resident_exact(&mut self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<R>> {
         self.clock = self.clock.saturating_add(1);
         let root = self.roots.get_mut(namespace)?;
@@ -428,6 +491,24 @@ impl<R: Clone, E> UnifiedRadixCache<R, E> {
 }
 
 impl<R, E: Clone> UnifiedRadixCache<R, E> {
+    /// Find the recurrent prefix without changing recency or active references.
+    /// Scheduler scans must not make merely considered entries look hot.
+    pub fn peek_recurrent(&self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<E>> {
+        let root = self.roots.get(namespace)?;
+        let matched_tokens = longest_component_prefix(root, tokens, ComponentKind::KvRecurrent)?;
+        let entry = node_at(root, &tokens[..matched_tokens])?
+            .components
+            .recurrent
+            .as_ref()?;
+        Some(RadixMatch {
+            matched_tokens,
+            stored_tokens: tokens[..matched_tokens].to_vec(),
+            logical_bytes: entry.logical_bytes,
+            active_refs: entry.active_refs,
+            value: entry.value.clone(),
+        })
+    }
+
     pub fn recurrent_exact(&mut self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<E>> {
         self.clock = self.clock.saturating_add(1);
         let root = self.roots.get_mut(namespace)?;
@@ -847,6 +928,34 @@ fn collect_lru_victim<R, E>(
     path.truncate(original_len);
 }
 
+fn collect_resident_eviction_candidates<R: Clone, E>(
+    namespace: &str,
+    node: &RadixNode<R, E>,
+    path: &mut Vec<i32>,
+    candidates: &mut Vec<RadixEvictionCandidate<R>>,
+) {
+    let original_len = path.len();
+    path.extend_from_slice(&node.edge);
+    if let Some(entry) = node
+        .components
+        .resident
+        .as_ref()
+        .filter(|entry| entry.active_refs == 0)
+    {
+        candidates.push(RadixEvictionCandidate {
+            namespace: namespace.to_string(),
+            tokens: path.clone(),
+            logical_bytes: entry.logical_bytes,
+            last_used: entry.last_used,
+            value: entry.value.clone(),
+        });
+    }
+    for child in node.children.values() {
+        collect_resident_eviction_candidates(namespace, child, path, candidates);
+    }
+    path.truncate(original_len);
+}
+
 fn normalize_root<R, E>(root: &mut RadixNode<R, E>) {
     normalize_children(root);
 }
@@ -905,6 +1014,10 @@ fn accumulate_stats<R, E>(
         stats.resident_active_refs = stats
             .resident_active_refs
             .saturating_add(u64::from(entry.active_refs));
+        if entry.active_refs > 0 {
+            stats.resident_pinned_tokens =
+                stats.resident_pinned_tokens.saturating_add(depth as u64);
+        }
     }
     if let Some(entry) = &node.components.recurrent {
         stats.recurrent_entries = stats.recurrent_entries.saturating_add(1);
@@ -1032,6 +1145,36 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_peeks_do_not_heat_resident_lru() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache.insert_resident("stage", &[1, 2], 2, "old").unwrap();
+        cache.insert_resident("stage", &[3, 4], 2, "new").unwrap();
+        let epoch = cache.epoch();
+
+        assert_eq!(
+            cache.peek_resident("stage", &[1, 2, 9]).unwrap().value,
+            "old"
+        );
+        assert_eq!(cache.epoch(), epoch);
+        assert_eq!(cache.lru_resident_candidate().unwrap().value, "old");
+    }
+
+    #[test]
+    fn scheduler_peeks_do_not_heat_recurrent_lru() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache.insert_recurrent("stage", &[1, 2], 2, "old").unwrap();
+        cache.insert_recurrent("stage", &[3, 4], 2, "new").unwrap();
+        let epoch = cache.epoch();
+
+        assert_eq!(
+            cache.peek_recurrent("stage", &[1, 2, 9]).unwrap().value,
+            "old"
+        );
+        assert_eq!(cache.epoch(), epoch);
+        assert_eq!(cache.lru_recurrent_candidate().unwrap().value, "old");
+    }
+
+    #[test]
     fn resident_kv_reuses_descendant_when_query_adds_a_new_branch() {
         let mut cache = UnifiedRadixCache::<&str, &str>::new();
         cache
@@ -1150,6 +1293,37 @@ mod tests {
         assert_eq!(cache.evict_lru_resident().unwrap().value, "old");
         assert_eq!(cache.stats().resident_evictions, 2);
         assert_eq!(cache.stats().namespaces, 0);
+    }
+
+    #[test]
+    fn capacity_candidates_exclude_pinned_entries_and_support_exact_eviction() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache
+            .insert_resident("stage", &[1, 2, 3], 30, "pinned")
+            .unwrap();
+        cache
+            .insert_resident("stage", &[4, 5], 20, "evictable")
+            .unwrap();
+        cache.acquire_resident("stage", &[1, 2, 3]).unwrap();
+
+        let candidates = cache.resident_eviction_candidates();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].tokens, vec![4, 5]);
+        assert_eq!(candidates[0].value, "evictable");
+        assert_eq!(cache.stats().resident_pinned_tokens, 3);
+        assert!(
+            cache
+                .evict_resident_candidate("stage", &[1, 2, 3])
+                .is_none()
+        );
+        assert_eq!(
+            cache
+                .evict_resident_candidate("stage", &[4, 5])
+                .unwrap()
+                .value,
+            "evictable"
+        );
+        assert_eq!(cache.stats().resident_evictions, 1);
     }
 
     #[test]

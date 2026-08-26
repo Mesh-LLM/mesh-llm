@@ -94,6 +94,7 @@ pub(super) fn seed_resident_prefix(kv: &KvStageIntegration, identity: &PrefillKv
                 page_id: identity.page_id.clone(),
                 seq_id,
                 token_count,
+                recompute_cost: token_count,
             },
         )
         .expect("synthetic radix prefix should record");

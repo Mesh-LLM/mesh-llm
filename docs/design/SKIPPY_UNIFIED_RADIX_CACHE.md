@@ -58,6 +58,31 @@ the radix path and are never replaced by a short hash.
   only to the request sequence.
 - Capacity is charged in native KV cells/tokens and estimated bytes.
 
+Resident-KV admission uses the runtime's unified KV-cell ceiling rather than
+the cache's entry limit alone. The planner accounts separately for active
+session tokens, referenced (pinned) resident prefixes, and unreferenced
+prefixes. It rejects only when active + pinned + request + the minimum decode
+watermark cannot fit after every releasable prefix is removed. Otherwise it
+evicts until a larger healthy watermark is reached, ranking candidates by
+predicted recomputation work per released token, recency, total work, and
+stable identity. The current resident estimate is cached tokens times a
+stage-local layer count that is constant for every entry, so density ties and
+recency is the effective production policy. This is cold-first LRU, not a
+measured cost-aware policy. Stage timing calibration can replace that uniform
+proxy without changing the generic planner contract.
+
+Native sequence deletion precedes exact radix removal for every selected
+victim. A failed native drop therefore leaves the logical cache owner and its
+sequence-id allocation intact. Capacity decisions report active, pinned,
+requested, minimum/target/projected-free, deficit, victim, and predicted-cost
+fields through `stage.openai_kv_capacity_decision` telemetry.
+
+Hard admission runs before request-session creation or prefix restoration.
+Rejected requests therefore do not change active-token accounting and can be
+retried after pressure clears. Decode-batch maintenance falls back to the
+legacy best-effort eviction pass when the hard planner cannot satisfy its
+watermark, so the most pressured state does not silently skip cleanup.
+
 ### KvRecurrent
 
 - The tree can share prefix identity and policy with ResidentKv, but recurrent
