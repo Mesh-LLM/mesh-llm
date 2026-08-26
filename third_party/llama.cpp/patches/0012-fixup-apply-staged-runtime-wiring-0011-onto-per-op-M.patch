@@ -851,7 +851,13 @@ index fa5ca80be..0e7bec61d 100644
  LLAMA_API enum skippy_status skippy_import_recurrent_state(
          struct skippy_session * session,
          const void * input,
-@@ -81,12 +93,14 @@ LLAMA_API enum skippy_status skippy_trim_session(
+@@ -76,17 +88,20 @@ LLAMA_API enum skippy_status skippy_import_recurrent_state(
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Trims the session's token history and associated state. */
+ LLAMA_API enum skippy_status skippy_trim_session(
+         struct skippy_session * session,
          uint64_t token_count,
          struct skippy_error ** out_error);
  
@@ -866,7 +872,7 @@ index fa5ca80be..0e7bec61d 100644
  LLAMA_API enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -99,6 +113,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
+@@ -99,27 +113,31 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
          size_t * out_bytes,
          struct skippy_error ** out_error);
  
@@ -874,6 +880,30 @@ index fa5ca80be..0e7bec61d 100644
  LLAMA_API enum skippy_status skippy_import_kv_page(
          struct skippy_session * session,
          const struct skippy_kv_page_desc * desc,
+         const void * input,
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Saves a session prefix into a resident cache sequence. */
+ LLAMA_API enum skippy_status skippy_session_save_prefix(
+         struct skippy_session * session,
+         int32_t cache_seq_id,
+         uint64_t token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Restores a session prefix from a resident cache sequence. */
+ LLAMA_API enum skippy_status skippy_session_restore_prefix(
+         struct skippy_session * session,
+         int32_t cache_seq_id,
+         const llama_token * token_ids,
+         size_t token_count,
+         struct skippy_error ** out_error);
+ 
++/** @brief Drops a llama.cpp sequence from the session's cache. */
+ LLAMA_API enum skippy_status skippy_session_drop_sequence(
+         struct skippy_session * session,
+         int32_t seq_id,
+         struct skippy_error ** out_error);
 diff --git a/include/skippy/tokenization.h b/include/skippy/tokenization.h
 index 7b8c4dcc4..ccf3d020c 100644
 --- a/include/skippy/tokenization.h
