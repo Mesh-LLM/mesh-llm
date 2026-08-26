@@ -13,11 +13,6 @@ SOURCES = ("upstream", "depot")
 
 
 def load_observations(root: Path) -> list[dict[str, object]]:
-    """Load observations from source.
-
-    Returns:
-        Loaded data.
-    """
     observations: list[dict[str, object]] = []
     for path in sorted(root.rglob("*.json")):
         with path.open(encoding="utf-8") as handle:
@@ -38,7 +33,6 @@ def load_observations(root: Path) -> list[dict[str, object]]:
 def summarize(
     observations: list[dict[str, object]], minimum_samples: int
 ) -> dict[str, object]:
-    """Execute summarize operation."""
     by_source = {
         source: [item for item in observations if item["source"] == source]
         for source in SOURCES
@@ -77,7 +71,6 @@ def summarize(
 
 
 def markdown(summary: dict[str, object]) -> str:
-    """Execute markdown operation."""
     return "\n".join(
         (
             "## Depot Registry pull-through result",
@@ -100,11 +93,6 @@ def markdown(summary: dict[str, object]) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse and validate args.
-
-    Returns:
-        Parsed result.
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("observations", type=Path)
     parser.add_argument("--minimum-samples", type=int, default=5)
@@ -115,11 +103,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     args = parse_args()
     result = summarize(load_observations(args.observations), args.minimum_samples)
     report = markdown(result)

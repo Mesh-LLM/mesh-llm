@@ -12,7 +12,6 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Function:
-    """Represents Function functionality."""
     name: str
     declaration: str
     brief: str
@@ -20,7 +19,6 @@ class Function:
 
 @dataclass(frozen=True)
 class Header:
-    """Represents Header functionality."""
     name: str
     brief: str
     declarations: tuple[str, ...]
@@ -28,12 +26,10 @@ class Header:
 
 
 def normalize_declaration(declaration: str) -> str:
-    """Execute normalize declaration operation."""
     return re.sub(r"\s+", " ", declaration.strip())
 
 
 def pretty_declaration(declaration: str) -> str:
-    """Execute pretty declaration operation."""
     declaration = normalize_declaration(declaration)
     declaration = declaration.replace("(", "(\n        ", 1)
     declaration = declaration.replace(", ", ",\n        ")
@@ -42,23 +38,19 @@ def pretty_declaration(declaration: str) -> str:
 
 
 def anchor_id(prefix: str, value: str) -> str:
-    """Execute anchor id operation."""
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return f"skippy-{prefix}-{slug}"
 
 
 def header_anchor(header: Header) -> str:
-    """Execute header anchor operation."""
     return anchor_id("header", header.name)
 
 
 def function_anchor(function: Function) -> str:
-    """Execute function anchor operation."""
     return anchor_id("fn", function.name)
 
 
 def comment_brief(comment: str) -> str:
-    """Execute comment brief operation."""
     lines = []
     for line in comment.splitlines():
         line = re.sub(r"^\s*\*/\s*$", "", line)
@@ -73,11 +65,6 @@ def comment_brief(comment: str) -> str:
 
 
 def parse_header(path: Path) -> Header:
-    """Parse and validate header.
-
-    Returns:
-        Parsed result.
-    """
     text = path.read_text()
     file_comment = re.search(r"/\*\*.*?@file.*?\*/", text, re.DOTALL)
     if file_comment is None:
@@ -114,7 +101,6 @@ def parse_header(path: Path) -> Header:
 
 
 def render(headers: list[Header], include_dir: Path) -> str:
-    """Render output for render."""
     functions = [function for header in headers for function in header.functions]
     lines = [
         "---",
@@ -235,11 +221,6 @@ def render(headers: list[Header], include_dir: Path) -> str:
 
 
 def main() -> int:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     parser = argparse.ArgumentParser(description=__doc__)
     repo_root = Path(__file__).resolve().parents[1]
     parser.add_argument(

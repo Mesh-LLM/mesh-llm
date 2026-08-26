@@ -255,7 +255,6 @@ def _assert_acyclic(dependencies: dict[str, list[str]]) -> None:
     visited: set[str] = set()
 
     def visit(node: str) -> None:
-        """Execute visit operation."""
         if node in visiting:
             raise PlanError(f"slice dependency cycle includes {node!r}")
         if node in visited:
@@ -502,7 +501,6 @@ def _select_rows(
             smoke_ids = [row_id for row_id in smoke_ids if row_id == "core"] or [smoke_ids[0]]
 
     def unique_rows(mapping: dict[str, dict[str, Any]], ids: Iterable[str], field: str) -> list[dict[str, Any]]:
-        """Execute unique rows operation."""
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         for row_id in ids:
@@ -792,11 +790,6 @@ def _validate_plan(plan: dict[str, Any], slices: dict[str, Any], packages: list[
 
 
 def build_plan(payload: object, *, root: Path = ROOT) -> dict[str, Any]:
-    """Create plan.
-
-    Returns:
-        Created object.
-    """
     input_data = _validate_input(payload)
     ownership = _load_manifest(root / "ci" / "ownership.yml")
     slices = _load_manifest(root / "ci" / "slices.yml")
@@ -889,11 +882,6 @@ def build_plan(payload: object, *, root: Path = ROOT) -> dict[str, Any]:
 
 
 def main() -> int:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     try:
         payload = json.load(sys.stdin)
         plan = build_plan(payload)

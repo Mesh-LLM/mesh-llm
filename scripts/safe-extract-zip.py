@@ -18,7 +18,6 @@ WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
 
 @dataclass(frozen=True)
 class Entry:
-    """Represents Entry functionality."""
     info: zipfile.ZipInfo
     parts: tuple[str, ...]
     kind: str
@@ -27,12 +26,10 @@ class Entry:
 
 
 def fail(message: str) -> NoReturn:
-    """Execute fail operation."""
     raise SystemExit(f"unsafe ZIP archive: {message}")
 
 
 def portable_parts(name: str, *, label: str) -> tuple[str, ...]:
-    """Execute portable parts operation."""
     if (
         not name
         or any(character in name for character in ("\0", "\r", "\n", "\t"))
@@ -53,7 +50,6 @@ def portable_parts(name: str, *, label: str) -> tuple[str, ...]:
 
 
 def resolve_link(parts: tuple[str, ...], target: str) -> None:
-    """Execute resolve link operation."""
     if (
         not target
         or any(character in target for character in ("\0", "\r", "\n", "\t"))
@@ -81,7 +77,6 @@ def classify(
     archive: zipfile.ZipFile,
     info: zipfile.ZipInfo,
 ) -> Entry:
-    """Execute classify operation."""
     name = info.filename.rstrip("/") if info.is_dir() else info.filename
     parts = portable_parts(name, label="entry")
     mode = info.external_attr >> 16
@@ -102,7 +97,6 @@ def classify(
 
 
 def inspect_archive(archive: zipfile.ZipFile) -> list[Entry]:
-    """Execute inspect archive operation."""
     entries = [classify(archive, info) for info in archive.infolist()]
     seen: set[tuple[str, ...]] = set()
     symlinks = {entry.parts for entry in entries if entry.kind == "symlink"}
@@ -121,7 +115,6 @@ def inspect_archive(archive: zipfile.ZipFile) -> list[Entry]:
 
 
 def extract(archive_path: Path, destination: Path) -> None:
-    """Execute extract operation."""
     if not archive_path.is_file():
         fail(f"archive does not exist: {archive_path}")
     if destination.is_symlink():
@@ -157,11 +150,6 @@ def extract(archive_path: Path, destination: Path) -> None:
 
 
 def main() -> None:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     if len(sys.argv) != 3:
         raise SystemExit(
             "usage: scripts/safe-extract-zip.py ARCHIVE.zip DESTINATION"

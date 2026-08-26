@@ -12,35 +12,29 @@ BACKEND_KIND_ALIASES = {"cuda-blackwell": "cuda", "hip": "rocm"}
 
 
 class RuntimeBackend(TypedDict):
-    """Represents RuntimeBackend functionality."""
     kind: str
 
 
 class RuntimeData(TypedDict):
-    """Represents RuntimeData functionality."""
     id: str
     mesh_version: str
     backend: RuntimeBackend
 
 
 class BuildData(TypedDict):
-    """Represents BuildData functionality."""
     backend: str
 
 
 class RuntimeManifest(TypedDict):
-    """Represents RuntimeManifest functionality."""
     runtime: RuntimeData
     build: NotRequired[BuildData]
 
 
 def expected_backend_kind(backend: str) -> str:
-    """Execute expected backend kind operation."""
     return BACKEND_KIND_ALIASES.get(backend, backend)
 
 
 def file_sha256(path: Path) -> str:
-    """Execute file sha256 operation."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -49,7 +43,6 @@ def file_sha256(path: Path) -> str:
 
 
 def tree_sha256(path: Path) -> str:
-    """Execute tree sha256 operation."""
     digest = hashlib.sha256()
     files = (candidate for candidate in path.rglob("*") if candidate.is_file())
     for item in sorted(files, key=lambda candidate: candidate.relative_to(path).as_posix()):
@@ -66,11 +59,6 @@ def validate_runtime_backend(
     runtime_data: RuntimeData,
     requested_backend: str,
 ) -> None:
-    """Validate runtime backend.
-
-    Raises:
-        ValidationError: If validation fails.
-    """
     expected_kind = expected_backend_kind(requested_backend)
     runtime_backend = runtime_data["backend"]
     runtime_kind = runtime_backend["kind"]
@@ -95,7 +83,6 @@ def compose_manifest(
     version: str,
     backend: str,
 ) -> dict[str, object]:
-    """Execute compose manifest operation."""
     version = version.removeprefix("v")
     runtime_manifest_path = runtime / "manifest.json"
     runtime_manifest: RuntimeManifest = json.loads(
@@ -129,11 +116,6 @@ def compose_manifest(
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse and validate args.
-
-    Returns:
-        Parsed result.
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--host", type=Path, required=True)
@@ -149,11 +131,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     args = parse_args()
     manifest = compose_manifest(
         args.bundle, args.host, args.runtime, args.version, args.backend

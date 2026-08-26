@@ -15,7 +15,6 @@ SIDECAR_LINE = re.compile(
 
 
 def sha256_file(path: Path) -> str:
-    """Execute sha256 file operation."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -24,7 +23,6 @@ def sha256_file(path: Path) -> str:
 
 
 def verify(artifact: Path) -> None:
-    """Execute verify operation."""
     sidecar = artifact.with_name(f"{artifact.name}.sha256")
     if not sidecar.is_file() or sidecar.stat().st_size == 0:
         raise ValueError(
@@ -56,11 +54,6 @@ def verify(artifact: Path) -> None:
 
 
 def main() -> int:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("artifact", type=Path)
     args = parser.parse_args()

@@ -16,13 +16,11 @@ from pathlib import Path
 
 
 def run(*command: str, cwd: Path | None = None) -> None:
-    """Run run operation."""
     print("+", " ".join(command), flush=True)
     subprocess.run(command, cwd=cwd, check=True)
 
 
 def ensure_build_tools() -> None:
-    """Execute ensure build tools operation."""
     required = ("git", "curl", "cmake", "c++", "ld.lld")
     if any(shutil.which(tool) is None for tool in required):
         if shutil.which("apt-get") is None:
@@ -51,11 +49,6 @@ def ensure_build_tools() -> None:
 
 
 def checkout_mesh(repo: str, revision: str, root: Path) -> None:
-    """Validate checkout mesh.
-
-    Raises:
-        ValidationError: If validation fails.
-    """
     if root.exists():
         shutil.rmtree(root)
     run("git", "clone", "--filter=blob:none", repo, str(root))
@@ -63,7 +56,6 @@ def checkout_mesh(repo: str, revision: str, root: Path) -> None:
 
 
 def write_beta_card(artifact_dir: Path, source_repo: str, revision: str) -> None:
-    """Save beta card to destination."""
     card = f"""---
 license: apache-2.0
 base_model: {source_repo}
@@ -87,7 +79,6 @@ Built with native `skippy-quantize` from mesh-llm revision `{revision}`.
 
 
 def convert(args: argparse.Namespace, root: Path) -> Path:
-    """Execute convert operation."""
     binary = root / "target" / "release" / "skippy-quantize"
     run("just", "skippy-quantize-standalone-release-build", "cpu", cwd=root)
     work = Path(args.work_dir)
@@ -149,7 +140,6 @@ def convert(args: argparse.Namespace, root: Path) -> Path:
 
 
 def upload(args: argparse.Namespace, artifact_dir: Path) -> None:
-    """Execute upload operation."""
     from huggingface_hub import HfApi
 
     api = HfApi(token=os.environ["HF_TOKEN"])
@@ -162,11 +152,6 @@ def upload(args: argparse.Namespace, artifact_dir: Path) -> None:
 
 
 def validate_converted_artifact(artifact_dir: Path) -> None:
-    """Validate converted artifact.
-
-    Raises:
-        ValidationError: If validation fails.
-    """
     required_files = ("README.md", "skippy-convert-manifest.json")
     missing = [name for name in required_files if not (artifact_dir / name).is_file()]
     if not artifact_dir.is_dir() or missing:
@@ -199,7 +184,6 @@ def validate_converted_artifact(artifact_dir: Path) -> None:
 
 
 def converted_artifact_dir(args: argparse.Namespace) -> Path:
-    """Execute converted artifact dir operation."""
     artifact_dir = Path(args.work_dir) / "target" / args.target_prefix
     if args.upload_only:
         validate_converted_artifact(artifact_dir)
@@ -207,11 +191,6 @@ def converted_artifact_dir(args: argparse.Namespace) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse and validate args.
-
-    Returns:
-        Parsed result.
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", default="/mnt/checkpoint")
     parser.add_argument("--source-repo", required=True)
@@ -238,11 +217,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     args = parse_args()
     os.environ.setdefault("HF_HOME", str(Path(args.work_dir) / "hf-home"))
     # The work directory can be a mounted bucket. Xet's shard cache performs

@@ -28,11 +28,6 @@ EXPECTED_ARCHITECTURES: dict[str, dict[PlatformKey, frozenset[str]]] = {
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse and validate args.
-
-    Returns:
-        Parsed result.
-    """
     parser = argparse.ArgumentParser(
         description=(
             "Verify an XCFramework's declared architectures, binary slices, "
@@ -45,12 +40,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def fail(message: str) -> None:
-    """Execute fail operation."""
     raise ValueError(message)
 
 
 def require_safe_component(value: Any, field: str) -> str:
-    """Execute require safe component operation."""
     if not isinstance(value, str) or not value:
         fail(f"XCFramework {field} must be a non-empty string")
     path = PurePosixPath(value)
@@ -60,7 +53,6 @@ def require_safe_component(value: Any, field: str) -> str:
 
 
 def platform_key(library: dict[str, Any]) -> PlatformKey:
-    """Execute platform key operation."""
     platform = library.get("SupportedPlatform")
     variant = library.get("SupportedPlatformVariant", "")
     if not isinstance(platform, str) or not platform:
@@ -74,7 +66,6 @@ def declared_architectures(
     library: dict[str, Any],
     key: PlatformKey,
 ) -> frozenset[str]:
-    """Execute declared architectures operation."""
     architectures = library.get("SupportedArchitectures")
     if not isinstance(architectures, list) or not architectures:
         fail(f"XCFramework slice {key!r} must declare SupportedArchitectures")
@@ -93,7 +84,6 @@ def framework_path(
     xcframework: Path,
     library: dict[str, Any],
 ) -> Path:
-    """Execute framework path operation."""
     identifier = require_safe_component(
         library.get("LibraryIdentifier"),
         "LibraryIdentifier",
@@ -112,7 +102,6 @@ def framework_path(
 
 
 def framework_binary(framework: Path) -> Path:
-    """Execute framework binary operation."""
     name = framework.stem
     binary = framework / name
     if not binary.exists() or not binary.is_file():
@@ -121,7 +110,6 @@ def framework_binary(framework: Path) -> Path:
 
 
 def verify_macos_layout(framework: Path) -> None:
-    """Execute verify macos layout operation."""
     name = framework.stem
     expected_symlinks = {
         "Versions/Current": "A",
@@ -151,7 +139,6 @@ def verify_macos_layout(framework: Path) -> None:
 
 
 def lipo_architectures(binary: Path) -> frozenset[str]:
-    """Execute lipo architectures operation."""
     lipo = os.environ.get("LIPO", "lipo")
     try:
         result = subprocess.run(
@@ -169,7 +156,6 @@ def lipo_architectures(binary: Path) -> frozenset[str]:
 
 
 def verify_xcframework(xcframework: Path, mode: str | None) -> None:
-    """Execute verify xcframework operation."""
     info_path = xcframework / "Info.plist"
     if not xcframework.is_dir() or not info_path.is_file():
         fail(f"XCFramework or Info.plist is missing: {xcframework}")
@@ -224,11 +210,6 @@ def verify_xcframework(xcframework: Path, mode: str | None) -> None:
 
 
 def main() -> int:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     args = parse_args()
     try:
         verify_xcframework(args.xcframework, args.mode)

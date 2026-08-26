@@ -15,7 +15,6 @@ class SummaryError(RuntimeError):
 
 
 def hit_rate(value: str) -> float:
-    """Execute hit rate operation."""
     try:
         parsed = float(value)
     except ValueError as error:
@@ -30,11 +29,6 @@ def hit_rate(value: str) -> float:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse and validate args.
-
-    Returns:
-        Parsed result.
-    """
     parser = argparse.ArgumentParser(
         description=(
             "Aggregate cache hits and misses from downloaded "
@@ -62,7 +56,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def discover_evidence(paths: list[Path]) -> list[Path]:
-    """Execute discover evidence operation."""
     evidence: set[Path] = set()
     for path in paths:
         if path.is_file():
@@ -81,7 +74,6 @@ def discover_evidence(paths: list[Path]) -> list[Path]:
 
 
 def sum_count_tree(value: Any, field: str) -> int:
-    """Execute sum count tree operation."""
     if isinstance(value, bool):
         raise SummaryError(f"{field} contains a boolean")
     if isinstance(value, int):
@@ -97,7 +89,6 @@ def sum_count_tree(value: Any, field: str) -> int:
 
 
 def read_count(path: Path, payload: Any, name: str) -> int:
-    """Execute read count operation."""
     if not isinstance(payload, dict):
         raise SummaryError(f"{path}: JSON root must be an object")
     stats = payload.get("stats")
@@ -113,7 +104,6 @@ def read_count(path: Path, payload: Any, name: str) -> int:
 
 
 def aggregate(paths: list[Path]) -> tuple[int, int]:
-    """Execute aggregate operation."""
     hits = 0
     misses = 0
     for path in paths:
@@ -127,7 +117,6 @@ def aggregate(paths: list[Path]) -> tuple[int, int]:
 
 
 def render_text(summary: dict[str, Any]) -> str:
-    """Render output for text."""
     rate = summary["hit_rate"]
     rate_text = "n/a" if rate is None else f"{rate:.2%}"
     lines = [
@@ -145,11 +134,6 @@ def render_text(summary: dict[str, Any]) -> str:
 
 
 def main() -> int:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     arguments = parse_args()
     try:
         evidence = discover_evidence(arguments.paths)

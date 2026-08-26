@@ -8,17 +8,12 @@ from typing import Any, Iterable
 
 
 def get_field(value: Any, name: str) -> Any:
-    """Execute get_field operation."""
-
     if isinstance(value, dict):
         return value.get(name)
     return getattr(value, name, None)
 
 
-    """Execute streamed_text operation."""
-
 def streamed_text(chunks: Iterable[object]) -> str:
-    """Execute streamed text operation."""
     parts: list[str] = []
     saw_choice = False
     for chunk in chunks:
@@ -38,15 +33,8 @@ def streamed_text(chunks: Iterable[object]) -> str:
         raise RuntimeError("stream returned no content")
     return text
 
-    """Execute main operation."""
-
 
 def main() -> None:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)

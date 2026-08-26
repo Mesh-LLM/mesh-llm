@@ -23,11 +23,6 @@ class StampError(RuntimeError):
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse and validate args.
-
-    Returns:
-        Parsed result.
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("stamp", type=Path)
     parser.add_argument("--backend", required=True)
@@ -39,11 +34,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def parse_stamp(path: Path) -> tuple[dict[str, str], list[str]]:
-    """Parse and validate stamp.
-
-    Returns:
-        Parsed result.
-    """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as error:
@@ -78,7 +68,6 @@ def parse_stamp(path: Path) -> tuple[dict[str, str], list[str]]:
 
 
 def require_equal(fields: dict[str, str], name: str, expected: str) -> None:
-    """Execute require equal operation."""
     actual = fields.get(name)
     if actual != expected:
         raise StampError(
@@ -88,11 +77,6 @@ def require_equal(fields: dict[str, str], name: str, expected: str) -> None:
 
 
 def main() -> int:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     arguments = parse_args()
     try:
         fields, cmake_arguments = parse_stamp(arguments.stamp)

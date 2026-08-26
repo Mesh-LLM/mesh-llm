@@ -105,15 +105,6 @@ def _required_jobs(lane_plan: dict[str, Any]) -> set[str]:
 
 
 def validate(lane_plan: dict[str, Any], needs: dict[str, Any]) -> None:
-    """Validate that all planned jobs completed successfully and unplanned jobs were skipped.
-
-    Args:
-        lane_plan: The CI lane plan containing required jobs and slices.
-        needs: The actual job results from the CI workflow.
-
-    Raises:
-        LaneResultError: If validation fails due to job failures or unexpected results.
-    """
     required = lane_plan.get("required")
     if not isinstance(required, bool):
         raise LaneResultError("lane plan required must be a boolean")
@@ -136,11 +127,6 @@ def validate(lane_plan: dict[str, Any], needs: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    """Parse arguments and validate CI lane results against the plan.
-
-    Returns:
-        Exit code: 0 for success, 2 for validation errors.
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--lane-plan", required=True)
     parser.add_argument("--needs", required=True)

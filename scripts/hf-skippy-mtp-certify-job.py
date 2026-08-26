@@ -24,13 +24,11 @@ TRUSTED_PROJECTOR_HOST_SUFFIXES = ("huggingface.co", "hf.co", "xethub.hf.co")
 
 
 def run(*command: str, cwd: Path | None = None) -> None:
-    """Run run operation."""
     print("+", " ".join(command), flush=True)
     subprocess.run(command, cwd=cwd, check=True)
 
 
 def ensure_build_tools() -> None:
-    """Execute ensure build tools operation."""
     required = ("git", "curl", "cmake", "c++", "ld.lld")
     if any(shutil.which(tool) is None for tool in required):
         if shutil.which("apt-get") is None:
@@ -59,11 +57,6 @@ def ensure_build_tools() -> None:
 
 
 def checkout_mesh(repo: str, revision: str, root: Path) -> None:
-    """Validate checkout mesh.
-
-    Raises:
-        ValidationError: If validation fails.
-    """
     if root.exists():
         shutil.rmtree(root)
     run("git", "clone", "--filter=blob:none", repo, str(root))
@@ -71,7 +64,6 @@ def checkout_mesh(repo: str, revision: str, root: Path) -> None:
 
 
 def model_parts(args: argparse.Namespace) -> list[Path]:
-    """Execute model parts operation."""
     parts = sorted(Path(args.model_root).glob(args.model_pattern))
     if len(parts) != args.expected_parts:
         raise RuntimeError(
@@ -82,7 +74,6 @@ def model_parts(args: argparse.Namespace) -> list[Path]:
 
 
 def require_gguf_magic(path: Path) -> Path:
-    """Execute require gguf magic operation."""
     with path.open("rb") as handle:
         magic = handle.read(4)
     if magic != b"GGUF":
@@ -91,11 +82,6 @@ def require_gguf_magic(path: Path) -> Path:
 
 
 def validate_projector_url(url: str) -> urllib.parse.ParseResult:
-    """Validate projector url.
-
-    Raises:
-        ValidationError: If validation fails.
-    """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https":
         raise RuntimeError(f"unsupported projector URL scheme: {parsed.scheme!r}")
@@ -123,15 +109,12 @@ def validate_projector_url(url: str) -> urllib.parse.ParseResult:
 
 
 class TrustedProjectorRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Represents TrustedProjectorRedirectHandler functionality."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
-        """Execute redirect request operation."""
         validate_projector_url(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def copy_projector_response(response, output) -> None:  # noqa: ANN001
-    """Execute copy projector response operation."""
     content_length = response.headers.get("Content-Length")
     if content_length is not None and int(content_length) > PROJECTOR_DOWNLOAD_MAX_BYTES:
         raise RuntimeError("projector download exceeds the maximum supported size")
@@ -144,7 +127,6 @@ def copy_projector_response(response, output) -> None:  # noqa: ANN001
 
 
 def projector_path(args: argparse.Namespace) -> Path:
-    """Execute projector path operation."""
     if not args.projector_url:
         return require_gguf_magic(Path(args.projector))
     parsed = validate_projector_url(args.projector_url)
@@ -169,7 +151,6 @@ def projector_path(args: argparse.Namespace) -> Path:
 
 
 def run_report(command: list[str], report_out: str) -> None:
-    """Run report operation."""
     print("+", " ".join(command), flush=True)
     completed = subprocess.run(command, text=True, capture_output=True)
     if completed.stderr:
@@ -185,7 +166,6 @@ def run_report(command: list[str], report_out: str) -> None:
 
 
 def certify(args: argparse.Namespace, mesh_root: Path) -> None:
-    """Execute certify operation."""
     binary = mesh_root / "target" / "release" / "skippy-quantize"
     run("just", "skippy-quantize-standalone-release-build", "cpu", cwd=mesh_root)
     projector = projector_path(args)
@@ -219,11 +199,6 @@ def certify(args: argparse.Namespace, mesh_root: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse and validate args.
-
-    Returns:
-        Parsed result.
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-root", default="/target")
     parser.add_argument("--model-pattern", required=True)
@@ -243,11 +218,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Execute main program logic.
-
-    Returns:
-        Exit code.
-    """
     args = parse_args()
     ensure_build_tools()
     mesh_root = Path("/tmp/mesh-llm")
