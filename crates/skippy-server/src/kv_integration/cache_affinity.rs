@@ -13,10 +13,11 @@ impl KvStageIntegration {
         if !self.should_lookup() {
             return CacheAffinity::default();
         }
-        let radix = self
-            .radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let radix = match self.radix.try_lock() {
+            Ok(radix) => radix,
+            Err(std::sync::TryLockError::WouldBlock) => return CacheAffinity::default(),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        };
         let cache_epoch = radix.epoch();
         let matched_tokens = identities
             .iter()
@@ -46,5 +47,89 @@ impl KvStageIntegration {
             restore_cost: 0,
             cache_epoch,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{Arc, mpsc},
+        time::{Duration, Instant},
+    };
+
+    use skippy_protocol::{LoadMode, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
+
+    use super::*;
+
+    fn test_config() -> StageConfig {
+        StageConfig {
+            run_id: "run".to_string(),
+            topology_id: "topology".to_string(),
+            model_id: "org/model:Q4_K_M".to_string(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: None,
+            projector_path: None,
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 4,
+            ctx_size: 512,
+            lane_count: 2,
+            n_batch: None,
+            n_ubatch: None,
+            n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: Default::default(),
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: Some(StageKvCacheConfig {
+                mode: StageKvCacheMode::LookupRecord,
+                payload: StageKvCachePayload::ResidentKv,
+                max_entries: 8,
+                max_bytes: 0,
+                min_tokens: 64,
+                shared_prefix_stride_tokens: 32,
+                shared_prefix_record_limit: 2,
+            }),
+            native_mtp_enabled: true,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_string(),
+            upstream: None,
+            downstream: None,
+        }
+    }
+
+    #[test]
+    fn busy_radix_returns_cold_affinity_without_waiting() {
+        let config = test_config();
+        let integration = KvStageIntegration::from_config(&config).unwrap().unwrap();
+        let radix = Arc::clone(&integration.radix);
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = radix.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        locked_rx.recv().unwrap();
+
+        let started = Instant::now();
+        assert_eq!(
+            integration.peek_cache_affinity(&config, &[]),
+            CacheAffinity::default()
+        );
+        assert!(started.elapsed() < Duration::from_millis(100));
+
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
     }
 }

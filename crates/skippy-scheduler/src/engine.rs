@@ -299,7 +299,6 @@ impl Scheduler {
             };
             self.release_memory(&sequence);
             sequence.reset_for_recompute();
-            sequence.enqueued_turn = self.waiting_turn;
             sequence.enqueue_order = self.next_waiting_order;
             self.next_waiting_order = self.next_waiting_order.saturating_add(1);
             self.waiting.push_front(sequence);
@@ -693,5 +692,50 @@ mod tests {
             scheduler.snapshot().component_used_bytes,
             vec![("kv".into(), 0)]
         );
+    }
+
+    #[test]
+    fn repeated_component_preemption_preserves_aging_credit() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 1,
+            cache_aging_cost_per_iteration: 10,
+            memory_components: vec![MemoryComponent {
+                name: "kv".into(),
+                capacity_bytes: 2,
+                resident_bytes: 0,
+                bytes_per_token: 1,
+                bytes_per_sequence: 0,
+            }],
+            ..SchedulerConfig::default()
+        });
+        let hot_affinity = crate::CacheAffinity::from_stage(crate::StageCacheAffinity {
+            stage_index: 0,
+            matched_tokens: 1,
+            prefill_cost_per_token: 80,
+            restore_cost: 0,
+            cache_epoch: 0,
+        });
+        scheduler
+            .submit(sequence("cold", 2, 4).with_admission_tokens(1))
+            .unwrap();
+        scheduler.plan_iteration();
+        scheduler.waiting_turn = 10;
+
+        for hot_id in ["hot-a", "hot-b"] {
+            assert_eq!(scheduler.preempt_for_component_pressure(&[3]), ["cold"]);
+            scheduler.preempt_for_component_pressure(&[0]);
+            scheduler
+                .submit(
+                    sequence(hot_id, 2, 4)
+                        .with_admission_tokens(1)
+                        .with_cache_affinity(hot_affinity.clone()),
+                )
+                .unwrap();
+
+            scheduler.plan_iteration();
+
+            assert_eq!(scheduler.snapshot().active_ids, ["cold"]);
+            assert_eq!(scheduler.sequence("cold").unwrap().enqueued_turn, 0);
+        }
     }
 }
