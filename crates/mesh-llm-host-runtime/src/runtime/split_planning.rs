@@ -414,9 +414,11 @@ fn runtime_slice_plan_input(
         for node in &mut plan_input.nodes {
             node.sustained_mem_bandwidth_mib_per_s = None;
             node.sustained_compute_gflop_per_s = None;
+            node.stage_transfer_latency_ms = None;
         }
         plan_input.edges = Vec::new();
         plan_input.activation_frame_bytes = 0;
+        plan_input.target_decode_tpot_ms = None;
     }
 
     plan_input
@@ -426,8 +428,8 @@ fn runtime_slice_plan_input(
 /// `MESH_TOPOLOGY_PERF_AWARE` escape hatch. Any of `0`, `false`, `off`, or
 /// `no` (case-insensitive) forces capacity-only placement and the legacy
 /// network estimate; unset or any other value keeps performance-aware
-/// behavior. Checked per planning attempt so operators can toggle without
-/// restarting a node's other state.
+/// behavior. The value is read from the process environment and requires a
+/// process restart to change.
 fn perf_aware_placement_disabled() -> bool {
     perf_aware_disabled_from_value(std::env::var("MESH_TOPOLOGY_PERF_AWARE").ok().as_deref())
 }
