@@ -211,16 +211,20 @@ impl RuntimeKvPageDesc {
                 if self.version == 2 && self.component_count == 2 =>
             {
                 let [base, swa] = *self.components;
+                let base_k_idx_flag = base.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
+                let swa_k_idx_flag = swa.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
                 if base.version != 1
                     || base.role != 1
                     || base.payload_offset != 0
                     || base.token_start != self.token_start
                     || base.token_count != self.token_count
+                    || (base.k_idx_row_bytes > 0) != (base_k_idx_flag != 0)
                     || swa.version != 1
                     || swa.role != 2
                     || swa.token_start < self.token_start
                     || swa.token_start.checked_add(swa.token_count)
                         != self.token_start.checked_add(self.token_count)
+                    || (swa.k_idx_row_bytes > 0) != (swa_k_idx_flag != 0)
                     || swa.payload_offset != base.payload_bytes
                     || swa.payload_offset.checked_add(swa.payload_bytes) != Some(payload_len)
                 {

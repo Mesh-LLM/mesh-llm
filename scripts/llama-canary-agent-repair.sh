@@ -98,18 +98,24 @@ ensure_pr() {
 
 pr_comment() {
   # Post a status comment on the repair PR; never fails the loop.
-  local body="$1" pr
-  pr="$(current_pr)"
-  [[ -n "$pr" ]] || pr="$(ensure_pr)"
-  [[ -n "$pr" ]] || return 0
-  gh pr comment "$pr" --body "$body" >/dev/null 2>&1 || true
+  local body="$1" resource
+  resource="$(current_pr)"
+  [[ -n "$resource" ]] || resource="$(ensure_pr)"
+  [[ -n "$resource" ]] || return 0
+  # ensure_pr returns an issue number when no PR exists; use the right command.
+  if gh pr view "$resource" >/dev/null 2>&1; then
+    gh pr comment "$resource" --body "$body" >/dev/null 2>&1 || true
+  else
+    gh issue comment "$resource" --body "$body" >/dev/null 2>&1 || true
+  fi
 }
 
 run_battery() {
   # Runs the certification battery; prints the summary line and returns the
   # battery exit code. Log path is echoed for the caller.
   local log=".deps/llama-canary-repair-battery.log"
-  if scripts/skippy-family-battery.sh --skip-build >"$log" 2>&1; then
+  scripts/build-llama.sh || return 1
+  if scripts/skippy-family-battery.sh >"$log" 2>&1; then
     tail -n 2 "$log"
     return 0
   fi

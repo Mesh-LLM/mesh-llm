@@ -232,6 +232,12 @@ pub(crate) fn write_kv<W: Write>(writer: &mut W, kv: &GgufKv) -> Result<()> {
             bytes,
         } => {
             write_scalar_header(writer, key, *value_type)?;
+            if *value_type == GGUF_TYPE_ARRAY {
+                ensure!(
+                    bytes.len() >= 12,
+                    "raw GGUF array metadata for {key:?} is missing the array header (element type + count)"
+                );
+            }
             writer.write_all(bytes)?;
         }
     }

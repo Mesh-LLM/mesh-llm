@@ -125,6 +125,9 @@ fn store_exact_radix_record(
     max_bytes: u64,
     pending: PendingExactStateRecord,
 ) {
+    if pending.token_ids.is_empty() {
+        return;
+    }
     let logical_bytes = pending.payload.byte_len();
     let (payload, _) = pending.payload.dedupe_into(blobs);
     let replaced = radix

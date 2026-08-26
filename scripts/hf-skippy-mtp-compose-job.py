@@ -165,7 +165,7 @@ def convert_mtp(llama_root: Path, args: argparse.Namespace, work: Path) -> Path:
 
 def target_shards(args: argparse.Namespace) -> list[Path]:
     shard_dir = Path(args.target_source) / TARGET_SUBDIR
-    shards = sorted(shard_dir.glob("*.gguf"))
+    shards = sorted(p for p in shard_dir.glob("*.gguf") if p.name.startswith(args.target_basename))
     if len(shards) < 2:
         raise FileNotFoundError(f"expected sharded target GGUF under {shard_dir}, found {shards}")
     return shards
@@ -232,6 +232,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if "HF_TOKEN" not in os.environ:
+        print("error: HF_TOKEN environment variable is required for upload", file=sys.stderr)
+        sys.exit(1)
     os.environ.setdefault("HF_HOME", str(Path(args.work_dir) / "hf-home"))
     os.environ.setdefault("HF_XET_CACHE", "/tmp/hf-xet")
     ensure_build_tools()

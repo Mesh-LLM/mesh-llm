@@ -634,12 +634,14 @@ fn resident_backing_prefix<R, E>(
         };
         let common = common_prefix_len(&child.edge, remaining);
         if common < child.edge.len() {
-            let mut child_path = path.clone();
-            child_path.extend_from_slice(&child.edge);
-            if common > 0
-                && let Some(stored_tokens) = nearest_resident_descendant(child, &child_path)
-            {
-                best = Some((consumed.saturating_add(common), stored_tokens));
+            if common > 0 {
+                let mut child_path = path.clone();
+                child_path.extend_from_slice(&child.edge[..common]);
+                if let Some(stored_tokens) = nearest_resident_descendant(child, &child_path) {
+                    best = Some((consumed.saturating_add(common), stored_tokens));
+                } else if let Some(stored_tokens) = nearest_resident_descendant(node, &path) {
+                    best = Some((consumed, stored_tokens));
+                }
             }
             break;
         }
