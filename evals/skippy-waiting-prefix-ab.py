@@ -281,7 +281,7 @@ def run_cell(
         "--bind-addr",
         f"127.0.0.1:{port}",
         "--generation-concurrency",
-        str(args.lanes),
+        str(args.admission_concurrency),
         "--telemetry-level",
         "debug",
     ]
@@ -408,6 +408,12 @@ def main() -> int:
     parser.add_argument("--output-tokens", type=int, default=64)
     parser.add_argument("--ctx-size", type=int, default=32768)
     parser.add_argument("--lanes", type=int, default=1)
+    parser.add_argument(
+        "--admission-concurrency",
+        type=int,
+        default=0,
+        help="accepted in-flight requests; 0 admits the full generated workload",
+    )
     parser.add_argument("--cache-entries", type=int, default=1)
     parser.add_argument("--stagger-ms", type=float, default=5.0)
     parser.add_argument("--request-timeout-secs", type=float, default=900.0)
@@ -415,6 +421,8 @@ def main() -> int:
     args = parser.parse_args()
     if min(args.rounds, args.families, args.requests_per_family, args.lanes, args.cache_entries) <= 0:
         parser.error("rounds, families, requests, lanes, and cache entries must be positive")
+    if args.admission_concurrency < 0:
+        parser.error("admission concurrency must be non-negative")
     if args.stagger_ms < 0:
         parser.error("stagger must be non-negative")
     binaries = {"old": args.old_bin.resolve(), "new": args.new_bin.resolve()}
@@ -428,6 +436,10 @@ def main() -> int:
         parser.error("case file must contain exactly one model")
     case = cases[0]
     prompts = interleaved_prompts(args.families, args.requests_per_family, args.prefix_blocks)
+    if args.admission_concurrency == 0:
+        args.admission_concurrency = len(prompts)
+    if args.admission_concurrency < len(prompts):
+        parser.error("admission concurrency must cover the generated workload")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     cells = []
     for round_index in range(args.rounds):
@@ -460,6 +472,7 @@ def main() -> int:
             "prefix_blocks": args.prefix_blocks,
             "output_tokens": args.output_tokens,
             "lanes": args.lanes,
+            "admission_concurrency": args.admission_concurrency,
             "cache_entries": args.cache_entries,
             "stagger_ms": args.stagger_ms,
         },
