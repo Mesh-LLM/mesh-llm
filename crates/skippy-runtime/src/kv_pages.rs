@@ -1,6 +1,6 @@
 use std::ptr;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use skippy_ffi::KvPageDesc as RawKvPageDesc;
 
 use crate::error::{ensure_ok, free_error};
@@ -140,7 +140,10 @@ impl StageSession {
         token_count: u64,
     ) -> Result<()> {
         self.import_full_state(layer_start, layer_end, input)?;
-        self.set_position(token_count)
+        let native_position = self.native_position()?;
+        self.token_count = native_position;
+        validate_imported_full_state_position(token_count, native_position)?;
+        Ok(())
     }
 
     pub fn export_kv_page(
@@ -311,5 +314,32 @@ impl StageSession {
     ) -> Result<()> {
         self.import_recurrent_state(input)?;
         self.set_position(token_count)
+    }
+}
+
+fn validate_imported_full_state_position(expected: u64, actual: u64) -> Result<()> {
+    ensure!(
+        actual == expected,
+        "full-state import restored native position {actual}, expected {expected}"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_imported_full_state_position;
+
+    #[test]
+    fn full_state_import_accepts_the_position_carried_by_native_state() {
+        validate_imported_full_state_position(17, 17).unwrap();
+    }
+
+    #[test]
+    fn full_state_import_rejects_lost_native_position() {
+        let error = validate_imported_full_state_position(17, 0).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "full-state import restored native position 0, expected 17"
+        );
     }
 }

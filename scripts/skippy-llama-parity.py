@@ -475,7 +475,6 @@ def validate_stage_abi_allowlist() -> int:
             "granite_moe",
             "hunyuan_dense",
             "phimoe",
-            "glm-dsa",
             "lfm2moe",
             "minicpm",
             "mistral4",

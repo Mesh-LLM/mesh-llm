@@ -223,6 +223,8 @@ fi
 
 FAILURES=()
 TOTAL=0
+EXPECTED_TOTAL=0
+EXPECTED_FAMILY_COUNT=0
 CERT_FAILURE_COUNT=0
 PREFLIGHT_FAILURE_COUNT=0
 PREFLIGHT_SPEC_FAMILY=""
@@ -514,6 +516,7 @@ run_certify() {
     --cert-root "$cert_run_dir"
     --run-id certification
     --require-lanes
+    --strict-dtype
     --skip-build
   )
   if (( native_mtp == 1 )); then
@@ -579,6 +582,18 @@ run_certify() {
 preflight_manifest() {
   local plan="$1"
   [[ -f "$plan" ]] || { echo "missing policy plan: $plan" >&2; exit 1; }
+
+  if [[ -n "$SHARD_INDEX" ]]; then
+    EXPECTED_FAMILY_COUNT="$(jq -r --argjson shard_index "$SHARD_INDEX" \
+      '.shards[] | select(.shard_index == $shard_index) | (.families | length)' "$plan")"
+  else
+    EXPECTED_FAMILY_COUNT="$(jq -r '.selected_family_count' "$plan")"
+  fi
+  if [[ ! "$EXPECTED_FAMILY_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "policy plan has no positive selected family count" >&2
+    PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+    return 1
+  fi
 
   while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv speculative_policy; do
     if [[ "$profile" != "full" ]]; then
@@ -718,8 +733,24 @@ preflight_manifest() {
   )
 
   local resolved_count=$(( $(wc -l < "$RESOLVED_MANIFEST") - 1 ))
-  if (( resolved_count == 0 )); then
-    echo "preflight selected no model rows" >&2
+  if (( resolved_count != EXPECTED_FAMILY_COUNT )); then
+    echo "preflight resolved $resolved_count model rows but policy planned $EXPECTED_FAMILY_COUNT" >&2
+    PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+  fi
+  local planned_families resolved_families
+  planned_families="$(jq -r --arg shard_index "$SHARD_INDEX" '
+    if $shard_index == "" then
+      [.selected_models[].family]
+    else
+      [.shards[]
+       | select(.shard_index == ($shard_index | tonumber))
+       | .families[]]
+    end
+    | join(",")
+  ' "$plan")"
+  resolved_families="$(tail -n +2 "$RESOLVED_MANIFEST" | cut -d '|' -f 1 | paste -sd, -)"
+  if [[ "$resolved_families" != "$planned_families" ]]; then
+    echo "resolved family order does not exactly match the validated policy plan" >&2
     PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
   fi
   if (( DRY_RUN == 1 )); then
@@ -747,6 +778,28 @@ preflight_manifest() {
     PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
     return 1
   fi
+}
+
+planned_certification_count() {
+  local resolved_manifest="$1"
+  local planned=0
+  while IFS='|' read -r family _repo _source_revision _file _selector sweep_period layer_end _rest; do
+    [[ "$family" == "family" ]] && continue
+    local base_split=$(( layer_end / 2 ))
+    planned=$((planned + 1))
+    if [[ "$sweep_period" != "0" ]]; then
+      local offset cut cuts
+      for (( offset = 1; offset <= sweep_period; offset++ )); do
+        cuts=0
+        for (( cut = offset; cut < layer_end && cuts < SWEEP_MAX_CUTS; cut += sweep_period )); do
+          (( cut == base_split )) && continue
+          planned=$((planned + 1))
+          cuts=$((cuts + 1))
+        done
+      done
+    fi
+  done < "$resolved_manifest"
+  printf '%s\n' "$planned"
 }
 
 run_resolved_manifest() {
@@ -780,7 +833,21 @@ build_certification_binaries
 if ! preflight_manifest "$POLICY_PLAN_COPY"; then
   echo "family battery preflight failed; no certification lane was started" >&2
 elif (( PREFLIGHT_ONLY == 0 )); then
+  EXPECTED_TOTAL="$(planned_certification_count "$RESOLVED_MANIFEST")"
   run_resolved_manifest "$RESOLVED_MANIFEST"
+  if (( TOTAL != EXPECTED_TOTAL )); then
+    echo "executed $TOTAL certifications but validated plan requires $EXPECTED_TOTAL" >&2
+    FAILURES+=("battery(planned-vs-executed)")
+    CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))
+  fi
+  if (( DRY_RUN == 0 )); then
+    actual_result_count="$(jq -s '[.[] | select(.split_layer != null)] | length' "$RESULTS_JSONL")"
+    if (( actual_result_count != EXPECTED_TOTAL )); then
+      echo "recorded $actual_result_count certification results but validated plan requires $EXPECTED_TOTAL" >&2
+      FAILURES+=("battery(result-reconciliation)")
+      CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))
+    fi
+  fi
 fi
 
 echo
@@ -799,6 +866,7 @@ if (( DRY_RUN == 0 )); then
       echo "- Policy shard: \`$SHARD_INDEX\`"
     fi
     echo "- Certifications: $TOTAL"
+    echo "- Planned certifications: $EXPECTED_TOTAL"
     echo "- MTP models: $(( $(wc -l < "$MTP_CORPUS_TSV") - 1 ))"
     echo "- Preflight failures: $PREFLIGHT_FAILURE_COUNT"
     echo "- Startup timeout policy: min ${STARTUP_TIMEOUT_MIN_SECS}s + ${STARTUP_TIMEOUT_PER_GIB_SECS}s/GiB, capped at ${STARTUP_TIMEOUT_MAX_SECS}s"

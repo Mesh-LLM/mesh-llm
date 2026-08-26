@@ -798,7 +798,7 @@
       "llama_model": "glm-dsa",
       "family": "glm_dsa",
       "status": "no_public_gguf_candidate",
-      "notes": "HF GGUF search for GLM-DSA did not find a public artifact for this llama.cpp architecture"
+      "notes": "offline artifact-tooling candidate only: the pinned llama.cpp runtime does not carry the GLM-DSA staged graph patch, so Mesh LLM intentionally does not advertise this as a runnable stage-runtime family; HF GGUF search also found no public certification artifact"
     },
     {
       "llama_model": "grok",

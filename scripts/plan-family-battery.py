@@ -173,7 +173,11 @@ def _enum(value: object, field: str, allowed: tuple[str, ...]) -> str:
 
 def _artifact(value: object, field: str) -> dict[str, Any]:
     artifact = _object(value, field)
-    _exact_keys(artifact, {"repo", "revision", "files", "selector"}, field)
+    _exact_keys(
+        artifact,
+        {"repo", "revision", "files", "file_integrity", "selector"},
+        field,
+    )
     repo = _string(artifact.get("repo"), f"{field}.repo")
     if repo.count("/") != 1 or repo.startswith("/") or repo.endswith("/"):
         raise PlanError(f"{field}.repo must be an owner/repository coordinate")
@@ -187,11 +191,40 @@ def _artifact(value: object, field: str) -> dict[str, Any]:
         path = PurePosixPath(file)
         if path.is_absolute() or ".." in path.parts or file.endswith("/"):
             raise PlanError(f"{field}.files contains an unsafe path: {file!r}")
+    integrity = _object(artifact.get("file_integrity"), f"{field}.file_integrity")
+    if set(integrity) != set(files):
+        raise PlanError(f"{field}.file_integrity must exactly cover {field}.files")
+    normalized_integrity: dict[str, dict[str, Any]] = {}
+    for file in files:
+        record = _object(integrity[file], f"{field}.file_integrity[{file!r}]")
+        _exact_keys(
+            record,
+            {"size_bytes", "blob_id"},
+            f"{field}.file_integrity[{file!r}]",
+        )
+        size_bytes = _integer(
+            record.get("size_bytes"),
+            f"{field}.file_integrity[{file!r}].size_bytes",
+            1,
+        )
+        blob_id = _string(
+            record.get("blob_id"),
+            f"{field}.file_integrity[{file!r}].blob_id",
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", blob_id):
+            raise PlanError(
+                f"{field}.file_integrity[{file!r}].blob_id must be a lowercase SHA-256"
+            )
+        normalized_integrity[file] = {
+            "size_bytes": size_bytes,
+            "blob_id": blob_id,
+        }
     selector = _string(artifact.get("selector"), f"{field}.selector")
     return {
         "repo": repo,
         "revision": revision,
         "files": files,
+        "file_integrity": normalized_integrity,
         "selector": selector,
     }
 
@@ -447,27 +480,55 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
         if model["draft_artifact"] is not None:
             artifacts.append(("draft", model["draft_artifact"]))
         for kind, artifact in artifacts:
-            for path in _artifact_cache_paths(cache_root, artifact):
+            repo_dir = "models--" + artifact["repo"].replace("/", "--")
+            blob_dir = (_cache_hub(cache_root) / repo_dir / "blobs").resolve()
+            for relative, path in zip(
+                artifact["files"], _artifact_cache_paths(cache_root, artifact), strict=True
+            ):
                 if not path.is_file():
                     missing.append(f"{model['family']} {kind}: {path}")
+                    continue
+                integrity = artifact["file_integrity"][relative]
+                if not path.is_symlink():
+                    missing.append(
+                        f"{model['family']} {kind}: snapshot entry is not a content-addressed symlink: {path}"
+                    )
+                    continue
+                resolved = path.resolve()
+                if resolved.parent != blob_dir or resolved.name != integrity["blob_id"]:
+                    missing.append(
+                        f"{model['family']} {kind}: expected blob {integrity['blob_id']} but snapshot resolves to {resolved}"
+                    )
+                    continue
+                actual_size = path.stat().st_size
+                if actual_size != integrity["size_bytes"]:
+                    missing.append(
+                        f"{model['family']} {kind}: expected {integrity['size_bytes']} bytes for {relative} but found {actual_size}"
+                    )
     if missing:
         joined = "\n  ".join(missing)
         raise PlanError(f"immutable family cache is incomplete:\n  {joined}")
     for model in models:
-        target = _artifact_cache_paths(cache_root, model["artifact"])[0]
-        block_count, embedding_length = _gguf_dimensions(target)
-        planned = model["execution"]["layer_end"]
-        if block_count != planned:
-            raise PlanError(
-                f"{model['family']} plans {planned} runtime layers but immutable "
-                f"GGUF metadata declares {block_count}"
-            )
-        planned_width = model["execution"]["activation_width"]
-        if embedding_length != planned_width:
-            raise PlanError(
-                f"{model['family']} plans activation width {planned_width} but immutable "
-                f"GGUF metadata declares {embedding_length}"
-            )
+        artifacts = [("target", model["artifact"])]
+        if model["draft_artifact"] is not None:
+            artifacts.append(("draft", model["draft_artifact"]))
+        for kind, artifact in artifacts:
+            for target in _artifact_cache_paths(cache_root, artifact):
+                block_count, embedding_length = _gguf_dimensions(target)
+                if kind != "target":
+                    continue
+                planned = model["execution"]["layer_end"]
+                if block_count != planned:
+                    raise PlanError(
+                        f"{model['family']} plans {planned} runtime layers but immutable "
+                        f"GGUF metadata in {target.name} declares {block_count}"
+                    )
+                planned_width = model["execution"]["activation_width"]
+                if embedding_length != planned_width:
+                    raise PlanError(
+                        f"{model['family']} plans activation width {planned_width} but immutable "
+                        f"GGUF metadata in {target.name} declares {embedding_length}"
+                    )
 
 
 def build_plan(

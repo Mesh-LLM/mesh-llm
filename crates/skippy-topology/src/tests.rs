@@ -1391,6 +1391,10 @@ fn infers_known_family_capabilities_from_model_identity() {
         "minimax_m27"
     );
     assert!(infer_family_capability("unknown", 1, 1).is_none());
+    assert!(
+        infer_family_capability("glm-dsa", 78, 7168).is_none(),
+        "GLM-DSA must remain unadvertised until its native staged graph patch is restored"
+    );
 }
 
 #[test]

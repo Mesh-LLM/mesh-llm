@@ -44,6 +44,12 @@ pub struct DecodeFrameBatchRequest<'a> {
     pub input: Option<&'a ActivationFrame>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IterationBatchPhase {
+    Prefill,
+    Decode,
+}
+
 pub struct IterationBatchRequest<'a> {
     pub session: &'a mut StageSession,
     pub token_ids: &'a [i32],
@@ -51,6 +57,7 @@ pub struct IterationBatchRequest<'a> {
     pub sampling: Option<&'a SamplingConfig>,
     pub input: Option<&'a ActivationFrame>,
     pub sample_last: bool,
+    pub phase: IterationBatchPhase,
 }
 
 impl StageSession {
@@ -179,7 +186,8 @@ impl StageSession {
         requests
             .iter_mut()
             .map(|request| {
-                let (predicted_token, output) = if serial_iteration_uses_decode_step(request) {
+                let (predicted_token, output) = if request.phase == IterationBatchPhase::Decode {
+                    validate_serial_decode_request(request)?;
                     request.session.decode_step_frame_sampled(
                         request.token_ids[0],
                         request.sampling,
@@ -1008,20 +1016,39 @@ impl StageSession {
     }
 }
 
-fn serial_iteration_uses_decode_step(request: &IterationBatchRequest<'_>) -> bool {
-    // The mixed ABI selects its phase automatically, while the serial frame
-    // APIs expose separate prefill and decode entrypoints. An established,
-    // sampled one-token request without explicit positions is the scheduler's
-    // decode shape; all other requests retain prefill semantics.
-    request.sample_last
-        && request.token_ids.len() == 1
-        && request.positions.is_empty()
-        && request.session.token_count() > 0
+fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result<()> {
+    anyhow::ensure!(
+        request.session.token_count() > 0,
+        "serial decode fallback requires an established session"
+    );
+    anyhow::ensure!(
+        request.token_ids.len() == 1,
+        "serial decode fallback requires exactly one token"
+    );
+    anyhow::ensure!(
+        request.sample_last,
+        "serial decode fallback requires sampling"
+    );
+    if let Some(position) = request.positions.first() {
+        anyhow::ensure!(
+            request.positions.len() == 1,
+            "serial decode fallback accepts at most one explicit position"
+        );
+        let position = u64::try_from(*position).context("decode position is negative")?;
+        anyhow::ensure!(
+            position == request.session.token_count(),
+            "serial decode position {position} does not match session position {}",
+            request.session.token_count()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{IterationBatchRequest, raw_input_frame, serial_iteration_uses_decode_step};
+    use super::{
+        IterationBatchPhase, IterationBatchRequest, raw_input_frame, validate_serial_decode_request,
+    };
     use crate::StageSession;
     use crate::{ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout};
     use std::ptr;
@@ -1071,7 +1098,7 @@ mod tests {
     }
 
     #[test]
-    fn serial_iteration_uses_decode_for_established_single_token_request() {
+    fn serial_decode_accepts_explicit_phase_and_matching_position() {
         let mut session = StageSession {
             raw: ptr::null_mut(),
             token_count: 4,
@@ -1083,17 +1110,18 @@ mod tests {
             sampling: None,
             input: None,
             sample_last: true,
+            phase: IterationBatchPhase::Decode,
         };
 
-        assert!(serial_iteration_uses_decode_step(&request));
+        validate_serial_decode_request(&request).unwrap();
     }
 
     #[test]
-    fn serial_iteration_keeps_prefill_semantics_when_decode_is_not_implied() {
+    fn serial_decode_rejects_invalid_decode_shapes() {
         for (session_tokens, token_ids, positions, sample_last) in [
             (0, &[7][..], &[][..], true),
             (4, &[7, 8][..], &[][..], true),
-            (4, &[7][..], &[4][..], true),
+            (4, &[7][..], &[3][..], true),
             (4, &[7][..], &[][..], false),
         ] {
             let mut session = StageSession {
@@ -1107,9 +1135,28 @@ mod tests {
                 sampling: None,
                 input: None,
                 sample_last,
+                phase: IterationBatchPhase::Decode,
             };
 
-            assert!(!serial_iteration_uses_decode_step(&request));
+            assert!(validate_serial_decode_request(&request).is_err());
         }
+    }
+
+    #[test]
+    fn one_token_prefill_tail_is_explicitly_not_decode() {
+        let mut session = StageSession {
+            raw: ptr::null_mut(),
+            token_count: 4,
+        };
+        let request = IterationBatchRequest {
+            session: &mut session,
+            token_ids: &[7],
+            positions: &[4],
+            sampling: None,
+            input: None,
+            sample_last: false,
+            phase: IterationBatchPhase::Prefill,
+        };
+        assert_eq!(request.phase, IterationBatchPhase::Prefill);
     }
 }

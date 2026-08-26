@@ -150,40 +150,42 @@ index 19c57820e..b5b842175 100644
      int64_t  * t_per_lib   = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
      NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
      __block atomic_bool any_failure = false;
-+    __block atomic_ullong source_hash = 0xcbf29ce484222325ULL;
++    uint64_t * source_hash_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(uint64_t));
  
      dispatch_group_t group = dispatch_group_create();
      dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
-@@ -307,6 +407,17 @@ static bool ggml_metal_library_compile_all(
+@@ -307,6 +407,11 @@ static bool ggml_metal_library_compile_all(
                  return;
              }
  
-+            // fold this kind's source into the pipeline-cache fingerprint
-+            {
-+                uint64_t h = atomic_load(&source_hash);
-+                const char * bytes = src.UTF8String;
-+                for (size_t i = 0; i < strlen(bytes); ++i) {
-+                    h ^= (unsigned char) bytes[i];
-+                    h *= 0x100000001b3ULL;
-+                }
-+                atomic_store(&source_hash, h);
-+            }
++            // Hash each source independently; fold by kind only after all
++            // concurrent compilation blocks have completed.
++            const char * bytes = src.UTF8String;
++            source_hash_per_lib[kind] = ggml_metal_fnv1a64(0xcbf29ce484222325ULL, bytes, strlen(bytes));
 +
              id<MTLLibrary> lib = nil;
  
              @autoreleasepool {
-@@ -340,6 +451,10 @@ static bool ggml_metal_library_compile_all(
+@@ -340,6 +444,18 @@ static bool ggml_metal_library_compile_all(
  
      const bool ok = !atomic_load(&any_failure);
  
-+    if (source_hash_out) {
-+        *source_hash_out = atomic_load(&source_hash);
++    uint64_t source_hash = 0xcbf29ce484222325ULL;
++    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
++        source_hash = ggml_metal_fnv1a64(source_hash, &kind, sizeof(kind));
++        source_hash = ggml_metal_fnv1a64(source_hash, &source_hash_per_lib[kind],
++                                         sizeof(source_hash_per_lib[kind]));
 +    }
++
++    if (source_hash_out) {
++        *source_hash_out = source_hash;
++    }
++    free(source_hash_per_lib);
 +
      if (ok) {
          const int64_t t_total = ggml_time_us() - t_start;
          int64_t t_max = 0;
-@@ -407,19 +522,23 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -407,19 +524,23 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
  #undef X
      };
  
@@ -208,7 +210,7 @@ index 19c57820e..b5b842175 100644
      return res;
  #else
  #ifdef SWIFT_PACKAGE
-@@ -478,6 +597,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -478,6 +599,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          }
  
          GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
@@ -218,7 +220,7 @@ index 19c57820e..b5b842175 100644
          return res;
      }
  
-@@ -512,10 +634,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -512,10 +636,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          path_per_kind[kind] = [path_source retain];
      }
  
@@ -231,7 +233,7 @@ index 19c57820e..b5b842175 100644
  
      for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
          [path_per_kind[kind] release];
-@@ -527,6 +650,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -527,6 +652,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          return NULL;
      }
  
@@ -240,7 +242,7 @@ index 19c57820e..b5b842175 100644
      return res;
  #endif
  }
-@@ -616,6 +741,13 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
+@@ -616,6 +743,13 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
  
      ggml_metal_pipelines_free(lib->pipelines);
  
@@ -254,7 +256,7 @@ index 19c57820e..b5b842175 100644
      [lib->lock release];
  
      free(lib);
-@@ -707,7 +839,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
+@@ -707,7 +841,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
          }
  
          id<MTLDevice> device = ggml_metal_device_get_obj(lib->dev);
@@ -288,7 +290,7 @@ index 19c57820e..b5b842175 100644
  
          [mtl_function release];
  
-@@ -741,6 +898,12 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
+@@ -741,6 +900,12 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
          res.pipeline->obj = obj;
  
          ggml_metal_pipelines_add(lib->pipelines, name, res.pipeline);
@@ -303,4 +305,3 @@ index 19c57820e..b5b842175 100644
      [lib->lock unlock];
 -- 
 2.54.0 (Apple Git-157)
-

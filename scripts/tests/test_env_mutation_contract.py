@@ -137,6 +137,54 @@ mod tests {
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("needs adjacent SAFETY and audit TODO comments", result.stderr)
 
+    def test_synchronous_bootstrap_mutation_rejects_audit_todo(self) -> None:
+        bootstrap_file = (
+            "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / bootstrap_file
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                f"""fn configure_metal_pipeline_cache() {{
+    // SAFETY: single-threaded bootstrap before the Tokio runtime.
+    {TODO}
+    unsafe {{ std::env::set_var("METAL_CACHE", "1") }};
+}}
+""",
+                encoding="utf-8",
+            )
+
+            result = self.run_checker("--root", str(root), "--file", bootstrap_file)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("stale environment audit TODO remains", result.stderr)
+
+    def test_synchronous_bootstrap_mutation_requires_exact_boundary(self) -> None:
+        bootstrap_file = (
+            "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / bootstrap_file
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                """fn configure_late() {
+    // SAFETY: generic claim.
+    unsafe { std::env::set_var("METAL_CACHE", "1") };
+}
+""",
+                encoding="utf-8",
+            )
+
+            result = self.run_checker("--root", str(root), "--file", bootstrap_file)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "bootstrap mutation must remain in configure_metal_pipeline_cache",
+                result.stderr,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

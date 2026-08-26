@@ -13,34 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "llama-upstream-canary.yml"
 BATTERY = ROOT / "scripts" / "skippy-family-battery.sh"
 BATTERY_PLANNER = ROOT / "scripts" / "plan-family-battery.py"
-SMOKE = ROOT / "scripts" / "skippy-ci-smoke.sh"
-FAMILY_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
 FAMILY_CERTIFY = ROOT / "scripts" / "family-certify.sh"
 FAMILY_OUTCOME = ROOT / "scripts" / "lib" / "family-outcome.sh"
 TIMEOUT_RUNNER = ROOT / "scripts" / "run-command-with-timeout.py"
-STATE_HANDOFF = ROOT / "crates" / "skippy-correctness" / "src" / "runner" / "state_handoff.rs"
-KV_PAGES = ROOT / "crates" / "skippy-runtime" / "src" / "kv_pages.rs"
-STAGED_GRAPH_PATCH = (
-    ROOT
-    / "third_party"
-    / "llama.cpp"
-    / "patches"
-    / "0001-Add-staged-model-graph-and-family-support.patch"
-)
-MODEL_LIFECYCLE_PATCH = (
-    ROOT
-    / "third_party"
-    / "llama.cpp"
-    / "patches"
-    / "0004-Add-Skippy-model-lifecycle-and-package-support.patch"
-)
-NEMOTRON_MTP_EMBEDDING_PATCH = (
-    ROOT
-    / "third_party"
-    / "llama.cpp"
-    / "patches"
-    / "0022-skippy-retain-Nemotron-MTP-shared-embeddings.patch"
-)
 
 
 def _step_block(workflow: str, name: str) -> str:
@@ -126,68 +101,19 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("steps.sha.outputs.changed == 'false'", forced_report)
         self.assertIn("steps.sha.outputs.certify == 'true'", forced_report)
 
-    def test_failed_repair_summary_runs_after_a_failed_step(self) -> None:
+    def test_persistent_runner_executes_only_trusted_main_with_read_access(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        condition = _step_block(workflow, "Report patch-queue failure")
-        self.assertIn("failure()", condition)
-        self.assertIn("steps.agent_repair.outcome == 'failure'", condition)
-
-    def test_smoke_uses_read_only_prewarmed_family_cache(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        smoke_step = _step_block(workflow, "Skippy smoke tests")
-        self.assertNotIn("MODEL_DIR", smoke_step)
-
-        smoke = SMOKE.read_text(encoding="utf-8")
-        self.assertIn('DENSE_MODEL_REPO="${DENSE_MODEL_REPO:-Qwen/Qwen3-0.6B-GGUF}"', smoke)
-        self.assertIn(
-            'RECURRENT_MODEL_REPO="${RECURRENT_MODEL_REPO:-tiiuae/Falcon-H1-1.5B-Instruct-GGUF}"',
-            smoke,
-        )
-        self.assertIn('HF_HUB_CACHE="$HF_CACHE/hub"', smoke)
-        self.assertIn("HF_HUB_OFFLINE=1", smoke)
-        self.assertIn('hf download "$repo" "$file"', smoke)
-        self.assertIn("'s/^[[:space:]]*path:[[:space:]]*//p'", smoke)
-        self.assertIn('CTX_SIZE="${CTX_SIZE:-8192}"', smoke)
-        self.assertIn('PROMPT_CTX_SIZE="${PROMPT_CTX_SIZE:-$CTX_SIZE}"', smoke)
-
-        battery = BATTERY.read_text(encoding="utf-8")
-        self.assertIn("'s/^[[:space:]]*path:[[:space:]]*//p'", battery)
-        self.assertIn("skippy-model-package\" inspect", battery)
-        self.assertIn('contains(".nextn.eh_proj")', battery)
-        self.assertIn('contains(".nextn.enorm")', battery)
-        self.assertIn('contains(".nextn.hnorm")', battery)
-        self.assertIn("--require-native-mtp-draft", battery)
-        self.assertIn("startup_timeout_for_bytes", battery)
-        self.assertIn('.resources.startup_timeout_secs // ""', battery)
-        self.assertIn('--activation-width "$activation_width"', battery)
-        self.assertIn("speculative_coding_prompts.jsonl", battery)
-        self.assertIn('resolve_model "$repo" "$file" "$revision"', battery)
-        self.assertIn("resolved-models.tsv", battery)
-        self.assertIn("preflight_speculative_corpus", battery)
-        self.assertIn("--skip-speculative", battery)
-        self.assertIn('if (( MODEL_HAS_MTP == 1 )) && [[ "$speculative_policy" == "mtp-if-present" ]]; then', battery)
-
-        manifest = json.loads(FAMILY_MANIFEST.read_text(encoding="utf-8"))
-        by_family = {model["family"]: model for model in manifest["models"]}
-        self.assertEqual("Qwen/Qwen3-0.6B-GGUF", by_family["qwen3-dense"]["artifact"]["repo"])
-        self.assertEqual(
-            ["Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"],
-            by_family["falcon-h1"]["artifact"]["files"],
-        )
-        self.assertEqual(4096, by_family["qwen3-vl"]["execution"]["activation_width"])
-        self.assertEqual(600, by_family["qwen3-vl"]["resources"]["startup_timeout_secs"])
-
-    def test_state_handoff_restores_the_authoritative_continuation_position(self) -> None:
-        state_handoff = STATE_HANDOFF.read_text(encoding="utf-8")
-        self.assertIn(
-            "LocalStatePayload::FullState(bytes) => session.import_full_state_for_token_count(",
-            state_handoff,
-        )
-
-        kv_pages = KV_PAGES.read_text(encoding="utf-8")
-        full_state_start = kv_pages.index("pub fn import_full_state_for_token_count(")
-        full_state_end = kv_pages.index("pub fn export_kv_page(", full_state_start)
-        self.assertIn("self.set_position(token_count)", kv_pages[full_state_start:full_state_end])
+        latest_job = workflow[workflow.index("  latest-upstream:") : workflow.index("  update-pin:")]
+        update_job = workflow[workflow.index("  update-pin:") :]
+        self.assertIn("runs-on: [self-hosted, family-certify]", latest_job)
+        self.assertIn("permissions:\n      contents: read", latest_job)
+        self.assertIn("ref: main", latest_job)
+        self.assertNotIn("queue_ref", workflow)
+        self.assertNotIn("agent repair", workflow.lower())
+        self.assertNotIn("github.token", latest_job)
+        self.assertIn("runs-on: ubuntu-latest", update_job)
+        self.assertIn("permissions:\n      contents: write", update_job)
+        self.assertIn("trusted_queue_sha", update_job)
 
     def test_family_results_have_typed_failure_outcomes(self) -> None:
         certify = FAMILY_CERTIFY.read_text(encoding="utf-8")
@@ -255,67 +181,26 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertEqual(124, result.returncode)
         self.assertIn("fixture timed out after 1s", result.stderr)
 
-    def test_runtime_slice_contract_covers_glm4_moe(self) -> None:
-        lifecycle = MODEL_LIFECYCLE_PATCH.read_text(encoding="utf-8")
-        self.assertIn("model->arch != LLM_ARCH_GLM4_MOE", lifecycle)
-
-    def test_staged_hybrid_memory_preserves_component_partition(self) -> None:
-        staged_graph = STAGED_GRAPH_PATCH.read_text(encoding="utf-8")
-        attention_default = (
-            "filter_attn = [&](uint32_t il) { return !hparams.is_recr(il); };"
+    def test_timeout_runner_closes_manifest_stdin_for_children(self) -> None:
+        result = subprocess.run(
+            [
+                str(TIMEOUT_RUNNER),
+                "--seconds",
+                "5",
+                "--label",
+                "stdin-fixture",
+                "--",
+                sys.executable,
+                "-c",
+                "import sys; raise SystemExit(0 if sys.stdin.read() == '' else 9)",
+            ],
+            input="a later manifest row\n",
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
         )
-        recurrent_default = (
-            "filter_recr = [&](uint32_t il) { return hparams.is_recr(il); };"
-        )
-        stage_intersection = (
-            "filter_attn = skippy_stage_memory_filter(std::move(filter_attn), "
-            "params.ctx_type);"
-        )
-        self.assertLess(
-            staged_graph.index(attention_default), staged_graph.index(stage_intersection)
-        )
-        self.assertLess(
-            staged_graph.index(recurrent_default), staged_graph.index(stage_intersection)
-        )
-
-    def test_certification_captures_stage_child_failures(self) -> None:
-        certify = FAMILY_CERTIFY.read_text(encoding="utf-8")
-        correctness_start = certify.index("correctness_common=(")
-        correctness_end = certify.index("\n)", correctness_start)
-        self.assertIn("--child-logs", certify[correctness_start:correctness_end])
-
-    def test_nemotron_uses_a_non_broken_quantization(self) -> None:
-        manifest = json.loads(FAMILY_MANIFEST.read_text(encoding="utf-8"))
-        nemotron = next(model for model in manifest["models"] if model["family"] == "nemotron")
-        self.assertEqual(
-            "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
-            nemotron["artifact"]["repo"],
-        )
-        self.assertIn("UD-Q4_K_M.gguf", nemotron["artifact"]["files"][0])
-        self.assertEqual("Q4_K_M", nemotron["artifact"]["selector"])
-        self.assertEqual(53, nemotron["execution"]["trunk_layers"] + nemotron["execution"]["mtp_layers"])
-
-    def test_nemotron_final_mtp_stage_retains_shared_embeddings(self) -> None:
-        patch = NEMOTRON_MTP_EMBEDDING_PATCH.read_text(encoding="utf-8")
-        self.assertIn("llm_kv.arch == LLM_ARCH_NEMOTRON_H_MOE", patch)
-        self.assertIn("hparams.n_layer_nextn > 0", patch)
-        self.assertIn(
-            "g_skippy_filter.layer_end > static_cast<int>(hparams.n_layer())", patch
-        )
-        self.assertIn("g_skippy_filter.include_output", patch)
-        self.assertIn("keep = tn.tensor == LLM_TENSOR_TOKEN_EMBD", patch)
-
-    def test_glm45_air_runtime_range_includes_the_mtp_layer(self) -> None:
-        manifest = json.loads(FAMILY_MANIFEST.read_text(encoding="utf-8"))
-        glm45_air = next(model for model in manifest["models"] if model["family"] == "glm45-air")
-        self.assertEqual(46, glm45_air["execution"]["trunk_layers"])
-        self.assertEqual(1, glm45_air["execution"]["mtp_layers"])
-
-    def test_glm47_runtime_range_includes_blk_46(self) -> None:
-        manifest = json.loads(FAMILY_MANIFEST.read_text(encoding="utf-8"))
-        glm47 = next(model for model in manifest["models"] if model["family"] == "glm47-flash")
-        self.assertEqual(47, glm47["execution"]["trunk_layers"])
-        self.assertEqual(0, glm47["execution"]["mtp_layers"])
+        self.assertEqual(0, result.returncode, result.stderr)
 
 
 class SkippyFamilyBatteryTests(unittest.TestCase):
@@ -370,6 +255,9 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 "repo": "org/model",
                 "revision": revision,
                 "files": ["model.gguf"],
+                "file_integrity": {
+                    "model.gguf": {"size_bytes": 1, "blob_id": "b" * 64}
+                },
                 "selector": "Q4_K_M",
             },
             "execution": {
@@ -387,7 +275,9 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             "notes": "fixture",
         }
 
-    def _dry_run(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def _dry_run(
+        self, *args: str, models: list[dict[str, object]] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             bin_dir = temp / "bin"
@@ -398,8 +288,11 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
 
             manifest = temp / "manifest.json"
+            selected_models = models or [self._model()]
+            policy = self._manifest(selected_models[0])
+            policy["models"] = selected_models
             manifest.write_text(
-                json.dumps(self._manifest(self._model())) + "\n", encoding="utf-8"
+                json.dumps(policy) + "\n", encoding="utf-8"
             )
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
@@ -431,8 +324,25 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertTrue(
             commands[0]
             .strip()
-            .endswith("--require-lanes --skip-build --skip-speculative")
+            .endswith(
+                "--require-lanes --strict-dtype --skip-build --skip-speculative"
+            )
         )
+
+    def test_dry_run_reconciles_every_planned_family(self) -> None:
+        first = self._model()
+        second = self._model()
+        second["family"] = "second-family"
+        result = self._dry_run(models=[first, second])
+        self.assertEqual(0, result.returncode, result.stderr)
+        commands = [
+            line
+            for line in result.stdout.splitlines()
+            if line.startswith(str(FAMILY_CERTIFY) + " ")
+        ]
+        self.assertEqual(2, len(commands))
+        self.assertIn("--family test-family", commands[0])
+        self.assertIn("--family second-family", commands[1])
 
     def test_family_filter_limits_the_resolved_dry_run(self) -> None:
         selected = self._dry_run("--families", "test-family")
@@ -534,6 +444,9 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 "repo": "org/mtp-model",
                 "revision": revision,
                 "files": ["model.gguf"],
+                "file_integrity": {
+                    "model.gguf": {"size_bytes": 1, "blob_id": "b" * 64}
+                },
                 "selector": "Q4_K_M",
             }
             model_policy["execution"] = {

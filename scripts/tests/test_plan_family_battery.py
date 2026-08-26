@@ -18,7 +18,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
     @staticmethod
     def _write_gguf(
         path: Path, block_count: int, embedding_length: int = 1024
-    ) -> None:
+    ) -> int:
         def gguf_string(value: str) -> bytes:
             encoded = value.encode("utf-8")
             return struct.pack("<Q", len(encoded)) + encoded
@@ -33,6 +33,38 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         payload.extend(gguf_string("fixture.embedding_length"))
         payload.extend(struct.pack("<II", 4, embedding_length))
         path.write_bytes(payload)
+        return len(payload)
+
+    @classmethod
+    def _materialize_cached_artifact(
+        cls,
+        root: Path,
+        artifact: dict[str, object],
+        block_counts: list[int],
+        embedding_length: int = 1024,
+    ) -> list[Path]:
+        files = artifact["files"]
+        assert isinstance(files, list)
+        assert len(files) == len(block_counts)
+        repo_dir = "models--" + str(artifact["repo"]).replace("/", "--")
+        repo_root = root / "cache" / "hub" / repo_dir
+        snapshot = repo_root / "snapshots" / str(artifact["revision"])
+        integrity: dict[str, dict[str, object]] = {}
+        paths = []
+        for index, (relative, block_count) in enumerate(
+            zip(files, block_counts, strict=True)
+        ):
+            blob_id = f"{index + 1:064x}"
+            blob = repo_root / "blobs" / blob_id
+            blob.parent.mkdir(parents=True, exist_ok=True)
+            size = cls._write_gguf(blob, block_count, embedding_length)
+            cached = snapshot / str(relative)
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            cached.symlink_to(blob)
+            integrity[str(relative)] = {"size_bytes": size, "blob_id": blob_id}
+            paths.append(cached)
+        artifact["file_integrity"] = integrity
+        return paths
 
     def _run(
         self, manifest: Path = MANIFEST, *args: str
@@ -127,19 +159,9 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             manifest = root / "manifest.json"
-            manifest.write_text(json.dumps(source), encoding="utf-8")
             artifact = model["artifact"]
-            cached = (
-                root
-                / "cache"
-                / "hub"
-                / ("models--" + artifact["repo"].replace("/", "--"))
-                / "snapshots"
-                / artifact["revision"]
-                / artifact["files"][0]
-            )
-            cached.parent.mkdir(parents=True)
-            self._write_gguf(cached, 3)
+            cached = self._materialize_cached_artifact(root, artifact, [3])[0]
+            manifest.write_text(json.dumps(source), encoding="utf-8")
             present = self._run(
                 manifest,
                 "--check-cache",
@@ -166,19 +188,9 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             manifest = root / "manifest.json"
-            manifest.write_text(json.dumps(source), encoding="utf-8")
             artifact = model["artifact"]
-            cached = (
-                root
-                / "cache"
-                / "hub"
-                / ("models--" + artifact["repo"].replace("/", "--"))
-                / "snapshots"
-                / artifact["revision"]
-                / artifact["files"][0]
-            )
-            cached.parent.mkdir(parents=True)
-            self._write_gguf(cached, 4)
+            self._materialize_cached_artifact(root, artifact, [4])
+            manifest.write_text(json.dumps(source), encoding="utf-8")
             result = self._run(
                 manifest,
                 "--check-cache",
@@ -197,19 +209,9 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             manifest = root / "manifest.json"
-            manifest.write_text(json.dumps(source), encoding="utf-8")
             artifact = model["artifact"]
-            cached = (
-                root
-                / "cache"
-                / "hub"
-                / ("models--" + artifact["repo"].replace("/", "--"))
-                / "snapshots"
-                / artifact["revision"]
-                / artifact["files"][0]
-            )
-            cached.parent.mkdir(parents=True)
-            self._write_gguf(cached, 3, 2048)
+            self._materialize_cached_artifact(root, artifact, [3], 2048)
+            manifest.write_text(json.dumps(source), encoding="utf-8")
             result = self._run(
                 manifest,
                 "--check-cache",
@@ -219,6 +221,39 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("plans activation width 1024", result.stderr)
         self.assertIn("declares 2048", result.stderr)
+
+    def test_cache_gate_checks_secondary_shard_metadata_and_blob_identity(self) -> None:
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source["models"] = [copy.deepcopy(source["models"][0])]
+        model = source["models"][0]
+        model["execution"]["trunk_layers"] = 3
+        model["artifact"]["files"] = ["model-00001.gguf", "model-00002.gguf"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = root / "manifest.json"
+            cached = self._materialize_cached_artifact(
+                root, model["artifact"], [3, 4]
+            )
+            manifest.write_text(json.dumps(source), encoding="utf-8")
+            metadata_drift = self._run(
+                manifest, "--check-cache", "--cache-root", str(root / "cache")
+            )
+            self.assertEqual(2, metadata_drift.returncode)
+            self.assertIn("model-00002.gguf declares 4", metadata_drift.stderr)
+
+            self._write_gguf(cached[1].resolve(), 3)
+            model["artifact"]["file_integrity"]["model-00002.gguf"][
+                "size_bytes"
+            ] = cached[1].stat().st_size
+            model["artifact"]["file_integrity"]["model-00002.gguf"][
+                "blob_id"
+            ] = "f" * 64
+            manifest.write_text(json.dumps(source), encoding="utf-8")
+            blob_drift = self._run(
+                manifest, "--check-cache", "--cache-root", str(root / "cache")
+            )
+        self.assertEqual(2, blob_drift.returncode)
+        self.assertIn("expected blob", blob_drift.stderr)
 
     def test_shards_are_deterministic_and_preserve_every_family_once(self) -> None:
         first = self._run(MANIFEST, "--shard-count", "4")

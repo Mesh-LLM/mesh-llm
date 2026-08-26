@@ -41,7 +41,15 @@ def terminate_group(process: subprocess.Popen[bytes]) -> None:
 
 def main() -> int:
     args = parse_args()
-    process = subprocess.Popen(args.command, start_new_session=True)
+    # The wrapper is commonly invoked from manifest-reading shell loops. A
+    # child must never inherit and consume the loop's stdin, because doing so
+    # can silently drop later planned rows. Commands in this harness are fully
+    # argument-driven, so EOF is the only valid stdin contract.
+    process = subprocess.Popen(
+        args.command,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     try:
         return process.wait(timeout=args.seconds)
     except subprocess.TimeoutExpired:

@@ -458,6 +458,7 @@ impl StageOpenAiBackend {
             &[],
             request.sampling.enabled.then_some(request.sampling),
             true,
+            skippy_runtime::IterationBatchPhase::Prefill,
         )?;
         let prompt_prefill_sample = Some(outcome.predicted);
         cache_stats.suffix_prefill_tokens = saturating_u32(request.prompt_token_ids.len());

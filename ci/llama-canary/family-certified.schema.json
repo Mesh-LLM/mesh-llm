@@ -65,7 +65,7 @@
     "artifact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repo", "revision", "files", "selector"],
+      "required": ["repo", "revision", "files", "file_integrity", "selector"],
       "properties": {
         "repo": {"type": "string", "pattern": "^[^/\\r\\n\\t]+/[^/\\r\\n\\t]+$"},
         "revision": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
@@ -74,6 +74,19 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/singleLine"}
+        },
+        "file_integrity": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["size_bytes", "blob_id"],
+            "properties": {
+              "size_bytes": {"type": "integer", "minimum": 1},
+              "blob_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          }
         },
         "selector": {"$ref": "#/$defs/singleLine"}
       }

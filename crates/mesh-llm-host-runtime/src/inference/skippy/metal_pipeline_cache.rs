@@ -34,12 +34,12 @@ pub(crate) fn configure_metal_pipeline_cache() {
         return;
     }
 
-    // SAFETY: UNSAFE CONTRACT — callers must invoke this before the Tokio
-    // runtime is constructed (so no concurrent runtime work can access the
-    // process environment) and before the native runtime libraries are
-    // loaded (they read the variable at Metal backend initialization). The
+    // SAFETY: UNSAFE CONTRACT — callers must invoke this from single-threaded
+    // synchronous bootstrap before the Tokio runtime is constructed. At that
+    // point no concurrent runtime work can access the process environment,
+    // and the native runtime libraries have not yet been loaded (they read the
+    // variable at Metal backend initialization). The
     // shipped binary enforces this by calling from synchronous `main()`
     // bootstrap.
-    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(GGML_METAL_PIPELINE_CACHE_DIR, &dir) };
 }
