@@ -200,18 +200,54 @@ fn apply_override(target_kv: &mut Vec<GgufKv>, key: &str, value: u32) -> Result<
 /// `split.tensors.count`; appended MTP tensors must be accounted for there or
 /// the loader rejects the composite as inconsistent with the tensor names.
 fn bump_split_tensors_count(target_kv: &mut [GgufKv], added: usize) -> Result<()> {
+    let added = u64::try_from(added).context("appended tensor count does not fit u64")?;
     for kv in target_kv.iter_mut() {
         if kv.key() != "split.tensors.count" {
             continue;
         }
-        let slot = kv
-            .u32_value_mut()
-            .context("split.tensors.count exists but is not a u32 value; refusing to rewrite it")?;
-        *slot = slot
-            .checked_add(u32::try_from(added).context("appended tensor count does not fit in u32")?)
-            .context("split.tensors.count overflows u32")?;
+        // Producers disagree on the scalar type: llama.cpp gguf_split writes
+        // int32, some converters write uint32/uint64. Bump in the existing
+        // type so the patched shard stays byte-compatible with its siblings.
+        bump_int_kv(kv, added, "split.tensors.count")?;
     }
     Ok(())
+}
+
+/// Adds `delta` to an integer KV value in place, preserving its scalar type.
+fn bump_int_kv(kv: &mut GgufKv, delta: u64, key: &str) -> Result<()> {
+    match kv {
+        GgufKv::U16 { value, .. } => {
+            *value = u16::try_from(
+                u64::from(*value)
+                    .checked_add(delta)
+                    .context(overflow(key, "uint16"))?,
+            )
+            .context(overflow(key, "uint16"))?;
+        }
+        GgufKv::U32 { value, .. } => {
+            *value = u32::try_from(
+                u64::from(*value)
+                    .checked_add(delta)
+                    .context(overflow(key, "uint32"))?,
+            )
+            .context(overflow(key, "uint32"))?;
+        }
+        GgufKv::I32 { value, .. } => {
+            let bumped = i64::from(*value)
+                .checked_add(i64::try_from(delta).context(overflow(key, "int32"))?)
+                .context(overflow(key, "int32"))?;
+            *value = i32::try_from(bumped).context(overflow(key, "int32"))?;
+        }
+        GgufKv::U64 { value, .. } => {
+            *value = value.checked_add(delta).context(overflow(key, "uint64"))?;
+        }
+        _ => anyhow::bail!("{key} exists but is not an integer value; refusing to rewrite it"),
+    }
+    Ok(())
+}
+
+fn overflow(key: &str, ty: &str) -> String {
+    format!("{key} overflows {ty}")
 }
 
 fn prepare_mtp_tensors(mtp: &GgufFileInfo, mtp_block: u32) -> Result<Vec<TensorEntry>> {
@@ -902,7 +938,9 @@ mod tests {
             &first_path,
             &[
                 GgufKv::u32("arch.block_count", 88),
-                GgufKv::u32("split.tensors.count", 1),
+                // The real split writer emits this as i32 (llama.cpp
+                // gguf_split convention), not u32.
+                GgufKv::i32("split.tensors.count", 1),
             ],
             &[],
         );
@@ -937,11 +975,18 @@ mod tests {
                 _ => None,
             })
         };
+        let get_i32 = |key: &str| {
+            patched.kv.iter().find_map(|kv| match kv {
+                GgufKv::I32 { key: k, value } if k == key => Some(*value),
+                _ => None,
+            })
+        };
         assert_eq!(get("arch.block_count"), Some(89));
         assert_eq!(get("arch.nextn_predict_layers"), Some(1));
         // The appended MTP tensor must be accounted for in the global split
-        // tensor total or llama.cpp rejects the composite shards.
-        assert_eq!(get("split.tensors.count"), Some(2));
+        // tensor total or llama.cpp rejects the composite shards. The i32
+        // scalar type must be preserved (byte-compatible with siblings).
+        assert_eq!(get_i32("split.tensors.count"), Some(2));
         assert!(patched.tensors.is_empty());
 
         // Last shard: split KV untouched (no block_count to double-bump),
