@@ -33,7 +33,7 @@ def select_trajectories(
                 total_tokens,
                 row_number() OVER (
                     PARTITION BY session_id
-                    ORDER BY max_isl DESC, total_tokens DESC
+                    ORDER BY max_isl DESC, total_tokens DESC, md5(messages_json)
                 ) AS occurrence
             FROM read_parquet(?)
             WHERE max_isl >= ?

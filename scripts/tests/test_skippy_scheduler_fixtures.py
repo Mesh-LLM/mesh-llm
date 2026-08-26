@@ -36,7 +36,12 @@ class SchedulerFixturesTest(unittest.TestCase):
 
         self.assertEqual(profile["workload"]["families"], 8)
         self.assertEqual(profile["workload"]["ctx_size"], 131072)
+        self.assertEqual(FIXTURES.derived_context_size(profile), 131072)
         self.assertEqual(len(profile["corpus"]["rows"]), 8)
+        self.assertEqual(
+            profile["model"]["sha256"],
+            "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8",
+        )
         self.assertEqual(
             profile["corpus"]["prompt_manifest_sha256"],
             "f1ddbe3d5974f3f4bd06f5d70fa45d0e10305bbafa4eb7399a0f972458d1beef",
@@ -53,7 +58,7 @@ class SchedulerFixturesTest(unittest.TestCase):
 
             def runner(command, **kwargs):
                 commands.append(command)
-                stdout = json.dumps({"path": str(snapshot)}) if command[1] == "download" else "{}"
+                stdout = str(snapshot) if command[1] == "download" else ""
                 return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
             parquet = FIXTURES.fetch_dataset(dataset, Path(directory) / "cache", runner)
@@ -63,6 +68,60 @@ class SchedulerFixturesTest(unittest.TestCase):
         self.assertIn(dataset["revision"], commands[0])
         self.assertEqual(commands[1][:3], ["hf", "cache", "verify"])
         self.assertIn("--fail-on-missing-files", commands[1])
+
+    def test_catalog_rejects_context_below_derived_pinned_requirement(self) -> None:
+        catalog = json.loads(CATALOG_PATH.read_text())
+        catalog["profiles"]["agentic-eviction-pressure"]["workload"]["ctx_size"] = 65536
+
+        with self.assertRaisesRegex(ValueError, "pinned row totals"):
+            FIXTURES.validate_catalog(catalog)
+
+    def test_catalog_rejects_unpinned_model_identity(self) -> None:
+        catalog = json.loads(CATALOG_PATH.read_text())
+        del catalog["profiles"]["warm-affinity"]["model"]["sha256"]
+
+        with self.assertRaisesRegex(ValueError, "model.*missing"):
+            FIXTURES.validate_catalog(catalog)
+
+    def test_real_generator_builds_deterministic_canned_manifest(self) -> None:
+        generator = FIXTURES.load_generator()
+        trajectories = [
+            {
+                "session_id": "session-b",
+                "source_dataset": "fixture",
+                "n_turns": 2,
+                "max_isl": 128,
+                "total_tokens": 144,
+                "messages_json": json.dumps(
+                    [
+                        {"role": "user", "content": "inspect"},
+                        {
+                            "role": "assistant",
+                            "content": "calling tool",
+                            "tool_calls_json": '[{"name":"read"}]',
+                        },
+                    ]
+                ),
+            },
+            {
+                "session_id": "session-a",
+                "source_dataset": "fixture",
+                "n_turns": 1,
+                "max_isl": 64,
+                "total_tokens": 72,
+                "messages_json": '[{"role":"user","content":{"path":"src/lib.rs"}}]',
+            },
+        ]
+
+        manifest = generator.build_manifest(trajectories, 2, {"fixture": True})
+
+        self.assertEqual(
+            [prompt["family"] for prompt in manifest["prompts"]],
+            ["trajectory-0", "trajectory-1", "trajectory-0", "trajectory-1"],
+        )
+        self.assertIn("<tool_calls>", manifest["prompts"][0]["prompt"])
+        self.assertIn('{"path": "src/lib.rs"}', manifest["prompts"][1]["prompt"])
+        self.assertEqual(manifest["metadata"]["rows"][0]["session_id"], "session-b")
 
     def test_materialization_rejects_row_provenance_drift(self) -> None:
         catalog = FIXTURES.load_catalog(CATALOG_PATH)

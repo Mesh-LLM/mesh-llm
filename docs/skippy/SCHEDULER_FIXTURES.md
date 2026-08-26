@@ -7,15 +7,18 @@ waiting-prefix policy boundary:
   affinity supplies the same order before waiting-prefix DFS, so the replay
   must stay neutral.
 - `agentic-eviction-pressure` is an interleaved eight-family trace with only
-  two resident prefix-cache entries and the measured 131,072-token aggregate
-  context budget. Waiting-prefix DFS must reduce family switches and the
-  periodic model-backed run must reduce recomputation and tail latency.
+  two resident prefix-cache entries. Its 131,072-token aggregate context is
+  the smallest power-of-two capacity covering the pinned row totals, request
+  multiplicity, and output allowance. Waiting-prefix DFS must reduce family
+  switches and the periodic model-backed run must reduce recomputation and
+  tail latency.
 
 The source of truth is
 [`evals/skippy-scheduler-fixtures.json`](../../evals/skippy-scheduler-fixtures.json).
 It pins the Hugging Face commit, selected source, eight session IDs, selection
-rules, runtime shape, generated prompt-manifest hash, and acceptance bounds.
-It contains no trajectory text or dataset files.
+rules, runtime shape, generated prompt-manifest hash, exact GGUF repository
+revision and content hash (including its embedded tokenizer), and acceptance
+bounds. It contains no trajectory text or dataset files.
 
 ## Fast PR gate
 
@@ -24,7 +27,7 @@ traces:
 
 ```bash
 python3 evals/skippy-scheduler-fixtures.py validate
-cargo test -p skippy-scheduler
+just with-lld cargo test -p skippy-scheduler
 ```
 
 The Rust replay reads the checked-in catalog directly. With
@@ -34,9 +37,10 @@ trace remains at one switch while the eviction-pressure trace collapses to
 seven. This gate is deterministic and performs no model inference or network
 access.
 
-The normal Python script-test lane also validates the catalog, the strict HF
-command shape, row-provenance rejection, and profile application in the A/B
-runner.
+The normal Python script-test lane also validates the catalog, derives the
+minimum context from the checked-in rows, exercises the real prompt generator
+with canned rows, verifies the strict HF command shape and row-provenance
+rejection, and covers profile application in the A/B runner.
 
 ## Pinned corpus cache
 
@@ -84,12 +88,18 @@ python3 evals/skippy-waiting-prefix-ab.py \
 
 The named profile owns rounds, lanes, admission concurrency, cache entries,
 output length, and arrival stagger; ad hoc workload flags do not override it.
-The result records the profile name and catalog SHA alongside binary, model,
-and prompt-manifest hashes.
+The case file must also match the profile's pinned model ID and GGUF SHA-256.
+HF profiles require their exact generated prompt manifest, while synthetic
+profiles reject external manifests. The result records the profile name and
+catalog SHA alongside binary, model, and prompt-manifest hashes.
 
 The eviction-pressure certificate requires every request to succeed and, at
-minimum, 10% improvements in suffix prefill, family switches, p95 TTFT, and
-makespan plus 10% higher output throughput. The warm certificate requires
+minimum, a 50,000-token suffix-prefill baseline and eight family switches so a
+drifted non-pressure workload cannot pass. It then requires 10% improvements
+in suffix prefill, family switches, p95 TTFT, and makespan plus 10% higher
+output throughput. The warm certificate requires
 identical suffix prefill and switch counts, with user-facing timing/throughput
-movement inside ±5%. Alternate binary order across all four rounds and retain
-raw requests, telemetry, configs, logs, `comparison.json`, and `report.md`.
+movement inside ±5%. A zero baseline is neutral only when both binaries remain
+at zero; any nonzero candidate value fails closed. Alternate binary order
+across all four rounds and retain raw requests, telemetry, configs, logs,
+`comparison.json`, and `report.md`.

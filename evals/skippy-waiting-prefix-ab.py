@@ -114,6 +114,29 @@ def apply_fixture_profile(args: argparse.Namespace) -> tuple[dict[str, Any] | No
     return selected, sha256(catalog_path)
 
 
+def validate_fixture_inputs(
+    selected: dict[str, Any],
+    model_id: str,
+    model_sha256: str,
+    prompt_manifest: Path | None,
+) -> None:
+    expected_model = selected["model"]
+    if model_id != expected_model["id"]:
+        raise ValueError(
+            f"model id must be {expected_model['id']}, got {model_id}"
+        )
+    if model_sha256 != expected_model["sha256"]:
+        raise ValueError(
+            "model SHA-256 must be "
+            f"{expected_model['sha256']}, got {model_sha256}"
+        )
+    corpus_kind = selected["corpus"]["kind"]
+    if corpus_kind == "hf" and prompt_manifest is None:
+        raise ValueError("HF fixture profiles require a prepared prompt manifest")
+    if corpus_kind == "synthetic" and prompt_manifest is not None:
+        raise ValueError("synthetic fixture profiles do not accept a prompt manifest")
+
+
 def percentile(values: list[float], quantile: float) -> float | None:
     if not values:
         return None
@@ -401,7 +424,9 @@ def aggregate(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def delta(old: float | None, new: float | None) -> float | None:
     if old is None or new is None:
         return None
-    return (new - old) / old * 100.0 if old else 0.0
+    if old == 0:
+        return 0.0 if new == 0 else None
+    return (new - old) / old * 100.0
 
 
 def format_metric(value: float | None) -> str:
@@ -422,6 +447,30 @@ def evaluate_acceptance(
     old, new = indexed["old"], indexed["new"]
     contract = profile["hardware_acceptance"]
     checks: list[dict[str, Any]] = []
+    known_contract_keys = {
+        "successful_requests_per_binary",
+        "absolute_user_metric_delta_percent_max",
+        "suffix_prefill_before_min",
+        "family_switch_before_min",
+    }
+    for prefix in (
+        "suffix_prefill",
+        "family_switch",
+        "ttft_p95",
+        "makespan",
+        "output_throughput",
+    ):
+        known_contract_keys.update(
+            {
+                f"{prefix}_delta_percent",
+                f"{prefix}_delta_percent_max",
+                f"{prefix}_delta_percent_min",
+            }
+        )
+    unknown_contract_keys = set(contract) - known_contract_keys
+    if unknown_contract_keys:
+        unknown = ", ".join(sorted(unknown_contract_keys))
+        raise ValueError(f"unsupported hardware acceptance keys: {unknown}")
 
     def record(label: str, actual: float | None, relation: str, threshold: Any) -> None:
         if actual is None:
@@ -449,6 +498,20 @@ def evaluate_acceptance(
     expected_successes = contract["successful_requests_per_binary"]
     record("before successful requests", old["successful"], "eq", expected_successes)
     record("after successful requests", new["successful"], "eq", expected_successes)
+    if "suffix_prefill_before_min" in contract:
+        record(
+            "before suffix prefill pressure",
+            old["suffix_prefill_tokens_median"],
+            "min",
+            contract["suffix_prefill_before_min"],
+        )
+    if "family_switch_before_min" in contract:
+        record(
+            "before family-switch pressure",
+            old["family_switches_median"],
+            "min",
+            contract["family_switch_before_min"],
+        )
     delta_keys = {
         "suffix_prefill": "suffix_prefill_tokens_median",
         "family_switch": "family_switches_median",
@@ -610,13 +673,18 @@ def main() -> int:
     if len(cases) != 1:
         parser.error("case file must contain exactly one model")
     case = cases[0]
+    model_sha256 = harness.model_sha256(case.model_path)
+    if fixture_profile is not None:
+        try:
+            validate_fixture_inputs(
+                fixture_profile,
+                case.model_id,
+                model_sha256,
+                args.prompt_manifest,
+            )
+        except ValueError as error:
+            parser.error(f"fixture input mismatch: {error}")
     prompt_manifest_metadata: dict[str, Any] = {}
-    if (
-        fixture_profile is not None
-        and fixture_profile["corpus"]["kind"] == "hf"
-        and args.prompt_manifest is None
-    ):
-        parser.error("HF fixture profiles require --prompt-manifest from the prepare command")
     if args.prompt_manifest is not None:
         prompt_manifest = args.prompt_manifest.resolve()
         if not prompt_manifest.is_file():
@@ -673,7 +741,7 @@ def main() -> int:
             "new": {"commit": args.new_commit, "binary": str(binaries["new"]), "sha256": sha256(binaries["new"])},
             "model_id": case.model_id,
             "model_path": str(case.model_path),
-            "model_sha256": harness.model_sha256(case.model_path),
+            "model_sha256": model_sha256,
             "rounds": args.rounds,
             "families": len(family_request_counts),
             "requests_per_family": (

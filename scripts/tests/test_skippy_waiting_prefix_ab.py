@@ -74,6 +74,37 @@ class WaitingPrefixAbTest(unittest.TestCase):
 
         self.assertTrue(acceptance["passed"])
 
+    def test_zero_baseline_regression_fails_closed(self) -> None:
+        catalog = json.loads((REPO / "evals/skippy-scheduler-fixtures.json").read_text())
+        profile = catalog["profiles"]["warm-affinity"]
+        rows = [
+            {
+                "version": "old",
+                "successful": 24,
+                "suffix_prefill_tokens_median": 0.0,
+                "family_switches_median": 0.0,
+                "ttft_ms_p50_median": 10.0,
+                "ttft_ms_p95_median": 10.0,
+                "makespan_ms_median": 10.0,
+                "output_tokens_per_second_median": 10.0,
+            },
+            {
+                "version": "new",
+                "successful": 24,
+                "suffix_prefill_tokens_median": 1.0,
+                "family_switches_median": 1.0,
+                "ttft_ms_p50_median": 10.0,
+                "ttft_ms_p95_median": 10.0,
+                "makespan_ms_median": 10.0,
+                "output_tokens_per_second_median": 10.0,
+            },
+        ]
+
+        acceptance = BENCH.evaluate_acceptance(rows, profile)
+
+        self.assertFalse(acceptance["passed"])
+        self.assertIsNone(BENCH.delta(0.0, 1.0))
+
     def test_eviction_profile_enforces_hardware_acceptance(self) -> None:
         catalog = json.loads((REPO / "evals/skippy-scheduler-fixtures.json").read_text())
         profile = catalog["profiles"]["agentic-eviction-pressure"]
@@ -122,6 +153,20 @@ class WaitingPrefixAbTest(unittest.TestCase):
         self.assertEqual(args.admission_concurrency, 16)
         self.assertEqual(selected["corpus"]["kind"], "hf")
         self.assertEqual(len(catalog_hash), 64)
+
+    def test_fixture_input_validation_pins_model_and_manifest_mode(self) -> None:
+        catalog = json.loads((REPO / "evals/skippy-scheduler-fixtures.json").read_text())
+        warm = catalog["profiles"]["warm-affinity"]
+        agentic = catalog["profiles"]["agentic-eviction-pressure"]
+        model = warm["model"]
+
+        BENCH.validate_fixture_inputs(warm, model["id"], model["sha256"], None)
+        with self.assertRaisesRegex(ValueError, "model id"):
+            BENCH.validate_fixture_inputs(warm, "different", model["sha256"], None)
+        with self.assertRaisesRegex(ValueError, "do not accept"):
+            BENCH.validate_fixture_inputs(warm, model["id"], model["sha256"], Path("x"))
+        with self.assertRaisesRegex(ValueError, "require a prepared"):
+            BENCH.validate_fixture_inputs(agentic, model["id"], model["sha256"], None)
 
     def test_reads_a_deterministic_prompt_manifest(self) -> None:
         document = {

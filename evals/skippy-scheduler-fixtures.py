@@ -51,6 +51,21 @@ def require_keys(document: dict[str, Any], keys: Sequence[str], context: str) ->
         raise ValueError(f"{context} is missing: {', '.join(missing)}")
 
 
+def derived_context_size(profile: dict[str, Any]) -> int | None:
+    """Return the smallest power-of-two context that covers the pinned workload."""
+    corpus = profile["corpus"]
+    if corpus.get("kind") != "hf":
+        return None
+    workload = profile["workload"]
+    prompt_tokens = sum(int(row["total_tokens"]) for row in corpus["rows"])
+    prompt_tokens *= int(workload["requests_per_family"])
+    output_tokens = int(workload["output_tokens"]) * (
+        int(workload["families"]) * int(workload["requests_per_family"])
+    )
+    required_tokens = prompt_tokens + output_tokens
+    return 1 << max(required_tokens - 1, 0).bit_length()
+
+
 def validate_catalog(catalog: dict[str, Any]) -> None:
     if catalog.get("schema_version") != 1:
         raise ValueError("scheduler fixture schema_version must be 1")
@@ -79,9 +94,28 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
             raise ValueError(f"profile {profile_name} must be an object")
         require_keys(
             profile,
-            ("description", "corpus", "workload", "ci_trace", "hardware_acceptance"),
+            (
+                "description",
+                "model",
+                "corpus",
+                "workload",
+                "ci_trace",
+                "hardware_acceptance",
+            ),
             f"profile {profile_name}",
         )
+        model = profile["model"]
+        require_keys(
+            model,
+            ("id", "repo", "revision", "filename", "sha256"),
+            f"profile {profile_name} model",
+        )
+        if not isinstance(model["id"], str) or not model["id"]:
+            raise ValueError(f"profile {profile_name} model id must be nonempty")
+        if not isinstance(model["revision"], str) or len(model["revision"]) != 40:
+            raise ValueError(f"profile {profile_name} model revision must be a commit")
+        if not isinstance(model["sha256"], str) or len(model["sha256"]) != 64:
+            raise ValueError(f"profile {profile_name} model needs a SHA-256")
         workload = profile["workload"]
         require_keys(workload, WORKLOAD_KEYS, f"profile {profile_name} workload")
         if any(float(workload[key]) <= 0 for key in WORKLOAD_KEYS):
@@ -118,6 +152,18 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
                 raise ValueError(f"profile {profile_name} needs selection and rows")
             if len(rows) != int(workload["families"]):
                 raise ValueError(f"profile {profile_name} must pin one row per family")
+            for row_index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    raise ValueError(f"profile {profile_name} row {row_index} must be an object")
+                require_keys(
+                    row,
+                    ("session_id", "source_dataset", "n_turns", "max_isl", "total_tokens"),
+                    f"profile {profile_name} row {row_index}",
+                )
+                if int(row["total_tokens"]) <= 0:
+                    raise ValueError(
+                        f"profile {profile_name} row {row_index} total_tokens must be positive"
+                    )
             if selection.get("families") != int(workload["families"]):
                 raise ValueError(f"profile {profile_name} selection family count drifted")
             if selection.get("order") != "md5(session_id)":
@@ -125,6 +171,12 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
             manifest_hash = corpus.get("prompt_manifest_sha256")
             if not isinstance(manifest_hash, str) or len(manifest_hash) != 64:
                 raise ValueError(f"profile {profile_name} needs a prompt manifest SHA-256")
+            required_ctx_size = derived_context_size(profile)
+            if required_ctx_size is None or int(workload["ctx_size"]) < required_ctx_size:
+                raise ValueError(
+                    f"profile {profile_name} ctx_size must cover its pinned row totals; "
+                    f"need at least {required_ctx_size}"
+                )
         elif corpus.get("kind") != "synthetic":
             raise ValueError(f"profile {profile_name} has an unsupported corpus kind")
 
