@@ -10,8 +10,9 @@ use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
     FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow,
     GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchPhase, IterationBatchRequest, MediaInput,
-    MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
-    RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, SplitMode as RuntimeSplitMode, StageModel,
+    IterationBatchOutput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft, RuntimeConfig,
+    RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig,
+    SplitMode as RuntimeSplitMode, StageModel,
     StageSession, TokenSignal, parse_cache_type,
 };
 

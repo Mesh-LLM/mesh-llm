@@ -151,6 +151,12 @@ pub struct IterationWork {
     pub sampling: Option<SamplingConfig>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IterationPrediction {
+    pub work_index: usize,
+    pub token: i32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct IterationPlan {
     pub work: Vec<IterationWork>,

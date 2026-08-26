@@ -11,7 +11,10 @@ use skippy_ffi::{
 use crate::error::{ensure_ok, free_error};
 use crate::session::StageSession;
 use crate::types::empty_raw_activation_desc;
-use crate::{ActivationFrame, DecodeFrameBatchOutput, NativeMtpDraft, SamplingConfig, Status};
+use crate::{
+    ActivationFrame, DecodeFrameBatchOutput, IterationBatchOutput, IterationSample, NativeMtpDraft,
+    SamplingConfig, Status,
+};
 
 type RawInputFrame = (Option<RawActivationDesc>, *const c_void);
 
@@ -35,6 +38,46 @@ fn raw_input_desc_ptr(input: &RawInputFrame) -> *const RawActivationDesc {
         .0
         .as_ref()
         .map_or(ptr::null(), |desc| desc as *const RawActivationDesc)
+}
+
+fn collect_iteration_samples(
+    request_count: usize,
+    sampled_output_count: usize,
+    sampled_request_indexes: &[usize],
+    predicted_tokens: &[i32],
+) -> Result<Vec<IterationSample>> {
+    if sampled_output_count > request_count
+        || sampled_output_count > sampled_request_indexes.len()
+        || sampled_output_count > predicted_tokens.len()
+    {
+        return Err(anyhow!(
+            "native iteration returned {sampled_output_count} samples for {request_count} requests"
+        ));
+    }
+    let mut seen_samples = vec![false; request_count];
+    sampled_request_indexes
+        .iter()
+        .copied()
+        .zip(predicted_tokens.iter().copied())
+        .take(sampled_output_count)
+        .map(|(request_index, predicted_token)| {
+            let sampled = seen_samples.get_mut(request_index).ok_or_else(|| {
+                anyhow!(
+                    "native iteration sample references request {request_index}, but only {request_count} requests were submitted"
+                )
+            })?;
+            if *sampled {
+                return Err(anyhow!(
+                    "native iteration returned duplicate sample for request {request_index}"
+                ));
+            }
+            *sampled = true;
+            Ok(IterationSample {
+                request_index,
+                predicted_token,
+            })
+        })
+        .collect()
 }
 
 pub struct DecodeFrameBatchRequest<'a> {
@@ -63,16 +106,19 @@ pub struct IterationBatchRequest<'a> {
 impl StageSession {
     pub fn iteration_batch_sampled(
         requests: &mut [IterationBatchRequest<'_>],
-    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+    ) -> Result<IterationBatchOutput> {
         Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()])
     }
 
     fn iteration_batch_sampled_raw(
         requests: &mut [IterationBatchRequest<'_>],
         output_capacities: &[usize],
-    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+    ) -> Result<IterationBatchOutput> {
         if requests.is_empty() {
-            return Ok(Vec::new());
+            return Ok(IterationBatchOutput {
+                request_outputs: Vec::new(),
+                samples: Vec::new(),
+            });
         }
         let raw_sampling = requests
             .iter()
@@ -114,7 +160,9 @@ impl StageSession {
             .map(|payload| payload.as_mut_ptr().cast())
             .collect::<Vec<_>>();
         let mut output_bytes = vec![0_usize; requests.len()];
-        let mut predicted_tokens = vec![-1_i32; requests.len()];
+        let mut sampled_request_indexes = vec![0_usize; requests.len()];
+        let mut predicted_tokens = vec![0_i32; requests.len()];
+        let mut sampled_output_count = 0_usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_iteration_batch_sampled(
@@ -124,8 +172,10 @@ impl StageSession {
                 output_payload_ptrs.as_ptr(),
                 output_capacities.as_ptr(),
                 output_bytes.as_mut_ptr(),
+                sampled_request_indexes.as_mut_ptr(),
                 predicted_tokens.as_mut_ptr(),
                 predicted_tokens.len(),
+                &mut sampled_output_count,
                 &mut error,
             )
         };
@@ -143,6 +193,12 @@ impl StageSession {
             return Self::iteration_batch_sampled_serial(requests);
         }
         ensure_ok(status, error)?;
+        let samples = collect_iteration_samples(
+            requests.len(),
+            sampled_output_count,
+            &sampled_request_indexes,
+            &predicted_tokens,
+        )?;
         // The native call has already advanced every session, so compute all
         // new counts before storing any: a mid-loop overflow error must not
         // leave a subset of sessions updated and the rest desynced.
@@ -162,30 +218,30 @@ impl StageSession {
         for (request, updated) in requests.iter_mut().zip(updated_counts) {
             request.session.token_count = updated;
         }
-        Ok(output_payloads
+        let request_outputs = output_payloads
             .into_iter()
             .zip(output_descs)
             .zip(output_bytes)
-            .zip(predicted_tokens)
-            .map(|(((mut payload, desc), bytes), predicted_token)| {
+            .map(|((mut payload, desc), bytes)| {
                 payload.truncate(bytes);
-                DecodeFrameBatchOutput {
-                    predicted_token,
-                    output: ActivationFrame {
-                        desc: desc.into(),
-                        payload,
-                    },
+                ActivationFrame {
+                    desc: desc.into(),
+                    payload,
                 }
             })
-            .collect())
+            .collect();
+        Ok(IterationBatchOutput {
+            request_outputs,
+            samples,
+        })
     }
 
     fn iteration_batch_sampled_serial(
         requests: &mut [IterationBatchRequest<'_>],
-    ) -> Result<Vec<DecodeFrameBatchOutput>> {
-        requests
-            .iter_mut()
-            .map(|request| {
+    ) -> Result<IterationBatchOutput> {
+        let mut request_outputs = Vec::with_capacity(requests.len());
+        let mut samples = Vec::new();
+        for (request_index, request) in requests.iter_mut().enumerate() {
                 let (predicted_token, output) = if request.phase == IterationBatchPhase::Decode {
                     validate_serial_decode_request(request)?;
                     request.session.decode_step_frame_sampled(
@@ -226,12 +282,18 @@ impl StageSession {
                     };
                     (-1, output)
                 };
-                Ok(DecodeFrameBatchOutput {
+            if request.sample_last {
+                samples.push(IterationSample {
+                    request_index,
                     predicted_token,
-                    output,
-                })
-            })
-            .collect()
+                });
+            }
+            request_outputs.push(output);
+        }
+        Ok(IterationBatchOutput {
+            request_outputs,
+            samples,
+        })
     }
 
     pub fn prefill_chunk_frame(
@@ -1050,7 +1112,8 @@ fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result
 #[cfg(test)]
 mod tests {
     use super::{
-        IterationBatchPhase, IterationBatchRequest, raw_input_frame, validate_serial_decode_request,
+        IterationBatchPhase, IterationBatchRequest, collect_iteration_samples, raw_input_frame,
+        validate_serial_decode_request,
     };
     use crate::StageSession;
     use crate::{ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout};
@@ -1186,5 +1249,23 @@ mod tests {
             phase: IterationBatchPhase::Prefill,
         };
         assert_eq!(request.phase, IterationBatchPhase::Prefill);
+    }
+
+    #[test]
+    fn sparse_iteration_samples_preserve_explicit_request_indexes() -> anyhow::Result<()> {
+        let samples = collect_iteration_samples(3, 2, &[0, 2, 0], &[41, 99, 0])?;
+
+        assert_eq!(samples[0].request_index, 0);
+        assert_eq!(samples[0].predicted_token, 41);
+        assert_eq!(samples[1].request_index, 2);
+        assert_eq!(samples[1].predicted_token, 99);
+        Ok(())
+    }
+
+    #[test]
+    fn iteration_samples_reject_duplicate_or_out_of_range_indexes() {
+        assert!(collect_iteration_samples(3, 2, &[1, 1], &[41, 99]).is_err());
+        assert!(collect_iteration_samples(3, 1, &[3], &[41]).is_err());
+        assert!(collect_iteration_samples(3, 4, &[0, 1, 2, 0], &[1, 2, 3, 4]).is_err());
     }
 }

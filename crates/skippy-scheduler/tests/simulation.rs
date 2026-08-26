@@ -165,6 +165,37 @@ fn bounded_prefill_iterations_reduce_decode_head_of_line_blocking() {
 }
 
 #[test]
+fn mixed_iterations_fill_prefill_capacity_without_starving_decode() {
+    let bounded = simulate(
+        SchedulerConfig {
+            max_consecutive_prefill_iterations: 1,
+            ..SchedulerConfig::default()
+        },
+        RuntimeCostModel::default(),
+        staggered_prefill_requests(),
+    )
+    .unwrap();
+    let mixed = simulate(
+        SchedulerConfig {
+            max_consecutive_prefill_iterations: 1,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        },
+        RuntimeCostModel::default(),
+        staggered_prefill_requests(),
+    )
+    .unwrap();
+
+    assert!(mixed.mixed_iterations > 0);
+    assert!(mixed.mean_token_occupancy > bounded.mean_token_occupancy);
+    assert!(
+        mixed.request("decoder").max_inter_token_gap_us
+            < bounded.request("decoder").max_inter_token_gap_us
+    );
+    assert!(mixed.makespan_us < bounded.makespan_us);
+}
+
+#[test]
 fn concurrent_burst_uses_batches_and_completes_every_request() {
     let report = simulate(
         SchedulerConfig::default(),

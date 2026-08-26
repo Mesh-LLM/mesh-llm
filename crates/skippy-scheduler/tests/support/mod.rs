@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use skippy_cache::UnifiedRadixCache;
 use skippy_scheduler::{
-    CacheAffinity, IterationPhase, IterationPlan, PrefixRestore, PrefixRestoreKind, Scheduler,
-    SchedulerConfig, Sequence, StageCacheAffinity,
+    CacheAffinity, IterationPhase, IterationPlan, IterationPrediction, PrefixRestore,
+    PrefixRestoreKind, Scheduler, SchedulerConfig, Sequence, StageCacheAffinity,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,7 +250,16 @@ pub fn simulate(
         let duration_us = cost.iteration_duration_us(&plan);
         now_us = now_us.saturating_add(duration_us);
         record_predictions(&plan, now_us, &mut metrics);
-        let predictions = vec![1; plan.work.len()];
+        let predictions = plan
+            .work
+            .iter()
+            .enumerate()
+            .filter(|(_, work)| work.sample_last)
+            .map(|(work_index, _)| IterationPrediction {
+                work_index,
+                token: 1,
+            })
+            .collect::<Vec<_>>();
         scheduler.complete_iteration(&plan, &predictions);
         completed += record_completions(&scheduler, now_us, &mut metrics);
 

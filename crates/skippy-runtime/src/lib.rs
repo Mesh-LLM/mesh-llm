@@ -50,9 +50,9 @@ pub use skippy_ffi::{
 pub use types::{
     ActivationDesc, ActivationFrame, ChatReasoningFormat, ChatTemplateJsonOptions,
     ChatTemplateJsonResult, ChatTemplateMessage, ChatTemplateOptions, DecodeFrameBatchOutput,
-    DrySamplingConfig, GenerationSignalWindow, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
-    MediaPrefillChunkFrame, MediaPrefillFrame, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig,
-    TensorInfo, TokenSignal, XtcSamplingConfig,
+    DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput, IterationSample, LogitBias,
+    MAX_LOGIT_BIAS, MediaInput, MediaPrefill, MediaPrefillChunkFrame, MediaPrefillFrame,
+    RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenSignal, XtcSamplingConfig,
 };
 
 #[cfg(feature = "dynamic-native-runtime")]
