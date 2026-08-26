@@ -171,8 +171,6 @@ def fetch_dataset(
         dataset["repo_type"],
         "--revision",
         dataset["revision"],
-        "--format",
-        "json",
     ]
     verify = [
         "hf",
@@ -184,14 +182,11 @@ def fetch_dataset(
         "--revision",
         dataset["revision"],
         "--fail-on-missing-files",
-        "--format",
-        "json",
     ]
     if cache_dir is not None:
         download.extend(("--cache-dir", str(cache_dir)))
         verify.extend(("--cache-dir", str(cache_dir)))
-    downloaded = json.loads(run_checked(download, runner).stdout)
-    snapshot = Path(downloaded["path"])
+    snapshot = Path(run_checked(download, runner).stdout.strip())
     run_checked(verify, runner)
     parquet = snapshot / dataset["parquet_file"]
     if not parquet.is_file():
