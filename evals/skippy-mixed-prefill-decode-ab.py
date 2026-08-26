@@ -385,11 +385,11 @@ def launch_cell(
         "--openai-prefill-chunk-size",
         str(args.n_ubatch),
         "--openai-prefill-adaptive-start",
-        str(args.n_ubatch),
+        str(args.prefill_adaptive_start),
         "--openai-prefill-adaptive-step",
-        str(args.n_ubatch),
+        str(args.prefill_adaptive_step),
         "--openai-prefill-adaptive-max",
-        str(args.n_ubatch),
+        str(args.prefill_adaptive_max),
     ]
     if version == "new" or not args.adaptive_target_new_only:
         command.extend(
@@ -699,6 +699,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lanes", type=int, default=12)
     parser.add_argument("--n-batch", type=int, default=1024)
     parser.add_argument("--n-ubatch", type=int, default=256)
+    parser.add_argument(
+        "--prefill-adaptive-start",
+        type=int,
+        help="adaptive-ramp starting chunk; defaults to n-ubatch",
+    )
+    parser.add_argument(
+        "--prefill-adaptive-step",
+        type=int,
+        help="adaptive-ramp chunk increment; defaults to n-ubatch",
+    )
+    parser.add_argument(
+        "--prefill-adaptive-max",
+        type=int,
+        help="adaptive-ramp maximum chunk; defaults to n-ubatch",
+    )
     parser.add_argument("--layer-end", type=int, required=True)
     parser.add_argument("--activation-width", type=int, required=True)
     parser.add_argument("--activation-wire-dtype", default="f16")
@@ -735,6 +750,17 @@ def parse_args() -> argparse.Namespace:
         parser.error("anchors plus prefills must not exceed lanes")
     if args.n_ubatch > args.n_batch:
         parser.error("n-ubatch must not exceed n-batch")
+    for name in (
+        "prefill_adaptive_start",
+        "prefill_adaptive_step",
+        "prefill_adaptive_max",
+    ):
+        if getattr(args, name) is None:
+            setattr(args, name, args.n_ubatch)
+        elif getattr(args, name) <= 0:
+            parser.error(f"{name.replace('_', '-')} must be positive")
+    if args.prefill_adaptive_start > args.prefill_adaptive_max:
+        parser.error("prefill-adaptive-start must not exceed prefill-adaptive-max")
     finite_nonnegative = ("prefill_delay_ms", "prefill_stagger_ms")
     if any(
         not math.isfinite(getattr(args, name)) or getattr(args, name) < 0
@@ -840,6 +866,9 @@ def main() -> int:
                 "lanes": args.lanes,
                 "n_batch": args.n_batch,
                 "n_ubatch": args.n_ubatch,
+                "prefill_adaptive_start": args.prefill_adaptive_start,
+                "prefill_adaptive_step": args.prefill_adaptive_step,
+                "prefill_adaptive_max": args.prefill_adaptive_max,
                 "layer_end": args.layer_end,
                 "activation_width": args.activation_width,
                 "adaptive_target_ms": args.adaptive_target_ms,
