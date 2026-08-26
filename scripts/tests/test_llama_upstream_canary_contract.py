@@ -32,6 +32,13 @@ MODEL_LIFECYCLE_PATCH = (
     / "patches"
     / "0004-Add-Skippy-model-lifecycle-and-package-support.patch"
 )
+NEMOTRON_MTP_EMBEDDING_PATCH = (
+    ROOT
+    / "third_party"
+    / "llama.cpp"
+    / "patches"
+    / "0022-skippy-retain-Nemotron-MTP-shared-embeddings.patch"
+)
 
 
 def _step_block(workflow: str, name: str) -> str:
@@ -136,7 +143,9 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         battery = BATTERY.read_text(encoding="utf-8")
         self.assertIn("'s/^[[:space:]]*path:[[:space:]]*//p'", battery)
         self.assertIn("skippy-model-package\" inspect", battery)
-        self.assertIn('contains(".nextn.")', battery)
+        self.assertIn('contains(".nextn.eh_proj")', battery)
+        self.assertIn('contains(".nextn.enorm")', battery)
+        self.assertIn('contains(".nextn.hnorm")', battery)
         self.assertIn("--require-native-mtp-draft", battery)
         self.assertIn("startup_timeout_for_bytes", battery)
         self.assertIn("speculative_coding_prompts.jsonl", battery)
@@ -276,6 +285,24 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             "ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
             nemotron.split("|")[1],
         )
+        self.assertEqual("53", nemotron.split("|")[5])
+
+    def test_nemotron_final_mtp_stage_retains_shared_embeddings(self) -> None:
+        patch = NEMOTRON_MTP_EMBEDDING_PATCH.read_text(encoding="utf-8")
+        self.assertIn("llm_kv.arch == LLM_ARCH_NEMOTRON_H_MOE", patch)
+        self.assertIn("hparams.n_layer_nextn > 0", patch)
+        self.assertIn(
+            "g_skippy_filter.layer_end > static_cast<int>(hparams.n_layer())", patch
+        )
+        self.assertIn("g_skippy_filter.include_output", patch)
+        self.assertIn("keep = tn.tensor == LLM_TENSOR_TOKEN_EMBD", patch)
+
+    def test_glm45_air_runtime_range_includes_the_mtp_layer(self) -> None:
+        manifest = FAMILY_MANIFEST.read_text(encoding="utf-8")
+        glm45_air = next(
+            line for line in manifest.splitlines() if line.startswith("glm45-air|")
+        )
+        self.assertEqual("47", glm45_air.split("|")[5])
 
 
 class SkippyFamilyBatteryTests(unittest.TestCase):
@@ -365,7 +392,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             inspect = bin_dir / "skippy-model-package"
             inspect.write_text(
                 "#!/bin/sh\n"
-                "printf '%s\\n' '{\"tensor_count\":1,\"tensors\":[{\"name\":\"blk.5.nextn.eh_proj.weight\",\"layer_index\":5,\"role\":\"layer\",\"ggml_type\":1,\"byte_size\":1024}]}'\n",
+                "printf '%s\\n' '{\"tensor_count\":3,\"tensors\":[{\"name\":\"blk.5.nextn.eh_proj.weight\",\"layer_index\":5,\"role\":\"layer\",\"ggml_type\":1,\"byte_size\":1024},{\"name\":\"blk.5.nextn.enorm.weight\",\"layer_index\":5,\"role\":\"layer\",\"ggml_type\":1,\"byte_size\":0},{\"name\":\"blk.5.nextn.hnorm.weight\",\"layer_index\":5,\"role\":\"layer\",\"ggml_type\":1,\"byte_size\":0}]}'\n",
                 encoding="utf-8",
             )
             spec = bin_dir / "llama-spec-bench"
@@ -428,6 +455,41 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             mtp_corpus = (run_dir / "mtp-corpus.tsv").read_text(encoding="utf-8")
             self.assertIn("mtp-family", mtp_corpus)
             self.assertTrue((run_dir / "preflight" / "speculative-smoke.json").is_file())
+
+            inspect.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' '{\"tensor_count\":1,\"tensors\":[{\"name\":\"blk.5.nextn.eh_proj.weight\",\"layer_index\":5,\"role\":\"layer\",\"ggml_type\":1,\"byte_size\":1024}]}'\n",
+                encoding="utf-8",
+            )
+            incomplete_artifacts = temp / "incomplete-artifacts"
+            env["FAMILY_BATTERY_ARTIFACT_ROOT"] = str(incomplete_artifacts)
+            incomplete = subprocess.run(
+                [
+                    str(BATTERY),
+                    "--manifest",
+                    str(manifest),
+                    "--preflight-only",
+                    "--skip-build",
+                ],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(1, incomplete.returncode)
+            incomplete_run = next(incomplete_artifacts.iterdir())
+            incomplete_corpus = (incomplete_run / "mtp-corpus.tsv").read_text(
+                encoding="utf-8"
+            )
+            self.assertEqual(
+                ["family\tmodel_id\tsource_revision\tmodel_path\tmtp_layers"],
+                incomplete_corpus.splitlines(),
+            )
+            self.assertFalse(
+                (incomplete_run / "preflight" / "speculative-smoke.json").exists()
+            )
 
 
 if __name__ == "__main__":

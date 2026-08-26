@@ -46,8 +46,9 @@ unchanged. Before any certification starts, every selected GGUF is resolved
 through the cached ref and then again through its immutable snapshot SHA. The
 preflight records the revisions, verifies all shard/tensor scans, disk
 headroom and certification ports, and runs one cheap MTP speculative-corpus
-smoke. Only GGUFs with native MTP/NextN tensors run `llama-spec-bench`; those
-rows also require native MTP draft sidebands in staged correctness. Per-lane
+smoke. Only GGUFs with a complete native MTP/NextN tensor head across all
+shards run `llama-spec-bench`; those rows also require native MTP draft
+sidebands in staged correctness. Per-lane
 outcomes, immutable model manifests, summaries, model scans, preflight
 evidence, and logs are uploaded for 14 days even when the battery fails. Stage
 readiness uses a model-size-derived deadline, each complete certification has

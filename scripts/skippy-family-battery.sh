@@ -306,7 +306,21 @@ scan_model() {
   fi
 
   MODEL_SIZE_BYTES="$(jq '[.tensors[].byte_size] | add // 0' "$scan_json")"
-  MODEL_MTP_LAYERS="$(jq -r '[.tensors[] | select(.name | contains(".nextn.")) | .layer_index | select(. != null)] | unique | map(tostring) | join(",")' "$scan_json")"
+  MODEL_MTP_LAYERS="$(jq -r '
+    [.tensors[]
+      | select(.layer_index != null)
+      | {layer: .layer_index, name: (.name | ascii_downcase)}]
+    | group_by(.layer)
+    | map(select(
+        any(.[]; .name | contains(".nextn.eh_proj"))
+        and any(.[]; .name | contains(".nextn.enorm"))
+        and any(.[]; .name | contains(".nextn.hnorm"))
+      ))
+    | map(.[0].layer)
+    | sort
+    | map(tostring)
+    | join(",")
+  ' "$scan_json")"
   if [[ -n "$MODEL_MTP_LAYERS" ]]; then
     MODEL_HAS_MTP=1
     printf '%s\t%s\t%s\t%s\t%s\n' "$family" "$model_id" "$source_revision" "$target" "$MODEL_MTP_LAYERS" >> "$MTP_CORPUS_TSV"
@@ -523,9 +537,9 @@ preflight_manifest() {
       continue
     fi
 
-    # Only models with actual MTP/NextN tensors join the speculative cohort.
-    # Non-MTP models keep all core correctness and state lanes, but do not run
-    # the unrelated self-draft benchmark.
+    # Only models with a complete native MTP/NextN tensor head join the
+    # speculative cohort. Non-MTP models keep all core correctness and state
+    # lanes, but do not run the unrelated self-draft benchmark.
     local draft="" draft_revision=""
     if (( MODEL_HAS_MTP == 1 )); then
       draft="$target"
@@ -593,7 +607,7 @@ preflight_manifest() {
     fi
     record_preflight_outcome "speculative-preflight" "$PREFLIGHT_SPEC_FAMILY" "mtp-corpus" "pass" "pass" "checked-in corpus consumed by one-token MTP speculative smoke"
   elif [[ -z "$FAMILY_FILTER" ]]; then
-    record_preflight_outcome "speculative-preflight" "battery" "mtp-corpus" "fail" "harness" "full manifest contained no model with MTP/NextN tensors"
+    record_preflight_outcome "speculative-preflight" "battery" "mtp-corpus" "fail" "harness" "full manifest contained no model with a complete native MTP/NextN tensor head"
     PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
     return 1
   fi
