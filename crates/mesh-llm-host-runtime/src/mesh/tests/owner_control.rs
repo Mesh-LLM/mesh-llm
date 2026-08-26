@@ -55,6 +55,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
 
         display_rtt: None,
         selected_path: None,
+        observed_large_frame: None,
         propagated_latency: None,
     }
 }

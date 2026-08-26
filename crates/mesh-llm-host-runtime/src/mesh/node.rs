@@ -1537,6 +1537,40 @@ impl Node {
         }
     }
 
+    /// Record a passive large-frame throughput observation for a peer link,
+    /// measured from a real bulk transfer (artifact download or upload).
+    /// Samples below the minimum duration/size floor are ignored — they
+    /// measure handshake jitter, not sustained throughput. Latest-wins.
+    pub(crate) async fn record_peer_large_frame_observation(
+        &self,
+        id: EndpointId,
+        bytes: u64,
+        elapsed: std::time::Duration,
+    ) {
+        const MIN_SAMPLE_BYTES: u64 = 512 * 1024;
+        const MIN_SAMPLE_DURATION: std::time::Duration = std::time::Duration::from_millis(100);
+        if bytes < MIN_SAMPLE_BYTES || elapsed < MIN_SAMPLE_DURATION {
+            return;
+        }
+        let elapsed_micros = elapsed.as_micros().max(1);
+        let mib_per_s = ((u128::from(bytes) * 1_000_000 / elapsed_micros) / 1_048_576) as u32;
+        if mib_per_s == 0 {
+            return;
+        }
+        let mut state = self.state.lock().await;
+        if let Some(peer) = state.peers.get_mut(&id) {
+            peer.observed_large_frame = Some(LargeFrameObservation {
+                mib_per_s,
+                observed_at: std::time::Instant::now(),
+            });
+            tracing::debug!(
+                "Peer {} large-frame: {mib_per_s} MiB/s over {} bytes in {elapsed:?}",
+                id.fmt_short(),
+                bytes
+            );
+        }
+    }
+
     pub(crate) async fn update_peer_selected_path(
         &self,
         id: EndpointId,

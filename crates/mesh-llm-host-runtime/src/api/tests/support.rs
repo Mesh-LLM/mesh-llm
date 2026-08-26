@@ -653,6 +653,7 @@ fn make_test_peer(
 
         display_rtt: None,
         selected_path: None,
+        observed_large_frame: None,
         propagated_latency: None,
         inference_admission_state: None,
     }

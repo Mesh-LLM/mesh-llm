@@ -172,6 +172,20 @@ pub struct DirectLatencyObservation {
     pub observed_at: std::time::Instant,
 }
 
+/// A large-frame throughput observation on a peer link, measured passively
+/// from a real artifact transfer (bulk bytes over the same QUIC transport
+/// the split pipeline uses). Latest-wins; `observed_at` lets consumers
+/// discard stale samples.
+#[derive(Debug, Clone)]
+pub struct LargeFrameObservation {
+    pub mib_per_s: u32,
+    pub observed_at: std::time::Instant,
+}
+
+/// How long a passive large-frame observation stays planner-relevant.
+pub const LARGE_FRAME_OBSERVATION_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
+
 /// Latency propagated via transitive gossip (not measured directly).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropagatedLatencyObservation {
@@ -264,6 +278,11 @@ pub struct PeerInfo {
     pub display_rtt: Option<DirectLatencyObservation>,
     /// Last selected path observed on the mesh control connection to this peer.
     pub(crate) selected_path: Option<SelectedPathObservation>,
+    /// Latest large-frame throughput observed on this peer's link, measured
+    /// passively from real artifact transfers (either direction). Used as the
+    /// edge bandwidth signal for topology planning; stale observations decay
+    /// to `None` (latency-only edge).
+    pub(crate) observed_large_frame: Option<LargeFrameObservation>,
     /// Latency propagated via transitive gossip.
     pub propagated_latency: Option<PropagatedLatencyObservation>,
     pub owner_summary: OwnershipSummary,
@@ -352,6 +371,7 @@ impl PeerInfo {
             cache_affinity: ann.cache_affinity.clone(),
             display_rtt: None,
             selected_path: None,
+            observed_large_frame: None,
             propagated_latency: None,
             owner_summary,
             inference_admission_state: ann.inference_admission_state,
@@ -365,6 +385,17 @@ impl PeerInfo {
     /// Return the most recent direct RTT sample for display, falling back to best-seen RTT.
     pub fn current_direct_rtt_ms(&self) -> Option<u32> {
         self.display_rtt.as_ref().map(|d| d.rtt_ms).or(self.rtt_ms)
+    }
+
+    /// Sustained large-frame throughput for this peer link from a recent
+    /// passive artifact-transfer observation. `None` when never measured or
+    /// the observation has aged out — the planner then treats the edge as
+    /// latency-only, which is exactly the pre-probing behavior.
+    pub fn large_frame_mib_per_s(&self) -> Option<u32> {
+        self.observed_large_frame
+            .as_ref()
+            .filter(|observed| observed.observed_at.elapsed() <= LARGE_FRAME_OBSERVATION_MAX_AGE)
+            .map(|observed| observed.mib_per_s)
     }
 
     pub(crate) fn split_stage_path_fallback(&self) -> Option<SelectedPathObservation> {
