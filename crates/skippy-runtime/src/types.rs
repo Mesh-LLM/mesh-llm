@@ -394,6 +394,7 @@ pub struct LogitBias {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SamplingConfig {
     pub enabled: bool,
+    pub ignore_eos: bool,
     pub seed: u32,
     pub temperature: f32,
     pub top_p: f32,
@@ -414,7 +415,6 @@ pub struct SamplingConfig {
     pub mirostat_entropy: f32,
     pub mirostat_learning_rate: f32,
     pub samplers: Vec<String>,
-    pub ignore_eos: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -436,6 +436,7 @@ impl Default for SamplingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            ignore_eos: false,
             seed: 0,
             temperature: 1.0,
             top_p: 1.0,
@@ -475,7 +476,6 @@ impl Default for SamplingConfig {
                 "xtc".into(),
                 "temperature".into(),
             ],
-            ignore_eos: false,
         }
     }
 }
@@ -530,7 +530,7 @@ impl SamplingConfig {
         }
         Ok(RawSamplingConfig {
             version: 2,
-            flags: u32::from(self.enabled),
+            flags: u32::from(self.enabled) | (u32::from(self.ignore_eos) << 1),
             seed: self.seed,
             top_k: self.top_k,
             penalty_last_n: self.penalty_last_n,
