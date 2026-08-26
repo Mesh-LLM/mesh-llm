@@ -689,20 +689,79 @@ fn configured_server_alias(
 }
 
 /// Look up the `hardware.device` (legacy `gpu_id`) persisted for a model
-/// referenced by an explicit CLI `--model`/`--gguf` value, matched by exact
-/// config `model` ref string. CLI-explicit launches otherwise never consult
-/// `config.models`, so a persisted per-model device pin would silently stop
-/// applying to `--device`-less CLI launches without this lookup.
+/// referenced by an explicit CLI `--model`/`--gguf` value.
+///
+/// Matching mirrors `ResolverContext::new` in
+/// `crate::inference::skippy::resolver::resolution`, which is what actually
+/// picks the persisted `hardware.device` up further downstream: the declared
+/// ref first (the alias from `--gguf <path> --model <alias>`), then the model
+/// ref string, then any config row whose `hardware.model_path` names the same
+/// file. Keeping the two lookups in step is what makes this preflight see
+/// exactly the pins that would otherwise reach the native ABI unresolved —
+/// a bare-path `--gguf` launch never matches a row keyed by alias, and the
+/// alias branch's `model_ref` is the GGUF path rather than the alias.
 fn matching_config_model_gpu_id<'a>(
     config: &'a plugin::MeshConfig,
+    declared_ref: Option<&str>,
     model_ref: &Path,
 ) -> Option<&'a str> {
-    let model_ref = model_ref.to_string_lossy();
+    let model_ref_text = model_ref.to_string_lossy();
     config
         .models
         .iter()
-        .find(|entry| entry.model.as_str() == model_ref.as_ref())
+        .find(|entry| {
+            declared_ref.is_some_and(|alias| entry.model.as_str() == alias)
+                || entry.model.as_str() == model_ref_text.as_ref()
+        })
+        .or_else(|| matching_config_model_by_model_path(config, model_ref))
         .and_then(|entry| entry.gpu_id.as_deref())
+}
+
+fn matching_config_model_by_model_path<'a>(
+    config: &'a plugin::MeshConfig,
+    model_ref: &Path,
+) -> Option<&'a plugin::ModelConfigEntry> {
+    let requested = comparable_startup_model_path(model_ref);
+    config.models.iter().find(|entry| {
+        entry
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.model_path.as_deref())
+            .is_some_and(|configured| {
+                comparable_startup_model_path(Path::new(configured)) == requested
+            })
+    })
+}
+
+/// Canonicalize for comparison, falling back to the raw path when the file is
+/// absent. A bare model ref such as `Qwen3-8B-Q4_K_M` never canonicalizes, so
+/// it can only ever compare equal to an identically bare configured path.
+fn comparable_startup_model_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The device persisted for a startup model: its own `hardware.device` first,
+/// then `[defaults.hardware] device`.
+///
+/// The two-level fallback mirrors `resolve_hardware_config` in
+/// `crate::inference::skippy::resolver::resolution`, which is what hands the
+/// selector to the native ABI. Config validation treats an inherited defaults
+/// device as satisfying the per-model requirement under
+/// `gpu.assignment = "pinned"`, so a config pinned only through
+/// `[defaults.hardware]` is accepted with every `models[].gpu_id` left unset;
+/// without this fallback that config fails startup preflight closed on a
+/// missing `gpu_id` it was never required to carry.
+fn persisted_startup_gpu_id<'a>(
+    config: &'a plugin::MeshConfig,
+    model_gpu_id: Option<&'a str>,
+) -> Option<&'a str> {
+    model_gpu_id.or_else(|| {
+        config
+            .defaults
+            .as_ref()
+            .and_then(|defaults| defaults.hardware.as_ref())
+            .and_then(|hardware| hardware.device.as_deref())
+    })
 }
 
 /// Effective device selector for a startup model: an explicit CLI `--device`
@@ -737,6 +796,13 @@ pub(super) fn build_startup_model_specs(
                 anyhow::bail!("GGUF file not found: {}", path.display());
             }
             let effective = effective_startup_model_config(&alias, None, defaults);
+            let gpu_id = effective_startup_gpu_id(
+                options,
+                persisted_startup_gpu_id(
+                    config,
+                    matching_config_model_gpu_id(config, Some(alias.as_str()), path),
+                ),
+            );
             specs.push(StartupModelSpec {
                 model_ref: path.clone(),
                 declared_ref: Some(alias),
@@ -746,10 +812,7 @@ pub(super) fn build_startup_model_specs(
                     .clone()
                     .or_else(|| effective.mmproj.as_ref().map(PathBuf::from)),
                 ctx_size: options.ctx_size.or(effective.ctx_size),
-                gpu_id: effective_startup_gpu_id(
-                    options,
-                    matching_config_model_gpu_id(config, path),
-                ),
+                gpu_id,
                 config_owned: false,
                 parallel: effective.parallel,
                 cache_type_k: effective.cache_type_k.clone(),
@@ -778,7 +841,10 @@ pub(super) fn build_startup_model_specs(
                 ctx_size: options.ctx_size.or(effective.ctx_size),
                 gpu_id: effective_startup_gpu_id(
                     options,
-                    matching_config_model_gpu_id(config, path),
+                    persisted_startup_gpu_id(
+                        config,
+                        matching_config_model_gpu_id(config, None, path),
+                    ),
                 ),
                 config_owned: false,
                 parallel: effective.parallel,
@@ -803,7 +869,10 @@ pub(super) fn build_startup_model_specs(
                 ctx_size: options.ctx_size.or(effective.ctx_size),
                 gpu_id: effective_startup_gpu_id(
                     options,
-                    matching_config_model_gpu_id(config, model),
+                    persisted_startup_gpu_id(
+                        config,
+                        matching_config_model_gpu_id(config, None, model),
+                    ),
                 ),
                 config_owned: false,
                 parallel: effective.parallel,
@@ -1083,7 +1152,17 @@ pub(super) fn preflight_config_owned_startup_models(
     binary_flavor: Option<backend::BinaryFlavor>,
     backend_probe: Option<&backend::BinaryBackendDeviceProbe>,
 ) -> Result<()> {
-    if config.gpu.assignment != plugin::GpuAssignment::Pinned {
+    // `gpu.assignment = "pinned"` always surveys, because config-owned models
+    // must fail closed when they resolve to no device. Under any other
+    // assignment the survey is only worth paying for when a startup model
+    // actually carries a device selector to resolve — a CLI `--device`
+    // override or a persisted per-model pin matched onto the model in
+    // `build_startup_model_specs`. Guarding on the assignment alone would
+    // strand exactly those selectors unresolved, which is the failure this
+    // preflight exists to prevent.
+    if config.gpu.assignment != plugin::GpuAssignment::Pinned
+        && plans.iter().all(|plan| plan.gpu_id.is_none())
+    {
         return Ok(());
     }
 

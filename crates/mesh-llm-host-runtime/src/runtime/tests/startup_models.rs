@@ -1680,6 +1680,223 @@ fn pinned_gpu_startup_preflight_unresolvable_device_names_available_devices() {
 }
 
 #[test]
+fn cli_device_reaches_startup_preflight_under_auto_assignment() {
+    // Regression guard on the production entry point rather than the inner
+    // GPU helper: `preflight_config_owned_startup_models` used to return
+    // early for every non-pinned assignment, so a plain `--device` launch
+    // under the default "auto" assignment never reached the resolver and the
+    // selector was handed to the native ABI verbatim. The requested stable id
+    // cannot exist on any host, so the preflight must fail here no matter
+    // what GPUs the machine running the test actually has.
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--model",
+        "Qwen3-8B-Q4_K_M",
+        "--device",
+        "pci:0000:ff:ff.7",
+    ]);
+    let config = plugin::MeshConfig::default();
+    assert_eq!(config.gpu.assignment, plugin::GpuAssignment::Auto);
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:ff:ff.7"));
+    let mut plans = vec![StartupModelPlan {
+        gpu_id: specs[0].gpu_id.clone(),
+        ..startup_model_plan("Qwen3-8B-Q4_K_M")
+    }];
+
+    let err = preflight_config_owned_startup_models(&config, &specs, &mut plans, None, None)
+        .expect_err("an unresolvable --device must fail startup preflight");
+
+    assert!(format!("{err:#}").contains("failed pinned GPU preflight"));
+    assert_eq!(plans[0].pinned_gpu, None);
+}
+
+#[test]
+fn startup_preflight_stays_inert_without_any_device_selector() {
+    // The relaxed guard must not make the common case fallible: auto
+    // assignment with no CLI `--device` and no persisted pin has nothing to
+    // resolve, so preflight succeeds and leaves the plan unpinned even on a
+    // host with no GPUs at all.
+    let options = runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M"]);
+    let config = plugin::MeshConfig::default();
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+    assert_eq!(specs[0].gpu_id, None);
+    let mut plans = vec![startup_model_plan("Qwen3-8B-Q4_K_M")];
+
+    preflight_config_owned_startup_models(&config, &specs, &mut plans, None, None)
+        .expect("preflight must stay inert when there is no device to resolve");
+
+    assert_eq!(plans[0].pinned_gpu, None);
+}
+
+#[test]
+fn gguf_alias_startup_model_picks_up_the_pin_configured_for_the_alias() {
+    // `--gguf <path> --model <alias>` binds the alias to the local file, and
+    // config rows are keyed by that alias rather than by the GGUF path, so
+    // the persisted pin has to be looked up by the declared ref.
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let model_path = temp_dir.path().join("deepseek.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model");
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--gguf",
+        model_path.to_str().expect("model path"),
+        "--model",
+        "deepseek-v4-flash",
+    ]);
+    let config = plugin::MeshConfig {
+        models: vec![plugin::ModelConfigEntry {
+            model: "deepseek-v4-flash".into(),
+            gpu_id: Some("pci:0000:65:00.0".into()),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].declared_ref.as_deref(), Some("deepseek-v4-flash"));
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
+}
+
+#[test]
+fn gguf_startup_model_picks_up_the_pin_configured_for_its_model_path() {
+    // A bare `--gguf <path>` launch carries no ref to match on, but the
+    // downstream resolver still finds the row through `hardware.model_path`,
+    // so the pin must be picked up the same way here.
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let model_path = temp_dir.path().join("glm.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model");
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--gguf",
+        model_path.to_str().expect("model path"),
+    ]);
+    let config = plugin::MeshConfig {
+        models: vec![plugin::ModelConfigEntry {
+            model: "glm-4.7-flash".into(),
+            gpu_id: Some("pci:0000:b3:00.0".into()),
+            hardware: Some(plugin::HardwareConfig {
+                model_path: Some(model_path.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:b3:00.0"));
+}
+
+#[test]
+fn config_owned_startup_model_inherits_the_defaults_hardware_device_pin() {
+    // `gpu.assignment = "pinned"` accepts a config that pins only through
+    // `[defaults.hardware]` -- validation counts the inherited device as
+    // satisfying the per-model requirement, so `models[].gpu_id` stays unset.
+    // Preflight has to inherit the same way or it fails that config closed on
+    // a `gpu_id` it was never required to carry.
+    let options = runtime_options_for_test(&["mesh-llm"]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        defaults: Some(plugin::ModelConfigDefaults {
+            hardware: Some(plugin::HardwareConfig {
+                device: Some("pci:0000:65:00.0".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        models: vec![plugin::ModelConfigEntry {
+            model: "Qwen3-8B-Q4_K_M".into(),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
+    let mut plans = vec![StartupModelPlan {
+        gpu_id: specs[0].gpu_id.clone(),
+        ..startup_model_plan("Qwen3-8B-Q4_K_M")
+    }];
+    let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
+
+    preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+        .expect("an inherited defaults pin must resolve");
+
+    assert_eq!(
+        plans[0]
+            .pinned_gpu
+            .as_ref()
+            .map(|gpu| gpu.backend_device.as_str()),
+        Some("CUDA0")
+    );
+}
+
+#[test]
+fn per_model_pin_wins_over_the_defaults_hardware_device_pin() {
+    let options = runtime_options_for_test(&["mesh-llm"]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        defaults: Some(plugin::ModelConfigDefaults {
+            hardware: Some(plugin::HardwareConfig {
+                device: Some("pci:0000:65:00.0".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        models: vec![plugin::ModelConfigEntry {
+            model: "Qwen3-8B-Q4_K_M".into(),
+            gpu_id: Some("pci:0000:b3:00.0".into()),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:b3:00.0"));
+}
+
+#[test]
+fn gguf_startup_model_ignores_a_pin_configured_for_a_different_model_path() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let model_path = temp_dir.path().join("glm.gguf");
+    let other_path = temp_dir.path().join("other.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model");
+    std::fs::write(&other_path, b"gguf").expect("write other model");
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--gguf",
+        model_path.to_str().expect("model path"),
+    ]);
+    let config = plugin::MeshConfig {
+        models: vec![plugin::ModelConfigEntry {
+            model: "glm-4.7-flash".into(),
+            gpu_id: Some("pci:0000:b3:00.0".into()),
+            hardware: Some(plugin::HardwareConfig {
+                model_path: Some(other_path.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+
+    assert_eq!(specs[0].gpu_id, None);
+}
+
+#[test]
 fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
