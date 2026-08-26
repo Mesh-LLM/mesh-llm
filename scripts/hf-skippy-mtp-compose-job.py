@@ -51,6 +51,19 @@ def run(*command: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(command, cwd=cwd, check=True)
 
 
+def log_stage(name: str, *paths: Path) -> None:
+    """Emit a stage marker plus disk usage for the writable work area and the
+    read-only model mounts. A previous run died with SIGBUS mid-conversion;
+    these lines make disk pressure vs mount stalls diagnosable from logs."""
+    print(f"=== stage: {name} ===", flush=True)
+    mounts = ["/data", "/tmp", "/mnt/target-src", "/mnt/mtpv2"]
+    run("sh", "-c", "df -h " + " ".join(mounts) + " || true")
+    for path in paths:
+        if path.exists():
+            size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+            print(f"    {path}: {size / 2**30:.2f} GiB", flush=True)
+
+
 def ensure_build_tools() -> None:
     required = ("git", "curl", "cmake", "c++")
     if any(shutil.which(tool) is None for tool in required) or shutil.which("ld.lld") is None:
@@ -227,9 +240,12 @@ def main() -> None:
     binary = build_skippy_quantize(mesh_root)
     work = Path(args.work_dir)
     work.mkdir(parents=True, exist_ok=True)
+    log_stage("convert-mtp", work)
     mtp_gguf = convert_mtp(llama_root, args, work)
     shards = target_shards(args)
+    log_stage("compose-mtp", work)
     out_first, out_last = compose(binary, args, work, mtp_gguf, shards)
+    log_stage("publish", work)
     # Stream-publish: patched metadata shard, untouched middle shards (straight
     # from the read-only mount), then the recomposed last shard.
     upload(args.composite_repo, out_first, out_first.name)
