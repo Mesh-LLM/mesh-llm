@@ -300,9 +300,12 @@ impl RuntimeState {
     pub fn iteration_batch_sampled(
         &mut self,
         requests: &[RuntimeIterationBatchRequest<'_>],
-    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+    ) -> Result<IterationBatchOutput> {
         if requests.is_empty() {
-            return Ok(Vec::new());
+            return Ok(IterationBatchOutput {
+                request_outputs: Vec::new(),
+                samples: Vec::new(),
+            });
         }
         let mut unique = std::collections::BTreeSet::new();
         for request in requests {

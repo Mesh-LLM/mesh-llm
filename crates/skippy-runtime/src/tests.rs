@@ -5,8 +5,9 @@ mod tests {
 
     use super::{
         ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
-        GGML_TYPE_F16, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
-        StageModel, StageSession, Status, TensorRole, format_skippy_error,
+        GGML_TYPE_F16, IterationBatchRequest, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig,
+        RuntimeLoadMode, SamplingConfig, StageModel, StageSession, Status, TensorRole,
+        format_skippy_error,
     };
     use std::{
         env,
@@ -60,13 +61,21 @@ mod tests {
         model_path: &PathBuf,
         ctx_size: u32,
     ) -> anyhow::Result<StageModel> {
+        open_correctness_model_with_context_and_lanes(model_path, ctx_size, 1)
+    }
+
+    fn open_correctness_model_with_context_and_lanes(
+        model_path: &PathBuf,
+        ctx_size: u32,
+        lane_count: u32,
+    ) -> anyhow::Result<StageModel> {
         let layer_end = infer_layer_end(model_path)?;
         let config = RuntimeConfig {
             stage_index: 0,
             layer_start: 0,
             layer_end,
             ctx_size,
-            lane_count: 1,
+            lane_count,
             n_batch: None,
             n_ubatch: None,
             n_threads: None,
@@ -86,6 +95,94 @@ mod tests {
             filter_tensors_on_load: false,
         };
         StageModel::open(model_path, &config)
+    }
+
+    #[test]
+    fn mixed_prefill_decode_matches_serial_when_model_is_configured() -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model_with_context_and_lanes(&model_path, 256, 3)?;
+        let tokens = model.tokenize(
+            "Mixed scheduling keeps decode latency bounded while prompts continue arriving.",
+            true,
+        )?;
+        assert!(tokens.len() >= 3, "correctness prompt must produce three tokens");
+        let prefix = &tokens[..2];
+        let long_prefill = &tokens[..tokens.len().min(6)];
+        let short_prefill = &tokens[..3];
+
+        let mut mixed = [
+            model.create_session()?,
+            model.create_session()?,
+            model.create_session()?,
+        ];
+        let mut serial = [
+            model.create_session()?,
+            model.create_session()?,
+            model.create_session()?,
+        ];
+        let (mixed_decode_token, _) =
+            mixed[0].prefill_chunk_frame_sampled(prefix, None, None, 0)?;
+        let (serial_decode_token, _) =
+            serial[0].prefill_chunk_frame_sampled(prefix, None, None, 0)?;
+        assert_eq!(mixed_decode_token, serial_decode_token);
+
+        let decode_tokens = [mixed_decode_token];
+        let output = {
+            let [decode, long, short] = &mut mixed;
+            let mut requests = [
+                IterationBatchRequest {
+                    session: decode,
+                    token_ids: &decode_tokens,
+                    positions: &[],
+                    sampling: None,
+                    input: None,
+                    sample_last: true,
+                },
+                IterationBatchRequest {
+                    session: long,
+                    token_ids: long_prefill,
+                    positions: &[],
+                    sampling: None,
+                    input: None,
+                    sample_last: false,
+                },
+                IterationBatchRequest {
+                    session: short,
+                    token_ids: short_prefill,
+                    positions: &[],
+                    sampling: None,
+                    input: None,
+                    sample_last: true,
+                },
+            ];
+            StageSession::iteration_batch_sampled(&mut requests)?
+        };
+
+        let (serial_decode_prediction, _) =
+            serial[0].decode_step_frame_sampled(serial_decode_token, None, None, 0)?;
+        serial[1].prefill_chunk_frame(long_prefill, None, 0)?;
+        let (serial_short_prediction, _) =
+            serial[2].prefill_chunk_frame_sampled(short_prefill, None, None, 0)?;
+        assert_eq!(
+            output
+                .samples
+                .iter()
+                .map(|sample| (sample.request_index, sample.predicted_token))
+                .collect::<Vec<_>>(),
+            [
+                (0, serial_decode_prediction),
+                (2, serial_short_prediction)
+            ]
+        );
+        assert_eq!(output.request_outputs.len(), 3);
+        for index in 0..3 {
+            assert_eq!(mixed[index].token_count(), serial[index].token_count());
+            assert_eq!(mixed[index].native_position()?, serial[index].native_position()?);
+        }
+        Ok(())
     }
 
     fn tool_call_template_options() -> ChatTemplateJsonOptions {

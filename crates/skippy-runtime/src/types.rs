@@ -341,6 +341,17 @@ pub struct DecodeFrameBatchOutput {
     pub output: ActivationFrame,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IterationSample {
+    pub request_index: usize,
+    pub predicted_token: i32,
+}
+
+pub struct IterationBatchOutput {
+    pub request_outputs: Vec<ActivationFrame>,
+    pub samples: Vec<IterationSample>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaInput {
     pub bytes: Vec<u8>,

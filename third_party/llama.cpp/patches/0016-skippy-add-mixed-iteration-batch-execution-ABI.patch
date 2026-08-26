@@ -1,14 +1,14 @@
-From 8a85f8e634927612b520a09a517bbf7f38e22718 Mon Sep 17 00:00:00 2001
+From 25be3b945ff84b4c47e1f6d520c5a185b7a8883c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 24 Aug 2026 15:35:31 +1000
 Subject: [PATCH 16/18] skippy: add mixed iteration batch execution ABI
 
 ---
  include/skippy/common.h        |  11 +-
- include/skippy/execution.h     |  57 +++++-
+ include/skippy/execution.h     |  60 +++++-
  src/skippy/abi.cpp             |   3 +-
- src/skippy/execution-batch.cpp | 326 +++++++++++++++++++++++++++++++++
- 4 files changed, 391 insertions(+), 6 deletions(-)
+ src/skippy/execution-batch.cpp | 341 +++++++++++++++++++++++++++++++++
+ 4 files changed, 409 insertions(+), 6 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 012aceb9a..e7f322abf 100644
@@ -40,10 +40,10 @@ index 012aceb9a..e7f322abf 100644
  
  enum skippy_status {
 diff --git a/include/skippy/execution.h b/include/skippy/execution.h
-index 83ea8ec1d..5a3496ce5 100644
+index 83ea8ec1d..7098677d8 100644
 --- a/include/skippy/execution.h
 +++ b/include/skippy/execution.h
-@@ -60,8 +60,52 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled_mtp(
+@@ -60,8 +60,55 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled_mtp(
          struct skippy_native_mtp_draft * out_mtp_draft,
          struct skippy_error ** out_error);
  
@@ -73,9 +73,10 @@ index 83ea8ec1d..5a3496ce5 100644
 +/**
 + * @brief Executes mixed prefill chunks and decode tokens in one model iteration.
 + *
-+ * Requests may have different token counts. Outputs are request-major and each
-+ * activation frame contains the complete token span for its request. GLM-DSA
-+ * inputs in one iteration must use the same sideband width and stream count.
++ * Requests may have different token counts. Activation outputs are request-major.
++ * Sampled outputs are compact and explicitly map back to the request indexes
++ * whose final rows requested logits. GLM-DSA inputs in one iteration must use
++ * the same sideband width and stream count.
 + */
 +LLAMA_API enum skippy_status skippy_iteration_batch_sampled(
 +        const struct skippy_iteration_request * requests,
@@ -84,8 +85,10 @@ index 83ea8ec1d..5a3496ce5 100644
 +        void * const * output_payloads,
 +        const size_t * output_payload_capacities,
 +        size_t * out_output_payload_bytes,
++        size_t * out_sampled_request_indexes,
 +        llama_token * out_predicted_tokens,
-+        size_t predicted_token_capacity,
++        size_t sampled_output_capacity,
++        size_t * out_sampled_output_count,
 +        struct skippy_error ** out_error);
 +
 +/**
@@ -98,7 +101,7 @@ index 83ea8ec1d..5a3496ce5 100644
          struct skippy_session * const * sessions,
          const llama_token * token_ids,
          const struct skippy_sampling_config * const * sampling,
-@@ -160,8 +204,13 @@ LLAMA_API enum skippy_status skippy_decode_step_frame_sampled_mtp(
+@@ -160,8 +207,13 @@ LLAMA_API enum skippy_status skippy_decode_step_frame_sampled_mtp(
          struct skippy_native_mtp_draft * out_mtp_draft,
          struct skippy_error ** out_error);
  
@@ -129,10 +132,10 @@ index 0ec72958e..f48e56cb5 100644
  
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index a8694dbed..2d771832a 100644
+index a8694dbed..754b940dc 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
-@@ -23,6 +23,332 @@
+@@ -23,6 +23,347 @@
  
  
  extern "C" {
@@ -143,17 +146,16 @@ index a8694dbed..2d771832a 100644
 +        void * const * output_payloads,
 +        const size_t * output_payload_capacities,
 +        size_t * out_output_payload_bytes,
++        size_t * out_sampled_request_indexes,
 +        llama_token * out_predicted_tokens,
-+        size_t predicted_token_capacity,
++        size_t sampled_output_capacity,
++        size_t * out_sampled_output_count,
 +        struct skippy_error ** out_error) {
-+    if (requests == nullptr || request_count == 0 || out_predicted_tokens == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "requests, request_count, and out_predicted_tokens are required");
++    if (requests == nullptr || request_count == 0 || out_sampled_output_count == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "requests, request_count, and out_sampled_output_count are required");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
-+    if (predicted_token_capacity < request_count) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "predicted token output buffer is too small");
-+        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
-+    }
++    *out_sampled_output_count = 0;
 +
 +    skippy_session * first = requests[0].session;
 +    if (first == nullptr || first->ctx == nullptr || first->stage_model == nullptr) {
@@ -183,6 +185,7 @@ index a8694dbed..2d771832a 100644
 +    uint32_t batch_input_top_k = 0;
 +    uint32_t batch_input_streams = 0;
 +    uint64_t batch_output_flags = 0;
++    size_t sampled_output_count = 0;
 +
 +    std::vector<size_t> request_offsets(request_count + 1, 0);
 +    for (size_t request_index = 0; request_index < request_count; ++request_index) {
@@ -218,6 +221,9 @@ index a8694dbed..2d771832a 100644
 +        if (total_token_count > static_cast<size_t>(std::numeric_limits<int32_t>::max()) - request.token_count) {
 +            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "iteration token count exceeds int32_t range");
 +            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        if (request.sample_last && request_logits) {
++            sampled_output_count += 1;
 +        }
 +
 +        enum skippy_status status = skippy_validate_frame_input(
@@ -267,7 +273,13 @@ index a8694dbed..2d771832a 100644
 +
 +        total_token_count += request.token_count;
 +        request_offsets[request_index + 1] = total_token_count;
-+        out_predicted_tokens[request_index] = -1;
++    }
++    *out_sampled_output_count = sampled_output_count;
++    if (sampled_output_count > sampled_output_capacity ||
++        (sampled_output_count > 0 &&
++         (out_sampled_request_indexes == nullptr || out_predicted_tokens == nullptr))) {
++        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "sampled iteration output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
 +    }
 +
 +    const int32_t n_tokens = static_cast<int32_t>(total_token_count);
@@ -408,6 +420,7 @@ index a8694dbed..2d771832a 100644
 +        }
 +    }
 +
++    size_t sampled_output_index = 0;
 +    for (size_t request_index = 0; request_index < request_count; ++request_index) {
 +        const skippy_iteration_request & request = requests[request_index];
 +        const size_t offset = request_offsets[request_index];
@@ -416,12 +429,16 @@ index a8694dbed..2d771832a 100644
 +        skippy_record_tokens(request.session, request.token_ids, request.token_count);
 +
 +        if (request.sample_last && request_logits) {
-+            const int32_t logits_index = static_cast<int32_t>(request_offsets[request_index + 1] - 1);
++            const int32_t logits_index = request_embeddings ?
++                    static_cast<int32_t>(request_offsets[request_index + 1] - 1) :
++                    static_cast<int32_t>(sampled_output_index);
 +            skippy_record_signal(request.session, logits_index);
-+            out_predicted_tokens[request_index] = skippy_sample_token_ith(
++            out_sampled_request_indexes[sampled_output_index] = request_index;
++            out_predicted_tokens[sampled_output_index] = skippy_sample_token_ith(
 +                    request.session,
 +                    request.sampling,
 +                    logits_index);
++            sampled_output_index += 1;
 +        }
 +
 +        if (embeddings != nullptr && output_payloads != nullptr && output_payloads[request_index] != nullptr) {
@@ -467,4 +484,3 @@ index a8694dbed..2d771832a 100644
          const llama_token * token_ids,
 -- 
 2.54.0 (Apple Git-157)
-

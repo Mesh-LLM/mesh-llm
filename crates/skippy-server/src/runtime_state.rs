@@ -9,6 +9,7 @@ use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
     FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, IterationBatchPhase,
+    IterationBatchOutput,
     IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft,
     RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel,
     StageSession, TokenSignal, parse_cache_type,

@@ -22,8 +22,8 @@ pub use capacity::{
 pub use config::{MemoryComponent, SchedulerConfig};
 pub use engine::{AdmissionError, Scheduler, SchedulerSnapshot};
 pub use sequence::{
-    IterationPhase, IterationPlan, IterationWork, PrefixRestore, PrefixRestoreKind, Sequence,
-    SequenceStatus,
+    IterationPhase, IterationPlan, IterationPrediction, IterationWork, PrefixRestore,
+    PrefixRestoreKind, Sequence, SequenceStatus,
 };
 pub use telemetry::{IterationTelemetry, SchedulerMetrics};
 
