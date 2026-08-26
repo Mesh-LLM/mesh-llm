@@ -476,6 +476,7 @@ fn embedded_openai_args_from(
         prefill_adaptive_start: embedded_args.prefill_adaptive_start,
         prefill_adaptive_step: embedded_args.prefill_adaptive_step,
         prefill_adaptive_max: embedded_args.prefill_adaptive_max,
+        prefill_adaptive_target_ms: embedded_args.prefill_adaptive_target_ms,
         draft_model_path: embedded_args.draft_model_path,
         speculative_window: embedded_args.speculative_window,
         adaptive_speculative_window: embedded_args.adaptive_speculative_window,
