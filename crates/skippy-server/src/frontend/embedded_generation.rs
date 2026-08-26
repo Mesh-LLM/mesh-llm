@@ -99,6 +99,9 @@ impl StageOpenAiBackend {
             let mut prefill_stage0_full_recorded = false;
             let mut fused_first_decode = None;
             let mut prefill_planner = request.prefill_chunk_policy.planner();
+            if let Some(estimate) = lane_pool.prefill_transport_estimate() {
+                prefill_planner.calibrate_slowest_stage_rate(estimate.slowest_compute_ms_per_token);
+            }
             if let Some(seed) = lane_pool.prefill_transport_seed() {
                 prefill_planner.observe(seed);
             }
@@ -569,8 +572,8 @@ impl StageOpenAiBackend {
                 json!(prefill_chain_cache_stats.prefill_edge_observation_count),
             );
             prefill_attrs.insert(
-                "llama_stage.prefill_compute_us_max".to_string(),
-                json!(prefill_chain_cache_stats.prefill_compute_us_max),
+                "llama_stage.prefill_compute_us_at_slowest_rate".to_string(),
+                json!(prefill_chain_cache_stats.prefill_compute_us_at_slowest_rate),
             );
             prefill_attrs.insert(
                 "llama_stage.prefill_compute_stage_index".to_string(),
@@ -584,6 +587,10 @@ impl StageOpenAiBackend {
                 prefill_attrs.insert(
                     "llama_stage.prefill_bottleneck_compute_ms".to_string(),
                     json!(estimate.slowest_compute_ms),
+                );
+                prefill_attrs.insert(
+                    "llama_stage.prefill_bottleneck_compute_ms_per_token".to_string(),
+                    json!(estimate.slowest_compute_ms_per_token),
                 );
                 prefill_attrs.insert(
                     "llama_stage.prefill_bottleneck_stage_index".to_string(),
@@ -702,6 +709,10 @@ impl StageOpenAiBackend {
                 calibration_attrs.insert(
                     "llama_stage.prefill_bottleneck_compute_ms".to_string(),
                     json!(estimate.slowest_compute_ms),
+                );
+                calibration_attrs.insert(
+                    "llama_stage.prefill_bottleneck_compute_ms_per_token".to_string(),
+                    json!(estimate.slowest_compute_ms_per_token),
                 );
                 calibration_attrs.insert(
                     "llama_stage.prefill_bottleneck_stage_index".to_string(),

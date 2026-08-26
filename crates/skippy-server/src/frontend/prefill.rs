@@ -59,7 +59,7 @@ impl PrefillChunkSchedule {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum PrefillChunkPolicy {
     Fixed {
         chunk_size: usize,
@@ -73,6 +73,7 @@ pub(super) enum PrefillChunkPolicy {
         start: usize,
         step: usize,
         max: usize,
+        target_ms: f64,
     },
 }
 
@@ -83,6 +84,7 @@ pub(super) struct PrefillChunkPolicyArgs<'a> {
     pub(super) adaptive_start: usize,
     pub(super) adaptive_step: usize,
     pub(super) adaptive_max: usize,
+    pub(super) adaptive_target_ms: f64,
     pub(super) schedule_arg: &'static str,
     pub(super) policy_arg: &'static str,
 }
@@ -98,6 +100,7 @@ pub(super) struct PrefillChunkObservation {
 pub(super) struct PrefillChunkPlanner {
     pub(super) policy: PrefillChunkPolicy,
     pub(super) next_adaptive_size: usize,
+    duration_ceiling: Option<usize>,
 }
 
 impl PrefillChunkPolicy {
@@ -134,9 +137,11 @@ impl PrefillChunkPolicy {
                     || args.adaptive_step == 0
                     || args.adaptive_max == 0
                     || args.adaptive_start > args.adaptive_max
+                    || !args.adaptive_target_ms.is_finite()
+                    || args.adaptive_target_ms <= 0.0
                 {
                     bail!(
-                        "{} adaptive-ramp requires positive start/step/max with start <= max",
+                        "{} adaptive-ramp requires positive start/step/max/target-ms with start <= max",
                         args.policy_arg
                     );
                 }
@@ -145,6 +150,7 @@ impl PrefillChunkPolicy {
                     start: args.adaptive_start,
                     step: args.adaptive_step,
                     max: args.adaptive_max,
+                    target_ms: args.adaptive_target_ms,
                 })
             }
             other => bail!(
@@ -163,6 +169,7 @@ impl PrefillChunkPolicy {
         PrefillChunkPlanner {
             policy: self.clone(),
             next_adaptive_size,
+            duration_ceiling: None,
         }
     }
 
@@ -193,11 +200,15 @@ impl PrefillChunkPolicy {
         }
     }
 
-    pub(super) fn adaptive_params(&self) -> Option<(usize, usize, usize)> {
+    pub(super) fn adaptive_params(&self) -> Option<(usize, usize, usize, f64)> {
         match self {
             Self::AdaptiveRamp {
-                start, step, max, ..
-            } => Some((*start, *step, *max)),
+                start,
+                step,
+                max,
+                target_ms,
+                ..
+            } => Some((*start, *step, *max, *target_ms)),
             _ => None,
         }
     }
@@ -215,8 +226,43 @@ impl PrefillChunkPlanner {
             PrefillChunkPolicy::AdaptiveRamp {
                 fixed_chunk_size, ..
             } if chunk_index == 0 && prefill_token_count <= *fixed_chunk_size => *fixed_chunk_size,
-            PrefillChunkPolicy::AdaptiveRamp { .. } => self.next_adaptive_size,
+            PrefillChunkPolicy::AdaptiveRamp { .. } => self
+                .duration_ceiling
+                .map_or(self.next_adaptive_size, |ceiling| {
+                    self.next_adaptive_size.min(ceiling)
+                }),
         }
+    }
+
+    pub(super) fn calibrate_slowest_stage_rate(&mut self, compute_ms_per_token: f64) {
+        let PrefillChunkPolicy::AdaptiveRamp {
+            start,
+            step,
+            max,
+            target_ms,
+            ..
+        } = &self.policy
+        else {
+            return;
+        };
+        if !compute_ms_per_token.is_finite() || compute_ms_per_token <= 0.0 {
+            return;
+        }
+        let predicted_tokens = (*target_ms / compute_ms_per_token).floor();
+        let predicted_tokens = if predicted_tokens.is_finite() && predicted_tokens > 0.0 {
+            predicted_tokens as usize
+        } else {
+            *start
+        };
+        let stepped = predicted_tokens
+            .saturating_sub(*start)
+            .checked_div(*step)
+            .unwrap_or(0)
+            .saturating_mul(*step)
+            .saturating_add(*start);
+        let ceiling = stepped.clamp(*start, *max);
+        self.duration_ceiling = Some(ceiling);
+        self.next_adaptive_size = self.next_adaptive_size.min(ceiling);
     }
 
     pub(super) fn observe(&mut self, observation: PrefillChunkObservation) {
@@ -235,6 +281,9 @@ impl PrefillChunkPlanner {
             self.next_adaptive_size = self.next_adaptive_size.saturating_add(*step).min(*max);
         } else if downstream_exposed {
             self.next_adaptive_size = self.next_adaptive_size.saturating_sub(*step).max(*start);
+        }
+        if let Some(ceiling) = self.duration_ceiling {
+            self.next_adaptive_size = self.next_adaptive_size.min(ceiling);
         }
     }
 
