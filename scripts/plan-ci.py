@@ -13,6 +13,7 @@ error rather than an implicit broad build.
 
 from __future__ import annotations
 
+import argparse
 from collections import OrderedDict
 from fnmatch import fnmatchcase
 import json
@@ -789,10 +790,16 @@ def _validate_plan(plan: dict[str, Any], slices: dict[str, Any], packages: list[
             raise PlanError("main rust test matrix does not cover every workspace crate")
 
 
-def build_plan(payload: object, *, root: Path = ROOT) -> dict[str, Any]:
+def build_plan(
+    payload: object,
+    *,
+    root: Path = ROOT,
+    manifest_root: Path | None = None,
+) -> dict[str, Any]:
     input_data = _validate_input(payload)
-    ownership = _load_manifest(root / "ci" / "ownership.yml")
-    slices = _load_manifest(root / "ci" / "slices.yml")
+    manifest_source = root if manifest_root is None else manifest_root
+    ownership = _load_manifest(manifest_source / "ci" / "ownership.yml")
+    slices = _load_manifest(manifest_source / "ci" / "slices.yml")
     _validate_manifests(ownership, slices)
 
     profile = input_data["profile"]
@@ -882,9 +889,12 @@ def build_plan(payload: object, *, root: Path = ROOT) -> dict[str, Any]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest-root", type=Path)
+    arguments = parser.parse_args()
     try:
         payload = json.load(sys.stdin)
-        plan = build_plan(payload)
+        plan = build_plan(payload, manifest_root=arguments.manifest_root)
     except (json.JSONDecodeError, PlanError) as error:
         print(f"ERROR: unable to build CI plan: {error}", file=sys.stderr)
         return 2
