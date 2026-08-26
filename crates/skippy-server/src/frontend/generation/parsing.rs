@@ -104,13 +104,17 @@ pub(in crate::frontend) fn attrs_insert_prefill_chunk_policy(
             json!(schedule.label()),
         );
     }
-    if let Some((start, step, max)) = policy.adaptive_params() {
+    if let Some((start, step, max, target_ms)) = policy.adaptive_params() {
         attrs.insert(
             "llama_stage.prefill_adaptive_start".to_string(),
             json!(start),
         );
         attrs.insert("llama_stage.prefill_adaptive_step".to_string(), json!(step));
         attrs.insert("llama_stage.prefill_adaptive_max".to_string(), json!(max));
+        attrs.insert(
+            "llama_stage.prefill_adaptive_target_ms".to_string(),
+            json!(target_ms),
+        );
     }
     if min_chunk_size != usize::MAX {
         attrs.insert(

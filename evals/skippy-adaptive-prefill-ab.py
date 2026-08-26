@@ -352,6 +352,8 @@ def launch_cell(
         "128",
         "--openai-prefill-adaptive-max",
         "384",
+        "--openai-prefill-adaptive-target-ms",
+        "100",
     ]
     stage0 = None
     stage1 = None
@@ -590,7 +592,7 @@ def main() -> int:
             "ctx_size": args.ctx_size,
             "split": [0, args.split_layer, args.layer_end],
             "cache": "disabled",
-            "prefill_policy": "adaptive-ramp: start=128, step=128, max=384",
+            "prefill_policy": "adaptive-ramp: start=128, step=128, max=384, target_ms=100",
         },
         "cells": cells,
         "aggregate": {

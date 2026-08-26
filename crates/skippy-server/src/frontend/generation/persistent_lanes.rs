@@ -45,6 +45,7 @@ pub(in crate::frontend) struct PrefillTransportEstimate {
     pub(in crate::frontend) write_ms: f64,
     pub(in crate::frontend) wait_ms: f64,
     pub(in crate::frontend) slowest_compute_ms: f64,
+    pub(in crate::frontend) slowest_compute_ms_per_token: f64,
     pub(in crate::frontend) write_to_compute: f64,
     pub(in crate::frontend) wait_to_compute: f64,
     pub(in crate::frontend) edge_stage_index: i64,
@@ -190,13 +191,18 @@ impl PersistentStageLanePool {
         if stage0_compute_max_tokens == 0 {
             return;
         }
-        let downstream_compute_ms = us_to_ms(stats.prefill_compute_us_max);
+        let downstream_compute_ms = us_to_ms(stats.prefill_compute_us_at_slowest_rate);
+        let downstream_compute_tokens = stats.prefill_compute_token_count_at_slowest_rate.max(1);
+        let downstream_compute_ms_per_token =
+            downstream_compute_ms / downstream_compute_tokens as f64;
+        let stage0_compute_ms_per_token =
+            stage0_compute_max_ms / stage0_compute_max_tokens.max(1) as f64;
         let (compute_ms, bottleneck_stage_index, bottleneck_token_count) =
-            if downstream_compute_ms > stage0_compute_max_ms {
+            if downstream_compute_ms_per_token > stage0_compute_ms_per_token {
                 (
                     downstream_compute_ms,
                     stats.prefill_compute_stage_index,
-                    stats.prefill_compute_token_count,
+                    downstream_compute_tokens,
                 )
             } else {
                 (
@@ -206,6 +212,7 @@ impl PersistentStageLanePool {
                 )
             };
         let compute_ms = compute_ms.max(0.001);
+        let compute_ms_per_token = compute_ms / bottleneck_token_count.max(1) as f64;
         let downstream_write_ms = us_to_ms(stats.prefill_edge_write_us_max);
         let downstream_wait_ms = us_to_ms(stats.prefill_edge_wait_us_max);
         let write_ms = stage0_forward_write_max_ms.max(downstream_write_ms);
@@ -221,6 +228,7 @@ impl PersistentStageLanePool {
             write_ms,
             wait_ms,
             slowest_compute_ms: compute_ms,
+            slowest_compute_ms_per_token: compute_ms_per_token,
             write_to_compute: write_ms / compute_ms,
             wait_to_compute: wait_ms / compute_ms,
             edge_stage_index,
@@ -240,6 +248,10 @@ impl PersistentStageLanePool {
             estimate.wait_ms = ewma(estimate.wait_ms, sample.wait_ms);
             estimate.slowest_compute_ms =
                 ewma(estimate.slowest_compute_ms, sample.slowest_compute_ms);
+            estimate.slowest_compute_ms_per_token = ewma(
+                estimate.slowest_compute_ms_per_token,
+                sample.slowest_compute_ms_per_token,
+            );
             estimate.write_to_compute = ewma(estimate.write_to_compute, sample.write_to_compute);
             estimate.wait_to_compute = ewma(estimate.wait_to_compute, sample.wait_to_compute);
             estimate.edge_stage_index = sample.edge_stage_index;

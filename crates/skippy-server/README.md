@@ -177,9 +177,13 @@ deadline handling.
   off when transport is exposed. Each stage folds its maximum prefill compute
   sample into the deferred ACK statistics; stage0 combines those samples with
   its own compute/write/wait timing, updates a lane-pool EWMA, and seeds the
-  next request from that calibrated bottleneck. `adaptive_max` remains a hard
-  chunk ceiling, so calibration cannot weaken the scheduler's bounded-prefill
-  decode-progress guarantee. Prefill and calibration spans record the selected
+  next request from that calibrated bottleneck. The measured slowest-stage
+  token rate derives a chunk ceiling for
+  `--openai-prefill-adaptive-target-ms` (100 ms by default), rounded down to an
+  adaptive step. The configured start is the minimum feasible chunk and
+  `adaptive_max` remains the hard starvation ceiling, so calibration cannot
+  weaken the scheduler's bounded-prefill decode-progress guarantee. Prefill
+  and calibration spans record the selected
   policy, schedule/adaptive knobs, min/max observed chunk sizes, bottleneck
   stage, bottleneck duration, and transport-to-compute ratios.
 - Embedded stage-0 OpenAI serving can run neural draft speculative decoding with
