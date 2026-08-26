@@ -563,7 +563,7 @@ impl OpenAiLifecycleLoggingAdapter {
                 request_id,
                 LifecycleEvent::UsageRecorded {
                     prompt_tokens: Some(u64::from(usage.prompt_tokens)),
-                    cached_prompt_tokens: Some(u64::from(usage.cached_tokens)),
+                    cached_prompt_tokens: usage.cached_tokens.map(u64::from),
                     completion_tokens: Some(u64::from(usage.completion_tokens)),
                     total_tokens: Some(u64::from(usage.total_tokens)),
                 },
@@ -588,7 +588,7 @@ impl OpenAiLifecycleLoggingAdapter {
                         Some(u64::from(value.total_tokens)),
                     )
                     .map(|usage| {
-                        usage.with_cached_prompt_tokens(Some(u64::from(value.cached_tokens)))
+                        usage.with_cached_prompt_tokens(value.cached_tokens.map(u64::from))
                     })
                 });
                 self.enqueue_operation_event(
@@ -1001,7 +1001,7 @@ mod tests {
         let operation = OpenAiBackendOperation::ChatCompletionStream;
         let usage = OpenAiUsage {
             prompt_tokens: 21,
-            cached_tokens: 13,
+            cached_tokens: Some(13),
             completion_tokens: 8,
             total_tokens: 29,
         };

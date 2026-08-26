@@ -245,6 +245,7 @@ impl EventDto {
     fn set_usage(&mut self, usage: Option<TokenUsage>) {
         if let Some(usage) = usage {
             self.prompt_tokens = usage.prompt_tokens;
+            self.cached_prompt_tokens = usage.cached_prompt_tokens;
             self.completion_tokens = usage.completion_tokens;
             self.total_tokens = usage.total_tokens;
         }
@@ -555,7 +556,7 @@ mod tests {
                 duration_ms: Some(9),
                 usage: Some(TokenUsage {
                     prompt_tokens: Some(8),
-                    cached_prompt_tokens: None,
+                    cached_prompt_tokens: Some(5),
                     completion_tokens: Some(3),
                     total_tokens: Some(11),
                 }),
@@ -571,6 +572,7 @@ mod tests {
         let json = serde_json::to_value(EventDto::try_from(record).unwrap()).unwrap();
         assert_eq!(json["statusCode"], 201);
         assert_eq!(json["promptTokens"], 8);
+        assert_eq!(json["cachedPromptTokens"], 5);
         assert_eq!(json["completionTokens"], 3);
         assert_eq!(json["totalTokens"], 11);
         assert!(json["tokens"].is_null());

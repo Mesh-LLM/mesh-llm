@@ -44,7 +44,10 @@ impl TokenUsage {
     }
 
     pub fn with_cached_prompt_tokens(mut self, cached_prompt_tokens: Option<u64>) -> Self {
-        self.cached_prompt_tokens = cached_prompt_tokens;
+        self.cached_prompt_tokens = match (self.prompt_tokens, cached_prompt_tokens) {
+            (Some(prompt_tokens), Some(cached_tokens)) if cached_tokens > prompt_tokens => None,
+            (_, cached_tokens) => cached_tokens,
+        };
         self
     }
 }

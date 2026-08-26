@@ -43,6 +43,15 @@ pub struct CacheAffinityAdvertisement {
 }
 
 impl CacheAffinityAdvertisement {
+    /// Compare the advertised cache state while ignoring its freshness clock.
+    /// Receivers still retain the newer timestamp for expiry decisions.
+    pub fn has_same_cache_state(&self, other: &Self) -> bool {
+        self.salt == other.salt
+            && self.epoch == other.epoch
+            && self.ttl_ms == other.ttl_ms
+            && self.entries == other.entries
+    }
+
     pub fn probe(
         &self,
         model: &str,
@@ -90,6 +99,26 @@ pub struct CacheInventory {
 }
 
 impl CacheInventory {
+    /// Look up local residency directly without rebuilding the gossip digest
+    /// set. The digest is not meaningful for a local-only exact-key probe.
+    pub fn probe_local(&mut self, model: &str, prefix_hash: u64) -> Option<CacheAffinityEntry> {
+        self.prune_expired();
+        let key = CacheKey {
+            model: model.to_string(),
+            prefix_hash,
+        };
+        let observation = self.entries.get(&key)?;
+        Some(CacheAffinityEntry {
+            model: key.model,
+            prefix_digest: [0; CACHE_AFFINITY_DIGEST_BYTES],
+            matched_tokens: observation.matched_tokens,
+            suffix_prefill_tokens: observation.suffix_prefill_tokens,
+            tier: observation.tier,
+            restore_micros: observation.restore_micros,
+            queue_delay_micros: observation.queue_delay_micros,
+        })
+    }
+
     pub fn record_l1_hit(
         &mut self,
         model: &str,
@@ -283,6 +312,32 @@ mod tests {
         let mut future = advertisement.clone();
         future.generated_at_unix_ms = CACHE_AFFINITY_MAX_FUTURE_SKEW_MS + 1_002;
         assert!(future.probe("model", 0xfeed_beef, 1_001).is_none());
+    }
+
+    #[test]
+    fn local_probe_returns_exact_residency_without_a_gossip_digest() {
+        let mut inventory = CacheInventory::default();
+        inventory.record_l1_hit("model", 0xfeed_beef, 512, 32, 10);
+
+        let entry = inventory
+            .probe_local("model", 0xfeed_beef)
+            .expect("local hit");
+        assert_eq!(entry.prefix_digest, [0; CACHE_AFFINITY_DIGEST_BYTES]);
+        assert_eq!(entry.matched_tokens, 512);
+        assert!(inventory.probe_local("model", 17).is_none());
+    }
+
+    #[test]
+    fn semantic_state_ignores_only_the_refresh_timestamp() {
+        let mut inventory = CacheInventory::default();
+        inventory.record_l1_hit("model", 7, 512, 32, 10);
+        let first = inventory.advertisement([3; CACHE_AFFINITY_SALT_BYTES], 1_000);
+        let mut refreshed = first.clone();
+        refreshed.generated_at_unix_ms = 2_000;
+
+        assert!(first.has_same_cache_state(&refreshed));
+        refreshed.epoch = refreshed.epoch.saturating_add(1);
+        assert!(!first.has_same_cache_state(&refreshed));
     }
 
     #[test]

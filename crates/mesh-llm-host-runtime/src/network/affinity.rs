@@ -194,7 +194,14 @@ impl AffinityRouter {
             prefix_hash,
         };
         let target = state.cache_leases.get(&key)?.target.clone();
-        candidates.contains(&target).then_some(target)
+        if !candidates.contains(&target) {
+            return None;
+        }
+        if let Some(position) = state.cache_lease_lru.iter().position(|item| item == &key) {
+            state.cache_lease_lru.remove(position);
+        }
+        state.cache_lease_lru.push_back(key);
+        Some(target)
     }
 
     pub(crate) fn remember_cache_lease(
@@ -223,6 +230,8 @@ impl AffinityRouter {
         while state.cache_leases.len() > CACHE_LEASE_MAX_ENTRIES {
             if let Some(oldest) = state.cache_lease_lru.pop_front() {
                 state.cache_leases.remove(&oldest);
+            } else {
+                break;
             }
         }
     }
@@ -350,24 +359,18 @@ impl crate::mesh::Node {
         prefix_hash: u64,
         candidates: &[election::InferenceTarget],
     ) -> Option<election::InferenceTarget> {
-        let now_unix_ms = crate::mesh::current_time_unix_ms();
-        let local_salt = mesh_llm_routing::cache_inventory::rotating_salt(
-            self.endpoint.id().as_bytes(),
-            now_unix_ms,
-        );
-        let local_advertisement = self
+        let local_evidence = self
             .cache_affinity_inventory
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .advertisement(local_salt, now_unix_ms);
+            .probe_local(model, prefix_hash);
+        let now_unix_ms = crate::mesh::current_time_unix_ms();
         let state = self.state.lock().await;
         let evidence: Vec<_> = candidates
             .iter()
             .filter_map(|target| {
                 let entry = match target {
-                    election::InferenceTarget::Local(_) => {
-                        local_advertisement.probe(model, prefix_hash, now_unix_ms)
-                    }
+                    election::InferenceTarget::Local(_) => local_evidence.clone(),
                     election::InferenceTarget::Remote(peer_id) => state
                         .peers
                         .get(peer_id)
@@ -525,6 +528,29 @@ mod tests {
         assert_eq!(
             affinity.lookup_cache_lease(TEST_MODEL, 7, &[remote(2)]),
             None
+        );
+    }
+
+    #[test]
+    fn cache_lease_lookup_refreshes_recency() {
+        let affinity = AffinityRouter::with_config(true, true);
+        let target = remote(1);
+        affinity.remember_cache_lease(TEST_MODEL, 7, &target);
+        affinity.remember_cache_lease(TEST_MODEL, 8, &target);
+
+        assert_eq!(
+            affinity.lookup_cache_lease(TEST_MODEL, 7, std::slice::from_ref(&target)),
+            Some(target)
+        );
+        assert_eq!(
+            affinity
+                .inner
+                .lock()
+                .unwrap()
+                .cache_lease_lru
+                .back()
+                .map(|key| key.prefix_hash),
+            Some(7)
         );
     }
 

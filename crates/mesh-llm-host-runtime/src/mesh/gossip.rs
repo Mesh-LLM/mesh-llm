@@ -283,7 +283,11 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.artifact_transfer_supported != new.artifact_transfer_supported
         || old.stage_protocol_generation_supported != new.stage_protocol_generation_supported
         || old.stage_status_list_supported != new.stage_status_list_supported
-        || old.cache_affinity != new.cache_affinity
+        || match (&old.cache_affinity, &new.cache_affinity) {
+            (Some(old), Some(new)) => !old.has_same_cache_state(new),
+            (None, None) => false,
+            _ => true,
+        }
         || old.version != new.version
         || old.owner_summary != new.owner_summary
         || old.gpu_reserved_bytes != new.gpu_reserved_bytes

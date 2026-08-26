@@ -109,6 +109,34 @@ pub(crate) fn test_meaningfully_changed_stage_protocol_generation_support() {
 }
 
 #[test]
+pub(crate) fn test_meaningfully_changed_ignores_cache_refresh_timestamp() {
+    let mut old_peer = test_peer(Some(100));
+    old_peer.cache_affinity = Some(
+        mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
+            salt: [3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES],
+            epoch: 7,
+            generated_at_unix_ms: 1_000,
+            ttl_ms: 120_000,
+            entries: Vec::new(),
+        },
+    );
+    let mut new_peer = old_peer.clone();
+    new_peer
+        .cache_affinity
+        .as_mut()
+        .expect("cache advertisement")
+        .generated_at_unix_ms = 2_000;
+
+    assert!(!peer_meaningfully_changed(&old_peer, &new_peer));
+    new_peer
+        .cache_affinity
+        .as_mut()
+        .expect("cache advertisement")
+        .epoch = 8;
+    assert!(peer_meaningfully_changed(&old_peer, &new_peer));
+}
+
+#[test]
 pub(crate) fn test_apply_transitive_ann_refreshes_explicit_model_interests() {
     let mut existing = test_peer(Some(100));
     let mut ann = test_announcement(Some(100));

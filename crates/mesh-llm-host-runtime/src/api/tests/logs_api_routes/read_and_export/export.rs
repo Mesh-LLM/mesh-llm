@@ -47,7 +47,7 @@ async fn export_is_deterministic_capped_metadata_only_and_audited() {
             duration_ms: Some(9),
             usage: Some(mesh_llm_events::logging::events::TokenUsage {
                 prompt_tokens: Some(8),
-                cached_prompt_tokens: None,
+                cached_prompt_tokens: Some(5),
                 completion_tokens: Some(3),
                 total_tokens: Some(11),
             }),
@@ -79,6 +79,7 @@ async fn export_is_deterministic_capped_metadata_only_and_audited() {
     );
     let event_page = json_body(&event_response);
     assert_eq!(event_page["items"][0]["promptTokens"], 8);
+    assert_eq!(event_page["items"][0]["cachedPromptTokens"], 5);
     assert_eq!(event_page["items"][0]["completionTokens"], 3);
     assert_eq!(event_page["items"][0]["totalTokens"], 11);
 
@@ -105,6 +106,7 @@ async fn export_is_deterministic_capped_metadata_only_and_audited() {
     assert_eq!(export["items"][0]["events"].as_array().unwrap().len(), 1);
     assert_eq!(export["items"][0]["events"][0]["statusCode"], 200);
     assert_eq!(export["items"][0]["events"][0]["promptTokens"], 8);
+    assert_eq!(export["items"][0]["events"][0]["cachedPromptTokens"], 5);
     assert_eq!(export["items"][0]["events"][0]["completionTokens"], 3);
     assert_eq!(export["items"][0]["events"][0]["totalTokens"], 11);
     assert_eq!(export["items"][0]["artifacts"].as_array().unwrap().len(), 0);

@@ -297,7 +297,7 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
         chat_usage,
         vec![OpenAiUsage {
             prompt_tokens: 2,
-            cached_tokens: 1,
+            cached_tokens: Some(1),
             completion_tokens: 1,
             total_tokens: 3,
         }]
@@ -547,7 +547,7 @@ async fn observer_tracks_stream_completion_error_drop_and_cancel_once() {
         completed_usage,
         Some(OpenAiUsage {
             prompt_tokens: 8,
-            cached_tokens: 5,
+            cached_tokens: Some(5),
             completion_tokens: 2,
             total_tokens: 10,
         })
