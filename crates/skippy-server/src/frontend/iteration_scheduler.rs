@@ -14,8 +14,8 @@ use serde_json::json;
 use skippy_protocol::StageConfig;
 use skippy_runtime::{ActivationFrame, IterationBatchPhase, SamplingConfig};
 use skippy_scheduler::{
-    AdmissionError, CacheAffinity, IterationPhase, MemoryComponent, Scheduler, SchedulerConfig,
-    Sequence,
+    AdmissionError, CacheAffinity, IterationPhase, IterationPrediction, MemoryComponent, Scheduler,
+    SchedulerConfig, Sequence,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
@@ -223,6 +223,7 @@ impl IterationScheduler {
         let iteration_interval = scheduler_config.iteration_interval;
         let max_consecutive_prefill_iterations =
             scheduler_config.max_consecutive_prefill_iterations;
+        let mixed_prefill_decode = scheduler_config.mixed_prefill_decode;
         let cache_runtime_queue = CacheRuntimeQueue::new(
             scheduler_config.cache_aging_cost_per_iteration,
             scheduler_config.group_waiting_prefixes,
@@ -251,6 +252,10 @@ impl IterationScheduler {
                 (
                     "skippy.scheduler.max_consecutive_prefill_iterations".to_string(),
                     json!(max_consecutive_prefill_iterations),
+                ),
+                (
+                    "skippy.scheduler.mixed_prefill_decode".to_string(),
+                    json!(mixed_prefill_decode),
                 ),
                 (
                     "skippy.scheduler.cache_policy".to_string(),
@@ -935,10 +940,10 @@ impl SchedulerWorker {
 
         match result {
             Ok(outputs) => {
-                if outputs.len() != runnable.len() {
+                if outputs.request_outputs.len() != runnable.len() {
                     let error = OpenAiError::backend(format!(
                         "scheduler iteration returned {} outputs for {} requests",
-                        outputs.len(),
+                        outputs.request_outputs.len(),
                         runnable.len()
                     ));
                     for (request, _) in runnable {
@@ -946,12 +951,39 @@ impl SchedulerWorker {
                     }
                     return;
                 }
-                for (((request, session_alignment), output), batch_wait_ms) in
-                    runnable.into_iter().zip(outputs).zip(batch_wait_ms)
+                let mut predicted = vec![None; runnable.len()];
+                for sample in outputs.samples {
+                    let Some(slot) = predicted.get_mut(sample.request_index) else {
+                        let error = OpenAiError::backend(format!(
+                            "scheduler iteration sample references request {}, but only {} requests ran",
+                            sample.request_index,
+                            runnable.len()
+                        ));
+                        for (request, _) in runnable {
+                            let _ = request.reply.send(Err(error.clone()));
+                        }
+                        return;
+                    };
+                    if slot.replace(sample.predicted_token).is_some() {
+                        let error = OpenAiError::backend(format!(
+                            "scheduler iteration returned duplicate sample for request {}",
+                            sample.request_index
+                        ));
+                        for (request, _) in runnable {
+                            let _ = request.reply.send(Err(error.clone()));
+                        }
+                        return;
+                    }
+                }
+                for ((((request, session_alignment), output), predicted), batch_wait_ms) in runnable
+                    .into_iter()
+                    .zip(outputs.request_outputs)
+                    .zip(predicted)
+                    .zip(batch_wait_ms)
                 {
                     let _ = request.reply.send(Ok(SchedulerIterationOutcome {
-                        predicted: output.predicted_token,
-                        output: output.output,
+                        predicted: predicted.unwrap_or(-1),
+                        output,
                         batch_size,
                         batch_wait_ms,
                         runtime_lock_wait_ms,
@@ -968,14 +1000,22 @@ impl SchedulerWorker {
         }
     }
 
-    fn finish_iteration(&mut self, plan: &skippy_scheduler::IterationPlan, predicted: &[i32]) {
+    fn finish_iteration(
+        &mut self,
+        plan: &skippy_scheduler::IterationPlan,
+        predicted: &[IterationPrediction],
+    ) {
         let mut stopped = BTreeSet::new();
         let mut missing_predictions = BTreeSet::new();
+        let predicted_by_work = predicted
+            .iter()
+            .map(|prediction| (prediction.work_index, prediction.token))
+            .collect::<BTreeMap<_, _>>();
         for (index, work) in plan.work.iter().enumerate() {
             if !work.sample_last {
                 continue;
             }
-            let Some(token) = predicted.get(index).copied() else {
+            let Some(token) = predicted_by_work.get(&index).copied() else {
                 missing_predictions.insert(work.sequence_id.clone());
                 continue;
             };
@@ -1170,7 +1210,10 @@ impl SchedulerWorker {
         Ok((configured, failures))
     }
 
-    fn execute_plan(&self, plan: &skippy_scheduler::IterationPlan) -> OpenAiResult<Vec<i32>> {
+    fn execute_plan(
+        &self,
+        plan: &skippy_scheduler::IterationPlan,
+    ) -> OpenAiResult<Vec<IterationPrediction>> {
         let mut runtime = self
             .runtime
             .lock()
@@ -1200,8 +1243,12 @@ impl SchedulerWorker {
             .iteration_batch_sampled(&requests)
             .map(|outputs| {
                 outputs
+                    .samples
                     .into_iter()
-                    .map(|output| output.predicted_token)
+                    .map(|sample| IterationPrediction {
+                        work_index: sample.request_index,
+                        token: sample.predicted_token,
+                    })
                     .collect()
             })
             .map_err(openai_backend_error)
@@ -1373,9 +1420,10 @@ fn build_scheduler_config(
         } else {
             usize::MAX
         },
-        // Preserve phase-homogeneous native batches while bounding the time a
-        // newly admitted prefill can block already-live decode sequences.
+        // Retained for scheduler-lab compatibility; production uses the mixed
+        // path below, which reserves live decode rows before prompt work.
         max_consecutive_prefill_iterations: 1,
+        mixed_prefill_decode: true,
         cache_aging_cost_per_iteration: CACHE_AGING_COST_PER_TURN,
         group_waiting_prefixes: true,
         // Native execution already provides a collection window: requests
@@ -1437,6 +1485,7 @@ mod tests {
         assert_eq!(config.max_tokens_per_iteration, 2048);
         assert_eq!(config.prefill_chunk_tokens, 128);
         assert_eq!(config.max_consecutive_prefill_iterations, 1);
+        assert!(config.mixed_prefill_decode);
         assert_eq!(config.memory_components[0].capacity_bytes, 131_072);
         assert_eq!(config.memory_components[1].bytes_per_sequence, 1024);
         assert_eq!(config.memory_components[1].capacity_bytes, 65_536);
@@ -1506,8 +1555,18 @@ mod tests {
         assert_eq!(plan.work.len(), 2);
         assert!(plan.work.iter().all(|work| work.sample_last));
 
-        let step = worker.scheduler.complete_iteration(&plan, &[10, 20]);
-        worker.finish_iteration(&plan, &[10, 20]);
+        let predictions = [
+            IterationPrediction {
+                work_index: 0,
+                token: 10,
+            },
+            IterationPrediction {
+                work_index: 1,
+                token: 20,
+            },
+        ];
+        let step = worker.scheduler.complete_iteration(&plan, &predictions);
+        worker.finish_iteration(&plan, &predictions);
         assert_eq!(step.admitted, 2);
 
         assert_eq!(consumer_a.join().unwrap(), vec![10]);
@@ -1576,9 +1635,13 @@ mod tests {
             reply,
         });
         let plan = worker.scheduler.plan_iteration();
-        worker.scheduler.complete_iteration(&plan, &[10]);
+        let predictions = [IterationPrediction {
+            work_index: 0,
+            token: 10,
+        }];
+        worker.scheduler.complete_iteration(&plan, &predictions);
 
-        worker.finish_iteration(&plan, &[10]);
+        worker.finish_iteration(&plan, &predictions);
 
         let SchedulerEvent::Token { ack, .. } = events.recv().unwrap() else {
             panic!("expected token event");

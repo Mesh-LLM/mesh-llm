@@ -212,8 +212,10 @@ unsafe extern "C" {
         output_payloads: *const *mut c_void,
         output_payload_capacities: *const usize,
         out_output_payload_bytes: *mut usize,
+        out_sampled_request_indexes: *mut usize,
         out_predicted_tokens: *mut i32,
-        predicted_token_capacity: usize,
+        sampled_output_capacity: usize,
+        out_sampled_output_count: *mut usize,
         out_error: *mut *mut Error,
     ) -> Status;
 

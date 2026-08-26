@@ -43,6 +43,9 @@ pub struct SchedulerConfig {
     /// Maximum prefill/recompute iterations allowed while decode work is live.
     /// `usize::MAX` preserves unbounded prefill-first scheduling.
     pub max_consecutive_prefill_iterations: usize,
+    /// Schedule live decode rows first, then use the remaining token budget for
+    /// prefill and recompute rows in the same native iteration.
+    pub mixed_prefill_decode: bool,
     /// Fairness credit added to a waiting request on every scheduler turn.
     /// Cache-aware admission uses this to prevent cold-prefix starvation.
     pub cache_aging_cost_per_iteration: u64,
@@ -78,6 +81,7 @@ impl Default for SchedulerConfig {
             prefill_chunk_tokens: 256,
             max_prefill_sequences_per_iteration: usize::MAX,
             max_consecutive_prefill_iterations: usize::MAX,
+            mixed_prefill_decode: false,
             cache_aging_cost_per_iteration: 4_096,
             group_waiting_prefixes: true,
             iteration_interval: Duration::from_millis(2),
