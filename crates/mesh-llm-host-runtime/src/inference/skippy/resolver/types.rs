@@ -15,6 +15,7 @@ pub(super) const BUILTIN_PREFILL_CHUNK_SIZE: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_START: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_STEP: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_MAX: usize = 512;
+pub(super) const BUILTIN_PREFILL_ADAPTIVE_TARGET_MS: f64 = 100.0;
 pub(super) const BUILTIN_SAFETY_MARGIN_GB: f64 = 2.0;
 
 #[derive(Clone, Debug)]
@@ -152,6 +153,7 @@ pub(crate) struct ResolvedEmbeddedOpenAiArgs {
     pub(crate) prefill_adaptive_start: usize,
     pub(crate) prefill_adaptive_step: usize,
     pub(crate) prefill_adaptive_max: usize,
+    pub(crate) prefill_adaptive_target_ms: f64,
     pub(crate) draft_model_path: Option<PathBuf>,
     pub(crate) speculative_window: usize,
     pub(crate) adaptive_speculative_window: bool,

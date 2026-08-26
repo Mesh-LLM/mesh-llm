@@ -27,8 +27,8 @@ use super::request_defaults::{
 use super::support::resolve_prefill_chunk_policy;
 use super::types::{
     BUILTIN_PREFILL_ADAPTIVE_MAX, BUILTIN_PREFILL_ADAPTIVE_START, BUILTIN_PREFILL_ADAPTIVE_STEP,
-    BUILTIN_PREFILL_CHUNK_SIZE, ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig,
-    ResolvedStageKvCache,
+    BUILTIN_PREFILL_ADAPTIVE_TARGET_MS, BUILTIN_PREFILL_CHUNK_SIZE, ResolvedEmbeddedOpenAiArgs,
+    ResolvedSkippyConfig, ResolvedStageKvCache,
 };
 
 /// Default maximum number of draft tokens for native MTP sidecar probes when
@@ -247,6 +247,7 @@ impl ResolvedSkippyConfig {
             prefill_adaptive_start: BUILTIN_PREFILL_ADAPTIVE_START,
             prefill_adaptive_step: BUILTIN_PREFILL_ADAPTIVE_STEP,
             prefill_adaptive_max: BUILTIN_PREFILL_ADAPTIVE_MAX,
+            prefill_adaptive_target_ms: BUILTIN_PREFILL_ADAPTIVE_TARGET_MS,
             draft_model_path: if mode == "draft" {
                 self.speculative.draft_model_path.clone()
             } else {
@@ -392,6 +393,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             prefill_adaptive_start: BUILTIN_PREFILL_ADAPTIVE_START,
             prefill_adaptive_step: BUILTIN_PREFILL_ADAPTIVE_STEP,
             prefill_adaptive_max: BUILTIN_PREFILL_ADAPTIVE_MAX,
+            prefill_adaptive_target_ms: BUILTIN_PREFILL_ADAPTIVE_TARGET_MS,
             draft_model_path: None,
             speculative_window: 0,
             adaptive_speculative_window: false,
@@ -450,6 +452,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             prefill_adaptive_start: BUILTIN_PREFILL_ADAPTIVE_START,
             prefill_adaptive_step: BUILTIN_PREFILL_ADAPTIVE_STEP,
             prefill_adaptive_max: BUILTIN_PREFILL_ADAPTIVE_MAX,
+            prefill_adaptive_target_ms: BUILTIN_PREFILL_ADAPTIVE_TARGET_MS,
             draft_model_path: None,
             speculative_window: 0,
             adaptive_speculative_window: false,
@@ -511,6 +514,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             prefill_adaptive_start: self.prefill_adaptive_start,
             prefill_adaptive_step: self.prefill_adaptive_step,
             prefill_adaptive_max: self.prefill_adaptive_max,
+            prefill_adaptive_target_ms: self.prefill_adaptive_target_ms,
             draft_model_path: self.draft_model_path,
             speculative_window: self.speculative_window,
             adaptive_speculative_window: self.adaptive_speculative_window,
