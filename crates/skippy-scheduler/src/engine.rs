@@ -36,13 +36,15 @@ pub struct Scheduler {
     waiting_order_dirty: bool,
     decode_us_per_row_ewma: Option<f64>,
     mixed_prefill_tokens: usize,
+    mixed_prefill_viable: bool,
 }
 
 const DURATION_EWMA_ALPHA: f64 = 0.25;
 const MIXED_DECODE_SLOWDOWN_FRACTION: f64 = 0.20;
 const MIXED_PREFILL_INITIAL_TOKENS: usize = 64;
-const MIXED_PREFILL_MIN_EXTRA_US: f64 = 8_000.0;
-const MIXED_PREFILL_MAX_EXTRA_US: f64 = 16_000.0;
+const MIXED_PREFILL_MIN_TOKENS: usize = 32;
+const MIXED_PREFILL_MIN_EXTRA_US: f64 = 20_000.0;
+const MIXED_PREFILL_MAX_EXTRA_US: f64 = 40_000.0;
 
 impl Scheduler {
     pub fn new(config: SchedulerConfig) -> Self {
@@ -62,6 +64,7 @@ impl Scheduler {
             waiting_order_dirty: false,
             decode_us_per_row_ewma: None,
             mixed_prefill_tokens,
+            mixed_prefill_viable: true,
         }
     }
 
@@ -101,7 +104,7 @@ impl Scheduler {
             admitted,
             ..IterationPlan::default()
         };
-        if self.config.mixed_prefill_decode {
+        if self.config.mixed_prefill_decode && self.mixed_prefill_viable {
             self.plan_mixed_iteration(&mut plan);
             return plan;
         }
@@ -355,6 +358,14 @@ impl Scheduler {
                 let ratio = (allowed_extra_us / observed_extra_us).clamp(0.125, 2.0);
                 let observed_tokens = prefill_tokens as f64;
                 let adjusted_tokens = observed_tokens * ratio;
+                if ratio < 1.0 && adjusted_tokens < MIXED_PREFILL_MIN_TOKENS as f64 {
+                    // A native mixed call has a fixed row-composition cost.
+                    // Trickle-prefilling below this quantum amplifies that
+                    // overhead, so fall back to alternating prompt/decode
+                    // iterations on model/hardware pairs where it cannot fit.
+                    self.mixed_prefill_viable = false;
+                    return;
+                }
                 let next_tokens = if ratio < 1.0 {
                     adjusted_tokens.floor()
                 } else {
@@ -875,13 +886,12 @@ mod tests {
             }],
         );
 
-        let bounded_mixed = scheduler.plan_iteration();
+        let fallback_prefill = scheduler.plan_iteration();
 
-        assert_eq!(bounded_mixed.work.len(), 2);
-        assert_eq!(bounded_mixed.work[0].phase, IterationPhase::Decode);
-        assert_eq!(bounded_mixed.work[1].phase, IterationPhase::Prefill);
-        assert_eq!(bounded_mixed.work[1].tokens.len(), 8);
-        assert_eq!(bounded_mixed.token_count, 9);
+        assert_eq!(fallback_prefill.work.len(), 1);
+        assert_eq!(fallback_prefill.work[0].phase, IterationPhase::Prefill);
+        assert_eq!(fallback_prefill.work[0].tokens.len(), 128);
+        assert_eq!(fallback_prefill.token_count, 128);
     }
 
     #[test]
