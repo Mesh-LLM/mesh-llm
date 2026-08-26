@@ -263,9 +263,13 @@ fn layer_package_inspection_paths(
     layer_start: u32,
     layer_end: u32,
 ) -> Vec<PathBuf> {
-    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(
-        &fs::read(package_dir.join("model-package.json")).unwrap_or_default(),
-    ) else {
+    let Some(manifest_path) = package_inspection_file(package_dir, Path::new("model-package.json"))
+    else {
+        return Vec::new();
+    };
+    let Ok(manifest) =
+        serde_json::from_slice::<serde_json::Value>(&fs::read(manifest_path).unwrap_or_default())
+    else {
         return Vec::new();
     };
     let Some(layers) = manifest.get("layers").and_then(|value| value.as_array()) else {
@@ -284,19 +288,55 @@ fn layer_package_inspection_paths(
                 return None;
             }
             let path = layer.get("path")?.as_str()?;
-            let path = PathBuf::from(path);
-            if path.is_absolute() {
-                return None;
-            }
-            let absolute = package_dir.join(path);
-            absolute.is_file().then_some(absolute)
+            package_inspection_file(package_dir, Path::new(path))
         })
         .collect()
 }
 
 fn layer_package_metadata_path(package_dir: &Path) -> Option<PathBuf> {
-    let metadata = package_dir.join("shared/metadata.gguf");
-    metadata.is_file().then_some(metadata)
+    package_inspection_file(package_dir, Path::new("shared/metadata.gguf"))
+}
+
+fn package_inspection_file(package_dir: &Path, relative_path: &Path) -> Option<PathBuf> {
+    if relative_path.as_os_str().is_empty()
+        || !relative_path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+
+    let canonical_package = fs::canonicalize(package_dir).ok()?;
+    if !canonical_package.is_dir() {
+        return None;
+    }
+    let canonical_candidate = fs::canonicalize(canonical_package.join(relative_path)).ok()?;
+    if !canonical_candidate.is_file() {
+        return None;
+    }
+
+    let containment_root = hugging_face_repo_cache_root(&canonical_package)
+        .unwrap_or_else(|| canonical_package.clone());
+    canonical_candidate
+        .starts_with(containment_root)
+        .then_some(canonical_candidate)
+}
+
+fn hugging_face_repo_cache_root(canonical_package: &Path) -> Option<PathBuf> {
+    let snapshots_dir = canonical_package.parent()?;
+    if snapshots_dir.file_name()?.to_str()? != "snapshots" {
+        return None;
+    }
+    let repo_root = snapshots_dir.parent()?;
+    let encoded_repo = repo_root.file_name()?.to_str()?.strip_prefix("models--")?;
+    let mut repo_parts = encoded_repo.split("--");
+    if !matches!(
+        (repo_parts.next(), repo_parts.next(), repo_parts.next()),
+        (Some(owner), Some(repo), None) if !owner.is_empty() && !repo.is_empty()
+    ) {
+        return None;
+    }
+    fs::canonicalize(repo_root).ok()
 }
 
 fn tensor_name_requires_recurrent_state(name: &str) -> bool {
@@ -599,7 +639,7 @@ mod tests {
 
         assert_eq!(
             kv_cache_inspection_paths(&config),
-            vec![dir.path().join("layers/00001.gguf")]
+            vec![fs::canonicalize(dir.path().join("layers/00001.gguf")).unwrap()]
         );
     }
 
@@ -634,9 +674,9 @@ mod tests {
         assert_eq!(
             kv_cache_inspection_paths(&config),
             vec![
-                dir.path().join("layers/00000.gguf"),
-                dir.path().join("layers/00001.gguf"),
-                dir.path().join("layers/00002.gguf"),
+                fs::canonicalize(dir.path().join("layers/00000.gguf")).unwrap(),
+                fs::canonicalize(dir.path().join("layers/00001.gguf")).unwrap(),
+                fs::canonicalize(dir.path().join("layers/00002.gguf")).unwrap(),
             ]
         );
     }
@@ -662,8 +702,162 @@ mod tests {
 
         assert_eq!(
             kv_cache_inspection_paths(&config),
-            vec![dir.path().join("shared/metadata.gguf")]
+            vec![fs::canonicalize(dir.path().join("shared/metadata.gguf")).unwrap()]
         );
+    }
+
+    #[test]
+    fn layer_package_inspection_rejects_parent_directory_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("package");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(dir.path().join("outside.gguf"), b"outside").unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "../outside.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_rejects_symlink_outside_local_package() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("package");
+        fs::create_dir_all(package.join("layers")).unwrap();
+        fs::write(dir.path().join("outside.gguf"), b"outside").unwrap();
+        symlink(
+            dir.path().join("outside.gguf"),
+            package.join("layers/00000.gguf"),
+        )
+        .unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_rejects_intermediate_symlink_outside_local_package() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("package");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&package).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("00000.gguf"), b"outside").unwrap();
+        symlink(&outside, package.join("layers")).unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_accepts_hf_snapshot_blob_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("models--owner--package");
+        let package = repo.join("snapshots/revision");
+        let blob = repo.join("blobs/layer-blob");
+        fs::create_dir_all(package.join("layers")).unwrap();
+        fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        fs::write(&blob, b"layer").unwrap();
+        symlink(
+            "../../../blobs/layer-blob",
+            package.join("layers/00000.gguf"),
+        )
+        .unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            layer_package_inspection_paths(&package, 0, 1),
+            vec![fs::canonicalize(blob).unwrap()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_rejects_hf_snapshot_symlink_to_sibling_repo() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("models--owner--package");
+        let sibling_repo = dir.path().join("models--owner--other");
+        let package = repo.join("snapshots/revision");
+        let sibling_blob = sibling_repo.join("blobs/layer-blob");
+        fs::create_dir_all(package.join("layers")).unwrap();
+        fs::create_dir_all(sibling_blob.parent().unwrap()).unwrap();
+        fs::write(&sibling_blob, b"layer").unwrap();
+        symlink(
+            "../../../../models--owner--other/blobs/layer-blob",
+            package.join("layers/00000.gguf"),
+        )
+        .unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_rejects_malformed_hf_repo_root_exception() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let malformed_repo = dir.path().join("models--owner");
+        let package = malformed_repo.join("snapshots/revision");
+        let outside_package = malformed_repo.join("private.gguf");
+        fs::create_dir_all(package.join("layers")).unwrap();
+        fs::write(&outside_package, b"outside package").unwrap();
+        symlink("../../../private.gguf", package.join("layers/00000.gguf")).unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
     }
 
     #[test]

@@ -50,6 +50,21 @@ def main() -> int:
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
+
+    def terminate_on_signal(signum: int, _frame: object) -> None:
+        # Prevent a second cancellation signal from interrupting cleanup and
+        # leaving descendants behind on the persistent runner.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        print(
+            f"{args.label} received signal {signum}; terminating process group",
+            file=sys.stderr,
+        )
+        terminate_group(process)
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGINT, terminate_on_signal)
+    signal.signal(signal.SIGTERM, terminate_on_signal)
     try:
         return process.wait(timeout=args.seconds)
     except subprocess.TimeoutExpired:

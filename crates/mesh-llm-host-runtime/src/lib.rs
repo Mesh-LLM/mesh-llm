@@ -126,8 +126,13 @@ pub use runtime::{
 /// the Tokio runtime is constructed; see
 /// `inference::skippy::metal_pipeline_cache` for the full contract. An
 /// explicit `GGML_METAL_PIPELINE_CACHE_DIR` set by the user wins.
-pub fn configure_metal_pipeline_cache() {
-    inference::skippy::metal_pipeline_cache::configure_metal_pipeline_cache()
+///
+/// # Safety
+///
+/// The caller must ensure no other thread can read or write the process
+/// environment for the duration of this call.
+pub unsafe fn configure_metal_pipeline_cache() {
+    unsafe { inference::skippy::metal_pipeline_cache::configure_metal_pipeline_cache() }
 }
 
 pub async fn run() -> Result<()> {

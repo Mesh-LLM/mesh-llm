@@ -20,7 +20,7 @@ classify_family_outcome() {
   local evidence="$note"
   if [[ -n "$log" && -f "$log" ]]; then
     evidence+=$'\n'
-    evidence+="$(tail -n 240 "$log")"
+    evidence+="$(tail -n 240 "$log" | sed '/^+ /d')"
   fi
   if grep -Eqi 'timed out|did not become ready|deadline exceeded' <<<"$evidence"; then
     printf 'timeout\n'

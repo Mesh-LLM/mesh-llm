@@ -372,7 +372,7 @@ index 0402044da..fe4d7748c 100644
  
      cparams.ctx_type     = params.ctx_type;
      cparams.pooling_type = params.pooling_type;
-@@ -160,6 +158,31 @@ llama_context::llama_context(
+@@ -160,6 +158,12 @@ llama_context::llama_context(
          }
      }
  
@@ -382,54 +382,9 @@ index 0402044da..fe4d7748c 100644
 +        cparams.ctx_other = params.ctx_other;
 +    }
 +
-+    // Initialize backend samplers here so they are part of the sampling graph
-+    // before the reserve passes run later in this function. This avoids a later
-+    // re-reserve when graph nodes change.
-+    if (params.samplers != nullptr && params.n_samplers > 0) {
-+        for (size_t i = 0; i < params.n_samplers; ++i) {
-+            const auto & config = params.samplers[i];
-+
-+            if (llama_sampler_chain_get(config.sampler, -1) == nullptr) {
-+                throw std::runtime_error("the backend samplers must be of type llama_sampler_chain");
-+            }
-+
-+            if (set_sampler(config.seq_id, config.sampler)) {
-+                const int n_samplers = llama_sampler_chain_n(config.sampler);
-+
-+                LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
-+            }
-+        }
-+    }
-+
      auto rope_scaling_type = params.rope_scaling_type;
      if (rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
          rope_scaling_type = hparams.rope_scaling_type_train;
-@@ -250,25 +273,6 @@ llama_context::llama_context(
-     cparams.n_outputs_max_per_seq = params.n_outputs_max_per_seq == 0 ?
-             cparams.n_outputs_max : std::min(params.n_outputs_max_per_seq, cparams.n_outputs_max);
- 
--    // Initialize backend samplers here so they are part of the sampling graph
--    // before the reserve passes run later in this function. This avoids a later
--    // re-reserve when graph nodes change.
--    if (params.samplers != nullptr && params.n_samplers > 0) {
--        for (size_t i = 0; i < params.n_samplers; ++i) {
--            const auto & config = params.samplers[i];
--
--            if (llama_sampler_chain_get(config.sampler, -1) == nullptr) {
--                throw std::runtime_error("the backend samplers must be of type llama_sampler_chain");
--            }
--
--            if (set_sampler(config.seq_id, config.sampler)) {
--                const int n_samplers = llama_sampler_chain_n(config.sampler);
--
--                LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
--            }
--        }
--    }
--
-     cparams.op_offload = params.op_offload;
-     cparams.kv_unified = params.kv_unified;
- 
 @@ -303,19 +307,18 @@ llama_context::llama_context(
          }
      }

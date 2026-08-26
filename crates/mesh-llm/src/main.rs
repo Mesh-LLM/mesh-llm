@@ -32,7 +32,9 @@ fn main() {
 /// env mutation is only sound while the process is single-threaded; see
 /// `mesh_llm_host_runtime::configure_metal_pipeline_cache`.
 fn configure_metal_pipeline_cache() {
-    mesh_llm_host_runtime::configure_metal_pipeline_cache();
+    // SAFETY: `main` calls this synchronously before creating the application
+    // thread or Tokio runtime, so no other thread can access the environment.
+    unsafe { mesh_llm_host_runtime::configure_metal_pipeline_cache() };
 }
 
 fn configured_worker_stack_size() -> usize {

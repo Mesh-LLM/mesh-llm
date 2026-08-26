@@ -14,10 +14,13 @@ const GGML_METAL_PIPELINE_CACHE_DIR: &str = "GGML_METAL_PIPELINE_CACHE_DIR";
 /// ggml version, kernel sources), so a process-wide scope is safe. An
 /// explicit value set by the user is always left untouched.
 ///
-/// Must be called exactly once from synchronous process bootstrap, before
-/// the Tokio runtime is constructed and before any native runtime library is
-/// loaded.
-pub(crate) fn configure_metal_pipeline_cache() {
+/// # Safety
+///
+/// The caller must ensure no other thread can read or write the process
+/// environment. Call this exactly once from synchronous process bootstrap,
+/// before the Tokio runtime is constructed and before any native runtime
+/// library is loaded.
+pub(crate) unsafe fn configure_metal_pipeline_cache() {
     if std::env::var_os(GGML_METAL_PIPELINE_CACHE_DIR).is_some() {
         return;
     }

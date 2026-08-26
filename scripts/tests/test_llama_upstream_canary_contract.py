@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
 import stat
 import subprocess
 import sys
@@ -131,18 +132,22 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("timed out|timeout|", classifier)
 
     def test_outcome_classifier_uses_terminal_evidence_not_option_names(self) -> None:
-        fixtures = {
-            "runtime-error": "+ tool --startup-timeout-secs 900\nlistener disconnected\n",
-            "timeout": "stage 1 binary server did not become ready\n",
-            "unsupported": "Unsupported: runtime-slice execution is not supported for this model architecture yet\n",
-            "model-invalid": "missing tensor blk.5.ssm_in.weight\n",
-            "mismatch": "authoritative token mismatch\n",
-            "harness": "corpus file does not exist\n",
-        }
+        fixtures = [
+            ("runtime-error", "+ tool --startup-timeout-secs 900\nlistener disconnected\n"),
+            ("runtime-error", "+ tool --allow-mismatch\nlistener disconnected\n"),
+            ("timeout", "stage 1 binary server did not become ready\n"),
+            (
+                "unsupported",
+                "Unsupported: runtime-slice execution is not supported for this model architecture yet\n",
+            ),
+            ("model-invalid", "missing tensor blk.5.ssm_in.weight\n"),
+            ("mismatch", "authoritative token mismatch\n"),
+            ("harness", "corpus file does not exist\n"),
+        ]
         with tempfile.TemporaryDirectory() as temp_dir:
             log = Path(temp_dir) / "lane.log"
-            for expected, evidence in fixtures.items():
-                with self.subTest(expected=expected):
+            for expected, evidence in fixtures:
+                with self.subTest(expected=expected, evidence=evidence):
                     log.write_text(evidence, encoding="utf-8")
                     result = subprocess.run(
                         [
@@ -180,6 +185,38 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(124, result.returncode)
         self.assertIn("fixture timed out after 1s", result.stderr)
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group signal semantics")
+    def test_timeout_runner_cleans_process_group_when_signalled(self) -> None:
+        for received_signal in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(received_signal=received_signal):
+                wrapper = subprocess.Popen(
+                    [
+                        str(TIMEOUT_RUNNER),
+                        "--seconds",
+                        "30",
+                        "--label",
+                        "signal-fixture",
+                        "--",
+                        sys.executable,
+                        "-c",
+                        "import os,time; print(os.getpid(), flush=True); time.sleep(30)",
+                    ],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                assert wrapper.stdout is not None
+                child_pid = int(wrapper.stdout.readline())
+                wrapper.send_signal(received_signal)
+                _, stderr = wrapper.communicate(timeout=15)
+
+                self.assertEqual(128 + received_signal, wrapper.returncode)
+                self.assertIn(
+                    f"signal-fixture received signal {received_signal}", stderr
+                )
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child_pid, 0)
 
     def test_timeout_runner_closes_manifest_stdin_for_children(self) -> None:
         result = subprocess.run(

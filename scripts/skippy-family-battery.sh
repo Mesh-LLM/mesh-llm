@@ -540,7 +540,10 @@ run_certify() {
     --seconds "$cert_timeout" \
     --label "family certification $family split $split_layer" \
     -- "${command[@]}" || exit_code=$?
-  manifest_path="$(find "$cert_run_dir" -name manifest.json -type f -print -quit)"
+  manifest_path=""
+  if [[ -d "$cert_run_dir" ]]; then
+    manifest_path="$(find "$cert_run_dir" -name manifest.json -type f -print -quit)"
+  fi
   if [[ -n "$manifest_path" ]]; then
     jq -c \
       --arg family "$family" \
