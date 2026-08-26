@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
 use crate::{
-    IterationPhase, IterationPlan, IterationTelemetry, IterationWork, SchedulerConfig,
-    SchedulerMetrics, Sequence, SequenceStatus,
+    CacheAwareCandidate, IterationPhase, IterationPlan, IterationTelemetry, IterationWork,
+    SchedulerConfig, SchedulerMetrics, Sequence, SequenceStatus, select_cache_aware_candidate,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -30,6 +30,8 @@ pub struct Scheduler {
     component_used_bytes: Vec<u64>,
     metrics: SchedulerMetrics,
     consecutive_prefill_iterations: usize,
+    waiting_turn: u64,
+    next_waiting_order: u64,
 }
 
 impl Scheduler {
@@ -42,10 +44,12 @@ impl Scheduler {
             active: BTreeMap::new(),
             metrics: SchedulerMetrics::default(),
             consecutive_prefill_iterations: 0,
+            waiting_turn: 0,
+            next_waiting_order: 0,
         }
     }
 
-    pub fn submit(&mut self, sequence: Sequence) -> Result<(), AdmissionError> {
+    pub fn submit(&mut self, mut sequence: Sequence) -> Result<(), AdmissionError> {
         if sequence.prompt_tokens.is_empty() {
             return Err(AdmissionError::EmptyPrompt);
         }
@@ -65,12 +69,16 @@ impl Scheduler {
         } else {
             self.metrics.prefix_misses = self.metrics.prefix_misses.saturating_add(1);
         }
+        sequence.enqueued_turn = self.waiting_turn;
+        sequence.enqueue_order = self.next_waiting_order;
+        self.next_waiting_order = self.next_waiting_order.saturating_add(1);
         self.waiting.push_back(sequence);
         self.refresh_counts();
         Ok(())
     }
 
     pub fn plan_iteration(&mut self) -> IterationPlan {
+        self.waiting_turn = self.waiting_turn.saturating_add(1);
         let admitted = self.admit_waiting();
         let mut plan = IterationPlan {
             admitted,
@@ -291,6 +299,9 @@ impl Scheduler {
             };
             self.release_memory(&sequence);
             sequence.reset_for_recompute();
+            sequence.enqueued_turn = self.waiting_turn;
+            sequence.enqueue_order = self.next_waiting_order;
+            self.next_waiting_order = self.next_waiting_order.saturating_add(1);
             self.waiting.push_front(sequence);
             preempted.push(victim);
             self.metrics.preempted = self.metrics.preempted.saturating_add(1);
@@ -340,7 +351,26 @@ impl Scheduler {
     fn admit_waiting(&mut self) -> usize {
         let mut admitted = 0;
         let mut deferred = VecDeque::new();
-        while let Some(mut sequence) = self.waiting.pop_front() {
+        while !self.waiting.is_empty() {
+            let index = select_cache_aware_candidate(
+                self.waiting
+                    .iter()
+                    .enumerate()
+                    .map(|(index, sequence)| CacheAwareCandidate {
+                        index,
+                        priority: sequence.priority,
+                        affinity: &sequence.cache_affinity,
+                        enqueued_turn: sequence.enqueued_turn,
+                        order: sequence.enqueue_order,
+                    }),
+                self.waiting_turn,
+                self.config.cache_aging_cost_per_iteration,
+            )
+            .expect("non-empty scheduler queue must yield a cache-aware candidate");
+            let mut sequence = self
+                .waiting
+                .remove(index)
+                .expect("selected scheduler candidate must exist");
             if self.active.len() >= self.config.max_active_sequences
                 || !self.can_reserve_memory(&sequence)
             {

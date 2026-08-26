@@ -22,8 +22,8 @@ impl KvStageIntegration {
         if !self.should_lookup() || self.payload != StagePrefixCachePayload::ResidentKv {
             return None;
         }
-        let mut radix = self.radix.lock().expect("radix cache lock poisoned");
-        let radix_hit = radix.lookup_resident(&identity.namespace, &identity.token_ids)?;
+        let radix = self.radix.lock().expect("radix cache lock poisoned");
+        let radix_hit = radix.peek_resident(&identity.namespace, &identity.token_ids)?;
         let entries = radix.stats().resident_entries;
         Some(ResidentPrefixRestore {
             page_id: radix_hit.value.page_id,

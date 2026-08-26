@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, VecDeque};
 
+use skippy_cache::UnifiedRadixCache;
 use skippy_scheduler::{
-    IterationPhase, IterationPlan, PrefixRestore, PrefixRestoreKind, Scheduler, SchedulerConfig,
-    Sequence,
+    CacheAffinity, IterationPhase, IterationPlan, PrefixRestore, PrefixRestoreKind, Scheduler,
+    SchedulerConfig, Sequence, StageCacheAffinity,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,6 +14,8 @@ pub struct SimRequest {
     pub output_tokens: u32,
     pub prefix_tokens: usize,
     pub priority: u64,
+    pub token_offset: i32,
+    pub cache_affinity: CacheAffinity,
 }
 
 impl SimRequest {
@@ -29,12 +32,53 @@ impl SimRequest {
             output_tokens,
             prefix_tokens: 0,
             priority: 0,
+            token_offset: 0,
+            cache_affinity: CacheAffinity::default(),
         }
     }
 
     pub fn with_prefix_tokens(mut self, prefix_tokens: usize) -> Self {
         self.prefix_tokens = prefix_tokens.min(self.prompt_tokens);
         self
+    }
+
+    pub fn with_token_offset(mut self, token_offset: i32) -> Self {
+        self.token_offset = token_offset;
+        self
+    }
+
+    fn prompt_token_ids(&self) -> Vec<i32> {
+        (0..self.prompt_tokens)
+            .map(|token| {
+                self.token_offset
+                    .saturating_add(i32::try_from(token).unwrap_or(i32::MAX))
+            })
+            .collect()
+    }
+}
+
+/// Probe the real unified radix and attach stage-local affinity plus the
+/// corresponding modeled restore cursor to each request.
+pub fn apply_resident_radix_affinity<R: Clone, E>(
+    cache: &UnifiedRadixCache<R, E>,
+    namespace: &str,
+    stage_index: u32,
+    prefill_cost_per_token: u64,
+    requests: &mut [SimRequest],
+) {
+    for request in requests {
+        let tokens = request.prompt_token_ids();
+        let Some(hit) = cache.peek_resident(namespace, &tokens) else {
+            continue;
+        };
+        request.prefix_tokens = hit.matched_tokens.min(request.prompt_tokens);
+        request.cache_affinity = CacheAffinity::from_stage(StageCacheAffinity {
+            stage_index,
+            matched_tokens: request.prefix_tokens,
+            prefill_cost_per_token,
+            restore_cost: 0,
+            cache_epoch: cache.epoch(),
+        });
     }
 }
 
@@ -275,9 +319,7 @@ fn submit_arrivals(
         .is_some_and(|request| request.arrival_us <= now_us)
     {
         let request = pending.pop_front().expect("front checked above");
-        let prompt_tokens = (0..request.prompt_tokens)
-            .map(|token| i32::try_from(token).unwrap_or(i32::MAX))
-            .collect();
+        let prompt_tokens = request.prompt_token_ids();
         let mut sequence = Sequence::new(
             request.id.clone(),
             prompt_tokens,
@@ -292,6 +334,7 @@ fn submit_arrivals(
                 kind: PrefixRestoreKind::ResidentKv,
             });
         }
+        sequence = sequence.with_cache_affinity(request.cache_affinity);
         scheduler
             .submit(sequence)
             .map_err(|error| format!("submit {}: {error}", request.id))?;

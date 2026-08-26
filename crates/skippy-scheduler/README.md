@@ -13,7 +13,7 @@ the Skippy runtime and server crates.
 Run the deterministic scheduler-only workload suite in release mode:
 
 ```bash
-cargo bench -p skippy-scheduler --features scheduler-lab --bench scheduler_lab
+just with-lld cargo bench -p skippy-scheduler --features scheduler-lab --bench scheduler_lab
 ```
 
 The lab drives the production `Scheduler` directly without loading a model or
@@ -22,6 +22,20 @@ and a configurable virtual prefill/decode cost model produce queue wait, TTFT,
 inter-token gap, throughput, batch-size, and token-occupancy measurements. The
 reported times are modeled scheduler outcomes rather than hardware inference
 claims; use them to compare policy changes under an identical cost model.
+
+The `radix-fcfs` and `radix-cache-aware` scenarios seed the production
+`UnifiedRadixCache`, probe it without changing LRU recency, and run the same
+request trace with and without cache-affinity ordering. Affinity is retained as
+a per-stage vector so split stages can score their own hits independently.
+
+## Cache-aware admission
+
+Equal-priority waiting work is ranked by estimated prefill work saved minus
+restore cost. Each scheduler turn adds an aging credit, so a cold request
+eventually outranks newly arriving hot-prefix requests. Explicit request
+priority remains the primary ordering key. The KV-enabled server path applies
+the same policy to restore/prefill runtime operations and alternates those turns
+with live decode work; native batches remain phase-homogeneous.
 
 ## License
 

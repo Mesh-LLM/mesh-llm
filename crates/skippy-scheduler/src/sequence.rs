@@ -2,6 +2,8 @@ use std::time::Instant;
 
 use skippy_runtime::SamplingConfig;
 
+use crate::CacheAffinity;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SequenceStatus {
     Waiting,
@@ -40,8 +42,11 @@ pub struct Sequence {
     pub admission_tokens: usize,
     pub status: SequenceStatus,
     pub prefix_restore: Option<PrefixRestore>,
+    pub cache_affinity: CacheAffinity,
     pub admitted_at: Option<Instant>,
     pub(crate) prefill_cursor: usize,
+    pub(crate) enqueued_turn: u64,
+    pub(crate) enqueue_order: u64,
 }
 
 impl Sequence {
@@ -65,8 +70,11 @@ impl Sequence {
             admission_tokens,
             status: SequenceStatus::Waiting,
             prefix_restore: None,
+            cache_affinity: CacheAffinity::default(),
             admitted_at: None,
             prefill_cursor: 0,
+            enqueued_turn: 0,
+            enqueue_order: 0,
         }
     }
 
@@ -82,6 +90,11 @@ impl Sequence {
         let replay_len = self.recompute_tokens().len();
         self.prefill_cursor = restore.token_count.min(replay_len.saturating_sub(1));
         self.prefix_restore = Some(restore);
+        self
+    }
+
+    pub fn with_cache_affinity(mut self, affinity: CacheAffinity) -> Self {
+        self.cache_affinity = affinity;
         self
     }
 

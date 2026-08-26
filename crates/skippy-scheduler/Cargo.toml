@@ -15,6 +15,9 @@ scheduler-lab = ["skippy-runtime/dynamic-native-runtime"]
 skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc7" }
 thiserror = "2"
 
+[dev-dependencies]
+skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc7" }
+
 [[bench]]
 name = "scheduler_lab"
 harness = false

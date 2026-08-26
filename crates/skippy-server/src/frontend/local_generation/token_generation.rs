@@ -515,12 +515,22 @@ impl StageOpenAiBackend {
         let recurrent_cache_prefix_token_ids = request
             .recurrent_cache_prefix_token_ids
             .map(<[i32]>::to_vec);
+        let cache_affinity =
+            self.kv
+                .as_ref()
+                .map_or_else(skippy_scheduler::CacheAffinity::default, |kv| {
+                    let base = self.local_kv_message_base(session_id, request.ids);
+                    let identities = kv.lookup_identities(&self.config, &base, 0, &prefill_tokens);
+                    kv.peek_cache_affinity(&self.config, &identities)
+                });
         let scheduler_backend = self.clone();
         let scheduler_session_id = session_id.to_string();
         let scheduler_ids = request.ids.clone();
         let mut scheduler_cache_stats = std::mem::take(cache_stats);
-        let outcome = self.iteration_scheduler.execute_runtime_timed(
+        let outcome = self.iteration_scheduler.execute_cache_aware_runtime_timed(
             "feature-kv-restore-prefill-record",
+            cache_affinity,
+            0,
             move |runtime| {
                 let outcome = scheduler_backend.restore_or_record_kv_on_runtime(
                     runtime,

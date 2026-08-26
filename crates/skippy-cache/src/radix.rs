@@ -315,6 +315,12 @@ impl<R, E> UnifiedRadixCache<R, E> {
         stats
     }
 
+    /// Monotonic cache mutation/recency epoch used to identify stale
+    /// scheduler observations. Peeks deliberately do not advance it.
+    pub fn epoch(&self) -> u64 {
+        self.clock
+    }
+
     fn ensure_node(&mut self, namespace: String, tokens: &[i32]) -> &mut RadixNode<R, E> {
         let root = self.roots.entry(namespace).or_insert_with(RadixNode::root);
         ensure_node(root, tokens, &mut self.splits)
@@ -330,6 +336,24 @@ impl<R, E> UnifiedRadixCache<R, E> {
 }
 
 impl<R: Clone, E> UnifiedRadixCache<R, E> {
+    /// Find the resident prefix without changing recency or active references.
+    /// Scheduler scans must not make merely considered entries look hot.
+    pub fn peek_resident(&self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<R>> {
+        let root = self.roots.get(namespace)?;
+        let (matched_tokens, stored_tokens) = resident_backing_prefix(root, tokens)?;
+        let entry = node_at(root, &stored_tokens)?
+            .components
+            .resident
+            .as_ref()?;
+        Some(RadixMatch {
+            matched_tokens,
+            stored_tokens,
+            logical_bytes: entry.logical_bytes,
+            active_refs: entry.active_refs,
+            value: entry.value.clone(),
+        })
+    }
+
     pub fn resident_exact(&mut self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<R>> {
         self.clock = self.clock.saturating_add(1);
         let root = self.roots.get_mut(namespace)?;
@@ -428,6 +452,24 @@ impl<R: Clone, E> UnifiedRadixCache<R, E> {
 }
 
 impl<R, E: Clone> UnifiedRadixCache<R, E> {
+    /// Find the recurrent prefix without changing recency or active references.
+    /// Scheduler scans must not make merely considered entries look hot.
+    pub fn peek_recurrent(&self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<E>> {
+        let root = self.roots.get(namespace)?;
+        let matched_tokens = longest_component_prefix(root, tokens, ComponentKind::KvRecurrent)?;
+        let entry = node_at(root, &tokens[..matched_tokens])?
+            .components
+            .recurrent
+            .as_ref()?;
+        Some(RadixMatch {
+            matched_tokens,
+            stored_tokens: tokens[..matched_tokens].to_vec(),
+            logical_bytes: entry.logical_bytes,
+            active_refs: entry.active_refs,
+            value: entry.value.clone(),
+        })
+    }
+
     pub fn recurrent_exact(&mut self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<E>> {
         self.clock = self.clock.saturating_add(1);
         let root = self.roots.get_mut(namespace)?;
@@ -1029,6 +1071,36 @@ mod tests {
             .expect("shorter query resident hit");
         assert_eq!(shorter.matched_tokens, 2);
         assert_eq!(shorter.stored_tokens, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn scheduler_peeks_do_not_heat_resident_lru() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache.insert_resident("stage", &[1, 2], 2, "old").unwrap();
+        cache.insert_resident("stage", &[3, 4], 2, "new").unwrap();
+        let epoch = cache.epoch();
+
+        assert_eq!(
+            cache.peek_resident("stage", &[1, 2, 9]).unwrap().value,
+            "old"
+        );
+        assert_eq!(cache.epoch(), epoch);
+        assert_eq!(cache.lru_resident_candidate().unwrap().value, "old");
+    }
+
+    #[test]
+    fn scheduler_peeks_do_not_heat_recurrent_lru() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache.insert_recurrent("stage", &[1, 2], 2, "old").unwrap();
+        cache.insert_recurrent("stage", &[3, 4], 2, "new").unwrap();
+        let epoch = cache.epoch();
+
+        assert_eq!(
+            cache.peek_recurrent("stage", &[1, 2, 9]).unwrap().value,
+            "old"
+        );
+        assert_eq!(cache.epoch(), epoch);
+        assert_eq!(cache.lru_recurrent_candidate().unwrap().value, "old");
     }
 
     #[test]

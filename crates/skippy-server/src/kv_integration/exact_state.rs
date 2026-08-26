@@ -28,12 +28,17 @@ impl KvStageIntegration {
                     .radix
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let lookup = radix.lookup_recurrent(&identity.namespace, &identity.token_ids);
+                let lookup = radix.acquire_recurrent(&identity.namespace, &identity.token_ids);
                 let entries = radix.stats().recurrent_entries;
                 (lookup, entries)
             };
             let Some(lookup) = lookup else {
                 continue;
+            };
+            let lease = ExactStateLease {
+                radix: std::sync::Arc::clone(&self.radix),
+                namespace: identity.namespace.clone(),
+                stored_tokens: lookup.stored_tokens.clone(),
             };
             let token_count = lookup.stored_tokens.len() as u64;
             let lookup_ms = lookup_started.elapsed().as_secs_f64() * 1000.0;
@@ -105,7 +110,7 @@ impl KvStageIntegration {
                 }
                 _ => continue,
             }
-            return Ok(Some(ExactStateRestore {
+            let restored = ExactStateRestore {
                 page_id: lookup.value.page_id,
                 token_count: token_count as usize,
                 payload_kind: lookup.value.payload.kind(),
@@ -117,7 +122,9 @@ impl KvStageIntegration {
                 lookup_ms,
                 kv_import_ms,
                 recurrent_import_ms,
-            }));
+            };
+            drop(lease);
+            return Ok(Some(restored));
         }
         Ok(None)
     }
@@ -243,6 +250,27 @@ impl KvStageIntegration {
                 Ok(None)
             }
         }
+    }
+}
+
+struct ExactStateLease {
+    radix: std::sync::Arc<
+        std::sync::Mutex<
+            skippy_cache::UnifiedRadixCache<super::RadixResidentEntry, super::RadixExactEntry>,
+        >,
+    >,
+    namespace: String,
+    stored_tokens: Vec<i32>,
+}
+
+impl Drop for ExactStateLease {
+    fn drop(&mut self) {
+        let released = self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .release_recurrent(&self.namespace, &self.stored_tokens);
+        debug_assert!(released, "recurrent radix acquire/release must balance");
     }
 }
 

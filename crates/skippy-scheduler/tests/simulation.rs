@@ -94,3 +94,51 @@ fn concurrent_burst_uses_batches_and_completes_every_request() {
             && request.generated_tokens == 32
     }));
 }
+
+#[test]
+fn real_radix_affinity_prioritizes_the_high_value_prefix() {
+    let mut radix = skippy_cache::UnifiedRadixCache::<&str, ()>::new();
+    let cached_tokens = (0..768).collect::<Vec<i32>>();
+    radix
+        .insert_resident("stage-0", &cached_tokens, 768, "hot-prefix")
+        .unwrap();
+    let requests = vec![
+        support::SimRequest::new("a-cold", 0, 1_024, 1).with_token_offset(10_000),
+        support::SimRequest::new("b-hot", 0, 1_024, 1),
+    ];
+    let mut cache_aware_requests = requests;
+    support::apply_resident_radix_affinity(
+        &radix,
+        "stage-0",
+        0,
+        RuntimeCostModel::default().prefill_token_us,
+        &mut cache_aware_requests,
+    );
+    let mut fcfs_requests = cache_aware_requests.clone();
+    for request in &mut fcfs_requests {
+        request.cache_affinity = skippy_scheduler::CacheAffinity::default();
+    }
+    let fcfs = simulate(
+        SchedulerConfig {
+            max_active_sequences: 1,
+            ..SchedulerConfig::default()
+        },
+        RuntimeCostModel::default(),
+        fcfs_requests,
+    )
+    .unwrap();
+    let cache_aware = simulate(
+        SchedulerConfig {
+            max_active_sequences: 1,
+            ..SchedulerConfig::default()
+        },
+        RuntimeCostModel::default(),
+        cache_aware_requests,
+    )
+    .unwrap();
+
+    assert!(
+        cache_aware.request("b-hot").ttft_us().unwrap() < fcfs.request("b-hot").ttft_us().unwrap()
+    );
+    assert_eq!(cache_aware.request("b-hot").queue_wait_us(), Some(0));
+}

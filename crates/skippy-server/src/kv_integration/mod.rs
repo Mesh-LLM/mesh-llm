@@ -22,6 +22,7 @@ use crate::kv_proto::{
 };
 
 mod activation;
+mod cache_affinity;
 mod config;
 mod exact_state;
 mod identity;

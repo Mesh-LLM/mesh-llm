@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use skippy_scheduler::SchedulerConfig;
 use support::{
-    RuntimeCostModel, SimRequest, SimulationReport, burst_requests, simulate,
-    staggered_prefill_requests,
+    RuntimeCostModel, SimRequest, SimulationReport, apply_resident_radix_affinity, burst_requests,
+    simulate, staggered_prefill_requests,
 };
 
 const BENCH_REPETITIONS: usize = 200;
@@ -16,6 +16,7 @@ struct Scenario {
     name: String,
     requests: Vec<SimRequest>,
     max_consecutive_prefill_iterations: usize,
+    max_active_sequences: usize,
 }
 
 fn main() {
@@ -27,6 +28,7 @@ fn main() {
     for scenario in scenarios() {
         let scenario_config = SchedulerConfig {
             max_consecutive_prefill_iterations: scenario.max_consecutive_prefill_iterations,
+            max_active_sequences: scenario.max_active_sequences,
             ..config.clone()
         };
         let report = simulate(scenario_config.clone(), cost, scenario.requests.clone())
@@ -50,22 +52,59 @@ fn scenarios() -> Vec<Scenario> {
             name: format!("cold-burst-n{concurrency}"),
             requests: burst_requests(concurrency, 4_096, 32, 0),
             max_consecutive_prefill_iterations: usize::MAX,
+            max_active_sequences: 32,
         });
         scenarios.push(Scenario {
             name: format!("warm-divergent-n{concurrency}"),
             requests: burst_requests(concurrency, 4_096, 32, 4_080),
             max_consecutive_prefill_iterations: usize::MAX,
+            max_active_sequences: 32,
         });
     }
     scenarios.push(Scenario {
         name: "staggered-prefill".to_string(),
         requests: staggered_prefill_requests(),
         max_consecutive_prefill_iterations: usize::MAX,
+        max_active_sequences: 32,
     });
     scenarios.push(Scenario {
         name: "staggered-prefill-bounded".to_string(),
         requests: staggered_prefill_requests(),
         max_consecutive_prefill_iterations: 1,
+        max_active_sequences: 32,
+    });
+    let mut radix = skippy_cache::UnifiedRadixCache::<&str, ()>::new();
+    let cached_tokens = (0..3_072).collect::<Vec<i32>>();
+    radix
+        .insert_resident("stage-0", &cached_tokens, 3_072, "shared-prefix")
+        .expect("valid scheduler-lab radix fixture");
+    let mut cache_aware = vec![
+        SimRequest::new("a-cold", 0, 4_096, 16).with_token_offset(10_000),
+        SimRequest::new("b-cold", 0, 4_096, 16).with_token_offset(20_000),
+        SimRequest::new("c-hot", 0, 4_096, 16),
+    ];
+    apply_resident_radix_affinity(
+        &radix,
+        "stage-0",
+        0,
+        RuntimeCostModel::default().prefill_token_us,
+        &mut cache_aware,
+    );
+    let mut fcfs = cache_aware.clone();
+    for request in &mut fcfs {
+        request.cache_affinity = skippy_scheduler::CacheAffinity::default();
+    }
+    scenarios.push(Scenario {
+        name: "radix-fcfs".to_string(),
+        requests: fcfs,
+        max_consecutive_prefill_iterations: 1,
+        max_active_sequences: 1,
+    });
+    scenarios.push(Scenario {
+        name: "radix-cache-aware".to_string(),
+        requests: cache_aware,
+        max_consecutive_prefill_iterations: 1,
+        max_active_sequences: 1,
     });
     scenarios
 }
