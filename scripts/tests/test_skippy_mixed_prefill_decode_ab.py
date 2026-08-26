@@ -25,6 +25,14 @@ BENCH = load_module()
 
 
 class MixedPrefillDecodeAbTests(unittest.TestCase):
+    def test_stable_prompt_is_deterministic_and_nonempty(self):
+        first = BENCH.stable_prompt(4, 2, "anchor")
+        second = BENCH.stable_prompt(4, 2, "anchor")
+
+        self.assertEqual(first, second)
+        self.assertIn("context-block-0000", first)
+        self.assertIn("Request 2", first)
+
     def test_prompt_manifest_preserves_trace_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "prompts.json"
