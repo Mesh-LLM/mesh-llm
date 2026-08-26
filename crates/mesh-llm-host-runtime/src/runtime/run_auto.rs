@@ -54,10 +54,6 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU16},
 };
 
-#[expect(
-    dead_code,
-    reason = "the legacy advertised-model selection lane remains available to compatibility helpers and focused tests"
-)]
 pub(super) enum RunAutoModelSelection {
     Model(PathBuf),
     Shutdown,
@@ -1256,10 +1252,6 @@ pub(super) fn configure_swarm_capture(
     Ok(recorder)
 }
 
-#[expect(
-    dead_code,
-    reason = "the legacy advertised-model selection context is retained for compatibility helpers and focused tests"
-)]
 pub(super) struct RunAutoModelSelectionContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) node: &'a mesh::Node,
@@ -1549,18 +1541,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         config.runtime.startup_failure_policy,
     );
     if startup_specs.is_empty() {
-        let _ = emit_event(OutputEvent::PassiveMode {
-            role: if is_client { "client" } else { "standby" }.to_string(),
-            status: RuntimeStatus::Ready,
-            capacity_gb: (!is_client).then(|| node.vram_bytes() as f64 / 1e9),
-            models_on_disk: (!is_client).then_some(local_models),
-            detail: Some(if is_client {
-                "Client daemon ready; local model loading is disabled".to_string()
-            } else {
-                "Runtime daemon ready; no local models are loaded".to_string()
-            }),
-        });
-        record_runtime_operational_event(RuntimeOperationalEvent::Ready);
+        emit_passive_mode_ready(is_client, &node, local_models).await;
     }
 
     // Discovery publish loop (if --publish) or Nostr watchdog (if --auto, to take over if publisher dies).
@@ -1604,4 +1585,19 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         anyhow::bail!("{summary}");
     }
     Ok(())
+}
+
+async fn emit_passive_mode_ready(is_client: bool, node: &mesh::Node, local_models: Vec<String>) {
+    let _ = emit_event(OutputEvent::PassiveMode {
+        role: if is_client { "client" } else { "standby" }.to_string(),
+        status: RuntimeStatus::Ready,
+        capacity_gb: (!is_client).then(|| node.vram_bytes() as f64 / 1e9),
+        models_on_disk: (!is_client).then_some(local_models),
+        detail: Some(if is_client {
+            "Client daemon ready; local model loading is disabled".to_string()
+        } else {
+            "Runtime daemon ready; no local models are loaded".to_string()
+        }),
+    });
+    record_runtime_operational_event(RuntimeOperationalEvent::Ready);
 }

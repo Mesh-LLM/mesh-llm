@@ -19,13 +19,6 @@ const TUI_QUIT_FRAME_DELAY: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InitialPromptMode {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "immediate prompting remains exercised by console compatibility tests"
-        )
-    )]
     Immediate,
     Deferred,
 }

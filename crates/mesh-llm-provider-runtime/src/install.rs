@@ -270,7 +270,6 @@ fn extract_entry(
     let bytes_written = std::io::copy(&mut limited_reader, &mut file)?;
     *remaining_budget = remaining_budget.saturating_sub(bytes_written);
     let exhausted_budget = limited_reader.limit() == 0;
-    drop(limited_reader);
     if exhausted_budget {
         let mut overflow = [0_u8; 1];
         if entry.read(&mut overflow)? != 0 {

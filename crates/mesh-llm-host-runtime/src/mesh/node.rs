@@ -1361,6 +1361,18 @@ impl Node {
         runtimes.len() != old_len
     }
 
+    pub(crate) async fn model_runtime_descriptor(
+        &self,
+        model_name: &str,
+    ) -> Option<ModelRuntimeDescriptor> {
+        self.model_runtime_descriptors
+            .lock()
+            .await
+            .iter()
+            .find(|runtime| runtime.model_name == model_name)
+            .cloned()
+    }
+
     pub async fn local_model_context_length(&self, model_name: &str) -> Option<u32> {
         self.model_runtime_descriptors
             .lock()

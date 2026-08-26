@@ -1085,13 +1085,6 @@ pub(super) fn should_show_serve_config_help(
     false
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "legacy size parsing remains covered by capacity compatibility tests"
-    )
-)]
 pub(super) fn parse_size_str(s: &str) -> Option<u64> {
     let s = s.trim();
     if let Some(gb) = s.strip_suffix("GB") {
@@ -1104,25 +1097,11 @@ pub(super) fn parse_size_str(s: &str) -> Option<u64> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "capacity projection remains covered by startup planning tests"
-    )
-)]
 pub(super) struct RuntimeModelCapacity {
     pub(super) required_bytes: u64,
     pub(super) fits: bool,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "path capacity projection remains covered by startup planning tests"
-    )
-)]
 pub(super) fn runtime_model_capacity_for_path(
     model_path: &Path,
     vram_bytes: u64,
@@ -1135,13 +1114,6 @@ pub(super) fn runtime_model_capacity_for_path(
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "reference capacity projection remains covered by startup planning tests"
-    )
-)]
 pub(super) fn runtime_model_capacity_for_ref(model: &str, vram_bytes: u64) -> RuntimeModelCapacity {
     let model_path = models::find_model_path(model);
     runtime_model_capacity_for_path(&model_path, vram_bytes)

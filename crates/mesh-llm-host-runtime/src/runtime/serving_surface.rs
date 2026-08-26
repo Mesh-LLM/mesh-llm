@@ -61,13 +61,6 @@ pub(super) fn serve_path_interactive_spawn_request(
     })
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the retained passive runtime compatibility lane and its focused tests"
-    )
-)]
 pub(super) fn passive_path_interactive_spawn_request(
     console_session_mode: Option<ConsoleSessionMode>,
     stdin_is_tty: bool,
@@ -199,13 +192,6 @@ pub(super) fn socket_addr_http_url(addr: std::net::SocketAddr) -> String {
     format!("http://{addr}")
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the retained passive runtime compatibility lane and listener tests"
-    )
-)]
 pub(super) fn listener_http_url(
     listener: &tokio::net::TcpListener,
     fallback_port: u16,
@@ -830,19 +816,11 @@ pub(super) fn start_run_auto_bootstrap_proxy(
     Some(stop_tx)
 }
 
-#[expect(
-    dead_code,
-    reason = "owned by the retained passive runtime compatibility lane"
-)]
 pub(super) struct PassiveConsoleRuntime {
     pub(super) control_rx: tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>,
     pub(super) console_server_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
-#[expect(
-    dead_code,
-    reason = "owned by the retained passive runtime compatibility lane"
-)]
 pub(super) struct PassiveConsoleSetupContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) node: &'a mesh::Node,
@@ -978,10 +956,6 @@ pub(super) async fn setup_run_auto_console_state(
     Ok(Some(console_state))
 }
 
-#[expect(
-    dead_code,
-    reason = "bridges the retained advertised-model and passive runtime compatibility lanes"
-)]
 pub(super) async fn run_auto_model_path_or_shutdown(
     ctx: &mut RunAutoModelSelectionContext<'_>,
 ) -> Result<Option<PathBuf>> {
@@ -1396,10 +1370,6 @@ pub(super) async fn spawn_run_auto_local_instance_scanner(
     );
 }
 
-#[expect(
-    dead_code,
-    reason = "owned by the retained passive runtime compatibility lane"
-)]
 pub(super) async fn setup_passive_console_runtime(
     ctx: PassiveConsoleSetupContext<'_>,
     console_listener: tokio::net::TcpListener,
@@ -1521,10 +1491,6 @@ pub(super) async fn setup_passive_console_runtime(
     })
 }
 
-#[expect(
-    dead_code,
-    reason = "owned by the retained passive runtime compatibility lane"
-)]
 pub(super) async fn run_passive_listener_loop(
     listener: tokio::net::TcpListener,
     node: mesh::Node,
@@ -1580,10 +1546,6 @@ pub(super) async fn run_passive_listener_loop(
     }
 }
 
-#[expect(
-    dead_code,
-    reason = "retained for compatibility with passive client and standby startup"
-)]
 pub(super) async fn run_passive(
     options: &RuntimeOptions,
     node: mesh::Node,
@@ -1652,10 +1614,6 @@ pub(super) async fn run_passive(
     .await
 }
 
-#[expect(
-    dead_code,
-    reason = "owned by the retained passive runtime compatibility lane and its ready-event tests"
-)]
 pub(super) async fn emit_passive_ready_events(
     options: &RuntimeOptions,
     node: &mesh::Node,

@@ -262,14 +262,9 @@ pub(crate) struct InstanceLifecycleRecord {
     max_history: usize,
 
     /// Timestamp when the instance was created.
-    #[expect(dead_code, reason = "instance age is test-observable")]
     created_at: Instant,
 
     /// Optional error message if state is `Failed`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "lifecycle errors are test-observable")
-    )]
     last_error: Option<String>,
 }
 
