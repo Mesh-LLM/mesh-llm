@@ -269,6 +269,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         prefill_adaptive_start: openai_options.prefill_adaptive_start,
                         prefill_adaptive_step: openai_options.prefill_adaptive_step,
                         prefill_adaptive_max: openai_options.prefill_adaptive_max,
+                        prefill_adaptive_target_ms: openai_options.prefill_adaptive_target_ms,
                         draft_model_path: openai_options.draft_model_path,
                         speculative_window: openai_options.speculative_window,
                         adaptive_speculative_window: openai_options.adaptive_speculative_window,

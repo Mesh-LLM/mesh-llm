@@ -623,9 +623,9 @@ pub struct StageReplyStats {
     pub prefill_edge_stage_index: i64,
     pub prefill_edge_activation_bytes_max: i64,
     pub prefill_edge_observation_count: i64,
-    pub prefill_compute_us_max: i64,
+    pub prefill_compute_us_at_slowest_rate: i64,
     pub prefill_compute_stage_index: i64,
-    pub prefill_compute_token_count: i64,
+    pub prefill_compute_token_count_at_slowest_rate: i64,
     pub prefill_compute_observation_count: i64,
 }
 
@@ -662,10 +662,16 @@ impl StageReplyStats {
             self.prefill_edge_activation_bytes_max = other.prefill_edge_activation_bytes_max;
         }
         self.prefill_edge_observation_count += other.prefill_edge_observation_count;
-        if other.prefill_compute_us_max > self.prefill_compute_us_max {
-            self.prefill_compute_us_max = other.prefill_compute_us_max;
+        if slower_prefill_compute_rate(
+            other.prefill_compute_us_at_slowest_rate,
+            other.prefill_compute_token_count_at_slowest_rate,
+            self.prefill_compute_us_at_slowest_rate,
+            self.prefill_compute_token_count_at_slowest_rate,
+        ) {
+            self.prefill_compute_us_at_slowest_rate = other.prefill_compute_us_at_slowest_rate;
             self.prefill_compute_stage_index = other.prefill_compute_stage_index;
-            self.prefill_compute_token_count = other.prefill_compute_token_count;
+            self.prefill_compute_token_count_at_slowest_rate =
+                other.prefill_compute_token_count_at_slowest_rate;
         }
         self.prefill_compute_observation_count += other.prefill_compute_observation_count;
     }
@@ -698,10 +704,16 @@ impl StageReplyStats {
         token_count: usize,
     ) {
         let compute_us = compute_us.max(0);
-        if compute_us > self.prefill_compute_us_max {
-            self.prefill_compute_us_max = compute_us;
+        let token_count = i64::try_from(token_count).unwrap_or(i64::MAX).max(1);
+        if slower_prefill_compute_rate(
+            compute_us,
+            token_count,
+            self.prefill_compute_us_at_slowest_rate,
+            self.prefill_compute_token_count_at_slowest_rate,
+        ) {
+            self.prefill_compute_us_at_slowest_rate = compute_us;
             self.prefill_compute_stage_index = i64::from(stage_index);
-            self.prefill_compute_token_count = i64::try_from(token_count).unwrap_or(i64::MAX);
+            self.prefill_compute_token_count_at_slowest_rate = token_count;
         }
         self.prefill_compute_observation_count =
             self.prefill_compute_observation_count.saturating_add(1);
@@ -728,6 +740,22 @@ impl StageReplyStats {
             && self.prefill_edge_observation_count == 0
             && self.prefill_compute_observation_count == 0
     }
+}
+
+fn slower_prefill_compute_rate(
+    candidate_us: i64,
+    candidate_tokens: i64,
+    current_us: i64,
+    current_tokens: i64,
+) -> bool {
+    if candidate_us <= 0 || candidate_tokens <= 0 {
+        return false;
+    }
+    if current_us <= 0 || current_tokens <= 0 {
+        return true;
+    }
+    i128::from(candidate_us) * i128::from(current_tokens)
+        > i128::from(current_us) * i128::from(candidate_tokens)
 }
 
 fn expected_phase(kind: WireMessageKind) -> WireStagePhase {

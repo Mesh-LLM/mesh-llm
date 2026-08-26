@@ -42,6 +42,7 @@ pub struct EmbeddedOpenAiStageOptions {
     pub prefill_adaptive_start: usize,
     pub prefill_adaptive_step: usize,
     pub prefill_adaptive_max: usize,
+    pub prefill_adaptive_target_ms: f64,
     pub draft_model_path: Option<PathBuf>,
     pub speculative_window: usize,
     pub adaptive_speculative_window: bool,
@@ -62,6 +63,11 @@ impl BinaryStageOptions {
         }
         if args.openai_prefill_chunk_size == 0 {
             bail!("--openai-prefill-chunk-size must be greater than zero");
+        }
+        if !args.openai_prefill_adaptive_target_ms.is_finite()
+            || args.openai_prefill_adaptive_target_ms <= 0.0
+        {
+            bail!("--openai-prefill-adaptive-target-ms must be finite and greater than zero");
         }
         let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
         let downstream_wire_condition =
@@ -97,6 +103,7 @@ impl BinaryStageOptions {
                 prefill_adaptive_start: args.openai_prefill_adaptive_start,
                 prefill_adaptive_step: args.openai_prefill_adaptive_step,
                 prefill_adaptive_max: args.openai_prefill_adaptive_max,
+                prefill_adaptive_target_ms: args.openai_prefill_adaptive_target_ms,
                 draft_model_path: args.openai_draft_model_path,
                 speculative_window: args.openai_speculative_window,
                 adaptive_speculative_window: args.openai_adaptive_speculative_window,

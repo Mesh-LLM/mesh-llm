@@ -29,6 +29,7 @@ fn prefill_chunk_policy_keeps_legacy_schedule_behavior() {
         adaptive_start: 128,
         adaptive_step: 128,
         adaptive_max: 384,
+        adaptive_target_ms: 100.0,
         schedule_arg: "--prefill-chunk-schedule",
         policy_arg: "--prefill-chunk-policy",
     })
@@ -49,6 +50,7 @@ fn prefill_adaptive_ramp_grows_when_downstream_wait_is_hidden() {
         adaptive_start: 128,
         adaptive_step: 128,
         adaptive_max: 384,
+        adaptive_target_ms: 100.0,
         schedule_arg: "--prefill-chunk-schedule",
         policy_arg: "--prefill-chunk-policy",
     })
@@ -78,6 +80,7 @@ fn prefill_adaptive_ramp_can_advance_without_observations() {
         adaptive_start: 128,
         adaptive_step: 128,
         adaptive_max: 384,
+        adaptive_target_ms: 100.0,
         schedule_arg: "--prefill-chunk-schedule",
         policy_arg: "--prefill-chunk-policy",
     })
@@ -101,6 +104,7 @@ fn prefill_adaptive_ramp_backs_off_when_wait_is_exposed() {
         adaptive_start: 128,
         adaptive_step: 128,
         adaptive_max: 384,
+        adaptive_target_ms: 100.0,
         schedule_arg: "--prefill-chunk-schedule",
         policy_arg: "--prefill-chunk-policy",
     })
@@ -129,6 +133,7 @@ fn prefill_adaptive_ramp_backs_off_when_write_is_exposed() {
         adaptive_start: 128,
         adaptive_step: 128,
         adaptive_max: 384,
+        adaptive_target_ms: 100.0,
         schedule_arg: "--prefill-chunk-schedule",
         policy_arg: "--prefill-chunk-policy",
     })
@@ -153,6 +158,7 @@ fn prefill_adaptive_ramp_keeps_short_prompts_fixed() {
         adaptive_start: 128,
         adaptive_step: 128,
         adaptive_max: 384,
+        adaptive_target_ms: 100.0,
         schedule_arg: "--prefill-chunk-schedule",
         policy_arg: "--prefill-chunk-policy",
     })
@@ -186,6 +192,7 @@ fn prefill_transport_ewma_seeds_adaptive_ramp() {
         adaptive_start: 128,
         adaptive_step: 128,
         adaptive_max: 384,
+        adaptive_target_ms: 100.0,
         schedule_arg: "--prefill-chunk-schedule",
         policy_arg: "--prefill-chunk-policy",
     })
@@ -209,13 +216,16 @@ fn prefill_calibration_uses_slowest_downstream_stage() {
         capacity: 1,
     };
     let mut stats = StageReplyStats::default();
-    stats.observe_prefill_compute(2, 100_000, 128);
-    pool.observe_prefill_transport(&stats, 10.0, 128, 20.0, 0.0);
+    // The downstream sample has lower absolute time than stage 0 but a slower
+    // per-token rate, so it is the duration-limiting stage.
+    stats.observe_prefill_compute(2, 50_000, 64);
+    pool.observe_prefill_transport(&stats, 80.0, 256, 20.0, 0.0);
 
     let estimate = pool.prefill_transport_estimate().unwrap();
     assert_eq!(estimate.bottleneck_stage_index, 2);
-    assert_eq!(estimate.bottleneck_token_count, 128);
-    assert_eq!(estimate.slowest_compute_ms, 100.0);
+    assert_eq!(estimate.bottleneck_token_count, 64);
+    assert_eq!(estimate.slowest_compute_ms, 50.0);
+    assert_eq!(estimate.slowest_compute_ms_per_token, 50.0 / 64.0);
 
     let policy = PrefillChunkPolicy::parse(PrefillChunkPolicyArgs {
         policy: "adaptive-ramp",
@@ -224,14 +234,16 @@ fn prefill_calibration_uses_slowest_downstream_stage() {
         adaptive_start: 128,
         adaptive_step: 128,
         adaptive_max: 384,
+        adaptive_target_ms: 100.0,
         schedule_arg: "--prefill-chunk-schedule",
         policy_arg: "--prefill-chunk-policy",
     })
     .unwrap();
     let mut planner = policy.planner();
+    planner.calibrate_slowest_stage_rate(estimate.slowest_compute_ms_per_token);
     planner.observe(pool.prefill_transport_seed().unwrap());
 
-    assert_eq!(planner.chunk_size_for(0, 512), 256);
+    assert_eq!(planner.chunk_size_for(0, 512), 128);
 }
 
 #[test]
@@ -243,6 +255,7 @@ fn prefill_adaptive_ramp_never_exceeds_starvation_bound() {
         adaptive_start: 128,
         adaptive_step: 128,
         adaptive_max: 384,
+        adaptive_target_ms: 100.0,
         schedule_arg: "--prefill-chunk-schedule",
         policy_arg: "--prefill-chunk-policy",
     })

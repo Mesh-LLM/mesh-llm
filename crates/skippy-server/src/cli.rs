@@ -119,6 +119,12 @@ pub struct ServeBinaryArgs {
     pub openai_prefill_adaptive_max: usize,
     #[arg(
         long,
+        default_value_t = 100.0,
+        help = "Target maximum compute time in milliseconds for one adaptive prefill chunk at the slowest measured stage."
+    )]
+    pub openai_prefill_adaptive_target_ms: f64,
+    #[arg(
+        long,
         help = "Draft GGUF to use for speculative decoding in the embedded stage-0 OpenAI surface."
     )]
     pub openai_draft_model_path: Option<PathBuf>,
@@ -193,6 +199,8 @@ pub struct ServeOpenAiArgs {
     pub prefill_adaptive_step: usize,
     #[arg(long, default_value_t = 384)]
     pub prefill_adaptive_max: usize,
+    #[arg(long, default_value_t = 100.0)]
+    pub prefill_adaptive_target_ms: f64,
     #[arg(long, default_value = "f32")]
     pub activation_wire_dtype: String,
     #[arg(long, default_value_t = 60)]
@@ -242,6 +250,7 @@ mod tests {
         assert_eq!(args.openai_prefill_adaptive_start, 128);
         assert_eq!(args.openai_prefill_adaptive_step, 128);
         assert_eq!(args.openai_prefill_adaptive_max, 384);
+        assert_eq!(args.openai_prefill_adaptive_target_ms, 100.0);
 
         let cli = Cli::try_parse_from(["skippy-server", "serve-openai", "--config", "stage.json"])
             .unwrap();
@@ -253,6 +262,7 @@ mod tests {
         assert_eq!(args.prefill_adaptive_start, 128);
         assert_eq!(args.prefill_adaptive_step, 128);
         assert_eq!(args.prefill_adaptive_max, 384);
+        assert_eq!(args.prefill_adaptive_target_ms, 100.0);
         assert_eq!(args.openai_guardrails, OpenAiGuardrailsCliMode::Metrics);
     }
 

@@ -622,9 +622,9 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
         stats.prefill_edge_stage_index,
         stats.prefill_edge_activation_bytes_max,
         stats.prefill_edge_observation_count,
-        stats.prefill_compute_us_max,
+        stats.prefill_compute_us_at_slowest_rate,
         stats.prefill_compute_stage_index,
-        stats.prefill_compute_token_count,
+        stats.prefill_compute_token_count_at_slowest_rate,
         stats.prefill_compute_observation_count,
     ]
 }
@@ -654,9 +654,9 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         prefill_edge_stage_index: fields[20],
         prefill_edge_activation_bytes_max: fields[21],
         prefill_edge_observation_count: fields[22],
-        prefill_compute_us_max: fields[23],
+        prefill_compute_us_at_slowest_rate: fields[23],
         prefill_compute_stage_index: fields[24],
-        prefill_compute_token_count: fields[25],
+        prefill_compute_token_count_at_slowest_rate: fields[25],
         prefill_compute_observation_count: fields[26],
     }
 }
