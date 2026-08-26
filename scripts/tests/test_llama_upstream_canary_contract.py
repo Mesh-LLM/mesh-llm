@@ -74,6 +74,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         build = _step_block(workflow, "Build stage runtime crates")
         self.assertIn("cargo build", build)
         self.assertIn("steps.sha.outputs.certify == 'true'", build)
+        self.assertNotIn("-p skippy-ffi", build)
         for package in (
             "skippy-correctness",
             "skippy-server",

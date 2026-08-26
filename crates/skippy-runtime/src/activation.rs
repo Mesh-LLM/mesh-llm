@@ -131,6 +131,10 @@ impl StageSession {
             free_error(error);
             return Self::iteration_batch_sampled_raw(requests, &output_bytes);
         }
+        if status == Status::Unsupported {
+            free_error(error);
+            return Self::iteration_batch_sampled_serial(requests);
+        }
         ensure_ok(status, error)?;
         // The native call has already advanced every session, so compute all
         // new counts before storing any: a mid-loop overflow error must not
@@ -167,6 +171,59 @@ impl StageSession {
                 }
             })
             .collect())
+    }
+
+    fn iteration_batch_sampled_serial(
+        requests: &mut [IterationBatchRequest<'_>],
+    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+        requests
+            .iter_mut()
+            .map(|request| {
+                let (predicted_token, output) = if serial_iteration_uses_decode_step(request) {
+                    request.session.decode_step_frame_sampled(
+                        request.token_ids[0],
+                        request.sampling,
+                        request.input,
+                        0,
+                    )?
+                } else if request.sample_last {
+                    if request.positions.is_empty() {
+                        request.session.prefill_chunk_frame_sampled(
+                            request.token_ids,
+                            request.sampling,
+                            request.input,
+                            0,
+                        )?
+                    } else {
+                        request.session.prefill_chunk_frame_sampled_with_positions(
+                            request.token_ids,
+                            request.positions,
+                            request.sampling,
+                            request.input,
+                            0,
+                        )?
+                    }
+                } else {
+                    let output = if request.positions.is_empty() {
+                        request
+                            .session
+                            .prefill_chunk_frame(request.token_ids, request.input, 0)?
+                    } else {
+                        request.session.prefill_chunk_frame_with_positions(
+                            request.token_ids,
+                            request.positions,
+                            request.input,
+                            0,
+                        )?
+                    };
+                    (-1, output)
+                };
+                Ok(DecodeFrameBatchOutput {
+                    predicted_token,
+                    output,
+                })
+            })
+            .collect()
     }
 
     pub fn prefill_chunk_frame(
@@ -951,10 +1008,23 @@ impl StageSession {
     }
 }
 
+fn serial_iteration_uses_decode_step(request: &IterationBatchRequest<'_>) -> bool {
+    // The mixed ABI selects its phase automatically, while the serial frame
+    // APIs expose separate prefill and decode entrypoints. An established,
+    // sampled one-token request without explicit positions is the scheduler's
+    // decode shape; all other requests retain prefill semantics.
+    request.sample_last
+        && request.token_ids.len() == 1
+        && request.positions.is_empty()
+        && request.session.token_count() > 0
+}
+
 #[cfg(test)]
 mod tests {
-    use super::raw_input_frame;
+    use super::{IterationBatchRequest, raw_input_frame, serial_iteration_uses_decode_step};
+    use crate::StageSession;
     use crate::{ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout};
+    use std::ptr;
 
     fn activation_desc(payload_bytes: u64) -> ActivationDesc {
         ActivationDesc {
@@ -998,5 +1068,48 @@ mod tests {
         assert_eq!(desc.unwrap().payload_bytes, 1);
         assert_eq!(payload, frame.payload.as_ptr().cast());
         Ok(())
+    }
+
+    #[test]
+    fn serial_iteration_uses_decode_for_established_single_token_request() {
+        let mut session = StageSession {
+            raw: ptr::null_mut(),
+            token_count: 4,
+        };
+        let request = IterationBatchRequest {
+            session: &mut session,
+            token_ids: &[7],
+            positions: &[],
+            sampling: None,
+            input: None,
+            sample_last: true,
+        };
+
+        assert!(serial_iteration_uses_decode_step(&request));
+    }
+
+    #[test]
+    fn serial_iteration_keeps_prefill_semantics_when_decode_is_not_implied() {
+        for (session_tokens, token_ids, positions, sample_last) in [
+            (0, &[7][..], &[][..], true),
+            (4, &[7, 8][..], &[][..], true),
+            (4, &[7][..], &[4][..], true),
+            (4, &[7][..], &[][..], false),
+        ] {
+            let mut session = StageSession {
+                raw: ptr::null_mut(),
+                token_count: session_tokens,
+            };
+            let request = IterationBatchRequest {
+                session: &mut session,
+                token_ids,
+                positions,
+                sampling: None,
+                input: None,
+                sample_last,
+            };
+
+            assert!(!serial_iteration_uses_decode_step(&request));
+        }
     }
 }
