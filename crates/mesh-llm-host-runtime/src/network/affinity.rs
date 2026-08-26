@@ -32,7 +32,10 @@ pub struct AffinityStatsSnapshot {
     pub prefix_routes: u64,
     pub sticky_routes: u64,
     pub session_routes: u64,
+    /// Legacy status compatibility. Long-lived learned prefix mappings were
+    /// removed; this counter is permanently zero.
     pub learned: u64,
+    /// Legacy status compatibility paired with `learned`; permanently zero.
     pub evicted: u64,
     pub target_reputation: TargetReputationStats,
 }
@@ -84,7 +87,7 @@ impl AffinityRouter {
     }
 
     #[cfg(test)]
-    fn with_config(prefix_enabled: bool, sticky_enabled: bool) -> Self {
+    pub(crate) fn with_config(prefix_enabled: bool, sticky_enabled: bool) -> Self {
         Self {
             inner: Arc::new(Mutex::new(AffinityState::default())),
             prefix: Arc::new(shared_affinity::AffinityRouter::with_config(
@@ -103,6 +106,10 @@ impl AffinityRouter {
         );
         stats.target_reputation = self.target_health.reputation_stats();
         stats
+    }
+
+    pub(crate) fn prefix_enabled(&self) -> bool {
+        self.prefix.prefix_enabled()
     }
 
     pub(crate) fn route_eligible_candidates(
@@ -234,6 +241,20 @@ impl AffinityRouter {
                 break;
             }
         }
+    }
+
+    pub(crate) fn forget_cache_leases_for_target(
+        &self,
+        target: &election::InferenceTarget,
+    ) -> usize {
+        let mut state = self.inner.lock().unwrap();
+        let before = state.cache_leases.len();
+        state
+            .cache_leases
+            .retain(|_, entry| &entry.target != target);
+        let live_keys: std::collections::HashSet<_> = state.cache_leases.keys().cloned().collect();
+        state.cache_lease_lru.retain(|key| live_keys.contains(key));
+        before.saturating_sub(state.cache_leases.len())
     }
 
     pub(crate) fn record_cache_probe(&self, hit: bool) {
@@ -551,6 +572,25 @@ mod tests {
                 .back()
                 .map(|key| key.prefix_hash),
             Some(7)
+        );
+    }
+
+    #[test]
+    fn cache_lease_invalidation_removes_only_the_failed_target() {
+        let affinity = AffinityRouter::with_config(true, true);
+        let failed = remote(1);
+        let healthy = remote(2);
+        affinity.remember_cache_lease(TEST_MODEL, 7, &failed);
+        affinity.remember_cache_lease(TEST_MODEL, 8, &healthy);
+
+        assert_eq!(affinity.forget_cache_leases_for_target(&failed), 1);
+        assert_eq!(
+            affinity.lookup_cache_lease(TEST_MODEL, 7, std::slice::from_ref(&failed)),
+            None
+        );
+        assert_eq!(
+            affinity.lookup_cache_lease(TEST_MODEL, 8, std::slice::from_ref(&healthy)),
+            Some(healthy)
         );
     }
 

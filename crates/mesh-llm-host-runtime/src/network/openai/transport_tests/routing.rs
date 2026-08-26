@@ -88,6 +88,33 @@ fn text_auto_request() -> BufferedHttpRequest {
         correlation_id: None,
     }
 }
+fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a scheduler."},
+            {"role": "user", "content": "Explain this trace."}
+        ]
+    });
+    let body_bytes = serde_json::to_vec(&body).expect("request body should serialize");
+    BufferedHttpRequest {
+        raw: Vec::new(),
+        method: "POST".to_string(),
+        path: "/v1/chat/completions".to_string(),
+        client_path: "/v1/chat/completions".to_string(),
+        request_id: mesh_llm_events::logging::identifiers::RequestId::default(),
+        body_json: None,
+        body_json_attempted: false,
+        body_len_bytes: body_bytes.len(),
+        body_bytes: Some(body_bytes),
+        completion_tokens: None,
+        model_name: Some(model.to_string()),
+        stream: None,
+        request_object_request_ids: Vec::new(),
+        response_adapter: ResponseAdapter::None,
+        correlation_id: None,
+    }
+}
 fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
     BufferedHttpRequest {
         raw: b"exact tokenizer request bytes".to_vec(),
@@ -198,6 +225,71 @@ fn tokenizer_effective_model_cannot_override_authoritative_identity() {
 
     assert_eq!(request.model_name.as_deref(), Some(model));
     assert_eq!(request.raw, raw_before);
+}
+
+#[test]
+fn single_remote_target_still_derives_a_cache_prefix() {
+    let model = "acme/code-model:Q4_K_M";
+    let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let affinity = AffinityRouter::with_config(true, true);
+    let mut request = unparsed_chat_request(model);
+
+    let prepared = prepare_mesh_targets(
+        &mut request,
+        Some(model),
+        std::slice::from_ref(&peer_id),
+        &affinity,
+    );
+
+    assert!(request.body_json_attempted);
+    assert!(request.body_json.is_some());
+    assert!(prepared.prefix_hash.is_some());
+}
+
+#[tokio::test]
+async fn prefix_kill_switch_prevents_cache_evidence_reordering() -> Result<()> {
+    use mesh_llm_routing::cache_inventory::{
+        CACHE_AFFINITY_SALT_BYTES, CacheAffinityAdvertisement, CacheAffinityEntry, CacheTier,
+        prefix_digest,
+    };
+
+    let model = "acme/code-model:Q4_K_M";
+    let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let node = test_node_with_remote_models(&[(model, peer_id)]).await;
+    let affinity = AffinityRouter::with_config(false, true);
+    let mut request = unparsed_chat_request(model);
+    let mut prepared = prepare_mesh_targets(
+        &mut request,
+        Some(model),
+        std::slice::from_ref(&peer_id),
+        &affinity,
+    );
+    let prefix_hash = prepared.prefix_hash.expect("derived prefix");
+    let salt = [3; CACHE_AFFINITY_SALT_BYTES];
+    let mut peer = test_peer_serving_model(peer_id, model);
+    peer.cache_affinity = Some(CacheAffinityAdvertisement {
+        salt,
+        epoch: 1,
+        generated_at_unix_ms: crate::mesh::current_time_unix_ms(),
+        ttl_ms: 120_000,
+        entries: vec![CacheAffinityEntry {
+            model: model.to_string(),
+            prefix_digest: prefix_digest(&salt, model, prefix_hash),
+            matched_tokens: 512,
+            suffix_prefill_tokens: 32,
+            tier: CacheTier::L1,
+            restore_micros: 0,
+            queue_delay_micros: 0,
+        }],
+    });
+    node.insert_test_peer(peer).await;
+
+    let ordered = order_mesh_target_hosts(&node, Some(model), None, &mut prepared, &affinity).await;
+
+    assert_eq!(ordered, vec![peer_id]);
+    assert!(prepared.cache_target.is_none());
+    assert_eq!(affinity.stats_snapshot().prefix_lookups, 0);
+    Ok(())
 }
 
 #[tokio::test]

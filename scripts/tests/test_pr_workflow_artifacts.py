@@ -261,6 +261,19 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             "steps.skippy_correctness_model_cache.outputs.cache-hit != 'true'",
             workflow,
         )
+        restore_start = workflow.index("- name: Restore Skippy correctness model cache")
+        download_start = workflow.index("- name: Download Skippy correctness model")
+        verify_start = workflow.index("- name: Verify Skippy correctness model")
+        save_start = workflow.index("- name: Save trusted Skippy correctness model cache")
+        restore_block = workflow[restore_start:download_start]
+        verify_block = workflow[verify_start:save_start]
+        save_block = workflow[save_start : workflow.index("- name: Run isolated Cargo tests")]
+        self.assertNotIn("restore-keys:", restore_block)
+        self.assertNotIn("cache-hit", verify_block)
+        self.assertIn("github.ref == 'refs/heads/main'", save_block)
+        self.assertLess(restore_start, download_start)
+        self.assertLess(download_start, verify_start)
+        self.assertLess(verify_start, save_start)
 
     def test_full_swift_sdk_has_a_cold_native_build_budget(self):
         workflow = self.workflow("ci-macos-lane.yml")

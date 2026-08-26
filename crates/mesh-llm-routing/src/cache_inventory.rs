@@ -43,6 +43,15 @@ pub struct CacheAffinityAdvertisement {
 }
 
 impl CacheAffinityAdvertisement {
+    pub fn is_fresh_at(&self, now_unix_ms: u64) -> bool {
+        self.generated_at_unix_ms <= now_unix_ms.saturating_add(CACHE_AFFINITY_MAX_FUTURE_SKEW_MS)
+            && now_unix_ms.saturating_sub(self.generated_at_unix_ms) <= u64::from(self.ttl_ms)
+    }
+
+    pub fn is_newer_than(&self, other: &Self) -> bool {
+        (self.generated_at_unix_ms, self.epoch) > (other.generated_at_unix_ms, other.epoch)
+    }
+
     /// Compare the advertised cache state while ignoring its freshness clock.
     /// Receivers still retain the newer timestamp for expiry decisions.
     pub fn has_same_cache_state(&self, other: &Self) -> bool {
@@ -58,9 +67,7 @@ impl CacheAffinityAdvertisement {
         prefix_hash: u64,
         now_unix_ms: u64,
     ) -> Option<CacheAffinityEntry> {
-        if self.generated_at_unix_ms > now_unix_ms.saturating_add(CACHE_AFFINITY_MAX_FUTURE_SKEW_MS)
-            || now_unix_ms.saturating_sub(self.generated_at_unix_ms) > u64::from(self.ttl_ms)
-        {
+        if !self.is_fresh_at(now_unix_ms) {
             return None;
         }
         let digest = prefix_digest(&self.salt, model, prefix_hash);
@@ -135,6 +142,13 @@ impl CacheInventory {
             model: model.to_string(),
             prefix_hash,
         };
+        let semantic_change = self.entries.get(&key).is_none_or(|previous| {
+            previous.matched_tokens != matched_tokens
+                || previous.suffix_prefill_tokens != suffix_prefill_tokens
+                || previous.tier != CacheTier::L1
+                || previous.restore_micros != 0
+                || previous.queue_delay_micros != queue_delay_micros
+        });
         if let Some(previous) = self.entries.remove(&key) {
             self.lru.remove(&previous.order);
         }
@@ -152,7 +166,9 @@ impl CacheInventory {
             },
         );
         self.lru.insert(order, key);
-        self.epoch = self.epoch.saturating_add(1);
+        if semantic_change {
+            self.epoch = self.epoch.saturating_add(1);
+        }
         while self.entries.len() > self.max_entries {
             let Some((_, oldest)) = self.lru.pop_first() else {
                 break;
@@ -207,6 +223,7 @@ impl CacheInventory {
 
     fn prune_expired(&mut self) {
         let now = Instant::now();
+        let mut changed = false;
         while let Some((_, key)) = self.lru.first_key_value() {
             if self
                 .entries
@@ -219,8 +236,11 @@ impl CacheInventory {
                 break;
             };
             if self.entries.remove(&key).is_some() {
-                self.epoch = self.epoch.saturating_add(1);
+                changed = true;
             }
+        }
+        if changed {
+            self.epoch = self.epoch.saturating_add(1);
         }
     }
 
@@ -338,6 +358,48 @@ mod tests {
         assert!(first.has_same_cache_state(&refreshed));
         refreshed.epoch = refreshed.epoch.saturating_add(1);
         assert!(!first.has_same_cache_state(&refreshed));
+    }
+
+    #[test]
+    fn identical_hits_refresh_lru_without_churning_the_epoch() {
+        let mut inventory = CacheInventory::default();
+        inventory.record_l1_hit("model", 7, 512, 32, 10);
+        let first = inventory.advertisement([3; CACHE_AFFINITY_SALT_BYTES], 1_000);
+
+        inventory.record_l1_hit("model", 7, 512, 32, 10);
+        let refreshed = inventory.advertisement([3; CACHE_AFFINITY_SALT_BYTES], 2_000);
+
+        assert_eq!(first.epoch, refreshed.epoch);
+        assert!(first.has_same_cache_state(&refreshed));
+    }
+
+    #[test]
+    fn inventory_evicts_oldest_entry_at_its_configured_bound() {
+        let mut inventory = CacheInventory {
+            max_entries: 2,
+            ..CacheInventory::default()
+        };
+        inventory.record_l1_hit("model", 1, 512, 32, 0);
+        inventory.record_l1_hit("model", 2, 512, 32, 0);
+        inventory.record_l1_hit("model", 3, 512, 32, 0);
+
+        assert!(inventory.probe_local("model", 1).is_none());
+        assert!(inventory.probe_local("model", 2).is_some());
+        assert!(inventory.probe_local("model", 3).is_some());
+    }
+
+    #[test]
+    fn invalidation_removes_positive_evidence_and_advances_epoch() {
+        let mut inventory = CacheInventory::default();
+        inventory.record_l1_hit("model", 7, 512, 32, 0);
+        let before = inventory.advertisement([3; CACHE_AFFINITY_SALT_BYTES], 1_000);
+
+        assert!(inventory.invalidate("model", 7));
+        assert!(!inventory.invalidate("model", 7));
+        let after = inventory.advertisement([3; CACHE_AFFINITY_SALT_BYTES], 2_000);
+
+        assert_eq!(after.epoch, before.epoch + 1);
+        assert!(after.entries.is_empty());
     }
 
     #[test]

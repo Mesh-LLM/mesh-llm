@@ -49,14 +49,6 @@ pub fn select_cache_target(
     evidence: &[TargetCacheEvidence],
     config: CacheAwareConfig,
 ) -> Option<TargetCacheEvidence> {
-    let cold_prefill_tokens = evidence
-        .iter()
-        .map(|item| {
-            u64::from(item.entry.matched_tokens)
-                .saturating_add(u64::from(item.entry.suffix_prefill_tokens))
-        })
-        .max()?;
-    let cold_cost_micros = cold_prefill_tokens.saturating_mul(config.prefill_micros_per_token);
     candidates
         .iter()
         .enumerate()
@@ -65,6 +57,12 @@ pub fn select_cache_target(
                 .iter()
                 .find(|item| &item.target == candidate)
                 .filter(|item| item.entry.matched_tokens >= config.min_saved_tokens)
+                .filter(|item| {
+                    let cold_tokens = u64::from(item.entry.matched_tokens)
+                        .saturating_add(u64::from(item.entry.suffix_prefill_tokens));
+                    item.estimated_cost_micros(config)
+                        < cold_tokens.saturating_mul(config.prefill_micros_per_token)
+                })
                 .map(|item| {
                     (
                         item.estimated_cost_micros(config),
@@ -75,7 +73,6 @@ pub fn select_cache_target(
                 })
         })
         .min_by_key(|(cost, matched, order, _)| (*cost, *matched, *order))
-        .filter(|(cost, _, _, _)| *cost < cold_cost_micros)
         .map(|(_, _, _, evidence)| evidence)
 }
 
@@ -152,5 +149,22 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn a_deep_hit_cannot_subsidize_an_expensive_shallow_candidate() {
+        let deep = remote(1);
+        let shallow = remote(2);
+        let selected = select_cache_target(
+            &[shallow.clone(), deep.clone()],
+            &[
+                evidence(deep.clone(), 4_000, 100, 3_000_000),
+                evidence(shallow, 256, 16, 400_000),
+            ],
+            CacheAwareConfig::default(),
+        )
+        .expect("the individually beneficial deep hit remains eligible");
+
+        assert_eq!(selected.target, deep);
     }
 }

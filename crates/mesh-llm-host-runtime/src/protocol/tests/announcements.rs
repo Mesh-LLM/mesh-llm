@@ -299,6 +299,44 @@ fn malformed_cache_affinity_is_dropped_at_the_gossip_boundary() {
 }
 
 #[test]
+fn stale_and_far_future_cache_affinity_are_dropped_at_ingest() {
+    use mesh_llm_routing::cache_inventory::CACHE_AFFINITY_MAX_FUTURE_SKEW_MS;
+
+    let now = crate::mesh::current_time_unix_ms();
+    let mut proto = crate::proto::node::PeerAnnouncement {
+        endpoint_id: SecretKey::from_bytes(&[0xAF; 32])
+            .public()
+            .as_bytes()
+            .to_vec(),
+        role: crate::proto::node::NodeRole::Host as i32,
+        serving_models: vec!["qwen".to_string()],
+        hosted_models: vec!["qwen".to_string()],
+        hosted_models_known: Some(true),
+        cache_affinity: Some(crate::proto::node::CacheAffinityAdvertisement {
+            salt: vec![1; 32],
+            epoch: 1,
+            generated_at_unix_ms: now.saturating_sub(10_001),
+            ttl_ms: 10_000,
+            entries: Vec::new(),
+        }),
+        ..Default::default()
+    };
+
+    let (_, stale) = proto_ann_to_local(&proto).expect("stale peer announcement");
+    assert!(stale.cache_affinity.is_none());
+
+    proto
+        .cache_affinity
+        .as_mut()
+        .expect("cache advertisement")
+        .generated_at_unix_ms = now
+        .saturating_add(CACHE_AFFINITY_MAX_FUTURE_SKEW_MS)
+        .saturating_add(1);
+    let (_, future) = proto_ann_to_local(&proto).expect("future peer announcement");
+    assert!(future.cache_affinity.is_none());
+}
+
+#[test]
 fn inference_admission_state_roundtrips_through_proto_announcement() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xAD; 32]).public());
     let expected_state = crate::proto::node::InferenceAdmissionState::RemotePaused;

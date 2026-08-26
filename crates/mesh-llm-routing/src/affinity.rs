@@ -21,7 +21,10 @@ pub struct AffinityStats {
     pub routes: u64,
     pub sticky_routes: u64,
     pub session_routes: u64,
+    /// Legacy status compatibility. Long-lived learned prefix mappings were
+    /// removed; this counter is permanently zero.
     pub learned: u64,
+    /// Legacy status compatibility paired with `learned`; permanently zero.
     pub evicted: u64,
 }
 

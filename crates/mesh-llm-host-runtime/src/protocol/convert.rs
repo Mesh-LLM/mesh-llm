@@ -653,13 +653,16 @@ fn proto_cache_affinity_to_local(
             })
         })
         .collect();
-    Some(CacheAffinityAdvertisement {
+    let advertisement = CacheAffinityAdvertisement {
         salt,
         epoch: advertisement.epoch,
         generated_at_unix_ms: advertisement.generated_at_unix_ms,
         ttl_ms: advertisement.ttl_ms,
         entries,
-    })
+    };
+    advertisement
+        .is_fresh_at(crate::mesh::current_time_unix_ms())
+        .then_some(advertisement)
 }
 
 pub(crate) fn local_ann_to_proto_ann(

@@ -554,7 +554,7 @@ fn prepare_mesh_targets(
     target_hosts: &[iroh::EndpointId],
     affinity: &AffinityRouter,
 ) -> PreparedTargets {
-    if !request.is_tokenize_request() && effective_model.is_some() && target_hosts.len() > 1 {
+    if !request.is_tokenize_request() && effective_model.is_some() && !target_hosts.is_empty() {
         request.ensure_body_json();
     }
     let body_json = request.body_json.as_ref();
@@ -591,7 +591,9 @@ async fn order_mesh_target_hosts(
     };
     let mut ordered =
         order_remote_hosts_by_context(node, name, required_tokens, &target_hosts).await;
-    if let Some(prefix_hash) = prepared.prefix_hash {
+    if affinity.prefix_enabled()
+        && let Some(prefix_hash) = prepared.prefix_hash
+    {
         let candidates: Vec<_> = ordered
             .iter()
             .copied()
@@ -949,6 +951,7 @@ fn handle_retryable_context_overflow(
         "Host {} rejected request with context overflow-style 400, trying next",
         context.target_host.fmt_short()
     );
+    forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
     MeshAttemptDisposition::Continue
 }
@@ -962,6 +965,7 @@ fn handle_retryable_mesh_response_quality(
         "Host {} returned low-quality success response, trying next",
         context.target_host.fmt_short()
     );
+    forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
     MeshAttemptDisposition::Continue
 }
@@ -973,6 +977,7 @@ fn handle_retryable_mesh_timeout(
         "Host {} timed out, trying next",
         context.target_host.fmt_short()
     );
+    forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
     spawn_mesh_refresh_once(context.node, &mut context.state.refreshed);
     MeshAttemptDisposition::Continue
@@ -985,9 +990,22 @@ fn handle_retryable_mesh_unavailable(
         "Failed to tunnel to host {}, trying next",
         context.target_host.fmt_short()
     );
+    forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
     spawn_mesh_refresh_once(context.node, &mut context.state.refreshed);
     MeshAttemptDisposition::Continue
+}
+
+fn forget_failed_target_cache_leases(context: &MeshAttemptResultContext<'_>) {
+    let target = election::InferenceTarget::Remote(context.target_host);
+    let invalidated = context.affinity.forget_cache_leases_for_target(&target);
+    if invalidated > 0 {
+        tracing::debug!(
+            target = %context.target_host.fmt_short(),
+            invalidated,
+            "invalidated cache leases after retryable target failure"
+        );
+    }
 }
 
 fn spawn_mesh_refresh_once(node: &mesh::Node, refreshed: &mut bool) {

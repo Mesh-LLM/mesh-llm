@@ -304,6 +304,21 @@ pub(crate) fn merge_first_joined_mesh_ts(existing: &mut Option<u64>, incoming: O
     }
 }
 
+fn merge_cache_affinity(
+    existing: &mut Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
+    incoming: Option<&mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
+    clear_on_absence: bool,
+) {
+    match (existing.as_ref(), incoming) {
+        (_, None) if clear_on_absence => *existing = None,
+        (None, Some(incoming)) => *existing = Some(incoming.clone()),
+        (Some(current), Some(incoming)) if incoming.is_newer_than(current) => {
+            *existing = Some(incoming.clone());
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn apply_transitive_ann(
     existing: &mut PeerInfo,
     addr: &EndpointAddr,
@@ -369,7 +384,11 @@ pub(super) fn apply_transitive_ann(
     existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
-    existing.cache_affinity = ann.cache_affinity.clone();
+    merge_cache_affinity(
+        &mut existing.cache_affinity,
+        ann.cache_affinity.as_ref(),
+        false,
+    );
     if ann.inference_admission_state.is_some() {
         existing.inference_admission_state = ann.inference_admission_state;
     }
@@ -814,7 +833,11 @@ impl Node {
         existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
         existing.stage_status_list_supported = ann.stage_status_list_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
-        existing.cache_affinity = ann.cache_affinity.clone();
+        merge_cache_affinity(
+            &mut existing.cache_affinity,
+            ann.cache_affinity.as_ref(),
+            true,
+        );
         existing.inference_admission_state = ann.inference_admission_state;
         if ann.version.is_some() {
             existing.version = ann.version.clone();

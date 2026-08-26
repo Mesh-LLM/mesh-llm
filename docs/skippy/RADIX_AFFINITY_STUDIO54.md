@@ -5,6 +5,11 @@ PR #1449 was exercised on Studio54 against a deterministic sample from
 distributed-ingress path with two serving hosts and two passive clients. It is a
 small-model integration result, not a production-capacity claim.
 
+This table supersedes the earlier interim channel figures (including the
+0.94–0.98 second p50 and 1.56 second p95 candidate observations). Those figures
+were from pre-final runs; the versioned values below are the final replay used
+for review.
+
 ## Result
 
 | Measured metric | `main` (`4c978666`) | PR code (`f25e2697`) | Change |
@@ -40,6 +45,10 @@ The derived metrics and pinned inputs are in
   checkpoint at concurrency four.
 - Each arm started fresh mesh and model processes. The PR arm was rerun at the
   final code commit after review fixes.
+
+The replay was not order-reversed, so run-order and thermal drift remain a
+limitation. The raw inputs and measured values are preserved to make that
+limitation explicit rather than treating this single pass as a capacity claim.
 
 TTFT is measured at the first streamed content or reasoning delta. Cached prompt
 tokens come from the terminal OpenAI usage payload. Router counters are deltas
