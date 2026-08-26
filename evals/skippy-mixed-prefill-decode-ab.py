@@ -385,9 +385,11 @@ def launch_cell(
         str(args.n_ubatch),
         "--openai-prefill-adaptive-max",
         str(args.n_ubatch),
-        "--openai-prefill-adaptive-target-ms",
-        str(args.adaptive_target_ms),
     ]
+    if version == "new" or not args.adaptive_target_new_only:
+        command.extend(
+            ["--openai-prefill-adaptive-target-ms", str(args.adaptive_target_ms)]
+        )
     environment = os.environ.copy()
     environment["LLAMA_STAGE_BUILD_DIR"] = str(native_build.resolve())
     environment["SKIPPY_TELEMETRY_STDERR"] = "1"
@@ -688,6 +690,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--activation-wire-dtype", default="f16")
     parser.add_argument("--n-gpu-layers", type=int, default=999)
     parser.add_argument("--adaptive-target-ms", type=float, default=100.0)
+    parser.add_argument(
+        "--adaptive-target-new-only",
+        action="store_true",
+        help="pass adaptive-target-ms only to NEW when OLD predates that CLI option",
+    )
     parser.add_argument("--startup-timeout-secs", type=float, default=900)
     parser.add_argument("--request-timeout-secs", type=float, default=1800)
     args = parser.parse_args()
@@ -818,6 +825,7 @@ def main() -> int:
                 "layer_end": args.layer_end,
                 "activation_width": args.activation_width,
                 "adaptive_target_ms": args.adaptive_target_ms,
+                "adaptive_target_new_only": args.adaptive_target_new_only,
             },
         },
         "cells": cells,
