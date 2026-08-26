@@ -35,8 +35,8 @@ or cache identity.
   immutable source SHA and passes their unique runner-temp root to the
   default-branch planner. The source manifests are data only. Planner code,
   Cargo workspace discovery, and affected-crate operations remain rooted in
-  the protected checkout. The source slice catalog must match the protected
-  catalog, and missing manifests fail closed.
+  the protected checkout. The source ownership and slice catalogs must match
+  the protected catalogs, and missing manifests fail closed.
 - scripts/plan-ci.py emits the versioned plan described by
   ci/ci-plan.schema.json, including direct domains, affected crates, signals,
   reasons, dependencies, matrices and budgets.

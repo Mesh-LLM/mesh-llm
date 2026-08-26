@@ -391,8 +391,8 @@ source commit.
   nested reusable workflow. The protected planner action extracts only
   `ci/ownership.yml` and `ci/slices.yml` from the validated immutable PR source
   SHA into a unique runner-temp directory. It treats those manifests as data;
-  the source slice catalog must match the protected catalog before use, so PRs
-  cannot expand protected matrix or worker ceilings.
+  both source catalogs must match the protected catalogs before use, so PRs
+  cannot alter ownership or expand protected matrix or worker ceilings.
   planner code, Cargo workspace discovery, and affected-crate operations remain
   rooted in the protected checkout. Missing or non-regular source manifests
   fail planning. Jobs and logs remain attached to five focused PR runs rather

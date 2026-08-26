@@ -35,8 +35,9 @@ The entries receive no repository secrets, cannot select Depot or publish
 trusted-main caches, and independently cancel superseded synchronizations.
 The protected planner action extracts only `ci/ownership.yml` and
 `ci/slices.yml` from the validated immutable PR source SHA into a unique
-runner-temp directory. The source slice catalog must match the protected
-catalog, preventing PR-controlled matrix or worker expansion. These files are
+runner-temp directory. The source ownership and slice catalogs must match the
+protected catalogs, preventing PR-controlled routing, matrix, or worker
+expansion. These files are
 routing data, not executable code.
 Planner code, Cargo workspace discovery, and affected-crate operations still
 run from the protected default-branch checkout. A missing or non-regular source
