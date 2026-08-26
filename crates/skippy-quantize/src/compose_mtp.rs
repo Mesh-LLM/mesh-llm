@@ -100,7 +100,12 @@ pub(crate) fn run_compose_mtp(args: ComposeMtpArgs) -> Result<()> {
     let metadata_shard = match (args.metadata_shard.as_ref(), args.metadata_output.as_ref()) {
         (Some(source), Some(output)) => {
             let mut metadata = read_gguf_file_info(source)?;
-            let patched = plan_metadata(&mut metadata.kv, &kv_overrides, args.no_bump_block_count)?;
+            let patched = plan_metadata(
+                &mut metadata.kv,
+                &mtp.kv,
+                &kv_overrides,
+                args.no_bump_block_count,
+            )?;
             bump_split_tensors_count(&mut metadata.kv, appended.len())?;
             write_patched_metadata_shard(source, output, &metadata)?;
             block_count = patched;
@@ -112,7 +117,12 @@ pub(crate) fn run_compose_mtp(args: ComposeMtpArgs) -> Result<()> {
     // the plan to the last shard too would double-bump it, and split shards
     // carry only split.* KV anyway.
     if metadata_shard.is_none() {
-        block_count = plan_metadata(&mut target.kv, &kv_overrides, args.no_bump_block_count)?;
+        block_count = plan_metadata(
+            &mut target.kv,
+            &mtp.kv,
+            &kv_overrides,
+            args.no_bump_block_count,
+        )?;
         bump_split_tensors_count(&mut target.kv, appended.len())?;
     }
     let appended_bytes = write_composite(
@@ -161,27 +171,128 @@ fn parse_kv_overrides(overrides: &[String]) -> Result<Vec<(String, u32)>> {
 
 /// Mutates target metadata in place: applies `--set-kv` overrides and bumps
 /// the architecture `block_count` unless disabled. Returns the final value.
+/// When the block count grows, per-layer array metadata is extended to match.
 fn plan_metadata(
     target_kv: &mut Vec<GgufKv>,
+    mtp_kv: &[GgufKv],
     overrides: &[(String, u32)],
     no_bump: bool,
 ) -> Result<Option<u32>> {
     for (key, value) in overrides {
         apply_override(target_kv, key, *value)?;
     }
-    let block_count_kv = target_kv
+    let block_count = match target_kv
         .iter_mut()
-        .find(|kv| kv.key().ends_with(".block_count"));
-    let Some(block_count_kv) = block_count_kv else {
-        return Ok(None);
+        .find(|kv| kv.key().ends_with(".block_count"))
+    {
+        None => return Ok(None),
+        Some(kv) => {
+            let value = kv
+                .u32_value_mut()
+                .context("block_count exists but is not a u32 value")?;
+            let previous = *value;
+            if !no_bump {
+                *value += 1;
+            }
+            previous
+        }
     };
-    let value = block_count_kv
-        .u32_value_mut()
-        .context("block_count exists but is not a u32 value")?;
     if !no_bump {
-        *value += 1;
+        extend_per_layer_arrays(target_kv, mtp_kv, block_count as usize)?;
+        return Ok(Some(block_count + 1));
     }
-    Ok(Some(*value))
+    Ok(Some(block_count))
+}
+
+/// llama.cpp's loader (`get_key_or_arr`) requires per-layer array metadata
+/// whose length equals `block_count`. Keys whose array length matches the
+/// pre-bump block count gain one entry for the appended MTP layer: taken from
+/// the MTP GGUF's matching key when it carries one, otherwise duplicated from
+/// the last target layer.
+fn extend_per_layer_arrays(
+    target_kv: &mut [GgufKv],
+    mtp_kv: &[GgufKv],
+    layer_count: usize,
+) -> Result<()> {
+    for kv in target_kv.iter_mut() {
+        if per_layer_suffix(kv.key()).is_none() {
+            continue;
+        }
+        extend_array_kv(kv, mtp_kv, layer_count)?;
+    }
+    Ok(())
+}
+
+/// Per-layer keys llama.cpp validates against `n_layer` when stored as arrays.
+fn per_layer_suffix(key: &str) -> Option<&'static str> {
+    const SUFFIXES: [&str; 3] = [
+        ".feed_forward_length",
+        ".attention.head_count",
+        ".attention.head_count_kv",
+    ];
+    SUFFIXES.into_iter().find(|suffix| key.ends_with(*suffix))
+}
+
+fn extend_array_kv(kv: &mut GgufKv, mtp_kv: &[GgufKv], layer_count: usize) -> Result<()> {
+    match kv {
+        GgufKv::ArrayU32 { key, value } => {
+            if value.len() == layer_count {
+                let mtp_value = mtp_layer_u32(mtp_kv, key);
+                value.push(mtp_value.unwrap_or_else(|| value[value.len() - 1]));
+            }
+        }
+        GgufKv::ArrayI32 { key, value } => {
+            if value.len() == layer_count {
+                let mtp_value = mtp_layer_i32(mtp_kv, key);
+                value.push(mtp_value.unwrap_or(value[value.len() - 1]));
+            }
+        }
+        GgufKv::ArrayF32 { value, .. } => {
+            if value.len() == layer_count && !value.is_empty() {
+                let last = value[value.len() - 1];
+                value.push(last);
+            }
+        }
+        GgufKv::ArrayBool { value, .. } => {
+            if value.len() == layer_count && !value.is_empty() {
+                let last = value[value.len() - 1];
+                value.push(last);
+            }
+        }
+        GgufKv::ArrayString { value, .. } => {
+            if value.len() == layer_count && !value.is_empty() {
+                let last = value[value.len() - 1].clone();
+                value.push(last);
+            }
+        }
+        _ => bail!(
+            "per-layer key {:?} has an unsupported representation; refusing to extend it",
+            kv.key()
+        ),
+    }
+    Ok(())
+}
+
+/// Reads the MTP draft layer's value for a per-layer key: a scalar, or the
+/// last entry of an array.
+fn mtp_layer_u32(mtp_kv: &[GgufKv], key: &str) -> Option<u32> {
+    mtp_layer(mtp_kv, key).and_then(|kv| match kv {
+        GgufKv::U32 { value, .. } => Some(*value),
+        GgufKv::ArrayU32 { value, .. } => value.last().copied(),
+        _ => None,
+    })
+}
+
+fn mtp_layer_i32(mtp_kv: &[GgufKv], key: &str) -> Option<i32> {
+    mtp_layer(mtp_kv, key).and_then(|kv| match kv {
+        GgufKv::I32 { value, .. } => Some(*value),
+        GgufKv::ArrayI32 { value, .. } => value.last().copied(),
+        _ => None,
+    })
+}
+
+fn mtp_layer<'a>(mtp_kv: &'a [GgufKv], key: &str) -> Option<&'a GgufKv> {
+    mtp_kv.iter().find(|kv| kv.key() == key)
 }
 
 fn apply_override(target_kv: &mut Vec<GgufKv>, key: &str, value: u32) -> Result<()> {
@@ -1062,6 +1173,60 @@ mod tests {
                 .iter()
                 .any(|kv| matches!(kv, GgufKv::U32 { key, value: 1 } if key == "arch.block_count"))
         );
+    }
+
+    #[test]
+    fn bumps_per_layer_array_metadata_with_block_count() {
+        let dir = TempDir::new("perlayer");
+        let target_path = dir.path("target.gguf");
+        let mtp_path = dir.path("mtp.gguf");
+        let output_path = dir.path("out.gguf");
+        // nemotron-style metadata: per-layer arrays sized to block_count. The
+        // MTP draft carries its own (different) ffn length but no head_count
+        // override, exercising both value sources.
+        write_fixture_gguf(
+            &target_path,
+            &[
+                GgufKv::u32("arch.block_count", 2),
+                GgufKv::array_u32("arch.feed_forward_length", vec![512, 1024]),
+                GgufKv::array_u32("arch.attention.head_count", vec![8, 8]),
+            ],
+            &[("blk.1.weight", vec![2], vec![9_u8; 8])],
+        );
+        write_fixture_gguf(
+            &mtp_path,
+            &[
+                GgufKv::u32("arch.block_count", 1),
+                GgufKv::u32("arch.feed_forward_length", 2048),
+            ],
+            &[("blk.0.nextn.weight", vec![2], vec![5_u8; 8])],
+        );
+        run_compose_mtp(ComposeMtpArgs {
+            target_shard: target_path,
+            mtp_gguf: mtp_path,
+            output: output_path.clone(),
+            mtp_block: 2,
+            metadata_shard: None,
+            metadata_output: None,
+            set_kv: vec![],
+            no_bump_block_count: false,
+            json: false,
+        })
+        .unwrap();
+        let composite = read_gguf_file_info(&output_path).unwrap();
+        let get_arr = |key: &str| {
+            composite.kv.iter().find_map(|kv| match kv {
+                GgufKv::ArrayU32 { key: k, value } if k == key => Some(value.clone()),
+                _ => None,
+            })
+        };
+        // ffn takes the MTP draft's value; head_count has no MTP source and
+        // duplicates the last layer.
+        assert_eq!(
+            get_arr("arch.feed_forward_length"),
+            Some(vec![512, 1024, 2048])
+        );
+        assert_eq!(get_arr("arch.attention.head_count"), Some(vec![8, 8, 8]));
     }
 
     #[test]
