@@ -2,8 +2,9 @@ use std::io;
 
 use super::invalid_data;
 
-// v13 extends the sampling payload with the full configurable sampler chain. Stage peers must be
-// upgraded together so older readers reject the changed payload contract.
+// v13 combines the raw-F32 activation contract and per-stage prefill calibration statistics with
+// the full configurable sampler-chain payload. Stage peers must be upgraded together so older
+// readers reject the changed wire contract.
 pub const STAGE_STATE_VERSION: i32 = 13;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_SAMPLERS: usize = 16;
@@ -624,6 +625,10 @@ pub struct StageReplyStats {
     pub prefill_edge_stage_index: i64,
     pub prefill_edge_activation_bytes_max: i64,
     pub prefill_edge_observation_count: i64,
+    pub prefill_compute_us_max: i64,
+    pub prefill_compute_stage_index: i64,
+    pub prefill_compute_token_count: i64,
+    pub prefill_compute_observation_count: i64,
 }
 
 impl StageReplyStats {
@@ -659,6 +664,12 @@ impl StageReplyStats {
             self.prefill_edge_activation_bytes_max = other.prefill_edge_activation_bytes_max;
         }
         self.prefill_edge_observation_count += other.prefill_edge_observation_count;
+        if other.prefill_compute_us_max > self.prefill_compute_us_max {
+            self.prefill_compute_us_max = other.prefill_compute_us_max;
+            self.prefill_compute_stage_index = other.prefill_compute_stage_index;
+            self.prefill_compute_token_count = other.prefill_compute_token_count;
+        }
+        self.prefill_compute_observation_count += other.prefill_compute_observation_count;
     }
 
     pub fn observe_prefill_edge_transport(
@@ -682,6 +693,22 @@ impl StageReplyStats {
         self.prefill_edge_observation_count = self.prefill_edge_observation_count.saturating_add(1);
     }
 
+    pub fn observe_prefill_compute(
+        &mut self,
+        stage_index: u32,
+        compute_us: i64,
+        token_count: usize,
+    ) {
+        let compute_us = compute_us.max(0);
+        if compute_us > self.prefill_compute_us_max {
+            self.prefill_compute_us_max = compute_us;
+            self.prefill_compute_stage_index = i64::from(stage_index);
+            self.prefill_compute_token_count = i64::try_from(token_count).unwrap_or(i64::MAX);
+        }
+        self.prefill_compute_observation_count =
+            self.prefill_compute_observation_count.saturating_add(1);
+    }
+
     pub fn is_empty(self) -> bool {
         self.kv_lookup_hits == 0
             && self.kv_lookup_misses == 0
@@ -701,6 +728,7 @@ impl StageReplyStats {
             && self.verify_window_token_count == 0
             && self.verify_window_max_tokens == 0
             && self.prefill_edge_observation_count == 0
+            && self.prefill_compute_observation_count == 0
     }
 }
 
