@@ -173,10 +173,15 @@ deadline handling.
   the first prefill chunk, `256` for the second, and repeats `384` afterward.
   `adaptive-ramp` starts at `--openai-prefill-adaptive-start`, grows by
   `--openai-prefill-adaptive-step` up to `--openai-prefill-adaptive-max` when
-  downstream wait is hidden under stage0 compute/write, and backs off when
-  downstream wait is exposed. Prefill spans record the selected policy,
-  schedule/adaptive knobs, and min/max observed chunk sizes so reports can
-  compare fixed, scheduled, and adaptive runs.
+  downstream transport is hidden under the slowest measured stage, and backs
+  off when transport is exposed. Each stage folds its maximum prefill compute
+  sample into the deferred ACK statistics; stage0 combines those samples with
+  its own compute/write/wait timing, updates a lane-pool EWMA, and seeds the
+  next request from that calibrated bottleneck. `adaptive_max` remains a hard
+  chunk ceiling, so calibration cannot weaken the scheduler's bounded-prefill
+  decode-progress guarantee. Prefill and calibration spans record the selected
+  policy, schedule/adaptive knobs, min/max observed chunk sizes, bottleneck
+  stage, bottleneck duration, and transport-to-compute ratios.
 - Embedded stage-0 OpenAI serving can run neural draft speculative decoding with
   `--openai-draft-model-path`, `--openai-speculative-window`, and
   `--openai-adaptive-speculative-window`. The draft model runs locally in the

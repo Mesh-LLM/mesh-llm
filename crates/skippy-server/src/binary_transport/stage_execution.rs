@@ -392,7 +392,7 @@ pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     predicted_token_count: usize,
 ) -> usize {
     const REPLY_HEADER_BYTES: usize = 3 * std::mem::size_of::<i32>();
-    const REPLY_STATS_BYTES: usize = 23 * std::mem::size_of::<i64>();
+    const REPLY_STATS_BYTES: usize = 27 * std::mem::size_of::<i64>();
     let token_count = match reply_kind {
         WireReplyKind::Ack => 0,
         WireReplyKind::PredictedToken => 1,

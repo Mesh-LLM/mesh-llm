@@ -299,10 +299,11 @@ prefill replies with credit. The current best-known setting remains
 
 Near-term work:
 
-- Add adaptive chunk sizing. Keep unchunked prefill for short prompts, use
-  coarse chunks such as `128` for long prompts, and sweep the prompt-length
-  threshold. The current fixed-size driver is useful for experiments, but it
-  probably leaves short prompts paying avoidable frame and ACK overhead.
+- Calibrate adaptive chunk sizing against the slowest stage. Keep unchunked
+  prefill for short prompts, use coarse bounded chunks such as `128` for long
+  prompts, and use stage compute plus transport timing to decide whether the
+  ramp can grow. The fixed-size driver remains useful for controls, but it
+  leaves asymmetric topologies making decisions from stage0 timing alone.
 - Improve credit telemetry before widening inflight windows. The next useful
   spans are credit wait time, outstanding prefill count, downstream ACK drain
   time, and per-stage queue depth. Only widen beyond `2 / 1` if those counters

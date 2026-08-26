@@ -44,9 +44,12 @@ pub(in crate::frontend) struct PersistentStageLane {
 pub(in crate::frontend) struct PrefillTransportEstimate {
     pub(in crate::frontend) write_ms: f64,
     pub(in crate::frontend) wait_ms: f64,
+    pub(in crate::frontend) slowest_compute_ms: f64,
     pub(in crate::frontend) write_to_compute: f64,
     pub(in crate::frontend) wait_to_compute: f64,
-    pub(in crate::frontend) stage_index: i64,
+    pub(in crate::frontend) edge_stage_index: i64,
+    pub(in crate::frontend) bottleneck_stage_index: i64,
+    pub(in crate::frontend) bottleneck_token_count: i64,
     pub(in crate::frontend) activation_bytes: i64,
     pub(in crate::frontend) observations: u64,
 }
@@ -169,26 +172,62 @@ impl PersistentStageLanePool {
         })
     }
 
+    pub(in crate::frontend) fn prefill_transport_estimate(
+        &self,
+    ) -> Option<PrefillTransportEstimate> {
+        let estimate = *self.prefill_transport.lock().ok()?;
+        (estimate.observations > 0).then_some(estimate)
+    }
+
     pub(in crate::frontend) fn observe_prefill_transport(
         &self,
         stats: &StageReplyStats,
-        stage0_compute_ms: f64,
-        prefill_chunks: usize,
+        stage0_compute_max_ms: f64,
+        stage0_compute_max_tokens: usize,
+        stage0_forward_write_max_ms: f64,
+        stage0_downstream_wait_max_ms: f64,
     ) {
-        if stats.prefill_edge_observation_count == 0 || prefill_chunks == 0 {
+        if stage0_compute_max_tokens == 0 {
             return;
         }
-        let compute_ms = (stage0_compute_ms / prefill_chunks as f64).max(0.001);
-        let write_ms = us_to_ms(stats.prefill_edge_write_us_max);
-        let wait_ms = us_to_ms(stats.prefill_edge_wait_us_max);
+        let downstream_compute_ms = us_to_ms(stats.prefill_compute_us_max);
+        let (compute_ms, bottleneck_stage_index, bottleneck_token_count) =
+            if downstream_compute_ms > stage0_compute_max_ms {
+                (
+                    downstream_compute_ms,
+                    stats.prefill_compute_stage_index,
+                    stats.prefill_compute_token_count,
+                )
+            } else {
+                (
+                    stage0_compute_max_ms,
+                    i64::from(self.config.stage_index),
+                    i64::try_from(stage0_compute_max_tokens).unwrap_or(i64::MAX),
+                )
+            };
+        let compute_ms = compute_ms.max(0.001);
+        let downstream_write_ms = us_to_ms(stats.prefill_edge_write_us_max);
+        let downstream_wait_ms = us_to_ms(stats.prefill_edge_wait_us_max);
+        let write_ms = stage0_forward_write_max_ms.max(downstream_write_ms);
+        let wait_ms = stage0_downstream_wait_max_ms.max(downstream_wait_ms);
+        let local_transport_ms = stage0_forward_write_max_ms + stage0_downstream_wait_max_ms;
+        let downstream_transport_ms = us_to_ms(stats.prefill_edge_total_us_max);
+        let edge_stage_index = if downstream_transport_ms > local_transport_ms {
+            stats.prefill_edge_stage_index
+        } else {
+            i64::from(self.config.stage_index)
+        };
         let sample = PrefillTransportEstimate {
             write_ms,
             wait_ms,
+            slowest_compute_ms: compute_ms,
             write_to_compute: write_ms / compute_ms,
             wait_to_compute: wait_ms / compute_ms,
-            stage_index: stats.prefill_edge_stage_index,
+            edge_stage_index,
+            bottleneck_stage_index,
+            bottleneck_token_count,
             activation_bytes: stats.prefill_edge_activation_bytes_max,
-            observations: u64::try_from(stats.prefill_edge_observation_count).unwrap_or(0),
+            observations: u64::try_from(stats.prefill_edge_observation_count.max(1)).unwrap_or(1),
         };
         let mut estimate = match self.prefill_transport.lock() {
             Ok(estimate) => estimate,
@@ -199,9 +238,13 @@ impl PersistentStageLanePool {
         } else {
             estimate.write_ms = ewma(estimate.write_ms, sample.write_ms);
             estimate.wait_ms = ewma(estimate.wait_ms, sample.wait_ms);
+            estimate.slowest_compute_ms =
+                ewma(estimate.slowest_compute_ms, sample.slowest_compute_ms);
             estimate.write_to_compute = ewma(estimate.write_to_compute, sample.write_to_compute);
             estimate.wait_to_compute = ewma(estimate.wait_to_compute, sample.wait_to_compute);
-            estimate.stage_index = sample.stage_index;
+            estimate.edge_stage_index = sample.edge_stage_index;
+            estimate.bottleneck_stage_index = sample.bottleneck_stage_index;
+            estimate.bottleneck_token_count = sample.bottleneck_token_count;
             estimate.activation_bytes = sample.activation_bytes;
             estimate.observations = estimate.observations.saturating_add(sample.observations);
         }

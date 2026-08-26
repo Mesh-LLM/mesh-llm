@@ -17,7 +17,7 @@ use super::telemetry::UpstreamReplyWriteSpan;
 use super::telemetry::{
     BinaryMessageTiming, emit_binary_message_received, emit_binary_message_timing,
     emit_upstream_reply_write_span, insert_runtime_session_stats, record_prefill_edge_transport,
-    record_verify_window_timing,
+    record_prefill_stage_compute, record_verify_window_timing,
 };
 use crate::binary_transport::BinaryStageExecutionOptions;
 use crate::binary_transport::WireCondition;
@@ -523,6 +523,7 @@ fn handle_binary_connection_messages(
                 compute_end_unix_nanos = now_unix_nanos() as u64;
                 (result.0, result.1, result.2, result.3, compute_ms)
             };
+        record_prefill_stage_compute(&mut message_reply_stats, config, &message, compute_ms);
         if telemetry.is_debug_enabled() {
             let mut decode_attrs = binary_message_attrs(config, session_id, &message);
             decode_attrs.insert(

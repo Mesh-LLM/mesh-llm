@@ -71,6 +71,8 @@ impl StageOpenAiBackend {
             let mut prefill_min_chunk_size = usize::MAX;
             let mut prefill_max_chunk_size = 0usize;
             let mut prefill_stage0_compute_ms = 0.0;
+            let mut prefill_stage0_compute_max_ms = 0.0_f64;
+            let mut prefill_stage0_compute_max_tokens = 0usize;
             let mut prefill_runtime_lock_wait_ms = 0.0;
             let mut prefill_runtime_lock_wait_max_ms = 0.0_f64;
             let mut prefill_runtime_lock_hold_ms = 0.0;
@@ -79,9 +81,11 @@ impl StageOpenAiBackend {
             let mut prefill_runtime_sessions_before = None;
             let mut prefill_runtime_sessions_after = None;
             let mut prefill_forward_write_ms = 0.0;
+            let mut prefill_forward_write_max_ms = 0.0_f64;
             let mut prefill_output_activation_bytes = 0usize;
             let mut prefill_forward_activation_bytes = 0usize;
             let mut prefill_downstream_wait_ms = 0.0;
+            let mut prefill_downstream_wait_max_ms = 0.0_f64;
             let mut pending_prefill_replies = 0usize;
             let mut prefill_credit_wait_count = 0usize;
             let mut prefill_deferred_replies_drained = 0usize;
@@ -339,6 +343,10 @@ impl StageOpenAiBackend {
                     }
                     let chunk_stage0_compute_ms = stage0_timer.elapsed_ms();
                     prefill_stage0_compute_ms += chunk_stage0_compute_ms;
+                    if chunk_stage0_compute_ms > prefill_stage0_compute_max_ms {
+                        prefill_stage0_compute_max_ms = chunk_stage0_compute_ms;
+                        prefill_stage0_compute_max_tokens = chunk.len();
+                    }
                     let forwarded = forwarded_stage_message(
                         request.config,
                         &message,
@@ -361,6 +369,8 @@ impl StageOpenAiBackend {
                     .map_err(openai_io_error)?;
                     let chunk_forward_write_ms = write_timer.elapsed_ms();
                     prefill_forward_write_ms += chunk_forward_write_ms;
+                    prefill_forward_write_max_ms =
+                        prefill_forward_write_max_ms.max(chunk_forward_write_ms);
                     let mut chunk_downstream_wait_ms = 0.0;
                     let mut chunk_deferred_replies_drained = 0usize;
                     let mut chunk_credit_wait_count = 0usize;
@@ -395,6 +405,8 @@ impl StageOpenAiBackend {
                             prefill_pending_replies_max.max(pending_prefill_replies);
                     }
                     prefill_downstream_wait_ms += chunk_downstream_wait_ms;
+                    prefill_downstream_wait_max_ms =
+                        prefill_downstream_wait_max_ms.max(chunk_downstream_wait_ms);
                     prefill_planner.observe(PrefillChunkObservation {
                         compute_ms: chunk_stage0_compute_ms,
                         forward_write_ms: chunk_forward_write_ms,
@@ -464,11 +476,6 @@ impl StageOpenAiBackend {
                 prefill_deferred_replies_drained =
                     prefill_deferred_replies_drained.saturating_add(drained.drained_replies);
                 prefill_downstream_wait_ms += drained.downstream_wait_ms;
-                lane_pool.observe_prefill_transport(
-                    &prefill_chain_cache_stats,
-                    prefill_stage0_compute_ms,
-                    prefill_chunks,
-                );
                 if !prefill_chain_cache_restored {
                     prefill_stage0_full_recorded = self.record_embedded_stage0_full_prefill(
                         &session_key,
@@ -567,6 +574,32 @@ impl StageOpenAiBackend {
                 json!(prefill_chain_cache_stats.prefill_edge_observation_count),
             );
             prefill_attrs.insert(
+                "llama_stage.prefill_compute_us_max".to_string(),
+                json!(prefill_chain_cache_stats.prefill_compute_us_max),
+            );
+            prefill_attrs.insert(
+                "llama_stage.prefill_compute_stage_index".to_string(),
+                json!(prefill_chain_cache_stats.prefill_compute_stage_index),
+            );
+            prefill_attrs.insert(
+                "llama_stage.prefill_compute_observation_count".to_string(),
+                json!(prefill_chain_cache_stats.prefill_compute_observation_count),
+            );
+            if let Some(estimate) = lane_pool.prefill_transport_estimate() {
+                prefill_attrs.insert(
+                    "llama_stage.prefill_bottleneck_compute_ms".to_string(),
+                    json!(estimate.slowest_compute_ms),
+                );
+                prefill_attrs.insert(
+                    "llama_stage.prefill_bottleneck_stage_index".to_string(),
+                    json!(estimate.bottleneck_stage_index),
+                );
+                prefill_attrs.insert(
+                    "llama_stage.prefill_bottleneck_token_count".to_string(),
+                    json!(estimate.bottleneck_token_count),
+                );
+            }
+            prefill_attrs.insert(
                 "skippy.prefill_credit_limit".to_string(),
                 json!(request.prefill_reply_credit_limit),
             );
@@ -663,6 +696,43 @@ impl StageOpenAiBackend {
                     "expected generation config ACK from downstream, got {:?}",
                     reply.kind
                 )));
+            }
+            prefill_chain_cache_stats.merge(reply.stats);
+            lane_pool.observe_prefill_transport(
+                &prefill_chain_cache_stats,
+                prefill_stage0_compute_max_ms,
+                prefill_stage0_compute_max_tokens,
+                prefill_forward_write_max_ms,
+                prefill_downstream_wait_max_ms,
+            );
+            if let Some(estimate) = lane_pool.prefill_transport_estimate() {
+                let mut calibration_attrs = self.openai_attrs(request.ids);
+                calibration_attrs.insert(
+                    "llama_stage.prefill_bottleneck_compute_ms".to_string(),
+                    json!(estimate.slowest_compute_ms),
+                );
+                calibration_attrs.insert(
+                    "llama_stage.prefill_bottleneck_stage_index".to_string(),
+                    json!(estimate.bottleneck_stage_index),
+                );
+                calibration_attrs.insert(
+                    "llama_stage.prefill_bottleneck_token_count".to_string(),
+                    json!(estimate.bottleneck_token_count),
+                );
+                calibration_attrs.insert(
+                    "llama_stage.prefill_transport_write_to_compute".to_string(),
+                    json!(estimate.write_to_compute),
+                );
+                calibration_attrs.insert(
+                    "llama_stage.prefill_transport_wait_to_compute".to_string(),
+                    json!(estimate.wait_to_compute),
+                );
+                calibration_attrs.insert(
+                    "llama_stage.prefill_calibration_observations".to_string(),
+                    json!(estimate.observations),
+                );
+                self.telemetry
+                    .emit("stage.openai_prefill_calibration", calibration_attrs);
             }
             if prefill_chain_cache_restored {
                 self.evict_embedded_stage0_resident_prefix(&session_key, request.ids, None)?;
