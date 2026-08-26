@@ -114,8 +114,8 @@ just release-build-cuda
 just release-bundle-cuda "$VERSION"
 ```
 
-You can override arches with a positional argument, e.g.:
-`just release-build-cuda "80;89"`.
+The Linux CUDA recipe selects its architecture list from the toolkit detected
+on the host; it does not accept a positional architecture override.
 
 ## CI wiring
 
