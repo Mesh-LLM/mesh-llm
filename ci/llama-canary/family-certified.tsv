@@ -1,14 +1,18 @@
 # Supported-families certification manifest — full certification on every row.
 # Replaces family-tier1.tsv + family-tier2.tsv (tiers dropped 2026-08-25).
 # Every row runs: load, single-step parity, chain split parity, dtype matrix,
-# state handoff, speculative/cache smoke; rows with sweep_period > 0 also run
-# the hybrid/recurrent boundary sweep. The KV-cache oracle is the in-run A/B
+# and state handoff. Rows with MTP/NextN tensors additionally run one
+# speculative/cache smoke at their base cut; rows with sweep_period > 0 also
+# run the hybrid/recurrent boundary sweep. The KV-cache oracle is the in-run A/B
 # assertion carried by the state-handoff lane: --cache-hit-repeats 2 makes the
 # cached pass token-exact vs the uncached pass (state_handoff cache_hit_matches).
 # Before certification, the battery inspects every resolved GGUF tensor table.
-# Rows with `.nextn.` tensors are added to the emitted `mtp-corpus.tsv` and
-# must return native MTP draft sidebands in the staged correctness lanes.
-# Each row also receives a recorded model-size-aware stage-readiness deadline.
+# Rows with `.nextn.` tensors are added to the emitted `mtp-corpus.tsv`, must
+# return native MTP draft sidebands in staged correctness, and are the only
+# rows that run llama-spec-bench. Preflight resolves every repo/file to an
+# immutable cached snapshot SHA and records it in `resolved-models.tsv` before
+# certification starts. Each row also receives recorded stage-readiness and
+# complete-certification wall-clock deadlines.
 # Columns (pipe-separated):
 #   family         | skippy family label used by scripts/family-certify.sh
 #   repo           | Hugging Face repo for the cert artifact (highest-download accessible repo per James 2026-08-25)
@@ -18,9 +22,8 @@
 #   layer_end      | final layer for staged correctness lanes
 #   notes
 #   draft_repo     | optional HF repo for the speculative draft model
-#   draft_file     | optional GGUF inside draft_repo; when both are empty the
-#                   | battery self-drafts (target GGUF is its own draft) so the
-#                   | speculative lane always runs
+#   draft_file     | optional GGUF inside draft_repo; used only for MTP rows;
+#                   | when both draft fields are empty an MTP row self-drafts
 # family|repo|file|selector|sweep_period|layer_end|notes|draft_repo|draft_file
 qwen3-dense|Qwen/Qwen3-0.6B-GGUF|Qwen3-0.6B-Q8_0.gguf|Q8_0|0|28|core prod dense baseline
 llama|bartowski/Llama-3.2-1B-Instruct-GGUF|Llama-3.2-1B-Instruct-Q4_K_M.gguf|Q4_K_M|0|16|prod dense (covers olmo2 arch, trimmed)

@@ -37,17 +37,22 @@ runner image; no GitHub Actions model caching). The runner's `.env` exports
 `HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
 read-only; the cache is populated by a two-stage prewarm that downloads on
-local disk and moves each repo to NFS). The workflow builds its three
+local disk and moves each repo to NFS). The workflow builds its four
 certification binaries before the manifest lanes; the family battery builds
 them once itself unless `--skip-build` is selected, in which case it verifies
 that every binary already exists. A manual dispatch may set `force_certify` to
 run build, smoke, and the full family battery when the upstream SHA is
-unchanged. Every resolved GGUF is inspected for native MTP/NextN tensors;
-matching rows require the native MTP draft sideband and are listed in the
-battery's speculative corpus. Per-lane outcomes, manifests, summaries, model
-scans, and logs are uploaded for 14 days even when the battery fails. Stage
-readiness uses a recorded model-size-derived deadline rather than the
-correctness binary's fixed default. On a
+unchanged. Before any certification starts, every selected GGUF is resolved
+through the cached ref and then again through its immutable snapshot SHA. The
+preflight records the revisions, verifies all shard/tensor scans, disk
+headroom and certification ports, and runs one cheap MTP speculative-corpus
+smoke. Only GGUFs with native MTP/NextN tensors run `llama-spec-bench`; those
+rows also require native MTP draft sidebands in staged correctness. Per-lane
+outcomes, immutable model manifests, summaries, model scans, preflight
+evidence, and logs are uploaded for 14 days even when the battery fails. Stage
+readiness uses a model-size-derived deadline, each complete certification has
+a portable process-group wall-clock limit, and the workflow's outer battery
+ceiling is 12 hours. On a
 patch-apply failure it hands the queue to a non-interactive `opencode` agent
 (`LLAMA_CANARY_AGENT_MODEL`, default `Nemotron 3 Ultra Free`) which rebases
 `third_party/llama.cpp/patches`, runs the supported-families certification

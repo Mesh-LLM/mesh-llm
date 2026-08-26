@@ -11,6 +11,8 @@ on:
       - "ci/llama-canary/**"
       - "scripts/family-certify.sh"
       - "scripts/skippy-family-battery.sh"
+      - "scripts/lib/family-outcome.sh"
+      - "scripts/run-command-with-timeout.py"
       - "scripts/llama-canary-agent-repair.sh"
       - ".github/workflows/llama-upstream-canary.yml"
   workflow_dispatch:
@@ -158,7 +160,10 @@ jobs:
       - name: Supported-families certification battery (parity gate)
         id: battery
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
-        timeout-minutes: 300
+        # Preflight resolves every cached model to an immutable snapshot before
+        # any certification starts. Individual certifications are bounded by
+        # the script; this outer ceiling leaves room for the complete manifest.
+        timeout-minutes: 720
         env:
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/skippy-family-battery.sh --skip-build

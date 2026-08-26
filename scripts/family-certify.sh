@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/family-outcome.sh
+source "$ROOT/scripts/lib/family-outcome.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -35,6 +37,7 @@ Correctness options:
   --skip-correctness          skip all correctness/state lanes
   --skip-dtype                skip dtype matrix
   --skip-state                skip state handoff
+  --skip-speculative          skip llama-spec-bench by explicit cohort policy
   --require-native-mtp-draft fail unless staged correctness returns a native
                               MTP draft sideband
   --require-lanes             fail if any correctness/speculative lane is
@@ -126,6 +129,7 @@ SKIP_BUILD=0
 SKIP_CORRECTNESS=0
 SKIP_DTYPE=0
 SKIP_STATE=0
+SKIP_SPECULATIVE=0
 REQUIRE_NATIVE_MTP_DRAFT=0
 REQUIRE_LANES=0
 CORPUS="crates/skippy-bench/corpora/speculative_coding_prompts.jsonl"
@@ -169,6 +173,7 @@ while [[ $# -gt 0 ]]; do
     --skip-correctness) SKIP_CORRECTNESS=1; shift ;;
     --skip-dtype) SKIP_DTYPE=1; shift ;;
     --skip-state) SKIP_STATE=1; shift ;;
+    --skip-speculative) SKIP_SPECULATIVE=1; shift ;;
     --require-native-mtp-draft) REQUIRE_NATIVE_MTP_DRAFT=1; shift ;;
     --require-lanes) REQUIRE_LANES=1; shift ;;
     --corpus) CORPUS="$2"; shift 2 ;;
@@ -241,7 +246,7 @@ record_event() {
   local report="$5"
   local note="$6"
   local outcome
-  outcome="$(classify_outcome "$status" "$log" "$note")"
+  outcome="$(classify_family_outcome "$status" "$log" "$note")"
   jq -n \
     --arg name "$name" \
     --arg status "$status" \
@@ -260,39 +265,6 @@ record_event() {
       note:($note | if length > 0 then . else null end)
     } | with_entries(select(.value != null))' \
     >> "$COMMANDS_JSONL"
-}
-
-classify_outcome() {
-  local status="$1"
-  local log="$2"
-  local note="$3"
-  if [[ "$status" == "pass" ]]; then
-    printf 'pass\n'
-    return
-  fi
-  if [[ "$status" == "skipped" ]]; then
-    printf 'skipped\n'
-    return
-  fi
-
-  local evidence="$note"
-  if [[ -n "$log" && -f "$log" ]]; then
-    evidence+=$'\n'
-    evidence+="$(tail -n 240 "$log")"
-  fi
-  if grep -Eqi 'timed out|timeout|did not become ready|deadline exceeded' <<<"$evidence"; then
-    printf 'timeout\n'
-  elif grep -Eqi 'unsupported:|not supported for this model architecture|unsupported model architecture' <<<"$evidence"; then
-    printf 'unsupported\n'
-  elif grep -Eqi 'missing tensor|tensor .* not found|failed to load model|model artifact.*invalid|invalid model artifact' <<<"$evidence"; then
-    printf 'model-invalid\n'
-  elif grep -Eqi 'mismatch|did not match|matches[=:][[:space:]]*false|token.*different' <<<"$evidence"; then
-    printf 'mismatch\n'
-  elif grep -Eqi 'no such file or directory|does not exist|requires --|corpus.*(missing|not found)|failed to resolve|command not found|required command not found' <<<"$evidence"; then
-    printf 'harness\n'
-  else
-    printf 'runtime-error\n'
-  fi
 }
 
 run_logged() {
@@ -505,7 +477,9 @@ else
   fi
 fi
 
-if [[ -n "$DRAFT_MODEL_PATH" ]]; then
+if (( SKIP_SPECULATIVE != 0 )); then
+  record_event "llama-spec-bench" "skipped" 0 "" "" "--skip-speculative"
+elif [[ -n "$DRAFT_MODEL_PATH" ]]; then
   SPEC_DIR="$OUT_DIR/speculative"
   mkdir -p "$SPEC_DIR"
   spec_args=(
@@ -711,6 +685,7 @@ jq -n \
   --arg cache_hit_repeats "$CACHE_HIT_REPEATS" \
   --arg startup_timeout_secs "$STARTUP_TIMEOUT_SECS" \
   --argjson require_native_mtp_draft "$REQUIRE_NATIVE_MTP_DRAFT" \
+  --argjson skip_speculative "$SKIP_SPECULATIVE" \
   --arg corpus "$(abs_path "$CORPUS")" \
   --arg capability_draft "$CAPABILITY_DRAFT_JSON" \
   --argjson commands "$(jq -s '.' "$COMMANDS_JSONL")" \
@@ -738,7 +713,10 @@ jq -n \
       startup_timeout_secs:($startup_timeout_secs | if length > 0 then tonumber else null end),
       require_native_mtp_draft:($require_native_mtp_draft == 1)
     },
-    speculative:{corpus:$corpus},
+    speculative:{
+      corpus:$corpus,
+      skipped_by_policy:($skip_speculative == 1)
+    },
     capability_draft:$capability_draft,
     commands:$commands
   }' > "$MANIFEST_JSON"
@@ -794,7 +772,18 @@ if (( FAILED_COUNT > 0 )); then
 fi
 
 if (( REQUIRE_LANES != 0 )); then
-  mapfile -t SKIPPED_LANES < <(jq -sr '.[] | select(.status == "skipped" and .name != "build") | .name' "$COMMANDS_JSONL")
+  mapfile -t SKIPPED_LANES < <(
+    jq -sr \
+      --argjson skip_speculative "$SKIP_SPECULATIVE" \
+      '.[]
+       | select(
+           .status == "skipped"
+           and .name != "build"
+           and (($skip_speculative == 0) or .name != "llama-spec-bench")
+         )
+       | .name' \
+      "$COMMANDS_JSONL"
+  )
   if (( ${#SKIPPED_LANES[@]} > 0 )); then
     echo "promised certification lanes were skipped (missing required inputs):" >&2
     printf '  %s\n' "${SKIPPED_LANES[@]}" >&2
