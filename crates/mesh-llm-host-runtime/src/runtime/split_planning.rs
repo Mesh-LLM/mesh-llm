@@ -409,19 +409,25 @@ fn runtime_slice_plan_input(
     };
 
     if perf_aware_placement_disabled() {
-        // Escape hatch: strip performance signals and edge data so the
-        // planner reproduces capacity-only placement exactly.
-        for node in &mut plan_input.nodes {
-            node.sustained_mem_bandwidth_mib_per_s = None;
-            node.sustained_compute_gflop_per_s = None;
-            node.stage_transfer_latency_ms = None;
-        }
-        plan_input.edges = Vec::new();
-        plan_input.activation_frame_bytes = 0;
-        plan_input.target_decode_tpot_ms = None;
+        strip_perf_aware_signals(&mut plan_input);
     }
 
     plan_input
+}
+
+/// Strip performance-aware planning signals in place for the
+/// `MESH_TOPOLOGY_PERF_AWARE` escape hatch. Fields that pre-date
+/// perf-aware planning — per-node RTT (`stage_transfer_latency_ms`) and the
+/// decode TPOT target — are deliberately kept: the legacy planner consumed
+/// both, so stripping them would change capacity-only placement instead of
+/// reproducing it. Tested by `kill_switch_strip_keeps_pre_perf_aware_fields`.
+fn strip_perf_aware_signals(plan_input: &mut SplitTopologyPlanInput) {
+    for node in &mut plan_input.nodes {
+        node.sustained_mem_bandwidth_mib_per_s = None;
+        node.sustained_compute_gflop_per_s = None;
+    }
+    plan_input.edges = Vec::new();
+    plan_input.activation_frame_bytes = 0;
 }
 
 /// Whether performance-aware placement is disabled via the
@@ -825,6 +831,18 @@ mod tests {
         participant
     }
 
+    fn participant_with_perf(
+        seed: u8,
+        vram_bytes: u64,
+        rtt_ms: u32,
+        bandwidth_mib_per_s: u32,
+    ) -> SplitParticipant {
+        let mut participant = participant_with_rtt(seed, vram_bytes, rtt_ms);
+        participant.sustained_mem_bandwidth_mib_per_s = Some(bandwidth_mib_per_s);
+        participant.sustained_compute_gflop_per_s = Some(15_000);
+        participant
+    }
+
     #[test]
     fn default_runtime_headroom_reserves_decode_margin() {
         // This fixed reserve is 1/10 (10%) of the advertised budget — the
@@ -1103,6 +1121,60 @@ mod tests {
         assert!(!perf_aware_disabled_from_value(Some("yes")));
         assert!(!perf_aware_disabled_from_value(Some("perf")));
         assert!(!perf_aware_disabled_from_value(Some("")));
+    }
+
+    #[test]
+    fn kill_switch_strip_keeps_pre_perf_aware_fields() {
+        // The kill-switch parity contract: MESH_TOPOLOGY_PERF_AWARE=0 must
+        // reproduce pre-PR capacity-only placement, which consumed per-node
+        // RTT (stage_transfer_latency_ms) and the decode TPOT target. The
+        // strip removes only signals introduced by perf-aware planning.
+        let mut plan_input = runtime_slice_plan_input(
+            &package(40, 40_000_000_000),
+            &[
+                participant_with_perf(1, 26_000_000_000, 5, 400_000),
+                participant_with_perf(2, 26_000_000_000, 9, 120_000),
+            ],
+            SplitTopologyResourceInputs {
+                native_context_length: 262_144,
+                kv_bytes_per_token: 64 * 1024,
+                recurrent_bytes_per_sequence_by_layer: Vec::new(),
+                ctx_size_override: None,
+                parallel_override: None,
+            },
+        );
+        assert!(
+            plan_input.target_decode_tpot_ms.is_some(),
+            "fixture must set the TPOT target for the assertion to mean anything"
+        );
+        assert!(
+            plan_input
+                .nodes
+                .iter()
+                .all(|node| node.stage_transfer_latency_ms.is_some()),
+            "fixture must set RTT for the assertion to mean anything"
+        );
+
+        strip_perf_aware_signals(&mut plan_input);
+
+        // Pre-perf-aware fields survive the strip.
+        assert!(plan_input.target_decode_tpot_ms.is_some());
+        assert!(
+            plan_input
+                .nodes
+                .iter()
+                .all(|node| node.stage_transfer_latency_ms.is_some())
+        );
+        // Perf-aware signals are stripped.
+        assert!(
+            plan_input
+                .nodes
+                .iter()
+                .all(|node| node.sustained_mem_bandwidth_mib_per_s.is_none()
+                    && node.sustained_compute_gflop_per_s.is_none())
+        );
+        assert!(plan_input.edges.is_empty());
+        assert_eq!(plan_input.activation_frame_bytes, 0);
     }
 
     #[test]
