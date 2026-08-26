@@ -104,7 +104,8 @@ mod tests {
             eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
             return Ok(());
         };
-        let model = open_correctness_model_with_context_and_lanes(&model_path, 256, 3)?;
+        // The mixed and serial sides each keep three sessions live at once.
+        let model = open_correctness_model_with_context_and_lanes(&model_path, 256, 6)?;
         let tokens = model.tokenize(
             "Mixed scheduling keeps decode latency bounded while prompts continue arriving.",
             true,
