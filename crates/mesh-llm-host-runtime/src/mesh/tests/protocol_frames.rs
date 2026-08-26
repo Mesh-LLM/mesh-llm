@@ -315,6 +315,7 @@ async fn transitive_peer_update_refreshes_last_mentioned() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
         latency_ms: None,
         latency_source: None,
         latency_age_ms: None,

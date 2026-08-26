@@ -58,6 +58,27 @@ fn no_context_eligible_target_reason(model: &str, required_tokens: Option<u32>) 
     }
 }
 
+async fn cache_target_for_request(
+    node: &mesh::Node,
+    affinity: &AffinityRouter,
+    model: &str,
+    prefix_hash: Option<u64>,
+    candidates: &[election::InferenceTarget],
+) -> Option<election::InferenceTarget> {
+    let prefix_hash = prefix_hash?;
+    if let Some(target) = affinity.lookup_cache_lease(model, prefix_hash, candidates) {
+        return Some(target);
+    }
+
+    let selected = node
+        .select_cache_target(model, prefix_hash, candidates)
+        .await;
+    if let Some(target) = selected.as_ref() {
+        affinity.remember_cache_lease(model, prefix_hash, target);
+    }
+    selected
+}
+
 async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDispatchOutcome {
     let RouteModelRequestArgs {
         node,
@@ -84,18 +105,20 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     }
     route_observer.route_selected(Some(model));
 
+    let prefix_hash = crate::network::affinity::cache_prefix_hash(request.body_json.as_ref());
+    let cache_target =
+        cache_target_for_request(&node, affinity, model, prefix_hash, &ordered_candidates).await;
     let selection = crate::network::affinity::select_model_target_from_candidates(
         targets,
         &ordered_candidates,
         model,
         request.body_json.as_ref(),
         affinity,
+        cache_target,
     );
     if matches!(selection.target, election::InferenceTarget::None) {
         return send_route_model_none_target(&node, tcp_stream, model, route_observer).await;
     }
-    forget_route_model_context_mismatch(&node, model, required_tokens, &selection, affinity).await;
-
     let mut ordered = ordered_candidates;
     move_target_first(&mut ordered, &selection.target);
     let total_targets = ordered.len();
@@ -154,7 +177,6 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             &selection,
             attempt_result,
             &mut state,
-            affinity,
         ) {
             RouteModelDisposition::Continue => continue,
             RouteModelDisposition::Return(result) => {
@@ -230,32 +252,6 @@ async fn finish_exhausted_route_model_request(
     response_outcome(503, result)
 }
 
-async fn forget_route_model_context_mismatch(
-    node: &mesh::Node,
-    model: &str,
-    required_tokens: Option<u32>,
-    selection: &TargetSelection,
-    affinity: &AffinityRouter,
-) {
-    let (Some(prefix_hash), Some(cached_target)) = (
-        selection.learn_prefix_hash,
-        selection.cached_target.as_ref(),
-    ) else {
-        return;
-    };
-    let cached_context = match cached_target {
-        election::InferenceTarget::Local(_) => node.local_model_context_length(model).await,
-        election::InferenceTarget::Remote(peer_id) => {
-            node.peer_model_context_length(*peer_id, model).await
-        }
-        election::InferenceTarget::None => None,
-    };
-    if matches!((required_tokens, cached_context), (Some(required), Some(context)) if context < required)
-    {
-        affinity.forget_target(model, prefix_hash, cached_target);
-    }
-}
-
 fn handle_route_model_attempt_result(
     node: &mesh::Node,
     model: &str,
@@ -263,7 +259,6 @@ fn handle_route_model_attempt_result(
     selection: &TargetSelection,
     attempt_result: RouteAttemptResult,
     state: &mut RouteModelState,
-    affinity: &AffinityRouter,
 ) -> RouteModelDisposition {
     match attempt_result {
         RouteAttemptResult::Delivered { status_code, usage } => {
@@ -274,26 +269,23 @@ fn handle_route_model_attempt_result(
                     target,
                     selection,
                     state,
-                    affinity,
                 },
                 status_code,
                 usage,
             )
         }
         RouteAttemptResult::RetryableContextOverflow => {
-            handle_retryable_route_model_context(model, target, selection, affinity)
+            handle_retryable_route_model_context(target)
         }
         RouteAttemptResult::RetryableResponseQuality(failure) => {
-            handle_retryable_route_model_response_quality(
-                model, target, selection, affinity, failure,
-            )
+            handle_retryable_route_model_response_quality(target, failure)
         }
         RouteAttemptResult::RetryableTimeout => {
-            handle_retryable_route_model_timeout(node, model, target, selection, state, affinity)
+            handle_retryable_route_model_timeout(node, target, state)
         }
-        RouteAttemptResult::RetryableUnavailable => handle_retryable_route_model_unavailable(
-            node, model, target, selection, state, affinity,
-        ),
+        RouteAttemptResult::RetryableUnavailable => {
+            handle_retryable_route_model_unavailable(node, target, state)
+        }
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
             RouteModelDisposition::Return(RouteDispatchOutcome::FailedWithStatus {
                 status_code,
@@ -318,7 +310,6 @@ struct DeliveredRouteModelContext<'a> {
     target: &'a election::InferenceTarget,
     selection: &'a TargetSelection,
     state: &'a RouteModelState,
-    affinity: &'a AffinityRouter,
 }
 
 fn handle_delivered_route_model_attempt(
@@ -326,12 +317,25 @@ fn handle_delivered_route_model_attempt(
     status_code: u16,
     usage: Option<TokenUsage>,
 ) -> RouteModelDisposition {
-    if should_learn_affinity(status_code)
-        && let Some(prefix_hash) = context.selection.learn_prefix_hash
+    if (200..400).contains(&status_code)
+        && let (Some(prefix_hash), election::InferenceTarget::Local(_), Some(usage)) = (
+            context.selection.prefix_hash,
+            context.target,
+            usage.as_ref(),
+        )
+        && let Some(cached_tokens) = usage.cached_prompt_tokens.filter(|count| *count > 0)
     {
-        context
-            .affinity
-            .learn_target(context.model, prefix_hash, context.target);
+        let suffix = usage
+            .prompt_tokens
+            .unwrap_or(cached_tokens)
+            .saturating_sub(cached_tokens);
+        context.node.record_local_cache_hit(
+            context.model,
+            prefix_hash,
+            u32::try_from(cached_tokens).unwrap_or(u32::MAX),
+            u32::try_from(suffix).unwrap_or(u32::MAX),
+            0,
+        );
     }
     context.node.record_routed_request(
         Some(context.model),
@@ -353,12 +357,8 @@ fn handle_delivered_route_model_attempt(
 }
 
 fn handle_retryable_route_model_context(
-    model: &str,
     target: &election::InferenceTarget,
-    selection: &TargetSelection,
-    affinity: &AffinityRouter,
 ) -> RouteModelDisposition {
-    forget_selected_route_model_target(model, target, selection, affinity);
     tracing::warn!(
         "Target {target:?} rejected request with context overflow-style 400, trying next"
     );
@@ -366,13 +366,9 @@ fn handle_retryable_route_model_context(
 }
 
 fn handle_retryable_route_model_response_quality(
-    model: &str,
     target: &election::InferenceTarget,
-    selection: &TargetSelection,
-    affinity: &AffinityRouter,
     failure: ResponseQualityFailure,
 ) -> RouteModelDisposition {
-    forget_selected_route_model_target(model, target, selection, affinity);
     tracing::warn!(
         reason = failure.label(),
         "Target {target:?} returned low-quality success response, trying next"
@@ -382,13 +378,9 @@ fn handle_retryable_route_model_response_quality(
 
 fn handle_retryable_route_model_timeout(
     node: &mesh::Node,
-    model: &str,
     target: &election::InferenceTarget,
-    selection: &TargetSelection,
     state: &mut RouteModelState,
-    affinity: &AffinityRouter,
 ) -> RouteModelDisposition {
-    forget_selected_route_model_target(model, target, selection, affinity);
     spawn_mesh_refresh_once(node, &mut state.refreshed);
     tracing::warn!("Target {target:?} timed out, trying next");
     RouteModelDisposition::Continue
@@ -396,31 +388,12 @@ fn handle_retryable_route_model_timeout(
 
 fn handle_retryable_route_model_unavailable(
     node: &mesh::Node,
-    model: &str,
     target: &election::InferenceTarget,
-    selection: &TargetSelection,
     state: &mut RouteModelState,
-    affinity: &AffinityRouter,
 ) -> RouteModelDisposition {
-    forget_selected_route_model_target(model, target, selection, affinity);
     spawn_mesh_refresh_once(node, &mut state.refreshed);
     tracing::warn!("Target {target:?} unavailable, trying next");
     RouteModelDisposition::Continue
-}
-
-fn forget_selected_route_model_target(
-    model: &str,
-    target: &election::InferenceTarget,
-    selection: &TargetSelection,
-    affinity: &AffinityRouter,
-) {
-    if let (Some(prefix_hash), Some(cached_target)) = (
-        selection.learn_prefix_hash,
-        selection.cached_target.as_ref(),
-    ) && cached_target == target
-    {
-        affinity.forget_target(model, prefix_hash, target);
-    }
 }
 
 fn finalize_route_model_result(

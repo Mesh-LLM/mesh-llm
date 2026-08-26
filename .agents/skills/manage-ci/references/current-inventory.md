@@ -116,7 +116,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, and public website build |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
-| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch |
+| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch and a pinned, digest-verified Skippy correctness fixture |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
@@ -425,6 +425,14 @@ fail-open policy.
   central runner policy permits it only for GitHub-hosted selections, and
   runtime rows must match the seed's container image and toolchain epoch.
 - `capture-sccache-stats`: machine-readable cache evidence.
+
+Rust-test batches that contain `skippy-runtime` or `skippy-model-package`
+restore the pinned Qwen correctness fixture from one exact GitHub Actions cache
+key containing its file SHA-256 and `.github/cache-version.txt`. Every use is
+verified against the pinned digest before tests. Cache publication is limited
+to the exhaustive trusted-main batch containing `skippy-runtime`; PR jobs are
+restore-only and jobs for which central runner policy denies native GitHub
+cache access download and verify the immutable revision without publishing.
 
 `scripts/collect-ci-metrics.py` is the read-only timing evidence collector. Its
 schema-v3 report keeps workflow wall/queue, job runner queue, measured

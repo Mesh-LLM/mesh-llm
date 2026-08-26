@@ -39,7 +39,7 @@ crates/mesh-llm-host-runtime/src/
 │   ├── router.rs            Request classification, model scoring, multimodal routing
 │   ├── tunnel.rs            TCP ↔ QUIC relay, B2B tunnel map
 │   ├── nostr.rs             Nostr discovery, score_mesh(), smart_auto()
-│   ├── affinity.rs          Prefix-affinity request routing
+│   ├── affinity.rs          Sticky fallback and cache-evidence routing
 │   └── openai/              OpenAI transport glue
 ├── logging/                 Local request lifecycle, persistence, replay, retention, audit, webhooks
 ├── plugin/                  Plugin host, runtime, transport, MCP bridge

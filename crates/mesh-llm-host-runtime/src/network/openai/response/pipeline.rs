@@ -267,6 +267,7 @@ mod tests {
             parser.usage,
             Some(TokenUsage {
                 prompt_tokens: Some(4),
+                cached_prompt_tokens: None,
                 completion_tokens: Some(6),
                 total_tokens: Some(10),
             })
@@ -284,6 +285,7 @@ mod tests {
     fn pipeline_error_statuses_discard_usage_from_error_bodies() {
         let usage = Some(TokenUsage {
             prompt_tokens: Some(2),
+            cached_prompt_tokens: None,
             completion_tokens: Some(3),
             total_tokens: Some(5),
         });

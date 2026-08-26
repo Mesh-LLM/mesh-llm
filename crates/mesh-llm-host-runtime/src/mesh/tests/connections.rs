@@ -415,6 +415,9 @@ async fn make_test_node_with_requirements(
         inflight_change_tx,
         routing_metrics: crate::network::metrics::RoutingMetrics::default(),
         routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
+        cache_affinity_inventory: Arc::new(std::sync::Mutex::new(
+            mesh_llm_routing::cache_inventory::CacheInventory::default(),
+        )),
         swarm_capture: Arc::new(std::sync::Mutex::new(None)),
         local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
         runtime_data_producer,

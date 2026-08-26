@@ -558,6 +558,7 @@ mod tests {
     fn progress_failure_preserves_committed_status_and_discards_usage() {
         let usage = Some(TokenUsage {
             prompt_tokens: Some(8),
+            cached_prompt_tokens: None,
             completion_tokens: Some(5),
             total_tokens: Some(13),
         });
@@ -575,6 +576,7 @@ mod tests {
     fn progress_success_preserves_authoritative_usage() {
         let usage = TokenUsage {
             prompt_tokens: Some(8),
+            cached_prompt_tokens: None,
             completion_tokens: Some(5),
             total_tokens: Some(13),
         };

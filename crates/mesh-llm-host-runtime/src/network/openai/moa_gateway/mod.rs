@@ -406,6 +406,7 @@ mod usage_tests {
             ),
             Some(TokenUsage {
                 prompt_tokens: Some(12),
+                cached_prompt_tokens: None,
                 completion_tokens: Some(7),
                 total_tokens: Some(19),
             })
@@ -416,6 +417,7 @@ mod usage_tests {
     fn moa_failure_status_discards_usage_and_remains_exact() {
         let usage = Some(TokenUsage {
             prompt_tokens: Some(12),
+            cached_prompt_tokens: None,
             completion_tokens: Some(7),
             total_tokens: Some(19),
         });

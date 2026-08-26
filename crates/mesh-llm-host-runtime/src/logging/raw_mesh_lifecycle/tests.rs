@@ -182,12 +182,14 @@ fn stream_completion_tokens_propagate_only_when_bounded_and_available() {
     for usage in [
         Some(mesh_llm_events::logging::events::TokenUsage {
             prompt_tokens: Some(0),
+            cached_prompt_tokens: None,
             completion_tokens: Some(42),
             total_tokens: Some(42),
         }),
         None,
         Some(mesh_llm_events::logging::events::TokenUsage {
             prompt_tokens: Some(u64::MAX),
+            cached_prompt_tokens: None,
             completion_tokens: Some(1),
             total_tokens: Some(u64::MAX),
         }),
@@ -224,6 +226,7 @@ fn stream_completion_tokens_propagate_only_when_bounded_and_available() {
         [
             Some(mesh_llm_events::logging::events::TokenUsage {
                 prompt_tokens: Some(0),
+                cached_prompt_tokens: None,
                 completion_tokens: Some(42),
                 total_tokens: Some(42),
             }),

@@ -108,6 +108,9 @@ jobs:
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
+      SKIPPY_CORRECTNESS_MODEL_FILE: Qwen3-0.6B-Q8_0.gguf
+      SKIPPY_CORRECTNESS_MODEL_REVISION: ef4088322893040952513f532f736ddeab518403
+      SKIPPY_CORRECTNESS_MODEL_SHA256: 12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -146,17 +149,39 @@ jobs:
           path: ${{ runner.temp }}/static-abi-input
       - name: Restore immutable static ABI input
         run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
+      - name: Restore Skippy correctness model cache when required
+        id: skippy_correctness_model_cache
+        if: ${{ (contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package')) && needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/skippy-correctness-model
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-correctness-model-${{ env.SKIPPY_CORRECTNESS_MODEL_SHA256 }}-${{ hashFiles('.github/cache-version.txt') }}
       - name: Download Skippy correctness model when required
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package') }}
+        if: ${{ (contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package')) && steps.skippy_correctness_model_cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/skippy-correctness-model"
-          hf download Qwen/Qwen3-0.6B-GGUF Qwen3-0.6B-Q8_0.gguf --local-dir "$RUNNER_TEMP/skippy-correctness-model"
-          test -s "$RUNNER_TEMP/skippy-correctness-model/Qwen3-0.6B-Q8_0.gguf"
+          hf download Qwen/Qwen3-0.6B-GGUF "$SKIPPY_CORRECTNESS_MODEL_FILE" \
+            --revision "$SKIPPY_CORRECTNESS_MODEL_REVISION" \
+            --local-dir "$RUNNER_TEMP/skippy-correctness-model"
+      - name: Verify Skippy correctness model when required
+        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package') }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/skippy-correctness-model"
+          printf '%s  %s\n' "$SKIPPY_CORRECTNESS_MODEL_SHA256" "$SKIPPY_CORRECTNESS_MODEL_FILE" | sha256sum --check --strict
+      - name: Save trusted Skippy correctness model cache
+        # Main is exhaustive, so the batch containing skippy-runtime is the
+        # sole publisher for this shared package-manager-style cache key.
+        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') && needs.runner_policy.outputs.allow_native_github_cache == 'true' && github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request' && inputs.original_event_name != 'pull_request_target' && steps.skippy_correctness_model_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/skippy-correctness-model
+          key: ${{ steps.skippy_correctness_model_cache.outputs.cache-primary-key }}
       - name: Run isolated Cargo tests for the batch
         env:
           TEST_CRATES: ${{ toJson(matrix.batch.crates) }}
-          SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/Qwen3-0.6B-Q8_0.gguf
+          SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/${{ env.SKIPPY_CORRECTNESS_MODEL_FILE }}
         run: |
           set -euo pipefail
           while IFS= read -r crate; do

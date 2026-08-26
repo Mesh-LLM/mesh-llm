@@ -67,7 +67,7 @@ fn test_duplicate_terminal_rejected() {
     let err = svc
         .transition_terminal(rid, &guard, TerminalOutcome::Failed("x".into()))
         .unwrap_err();
-    assert_eq!(err.existing, TerminalOutcome::Completed);
+    assert_eq!(*err.existing, TerminalOutcome::Completed);
 }
 
 // ---------------------------------------------------------------------------

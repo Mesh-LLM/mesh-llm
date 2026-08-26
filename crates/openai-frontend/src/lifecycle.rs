@@ -96,7 +96,7 @@ pub enum OpenAiFailure {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct OpenAiUsage {
     pub prompt_tokens: u32,
-    pub cached_tokens: u32,
+    pub cached_tokens: Option<u32>,
     pub completion_tokens: u32,
     pub total_tokens: u32,
 }
@@ -108,7 +108,7 @@ impl From<&Usage> for OpenAiUsage {
             cached_tokens: usage
                 .prompt_tokens_details
                 .as_ref()
-                .map_or(0, |details| details.cached_tokens),
+                .map(|details| details.cached_tokens),
             completion_tokens: usage.completion_tokens,
             total_tokens: usage.total_tokens,
         }
@@ -381,11 +381,18 @@ mod tests {
             usage,
             OpenAiUsage {
                 prompt_tokens: 17,
-                cached_tokens: 11,
+                cached_tokens: Some(11),
                 completion_tokens: 4,
                 total_tokens: 21,
             }
         );
+    }
+
+    #[test]
+    fn usage_projection_preserves_absent_cache_metadata() {
+        let usage = OpenAiUsage::from(&Usage::new(17, 4));
+
+        assert_eq!(usage.cached_tokens, None);
     }
 
     #[test]

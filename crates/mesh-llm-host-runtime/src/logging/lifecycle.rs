@@ -110,8 +110,8 @@ impl fmt::Display for TerminalOutcome {
 /// Error returned when a duplicate terminal transition is attempted.
 #[derive(Clone, Debug)]
 pub struct DuplicateTerminalError {
-    pub existing: TerminalOutcome,
-    pub attempted: TerminalOutcome,
+    pub existing: Box<TerminalOutcome>,
+    pub attempted: Box<TerminalOutcome>,
 }
 
 impl fmt::Display for DuplicateTerminalError {
@@ -218,8 +218,8 @@ impl LifecycleGuard {
         let mut record = lock_recover(&self.inner.record);
         if let Some(existing) = &record.outcome {
             return Err(DuplicateTerminalError {
-                existing: existing.clone(),
-                attempted: outcome,
+                existing: Box::new(existing.clone()),
+                attempted: Box::new(outcome),
             });
         }
 
@@ -382,8 +382,8 @@ mod tests {
         let err = guard
             .terminate(TerminalOutcome::Failed("oops".into()))
             .unwrap_err();
-        assert_eq!(err.existing, TerminalOutcome::Completed);
-        assert_eq!(err.attempted, TerminalOutcome::Failed("oops".into()));
+        assert_eq!(*err.existing, TerminalOutcome::Completed);
+        assert_eq!(*err.attempted, TerminalOutcome::Failed("oops".into()));
     }
 
     #[test]
@@ -505,8 +505,8 @@ mod tests {
     #[test]
     fn duplicate_terminal_error_display() {
         let err = DuplicateTerminalError {
-            existing: TerminalOutcome::Completed,
-            attempted: TerminalOutcome::Failed("x".into()),
+            existing: Box::new(TerminalOutcome::Completed),
+            attempted: Box::new(TerminalOutcome::Failed("x".into())),
         };
         let msg = format!("{}", err);
         assert!(msg.contains("completed"));
@@ -516,8 +516,8 @@ mod tests {
     #[test]
     fn duplicate_terminal_error_is_std_error() {
         let err: Box<dyn std::error::Error> = Box::new(DuplicateTerminalError {
-            existing: TerminalOutcome::Completed,
-            attempted: TerminalOutcome::Failed("x".into()),
+            existing: Box::new(TerminalOutcome::Completed),
+            attempted: Box::new(TerminalOutcome::Failed("x".into())),
         });
         assert!(!err.to_string().is_empty());
     }

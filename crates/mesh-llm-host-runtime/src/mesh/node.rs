@@ -110,6 +110,8 @@ pub struct Node {
     pub(crate) routing_metrics: crate::network::metrics::RoutingMetrics,
     pub(crate) routing_telemetry:
         Arc<std::sync::Mutex<Option<Arc<dyn crate::network::metrics::RoutingTelemetrySink>>>>,
+    pub(crate) cache_affinity_inventory:
+        Arc<std::sync::Mutex<mesh_llm_routing::cache_inventory::CacheInventory>>,
     pub(crate) swarm_capture: Arc<std::sync::Mutex<Option<crate::capture::SwarmCaptureRecorder>>>,
     pub(crate) local_request_metrics: Arc<LocalRequestMetricsSampler>,
     pub(crate) runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
@@ -878,6 +880,9 @@ impl Node {
             inflight_change_tx,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
+            cache_affinity_inventory: Arc::new(std::sync::Mutex::new(
+                mesh_llm_routing::cache_inventory::CacheInventory::default(),
+            )),
             swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
             runtime_data_producer,
@@ -1055,6 +1060,9 @@ impl Node {
             inflight_change_tx,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
+            cache_affinity_inventory: Arc::new(std::sync::Mutex::new(
+                mesh_llm_routing::cache_inventory::CacheInventory::default(),
+            )),
             swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
             runtime_data_producer,

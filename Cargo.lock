@@ -4184,7 +4184,9 @@ dependencies = [
 name = "mesh-llm-routing"
 version = "0.76.0-rc7"
 dependencies = [
+ "blake3",
  "iroh",
+ "serde",
  "serde_json",
 ]
 
