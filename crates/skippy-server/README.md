@@ -104,10 +104,17 @@ deadline handling.
 
 - `serve-binary` is the tuned binary stage-to-stage path.
 - `serve-binary` participates in the breaking generation-5 stage protocol.
-  Stage compatibility requires `stage-generation-5`; direct prediction return and
-  exact verify-checkpoint retirement are part of that generation's contract, so
-  older peers are rejected during split planning instead of being mixed into a
-  generation-5 topology.
+  Stage compatibility requires `stage-generation-5`; direct prediction return,
+  exact verify-checkpoint retirement, and the `DiscardStaleWindows` control
+  frame are part of that generation's contract, so older peers are rejected
+  during split planning instead of being mixed into a generation-5 topology.
+- That rejection happens in mesh split planning. A manually wired
+  `serve-binary --downstream host:port` pair performs no generation
+  handshake, so **the contract for the standalone path is that all stages are
+  upgraded together**. Pointing a run-ahead coordinator at a generation-4
+  stage binary is not degraded gracefully: the older peer rejects the
+  `DiscardStaleWindows` frame as an unknown message kind and drops the
+  request connection.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
