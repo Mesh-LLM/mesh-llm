@@ -196,11 +196,15 @@ class WaitingPrefixAbTest(unittest.TestCase):
         contract = BENCH.load_acceptance_contract(
             REPO / "evals/skippy-capacity-acceptance.json"
         )
+        self.assertEqual(contract["workload_overrides"], {"cache_entries": 16})
+        self.assertEqual(contract["cache_seed"]["families"], 8)
         rows = [
             {
                 "version": "old",
                 "successful": 64,
                 "capacity_rejections": 0,
+                "resident_evicted_tokens_median": 2000.0,
+                "predicted_recompute_cost_median": None,
                 "suffix_prefill_tokens_median": 66735.5,
                 "family_switches_median": 10.0,
                 "ttft_ms_p95_median": 27901.1,
@@ -211,6 +215,8 @@ class WaitingPrefixAbTest(unittest.TestCase):
                 "version": "new",
                 "successful": 64,
                 "capacity_rejections": 0,
+                "resident_evicted_tokens_median": 1500.0,
+                "predicted_recompute_cost_median": 42000.0,
                 "suffix_prefill_tokens_median": 65000.0,
                 "family_switches_median": 10.0,
                 "ttft_ms_p95_median": 27500.0,

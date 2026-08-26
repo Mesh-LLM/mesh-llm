@@ -150,6 +150,20 @@ def load_acceptance_contract(path: Path) -> dict[str, Any]:
     contract = document.get("hardware_acceptance")
     if not isinstance(contract, dict) or "successful_requests_per_binary" not in contract:
         raise ValueError("acceptance contract needs hardware_acceptance success bounds")
+    overrides = document.get("workload_overrides", {})
+    if not isinstance(overrides, dict) or set(overrides) - {"cache_entries"}:
+        raise ValueError("acceptance workload_overrides may only set cache_entries")
+    if overrides and int(overrides["cache_entries"]) <= 0:
+        raise ValueError("acceptance cache_entries override must be positive")
+    seed = document.get("cache_seed")
+    if seed is not None:
+        if not isinstance(seed, dict):
+            raise ValueError("acceptance cache_seed must be an object")
+        required_seed_keys = {"families", "prefix_blocks", "output_tokens", "stagger_ms"}
+        if set(seed) != required_seed_keys:
+            raise ValueError("acceptance cache_seed keys do not match the schema")
+        if any(float(seed[key]) <= 0 for key in required_seed_keys):
+            raise ValueError("acceptance cache_seed values must be positive")
     return document
 
 
@@ -419,6 +433,35 @@ def run_cell(
         )
         try:
             harness.wait_ready(port, process, 900, path="/v1/models", server_name=version)
+            seed_result = None
+            if args.cache_seed is not None:
+                seed = args.cache_seed
+                seed_prompts = interleaved_prompts(
+                    int(seed["families"]), 1, int(seed["prefix_blocks"])
+                )
+                seed_event_start = len(radix.json_events(log_path, SUMMARY_EVENT))
+                seed_requests, seed_makespan_ms = run_requests(
+                    seed_prompts,
+                    case.model_id,
+                    int(seed["output_tokens"]),
+                    port,
+                    args.request_timeout_secs,
+                    float(seed["stagger_ms"]),
+                )
+                seed_successful = sum("error" not in row for row in seed_requests)
+                if seed_successful != len(seed_requests):
+                    errors = [row for row in seed_requests if "error" in row]
+                    raise RuntimeError(f"cache seed failed: {errors}")
+                radix.wait_for_json_events(
+                    log_path,
+                    SUMMARY_EVENT,
+                    seed_event_start + seed_successful,
+                    process,
+                )
+                seed_result = {
+                    "requests": seed_requests,
+                    "makespan_ms": seed_makespan_ms,
+                }
             event_start = len(radix.json_events(log_path, SUMMARY_EVENT))
             capacity_event_start = len(radix.json_events(log_path, KV_CAPACITY_EVENT))
             record_event_start = len(radix.json_events(log_path, KV_RECORD_EVENT))
@@ -454,6 +497,7 @@ def run_cell(
         "binary": str(binary),
         "config": str(config_path),
         "log": str(log_path),
+        "cache_seed": seed_result,
         "requests": requests,
         "summary": summarize(requests, events, capacity_events, record_events, makespan_ms),
     }
@@ -597,6 +641,20 @@ def evaluate_acceptance(
             "max",
             contract["capacity_rejections_after_max"],
         )
+    for contract_key, label, row_key in (
+        (
+            "resident_evicted_tokens_after_min",
+            "after resident KV evicted tokens per round",
+            "resident_evicted_tokens_median",
+        ),
+        (
+            "predicted_recompute_cost_after_min",
+            "after predicted recompute cost per round",
+            "predicted_recompute_cost_median",
+        ),
+    ):
+        if contract_key in contract:
+            record(label, new[row_key], "min", contract[contract_key])
     delta_keys = {
         "suffix_prefill": "suffix_prefill_tokens_median",
         "family_switch": "family_switches_median",
@@ -782,6 +840,13 @@ def main() -> int:
             parser.error(
                 "acceptance contract workload_profile does not match --fixture-profile"
             )
+        for key, value in acceptance_contract.get("workload_overrides", {}).items():
+            setattr(args, key, value)
+    args.cache_seed = (
+        acceptance_contract.get("cache_seed")
+        if acceptance_contract is not None
+        else None
+    )
     if min(args.rounds, args.families, args.requests_per_family, args.lanes, args.cache_entries) <= 0:
         parser.error("rounds, families, requests, lanes, and cache entries must be positive")
     if args.admission_concurrency < 0:
@@ -898,6 +963,7 @@ def main() -> int:
             "admission_concurrency": args.admission_concurrency,
             "cache_entries": args.cache_entries,
             "stagger_ms": args.stagger_ms,
+            "cache_seed": args.cache_seed,
         },
         "cells": cells,
         "aggregate": rows,
