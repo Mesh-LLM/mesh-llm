@@ -90,6 +90,8 @@ pub enum ScenarioError {
         "unknown top-level scenario key `{key}` — links must be declared as `[links.\"a -> b\"]` tables, not top-level keys"
     )]
     UnknownTopLevelKey { key: String },
+    #[error("malformed link key `{key}` — expected exactly one ` -> ` separating two node ids")]
+    MalformedLinkKey { key: String },
 }
 
 impl Scenario {
@@ -100,7 +102,13 @@ impl Scenario {
                 return Err(ScenarioError::UnknownTopLevelKey { key: key.clone() });
             }
         }
-        Ok(toml::from_str(input)?)
+        let scenario: Scenario = toml::from_str(input)?;
+        // Validate link keys now so malformed edges fail at parse time,
+        // not silently at planning time.
+        for key in scenario.links.keys() {
+            parse_link_key(key)?;
+        }
+        Ok(scenario)
     }
 
     /// Build the coordinator planning input for this scenario.
@@ -122,7 +130,9 @@ impl Scenario {
             .links
             .iter()
             .map(|(key, link)| {
-                let (source, target) = parse_link_key(key);
+                // Keys are validated at parse time; a malformed key here is
+                // a programming error, not scenario content.
+                let (source, target) = parse_link_key(key).expect("validated link key");
                 TopologyEdge {
                     source_node_id: source,
                     target_node_id: target,
@@ -155,7 +165,7 @@ impl Scenario {
     fn node_latency_ms(&self, node_id: &str) -> Option<u32> {
         let mut best: Option<u32> = None;
         for (key, link) in &self.links {
-            let (source, target) = parse_link_key(key);
+            let (source, target) = parse_link_key(key).expect("validated link key");
             if source == node_id || target == node_id {
                 best = Some(best.map_or(link.rtt_ms, |current| current.min(link.rtt_ms)));
             }
@@ -170,11 +180,24 @@ impl Scenario {
     }
 }
 
-fn parse_link_key(key: &str) -> (String, String) {
-    let mut parts = key.split("->");
-    let source = parts.next().unwrap_or_default().trim().to_string();
-    let target = parts.next().unwrap_or_default().trim().to_string();
-    (source, target)
+fn parse_link_key(key: &str) -> Result<(String, String), ScenarioError> {
+    // Accept exactly one "->" separating two non-empty node ids; anything
+    // else is a malformed key that would silently produce unusable edges.
+    let parts: Vec<&str> = key.split("->").collect();
+    if parts.len() == 2 {
+        let source = parts[0].trim();
+        let target = parts[1].trim();
+        if !source.is_empty()
+            && !target.is_empty()
+            && !source.contains(' ')
+            && !target.contains(' ')
+        {
+            return Ok((source.to_string(), target.to_string()));
+        }
+    }
+    Err(ScenarioError::MalformedLinkKey {
+        key: key.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -239,6 +262,27 @@ minimum_nodes = 2
         let error =
             Scenario::from_toml(scenario).expect_err("misdeclared top-level link must be rejected");
         assert!(error.to_string().contains("unknown top-level scenario key"));
+    }
+
+    #[test]
+    fn malformed_link_keys_fail_loudly() {
+        for key in ["alpha", "alpha -> beta -> gamma", " -> beta", "alpha -> "] {
+            let scenario = format!(
+                "[nodes.alpha]\nvram_bytes = 68719476736\n\
+                 [nodes.beta]\nvram_bytes = 51539607552\n\
+                 [links.\"{key}\"]\nrtt_ms = 2\n\
+                 [model]\nlayer_count = 40\nweight_bytes_per_layer = 1610612736\n\
+                 kv_bytes_per_token = 4096\nnative_context_length = 65536\n\
+                 [workload]\nminimum_nodes = 2\n"
+            );
+            let error = Scenario::from_toml(&scenario)
+                .err()
+                .unwrap_or_else(|| panic!("malformed link key `{key}` must be rejected"));
+            assert!(
+                error.to_string().contains("malformed link key"),
+                "key `{key}`: {error}"
+            );
+        }
     }
 
     #[test]
