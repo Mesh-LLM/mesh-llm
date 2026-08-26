@@ -331,7 +331,9 @@ fn stale_and_far_future_cache_affinity_are_dropped_at_ingest() {
         .expect("cache advertisement")
         .generated_at_unix_ms = now
         .saturating_add(CACHE_AFFINITY_MAX_FUTURE_SKEW_MS)
-        .saturating_add(1);
+        // Keep the fixture well beyond the boundary even if this test is
+        // descheduled between capturing `now` and decoding the announcement.
+        .saturating_add(60_000);
     let (_, future) = proto_ann_to_local(&proto).expect("future peer announcement");
     assert!(future.cache_affinity.is_none());
 }
