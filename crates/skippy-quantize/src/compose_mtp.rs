@@ -237,14 +237,23 @@ fn extend_array_kv(kv: &mut GgufKv, mtp_kv: &[GgufKv], layer_count: usize) -> Re
     match kv {
         GgufKv::ArrayU32 { key, value } => {
             if value.len() == layer_count {
-                let mtp_value = mtp_layer_u32(mtp_kv, key);
-                value.push(mtp_value.unwrap_or_else(|| value[value.len() - 1]));
+                let mtp_value = mtp_layer_integer(mtp_kv, key);
+                let fallback = u64::from(value[value.len() - 1]);
+                value.push(
+                    u32::try_from(mtp_value.unwrap_or(fallback))
+                        .context("per-layer array entry overflows uint32")?,
+                );
             }
         }
         GgufKv::ArrayI32 { key, value } => {
             if value.len() == layer_count {
-                let mtp_value = mtp_layer_i32(mtp_kv, key);
-                value.push(mtp_value.unwrap_or(value[value.len() - 1]));
+                let mtp_value = mtp_layer_integer(mtp_kv, key);
+                let fallback = u64::try_from(i64::from(value[value.len() - 1]))
+                    .context("negative per-layer array entry")?;
+                value.push(
+                    i32::try_from(mtp_value.unwrap_or(fallback))
+                        .context("per-layer array entry overflows int32")?,
+                );
             }
         }
         GgufKv::ArrayF32 { value, .. } => {
@@ -265,34 +274,85 @@ fn extend_array_kv(kv: &mut GgufKv, mtp_kv: &[GgufKv], layer_count: usize) -> Re
                 value.push(last);
             }
         }
-        _ => bail!(
-            "per-layer key {:?} has an unsupported representation; refusing to extend it",
-            kv.key()
-        ),
+        // Typed-array variants cover only u32/i32/f32/bool/string; other
+        // element widths (e.g. the u16 `attention.head_count` the Nemotron
+        // converter emits) round-trip as Raw. Layout: element type u32,
+        // element count u64, then the elements.
+        GgufKv::Raw {
+            key,
+            value_type,
+            bytes,
+        } if *value_type == GGUF_TYPE_ARRAY => {
+            extend_raw_array_kv(key, bytes, mtp_kv, layer_count)?;
+        }
+        // Scalar per-layer keys are fine: llama.cpp's `get_key_or_arr`
+        // repeats a scalar across all layers, so no extension is needed.
+        _ => {}
     }
     Ok(())
 }
 
-/// Reads the MTP draft layer's value for a per-layer key: a scalar, or the
-/// last entry of an array.
-fn mtp_layer_u32(mtp_kv: &[GgufKv], key: &str) -> Option<u32> {
-    mtp_layer(mtp_kv, key).and_then(|kv| match kv {
-        GgufKv::U32 { value, .. } => Some(*value),
-        GgufKv::ArrayU32 { value, .. } => value.last().copied(),
-        _ => None,
-    })
+fn extend_raw_array_kv(
+    key: &str,
+    bytes: &mut Vec<u8>,
+    mtp_kv: &[GgufKv],
+    layer_count: usize,
+) -> Result<()> {
+    ensure!(
+        bytes.len() >= 12,
+        "per-layer array {key:?} has a truncated header"
+    );
+    let element_type = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let count = u64::from_le_bytes(bytes[4..12].try_into().unwrap());
+    if count != layer_count as u64 {
+        return Ok(());
+    }
+    let element_size = array_element_size(element_type)
+        .with_context(|| format!("per-layer array {key:?} element type"))?;
+    let data_len = count as usize * element_size;
+    ensure!(
+        bytes.len() >= 12 + data_len,
+        "per-layer array {key:?} is truncated"
+    );
+    // Duplicate the last element by default; prefer the MTP draft's scalar
+    // value when it is representable in the array's element type.
+    let mut element = bytes[12 + data_len - element_size..12 + data_len].to_vec();
+    if let Some(scalar) = mtp_layer_scalar(mtp_kv, key, element_type) {
+        element = scalar;
+    }
+    let new_count = count + 1;
+    bytes[4..12].copy_from_slice(&new_count.to_le_bytes());
+    bytes.extend_from_slice(&element);
+    Ok(())
 }
 
-fn mtp_layer_i32(mtp_kv: &[GgufKv], key: &str) -> Option<i32> {
-    mtp_layer(mtp_kv, key).and_then(|kv| match kv {
-        GgufKv::I32 { value, .. } => Some(*value),
-        GgufKv::ArrayI32 { value, .. } => value.last().copied(),
+/// Encodes the MTP draft layer's value for `key` in a raw array's element
+/// type, when the MTP GGUF carries a scalar or array of a compatible width.
+fn mtp_layer_scalar(mtp_kv: &[GgufKv], key: &str, element_type: u32) -> Option<Vec<u8>> {
+    let value = mtp_layer_integer(mtp_kv, key)?;
+    match element_type {
+        GGUF_TYPE_UINT8 | GGUF_TYPE_INT8 => Some(vec![value as u8]),
+        GGUF_TYPE_UINT16 => Some((value as u16).to_le_bytes().to_vec()),
+        GGUF_TYPE_UINT32 => Some((value as u32).to_le_bytes().to_vec()),
+        GGUF_TYPE_INT32 => Some((value as i32).to_le_bytes().to_vec()),
         _ => None,
-    })
+    }
 }
 
-fn mtp_layer<'a>(mtp_kv: &'a [GgufKv], key: &str) -> Option<&'a GgufKv> {
-    mtp_kv.iter().find(|kv| kv.key() == key)
+/// Reads the MTP draft layer's integer value for a per-layer key: a scalar,
+/// or the last entry of an array, in any integer representation.
+fn mtp_layer_integer(mtp_kv: &[GgufKv], key: &str) -> Option<u64> {
+    match mtp_kv.iter().find(|kv| kv.key() == key)? {
+        GgufKv::U16 { value, .. } => Some(u64::from(*value)),
+        GgufKv::U32 { value, .. } => Some(u64::from(*value)),
+        GgufKv::I32 { value, .. } => u64::try_from(i64::from(*value)).ok(),
+        GgufKv::U64 { value, .. } => Some(*value),
+        GgufKv::ArrayU32 { value, .. } => value.last().map(|v| u64::from(*v)),
+        GgufKv::ArrayI32 { value, .. } => {
+            value.last().and_then(|v| u64::try_from(i64::from(*v)).ok())
+        }
+        _ => None,
+    }
 }
 
 fn apply_override(target_kv: &mut Vec<GgufKv>, key: &str, value: u32) -> Result<()> {
@@ -1227,6 +1287,94 @@ mod tests {
             Some(vec![512, 1024, 2048])
         );
         assert_eq!(get_arr("arch.attention.head_count"), Some(vec![8, 8, 8]));
+    }
+
+    #[test]
+    fn extends_raw_u16_per_layer_arrays() {
+        let dir = TempDir::new("rawperlayer");
+        let target_path = dir.path("target.gguf");
+        let mtp_path = dir.path("mtp.gguf");
+        let output_path = dir.path("out.gguf");
+        // Real-world Nemotron shape: `attention.head_count` is a u16 array,
+        // which round-trips through the Raw KV variant (no typed u16 array).
+        let head_count = {
+            let mut bytes = GGUF_TYPE_UINT16.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&2_u64.to_le_bytes());
+            for value in [32_u16, 32_u16] {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            GgufKv::Raw {
+                key: "arch.attention.head_count".to_string(),
+                value_type: GGUF_TYPE_ARRAY,
+                bytes,
+            }
+        };
+        write_fixture_gguf(
+            &target_path,
+            &[
+                GgufKv::u32("arch.block_count", 2),
+                GgufKv::array_u32("arch.feed_forward_length", vec![512, 1024]),
+                head_count,
+            ],
+            &[("blk.1.weight", vec![2], vec![9_u8; 8])],
+        );
+        write_fixture_gguf(
+            &mtp_path,
+            &[
+                GgufKv::u32("arch.block_count", 1),
+                GgufKv::u32("arch.feed_forward_length", 2048),
+                // Scalar u16 in the draft; must be encoded into the raw u16
+                // array's element type.
+                GgufKv::U16 {
+                    key: "arch.attention.head_count".to_string(),
+                    value: 8,
+                },
+            ],
+            &[("blk.0.nextn.weight", vec![2], vec![5_u8; 8])],
+        );
+        run_compose_mtp(ComposeMtpArgs {
+            target_shard: target_path,
+            mtp_gguf: mtp_path,
+            output: output_path.clone(),
+            mtp_block: 2,
+            metadata_shard: None,
+            metadata_output: None,
+            set_kv: vec![],
+            no_bump_block_count: false,
+            json: false,
+        })
+        .unwrap();
+        let composite = read_gguf_file_info(&output_path).unwrap();
+        assert_eq!(
+            composite
+                .kv
+                .iter()
+                .find_map(|kv| match kv {
+                    GgufKv::ArrayU32 { key: k, value } if k == "arch.feed_forward_length" =>
+                        Some(value.clone()),
+                    _ => None,
+                })
+                .unwrap(),
+            vec![512, 1024, 2048]
+        );
+        let raw = composite
+            .kv
+            .iter()
+            .find(|kv| kv.key() == "arch.attention.head_count")
+            .unwrap();
+        let GgufKv::Raw { bytes, .. } = raw else {
+            panic!("expected raw array");
+        };
+        assert_eq!(
+            u64::from_le_bytes(bytes[4..12].try_into().unwrap()),
+            3,
+            "element count must be bumped"
+        );
+        assert_eq!(
+            u16::from_le_bytes(bytes[16..18].try_into().unwrap()),
+            8,
+            "MTP scalar must be appended in the array's element type"
+        );
     }
 
     #[test]
