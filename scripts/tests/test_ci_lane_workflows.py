@@ -220,6 +220,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
             action,
         )
         self.assertIn(
+            'git show "$SOURCE_SHA:ci/ownership.yml" | cmp -s - ci/ownership.yml',
+            action,
+        )
+        self.assertIn(
             'python3 scripts/plan-ci.py --manifest-root "$manifest_root"',
             action,
         )
