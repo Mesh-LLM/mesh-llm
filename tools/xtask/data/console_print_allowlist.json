@@ -4245,15 +4245,15 @@
   ],
   "crates/skippy-server/src/binary_transport/boundary_codec.rs": [
     {
-      "line": 323,
+      "line": 328,
       "macro_name": "eprintln!"
     },
     {
-      "line": 329,
+      "line": 334,
       "macro_name": "eprintln!"
     },
     {
-      "line": 363,
+      "line": 368,
       "macro_name": "eprintln!"
     }
   ],

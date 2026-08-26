@@ -272,7 +272,7 @@ pub fn write_stage_message(
     // A lowrank frame's reserved field carries the rank alongside the dtype
     // tag; preserve it instead of clobbering it with the bare tag.
     if dtype == WireActivationDType::Lowrank {
-        state.lowrank_k().map_err(io::Error::other)?;
+        state.validate_lowrank().map_err(io::Error::other)?;
     } else {
         state.reserved = dtype as i32;
     }

@@ -126,6 +126,11 @@ impl BoundaryCodec {
                     .try_into()
                     .expect("slice length"),
             );
+            // A NaN or infinite scale would propagate into the model as NaN
+            // activations rather than failing the frame here.
+            if !scale.is_finite() {
+                return Err(invalid_data("lowrank token scale is not finite"));
+            }
             row.copy_from_slice(&self.mean);
             let coeff_offset = scale_bytes + token_index * self.k;
             for component_index in 0..self.k {

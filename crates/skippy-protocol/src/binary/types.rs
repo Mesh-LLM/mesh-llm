@@ -336,8 +336,23 @@ impl StageStateHeader {
 
     pub fn dtype(self) -> io::Result<WireActivationDType> {
         // The low byte carries the dtype tag; Lowrank packs its rank into the
-        // high bits (existing dtypes always have zero high bits).
-        WireActivationDType::try_from(self.reserved & 0xFF)
+        // high bits. Every other dtype must still leave the high bits zero:
+        // before the rank was packed here, `reserved` was exactly the tag, and
+        // masking alone would silently accept a frame whose high bits are
+        // garbage instead of rejecting it as this field always has.
+        let dtype = WireActivationDType::try_from(self.reserved & 0xFF)?;
+        if dtype != WireActivationDType::Lowrank && self.reserved >> 8 != 0 {
+            return Err(invalid_data(
+                "activation wire dtype has unexpected reserved high bits",
+            ));
+        }
+        Ok(dtype)
+    }
+
+    /// Checks that this header carries a well-formed `Lowrank` rank, for
+    /// callers that only want the validation and discard the value.
+    pub fn validate_lowrank(self) -> io::Result<()> {
+        self.lowrank_k().map(|_| ())
     }
 
     /// The low-rank codec rank carried by a `Lowrank` frame.
@@ -768,5 +783,40 @@ fn expected_phase(kind: WireMessageKind) -> WireStagePhase {
         WireStagePhase::DecodeLight
     } else {
         WireStagePhase::Decode
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_lowrank_may_carry_reserved_high_bits() {
+        let mut header =
+            StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F32);
+
+        assert_eq!(
+            header.dtype().expect("plain dtype"),
+            WireActivationDType::F32
+        );
+
+        // Before the rank was packed into `reserved`, this field was exactly
+        // the dtype tag and anything else was rejected. Masking alone would
+        // have accepted this as F32.
+        header.reserved = 0x0100;
+        assert!(
+            header.dtype().is_err(),
+            "high bits on a non-lowrank dtype must fail"
+        );
+
+        header
+            .set_lowrank(512)
+            .expect("a lowrank rank packs into the high bits");
+        assert_eq!(
+            header.dtype().expect("lowrank dtype"),
+            WireActivationDType::Lowrank
+        );
+        assert_eq!(header.lowrank_k().expect("rank"), 512);
+        header.validate_lowrank().expect("validation accepts it");
     }
 }
