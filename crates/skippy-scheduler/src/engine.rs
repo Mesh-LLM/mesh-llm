@@ -34,7 +34,7 @@ pub struct Scheduler {
     waiting_turn: u64,
     next_waiting_order: u64,
     waiting_order_dirty: bool,
-    decode_us_ewma: Option<f64>,
+    decode_us_ewma_by_rows: BTreeMap<usize, f64>,
     mixed_prefill_viable: bool,
 }
 
@@ -56,7 +56,7 @@ impl Scheduler {
             waiting_turn: 0,
             next_waiting_order: 0,
             waiting_order_dirty: false,
-            decode_us_ewma: None,
+            decode_us_ewma_by_rows: BTreeMap::new(),
             mixed_prefill_viable: true,
         }
     }
@@ -97,7 +97,22 @@ impl Scheduler {
             admitted,
             ..IterationPlan::default()
         };
-        if self.config.mixed_prefill_decode && self.mixed_prefill_viable {
+        let calibrated_decode_rows = self
+            .active
+            .values()
+            .filter(|sequence| {
+                sequence.prefill_cursor >= sequence.recompute_token_count()
+                    && sequence.pending_decode_token().is_some()
+            })
+            .count()
+            .min(self.config.max_tokens_per_iteration);
+        if self.config.mixed_prefill_decode
+            && self.mixed_prefill_viable
+            && calibrated_decode_rows > 0
+            && self
+                .decode_us_ewma_by_rows
+                .contains_key(&calibrated_decode_rows)
+        {
             self.plan_mixed_iteration(&mut plan);
             return plan;
         }
@@ -305,28 +320,24 @@ impl Scheduler {
             .iter()
             .filter(|work| work.phase == IterationPhase::Decode)
             .count();
-        let samples_prefill = plan
-            .work
-            .iter()
-            .any(|work| work.phase != IterationPhase::Decode && work.sample_last);
-
         match (prefill_tokens, decode_rows) {
             (0, 0) => {}
             (0, _) => {
-                update_duration_ewma(&mut self.decode_us_ewma, elapsed_us);
+                update_duration_ewma(
+                    self.decode_us_ewma_by_rows
+                        .entry(decode_rows)
+                        .or_insert(elapsed_us),
+                    elapsed_us,
+                );
             }
             (_, 0) => {}
             (_, _) => {
-                // Sampling the first output token adds work that does not
-                // describe the cost of another non-final prompt quantum.
-                if samples_prefill {
-                    return;
-                }
-                let Some(predicted_decode_us) = self.decode_us_ewma else {
+                let Some(predicted_decode_us) = self.decode_us_ewma_by_rows.get(&decode_rows)
+                else {
                     return;
                 };
-                let observed_extra_us = (elapsed_us - predicted_decode_us).max(1.0);
-                let allowed_extra_us = (predicted_decode_us * MIXED_DECODE_SLOWDOWN_FRACTION)
+                let observed_extra_us = (elapsed_us - *predicted_decode_us).max(1.0);
+                let allowed_extra_us = (*predicted_decode_us * MIXED_DECODE_SLOWDOWN_FRACTION)
                     .clamp(MIXED_PREFILL_MIN_EXTRA_US, MIXED_PREFILL_MAX_EXTRA_US);
                 if observed_extra_us > allowed_extra_us {
                     // A mixed native call has a fixed row-composition cost.
@@ -634,13 +645,11 @@ fn is_complete_permutation(order: &[usize], len: usize) -> bool {
         .all(|index| index < len && !std::mem::replace(&mut seen[index], true))
 }
 
-fn update_duration_ewma(estimate: &mut Option<f64>, sample: f64) {
+fn update_duration_ewma(estimate: &mut f64, sample: f64) {
     if !sample.is_finite() || sample <= 0.0 {
         return;
     }
-    *estimate = Some(estimate.map_or(sample, |current| {
-        current + DURATION_EWMA_ALPHA * (sample - current)
-    }));
+    *estimate += DURATION_EWMA_ALPHA * (sample - *estimate);
 }
 
 fn contiguous_positions(start: usize, count: usize) -> Vec<i32> {
@@ -854,6 +863,41 @@ mod tests {
         assert_eq!(fallback_prefill.work[0].phase, IterationPhase::Prefill);
         assert_eq!(fallback_prefill.work[0].tokens.len(), 128);
         assert_eq!(fallback_prefill.token_count, 128);
+    }
+
+    #[test]
+    fn mixed_admission_waits_for_the_matching_decode_row_baseline() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 3,
+            max_tokens_per_iteration: 128,
+            prefill_chunk_tokens: 128,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("decode-a", 2, 8)).unwrap();
+        scheduler.submit(sequence("decode-b", 2, 8)).unwrap();
+        let initial = scheduler.plan_iteration();
+        scheduler.complete_iteration(
+            &initial,
+            &[
+                IterationPrediction {
+                    work_index: 0,
+                    token: 42,
+                },
+                IterationPrediction {
+                    work_index: 1,
+                    token: 43,
+                },
+            ],
+        );
+        scheduler.decode_us_ewma_by_rows.insert(1, 10_000.0);
+        scheduler.submit(sequence("prefill", 256, 4)).unwrap();
+
+        let uncalibrated = scheduler.plan_iteration();
+
+        assert_eq!(uncalibrated.work.len(), 1);
+        assert_eq!(uncalibrated.work[0].sequence_id, "prefill");
+        assert_eq!(uncalibrated.work[0].phase, IterationPhase::Prefill);
     }
 
     #[test]

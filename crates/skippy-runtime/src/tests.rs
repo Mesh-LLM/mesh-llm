@@ -5,8 +5,9 @@ mod tests {
 
     use super::{
         ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
-        GGML_TYPE_F16, IterationBatchRequest, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig,
-        RuntimeLoadMode, SamplingConfig, StageModel, StageSession, Status, TensorRole,
+        GGML_TYPE_F16, IterationBatchPhase, IterationBatchRequest, ModelInfo, MtpSource,
+        NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig, StageModel, StageSession,
+        Status, TensorRole,
         format_skippy_error,
     };
     use std::{
@@ -140,6 +141,7 @@ mod tests {
                     sampling: None,
                     input: None,
                     sample_last: true,
+                    phase: IterationBatchPhase::Decode,
                 },
                 IterationBatchRequest {
                     session: long,
@@ -148,6 +150,7 @@ mod tests {
                     sampling: None,
                     input: None,
                     sample_last: false,
+                    phase: IterationBatchPhase::Prefill,
                 },
                 IterationBatchRequest {
                     session: short,
@@ -156,6 +159,7 @@ mod tests {
                     sampling: None,
                     input: None,
                     sample_last: true,
+                    phase: IterationBatchPhase::Prefill,
                 },
             ];
             StageSession::iteration_batch_sampled(&mut requests)?
