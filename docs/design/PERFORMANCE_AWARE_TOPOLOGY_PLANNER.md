@@ -219,6 +219,19 @@ documented hardware; 10-25 tok/s at ~20 ms RTT, RPC-latency-dominated) from
 the documented inputs, within tolerance. If it cannot, the cost model is
 wrong and gets fixed before any production behavior depends on it.
 
+**As-built (PR #1454):** the execution layer (`skippy-topology-sim::execution`)
+models two regimes — **serial** decode (single stream: every token traverses
+every stage and returns; TPOT = Σ stages + Σ hops — this is the regime the
+BENCHMARKS.md anchors measured) and **pipelined** (lanes > 1: bounded by the
+slowest stage+egress pair). Stage service time is streamed-bytes/bandwidth
+with `active_weight_fraction` capturing MoE active-expert bytes; two
+calibration knobs record what the pure model cannot see: per-stage software
+overhead and per-hop RPC overhead (the "per-token RPC latency" BENCHMARKS.md
+names as dominant). Calibration scenario `benchmarks_anchor_pair.toml` +
+tests reproduce all three anchors within ~10% (tolerance ±15%). Coefficients
+are recorded in the scenario with their derivation so real measurements
+(passive edge observations in particular) can tighten them.
+
 ## Scenario corpus: realistic hardware, links, and backends
 
 The simulator is only as honest as its inputs. The corpus spans the hardware
@@ -354,7 +367,7 @@ be the testbed for choosing between these.
 | 0 | Thread gossiped perf metrics through `SplitTopologyPlanInput → TopologyNode`; instrumentation of observed stage timings | no behavior change (signals recorded, unused) | **Done** (PR #1454) — metrics flowed through and joined the replan signature |
 | 1 | Cost model + merged scoring in `skippy-coordinator`; absent-signal fallback = exact current behavior | placement-parity tests vs old planner on signal-less inputs | **Done** (PR #1454) — `perf_balanced_spans` DP + parity tests |
 | 2 | Placement sim in CI; scenario corpus incl. BENCHMARKS.md anchors | property tests green; parity suite green | **Done** (PR #1454) — `skippy-topology-sim` + 3 corpus scenarios |
-| 3 | Per-edge bandwidth probing; execution sim validated against measured data | calibration tolerance met | **Partially landed** — passive edge bandwidth from real artifact transfers (both directions, age-gated 30 min, conservative min-merge into edges, replan signature); active probing + execution sim remain |
+| 3 | Per-edge bandwidth probing; execution sim validated against measured data | calibration tolerance met | **Mostly landed** — passive edge bandwidth from real artifact transfers (both directions, age-gated 30 min, conservative min-merge, replan signature); execution sim + BENCHMARKS.md calibration tests in `skippy-topology-sim::execution` (±15% tolerance, currently within ~10% on all three anchors). Active probing remains |
 | 4 | Performance-aware placement live (default on) | A/B on staging meshes vs capacity-only | Planned |
 | 5 | Adaptive replanning with hysteresis + migration budgets | dwell-time threshold; no churn under synthetic jitter | Planned |
 
