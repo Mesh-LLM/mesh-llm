@@ -460,12 +460,14 @@ is inference-free; periodic hardware runs fetch and verify the pinned Hugging
 Face corpus in the shared cache and never vendor trajectory data.
 
 Resident-KV admission is capacity-aware: active sessions and referenced cache
-entries are non-evictable, while releasable prefixes are ranked by estimated
-recomputation cost per KV token. Admission preserves a hard decode watermark,
-evicts through a larger healthy watermark to avoid churn, and rejects with an
-explicit deficit when pinned pressure makes the request impossible. The first
-cost proxy is prefix tokens multiplied by local stage layers; calibrated stage
-duration is the planned replacement.
+entries are non-evictable. Admission preserves a hard decode watermark, evicts
+through a larger healthy watermark to avoid churn, and returns a retriable 429
+with an explicit deficit when pinned pressure makes the request impossible.
+The current resident backend has a uniform per-token recomputation proxy
+(prefix tokens multiplied by the same stage-local layer count), so its density
+comparison intentionally collapses to cold-first LRU ordering. A future
+calibrated stage-duration signal can make the generic planner's cost dimension
+meaningful without changing its contract.
 
 Example shape:
 

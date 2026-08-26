@@ -142,12 +142,17 @@ impl RuntimeState {
     /// this must not be used to drive inference.
     #[cfg(test)]
     pub(crate) fn new_modelless_for_test(lane_count: u32) -> Self {
+        Self::new_modelless_with_capacity_for_test(lane_count, 0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_modelless_with_capacity_for_test(lane_count: u32, ctx_size: u32) -> Self {
         Self {
             model: StageModel::new_dummy(),
             layer_start: 0,
             layer_end: 1,
             lane_count,
-            ctx_size: 0,
+            ctx_size,
             next_lane_index: 0,
             free_lane_indices: Vec::new(),
             sessions: BTreeMap::new(),

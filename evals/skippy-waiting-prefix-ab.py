@@ -574,6 +574,8 @@ def evaluate_acceptance(
         "suffix_prefill_before_min",
         "family_switch_before_min",
         "capacity_rejections_after_max",
+        "resident_evicted_tokens_after_min",
+        "predicted_recompute_cost_after_min",
     }
     for prefix in (
         "suffix_prefill",

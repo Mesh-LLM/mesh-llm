@@ -97,17 +97,20 @@ catalog SHA alongside binary, model, and prompt-manifest hashes.
 The same replay is also the capacity-policy certificate. Pass the checked-in
 `skippy-capacity-acceptance.json` contract when comparing the capacity layer;
 the measured agentic requests remain identical, but the gate changes from
-proving the DFS gain a second time to requiring an exercised cost prediction,
-actual eviction, zero fail-closed rejections, and no regression over 10% in
-recomputation, p95 TTFT, makespan, or throughput. The contract first
+proving the DFS gain a second time to requiring actual eviction, zero
+fail-closed rejections, and no regression over 2% in recomputation, p95 TTFT,
+makespan, or throughput. The contract first
 seeds eight deterministic synthetic resident prefixes and raises the entry cap
 to sixteen, so the measured agentic requests encounter evictable cold state
 without reducing the validated per-lane context budget. The runner combines
 pre-admission and post-record resident eviction telemetry into per-round token
-and entry totals, reports fail-closed capacity rejections, and retains the new
-planner's predicted recomputation cost. This lets a stacked capacity change be
-compared against the preceding scheduler binary without changing the pinned
-requests or silently treating legacy proactive eviction as zero.
+and entry totals, reports fail-closed capacity rejections, and retains the
+planner's deterministic work estimate. Because the current per-token estimate
+is uniform within a stage, the certificate describes the effective victim
+policy as cold-first LRU rather than attributing results to cost density. This
+lets a stacked capacity change be compared against the preceding scheduler
+binary without changing the pinned requests or silently treating legacy
+proactive eviction as zero.
 
 The waiting-prefix eviction-pressure certificate requires every request to succeed and, at
 minimum, a 50,000-token suffix-prefill baseline and eight family switches so a

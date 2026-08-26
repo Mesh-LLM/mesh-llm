@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "capacity-eviction-pressure",
-  "description": "Capacity-aware admission must preserve the pinned agentic workload without fail-closed rejection or a material user-facing regression.",
+  "description": "Capacity-aware admission must preserve the pinned agentic workload without rejection or more than a 2% user-facing regression.",
   "workload_profile": "agentic-eviction-pressure",
   "workload_overrides": {
     "cache_entries": 16
@@ -17,9 +17,9 @@
     "capacity_rejections_after_max": 0,
     "resident_evicted_tokens_after_min": 1,
     "predicted_recompute_cost_after_min": 1,
-    "suffix_prefill_delta_percent_max": 10.0,
-    "ttft_p95_delta_percent_max": 10.0,
-    "makespan_delta_percent_max": 10.0,
-    "output_throughput_delta_percent_min": -10.0
+    "suffix_prefill_delta_percent_max": 2.0,
+    "ttft_p95_delta_percent_max": 2.0,
+    "makespan_delta_percent_max": 2.0,
+    "output_throughput_delta_percent_min": -2.0
   }
 }

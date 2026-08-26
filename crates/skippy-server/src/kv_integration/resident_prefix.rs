@@ -59,7 +59,7 @@ pub struct ResidentCapacityDecision {
 
 impl KvStageIntegration {
     /// Admit one resident-KV operation against the native unified KV pool and
-    /// release the cheapest unreferenced prefixes needed to reach the healthy
+    /// release deterministic unreferenced prefixes needed to reach the healthy
     /// free-space watermark. Native sequence deletion always precedes radix
     /// mutation, so a runtime failure leaves the selected cache entry intact.
     pub fn admit_resident_capacity(
@@ -90,7 +90,10 @@ impl KvStageIntegration {
             });
         }
 
-        let mut radix = self.radix.lock().expect("radix cache lock poisoned");
+        let mut radix = self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let stats = radix.stats();
         let candidates = radix.resident_eviction_candidates();
         let plan = plan_component_capacity(
@@ -103,7 +106,7 @@ impl KvStageIntegration {
                     .iter()
                     .map(|candidate| EvictableCacheEntry {
                         id: candidate.value.seq_id.to_string(),
-                        units: candidate.value.token_count,
+                        units: resident_candidate_units(candidate),
                         recompute_cost: candidate.value.recompute_cost,
                         last_used: candidate.last_used,
                     })
@@ -135,10 +138,14 @@ impl KvStageIntegration {
             return Ok(decision);
         }
 
+        if !plan.victim_ids.is_empty() {
+            runtime.ensure_session_active(session_id)?;
+        }
+
         let mut sequences = self
             .resident_sequences
             .lock()
-            .expect("resident sequence pool lock poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for victim_id in &plan.victim_ids {
             let Some(victim) = candidates
                 .iter()
@@ -299,6 +306,9 @@ impl KvStageIntegration {
             decode_batch_tokens,
             decode_batch_tokens,
         )?;
+        if !decision.admitted {
+            return self.evict_resident_prefix_for_tokens(runtime, session_id, decode_batch_tokens);
+        }
         Ok(ResidentPrefixEviction {
             target_tokens: decision.required_eviction_tokens,
             evicted_entries: decision.evicted_entries,
@@ -453,7 +463,6 @@ fn evict_one_resident(
     sequences: &mut ResidentSequencePool,
     mut drop_native: impl FnMut(i32) -> Result<()>,
 ) -> Result<Option<skippy_cache::RadixEviction<RadixResidentEntry>>> {
-    let stats = radix.stats();
     let candidates = radix.resident_eviction_candidates();
     if candidates.is_empty() {
         return Ok(None);
@@ -461,14 +470,17 @@ fn evict_one_resident(
     let plan = plan_component_capacity(
         &ComponentCapacitySnapshot {
             component: "resident-kv-tokens".to_string(),
-            capacity_units: stats.resident_tokens,
+            capacity_units: candidates
+                .iter()
+                .map(resident_candidate_units)
+                .fold(0u64, u64::saturating_add),
             active_units: 0,
-            pinned_cache_units: stats.resident_pinned_tokens,
+            pinned_cache_units: 0,
             evictable_entries: candidates
                 .iter()
                 .map(|candidate| EvictableCacheEntry {
                     id: candidate.value.seq_id.to_string(),
-                    units: candidate.value.token_count,
+                    units: resident_candidate_units(candidate),
                     recompute_cost: candidate.value.recompute_cost,
                     last_used: candidate.last_used,
                 })
@@ -495,6 +507,15 @@ fn evict_one_resident(
     debug_assert_eq!(removed.value.page_id, victim.value.page_id);
     sequences.release(removed.value.seq_id);
     Ok(Some(removed))
+}
+
+fn resident_candidate_units(
+    candidate: &skippy_cache::RadixEvictionCandidate<RadixResidentEntry>,
+) -> u64 {
+    candidate
+        .value
+        .token_count
+        .max(candidate.tokens.len() as u64)
 }
 
 fn insert_saved_resident(
@@ -597,6 +618,38 @@ mod proactive_eviction_tests {
         assert!(removed.is_none());
         assert!(!dropped);
         assert_eq!(radix.stats().resident_entries, 1);
+    }
+
+    #[test]
+    fn zero_metadata_token_count_falls_back_to_radix_path_length() {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(1);
+        let seq_id = sequences.allocate().unwrap();
+        radix
+            .insert_resident(
+                "stage",
+                &[1, 2, 3],
+                3,
+                RadixResidentEntry {
+                    page_id: "legacy-zero".to_string(),
+                    seq_id,
+                    token_count: 0,
+                    recompute_cost: 0,
+                },
+            )
+            .unwrap();
+        let mut dropped = None;
+
+        let removed = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
+            dropped = Some(seq_id);
+            Ok(())
+        })
+        .unwrap()
+        .expect("zero-metadata resident entry should remain evictable");
+
+        assert_eq!(dropped, Some(seq_id));
+        assert_eq!(removed.value.page_id, "legacy-zero");
+        assert_eq!(radix.stats().resident_entries, 0);
     }
 
     #[test]

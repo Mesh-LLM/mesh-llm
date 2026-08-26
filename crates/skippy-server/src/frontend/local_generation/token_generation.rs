@@ -2,6 +2,7 @@ use super::native_mtp_decode::NativeMtpSpanProgress;
 use crate::frontend::NativeMtpDecodeOptions;
 use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpVerifier;
+use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::LocalGeneration;
 use crate::frontend::generation::OpenAiGenerationIds;
@@ -19,8 +20,10 @@ use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
 use crate::kv_integration::{KvStageIntegration, StagePrefixCachePayload};
 use crate::runtime_state::{RuntimeSessionStats, RuntimeState};
+use axum::http::StatusCode;
 use openai_frontend::ChatCompletionRequest;
 use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiErrorKind;
 use openai_frontend::OpenAiResult;
 use serde_json::json;
 use skippy_metrics::attr as attr_key;
@@ -32,6 +35,25 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
+
+pub(in crate::frontend) fn resident_capacity_admission_error(
+    capacity: &crate::kv_integration::ResidentCapacityDecision,
+) -> OpenAiError {
+    OpenAiError::from_kind(
+        StatusCode::TOO_MANY_REQUESTS,
+        OpenAiErrorKind::RateLimit,
+        format!(
+            "resident KV capacity admission rejected request: {} token deficit (capacity={}, active={}, pinned={}, request={}, minimum_free={})",
+            capacity.admission_deficit_tokens,
+            capacity.capacity_tokens,
+            capacity.active_tokens,
+            capacity.pinned_tokens,
+            capacity.request_tokens,
+            capacity.minimum_free_tokens,
+        ),
+    )
+    .with_retry_after_secs(GENERATION_RETRY_AFTER_SECS)
+}
 
 pub(super) fn commit_local_generation_token(
     config: Option<&crate::frontend::GenerationReceiptConfig>,
@@ -713,15 +735,7 @@ impl StageOpenAiBackend {
         self.telemetry
             .emit("stage.openai_kv_capacity_decision", capacity_attrs);
         if !capacity.admitted {
-            return Err(OpenAiError::backend(format!(
-                "resident KV capacity admission rejected request: {} token deficit (capacity={}, active={}, pinned={}, request={}, minimum_free={})",
-                capacity.admission_deficit_tokens,
-                capacity.capacity_tokens,
-                capacity.active_tokens,
-                capacity.pinned_tokens,
-                capacity.request_tokens,
-                capacity.minimum_free_tokens,
-            )));
+            return Err(resident_capacity_admission_error(&capacity));
         }
         if let Some(error) = record.proactive_eviction_error {
             return Err(openai_backend_error(error));
@@ -741,23 +755,14 @@ impl StageOpenAiBackend {
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<KvRestoreOutcome> {
         let runtime_sessions_before = runtime.session_stats();
-        let (restored_prefill, restored_prefill_tokens) = if let Some(kv) = self.kv.as_ref() {
-            cache_stats.status = "miss";
-            self.lookup_and_restore_kv(kv, runtime, session_id, ids, prefill_tokens, cache_stats)
-        } else {
-            (false, 0)
-        };
-        let suffix_tokens = prefill_tokens.len().saturating_sub(restored_prefill_tokens) as u64;
         let capacity = if let Some(kv) = self.kv.as_ref() {
-            let decode_batch_tokens = runtime
-                .admit_session_batch_size(session_id)
-                .map_err(openai_backend_error)? as u64;
+            let decode_batch_tokens = u64::from(self.config.n_batch.unwrap_or(2048));
             let target_free_tokens =
                 decode_batch_tokens.saturating_add(u64::from(max_tokens).min(decode_batch_tokens));
             kv.admit_resident_capacity(
                 runtime,
                 session_id,
-                suffix_tokens,
+                prefill_tokens.len() as u64,
                 decode_batch_tokens,
                 target_free_tokens,
             )
@@ -772,12 +777,18 @@ impl StageOpenAiBackend {
             return Ok(KvRestoreOutcome {
                 runtime_sessions_before,
                 runtime_sessions_after: runtime.session_stats(),
-                restored_prefill,
-                restored_prefill_tokens,
+                restored_prefill: false,
+                restored_prefill_tokens: 0,
                 capacity,
                 record: KvRecordResult::default(),
             });
         }
+        let (restored_prefill, restored_prefill_tokens) = if let Some(kv) = self.kv.as_ref() {
+            cache_stats.status = "miss";
+            self.lookup_and_restore_kv(kv, runtime, session_id, ids, prefill_tokens, cache_stats)
+        } else {
+            (false, 0)
+        };
         let mut decoded_prefill_suffix = false;
         if restored_prefill_tokens < prefill_tokens.len() {
             decoded_prefill_suffix = true;

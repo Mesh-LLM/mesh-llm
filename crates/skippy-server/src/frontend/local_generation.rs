@@ -4,6 +4,8 @@ mod native_mtp_decode;
 #[cfg(test)]
 mod tests;
 mod token_generation;
+#[cfg(test)]
+pub(in crate::frontend) use token_generation::resident_capacity_admission_error;
 
 #[cfg(test)]
 pub(super) use token_generation::{
