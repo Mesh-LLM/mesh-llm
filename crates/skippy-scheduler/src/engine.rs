@@ -34,24 +34,18 @@ pub struct Scheduler {
     waiting_turn: u64,
     next_waiting_order: u64,
     waiting_order_dirty: bool,
-    decode_us_per_row_ewma: Option<f64>,
-    mixed_prefill_tokens: usize,
+    decode_us_ewma: Option<f64>,
     mixed_prefill_viable: bool,
 }
 
 const DURATION_EWMA_ALPHA: f64 = 0.25;
 const MIXED_DECODE_SLOWDOWN_FRACTION: f64 = 0.20;
-const MIXED_PREFILL_INITIAL_TOKENS: usize = 64;
-const MIXED_PREFILL_MIN_TOKENS: usize = 32;
-const MIXED_PREFILL_MIN_EXTRA_US: f64 = 20_000.0;
-const MIXED_PREFILL_MAX_EXTRA_US: f64 = 40_000.0;
+const MIXED_PREFILL_MIN_EXTRA_US: f64 = 8_000.0;
+const MIXED_PREFILL_MAX_EXTRA_US: f64 = 20_000.0;
 
 impl Scheduler {
     pub fn new(config: SchedulerConfig) -> Self {
         let config = config.normalized();
-        let mixed_prefill_tokens = config
-            .max_tokens_per_iteration
-            .min(MIXED_PREFILL_INITIAL_TOKENS);
         Self {
             component_used_bytes: vec![0; config.memory_components.len()],
             config,
@@ -62,8 +56,7 @@ impl Scheduler {
             waiting_turn: 0,
             next_waiting_order: 0,
             waiting_order_dirty: false,
-            decode_us_per_row_ewma: None,
-            mixed_prefill_tokens,
+            decode_us_ewma: None,
             mixed_prefill_viable: true,
         }
     }
@@ -251,18 +244,9 @@ impl Scheduler {
             budget -= 1;
         }
 
-        let decode_rows = plan
-            .work
-            .iter()
-            .filter(|work| work.phase == IterationPhase::Decode)
-            .count();
-        let mut mixed_prefill_budget = self.mixed_prefill_budget(budget, decode_rows);
         let mut prefill_sequences = 0usize;
         for id in ids {
-            if budget == 0
-                || mixed_prefill_budget == 0
-                || prefill_sequences >= self.config.max_prefill_sequences_per_iteration
-            {
+            if budget == 0 || prefill_sequences >= self.config.max_prefill_sequences_per_iteration {
                 break;
             }
             let Some(sequence) = self.active.get_mut(&id) else {
@@ -276,8 +260,7 @@ impl Scheduler {
                 .config
                 .prefill_chunk_tokens
                 .min(replay.len() - sequence.prefill_cursor)
-                .min(budget)
-                .min(mixed_prefill_budget);
+                .min(budget);
             let start = sequence.prefill_cursor;
             let end = start + count;
             let phase = if sequence.generated_tokens.is_empty() {
@@ -297,23 +280,15 @@ impl Scheduler {
             prefill_sequences += 1;
             plan.token_count += count;
             budget -= count;
-            mixed_prefill_budget -= count;
         }
 
         self.consecutive_prefill_iterations = 0;
     }
 
-    fn mixed_prefill_budget(&self, available_tokens: usize, decode_rows: usize) -> usize {
-        if decode_rows == 0 {
-            return available_tokens;
-        }
-        available_tokens.min(self.mixed_prefill_tokens.max(1))
-    }
-
     /// Feed a completed native step back into duration-aware mixed admission.
-    /// Decode-only steps calibrate latency-sensitive row cost. Mixed steps use
-    /// that baseline to shrink promptly when prompt work exceeds its duration
-    /// allowance and grow conservatively when spare latency remains.
+    /// Decode-only steps calibrate the latency-sensitive baseline. A full-size
+    /// mixed step must then prove that its added duration fits the allowance;
+    /// otherwise this scheduler returns to alternating prompt/decode steps.
     pub fn observe_iteration_duration(&mut self, plan: &IterationPlan, elapsed: Duration) {
         let elapsed_us = elapsed.as_secs_f64() * 1_000_000.0;
         if !elapsed_us.is_finite() || elapsed_us <= 0.0 {
@@ -337,42 +312,29 @@ impl Scheduler {
 
         match (prefill_tokens, decode_rows) {
             (0, 0) => {}
-            (0, decode_rows) => {
-                let sample = elapsed_us / decode_rows as f64;
-                update_duration_ewma(&mut self.decode_us_per_row_ewma, sample);
+            (0, _) => {
+                update_duration_ewma(&mut self.decode_us_ewma, elapsed_us);
             }
             (_, 0) => {}
-            (prefill_tokens, decode_rows) => {
+            (_, _) => {
                 // Sampling the first output token adds work that does not
-                // describe the cost of another non-final prompt slice.
+                // describe the cost of another non-final prompt quantum.
                 if samples_prefill {
                     return;
                 }
-                let Some(decode_us_per_row) = self.decode_us_per_row_ewma else {
+                let Some(predicted_decode_us) = self.decode_us_ewma else {
                     return;
                 };
-                let predicted_decode_us = decode_us_per_row * decode_rows as f64;
                 let observed_extra_us = (elapsed_us - predicted_decode_us).max(1.0);
                 let allowed_extra_us = (predicted_decode_us * MIXED_DECODE_SLOWDOWN_FRACTION)
                     .clamp(MIXED_PREFILL_MIN_EXTRA_US, MIXED_PREFILL_MAX_EXTRA_US);
-                let ratio = (allowed_extra_us / observed_extra_us).clamp(0.125, 2.0);
-                let observed_tokens = prefill_tokens as f64;
-                let adjusted_tokens = observed_tokens * ratio;
-                if ratio < 1.0 && adjusted_tokens < MIXED_PREFILL_MIN_TOKENS as f64 {
-                    // A native mixed call has a fixed row-composition cost.
-                    // Trickle-prefilling below this quantum amplifies that
-                    // overhead, so fall back to alternating prompt/decode
-                    // iterations on model/hardware pairs where it cannot fit.
+                if observed_extra_us > allowed_extra_us {
+                    // A mixed native call has a fixed row-composition cost.
+                    // Trickle-prefilling amplifies it, so preserve the full
+                    // prompt quantum and fall back when that quantum is not a
+                    // latency-safe fit for this model/hardware pair.
                     self.mixed_prefill_viable = false;
-                    return;
                 }
-                let next_tokens = if ratio < 1.0 {
-                    adjusted_tokens.floor()
-                } else {
-                    observed_tokens + DURATION_EWMA_ALPHA * (adjusted_tokens - observed_tokens)
-                };
-                self.mixed_prefill_tokens =
-                    (next_tokens.round() as usize).clamp(1, self.config.max_tokens_per_iteration);
             }
         }
     }
@@ -876,7 +838,7 @@ mod tests {
         scheduler.submit(sequence("prefill", 256, 4)).unwrap();
 
         let slow_mixed = scheduler.plan_iteration();
-        assert_eq!(slow_mixed.work[1].tokens.len(), 64);
+        assert_eq!(slow_mixed.work[1].tokens.len(), 127);
         scheduler.observe_iteration_duration(&slow_mixed, Duration::from_millis(170));
         scheduler.complete_iteration(
             &slow_mixed,
@@ -892,6 +854,50 @@ mod tests {
         assert_eq!(fallback_prefill.work[0].phase, IterationPhase::Prefill);
         assert_eq!(fallback_prefill.work[0].tokens.len(), 128);
         assert_eq!(fallback_prefill.token_count, 128);
+    }
+
+    #[test]
+    fn duration_aware_mixed_admission_keeps_cheap_prompt_work() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_tokens_per_iteration: 128,
+            prefill_chunk_tokens: 128,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("decode", 2, 8)).unwrap();
+        let initial = scheduler.plan_iteration();
+        scheduler.complete_iteration(
+            &initial,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 42,
+            }],
+        );
+        let decode_only = scheduler.plan_iteration();
+        scheduler.observe_iteration_duration(&decode_only, Duration::from_millis(10));
+        scheduler.complete_iteration(
+            &decode_only,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 43,
+            }],
+        );
+        scheduler.submit(sequence("prefill", 256, 4)).unwrap();
+
+        let cheap_mixed = scheduler.plan_iteration();
+        scheduler.observe_iteration_duration(&cheap_mixed, Duration::from_millis(18));
+        scheduler.complete_iteration(
+            &cheap_mixed,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 44,
+            }],
+        );
+
+        let next_mixed = scheduler.plan_iteration();
+        assert_eq!(next_mixed.work.len(), 2);
+        assert_eq!(next_mixed.work[0].phase, IterationPhase::Decode);
+        assert_eq!(next_mixed.work[1].phase, IterationPhase::Prefill);
     }
 
     #[test]
