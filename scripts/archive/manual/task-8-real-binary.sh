@@ -96,7 +96,7 @@ prepare_binary() {
 stamp_binary() {
   local name="$1"
   local node_version="$2"
-  just --justfile "$REPO_ROOT/justfile" release-attestation stamp \
+  just --justfile "$REPO_ROOT/Justfile" release-attestation stamp \
     --binary "$WORK_ROOT/$name/mesh-llm" \
     --signing-key-file "$RELEASE_KEY_PRIVATE" \
     --node-version "$node_version" \
@@ -109,11 +109,11 @@ inspect_binary() {
   local binary="$1"
   local output="$2"
   shift 2
-  just --justfile "$REPO_ROOT/justfile" release-attestation inspect --binary "$binary" --json "$@" > "$output"
+  just --justfile "$REPO_ROOT/Justfile" release-attestation inspect --binary "$binary" --json "$@" > "$output"
 }
 
 init_release_signer() {
-  just --justfile "$REPO_ROOT/justfile" release-attestation generate-keypair \
+  just --justfile "$REPO_ROOT/Justfile" release-attestation generate-keypair \
     --private-key-out "$RELEASE_KEY_PRIVATE" \
     --public-key-out "$RELEASE_KEY_PUBLIC" \
     >/dev/null

@@ -100,7 +100,8 @@ bundle.
 
 ## Building locally
 
-Both lanes are exposed in the `Justfile`:
+Both lanes remain exposed from the root `Justfile`; their definitions are
+loaded from its flat imports under `just/`:
 
 ```bash
 # primary (CUDA 12.6.3 toolkit required on the host / container)
