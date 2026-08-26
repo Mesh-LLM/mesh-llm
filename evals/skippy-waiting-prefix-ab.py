@@ -139,6 +139,20 @@ def validate_fixture_inputs(
         raise ValueError("synthetic fixture profiles do not accept a prompt manifest")
 
 
+def load_acceptance_contract(path: Path) -> dict[str, Any]:
+    document = json.loads(path.read_text())
+    if not isinstance(document, dict) or document.get("schema_version") != 1:
+        raise ValueError("acceptance contract schema_version must be 1")
+    if not isinstance(document.get("name"), str) or not document["name"]:
+        raise ValueError("acceptance contract needs a nonempty name")
+    if not isinstance(document.get("workload_profile"), str):
+        raise ValueError("acceptance contract needs a workload_profile")
+    contract = document.get("hardware_acceptance")
+    if not isinstance(contract, dict) or "successful_requests_per_binary" not in contract:
+        raise ValueError("acceptance contract needs hardware_acceptance success bounds")
+    return document
+
+
 def percentile(values: list[float], quantile: float) -> float | None:
     if not values:
         return None
@@ -496,19 +510,26 @@ def format_delta(old: float | None, new: float | None) -> str:
 
 
 def evaluate_acceptance(
-    rows: list[dict[str, Any]], profile: dict[str, Any] | None
+    rows: list[dict[str, Any]],
+    profile: dict[str, Any] | None,
+    contract_override: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if profile is None:
         return None
     indexed = {row["version"]: row for row in rows}
     old, new = indexed["old"], indexed["new"]
-    contract = profile["hardware_acceptance"]
+    contract = (
+        contract_override["hardware_acceptance"]
+        if contract_override is not None
+        else profile["hardware_acceptance"]
+    )
     checks: list[dict[str, Any]] = []
     known_contract_keys = {
         "successful_requests_per_binary",
         "absolute_user_metric_delta_percent_max",
         "suffix_prefill_before_min",
         "family_switch_before_min",
+        "capacity_rejections_after_max",
     }
     for prefix in (
         "suffix_prefill",
@@ -568,6 +589,13 @@ def evaluate_acceptance(
             old["family_switches_median"],
             "min",
             contract["family_switch_before_min"],
+        )
+    if "capacity_rejections_after_max" in contract:
+        record(
+            "after capacity rejections",
+            new["capacity_rejections"],
+            "max",
+            contract["capacity_rejections_after_max"],
         )
     delta_keys = {
         "suffix_prefill": "suffix_prefill_tokens_median",
@@ -707,6 +735,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_FIXTURE_CATALOG,
     )
+    parser.add_argument(
+        "--acceptance-contract",
+        type=Path,
+        help="checked-in acceptance bounds for this layer over the selected workload",
+    )
     parser.add_argument("--rounds", type=int, default=4)
     parser.add_argument("--families", type=int, default=2)
     parser.add_argument("--requests-per-family", type=int, default=6)
@@ -734,6 +767,21 @@ def main() -> int:
         fixture_profile, fixture_catalog_sha256 = apply_fixture_profile(args)
     except (json.JSONDecodeError, OSError, ValueError) as error:
         parser.error(f"invalid fixture profile: {error}")
+    acceptance_contract = None
+    acceptance_contract_sha256 = None
+    if args.acceptance_contract is not None:
+        try:
+            acceptance_contract_path = args.acceptance_contract.resolve()
+            acceptance_contract = load_acceptance_contract(acceptance_contract_path)
+            acceptance_contract_sha256 = sha256(acceptance_contract_path)
+        except (json.JSONDecodeError, OSError, ValueError) as error:
+            parser.error(f"invalid acceptance contract: {error}")
+        if args.fixture_profile is None:
+            parser.error("--acceptance-contract requires --fixture-profile")
+        if acceptance_contract["workload_profile"] != args.fixture_profile:
+            parser.error(
+                "acceptance contract workload_profile does not match --fixture-profile"
+            )
     if min(args.rounds, args.families, args.requests_per_family, args.lanes, args.cache_entries) <= 0:
         parser.error("rounds, families, requests, lanes, and cache entries must be positive")
     if args.admission_concurrency < 0:
@@ -811,7 +859,7 @@ def main() -> int:
                 )
             )
     rows = aggregate(cells)
-    acceptance = evaluate_acceptance(rows, fixture_profile)
+    acceptance = evaluate_acceptance(rows, fixture_profile, acceptance_contract)
     result = {
         "metadata": {
             "old": {"commit": args.old_commit, "binary": str(binaries["old"]), "sha256": sha256(binaries["old"])},
@@ -836,6 +884,15 @@ def main() -> int:
                 str(args.fixture_catalog.resolve()) if fixture_profile is not None else None
             ),
             "fixture_catalog_sha256": fixture_catalog_sha256,
+            "acceptance_contract": (
+                str(args.acceptance_contract.resolve())
+                if acceptance_contract is not None
+                else None
+            ),
+            "acceptance_contract_name": (
+                acceptance_contract["name"] if acceptance_contract is not None else None
+            ),
+            "acceptance_contract_sha256": acceptance_contract_sha256,
             "output_tokens": args.output_tokens,
             "lanes": args.lanes,
             "admission_concurrency": args.admission_concurrency,

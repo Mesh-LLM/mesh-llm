@@ -190,6 +190,39 @@ class WaitingPrefixAbTest(unittest.TestCase):
         ]
         self.assertFalse(BENCH.evaluate_acceptance(rows, profile)["passed"])
 
+    def test_capacity_contract_reuses_workload_with_layer_specific_bounds(self) -> None:
+        catalog = json.loads((REPO / "evals/skippy-scheduler-fixtures.json").read_text())
+        profile = catalog["profiles"]["agentic-eviction-pressure"]
+        contract = BENCH.load_acceptance_contract(
+            REPO / "evals/skippy-capacity-acceptance.json"
+        )
+        rows = [
+            {
+                "version": "old",
+                "successful": 64,
+                "capacity_rejections": 0,
+                "suffix_prefill_tokens_median": 66735.5,
+                "family_switches_median": 10.0,
+                "ttft_ms_p95_median": 27901.1,
+                "makespan_ms_median": 30328.4,
+                "output_tokens_per_second_median": 16.26,
+            },
+            {
+                "version": "new",
+                "successful": 64,
+                "capacity_rejections": 0,
+                "suffix_prefill_tokens_median": 65000.0,
+                "family_switches_median": 10.0,
+                "ttft_ms_p95_median": 27500.0,
+                "makespan_ms_median": 30000.0,
+                "output_tokens_per_second_median": 16.5,
+            },
+        ]
+
+        self.assertTrue(BENCH.evaluate_acceptance(rows, profile, contract)["passed"])
+        rows[1]["capacity_rejections"] = 1
+        self.assertFalse(BENCH.evaluate_acceptance(rows, profile, contract)["passed"])
+
     def test_checked_in_fixture_profile_owns_the_workload_shape(self) -> None:
         args = Namespace(
             fixture_profile="agentic-eviction-pressure",

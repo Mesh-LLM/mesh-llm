@@ -76,6 +76,7 @@ run the A/B harness with the named profile:
 ```bash
 python3 evals/skippy-waiting-prefix-ab.py \
   --fixture-profile agentic-eviction-pressure \
+  --acceptance-contract evals/skippy-capacity-acceptance.json \
   --prompt-manifest /tmp/skippy-agentic-eviction-pressure.json \
   --case-file /path/to/one-model-case.json \
   --old-bin /path/to/old/skippy-server \
@@ -93,14 +94,18 @@ HF profiles require their exact generated prompt manifest, while synthetic
 profiles reject external manifests. The result records the profile name and
 catalog SHA alongside binary, model, and prompt-manifest hashes.
 
-The same replay is also the capacity-policy certificate. The runner combines
+The same replay is also the capacity-policy certificate. Pass the checked-in
+`skippy-capacity-acceptance.json` contract when comparing the capacity layer;
+the workload remains identical, but the gate changes from proving the DFS gain
+a second time to requiring zero fail-closed rejections and no regression over
+10% in recomputation, p95 TTFT, makespan, or throughput. The runner combines
 pre-admission and post-record resident eviction telemetry into per-round token
 and entry totals, reports fail-closed capacity rejections, and retains the new
 planner's predicted recomputation cost. This lets a stacked capacity change be
 compared against the preceding scheduler binary without changing the pinned
 requests or silently treating legacy proactive eviction as zero.
 
-The eviction-pressure certificate requires every request to succeed and, at
+The waiting-prefix eviction-pressure certificate requires every request to succeed and, at
 minimum, a 50,000-token suffix-prefill baseline and eight family switches so a
 drifted non-pressure workload cannot pass. It then requires 10% improvements
 in suffix prefill, family switches, p95 TTFT, and makespan plus 10% higher
