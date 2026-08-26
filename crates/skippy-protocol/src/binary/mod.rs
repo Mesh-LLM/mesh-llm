@@ -14,6 +14,7 @@ pub use codec::{
     send_reply_predicted_with_stats, send_reply_predicted_with_tokens_and_stats,
     send_reply_predicted_with_tokens_window_and_stats, write_stage_message,
 };
+pub use types::sampling_flags;
 pub use types::{
     ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_INKLING_MTP_EMBD, ACTIVATION_FLAG_RWKV7_V_FIRST,
     LLAMA_TOKEN_NULL, MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,

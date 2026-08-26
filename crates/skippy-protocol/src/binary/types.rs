@@ -244,6 +244,11 @@ pub struct StageSamplingConfig {
     pub logit_bias: Vec<StageLogitBias>,
 }
 
+pub mod sampling_flags {
+    pub const ENABLED: u32 = 1 << 0;
+    pub const IGNORE_EOS: u32 = 1 << 1;
+}
+
 impl Default for StageSamplingConfig {
     fn default() -> Self {
         Self {
@@ -264,7 +269,7 @@ impl Default for StageSamplingConfig {
 
 impl StageSamplingConfig {
     pub fn enabled(&self) -> bool {
-        self.flags != 0
+        (self.flags & sampling_flags::ENABLED) != 0
     }
 }
 

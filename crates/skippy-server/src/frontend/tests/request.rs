@@ -121,6 +121,38 @@ fn extra_sampling_fields_are_enabled() {
 }
 
 #[test]
+fn ignore_eos_is_accepted_and_forwarded() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
+        "messages": [{"role": "user", "content": "hello"}],
+        "ignore_eos": true
+    }))
+    .unwrap();
+
+    let sampling = chat_sampling_config(&request).unwrap();
+    assert!(sampling.enabled);
+    assert!(sampling.ignore_eos);
+    let wire = wire_sampling_config(&sampling).unwrap();
+    assert_ne!(
+        wire.flags & skippy_protocol::binary::sampling_flags::IGNORE_EOS,
+        0
+    );
+}
+
+#[test]
+fn ignore_eos_rejects_non_boolean_values() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
+        "messages": [{"role": "user", "content": "hello"}],
+        "ignore_eos": "yes"
+    }))
+    .unwrap();
+
+    let error = chat_sampling_config(&request).unwrap_err();
+    assert_eq!(error.body().error.code.as_deref(), Some("invalid_value"));
+}
+
+#[test]
 fn request_defaults_fill_omitted_chat_fields_only() {
     let mut request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
