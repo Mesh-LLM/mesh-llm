@@ -129,6 +129,8 @@ def stage_converter_input(args: argparse.Namespace, work: Path) -> Path:
     from huggingface_hub import hf_hub_download, snapshot_download
 
     staged = work / "mtp-src"
+    if staged.exists():
+        shutil.rmtree(staged)
     staged.mkdir(parents=True, exist_ok=True)
     mount_repo = os.environ.get("MTP_MOUNT_REPO", "nvidia/Nemotron-3-Super-120B-A12B-BF16-MTPv2")
     snapshot_download(
