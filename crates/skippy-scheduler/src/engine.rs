@@ -35,17 +35,21 @@ pub struct Scheduler {
     next_waiting_order: u64,
     waiting_order_dirty: bool,
     decode_us_per_row_ewma: Option<f64>,
-    prefill_us_per_token_ewma: Option<f64>,
+    mixed_prefill_tokens: usize,
 }
 
 const DURATION_EWMA_ALPHA: f64 = 0.25;
 const MIXED_DECODE_SLOWDOWN_FRACTION: f64 = 0.20;
-const MIXED_PREFILL_MIN_EXTRA_US: f64 = 1_000.0;
-const MIXED_PREFILL_MAX_EXTRA_US: f64 = 8_000.0;
+const MIXED_PREFILL_INITIAL_TOKENS: usize = 64;
+const MIXED_PREFILL_MIN_EXTRA_US: f64 = 8_000.0;
+const MIXED_PREFILL_MAX_EXTRA_US: f64 = 16_000.0;
 
 impl Scheduler {
     pub fn new(config: SchedulerConfig) -> Self {
         let config = config.normalized();
+        let mixed_prefill_tokens = config
+            .max_tokens_per_iteration
+            .min(MIXED_PREFILL_INITIAL_TOKENS);
         Self {
             component_used_bytes: vec![0; config.memory_components.len()],
             config,
@@ -57,7 +61,7 @@ impl Scheduler {
             next_waiting_order: 0,
             waiting_order_dirty: false,
             decode_us_per_row_ewma: None,
-            prefill_us_per_token_ewma: None,
+            mixed_prefill_tokens,
         }
     }
 
@@ -300,27 +304,13 @@ impl Scheduler {
         if decode_rows == 0 {
             return available_tokens;
         }
-        let Some(prefill_us_per_token) = self.prefill_us_per_token_ewma else {
-            // Until a prompt-only iteration supplies a hardware-local rate,
-            // make progress without turning an uncalibrated mixed step into a
-            // long decode stall.
-            return available_tokens.min(1);
-        };
-        let predicted_decode_us = self
-            .decode_us_per_row_ewma
-            .map(|per_row| per_row * decode_rows as f64)
-            .unwrap_or(MIXED_PREFILL_MAX_EXTRA_US);
-        let allowed_extra_us = (predicted_decode_us * MIXED_DECODE_SLOWDOWN_FRACTION)
-            .clamp(MIXED_PREFILL_MIN_EXTRA_US, MIXED_PREFILL_MAX_EXTRA_US)
-            .max(prefill_us_per_token);
-        let predicted_tokens = (allowed_extra_us / prefill_us_per_token).floor() as usize;
-        available_tokens.min(predicted_tokens.max(1))
+        available_tokens.min(self.mixed_prefill_tokens.max(1))
     }
 
     /// Feed a completed native step back into duration-aware mixed admission.
-    /// Prompt-only steps calibrate prompt cost, decode-only steps calibrate
-    /// latency-sensitive row cost, and mixed steps refine prompt cost after
-    /// subtracting the predicted decode baseline.
+    /// Decode-only steps calibrate latency-sensitive row cost. Mixed steps use
+    /// that baseline to shrink promptly when prompt work exceeds its duration
+    /// allowance and grow conservatively when spare latency remains.
     pub fn observe_iteration_duration(&mut self, plan: &IterationPlan, elapsed: Duration) {
         let elapsed_us = elapsed.as_secs_f64() * 1_000_000.0;
         if !elapsed_us.is_finite() || elapsed_us <= 0.0 {
@@ -337,6 +327,10 @@ impl Scheduler {
             .iter()
             .filter(|work| work.phase == IterationPhase::Decode)
             .count();
+        let samples_prefill = plan
+            .work
+            .iter()
+            .any(|work| work.phase != IterationPhase::Decode && work.sample_last);
 
         match (prefill_tokens, decode_rows) {
             (0, 0) => {}
@@ -344,21 +338,30 @@ impl Scheduler {
                 let sample = elapsed_us / decode_rows as f64;
                 update_duration_ewma(&mut self.decode_us_per_row_ewma, sample);
             }
-            (prefill_tokens, 0) => {
-                let sample = elapsed_us / prefill_tokens as f64;
-                update_duration_ewma(&mut self.prefill_us_per_token_ewma, sample);
-            }
+            (_, 0) => {}
             (prefill_tokens, decode_rows) => {
+                // Sampling the first output token adds work that does not
+                // describe the cost of another non-final prompt slice.
+                if samples_prefill {
+                    return;
+                }
                 let Some(decode_us_per_row) = self.decode_us_per_row_ewma else {
                     return;
                 };
-                let prompt_us = elapsed_us - decode_us_per_row * decode_rows as f64;
-                if prompt_us > 0.0 {
-                    update_duration_ewma(
-                        &mut self.prefill_us_per_token_ewma,
-                        prompt_us / prefill_tokens as f64,
-                    );
-                }
+                let predicted_decode_us = decode_us_per_row * decode_rows as f64;
+                let observed_extra_us = (elapsed_us - predicted_decode_us).max(1.0);
+                let allowed_extra_us = (predicted_decode_us * MIXED_DECODE_SLOWDOWN_FRACTION)
+                    .clamp(MIXED_PREFILL_MIN_EXTRA_US, MIXED_PREFILL_MAX_EXTRA_US);
+                let ratio = (allowed_extra_us / observed_extra_us).clamp(0.125, 2.0);
+                let observed_tokens = prefill_tokens as f64;
+                let adjusted_tokens = observed_tokens * ratio;
+                let next_tokens = if ratio < 1.0 {
+                    adjusted_tokens.floor()
+                } else {
+                    observed_tokens + DURATION_EWMA_ALPHA * (adjusted_tokens - observed_tokens)
+                };
+                self.mixed_prefill_tokens =
+                    (next_tokens.round() as usize).clamp(1, self.config.max_tokens_per_iteration);
             }
         }
     }
@@ -836,14 +839,13 @@ mod tests {
     #[test]
     fn duration_aware_mixed_admission_caps_slow_prompt_work() {
         let mut scheduler = Scheduler::new(SchedulerConfig {
-            max_tokens_per_iteration: 8,
-            prefill_chunk_tokens: 8,
+            max_tokens_per_iteration: 128,
+            prefill_chunk_tokens: 128,
             mixed_prefill_decode: true,
             ..SchedulerConfig::default()
         });
-        scheduler.submit(sequence("decode", 2, 4)).unwrap();
+        scheduler.submit(sequence("decode", 2, 8)).unwrap();
         let initial = scheduler.plan_iteration();
-        scheduler.observe_iteration_duration(&initial, Duration::from_millis(4));
         scheduler.complete_iteration(
             &initial,
             &[IterationPrediction {
@@ -860,15 +862,26 @@ mod tests {
                 token: 43,
             }],
         );
-        scheduler.submit(sequence("prefill", 8, 4)).unwrap();
+        scheduler.submit(sequence("prefill", 256, 4)).unwrap();
 
-        let mixed = scheduler.plan_iteration();
+        let slow_mixed = scheduler.plan_iteration();
+        assert_eq!(slow_mixed.work[1].tokens.len(), 64);
+        scheduler.observe_iteration_duration(&slow_mixed, Duration::from_millis(170));
+        scheduler.complete_iteration(
+            &slow_mixed,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 44,
+            }],
+        );
 
-        assert_eq!(mixed.work.len(), 2);
-        assert_eq!(mixed.work[0].phase, IterationPhase::Decode);
-        assert_eq!(mixed.work[1].phase, IterationPhase::Prefill);
-        assert_eq!(mixed.work[1].tokens.len(), 1);
-        assert_eq!(mixed.token_count, 2);
+        let bounded_mixed = scheduler.plan_iteration();
+
+        assert_eq!(bounded_mixed.work.len(), 2);
+        assert_eq!(bounded_mixed.work[0].phase, IterationPhase::Decode);
+        assert_eq!(bounded_mixed.work[1].phase, IterationPhase::Prefill);
+        assert_eq!(bounded_mixed.work[1].tokens.len(), 8);
+        assert_eq!(bounded_mixed.token_count, 9);
     }
 
     #[test]
