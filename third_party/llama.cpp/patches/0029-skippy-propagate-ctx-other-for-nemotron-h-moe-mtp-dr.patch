@@ -1,25 +1,18 @@
-From f8202526dfedf6a3b74bb093bfc85e4322f0be8c Mon Sep 17 00:00:00 2001
+From 8f4ddf1b4873e84eb686a433559b3c9a2bf94115 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Wed, 26 Aug 2026 16:45:00 +1000
+Date: Wed, 26 Aug 2026 22:47:11 +1000
 Subject: [PATCH] skippy: propagate ctx_other for nemotron-h-moe MTP draft
  contexts
 
-The llama_context constructor gates ctx_other propagation by arch.
-A NextN-only nemotron-h-moe draft omits token_embd/output and borrows
-the trunk tensors through ctx_other (see graph_mtp), but there was no
-NEMOTRON_H_MOE clause, so the constructor silently dropped
-params.ctx_other and graph_mtp asserted at reserve time with
-'tok_embd_w != nullptr'.
-
-Add the missing clause mirroring the INKLING one: gated on
-LLAMA_CONTEXT_TYPE_MTP so trunk contexts of the same arch never adopt
-a stray ctx_other.
+Rediffed for the post-#1436/#1457 patch series: insertion point moved
+after the INKLING clause (the old 'backend samplers' anchor region was
+restructured upstream).
 ---
  src/llama-context.cpp | 10 ++++++++++
  1 file changed, 10 insertions(+)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index f09531921..679da84c5 100644
+index aa1f94bd0..dce2c4bf0 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -164,6 +164,16 @@ llama_context::llama_context(
@@ -36,9 +29,9 @@ index f09531921..679da84c5 100644
 +        cparams.ctx_other = params.ctx_other;
 +    }
 +
-     // Initialize backend samplers here so they are part of the sampling graph
-     // before the reserve passes run later in this function. This avoids a later
-     // re-reserve when graph nodes change.
+     auto rope_scaling_type = params.rope_scaling_type;
+     if (rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
+         rope_scaling_type = hparams.rope_scaling_type_train;
 -- 
 2.54.0 (Apple Git-157)
 
