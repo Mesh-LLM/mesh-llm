@@ -334,6 +334,15 @@ impl OpenAiBackend for HookedOpenAiBackend {
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
         let exchange_id = uuid::Uuid::new_v4().to_string();
+        // Armed immediately after minting the exchange id — before
+        // `before_chat_completion` and `on_effective_chat_completion` run —
+        // so a future dropped during either of those pre-backend awaits
+        // still gets exactly one terminal callback via the guard's `Drop`.
+        // The pre-mutation `request` clone is fine for that fallback: it
+        // only ever surfaces on the `Cancelled` path, which doesn't need the
+        // post-dispatch copy.
+        let mut guard =
+            TerminalGuard::new(self.hooks.clone(), request.clone(), exchange_id.clone());
         let outcome = match self.hooks.before_chat_completion(&mut request).await {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -342,9 +351,8 @@ impl OpenAiBackend for HookedOpenAiBackend {
                     status: error.status().as_u16(),
                     reason: &reason,
                 };
-                self.hooks
-                    .on_chat_completion_terminal(&request, &exchange_id, &denial)
-                    .await;
+                guard.request = request.clone();
+                guard.fire(&denial).await;
                 return Err(error);
             }
         };
@@ -362,15 +370,10 @@ impl OpenAiBackend for HookedOpenAiBackend {
         } else {
             ChatCompletionRequest::default()
         };
-        // Armed here, right before the backend call: if this future is
-        // dropped while `backend.await` below is pending (an outer timeout
-        // or client disconnect), the guard's `Drop` still fires exactly one
-        // terminal callback instead of this exchange getting none.
-        let guard = TerminalGuard::new(
-            self.hooks.clone(),
-            dispatched_request.clone(),
-            exchange_id.clone(),
-        );
+        // Swap in the post-mutation request now that dispatch is imminent,
+        // so the backend-call `Cancelled` fallback and the final
+        // success/error terminal both report what was actually sent.
+        guard.request = dispatched_request.clone();
         let mut result = self
             .backend
             .chat_completion_with_context(request, context)
@@ -1245,7 +1248,10 @@ mod tests {
                     std::future::pending::<()>().await;
                 }
                 ChatCompletionOutcome::Cancelled => {
-                    self.terminals.lock().unwrap().push(TerminalRecord::Cancelled);
+                    self.terminals
+                        .lock()
+                        .unwrap()
+                        .push(TerminalRecord::Cancelled);
                 }
                 _ => {}
             }
@@ -1292,6 +1298,174 @@ mod tests {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "terminal event never fired after cancelling mid-terminal-hook-await"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.as_slice(), [TerminalRecord::Cancelled]);
+    }
+
+    /// A policy whose `on_effective_chat_completion` hangs forever (after
+    /// signalling `started`). This lets a test park the exchange future
+    /// *inside* that pre-backend await — the window Gap B's fix targets —
+    /// rather than only during the backend call itself.
+    #[derive(Default)]
+    struct HangOnEffectivePolicy {
+        started: tokio::sync::Notify,
+        terminals: Mutex<Vec<TerminalRecord>>,
+    }
+
+    #[async_trait]
+    impl OpenAiHookPolicy for HangOnEffectivePolicy {
+        async fn on_effective_chat_completion(
+            &self,
+            _request: &ChatCompletionRequest,
+            _route: &ChatExchangeRoute,
+        ) {
+            self.started.notify_one();
+            std::future::pending::<()>().await;
+        }
+
+        async fn on_chat_completion_terminal(
+            &self,
+            _request: &ChatCompletionRequest,
+            _exchange_id: &str,
+            outcome: &ChatCompletionOutcome<'_>,
+        ) {
+            if let ChatCompletionOutcome::Cancelled = outcome {
+                self.terminals
+                    .lock()
+                    .unwrap()
+                    .push(TerminalRecord::Cancelled);
+            }
+        }
+    }
+
+    /// Reproduces Gap B: the guard used to be armed right before the
+    /// backend call, *after* `before_chat_completion` and
+    /// `on_effective_chat_completion` had already run. A future dropped
+    /// during either of those pre-backend awaits got no terminal event at
+    /// all. Arming the guard immediately after the exchange id is minted
+    /// closes that window.
+    #[tokio::test]
+    async fn dropping_the_future_during_on_effective_chat_completion_still_fires_exactly_one_terminal_event()
+     {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let policy = Arc::new(HangOnEffectivePolicy::default());
+        let hooked = Arc::new(HookedOpenAiBackend::new(backend, policy.clone()));
+
+        let hooked_for_task = hooked.clone();
+        let handle = tokio::spawn(async move {
+            hooked_for_task
+                .chat_completion(request_for("gpt-mesh"))
+                .await
+        });
+
+        // Wait until the exchange is parked inside `on_effective_chat_completion`,
+        // then cancel it the way an outer timeout or client disconnect would.
+        policy.started.notified().await;
+        handle.abort();
+        let _ = handle.await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if !policy.terminals.lock().unwrap().is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "terminal event never fired after cancelling during on_effective_chat_completion"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.as_slice(), [TerminalRecord::Cancelled]);
+    }
+
+    /// A policy that denies every request and whose terminal hook hangs
+    /// forever on a `Denied` outcome (after signalling `started`), but
+    /// records `Cancelled` immediately. This lets a test park the exchange
+    /// future *inside* the denial path's `TerminalGuard::fire` await.
+    #[derive(Default)]
+    struct DenyingHangOnTerminalPolicy {
+        started: tokio::sync::Notify,
+        terminals: Mutex<Vec<TerminalRecord>>,
+    }
+
+    #[async_trait]
+    impl OpenAiHookPolicy for DenyingHangOnTerminalPolicy {
+        async fn before_chat_completion(
+            &self,
+            _request: &mut ChatCompletionRequest,
+        ) -> OpenAiResult<ChatHookOutcome> {
+            Err(crate::errors::OpenAiError::invalid_request(
+                "denied by policy",
+            ))
+        }
+
+        async fn on_chat_completion_terminal(
+            &self,
+            _request: &ChatCompletionRequest,
+            _exchange_id: &str,
+            outcome: &ChatCompletionOutcome<'_>,
+        ) {
+            match outcome {
+                ChatCompletionOutcome::Denied { .. } => {
+                    self.started.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                ChatCompletionOutcome::Cancelled => {
+                    self.terminals
+                        .lock()
+                        .unwrap()
+                        .push(TerminalRecord::Cancelled);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Reproduces Gap A: the denial path used to call
+    /// `on_chat_completion_terminal` directly, bypassing `TerminalGuard`
+    /// entirely. If that direct call's await was cancelled mid-flight, the
+    /// denied exchange got zero terminal events. Routing the denial through
+    /// `guard.fire` gives it the same exactly-once + `Drop`-fallback
+    /// guarantee as the admitted path.
+    #[tokio::test]
+    async fn cancelling_a_denied_requests_terminal_delivery_still_fires_exactly_one_terminal_event()
+    {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let policy = Arc::new(DenyingHangOnTerminalPolicy::default());
+        let hooked = Arc::new(HookedOpenAiBackend::new(backend, policy.clone()));
+
+        let hooked_for_task = hooked.clone();
+        let handle = tokio::spawn(async move {
+            hooked_for_task
+                .chat_completion(request_for("gpt-mesh"))
+                .await
+        });
+
+        // Wait until the denial's `guard.fire` call has started awaiting the
+        // terminal hook (which then hangs), then cancel the exchange the way
+        // an outer timeout or client disconnect would.
+        policy.started.notified().await;
+        handle.abort();
+        let _ = handle.await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if !policy.terminals.lock().unwrap().is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "terminal event never fired after cancelling mid-denial-terminal-hook-await"
             );
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
