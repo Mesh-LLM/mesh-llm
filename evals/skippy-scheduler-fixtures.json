@@ -139,7 +139,7 @@
         "requests_per_family": 2,
         "prefix_blocks": 192,
         "output_tokens": 32,
-        "ctx_size": 65536,
+        "ctx_size": 131072,
         "lanes": 16,
         "admission_concurrency": 16,
         "cache_entries": 2,

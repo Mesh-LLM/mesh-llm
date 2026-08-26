@@ -7,9 +7,9 @@ waiting-prefix policy boundary:
   affinity supplies the same order before waiting-prefix DFS, so the replay
   must stay neutral.
 - `agentic-eviction-pressure` is an interleaved eight-family trace with only
-  two resident prefix-cache entries. Waiting-prefix DFS must reduce family
-  switches and the periodic model-backed run must reduce recomputation and
-  tail latency.
+  two resident prefix-cache entries and the measured 131,072-token aggregate
+  context budget. Waiting-prefix DFS must reduce family switches and the
+  periodic model-backed run must reduce recomputation and tail latency.
 
 The source of truth is
 [`evals/skippy-scheduler-fixtures.json`](../../evals/skippy-scheduler-fixtures.json).

@@ -35,6 +35,7 @@ class SchedulerFixturesTest(unittest.TestCase):
         profile = catalog["profiles"]["agentic-eviction-pressure"]
 
         self.assertEqual(profile["workload"]["families"], 8)
+        self.assertEqual(profile["workload"]["ctx_size"], 131072)
         self.assertEqual(len(profile["corpus"]["rows"]), 8)
         self.assertEqual(
             profile["corpus"]["prompt_manifest_sha256"],
