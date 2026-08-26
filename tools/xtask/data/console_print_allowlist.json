@@ -1589,7 +1589,7 @@
   ],
   "crates/mesh-llm-host-runtime/src/inference/skippy/resolver/native_mtp_tests.rs": [
     {
-      "line": 914,
+      "line": 898,
       "macro_name": "eprintln!"
     }
   ],
@@ -3647,6 +3647,10 @@
     {
       "line": 104,
       "macro_name": "eprintln!"
+    },
+    {
+      "line": 331,
+      "macro_name": "eprintln!"
     }
   ],
   "crates/skippy-model-package/src/glm_dsa_generation_policy.rs": [
@@ -4299,15 +4303,15 @@
   ],
   "crates/skippy-server/src/frontend/generation/persistent_lanes.rs": [
     {
-      "line": 276,
+      "line": 331,
       "macro_name": "eprintln!"
     },
     {
-      "line": 316,
+      "line": 371,
       "macro_name": "eprintln!"
     },
     {
-      "line": 324,
+      "line": 379,
       "macro_name": "eprintln!"
     }
   ],
