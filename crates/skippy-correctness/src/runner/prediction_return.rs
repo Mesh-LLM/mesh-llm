@@ -140,7 +140,12 @@ fn accept_prediction_return(
                     return Ok(());
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                let _ = sender.send(Err(format!(
+                    "direct prediction return closed before a reply: {error}"
+                )));
+                return Ok(());
+            }
             Err(error) => return Err(error).context("read direct prediction return reply"),
         }
     }
@@ -247,5 +252,49 @@ mod tests {
         drop(listener);
 
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn closed_return_stream_reports_the_transport_failure() {
+        let listener = PredictionReturnListener::start().unwrap();
+        let address = listener
+            .endpoint()
+            .strip_prefix("tcp://")
+            .unwrap()
+            .to_string();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            if client_ready_hello_enabled() {
+                send_ready(&mut stream).unwrap();
+            }
+            recv_ready(&mut stream).unwrap();
+            let kind = WireMessageKind::PredictionReturnOpen;
+            let open = StageWireMessage {
+                kind,
+                pos_start: 0,
+                token_count: 0,
+                state: StageStateHeader::new(kind, WireActivationDType::F32),
+                request_id: 17,
+                session_id: 19,
+                sampling: None,
+                chat_sampling_metadata: None,
+                tokens: Vec::new(),
+                positions: Vec::new(),
+                activation: Vec::new(),
+                raw_bytes: Vec::new(),
+            };
+            write_stage_message(&mut stream, &open, WireActivationDType::F32).unwrap();
+        });
+
+        let error = listener
+            .receive(Duration::from_secs(1))
+            .expect_err("closed direct return must not look like a clean listener exit");
+
+        assert!(
+            error
+                .to_string()
+                .contains("direct prediction return closed before a reply")
+        );
+        client.join().unwrap();
     }
 }

@@ -15,6 +15,20 @@ FAMILY_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.tsv"
 FAMILY_CERTIFY = ROOT / "scripts" / "family-certify.sh"
 STATE_HANDOFF = ROOT / "crates" / "skippy-correctness" / "src" / "runner" / "state_handoff.rs"
 KV_PAGES = ROOT / "crates" / "skippy-runtime" / "src" / "kv_pages.rs"
+STAGED_GRAPH_PATCH = (
+    ROOT
+    / "third_party"
+    / "llama.cpp"
+    / "patches"
+    / "0001-Add-staged-model-graph-and-family-support.patch"
+)
+MODEL_LIFECYCLE_PATCH = (
+    ROOT
+    / "third_party"
+    / "llama.cpp"
+    / "patches"
+    / "0004-Add-Skippy-model-lifecycle-and-package-support.patch"
+)
 
 
 def _step_block(workflow: str, name: str) -> str:
@@ -154,6 +168,49 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(f"printf '{outcome}\\n'", certify)
         self.assertIn("outcome:$outcome", certify)
+
+    def test_runtime_slice_contract_covers_glm4_moe(self) -> None:
+        lifecycle = MODEL_LIFECYCLE_PATCH.read_text(encoding="utf-8")
+        self.assertIn("model->arch != LLM_ARCH_GLM4_MOE", lifecycle)
+
+    def test_staged_hybrid_memory_preserves_component_partition(self) -> None:
+        staged_graph = STAGED_GRAPH_PATCH.read_text(encoding="utf-8")
+        attention_default = (
+            "filter_attn = [&](uint32_t il) { return !hparams.is_recr(il); };"
+        )
+        recurrent_default = (
+            "filter_recr = [&](uint32_t il) { return hparams.is_recr(il); };"
+        )
+        stage_intersection = (
+            "filter_attn = skippy_stage_memory_filter(std::move(filter_attn), "
+            "params.ctx_type);"
+        )
+        self.assertLess(
+            staged_graph.index(attention_default), staged_graph.index(stage_intersection)
+        )
+        self.assertLess(
+            staged_graph.index(recurrent_default), staged_graph.index(stage_intersection)
+        )
+
+    def test_certification_captures_stage_child_failures(self) -> None:
+        certify = FAMILY_CERTIFY.read_text(encoding="utf-8")
+        correctness_start = certify.index("correctness_common=(")
+        correctness_end = certify.index("\n)", correctness_start)
+        self.assertIn("--child-logs", certify[correctness_start:correctness_end])
+
+    def test_nemotron_uses_a_non_broken_quantization(self) -> None:
+        manifest = FAMILY_MANIFEST.read_text(encoding="utf-8")
+        nemotron = next(
+            line for line in manifest.splitlines() if line.startswith("nemotron|")
+        )
+        self.assertIn(
+            "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF", nemotron
+        )
+        self.assertIn("UD-Q4_K_M.gguf|Q4_K_M|", nemotron)
+        self.assertNotEqual(
+            "ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+            nemotron.split("|")[1],
+        )
 
 
 class SkippyFamilyBatteryTests(unittest.TestCase):

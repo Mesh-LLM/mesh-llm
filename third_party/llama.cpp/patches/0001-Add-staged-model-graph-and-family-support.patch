@@ -3884,10 +3884,21 @@ index c34700ff5..42455490a 100644
                      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                          filter_attn = [&](uint32_t il) {
                              return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
-@@ -2450,6 +2466,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2450,6 +2466,20 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          };
                      }
  
++                    // Preserve llama.cpp's default hybrid partition before
++                    // intersecting it with the runtime-slice layer range.
++                    // Wrapping a null callback directly turns it into a
++                    // stage-only predicate and makes attention caches include
++                    // recurrent layers (and vice versa).
++                    if (!filter_attn) {
++                        filter_attn = [&](uint32_t il) { return !hparams.is_recr(il); };
++                    }
++                    if (!filter_recr) {
++                        filter_recr = [&](uint32_t il) { return hparams.is_recr(il); };
++                    }
 +                    filter_attn = skippy_stage_memory_filter(std::move(filter_attn), params.ctx_type);
 +                    filter_recr = skippy_stage_memory_filter(std::move(filter_recr), params.ctx_type);
 +
@@ -10724,4 +10735,3 @@ index 313500129..0aada2095 100644
      cb(cur, "result_norm", -1);
 -- 
 2.54.0 (Apple Git-157)
-

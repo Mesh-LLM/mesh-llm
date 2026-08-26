@@ -35,7 +35,7 @@ falcon-h1|tiiuae/Falcon-H1-1.5B-Instruct-GGUF|Falcon-H1-1.5B-Instruct-Q4_K_M.ggu
 jamba2|bartowski/ai21labs_AI21-Jamba2-3B-GGUF|ai21labs_AI21-Jamba2-3B-Q4_K_M.gguf|Q4_K_M|6|28|hybrid boundary sweep
 kimi-linear|bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF|moonshotai_Kimi-Linear-48B-A3B-Instruct-IQ2_XS.gguf|IQ2_XS|4|40|hybrid 3:1 interleave; B1 canonical
 qwen3-next|bartowski/Qwen_Qwen3-Next-80B-A3B-Thinking-GGUF|Qwen_Qwen3-Next-80B-A3B-Thinking-IQ2_XS.gguf|IQ2_XS|4|48|hybrid 3 linear:1 attention
-nemotron|ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF|NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf|Q4_0|2|32|hybrid Mamba2+attn MoE; no Q4_K_M in repo
+nemotron|unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF|NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf|Q4_K_M|2|32|hybrid Mamba2+attn MoE; replacement for ggml-org GGUF with invalid all-zero attention head_count_kv metadata
 mamba|Felladrin/gguf-mamba-130m-hf|mamba-130m-hf.Q4_K_M.gguf|Q4_K_M|2|24|recurrent cheap sweep
 mamba2|bartowski/falcon-mamba-7b-GGUF|falcon-mamba-7b-Q4_K_M.gguf|Q4_K_M|2|32|Mamba-2 SSM canonical path
 rwkv6|latestissue/rwkv-6-finch-1b6-gguf|rwkv-6-finch-1b6-Q4_0.gguf|Q4_0|1|24|recurrent; v_first sideband crossing

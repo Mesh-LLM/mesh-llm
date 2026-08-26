@@ -500,7 +500,7 @@ new file mode 100644
 index 000000000..dd21a313f
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,929 @@
+@@ -0,0 +1,930 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -1041,6 +1041,7 @@ index 000000000..dd21a313f
 +            model->arch != LLM_ARCH_GEMMA4 &&
 +            model->arch != LLM_ARCH_GLM_DSA &&
 +            model->arch != LLM_ARCH_GLM4 &&
++            model->arch != LLM_ARCH_GLM4_MOE &&
 +            model->arch != LLM_ARCH_DEEPSEEK2 &&
 +            model->arch != LLM_ARCH_DEEPSEEK2OCR &&
 +            model->arch != LLM_ARCH_FALCON_H1 &&
@@ -2373,4 +2374,3 @@ index 000000000..c20c52e71
 +
 -- 
 2.54.0 (Apple Git-157)
-

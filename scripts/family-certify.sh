@@ -378,6 +378,7 @@ correctness_common=(
   --n-gpu-layers "$N_GPU_LAYERS"
   --prompt "$PROMPT"
   --stage-server-bin "$ROOT/target/debug/skippy-server"
+  --child-logs
 )
 native_mtp_args=()
 if (( REQUIRE_NATIVE_MTP_DRAFT != 0 )); then
