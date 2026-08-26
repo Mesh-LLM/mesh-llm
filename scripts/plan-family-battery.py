@@ -92,7 +92,7 @@ class _GgufReader:
         raise PlanError(f"unsupported GGUF metadata type {kind}: {self.path}")
 
 
-def _gguf_dimensions(path: Path) -> tuple[int, int]:
+def _gguf_dimensions(path: Path) -> tuple[int, int] | None:
     reader = _GgufReader(path)
     try:
         if reader.read(4) != b"GGUF":
@@ -111,6 +111,8 @@ def _gguf_dimensions(path: Path) -> tuple[int, int]:
                 block_counts.append(value)
             if key.endswith(".embedding_length") and type(value) is int:
                 embedding_lengths.append(value)
+        if not block_counts and not embedding_lengths:
+            return None
         if len(block_counts) != 1 or block_counts[0] < 1:
             raise PlanError(f"GGUF must contain exactly one positive *.block_count: {path}")
         if len(embedding_lengths) != 1 or embedding_lengths[0] < 1:
@@ -513,8 +515,13 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
         if model["draft_artifact"] is not None:
             artifacts.append(("draft", model["draft_artifact"]))
         for kind, artifact in artifacts:
+            found_dimensions = False
             for target in _artifact_cache_paths(cache_root, artifact):
-                block_count, embedding_length = _gguf_dimensions(target)
+                dimensions = _gguf_dimensions(target)
+                if dimensions is None:
+                    continue
+                found_dimensions = True
+                block_count, embedding_length = dimensions
                 if kind != "target":
                     continue
                 planned = model["execution"]["layer_end"]
@@ -529,6 +536,11 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
                         f"{model['family']} plans activation width {planned_width} but immutable "
                         f"GGUF metadata in {target.name} declares {embedding_length}"
                     )
+            if not found_dimensions:
+                raise PlanError(
+                    f"{model['family']} {kind} artifact has no GGUF shard with "
+                    "positive *.block_count and *.embedding_length metadata"
+                )
 
 
 def build_plan(

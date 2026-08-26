@@ -17,21 +17,31 @@ MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
 class FamilyBatteryPlannerTests(unittest.TestCase):
     @staticmethod
     def _write_gguf(
-        path: Path, block_count: int, embedding_length: int = 1024
+        path: Path,
+        block_count: int | None,
+        embedding_length: int | None = 1024,
     ) -> int:
         def gguf_string(value: str) -> bytes:
             encoded = value.encode("utf-8")
             return struct.pack("<Q", len(encoded)) + encoded
 
+        metadata = [("general.architecture", 8, "fixture")]
+        if block_count is not None:
+            metadata.append(("fixture.block_count", 4, block_count))
+        if embedding_length is not None:
+            metadata.append(("fixture.embedding_length", 4, embedding_length))
+
         payload = bytearray(b"GGUF")
-        payload.extend(struct.pack("<IQQ", 3, 0, 3))
-        payload.extend(gguf_string("general.architecture"))
-        payload.extend(struct.pack("<I", 8))
-        payload.extend(gguf_string("fixture"))
-        payload.extend(gguf_string("fixture.block_count"))
-        payload.extend(struct.pack("<II", 4, block_count))
-        payload.extend(gguf_string("fixture.embedding_length"))
-        payload.extend(struct.pack("<II", 4, embedding_length))
+        payload.extend(struct.pack("<IQQ", 3, 0, len(metadata)))
+        for key, kind, value in metadata:
+            payload.extend(gguf_string(key))
+            payload.extend(struct.pack("<I", kind))
+            if kind == 8:
+                assert isinstance(value, str)
+                payload.extend(gguf_string(value))
+            else:
+                assert isinstance(value, int)
+                payload.extend(struct.pack("<I", value))
         path.write_bytes(payload)
         return len(payload)
 
@@ -40,7 +50,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         cls,
         root: Path,
         artifact: dict[str, object],
-        block_counts: list[int],
+        block_counts: list[int | None],
         embedding_length: int = 1024,
     ) -> list[Path]:
         files = artifact["files"]
@@ -57,7 +67,8 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
             blob_id = f"{index + 1:064x}"
             blob = repo_root / "blobs" / blob_id
             blob.parent.mkdir(parents=True, exist_ok=True)
-            size = cls._write_gguf(blob, block_count, embedding_length)
+            shard_width = embedding_length if block_count is not None else None
+            size = cls._write_gguf(blob, block_count, shard_width)
             cached = snapshot / str(relative)
             cached.parent.mkdir(parents=True, exist_ok=True)
             cached.symlink_to(blob)
@@ -254,6 +265,38 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
             )
         self.assertEqual(2, blob_drift.returncode)
         self.assertIn("expected blob", blob_drift.stderr)
+
+    def test_cache_gate_accepts_payload_only_secondary_shard(self) -> None:
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source["models"] = [copy.deepcopy(source["models"][0])]
+        model = source["models"][0]
+        model["execution"]["trunk_layers"] = 3
+        model["artifact"]["files"] = ["model-00001.gguf", "model-00002.gguf"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = root / "manifest.json"
+            self._materialize_cached_artifact(root, model["artifact"], [3, None])
+            manifest.write_text(json.dumps(source), encoding="utf-8")
+            result = self._run(
+                manifest, "--check-cache", "--cache-root", str(root / "cache")
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_cache_gate_requires_dimensions_in_at_least_one_shard(self) -> None:
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source["models"] = [copy.deepcopy(source["models"][0])]
+        model = source["models"][0]
+        model["artifact"]["files"] = ["model-00001.gguf", "model-00002.gguf"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = root / "manifest.json"
+            self._materialize_cached_artifact(root, model["artifact"], [None, None])
+            manifest.write_text(json.dumps(source), encoding="utf-8")
+            result = self._run(
+                manifest, "--check-cache", "--cache-root", str(root / "cache")
+            )
+        self.assertEqual(2, result.returncode)
+        self.assertIn("has no GGUF shard", result.stderr)
 
     def test_shards_are_deterministic_and_preserve_every_family_once(self) -> None:
         first = self._run(MANIFEST, "--shard-count", "4")

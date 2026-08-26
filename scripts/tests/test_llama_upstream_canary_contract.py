@@ -27,12 +27,14 @@ def _step_block(workflow: str, name: str) -> str:
 
 
 class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
+    def test_workflow_runs_only_daily_or_by_manual_dispatch(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('    - cron: "47 3 * * *"', workflow)
+        self.assertIn("  workflow_dispatch:", workflow)
+        self.assertNotIn("\n  push:", workflow)
+
     def test_workflow_builds_binaries_before_skipping_per_lane_builds(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('- "scripts/family-certify.sh"', workflow)
-        self.assertIn('- "scripts/lib/family-outcome.sh"', workflow)
-        self.assertIn('- "scripts/run-command-with-timeout.py"', workflow)
-        self.assertIn('- "scripts/plan-family-battery.py"', workflow)
         self.assertIn("force_certify:", workflow)
         self.assertIn("FORCE_CERTIFY:", workflow)
         self.assertIn(

@@ -3,18 +3,6 @@ name: llama.cpp Upstream Canary
 on:
   schedule:
     - cron: "47 3 * * *"
-  push:
-    branches: [main]
-    paths:
-      - "third_party/llama.cpp/patches/**"
-      - "third_party/llama.cpp/upstream.txt"
-      - "ci/llama-canary/**"
-      - "scripts/family-certify.sh"
-      - "scripts/skippy-family-battery.sh"
-      - "scripts/plan-family-battery.py"
-      - "scripts/lib/family-outcome.sh"
-      - "scripts/run-command-with-timeout.py"
-      - ".github/workflows/llama-upstream-canary.yml"
   workflow_dispatch:
     inputs:
       upstream_sha:

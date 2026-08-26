@@ -31,14 +31,18 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
-`llama-upstream-canary.yml` runs trusted default-branch content only on the
-persistent self-hosted `family-certify` runner group (tools come from the
-runner image; no GitHub Actions model caching). Before native compilation,
+`llama-upstream-canary.yml` runs only on its daily schedule or an explicit
+manual dispatch; it is not ordinary push or PR CI. It executes trusted
+default-branch content only on the persistent self-hosted `family-certify`
+runner group (tools come from the runner image; no GitHub Actions model
+caching). Before native compilation,
 `scripts/plan-family-battery.py` validates the versioned JSON family policy,
 the mandatory four-lane contract for every certified profile, and every exact
-artifact revision/file in the immutable local cache. It reads only the GGUF
-metadata header to require `*.block_count` and `*.embedding_length` to equal
-the planned runtime range and activation width before compilation. It emits
+artifact revision/file in the immutable local cache. It reads only GGUF
+metadata headers, requires each artifact to have at least one metadata-bearing
+shard, and requires every shard that carries `*.block_count` and
+`*.embedding_length` to equal the planned runtime range and activation width
+before compilation. It emits
 deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
 all-family shard while retaining the plan as evidence. The runner's `.env` exports
 `HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
