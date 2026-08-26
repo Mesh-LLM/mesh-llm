@@ -79,6 +79,24 @@ class ComputeChangesJustfileTests(unittest.TestCase):
             backend_head = commit(repository, "backend recipe")
             self.assertTrue(classify(RevisionDiff(repository, light_head, backend_head, "just/build.just")))
 
+            nested = recipes / "nested"
+            nested.mkdir()
+            nested_build = nested / "runtime.just"
+            nested_build.write_text("build-runtime:\n    printf backend\n", encoding="utf-8")
+            nested_base = commit(repository, "nested recipe")
+            nested_build.write_text("build-runtime:\n    printf changed\n", encoding="utf-8")
+            nested_head = commit(repository, "nested backend recipe")
+            self.assertTrue(
+                classify(
+                    RevisionDiff(
+                        repository,
+                        nested_base,
+                        nested_head,
+                        "just/nested/runtime.just",
+                    )
+                )
+            )
+
             added = recipes / "release-extra.just"
             added.write_text("release-build-extra:\n    true\n", encoding="utf-8")
             added_head = commit(repository, "added recipe source")

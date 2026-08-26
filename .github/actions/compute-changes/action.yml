@@ -297,7 +297,7 @@ runs:
           fi
         fi
 
-        JUSTFILE_SOURCES=$(echo "$CHANGED_FILES" | grep -E '^just/[^/]+\.just$' || true)
+        JUSTFILE_SOURCES=$(echo "$CHANGED_FILES" | grep -E '^just/.+\.just$' || true)
         while IFS= read -r JUSTFILE_SOURCE; do
           [[ -n "$JUSTFILE_SOURCE" ]] || continue
           [[ "$BACKEND_RECIPE_CHANGED" == "false" ]] || break

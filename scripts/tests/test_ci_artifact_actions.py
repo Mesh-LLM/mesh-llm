@@ -946,7 +946,7 @@ class CiArtifactActionTests(unittest.TestCase):
     def test_imported_justfile_sources_are_classified_on_both_diff_sides(self) -> None:
         action = self.read_action("compute-changes")
 
-        self.assertIn("grep -E '^just/[^/]+\\.just$'", action)
+        self.assertIn("grep -E '^just/.+\\.just$'", action)
         self.assertIn("${{ inputs.base_sha }}:$JUSTFILE_SOURCE", action)
         self.assertIn("${{ inputs.head_sha }}:$JUSTFILE_SOURCE", action)
         self.assertIn("git diff --name-status --no-renames", action)
