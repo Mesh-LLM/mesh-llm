@@ -23,7 +23,68 @@ pub(in crate::frontend) struct DraftRunner {
     /// Tokens currently materialized in the draft session's KV, maintained so
     /// fallback proposals can advance incrementally instead of re-prefilling
     /// the whole context on every call.
-    synced: Vec<i32>,
+    synced: DraftSyncState,
+}
+
+/// What a sync to a given context requires of the draft session. Split out
+/// from the session I/O because this bookkeeping is load-bearing for KV
+/// correctness: claiming a prefix extension the session has not materialized
+/// silently corrupts every later proposal.
+#[derive(Debug, Eq, PartialEq)]
+pub(in crate::frontend) enum DraftSyncPlan {
+    /// The session is already at the target; nothing to do.
+    AlreadySynced,
+    /// The synced tokens are a prefix of the target: prefill only the tail,
+    /// given here as a range into the target prefix.
+    Extend { from: usize, to: usize },
+    /// The synced tokens diverge from the target: reset and prefill the
+    /// whole prefix.
+    Reset,
+}
+
+/// Tokens the draft session has materialized, and the decisions derived from
+/// them.
+#[derive(Debug, Default)]
+pub(in crate::frontend) struct DraftSyncState {
+    tokens: Vec<i32>,
+}
+
+impl DraftSyncState {
+    /// The prefix a context implies: every token but the last, which is the
+    /// one a proposal decodes from.
+    fn target_len(context_tokens: &[i32]) -> usize {
+        context_tokens.len().saturating_sub(1)
+    }
+
+    pub(in crate::frontend) fn plan(&self, context_tokens: &[i32]) -> DraftSyncPlan {
+        let target = &context_tokens[..Self::target_len(context_tokens)];
+        if self.tokens.is_empty() || !target.starts_with(&self.tokens) {
+            return DraftSyncPlan::Reset;
+        }
+        if target.len() == self.tokens.len() {
+            return DraftSyncPlan::AlreadySynced;
+        }
+        DraftSyncPlan::Extend {
+            from: self.tokens.len(),
+            to: target.len(),
+        }
+    }
+
+    fn record_extend(&mut self, delta: &[i32]) {
+        self.tokens.extend_from_slice(delta);
+    }
+
+    fn record_reset(&mut self, prefix: &[i32]) {
+        self.tokens.clear();
+        self.tokens.extend_from_slice(prefix);
+    }
+
+    /// A proposal decodes from `current`, which the session materializes as
+    /// it steps — so it joins the synced prefix and the next sync can extend
+    /// instead of resetting.
+    fn record_proposal_step(&mut self, current: i32) {
+        self.tokens.push(current);
+    }
 }
 
 impl DraftRunner {
@@ -74,19 +135,19 @@ impl DraftRunner {
             window,
             _model: model,
             session,
-            synced: Vec::new(),
+            synced: DraftSyncState::default(),
         })
     }
 
     pub(in crate::frontend) fn reset_to_context(&mut self, context_tokens: &[i32]) -> Result<()> {
         self.session.reset().context("reset draft session")?;
-        self.synced.clear();
+        self.synced.record_reset(&[]);
         if context_tokens.len() > 1 {
             let prefix = &context_tokens[..context_tokens.len() - 1];
             self.session
                 .prefill_chunk(prefix)
                 .context("prefill draft context")?;
-            self.synced.extend_from_slice(prefix);
+            self.synced.record_reset(prefix);
         }
         Ok(())
     }
@@ -97,18 +158,18 @@ impl DraftRunner {
     /// when prior fallback proposals were accepted — and falls back to a full
     /// reset on divergence.
     pub(in crate::frontend) fn sync_to_context(&mut self, context_tokens: &[i32]) -> Result<()> {
-        let target = &context_tokens[..context_tokens.len().saturating_sub(1)];
-        if !self.synced.is_empty() && target.starts_with(&self.synced) {
-            let delta = &target[self.synced.len()..];
-            if !delta.is_empty() {
+        match self.synced.plan(context_tokens) {
+            DraftSyncPlan::AlreadySynced => Ok(()),
+            DraftSyncPlan::Extend { from, to } => {
+                let delta = &context_tokens[from..to];
                 self.session
                     .prefill_chunk(delta)
                     .context("advance draft context")?;
-                self.synced.extend_from_slice(delta);
+                self.synced.record_extend(delta);
+                Ok(())
             }
-            return Ok(());
+            DraftSyncPlan::Reset => self.reset_to_context(context_tokens),
         }
-        self.reset_to_context(context_tokens)
     }
 
     pub(in crate::frontend) fn propose(
@@ -118,7 +179,7 @@ impl DraftRunner {
     ) -> Result<Vec<i32>> {
         let mut tokens = Vec::with_capacity(max_tokens);
         for _ in 0..max_tokens {
-            self.synced.push(current);
+            self.synced.record_proposal_step(current);
             current = self
                 .session
                 .decode_step(current)
@@ -208,4 +269,94 @@ pub(in crate::frontend) fn model_layer_count(path: &Path) -> Result<u32> {
         .map(|index| index + 1)
         .ok_or_else(|| anyhow!("could not infer layer count for {}", path.display()))?;
     Ok(layer_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(tokens: &[i32]) -> DraftSyncState {
+        DraftSyncState {
+            tokens: tokens.to_vec(),
+        }
+    }
+
+    #[test]
+    fn an_empty_session_always_resets() {
+        assert_eq!(state(&[]).plan(&[1, 2, 3]), DraftSyncPlan::Reset);
+        // A context of one token has an empty prefix: still a reset, and
+        // `reset_to_context` then prefills nothing.
+        assert_eq!(state(&[]).plan(&[1]), DraftSyncPlan::Reset);
+    }
+
+    #[test]
+    fn a_synced_prefix_extends_by_the_delta_only() {
+        // Synced [1, 2]; context [1, 2, 3, 4, 5] has prefix [1, 2, 3, 4].
+        assert_eq!(
+            state(&[1, 2]).plan(&[1, 2, 3, 4, 5]),
+            DraftSyncPlan::Extend { from: 2, to: 4 }
+        );
+    }
+
+    #[test]
+    fn an_exactly_synced_prefix_is_a_no_op() {
+        // Synced [1, 2, 3]; context [1, 2, 3, 4] has prefix [1, 2, 3].
+        assert_eq!(
+            state(&[1, 2, 3]).plan(&[1, 2, 3, 4]),
+            DraftSyncPlan::AlreadySynced
+        );
+    }
+
+    #[test]
+    fn divergence_resets_rather_than_extending() {
+        // Same length, different token: the KV past that point is wrong.
+        assert_eq!(state(&[1, 9]).plan(&[1, 2, 3, 4]), DraftSyncPlan::Reset);
+        // A rejected proposal leaves the session longer than the target.
+        assert_eq!(state(&[1, 2, 3, 4]).plan(&[1, 2, 3]), DraftSyncPlan::Reset);
+    }
+
+    #[test]
+    fn proposal_steps_join_the_synced_prefix_so_the_next_sync_extends() {
+        let mut synced = state(&[1, 2]);
+        // Two proposal steps decoded from 3 then 4.
+        synced.record_proposal_step(3);
+        synced.record_proposal_step(4);
+
+        // Both accepted, and the caller committed a fifth token: the session
+        // already holds [1, 2, 3, 4], so only [5] needs prefilling.
+        assert_eq!(
+            synced.plan(&[1, 2, 3, 4, 5, 6]),
+            DraftSyncPlan::Extend { from: 4, to: 5 }
+        );
+    }
+
+    #[test]
+    fn a_rejected_proposal_step_forces_a_reset() {
+        let mut synced = state(&[1, 2]);
+        synced.record_proposal_step(3);
+        // The verifier rejected 3 and committed 9 instead: the draft KV holds
+        // a token the target never accepted, so the prefix cannot be reused.
+        assert_eq!(synced.plan(&[1, 2, 9, 10]), DraftSyncPlan::Reset);
+    }
+
+    #[test]
+    fn recording_a_reset_replaces_the_whole_prefix() {
+        let mut synced = state(&[1, 2, 3]);
+        synced.record_reset(&[7, 8]);
+
+        assert_eq!(synced.plan(&[7, 8, 9]), DraftSyncPlan::AlreadySynced);
+        assert_eq!(synced.plan(&[1, 2, 3]), DraftSyncPlan::Reset);
+    }
+
+    #[test]
+    fn an_extend_plan_indexes_the_context_the_caller_slices() {
+        // The plan's range must address `context_tokens` directly, since
+        // sync_to_context slices the context with it.
+        let context = [1, 2, 3, 4, 5];
+        let DraftSyncPlan::Extend { from, to } = state(&[1, 2]).plan(&context) else {
+            panic!("a synced prefix must extend");
+        };
+
+        assert_eq!(&context[from..to], &[3, 4]);
+    }
 }

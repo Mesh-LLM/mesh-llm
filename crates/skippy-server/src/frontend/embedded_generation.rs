@@ -910,6 +910,11 @@ impl StageOpenAiBackend {
                     let proposal = if proposal.tokens().len() < 2
                         && ngram_fallback_draft_enabled
                         && pipelined_decode_enabled
+                        // A fallback proposal is only worth its draft decode
+                        // when at least two tokens still fit the remaining
+                        // window; below that, fall through to the serial path
+                        // rather than overshoot the budget by a token.
+                        && native_mtp_remaining >= 2
                     {
                         let fallback_timer = PhaseTimer::start();
                         let draft = draft_guard
@@ -918,11 +923,13 @@ impl StageOpenAiBackend {
                         draft
                             .sync_to_context(&context_tokens)
                             .map_err(openai_backend_error)?;
+                        // The floor must not lift the budget back over the
+                        // remaining window, so it is applied before the cap.
                         let budget = native_mtp_options
                             .ngram_max_proposal_tokens
                             .min(draft.window.max(1))
-                            .min(native_mtp_remaining)
-                            .max(2);
+                            .max(2)
+                            .min(native_mtp_remaining);
                         let draft_tokens = draft
                             .propose(current, budget)
                             .map_err(openai_backend_error)?;
