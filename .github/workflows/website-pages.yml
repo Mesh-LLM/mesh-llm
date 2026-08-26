@@ -12,6 +12,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "Justfile"
+      - "just/**"
       - "crates/**"
       - "scripts/build-crate-docs.sh"
       - "scripts/publish-crates.sh"
