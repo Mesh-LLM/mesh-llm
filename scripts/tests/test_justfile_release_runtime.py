@@ -9,6 +9,8 @@ import tempfile
 from typing import Final
 import unittest
 
+from scripts.tests.justfile_source import read_justfile_source
+
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 JUSTFILE: Final = ROOT / "Justfile"
@@ -126,7 +128,7 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         )
 
     def test_cuda12_release_recipes_include_pascal_sm61(self) -> None:
-        contents = JUSTFILE.read_text(encoding="utf-8")
+        contents = read_justfile_source(JUSTFILE)
 
         self.assertIn(
             "arches='61;75;80;86;87;89;90'",
@@ -264,13 +266,13 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         self.assertNotIn('cp "{{ mesh_bin }}"', recipe)
 
     def release_runtime_recipe(self) -> str:
-        contents = JUSTFILE.read_text(encoding="utf-8")
+        contents = read_justfile_source(JUSTFILE)
         start = contents.index('release-runtime-build backend="" target="":')
         end = contents.index("# Build the backend-neutral host and the default runtime", start)
         return contents[start:end]
 
     def recipe(self, name: str) -> str:
-        contents = JUSTFILE.read_text(encoding="utf-8")
+        contents = read_justfile_source(JUSTFILE)
         match = re.search(rf"(?m)^{re.escape(name)}(?=[: ])", contents)
         self.assertIsNotNone(match)
         assert match is not None
