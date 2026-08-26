@@ -96,6 +96,21 @@ pub(super) struct PrefillChunkObservation {
     pub(super) downstream_wait_ms: f64,
 }
 
+pub(super) fn representative_prefill_compute_sample(
+    current_ms: f64,
+    current_tokens: usize,
+    candidate_ms: f64,
+    candidate_tokens: usize,
+) -> (f64, usize) {
+    if candidate_tokens > current_tokens
+        || (candidate_tokens == current_tokens && candidate_ms > current_ms)
+    {
+        (candidate_ms, candidate_tokens)
+    } else {
+        (current_ms, current_tokens)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct PrefillChunkPlanner {
     pub(super) policy: PrefillChunkPolicy,

@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use crate::frontend::prefill::representative_prefill_compute_sample;
 
 #[test]
 fn prefill_chunk_schedule_parses_and_repeats_last_size() {
@@ -244,6 +245,16 @@ fn prefill_calibration_uses_slowest_downstream_stage() {
     planner.observe(pool.prefill_transport_seed().unwrap());
 
     assert_eq!(planner.chunk_size_for(0, 512), 128);
+}
+
+#[test]
+fn prefill_calibration_ignores_short_stage0_startup_overhead() {
+    let (compute_ms, token_count) = representative_prefill_compute_sample(0.0, 0, 180.0, 128);
+    let (compute_ms, token_count) =
+        representative_prefill_compute_sample(compute_ms, token_count, 90.0, 384);
+
+    assert_eq!(compute_ms, 90.0);
+    assert_eq!(token_count, 384);
 }
 
 #[test]
