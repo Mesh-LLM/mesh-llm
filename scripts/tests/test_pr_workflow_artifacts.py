@@ -225,6 +225,43 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertIn('cargo test --locked -p "$crate"', workflow)
         self.assertNotIn('args+=("-p" "$crate")', workflow)
 
+    def test_rust_tests_restore_only_verified_trusted_model_cache(self):
+        workflow = self.workflow("ci-rust-tests-slice.yml")
+        self.assertIn(
+            "SKIPPY_CORRECTNESS_MODEL_REVISION: "
+            "ef4088322893040952513f532f736ddeab518403",
+            workflow,
+        )
+        self.assertIn(
+            "SKIPPY_CORRECTNESS_MODEL_SHA256: "
+            "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735",
+            workflow,
+        )
+        self.assertIn("Restore Skippy correctness model cache", workflow)
+        self.assertIn("uses: actions/cache/restore@", workflow)
+        self.assertIn(
+            "needs.runner_policy.outputs.allow_native_github_cache == 'true'",
+            workflow,
+        )
+        self.assertIn("--revision \"$SKIPPY_CORRECTNESS_MODEL_REVISION\"", workflow)
+        self.assertIn("sha256sum --check --strict", workflow)
+        self.assertIn("Save trusted Skippy correctness model cache", workflow)
+        self.assertIn("uses: actions/cache/save@", workflow)
+        self.assertIn(
+            "if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') && "
+            "needs.runner_policy.outputs.allow_native_github_cache == 'true'",
+            workflow,
+        )
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertIn(
+            "inputs.original_event_name != 'pull_request_target'",
+            workflow,
+        )
+        self.assertIn(
+            "steps.skippy_correctness_model_cache.outputs.cache-hit != 'true'",
+            workflow,
+        )
+
     def test_full_swift_sdk_has_a_cold_native_build_budget(self):
         workflow = self.workflow("ci-macos-lane.yml")
         self.assertIn("timeout_minutes: 90", workflow)
