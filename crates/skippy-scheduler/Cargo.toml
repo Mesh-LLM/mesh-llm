@@ -16,6 +16,8 @@ skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc7" }
 thiserror = "2"
 
 [dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
 skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc7" }
 
 [[bench]]

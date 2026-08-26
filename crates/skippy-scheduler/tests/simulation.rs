@@ -1,7 +1,78 @@
 mod support;
 
+use std::collections::BTreeMap;
+
+use serde::Deserialize;
 use skippy_scheduler::SchedulerConfig;
 use support::{RuntimeCostModel, burst_requests, simulate, staggered_prefill_requests};
+
+#[derive(Deserialize)]
+struct FixtureCatalog {
+    profiles: BTreeMap<String, FixtureProfile>,
+}
+
+#[derive(Deserialize)]
+struct FixtureProfile {
+    ci_trace: FixtureTrace,
+}
+
+#[derive(Deserialize)]
+struct FixtureTrace {
+    family_order: Vec<i32>,
+    prompt_tokens: usize,
+    expected_fcfs_switches: usize,
+    expected_dfs_switches: usize,
+}
+
+fn scheduler_fixture_catalog() -> FixtureCatalog {
+    serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../evals/skippy-scheduler-fixtures.json"
+    )))
+    .expect("valid checked-in scheduler fixture catalog")
+}
+
+fn replay_family_switches(trace: &FixtureTrace, group_waiting_prefixes: bool) -> usize {
+    let mut request_families = BTreeMap::new();
+    let requests = trace
+        .family_order
+        .iter()
+        .enumerate()
+        .map(|(index, family)| {
+            let id = format!("request-{index:03}-family-{family:02}");
+            request_families.insert(id.clone(), *family);
+            support::SimRequest::new(id, 0, trace.prompt_tokens, 1)
+                .with_token_offset(family.saturating_add(1).saturating_mul(10_000))
+        })
+        .collect();
+    let report = simulate(
+        SchedulerConfig {
+            max_active_sequences: 1,
+            group_waiting_prefixes,
+            ..SchedulerConfig::default()
+        },
+        RuntimeCostModel::default(),
+        requests,
+    )
+    .expect("fixture replay completes");
+    let mut service_order = report
+        .requests
+        .iter()
+        .map(|(id, metrics)| {
+            (
+                metrics
+                    .first_scheduled_us
+                    .expect("fixture request was scheduled"),
+                request_families[id],
+            )
+        })
+        .collect::<Vec<_>>();
+    service_order.sort_unstable();
+    service_order
+        .windows(2)
+        .filter(|pair| pair[0].1 != pair[1].1)
+        .count()
+}
 
 #[test]
 fn scheduler_simulation_is_deterministic() {
@@ -13,6 +84,23 @@ fn scheduler_simulation_is_deterministic() {
     let second = simulate(config, cost, requests).unwrap();
 
     assert_eq!(first, second);
+}
+
+#[test]
+fn named_scheduler_profiles_replay_the_measured_locality_boundary() {
+    for (name, profile) in scheduler_fixture_catalog().profiles {
+        let fcfs_switches = replay_family_switches(&profile.ci_trace, false);
+        let dfs_switches = replay_family_switches(&profile.ci_trace, true);
+
+        assert_eq!(
+            fcfs_switches, profile.ci_trace.expected_fcfs_switches,
+            "{name} FCFS trace drifted"
+        );
+        assert_eq!(
+            dfs_switches, profile.ci_trace.expected_dfs_switches,
+            "{name} waiting-prefix trace drifted"
+        );
+    }
 }
 
 #[test]

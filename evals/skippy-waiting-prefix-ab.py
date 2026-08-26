@@ -28,6 +28,7 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 SUMMARY_EVENT = "stage.openai_generation_summary"
+DEFAULT_FIXTURE_CATALOG = REPO / "evals/skippy-scheduler-fixtures.json"
 
 
 def load_module(name: str, path: Path) -> Any:
@@ -97,6 +98,20 @@ def read_prompt_manifest(path: Path) -> tuple[list[dict[str, str]], dict[str, An
     if not isinstance(metadata, dict):
         raise ValueError("prompt manifest metadata must be an object")
     return prompts, metadata
+
+
+def apply_fixture_profile(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+    if args.fixture_profile is None:
+        return None, None
+    fixtures = load_module(
+        "skippy_scheduler_fixtures", REPO / "evals/skippy-scheduler-fixtures.py"
+    )
+    catalog_path = args.fixture_catalog.resolve()
+    catalog = fixtures.load_catalog(catalog_path)
+    selected = fixtures.profile(catalog, args.fixture_profile)
+    for key, value in selected["workload"].items():
+        setattr(args, key, value)
+    return selected, sha256(catalog_path)
 
 
 def percentile(values: list[float], quantile: float) -> float | None:
@@ -398,7 +413,79 @@ def format_delta(old: float | None, new: float | None) -> str:
     return "n/a" if value is None else f"{value:+.1f}%"
 
 
-def report(rows: list[dict[str, Any]]) -> str:
+def evaluate_acceptance(
+    rows: list[dict[str, Any]], profile: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    if profile is None:
+        return None
+    indexed = {row["version"]: row for row in rows}
+    old, new = indexed["old"], indexed["new"]
+    contract = profile["hardware_acceptance"]
+    checks: list[dict[str, Any]] = []
+
+    def record(label: str, actual: float | None, relation: str, threshold: Any) -> None:
+        if actual is None:
+            passed = False
+        elif relation == "eq":
+            passed = actual == threshold
+        elif relation == "max":
+            passed = actual <= threshold
+        elif relation == "min":
+            passed = actual >= threshold
+        elif relation == "range":
+            passed = threshold["min"] <= actual <= threshold["max"]
+        else:
+            raise ValueError(f"unsupported acceptance relation: {relation}")
+        checks.append(
+            {
+                "label": label,
+                "actual": actual,
+                "relation": relation,
+                "threshold": threshold,
+                "passed": passed,
+            }
+        )
+
+    expected_successes = contract["successful_requests_per_binary"]
+    record("before successful requests", old["successful"], "eq", expected_successes)
+    record("after successful requests", new["successful"], "eq", expected_successes)
+    delta_keys = {
+        "suffix_prefill": "suffix_prefill_tokens_median",
+        "family_switch": "family_switches_median",
+        "ttft_p95": "ttft_ms_p95_median",
+        "makespan": "makespan_ms_median",
+        "output_throughput": "output_tokens_per_second_median",
+    }
+    for prefix, row_key in delta_keys.items():
+        actual = delta(old[row_key], new[row_key])
+        range_key = f"{prefix}_delta_percent"
+        max_key = f"{prefix}_delta_percent_max"
+        min_key = f"{prefix}_delta_percent_min"
+        if range_key in contract:
+            record(f"{prefix} delta percent", actual, "range", contract[range_key])
+        if max_key in contract:
+            record(f"{prefix} delta percent", actual, "max", contract[max_key])
+        if min_key in contract:
+            record(f"{prefix} delta percent", actual, "min", contract[min_key])
+    if "absolute_user_metric_delta_percent_max" in contract:
+        threshold = contract["absolute_user_metric_delta_percent_max"]
+        for label, row_key in (
+            ("TTFT p50", "ttft_ms_p50_median"),
+            ("TTFT p95", "ttft_ms_p95_median"),
+            ("makespan", "makespan_ms_median"),
+            ("output throughput", "output_tokens_per_second_median"),
+        ):
+            value = delta(old[row_key], new[row_key])
+            record(
+                f"absolute {label} delta percent",
+                abs(value) if value is not None else None,
+                "max",
+                threshold,
+            )
+    return {"passed": all(check["passed"] for check in checks), "checks": checks}
+
+
+def report(rows: list[dict[str, Any]], acceptance: dict[str, Any] | None = None) -> str:
     indexed = {row["version"]: row for row in rows}
     old, new = indexed["old"], indexed["new"]
     old_suffix = old["suffix_prefill_tokens_median"]
@@ -439,6 +526,26 @@ def report(rows: list[dict[str, Any]]) -> str:
             f"| {label} | {format_metric(before)} | {format_metric(after)} | "
             f"{format_delta(before, after)} |"
         )
+    if acceptance is not None:
+        lines.extend(
+            [
+                "",
+                f"Fixture acceptance: **{'PASS' if acceptance['passed'] else 'FAIL'}**",
+                "",
+                "| Check | Actual | Required | Result |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for check in acceptance["checks"]:
+            threshold = check["threshold"]
+            if isinstance(threshold, dict):
+                required = f"{threshold['min']} to {threshold['max']}"
+            else:
+                operators = {"eq": "=", "max": "≤", "min": "≥"}
+                required = f"{operators[check['relation']]} {threshold}"
+            actual = format_metric(check["actual"])
+            result = "PASS" if check["passed"] else "FAIL"
+            lines.append(f"| {check['label']} | {actual} | {required} | {result} |")
     return "\n".join(lines) + "\n"
 
 
@@ -451,6 +558,15 @@ def main() -> int:
     parser.add_argument("--new-commit", required=True)
     parser.add_argument("--native-build", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--fixture-profile",
+        help="checked-in workload profile; its shape overrides workload flags",
+    )
+    parser.add_argument(
+        "--fixture-catalog",
+        type=Path,
+        default=DEFAULT_FIXTURE_CATALOG,
+    )
     parser.add_argument("--rounds", type=int, default=4)
     parser.add_argument("--families", type=int, default=2)
     parser.add_argument("--requests-per-family", type=int, default=6)
@@ -474,6 +590,10 @@ def main() -> int:
     parser.add_argument("--request-timeout-secs", type=float, default=900.0)
     parser.add_argument("--n-gpu-layers", type=int, default=999)
     args = parser.parse_args()
+    try:
+        fixture_profile, fixture_catalog_sha256 = apply_fixture_profile(args)
+    except (json.JSONDecodeError, OSError, ValueError) as error:
+        parser.error(f"invalid fixture profile: {error}")
     if min(args.rounds, args.families, args.requests_per_family, args.lanes, args.cache_entries) <= 0:
         parser.error("rounds, families, requests, lanes, and cache entries must be positive")
     if args.admission_concurrency < 0:
@@ -491,6 +611,12 @@ def main() -> int:
         parser.error("case file must contain exactly one model")
     case = cases[0]
     prompt_manifest_metadata: dict[str, Any] = {}
+    if (
+        fixture_profile is not None
+        and fixture_profile["corpus"]["kind"] == "hf"
+        and args.prompt_manifest is None
+    ):
+        parser.error("HF fixture profiles require --prompt-manifest from the prepare command")
     if args.prompt_manifest is not None:
         prompt_manifest = args.prompt_manifest.resolve()
         if not prompt_manifest.is_file():
@@ -499,6 +625,14 @@ def main() -> int:
             prompts, prompt_manifest_metadata = read_prompt_manifest(prompt_manifest)
         except (json.JSONDecodeError, OSError, ValueError) as error:
             parser.error(f"invalid prompt manifest: {error}")
+        if fixture_profile is not None and fixture_profile["corpus"]["kind"] == "hf":
+            expected_manifest_sha = fixture_profile["corpus"]["prompt_manifest_sha256"]
+            actual_manifest_sha = sha256(prompt_manifest)
+            if actual_manifest_sha != expected_manifest_sha:
+                parser.error(
+                    "prompt manifest does not match fixture profile: "
+                    f"expected {expected_manifest_sha}, got {actual_manifest_sha}"
+                )
     else:
         prompt_manifest = None
         prompts = interleaved_prompts(args.families, args.requests_per_family, args.prefix_blocks)
@@ -532,6 +666,7 @@ def main() -> int:
                 )
             )
     rows = aggregate(cells)
+    acceptance = evaluate_acceptance(rows, fixture_profile)
     result = {
         "metadata": {
             "old": {"commit": args.old_commit, "binary": str(binaries["old"]), "sha256": sha256(binaries["old"])},
@@ -551,6 +686,11 @@ def main() -> int:
                 sha256(prompt_manifest) if prompt_manifest is not None else None
             ),
             "prompt_manifest_metadata": prompt_manifest_metadata,
+            "fixture_profile": args.fixture_profile,
+            "fixture_catalog": (
+                str(args.fixture_catalog.resolve()) if fixture_profile is not None else None
+            ),
+            "fixture_catalog_sha256": fixture_catalog_sha256,
             "output_tokens": args.output_tokens,
             "lanes": args.lanes,
             "admission_concurrency": args.admission_concurrency,
@@ -559,11 +699,16 @@ def main() -> int:
         },
         "cells": cells,
         "aggregate": rows,
+        "acceptance": acceptance,
     }
     (args.output_dir / "comparison.json").write_text(json.dumps(result, indent=2) + "\n")
-    (args.output_dir / "report.md").write_text(report(rows))
+    (args.output_dir / "report.md").write_text(report(rows, acceptance))
     print(args.output_dir / "comparison.json")
-    return 0 if all(cell["summary"]["successful"] == cell["summary"]["requests"] for cell in cells) else 1
+    successful = all(
+        cell["summary"]["successful"] == cell["summary"]["requests"] for cell in cells
+    )
+    accepted = acceptance is None or acceptance["passed"]
+    return 0 if successful and accepted else 1
 
 
 if __name__ == "__main__":

@@ -453,6 +453,12 @@ Operational requirements:
   deletion/prune can discard it safely;
 - keep a global emergency off switch for burn-in and incident response.
 
+Scheduler changes that use this cache are gated by the named warm-affinity and
+agentic eviction-pressure profiles in
+[Scheduler workload fixtures](skippy/SCHEDULER_FIXTURES.md). The fast PR replay
+is inference-free; periodic hardware runs fetch and verify the pinned Hugging
+Face corpus in the shared cache and never vendor trajectory data.
+
 Example shape:
 
 ```toml

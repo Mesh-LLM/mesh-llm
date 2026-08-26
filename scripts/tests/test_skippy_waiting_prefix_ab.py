@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 
@@ -43,6 +44,85 @@ def cell(version: str, ttft_ms: float | None) -> dict:
 
 
 class WaitingPrefixAbTest(unittest.TestCase):
+    def test_warm_profile_accepts_the_measured_neutral_boundary(self) -> None:
+        catalog = json.loads((REPO / "evals/skippy-scheduler-fixtures.json").read_text())
+        profile = catalog["profiles"]["warm-affinity"]
+        rows = [
+            {
+                "version": "old",
+                "successful": 24,
+                "suffix_prefill_tokens_median": 8237.0,
+                "family_switches_median": 1.0,
+                "ttft_ms_p50_median": 3161.1,
+                "ttft_ms_p95_median": 3313.7,
+                "makespan_ms_median": 5326.8,
+                "output_tokens_per_second_median": 71.34,
+            },
+            {
+                "version": "new",
+                "successful": 24,
+                "suffix_prefill_tokens_median": 8237.0,
+                "family_switches_median": 1.0,
+                "ttft_ms_p50_median": 3190.0,
+                "ttft_ms_p95_median": 3305.4,
+                "makespan_ms_median": 5331.8,
+                "output_tokens_per_second_median": 71.27,
+            },
+        ]
+
+        acceptance = BENCH.evaluate_acceptance(rows, profile)
+
+        self.assertTrue(acceptance["passed"])
+
+    def test_eviction_profile_enforces_hardware_acceptance(self) -> None:
+        catalog = json.loads((REPO / "evals/skippy-scheduler-fixtures.json").read_text())
+        profile = catalog["profiles"]["agentic-eviction-pressure"]
+        rows = [
+            {
+                "version": "old",
+                "successful": 64,
+                "suffix_prefill_tokens_median": 92061.5,
+                "family_switches_median": 14.0,
+                "ttft_ms_p95_median": 38646.5,
+                "makespan_ms_median": 41132.9,
+                "output_tokens_per_second_median": 12.02,
+            },
+            {
+                "version": "new",
+                "successful": 64,
+                "suffix_prefill_tokens_median": 66735.5,
+                "family_switches_median": 10.0,
+                "ttft_ms_p95_median": 27901.1,
+                "makespan_ms_median": 30328.4,
+                "output_tokens_per_second_median": 16.26,
+            },
+        ]
+
+        acceptance = BENCH.evaluate_acceptance(rows, profile)
+
+        self.assertTrue(acceptance["passed"])
+        self.assertTrue(all(check["passed"] for check in acceptance["checks"]))
+        rows[1]["output_tokens_per_second_median"] = rows[0][
+            "output_tokens_per_second_median"
+        ]
+        self.assertFalse(BENCH.evaluate_acceptance(rows, profile)["passed"])
+
+    def test_checked_in_fixture_profile_owns_the_workload_shape(self) -> None:
+        args = Namespace(
+            fixture_profile="agentic-eviction-pressure",
+            fixture_catalog=REPO / "evals/skippy-scheduler-fixtures.json",
+            rounds=1,
+            families=1,
+        )
+
+        selected, catalog_hash = BENCH.apply_fixture_profile(args)
+
+        self.assertEqual(args.rounds, 4)
+        self.assertEqual(args.families, 8)
+        self.assertEqual(args.admission_concurrency, 16)
+        self.assertEqual(selected["corpus"]["kind"], "hf")
+        self.assertEqual(len(catalog_hash), 64)
+
     def test_reads_a_deterministic_prompt_manifest(self) -> None:
         document = {
             "metadata": {"dataset_revision": "abc123"},

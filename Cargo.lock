@@ -7514,6 +7514,8 @@ dependencies = [
 name = "skippy-scheduler"
 version = "0.76.0-rc7"
 dependencies = [
+ "serde",
+ "serde_json",
  "skippy-cache",
  "skippy-runtime",
  "thiserror 2.0.18",
