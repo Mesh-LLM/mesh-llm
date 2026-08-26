@@ -7,8 +7,8 @@ Subject: [PATCH 16/18] skippy: add mixed iteration batch execution ABI
  include/skippy/common.h        |  11 +-
  include/skippy/execution.h     |  60 +++++-
  src/skippy/abi.cpp             |   3 +-
- src/skippy/execution-batch.cpp | 340 +++++++++++++++++++++++++++++++++
- 4 files changed, 408 insertions(+), 6 deletions(-)
+ src/skippy/execution-batch.cpp | 342 +++++++++++++++++++++++++++++++++
+ 4 files changed, 410 insertions(+), 6 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 012aceb9a..e7f322abf 100644
@@ -135,7 +135,7 @@ diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 index a8694dbed..754b940dc 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
-@@ -23,6 +23,346 @@
+@@ -23,6 +23,348 @@
  
  
  extern "C" {
@@ -429,9 +429,11 @@ index a8694dbed..754b940dc 100644
 +        skippy_record_tokens(request.session, request.token_ids, request.token_count);
 +
 +        if (request.sample_last && request_logits) {
-+            const int32_t logits_index = request_embeddings ?
-+                    static_cast<int32_t>(request_offsets[request_index + 1] - 1) :
-+                    static_cast<int32_t>(sampled_output_index);
++            // llama_get_logits_ith indexes the original batch token row even
++            // when only selected rows requested logits; output_ids performs
++            // the sparse-row translation internally.
++            const int32_t logits_index =
++                    static_cast<int32_t>(request_offsets[request_index + 1] - 1);
 +            skippy_record_signal(request.session, logits_index);
 +            out_sampled_request_indexes[sampled_output_index] = request_index;
 +            out_predicted_tokens[sampled_output_index] = skippy_sample_token_ith(
