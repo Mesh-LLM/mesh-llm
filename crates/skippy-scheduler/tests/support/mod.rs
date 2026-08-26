@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::time::Duration;
 
 use skippy_cache::UnifiedRadixCache;
 use skippy_scheduler::{
@@ -260,6 +261,7 @@ pub fn simulate(
                 token: 1,
             })
             .collect::<Vec<_>>();
+        scheduler.observe_iteration_duration(&plan, Duration::from_micros(duration_us));
         scheduler.complete_iteration(&plan, &predictions);
         completed += record_completions(&scheduler, now_us, &mut metrics);
 
