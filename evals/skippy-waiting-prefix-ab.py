@@ -338,7 +338,11 @@ def aggregate(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for version in ("old", "new"):
         summaries = [cell["summary"] for cell in cells if cell["version"] == version]
-        median = lambda key: statistics.median(float(row[key]) for row in summaries)
+
+        def median(key: str, summaries: list[dict[str, Any]] = summaries) -> float | None:
+            values = [float(row[key]) for row in summaries if row.get(key) is not None]
+            return statistics.median(values) if values else None
+
         rows.append(
             {
                 "version": version,
@@ -357,26 +361,47 @@ def aggregate(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def delta(old: float, new: float) -> float:
+def delta(old: float | None, new: float | None) -> float | None:
+    if old is None or new is None:
+        return None
     return (new - old) / old * 100.0 if old else 0.0
+
+
+def format_metric(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.1f}"
+
+
+def format_delta(old: float | None, new: float | None) -> str:
+    value = delta(old, new)
+    return "n/a" if value is None else f"{value:+.1f}%"
 
 
 def report(rows: list[dict[str, Any]]) -> str:
     indexed = {row["version"]: row for row in rows}
     old, new = indexed["old"], indexed["new"]
-    suffix_ceiling = max(old["suffix_prefill_tokens_median"], new["suffix_prefill_tokens_median"], 1)
-    lines = [
-        "```mermaid",
-        "xychart-beta",
-        '    title "Waiting-prefix A/B: suffix tokens prefetched (lower is better)"',
-        '    x-axis ["Before", "After"]',
-        f"    y-axis \"tokens\" 0 --> {int(suffix_ceiling * 1.1)}",
-        f"    bar [{old['suffix_prefill_tokens_median']:.0f}, {new['suffix_prefill_tokens_median']:.0f}]",
-        "```",
-        "",
+    old_suffix = old["suffix_prefill_tokens_median"]
+    new_suffix = new["suffix_prefill_tokens_median"]
+    lines = []
+    if old_suffix is not None and new_suffix is not None:
+        suffix_ceiling = max(old_suffix, new_suffix, 1)
+        lines.extend(
+            [
+                "```mermaid",
+                "xychart-beta",
+                '    title "Waiting-prefix A/B: suffix tokens prefetched (lower is better)"',
+                '    x-axis ["Before", "After"]',
+                f"    y-axis \"tokens\" 0 --> {int(suffix_ceiling * 1.1)}",
+                f"    bar [{old_suffix:.0f}, {new_suffix:.0f}]",
+                "```",
+                "",
+            ]
+        )
+    lines.extend(
+        [
         "| Metric | Before | After | Delta |",
         "| --- | ---: | ---: | ---: |",
-    ]
+        ]
+    )
     metrics = (
         ("Cache hits / round", "cache_hits_median", False),
         ("Suffix prefill tokens / round", "suffix_prefill_tokens_median", True),
@@ -387,8 +412,11 @@ def report(rows: list[dict[str, Any]]) -> str:
         ("Output tok/s", "output_tokens_per_second_median", False),
     )
     for label, key, _lower_is_better in metrics:
-        before, after = float(old[key]), float(new[key])
-        lines.append(f"| {label} | {before:.1f} | {after:.1f} | {delta(before, after):+.1f}% |")
+        before, after = old[key], new[key]
+        lines.append(
+            f"| {label} | {format_metric(before)} | {format_metric(after)} | "
+            f"{format_delta(before, after)} |"
+        )
     return "\n".join(lines) + "\n"
 
 
