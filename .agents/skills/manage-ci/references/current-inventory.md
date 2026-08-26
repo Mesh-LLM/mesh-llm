@@ -37,9 +37,9 @@ runner image; no GitHub Actions model caching). Before native compilation,
 `scripts/plan-family-battery.py` validates the versioned JSON family policy,
 the mandatory four-lane contract for every certified profile, and every exact
 artifact revision/file in the immutable local cache. It reads only the GGUF
-metadata header to require `*.block_count` to equal the planned runtime range
-before compilation. It emits deterministic
-bounded GitHub matrix shards; the current one-runner topology consumes one
+metadata header to require `*.block_count` and `*.embedding_length` to equal
+the planned runtime range and activation width before compilation. It emits
+deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
 all-family shard while retaining the plan as evidence. The runner's `.env` exports
 `HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
@@ -60,7 +60,8 @@ shards run `llama-spec-bench`; those rows also require native MTP draft
 sidebands in staged correctness. Per-lane
 outcomes, immutable model manifests, summaries, model scans, preflight
 evidence, and logs are uploaded for 14 days even when the battery fails. Stage
-readiness uses a model-size-derived deadline, each complete certification has
+readiness uses a declared per-model override or a model-size-derived deadline,
+each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
 ceiling is 12 hours. On a
 patch-apply failure it hands the queue to a non-interactive `opencode` agent

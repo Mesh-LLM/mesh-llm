@@ -158,6 +158,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('contains(".nextn.hnorm")', battery)
         self.assertIn("--require-native-mtp-draft", battery)
         self.assertIn("startup_timeout_for_bytes", battery)
+        self.assertIn('.resources.startup_timeout_secs // ""', battery)
+        self.assertIn('--activation-width "$activation_width"', battery)
         self.assertIn("speculative_coding_prompts.jsonl", battery)
         self.assertIn('resolve_model "$repo" "$file" "$revision"', battery)
         self.assertIn("resolved-models.tsv", battery)
@@ -172,6 +174,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             ["Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"],
             by_family["falcon-h1"]["artifact"]["files"],
         )
+        self.assertEqual(4096, by_family["qwen3-vl"]["execution"]["activation_width"])
+        self.assertEqual(600, by_family["qwen3-vl"]["resources"]["startup_timeout_secs"])
 
     def test_state_handoff_restores_the_authoritative_continuation_position(self) -> None:
         state_handoff = STATE_HANDOFF.read_text(encoding="utf-8")
@@ -371,6 +375,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             "execution": {
                 "trunk_layers": 6,
                 "mtp_layers": 0,
+                "activation_width": 1024,
                 "boundary_sweep_period": 0,
                 "speculative_policy": "mtp-if-present",
             },
@@ -534,6 +539,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             model_policy["execution"] = {
                 "trunk_layers": 5,
                 "mtp_layers": 1,
+                "activation_width": 1024,
                 "boundary_sweep_period": 0,
                 "speculative_policy": "mtp-if-present",
             }

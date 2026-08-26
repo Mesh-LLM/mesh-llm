@@ -92,7 +92,7 @@ class _GgufReader:
         raise PlanError(f"unsupported GGUF metadata type {kind}: {self.path}")
 
 
-def _gguf_block_count(path: Path) -> int:
+def _gguf_dimensions(path: Path) -> tuple[int, int]:
     reader = _GgufReader(path)
     try:
         if reader.read(4) != b"GGUF":
@@ -103,14 +103,21 @@ def _gguf_block_count(path: Path) -> int:
         reader.u64()  # tensor count
         kv_count = reader.u64()
         block_counts: list[int] = []
+        embedding_lengths: list[int] = []
         for _ in range(kv_count):
             key = reader.string()
             value = reader.value(reader.u32())
             if key.endswith(".block_count") and type(value) is int:
                 block_counts.append(value)
+            if key.endswith(".embedding_length") and type(value) is int:
+                embedding_lengths.append(value)
         if len(block_counts) != 1 or block_counts[0] < 1:
             raise PlanError(f"GGUF must contain exactly one positive *.block_count: {path}")
-        return block_counts[0]
+        if len(embedding_lengths) != 1 or embedding_lengths[0] < 1:
+            raise PlanError(
+                f"GGUF must contain exactly one positive *.embedding_length: {path}"
+            )
+        return block_counts[0], embedding_lengths[0]
     finally:
         reader.close()
 
@@ -142,9 +149,18 @@ def _string_list(value: object, field: str) -> list[str]:
     return result
 
 
-def _integer(value: object, field: str, minimum: int = 0) -> int:
-    if type(value) is not int or value < minimum:
-        raise PlanError(f"{field} must be an integer >= {minimum}")
+def _integer(
+    value: object, field: str, minimum: int = 0, maximum: int | None = None
+) -> int:
+    if type(value) is not int or value < minimum or (
+        maximum is not None and value > maximum
+    ):
+        bounds = (
+            f">= {minimum}"
+            if maximum is None
+            else f"between {minimum} and {maximum}"
+        )
+        raise PlanError(f"{field} must be an integer {bounds}")
     return value
 
 
@@ -278,7 +294,13 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
         execution = _object(model.get("execution"), f"{field}.execution")
         _exact_keys(
             execution,
-            {"trunk_layers", "mtp_layers", "boundary_sweep_period", "speculative_policy"},
+            {
+                "trunk_layers",
+                "mtp_layers",
+                "activation_width",
+                "boundary_sweep_period",
+                "speculative_policy",
+            },
             f"{field}.execution",
         )
         trunk_layers = _integer(
@@ -286,6 +308,11 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
         )
         mtp_layers = _integer(
             execution.get("mtp_layers"), f"{field}.execution.mtp_layers"
+        )
+        activation_width = _integer(
+            execution.get("activation_width"),
+            f"{field}.execution.activation_width",
+            1,
         )
         sweep_period = _integer(
             execution.get("boundary_sweep_period"),
@@ -303,7 +330,12 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
         resources = _object(model.get("resources"), f"{field}.resources")
         _exact_keys(
             resources,
-            {"runner_role", "cache_policy", "estimated_model_bytes"},
+            {
+                "runner_role",
+                "cache_policy",
+                "estimated_model_bytes",
+                "startup_timeout_secs",
+            },
             f"{field}.resources",
         )
         runner_role = _enum(
@@ -321,6 +353,14 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
             f"{field}.resources.estimated_model_bytes",
             1,
         )
+        startup_timeout_secs = None
+        if "startup_timeout_secs" in resources:
+            startup_timeout_secs = _integer(
+                resources["startup_timeout_secs"],
+                f"{field}.resources.startup_timeout_secs",
+                180,
+                900,
+            )
         notes = _string(model.get("notes"), f"{field}.notes")
         profile_policy = policy["profiles"][profile]
         models.append(
@@ -336,6 +376,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "execution": {
                     "trunk_layers": trunk_layers,
                     "mtp_layers": mtp_layers,
+                    "activation_width": activation_width,
                     "layer_end": layer_end,
                     "boundary_sweep_period": sweep_period,
                     "speculative_policy": speculative_policy,
@@ -344,6 +385,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                     "runner_role": runner_role,
                     "cache_policy": cache_policy,
                     "estimated_model_bytes": estimated_model_bytes,
+                    "startup_timeout_secs": startup_timeout_secs,
                 },
                 "notes": notes,
                 "manifest_index": index,
@@ -413,12 +455,18 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
         raise PlanError(f"immutable family cache is incomplete:\n  {joined}")
     for model in models:
         target = _artifact_cache_paths(cache_root, model["artifact"])[0]
-        block_count = _gguf_block_count(target)
+        block_count, embedding_length = _gguf_dimensions(target)
         planned = model["execution"]["layer_end"]
         if block_count != planned:
             raise PlanError(
                 f"{model['family']} plans {planned} runtime layers but immutable "
                 f"GGUF metadata declares {block_count}"
+            )
+        planned_width = model["execution"]["activation_width"]
+        if embedding_length != planned_width:
+            raise PlanError(
+                f"{model['family']} plans activation width {planned_width} but immutable "
+                f"GGUF metadata declares {embedding_length}"
             )
 
 

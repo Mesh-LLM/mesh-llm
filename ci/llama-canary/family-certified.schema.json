@@ -107,12 +107,14 @@
           "required": [
             "trunk_layers",
             "mtp_layers",
+            "activation_width",
             "boundary_sweep_period",
             "speculative_policy"
           ],
           "properties": {
             "trunk_layers": {"type": "integer", "minimum": 1},
             "mtp_layers": {"type": "integer", "minimum": 0},
+            "activation_width": {"type": "integer", "minimum": 1},
             "boundary_sweep_period": {"type": "integer", "minimum": 0},
             "speculative_policy": {"enum": ["mtp-if-present", "disabled"]}
           }
@@ -124,7 +126,8 @@
           "properties": {
             "runner_role": {"const": "family-certify"},
             "cache_policy": {"const": "immutable-local"},
-            "estimated_model_bytes": {"type": "integer", "minimum": 1}
+            "estimated_model_bytes": {"type": "integer", "minimum": 1},
+            "startup_timeout_secs": {"type": "integer", "minimum": 180, "maximum": 900}
           }
         },
         "notes": {"$ref": "#/$defs/singleLine"}

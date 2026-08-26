@@ -16,18 +16,22 @@ MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
 
 class FamilyBatteryPlannerTests(unittest.TestCase):
     @staticmethod
-    def _write_gguf(path: Path, block_count: int) -> None:
+    def _write_gguf(
+        path: Path, block_count: int, embedding_length: int = 1024
+    ) -> None:
         def gguf_string(value: str) -> bytes:
             encoded = value.encode("utf-8")
             return struct.pack("<Q", len(encoded)) + encoded
 
         payload = bytearray(b"GGUF")
-        payload.extend(struct.pack("<IQQ", 3, 0, 2))
+        payload.extend(struct.pack("<IQQ", 3, 0, 3))
         payload.extend(gguf_string("general.architecture"))
         payload.extend(struct.pack("<I", 8))
         payload.extend(gguf_string("fixture"))
         payload.extend(gguf_string("fixture.block_count"))
         payload.extend(struct.pack("<II", 4, block_count))
+        payload.extend(gguf_string("fixture.embedding_length"))
+        payload.extend(struct.pack("<II", 4, embedding_length))
         path.write_bytes(payload)
 
     def _run(
@@ -68,6 +72,18 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         for family, layer_end in expected_ranges.items():
             with self.subTest(family=family):
                 self.assertEqual(layer_end, by_family[family]["execution"]["layer_end"])
+        self.assertEqual(4096, by_family["qwen3-vl"]["execution"]["activation_width"])
+        self.assertEqual(600, by_family["qwen3-vl"]["resources"]["startup_timeout_secs"])
+
+    def test_certified_model_requires_an_explicit_activation_width(self) -> None:
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        del manifest["models"][0]["execution"]["activation_width"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = self._run(path)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("activation_width must be an integer", result.stderr)
 
     def test_certified_profile_cannot_drop_a_core_lane(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -172,6 +188,37 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("plans 3 runtime layers", result.stderr)
         self.assertIn("declares 4", result.stderr)
+
+    def test_cache_gate_rejects_activation_width_drift_before_build(self) -> None:
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source["models"] = [copy.deepcopy(source["models"][0])]
+        model = source["models"][0]
+        model["execution"]["trunk_layers"] = 3
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps(source), encoding="utf-8")
+            artifact = model["artifact"]
+            cached = (
+                root
+                / "cache"
+                / "hub"
+                / ("models--" + artifact["repo"].replace("/", "--"))
+                / "snapshots"
+                / artifact["revision"]
+                / artifact["files"][0]
+            )
+            cached.parent.mkdir(parents=True)
+            self._write_gguf(cached, 3, 2048)
+            result = self._run(
+                manifest,
+                "--check-cache",
+                "--cache-root",
+                str(root / "cache"),
+            )
+        self.assertEqual(2, result.returncode)
+        self.assertIn("plans activation width 1024", result.stderr)
+        self.assertIn("declares 2048", result.stderr)
 
     def test_shards_are_deterministic_and_preserve_every_family_once(self) -> None:
         first = self._run(MANIFEST, "--shard-count", "4")

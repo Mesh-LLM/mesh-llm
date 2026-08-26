@@ -158,7 +158,7 @@ fi
 mkdir -p "$MODEL_SCAN_DIR" "$PREFLIGHT_DIR" "$CERT_DIR"
 : > "$RESULTS_JSONL"
 printf 'family\tmodel_id\tsource_revision\tmodel_path\tmtp_layers\n' > "$MTP_CORPUS_TSV"
-printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|startup_timeout_secs\n' > "$RESOLVED_MANIFEST"
+printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs\n' > "$RESOLVED_MANIFEST"
 
 prepare_policy_plan() {
   local plan_args=(
@@ -482,7 +482,7 @@ preflight_speculative_corpus() {
 
 run_certify() {
   local family="$1" target="$2" model_id="$3" source_revision="$4" split_layer="$5" layer_end="$6" draft="$7" draft_revision="$8" native_mtp="$9"
-  local run_speculative="${10}" startup_timeout="${11}" model_size_bytes="${12}"
+  local run_speculative="${10}" startup_timeout="${11}" model_size_bytes="${12}" activation_width="${13}"
   # Two distinct interior cut points so the chain lane (exactly two split
   # indexes) always has valid inputs; distinct from each other and from 0.
   local chain_a=$(( layer_end / 3 ))
@@ -509,6 +509,7 @@ run_certify() {
     --split-layer "$split_layer"
     --layer-end "$layer_end"
     --splits "$chain_a,$chain_b"
+    --activation-width "$activation_width"
     --startup-timeout-secs "$startup_timeout"
     --cert-root "$cert_run_dir"
     --run-id certification
@@ -545,11 +546,12 @@ run_certify() {
       --arg draft_revision "$draft_revision" \
       --argjson split_layer "$split_layer" \
       --argjson model_size_bytes "$model_size_bytes" \
+      --argjson activation_width "$activation_width" \
       --argjson startup_timeout_secs "$startup_timeout" \
       --argjson certification_timeout_secs "$cert_timeout" \
       --argjson native_mtp "$native_mtp" \
       --argjson exit_code "$exit_code" \
-      '{family:$family,model_id:$model_id,source_revision:$source_revision,draft_revision:($draft_revision | if length > 0 then . else null end),split_layer:$split_layer,model_size_bytes:$model_size_bytes,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,native_mtp:($native_mtp == 1),exit_code:$exit_code,manifest:input_filename,outcomes:.commands}' \
+      '{family:$family,model_id:$model_id,source_revision:$source_revision,draft_revision:($draft_revision | if length > 0 then . else null end),split_layer:$split_layer,model_size_bytes:$model_size_bytes,activation_width:$activation_width,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,native_mtp:($native_mtp == 1),exit_code:$exit_code,manifest:input_filename,outcomes:.commands}' \
       "$manifest_path" >> "$RESULTS_JSONL"
   else
     jq -n \
@@ -559,12 +561,13 @@ run_certify() {
       --arg draft_revision "$draft_revision" \
       --argjson split_layer "$split_layer" \
       --argjson model_size_bytes "$model_size_bytes" \
+      --argjson activation_width "$activation_width" \
       --argjson startup_timeout_secs "$startup_timeout" \
       --argjson certification_timeout_secs "$cert_timeout" \
       --argjson native_mtp "$native_mtp" \
       --argjson exit_code "$exit_code" \
       --arg outcome "$(if (( exit_code == 124 )); then printf timeout; else printf harness; fi)" \
-      '{family:$family,model_id:$model_id,source_revision:$source_revision,draft_revision:($draft_revision | if length > 0 then . else null end),split_layer:$split_layer,model_size_bytes:$model_size_bytes,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,native_mtp:($native_mtp == 1),exit_code:$exit_code,outcomes:[{name:"certification-manifest",status:"fail",outcome:$outcome,note:(if $outcome == "timeout" then "family-certify exceeded its wall-clock budget before writing a manifest" else "family-certify produced no manifest" end)}]}' \
+      '{family:$family,model_id:$model_id,source_revision:$source_revision,draft_revision:($draft_revision | if length > 0 then . else null end),split_layer:$split_layer,model_size_bytes:$model_size_bytes,activation_width:$activation_width,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,native_mtp:($native_mtp == 1),exit_code:$exit_code,outcomes:[{name:"certification-manifest",status:"fail",outcome:$outcome,note:(if $outcome == "timeout" then "family-certify exceeded its wall-clock budget before writing a manifest" else "family-certify produced no manifest" end)}]}' \
       >> "$RESULTS_JSONL"
   fi
   if (( exit_code != 0 )); then
@@ -577,7 +580,7 @@ preflight_manifest() {
   local plan="$1"
   [[ -f "$plan" ]] || { echo "missing policy plan: $plan" >&2; exit 1; }
 
-  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end notes draft_repo draft_revision draft_file expected_model_bytes expected_mtp_layers lane_csv speculative_policy; do
+  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv speculative_policy; do
     if [[ "$profile" != "full" ]]; then
       echo "the local monolithic battery cannot execute profile $profile for $family" >&2
       exit 1
@@ -671,10 +674,10 @@ preflight_manifest() {
     fi
 
     local startup_timeout
-    startup_timeout="$(startup_timeout_for_bytes "$MODEL_SIZE_BYTES")"
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    startup_timeout="${startup_timeout_override:-$(startup_timeout_for_bytes "$MODEL_SIZE_BYTES")}"
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$family" "$repo" "$source_revision" "$file" "$selector" "$sweep_period" "$layer_end" "$notes" "$target" \
-      "$draft_repo" "$draft_revision" "$draft_file" "$draft" "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "$MODEL_MTP_LAYERS" "$startup_timeout" \
+      "$draft_repo" "$draft_revision" "$draft_file" "$draft" "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "$MODEL_MTP_LAYERS" "$activation_width" "$startup_timeout" \
       >> "$RESOLVED_MANIFEST"
     if (( DRY_RUN == 0 )); then
       record_preflight_outcome "model-preflight" "$family" "$model_id" "pass" "pass" "resolved immutable snapshot $source_revision; tensor scan complete"
@@ -699,11 +702,13 @@ preflight_manifest() {
           .artifact.selector,
           .execution.boundary_sweep_period,
           .execution.layer_end,
+          .execution.activation_width,
           .notes,
           (.draft_artifact.repo // ""),
           (.draft_artifact.revision // ""),
           (.draft_artifact.files[0] // ""),
           .resources.estimated_model_bytes,
+          (.resources.startup_timeout_secs // ""),
           .execution.mtp_layers,
           (.certification_lanes | join(",")),
           .execution.speculative_policy
@@ -746,13 +751,13 @@ preflight_manifest() {
 
 run_resolved_manifest() {
   local resolved_manifest="$1"
-  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target draft_repo draft_revision draft_file draft native_mtp model_size_bytes _mtp_layers startup_timeout; do
+  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target draft_repo draft_revision draft_file draft native_mtp model_size_bytes _mtp_layers activation_width startup_timeout; do
     [[ "$family" == "family" ]] && continue
     local model_id="$repo:$selector"
 
     # Fixed mid-range split for the base parity + dtype lanes.
     local base_split=$(( layer_end / 2 ))
-    run_certify "$family" "$target" "$model_id" "$source_revision" "$base_split" "$layer_end" "$draft" "$draft_revision" "$native_mtp" "$native_mtp" "$startup_timeout" "$model_size_bytes"
+    run_certify "$family" "$target" "$model_id" "$source_revision" "$base_split" "$layer_end" "$draft" "$draft_revision" "$native_mtp" "$native_mtp" "$startup_timeout" "$model_size_bytes" "$activation_width"
 
     if [[ "$sweep_period" != "0" ]]; then
       # Boundary sweep: every cut offset mod the interleaving period, one
@@ -763,7 +768,7 @@ run_resolved_manifest() {
         cuts=0
         for (( cut = offset; cut < layer_end && cuts < SWEEP_MAX_CUTS; cut += sweep_period )); do
           (( cut == base_split )) && continue
-          run_certify "$family" "$target" "$model_id" "$source_revision" "$cut" "$layer_end" "$draft" "$draft_revision" "$native_mtp" "0" "$startup_timeout" "$model_size_bytes"
+          run_certify "$family" "$target" "$model_id" "$source_revision" "$cut" "$layer_end" "$draft" "$draft_revision" "$native_mtp" "0" "$startup_timeout" "$model_size_bytes" "$activation_width"
           cuts=$((cuts + 1))
         done
       done
