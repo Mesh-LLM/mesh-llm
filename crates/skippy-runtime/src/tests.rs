@@ -611,6 +611,16 @@ mod tests {
     }
 
     #[test]
+    fn ignore_eos_sets_the_native_sampling_flag() {
+        let sampling = SamplingConfig {
+            enabled: true,
+            ignore_eos: true,
+            ..SamplingConfig::default()
+        };
+        assert_eq!(sampling.as_raw().flags & 0b11, 0b11);
+    }
+
+    #[test]
     fn stage_session_exposes_non_frame_native_mtp_decode_api() {
         type DecodeStepSampledMtp = fn(
             &mut StageSession,

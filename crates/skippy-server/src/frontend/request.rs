@@ -13,6 +13,7 @@ use serde_json::Value;
 use skippy_protocol::binary::MAX_STAGE_LOGIT_BIAS;
 use skippy_protocol::binary::StageLogitBias as WireLogitBias;
 use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
+use skippy_protocol::binary::sampling_flags;
 use skippy_runtime::ChatReasoningFormat;
 use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::LogitBias as RuntimeLogitBias;
@@ -337,7 +338,6 @@ pub(super) fn ensure_extra_generation_fields_absent(
         "mirostat_learning_rate",
         "samplers",
         "sampler_sequence",
-        "ignore_eos",
     ];
 
     for field in UNSUPPORTED_FIELDS {
@@ -366,6 +366,7 @@ pub(super) fn sampling_config(
     let frequency_penalty = frequency_penalty.unwrap_or(0.0);
     let top_k = optional_i32_extra(extra, "top_k")?.unwrap_or(40);
     let min_p = optional_f32_extra(extra, "min_p")?.unwrap_or(0.05);
+    let ignore_eos = optional_bool_extra(extra, "ignore_eos")?.unwrap_or(false);
     let repeat_penalty = optional_f32_extra(extra, "repeat_penalty")?
         .or(optional_f32_extra(extra, "repetition_penalty")?)
         .unwrap_or(1.0);
@@ -392,7 +393,8 @@ pub(super) fn sampling_config(
         None => 0,
     };
     let logit_bias = parse_logit_bias(logit_bias)?;
-    let enabled = seed != 0
+    let enabled = ignore_eos
+        || seed != 0
         || temperature <= 0.0
         || (temperature - 1.0).abs() > f32::EPSILON
         || (top_p - 1.0).abs() > f32::EPSILON
@@ -405,6 +407,7 @@ pub(super) fn sampling_config(
         || !logit_bias.is_empty();
     Ok(SamplingConfig {
         enabled,
+        ignore_eos,
         seed,
         temperature,
         top_p,
@@ -488,12 +491,34 @@ pub(super) fn optional_i32_extra(
         .transpose()
 }
 
+pub(super) fn optional_bool_extra(
+    extra: &std::collections::BTreeMap<String, serde_json::Value>,
+    field: &str,
+) -> OpenAiResult<Option<bool>> {
+    extra
+        .get(field)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value::<bool>(value.clone())
+                .map_err(|_| OpenAiError::invalid_request(format!("{field} must be a boolean")))
+        })
+        .transpose()
+}
+
 pub(super) fn wire_sampling_config(sampling: &SamplingConfig) -> Option<WireSamplingConfig> {
     if !sampling.enabled {
         return None;
     }
     let mut wire = WireSamplingConfig {
-        flags: u32::from(sampling.enabled),
+        flags: (if sampling.enabled {
+            sampling_flags::ENABLED
+        } else {
+            0
+        }) | (if sampling.ignore_eos {
+            sampling_flags::IGNORE_EOS
+        } else {
+            0
+        }),
         seed: sampling.seed,
         temperature: sampling.temperature,
         top_p: sampling.top_p,

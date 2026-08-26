@@ -655,7 +655,7 @@ index eab00881b..bfb80e105 100644
          struct skippy_session * session,
          struct skippy_error ** out_error);
 diff --git a/include/skippy/sampling.h b/include/skippy/sampling.h
-index d74b56c03..db1fdf570 100644
+index 86bc95ede..adbc4d640 100644
 --- a/include/skippy/sampling.h
 +++ b/include/skippy/sampling.h
 @@ -1,6 +1,11 @@
@@ -670,8 +670,10 @@ index d74b56c03..db1fdf570 100644
  #include "common.h"
  
  #ifdef __cplusplus
-@@ -10,6 +15,7 @@ extern "C" {
+@@ -10,8 +15,9 @@ extern "C" {
  #define SKIPPY_MAX_LOGIT_BIAS 256
+ #define SKIPPY_SAMPLING_FLAG_ENABLED (1u << 0)
+ #define SKIPPY_SAMPLING_FLAG_IGNORE_EOS (1u << 1)
  
  
 +/** @brief Versioned sampling configuration consumed by Skippy decode entrypoints. */
@@ -1448,7 +1450,7 @@ index 74ebe85bc..5a9496887 100644
          graph(const llama_model & model, const llm_graph_params & params);
      };
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 3a9fb82f0..49d4eaa59 100644
+index 42af1d347..6af39dec4 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -372,9 +372,11 @@ llama_sampler * skippy_build_sampling_chain(
@@ -1762,4 +1764,3 @@ index 0dda8770f..ec9bc8f88 100644
  //
 -- 
 2.54.0 (Apple Git-157)
-

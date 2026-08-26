@@ -390,6 +390,7 @@ pub struct LogitBias {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SamplingConfig {
     pub enabled: bool,
+    pub ignore_eos: bool,
     pub seed: u32,
     pub temperature: f32,
     pub top_p: f32,
@@ -406,6 +407,7 @@ impl Default for SamplingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            ignore_eos: false,
             seed: 0,
             temperature: 1.0,
             top_p: 1.0,
@@ -438,7 +440,7 @@ impl SamplingConfig {
         }
         RawSamplingConfig {
             version: 1,
-            flags: u32::from(self.enabled),
+            flags: u32::from(self.enabled) | (u32::from(self.ignore_eos) << 1),
             seed: self.seed,
             top_k: self.top_k,
             penalty_last_n: self.penalty_last_n,

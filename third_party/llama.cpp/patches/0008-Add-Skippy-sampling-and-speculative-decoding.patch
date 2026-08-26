@@ -223,10 +223,10 @@ index dce54b364..ae4f910f7 100644
              drafted_token = try_draft(nc_static, ngram_static);
 diff --git a/include/skippy/sampling.h b/include/skippy/sampling.h
 new file mode 100644
-index 000000000..d74b56c03
+index 000000000..86bc95ede
 --- /dev/null
 +++ b/include/skippy/sampling.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,35 @@
 +#ifndef SKIPPY_SAMPLING_H
 +#define SKIPPY_SAMPLING_H
 +
@@ -237,6 +237,8 @@ index 000000000..d74b56c03
 +#endif
 +
 +#define SKIPPY_MAX_LOGIT_BIAS 256
++#define SKIPPY_SAMPLING_FLAG_ENABLED (1u << 0)
++#define SKIPPY_SAMPLING_FLAG_IGNORE_EOS (1u << 1)
 +
 +
 +struct skippy_sampling_config {
@@ -328,10 +330,10 @@ index 000000000..67fc99716
 +#endif // SKIPPY_SPECULATIVE_DECODING_H
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 new file mode 100644
-index 000000000..3a9fb82f0
+index 000000000..42af1d347
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,629 @@
+@@ -0,0 +1,657 @@
 +#include "skippy/sampling.h"
 +#include "skippy/errors.h"
 +#include "skippy/execution_internal.h"
@@ -643,7 +645,8 @@ index 000000000..3a9fb82f0
 +}
 +
 +static bool skippy_sampling_enabled(const skippy_sampling_config * sampling) {
-+    if (sampling == nullptr || sampling->version == 0 || sampling->flags == 0) {
++    if (sampling == nullptr || sampling->version == 0 ||
++            (sampling->flags & SKIPPY_SAMPLING_FLAG_ENABLED) == 0) {
 +        return false;
 +    }
 +    return true;
@@ -655,6 +658,7 @@ index 000000000..3a9fb82f0
 +    }
 +    const float repeat_penalty = sampling->repeat_penalty == 0.0f ? 1.0f : sampling->repeat_penalty;
 +    return sampling->temperature <= 0.0f &&
++           (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) == 0 &&
 +           sampling->presence_penalty == 0.0f &&
 +           sampling->frequency_penalty == 0.0f &&
 +           repeat_penalty == 1.0f &&
@@ -714,15 +718,41 @@ index 000000000..3a9fb82f0
 +                        sampling->frequency_penalty,
 +                        sampling->presence_penalty));
 +    }
++    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
 +    const uint32_t logit_bias_count = std::min<uint32_t>(sampling->logit_bias_count, SKIPPY_MAX_LOGIT_BIAS);
-+    if (logit_bias_count > 0) {
-+        const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
++    std::vector<llama_logit_bias> effective_logit_bias;
++    const bool ignore_eos = (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0;
++    if (ignore_eos) {
++        const int32_t token_count = llama_vocab_n_tokens(vocab);
++        effective_logit_bias.reserve(std::min<int32_t>(token_count, SKIPPY_MAX_LOGIT_BIAS));
++        for (llama_token token = 0; token < token_count; ++token) {
++            if (llama_vocab_is_eog(vocab, token)) {
++                effective_logit_bias.push_back(
++                        { token, -std::numeric_limits<float>::infinity() });
++            }
++        }
++        for (uint32_t i = 0;
++                i < logit_bias_count && effective_logit_bias.size() < SKIPPY_MAX_LOGIT_BIAS;
++                ++i) {
++            const bool targets_eog = llama_vocab_is_eog(vocab, sampling->logit_bias[i].token);
++            if (!targets_eog) {
++                effective_logit_bias.push_back(sampling->logit_bias[i]);
++            }
++        }
++    }
++    const llama_logit_bias * logit_bias = ignore_eos
++        ? effective_logit_bias.data()
++        : sampling->logit_bias;
++    const int32_t effective_logit_bias_count = ignore_eos
++        ? static_cast<int32_t>(effective_logit_bias.size())
++        : static_cast<int32_t>(logit_bias_count);
++    if (effective_logit_bias_count > 0) {
 +        llama_sampler_chain_add(
 +                sampler,
 +                llama_sampler_init_logit_bias(
 +                        llama_vocab_n_tokens(vocab),
-+                        static_cast<int32_t>(logit_bias_count),
-+                        sampling->logit_bias));
++                        effective_logit_bias_count,
++                        logit_bias));
 +    }
 +    if (sampling->top_k > 0) {
 +        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(sampling->top_k));
@@ -1575,4 +1605,3 @@ index 000000000..db0055657
 +        skippy_error ** out_error);
 -- 
 2.54.0 (Apple Git-157)
-
