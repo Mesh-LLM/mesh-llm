@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Benchmark waiting-request prefix grouping against an exact OLD/NEW pair.
 
-The workload holds one runtime lane with the first request while two prompt
-families arrive in alternating order. With a one-entry prefix cache, FCFS
-repeatedly evicts the useful family; prefix-aware waiting order should finish
-one family before switching to the other. The runner alternates binary launch
+The first long cache operation holds the scheduler worker while two prompt
+families arrive in alternating order. With a one-entry prefix cache, FCFS can
+repeatedly evict the useful family; prefix-aware waiting order should finish one
+family before switching to the other. The runner alternates binary launch
 order, retains raw requests and telemetry, and emits JSON plus a PR-ready
 Mermaid chart and Markdown table.
 """
@@ -406,8 +406,8 @@ def main() -> int:
     parser.add_argument("--requests-per-family", type=int, default=6)
     parser.add_argument("--prefix-blocks", type=int, default=192)
     parser.add_argument("--output-tokens", type=int, default=64)
-    parser.add_argument("--ctx-size", type=int, default=32768)
-    parser.add_argument("--lanes", type=int, default=1)
+    parser.add_argument("--ctx-size", type=int, default=65536)
+    parser.add_argument("--lanes", type=int, default=12)
     parser.add_argument(
         "--admission-concurrency",
         type=int,
@@ -440,6 +440,8 @@ def main() -> int:
         args.admission_concurrency = len(prompts)
     if args.admission_concurrency < len(prompts):
         parser.error("admission concurrency must cover the generated workload")
+    if args.admission_concurrency > args.lanes:
+        parser.error("admission concurrency cannot exceed configured runtime lanes")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     cells = []
     for round_index in range(args.rounds):
