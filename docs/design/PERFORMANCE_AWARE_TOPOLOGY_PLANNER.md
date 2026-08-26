@@ -1,10 +1,16 @@
 # Performance-Aware Topology Planner and Placement Simulator
 
-## Status: Design proposal
+## Status: Phases 0-2 implemented; 3-5 planned
 
 - Date: 2026-08-26
 - Owner: TBD
 - Origin: skippy-topology channel discussion (2026-08-26); requested by James.
+- Implementation: PR #1454 (branch `docs/perf-aware-topology-planner`).
+  Phases 0-2 (metric plumbing, perf-aware span assignment, directed-edge
+  network model, modeled-TPOT candidate selection, placement simulator +
+  scenario corpus) are implemented and tested there. As-built notes are
+  inline below. Phases 3-5 (execution sim + calibration, default-on A/B,
+  adaptive replanning) remain planned.
 
 ## Problem
 
@@ -55,19 +61,23 @@ calibratable, and regression-guarded.
 - No live adaptive replanning in the first phases (see rollout — hysteresis
   and migration come last, after the model is calibrated).
 
-## Current state (verified at `9feef0c1`)
+## Current state
 
 | Capability | Where | Used by automatic placement? |
 |---|---|---|
 | Capacity fitting (exact per-layer weights, KV/token, recurrent/lane, 100/85 KV compute reserve, 10% runtime headroom) | `skippy-coordinator/src/topology.rs` | Yes |
 | Candidate search (context ↓, node count ↑, lanes ↓, all subsets), stage-0 binding, 33 ms decode TPOT target, 64K shared-context floor | `skippy-coordinator/src/topology.rs`, `mesh-llm-host-runtime/src/runtime/split_planning.rs` | Yes |
-| Latency estimate `stage_count × max RTT` | `estimate_decode_network_ms_per_token` | Yes (latency-aware ordering only) |
-| GPU benchmarking (mem bw, fp16/fp32 TFLOPS) | `mesh-llm-gpu-bench`, `mesh-llm-system/src/benchmark.rs` | Metrics gossiped, **dropped before planner** |
-| Directed edge signals (RTT + large-frame bandwidth per edge, prediction-return support) | `skippy-topology/src/edge_order.rs` (exhaustive ordering ≤ 8 stages, greedy beyond) | **No** |
-| Model-family cut rules, state affinity, shared-KV cut bans, wire dtype, sidebands | `skippy-topology/src/planning.rs`, `validation.rs` | **No** (explicit-split validation only) |
+| Latency estimate `stage_count × max RTT` | `estimate_decode_network_ms_per_token` | Superseded when edge data is present (modeled per-hop estimate); legacy estimate otherwise |
+| GPU benchmarking (mem bw, fp16/fp32 TFLOPS) | `mesh-llm-gpu-bench`, `mesh-llm-system/src/benchmark.rs` | Metrics gossiped; **flow into the planner as of PR #1454** (auto-runs at node startup on non-client nodes) |
+| Directed edge signals (RTT + large-frame bandwidth per edge, prediction-return support) | `skippy-topology/src/edge_order.rs` (exhaustive ordering ≤ 8 stages, greedy beyond) | Planner consumes directed RTT edges as of PR #1454; `large_frame_bytes_per_sec` plumbed but not yet measured per edge (phase 3 probing) |
+| Perf-aware span assignment (DP over layer boundaries minimizing max modeled stage time) | `skippy-coordinator/src/topology.rs` (`perf_balanced_spans`) | Yes, when every node in a subset reports sustained bandwidth; exact legacy greedy otherwise |
+| Modeled decode TPOT (bottleneck stage + network) for candidate selection | `skippy-coordinator/src/topology.rs` (`modeled_decode_tpot_us`) | Yes, when both compared candidates carry complete bandwidth signals; legacy ordering otherwise |
+| Placement simulator + scenario corpus | `skippy-topology-sim` crate | CI surface for planner behavior; corpus in `crates/skippy-topology-sim/scenarios/` |
+| Model-family cut rules, state affinity, shared-KV cut bans, wire dtype, sidebands | `skippy-topology/src/planning.rs`, `validation.rs` | **No** (explicit-split validation only) — folding legality inputs into automatic planning is future work |
 
-The two planners are complementary halves of one optimizer. The design below
-merges them rather than adding a third.
+The table above reflects the tree as of PR #1454 head; the original
+`9feef0c1` survey that motivated the design is preserved in the PR's
+first commit.
 
 ## Input contract
 
@@ -154,25 +164,28 @@ performance to scoring and ordering:
 
 ## Simulator
 
-Two layers, sharing one scenario format (`toml`):
+Two layers, sharing one scenario format (`toml`) — see the as-built corpus in
+`crates/skippy-topology-sim/scenarios/`:
 
 ```toml
 [nodes.m4max]
-vram_gb = 48
-mem_bw_gbps = 546          # measured
-compute_tflops_fp16 = 34
+vram_bytes = 68719476736              # 64 GiB
+sustained_mem_bandwidth_mib_per_s = 546000   # measured
+sustained_compute_gflop_per_s = 34000
 
-[links."m4max->mini"]
-p50_latency_ms = 2.1
-large_frame_gbps = 31      # measured activation throughput
+[links."m4max -> mini"]               # directed edge, spaces in key
+rtt_ms = 3
+large_frame_mib_per_s = 30            # Wi-Fi large-frame prior
 
 [model]
-package = "GLM-4.7-Flash-Q4_K_M"
-context = 65536
+layer_count = 40
+weight_bytes_per_layer = 1610612736
+kv_bytes_per_token = 4096
+native_context_length = 65536
+activation_frame_bytes = 8192
 
 [workload]
-objective = "interactive"
-decode_tpot_target_ms = 33
+minimum_nodes = 2
 ```
 
 1. **Placement sim** (deterministic, fast, in-crate): scenario → planner →
@@ -236,21 +249,27 @@ where A→B and B→A differ (asymmetric Wi-Fi, rate-limited cloud egress).
 
 ### Corpus scenarios (initial set)
 
-1. **Homogeneous pair** (2× M4 Max, Thunderbolt): baseline sanity.
+Landed in `crates/skippy-topology-sim/scenarios/` as of PR #1454:
+`heterogeneous_pair.toml` (2), `straggler_triplet.toml` (3),
+`cross_continent_chain.toml` (4). Remaining from the initial set —
+homogeneous pair (1), mixed-quant fleet (5), load/staleness sweep (6),
+failure cold-start (7) — are open corpus work tracked in issue #1455.
+
+1. **Homogeneous pair** (2× M4 Max, Thunderbolt): baseline sanity. *(pending)*
 2. **Heterogeneous pair** (M4 Max + Mac mini, Wi-Fi): reproduces the
-   `docs/BENCHMARKS.md` 68 → 21 tok/s anchor.
+   `docs/BENCHMARKS.md` 68 → 21 tok/s anchor. **landed**
 3. **Straggler triplet** (A100 + 4090 + laptop-CPU): the laptop must get
    few layers or be excluded; tests performance-aware span assignment
-   against capacity-only.
+   against capacity-only. **landed**
 4. **Cross-continent chain** (3 nodes, 60-150 ms edges): tests that
    edge-aware ordering minimizes high-latency hops and rejects infeasible
-   TPOT targets rather than accepting them.
+   TPOT targets rather than accepting them. **landed**
 5. **Mixed-quant fleet** (same model, Q4/Q8/f16 on different nodes):
-   activation wire dtype interacts with per-node bytes/layer.
+   activation wire dtype interacts with per-node bytes/layer. *(pending)*
 6. **Load and staleness sweep** (one node busy/stale): confidence decay
-   must fall back toward capacity-only placement.
+   must fall back toward capacity-only placement. *(pending)*
 7. **Failure cold-start** (node rejoins empty): migration/dwell-time
-   accounting under phase 5 policies.
+   accounting under phase 5 policies. *(pending)*
 
 ### Where the data comes from
 
@@ -265,16 +284,59 @@ where A→B and B→A differ (asymmetric Wi-Fi, rate-limited cloud egress).
 The corpus lives in-repo as scenario TOML files so CI, the planner tests, and
 the execution sim all consume the same data.
 
+## Changing network conditions
+
+Bandwidth is not static: Wi-Fi fades, links get congested, VPNs re-route.
+The planner's job under drift is **detect → re-estimate → decide**, with
+anti-churn protection so a transient dip does not cause a topology stampede.
+
+**What exists today (as of PR #1454):**
+- Node perf metrics (mem bw, compute) and per-participant RTT are part of the
+  split-participant signature (`split_participant_signature`), so a measured
+  change re-triggers planning automatically.
+- Edge data is directed and measured from the coordinator's vantage, so a
+  degrading A→B link is visible independently of B→A.
+- `MESH_TOPOLOGY_PERF_AWARE=0/false/off/no` is an operator kill-switch that
+  strips perf signals + edges and reproduces capacity-only placement exactly
+  (checked per planning attempt, no restart needed).
+
+**The three detection windows and their design:**
+
+| Window | Signal | Response |
+|---|---|---|
+| Per-token (immediate) | In-flight decode misses TPOT target | Runtime concern, not planner's — no topology change; the plan already priced this link into its estimate |
+| Per-probe (minutes) | Re-measured edge/node metrics shift | Signature change flows into the coordinator claim's `participant_set_hash`, invalidating the current generation's identity and forcing a fresh planning round. **Today the fresh round replaces the incumbent unconditionally** — the minimum-improvement threshold below is phase-5 design, not yet implemented |
+| Per-epoch (hours/days) | Slow drift, new nodes, day/night load | Same replan trigger; hysteresis (phase 5) dampens noise |
+
+**Why not react instantly:** re-sharding a live mesh costs KV migration +
+pipeline stall. A Wi-Fi blip that halves bandwidth for 20 seconds should not
+evict a topology that took minutes to load. The planner therefore treats
+edge measurements as *estimates with age and confidence*, not instantaneous
+truth — the same design as metric-age decay in the input contract.
+
+**What phase 5 adds:** adaptive replanning with explicit hysteresis and
+migration budgets — re-estimating when an edge's sustained (not transient)
+bandwidth drops materially below what the plan assumed, and migrating only
+when the modeled improvement exceeds the migration cost. Until then the
+system degrades to today's behavior: the plan made at startup holds until
+membership or a signature change forces a re-plan.
+
+**Open question (phase 3+):** how to age/degrade edge bandwidth measurements
+between probes. Candidates: EWMA of probe samples, confidence intervals that
+widen with sample age, or pessimistic floor (assume the p95 of recent
+history). The execution sim's calibration against BENCHMARKS.md anchors will
+be the testbed for choosing between these.
+
 ## Phased rollout
 
-| Phase | Deliverable | Gate |
-|---|---|---|
-| 0 | Thread gossiped perf metrics through `SplitTopologyPlanInput → TopologyNode`; instrumentation of observed stage timings | no behavior change (signals recorded, unused) |
-| 1 | Cost model + merged scoring in `skippy-coordinator`; absent-signal fallback = exact current behavior | placement-parity tests vs old planner on signal-less inputs |
-| 2 | Placement sim in CI; scenario corpus incl. BENCHMARKS.md anchors | property tests green; parity suite green |
-| 3 | Execution sim validated against measured data | calibration tolerance met |
-| 4 | Performance-aware placement live (default on) | A/B on staging meshes vs capacity-only |
-| 5 | Adaptive replanning with hysteresis + migration budgets | dwell-time threshold; no churn under synthetic jitter |
+| Phase | Deliverable | Gate | Status |
+|---|---|---|---|
+| 0 | Thread gossiped perf metrics through `SplitTopologyPlanInput → TopologyNode`; instrumentation of observed stage timings | no behavior change (signals recorded, unused) | **Done** (PR #1454) — metrics flowed through and joined the replan signature |
+| 1 | Cost model + merged scoring in `skippy-coordinator`; absent-signal fallback = exact current behavior | placement-parity tests vs old planner on signal-less inputs | **Done** (PR #1454) — `perf_balanced_spans` DP + parity tests |
+| 2 | Placement sim in CI; scenario corpus incl. BENCHMARKS.md anchors | property tests green; parity suite green | **Done** (PR #1454) — `skippy-topology-sim` + 3 corpus scenarios |
+| 3 | Per-edge bandwidth probing; execution sim validated against measured data | calibration tolerance met | Planned — edge probing next; execution sim after |
+| 4 | Performance-aware placement live (default on) | A/B on staging meshes vs capacity-only | Planned |
+| 5 | Adaptive replanning with hysteresis + migration budgets | dwell-time threshold; no churn under synthetic jitter | Planned |
 
 Phase 1's fallback property is the safety story: with no signals, the merged
 planner is bit-identical to today's. Each phase is independently mergeable.
