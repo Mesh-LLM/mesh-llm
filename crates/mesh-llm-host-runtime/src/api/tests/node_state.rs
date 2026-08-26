@@ -124,6 +124,7 @@ fn make_test_state_peer(seed: u8, role: mesh::NodeRole) -> mesh::PeerInfo {
 
         display_rtt: None,
         selected_path: None,
+        observed_large_frame: None,
         propagated_latency: None,
         inference_admission_state: None,
     }

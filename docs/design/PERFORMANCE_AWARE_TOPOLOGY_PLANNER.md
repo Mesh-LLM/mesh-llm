@@ -308,6 +308,12 @@ anti-churn protection so a transient dip does not cause a topology stampede.
 - Node perf metrics (mem bw, compute) and per-participant RTT are part of the
   split-participant signature (`split_participant_signature`), so a measured
   change re-triggers planning automatically.
+- **Edge bandwidth is measured passively**: every artifact transfer (either
+  direction) records bytes/second on that peer link (`LargeFrameObservation`),
+  age-gated to 30 minutes, conservatively min-merged into plan edges. As
+  conditions change, the next transfer re-measures the link — drift detection
+  rides the traffic the mesh already generates. Active probing (synthetic
+  frames between idle stage peers) remains future work.
 - Edge data is directed and measured from the coordinator's vantage, so a
   degrading A→B link is visible independently of B→A.
 - `MESH_TOPOLOGY_PERF_AWARE=0/false/off/no` is an operator kill-switch that
@@ -348,7 +354,7 @@ be the testbed for choosing between these.
 | 0 | Thread gossiped perf metrics through `SplitTopologyPlanInput → TopologyNode`; instrumentation of observed stage timings | no behavior change (signals recorded, unused) | **Done** (PR #1454) — metrics flowed through and joined the replan signature |
 | 1 | Cost model + merged scoring in `skippy-coordinator`; absent-signal fallback = exact current behavior | placement-parity tests vs old planner on signal-less inputs | **Done** (PR #1454) — `perf_balanced_spans` DP + parity tests |
 | 2 | Placement sim in CI; scenario corpus incl. BENCHMARKS.md anchors | property tests green; parity suite green | **Done** (PR #1454) — `skippy-topology-sim` + 3 corpus scenarios |
-| 3 | Per-edge bandwidth probing; execution sim validated against measured data | calibration tolerance met | Planned — edge probing next; execution sim after |
+| 3 | Per-edge bandwidth probing; execution sim validated against measured data | calibration tolerance met | **Partially landed** — passive edge bandwidth from real artifact transfers (both directions, age-gated 30 min, conservative min-merge into edges, replan signature); active probing + execution sim remain |
 | 4 | Performance-aware placement live (default on) | A/B on staging meshes vs capacity-only | Planned |
 | 5 | Adaptive replanning with hysteresis + migration budgets | dwell-time threshold; no churn under synthetic jitter | Planned |
 

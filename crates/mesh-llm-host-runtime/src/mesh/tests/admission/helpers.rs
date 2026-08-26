@@ -49,6 +49,7 @@ pub(super) fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) 
 
         display_rtt: None,
         selected_path: None,
+        observed_large_frame: None,
         propagated_latency: None,
         inference_admission_state: None,
     }

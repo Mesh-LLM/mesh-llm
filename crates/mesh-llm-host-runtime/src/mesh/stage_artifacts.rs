@@ -564,6 +564,7 @@ impl Node {
         );
 
         let transfer_result = async {
+            let transfer_started = std::time::Instant::now();
             append_artifact_transfer_body(
                 &mut recv,
                 &temp_path,
@@ -573,6 +574,15 @@ impl Node {
                 ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT,
             )
             .await?;
+            // Passive edge-bandwidth measurement: this transfer moved real
+            // bulk bytes over the same QUIC transport the split pipeline
+            // uses. Record it as the peer link's large-frame observation.
+            self.record_peer_large_frame_observation(
+                peer_id,
+                response.total_size.saturating_sub(offset),
+                transfer_started.elapsed(),
+            )
+            .await;
 
             let actual_size = tokio::fs::metadata(&temp_path)
                 .await
@@ -840,6 +850,7 @@ impl Node {
             .context("seek artifact for transfer")?;
         let mut buffer = vec![0u8; ARTIFACT_TRANSFER_BUFFER_BYTES];
         let mut remaining = artifact.size.saturating_sub(request.offset);
+        let upload_started = std::time::Instant::now();
         while remaining > 0 {
             let limit = buffer.len().min(remaining as usize);
             let read = file
@@ -855,6 +866,14 @@ impl Node {
             .await?;
             remaining -= read as u64;
         }
+        // Passive edge-bandwidth measurement, upload direction: see
+        // fetch_artifact_from_peer for the rationale.
+        self.record_peer_large_frame_observation(
+            remote,
+            artifact.size.saturating_sub(request.offset),
+            upload_started.elapsed(),
+        )
+        .await;
         let _ = send.finish();
         Ok(())
     }

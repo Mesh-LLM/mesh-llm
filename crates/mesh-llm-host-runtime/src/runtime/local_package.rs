@@ -260,6 +260,7 @@ type SplitParticipantSignature = Vec<(
     u64,
     u64,
     Option<u32>,
+    Option<u32>,
     bool,
     u32,
     Option<u32>,
@@ -274,6 +275,10 @@ pub(super) struct SplitParticipant {
     pub(super) cached_slice_bytes: u64,
     pub(super) missing_artifact_bytes: u64,
     pub(super) rtt_ms: Option<u32>,
+    /// Sustained large-frame throughput to this peer, MiB/s, from passive
+    /// artifact-transfer observation. `None` until measured (or aged out) —
+    /// edges to this peer stay latency-only.
+    pub(super) large_frame_mib_per_s: Option<u32>,
     pub(super) artifact_transfer_supported: bool,
     availability_score: u32,
     /// Sustained memory bandwidth in MiB/s, summed across GPUs (gpu-bench,
@@ -296,6 +301,7 @@ impl SplitParticipant {
             cached_slice_bytes: 0,
             missing_artifact_bytes: 0,
             rtt_ms: None,
+            large_frame_mib_per_s: None,
             artifact_transfer_supported: false,
             availability_score: 0,
             sustained_mem_bandwidth_mib_per_s: None,
@@ -330,6 +336,13 @@ impl SplitParticipant {
         self.artifact_transfer_supported = artifact_transfer_supported;
         self.sustained_mem_bandwidth_mib_per_s = perf.sustained_mem_bandwidth_mib_per_s;
         self.sustained_compute_gflop_per_s = perf.sustained_compute_gflop_per_s;
+        self
+    }
+
+    /// Attach the passively observed large-frame throughput for this peer
+    /// link (MiB/s), from artifact-transfer measurement.
+    pub(super) fn with_edge_bandwidth(mut self, mib_per_s: Option<u32>) -> Self {
+        self.large_frame_mib_per_s = mib_per_s;
         self
     }
 
@@ -644,7 +657,8 @@ pub(super) async fn collect_split_participants(
                             peer.rtt_ms,
                             artifact_transfer_allowed,
                             perf,
-                        ),
+                        )
+                        .with_edge_bandwidth(peer.large_frame_mib_per_s()),
                 );
             }
             Err(reason) => {
@@ -911,6 +925,7 @@ pub(super) fn split_participant_signature(
                 participant.cached_slice_bytes,
                 participant.missing_artifact_bytes,
                 participant.rtt_ms,
+                participant.large_frame_mib_per_s,
                 participant.artifact_transfer_supported,
                 participant.availability_score,
                 participant.sustained_mem_bandwidth_mib_per_s,
@@ -928,8 +943,9 @@ pub(super) fn split_participant_set_hash(participants: &[SplitParticipant]) -> S
         hasher.update(participant.2.to_le_bytes());
         hasher.update(participant.3.to_le_bytes());
         hasher.update(participant.4.unwrap_or_default().to_le_bytes());
-        hasher.update([u8::from(participant.5)]);
-        hasher.update(participant.6.to_le_bytes());
+        hasher.update(participant.5.unwrap_or_default().to_le_bytes());
+        hasher.update([u8::from(participant.6)]);
+        hasher.update(participant.7.to_le_bytes());
     }
     hex::encode(hasher.finalize())
 }

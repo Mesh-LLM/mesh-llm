@@ -441,13 +441,15 @@ fn perf_aware_disabled_from_value(value: Option<&str>) -> bool {
     })
 }
 
-/// Directed edge measurements between participants. Each pair's RTT is
-/// synthesized from coordinator-observed participant RTTs (the mesh does
-/// not yet relay peer-to-peer pair measurements): when either side is
-/// unobserved the pair takes the observed side's value, and when both are
-/// observed the pair takes the conservative `max` so the estimate can
-/// never underestimate a real hop. Bandwidth is not yet measured per
-/// edge, so it stays `None` (latency-only) until edge probing lands.
+/// Directed edge measurements between participants. The mesh does not relay
+/// peer-to-peer pair measurements, so both RTT and bandwidth are synthesized
+/// from each participant's coordinator-observed link (RTT from gossip round
+/// trips; bandwidth from passive artifact-transfer observation). RTT takes the
+/// conservative `max` of the two sides so the estimate can never
+/// underestimate a real hop; bandwidth takes the conservative `min` (a
+/// stage's egress is limited by the slower direction's sustain). Missing
+/// observations fall back per-signal: no RTT on either side ⇒ no edge; no
+/// bandwidth ⇒ latency-only edge, preserving pre-probing behavior.
 fn participant_edges(participants: &[SplitParticipant]) -> Vec<SplitTopologyPlanEdge> {
     let mut edges = Vec::new();
     for (index, source) in participants.iter().enumerate() {
@@ -455,18 +457,23 @@ fn participant_edges(participants: &[SplitParticipant]) -> Vec<SplitTopologyPlan
             let Some(rtt_ms) = source.rtt_ms.into_iter().chain(target.rtt_ms).max() else {
                 continue;
             };
+            let large_frame_mib_per_s = source
+                .large_frame_mib_per_s
+                .into_iter()
+                .chain(target.large_frame_mib_per_s)
+                .min();
             let (forward, reverse) = (
                 SplitTopologyPlanEdge {
                     source_node_id: source.node_id.to_string(),
                     target_node_id: target.node_id.to_string(),
                     rtt_ms,
-                    large_frame_mib_per_s: None,
+                    large_frame_mib_per_s,
                 },
                 SplitTopologyPlanEdge {
                     source_node_id: target.node_id.to_string(),
                     target_node_id: source.node_id.to_string(),
                     rtt_ms,
-                    large_frame_mib_per_s: None,
+                    large_frame_mib_per_s,
                 },
             );
             edges.push(forward);
@@ -1094,5 +1101,55 @@ mod tests {
         assert!(!perf_aware_disabled_from_value(Some("yes")));
         assert!(!perf_aware_disabled_from_value(Some("perf")));
         assert!(!perf_aware_disabled_from_value(Some("")));
+    }
+
+    #[test]
+    fn participant_edges_take_conservative_rtt_max_and_bandwidth_min() {
+        let mut fast_link = participant_with_rtt(1, 40_000_000_000, 5);
+        fast_link.large_frame_mib_per_s = Some(800);
+        let mut slow_link = participant_with_rtt(2, 40_000_000_000, 25);
+        slow_link.large_frame_mib_per_s = Some(120);
+
+        let edges = participant_edges(&[fast_link, slow_link]);
+        assert_eq!(edges.len(), 2, "one edge per direction");
+        // RTT is the max of the two sides' coordinator observations; the
+        // estimate must never under-estimate a real hop.
+        assert_eq!(edges[0].rtt_ms, 25);
+        assert_eq!(edges[1].rtt_ms, 25);
+        // Bandwidth is the min of the two directions' sustained throughput:
+        // the link runs at the slower side's pace.
+        assert_eq!(edges[0].large_frame_mib_per_s, Some(120));
+        assert_eq!(edges[1].large_frame_mib_per_s, Some(120));
+        assert_eq!(edges[0].source_node_id, edges[1].target_node_id);
+        assert_eq!(edges[0].target_node_id, edges[1].source_node_id);
+    }
+
+    #[test]
+    fn participant_edges_without_bandwidth_stay_latency_only() {
+        // No passive observation on either side: latency-only edges,
+        // exactly the pre-probing behavior.
+        let participants = vec![
+            participant_with_rtt(1, 40_000_000_000, 5),
+            participant_with_rtt(2, 40_000_000_000, 8),
+        ];
+        let edges = participant_edges(&participants);
+        assert_eq!(edges.len(), 2);
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.large_frame_mib_per_s.is_none())
+        );
+        assert_eq!(edges[0].rtt_ms, 8);
+
+        // A single observed side propagates to the pair (the mesh only
+        // observes coordinator links, so partial coverage is the norm).
+        let mut one_sided = participants;
+        one_sided[0].large_frame_mib_per_s = Some(400);
+        let edges = participant_edges(&one_sided);
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.large_frame_mib_per_s == Some(400))
+        );
     }
 }
