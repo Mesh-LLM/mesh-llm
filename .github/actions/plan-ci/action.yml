@@ -181,6 +181,10 @@ runs:
               exit 1
             fi
           done
+          if ! git show "$SOURCE_SHA:ci/slices.yml" | cmp -s - ci/slices.yml; then
+            echo "source slice catalog differs from the protected planner catalog" >&2
+            exit 1
+          fi
           manifest_root=$(mktemp -d "$RUNNER_TEMP/mesh-ci-manifests.XXXXXX")
           git archive --format=tar "$SOURCE_SHA" -- ci/ownership.yml ci/slices.yml \
             | tar -x -C "$manifest_root"

@@ -216,6 +216,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
             action,
         )
         self.assertIn(
+            'git show "$SOURCE_SHA:ci/slices.yml" | cmp -s - ci/slices.yml',
+            action,
+        )
+        self.assertIn(
             'python3 scripts/plan-ci.py --manifest-root "$manifest_root"',
             action,
         )
