@@ -93,6 +93,11 @@ def stable_prompt(blocks: int, request_index: int, role: str) -> str:
         if role == "anchor"
         else f"Name the owner of invariant {request_index % blocks}."
     )
+    return (
+        "You are a deterministic coding assistant. Read this repository context.\n"
+        + "\n".join(rows)
+        + f"\nRequest {request_index}: {task}"
+    )
 
 
 def read_prompt_manifest(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -116,11 +121,6 @@ def read_prompt_manifest(path: Path) -> tuple[list[dict[str, Any]], dict[str, An
     if not isinstance(metadata, dict):
         raise ValueError("prompt manifest metadata must be an object")
     return prompts, metadata
-    return (
-        "You are a deterministic coding assistant. Read this repository context.\n"
-        + "\n".join(rows)
-        + f"\nRequest {request_index}: {task}"
-    )
 
 
 def write_config(args: argparse.Namespace, path: Path, port: int) -> None:
@@ -158,6 +158,7 @@ def run_request(
     prompt: str,
     prompt_provenance: dict[str, Any],
     output_tokens: int,
+    suppressed_token_ids: tuple[int, ...],
     delay_ms: float,
     epoch: float,
     timeout: float,
@@ -175,6 +176,10 @@ def run_request(
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if suppressed_token_ids:
+        payload["logit_bias"] = {
+            str(token_id): -100 for token_id in suppressed_token_ids
+        }
     started = time.monotonic()
     first_content = None
     previous_content = None
@@ -414,6 +419,7 @@ def launch_cell(
                 stable_prompt(16, -1, "prefill"),
                 {"family": "synthetic-warmup"},
                 4,
+                args.suppress_token_id,
                 0.0,
                 time.monotonic(),
                 args.request_timeout_secs,
@@ -478,6 +484,7 @@ def launch_cell(
                         prompt,
                         provenance,
                         output_tokens,
+                        args.suppress_token_id,
                         delay_ms,
                         epoch,
                         args.request_timeout_secs,
@@ -679,6 +686,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--anchor-output-tokens", type=int, default=128)
     parser.add_argument("--prefill-output-tokens", type=int, default=8)
+    parser.add_argument(
+        "--suppress-token-id",
+        action="append",
+        type=int,
+        default=[],
+        help="token ID to suppress with logit bias; repeat for multiple IDs",
+    )
     parser.add_argument("--prefill-delay-ms", type=float, default=100.0)
     parser.add_argument("--prefill-stagger-ms", type=float, default=5.0)
     parser.add_argument("--ctx-size", type=int, default=65536)
@@ -729,6 +743,9 @@ def parse_args() -> argparse.Namespace:
         parser.error("prefill delay and stagger must be finite and non-negative")
     if not math.isfinite(args.adaptive_target_ms) or args.adaptive_target_ms <= 0:
         parser.error("adaptive-target-ms must be finite and positive")
+    if any(token_id < 0 for token_id in args.suppress_token_id):
+        parser.error("suppress-token-id must be non-negative")
+    args.suppress_token_id = tuple(args.suppress_token_id)
     for name in ("old_binary", "new_binary", "model"):
         if not getattr(args, name).is_file():
             parser.error(f"{name.replace('_', '-')} not found: {getattr(args, name)}")
@@ -816,6 +833,7 @@ def main() -> int:
                 "prefill_output_tokens": args.prefill_output_tokens,
                 "prefill_delay_ms": args.prefill_delay_ms,
                 "prefill_stagger_ms": args.prefill_stagger_ms,
+                "suppressed_token_ids": list(args.suppress_token_id),
             },
             "runtime": {
                 "ctx_size": args.ctx_size,
