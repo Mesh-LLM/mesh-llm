@@ -1425,9 +1425,12 @@ fn build_scheduler_config(
             usize::MAX
         },
         // Retained for scheduler-lab compatibility; production uses the mixed
-        // path below, which reserves live decode rows before prompt work.
+        // path below when the model does not carry recurrent state.
         max_consecutive_prefill_iterations: 1,
-        mixed_prefill_decode: true,
+        // A live mixed probe permanently raised subsequent decode-step cost by
+        // 9-20% on the Studio54 Qwen3.5 recurrent trace even after admission
+        // fell back. Keep phase-homogeneous execution for recurrent models.
+        mixed_prefill_decode: recurrent_bytes_per_sequence == 0,
         cache_aging_cost_per_iteration: CACHE_AGING_COST_PER_TURN,
         group_waiting_prefixes: true,
         // Native execution already provides a collection window: requests
@@ -1489,10 +1492,13 @@ mod tests {
         assert_eq!(config.max_tokens_per_iteration, 2048);
         assert_eq!(config.prefill_chunk_tokens, 128);
         assert_eq!(config.max_consecutive_prefill_iterations, 1);
-        assert!(config.mixed_prefill_decode);
+        assert!(!config.mixed_prefill_decode);
         assert_eq!(config.memory_components[0].capacity_bytes, 131_072);
         assert_eq!(config.memory_components[1].bytes_per_sequence, 1024);
         assert_eq!(config.memory_components[1].capacity_bytes, 65_536);
+
+        let non_recurrent = build_scheduler_config(32, 131_072, 0, Some(4096), Some(128), 64);
+        assert!(non_recurrent.mixed_prefill_decode);
     }
 
     #[test]
