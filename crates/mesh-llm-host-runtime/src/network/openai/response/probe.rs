@@ -94,7 +94,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
 }
 
 /// Read the next chunk of HTTP response data without any timeout.
-/// Used for continuation reads after the first byte has already arrived.
+/// Used by relay paths whose own body limits provide the lifetime bound.
 pub(in crate::network::openai::response) async fn read_response_chunk<R: AsyncRead + Unpin>(
     reader: &mut R,
     buf: &mut Vec<u8>,
@@ -106,6 +106,16 @@ pub(in crate::network::openai::response) async fn read_response_chunk<R: AsyncRe
     }
     buf.extend_from_slice(&chunk[..read_result]);
     Ok(read_result)
+}
+
+async fn read_response_chunk_with_timeout<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    timeout: Duration,
+) -> Result<usize> {
+    tokio::time::timeout(timeout, read_response_chunk(reader, buf))
+        .await
+        .context("upstream response continuation read timeout")?
 }
 
 pub(in crate::network::openai::response) async fn read_transformed_response_body<
@@ -228,7 +238,7 @@ pub(in crate::network::openai::response) async fn probe_http_response_with_timeo
             }
             buffered.extend_from_slice(&chunk[..read_result]);
         } else {
-            read_response_chunk(reader, &mut buffered).await?;
+            read_response_chunk_with_timeout(reader, &mut buffered, timeout).await?;
         }
         if buffered.len() > MAX_HEADER_BYTES {
             bail!("HTTP response headers exceed {MAX_HEADER_BYTES} bytes");
@@ -244,7 +254,7 @@ pub(in crate::network::openai::response) async fn probe_http_response_with_timeo
         0
     };
     while buffered.len() < parsed.header_end + preview_len {
-        read_response_chunk(reader, &mut buffered).await?;
+        read_response_chunk_with_timeout(reader, &mut buffered, timeout).await?;
     }
 
     let retryable_context_overflow = parsed.status_code == 400
@@ -340,6 +350,27 @@ mod tests {
 
         assert!(is_timeout_error(&error), "unexpected error: {error:#}");
     }
+
+    #[tokio::test]
+    async fn probe_continuation_read_has_timeout_after_partial_headers() {
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        writer.write_all(b"HTTP/1.1 200 OK\r\n").await.unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            probe_http_response_with_timeout(&mut reader, Duration::from_millis(10)),
+        )
+        .await
+        .expect("partial response headers must honor the configured timeout");
+        let error = match result {
+            Ok(_) => panic!("a stalled partial header must time out"),
+            Err(error) => error,
+        };
+
+        assert!(is_timeout_error(&error), "unexpected error: {error:#}");
+        assert!(error.to_string().contains("continuation read timeout"));
+    }
+
     #[tokio::test(start_paused = true)]
     async fn test_probe_http_response_local_tolerates_slow_first_byte() {
         use tokio::io::AsyncWriteExt;
