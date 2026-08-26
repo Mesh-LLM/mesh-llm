@@ -61,7 +61,7 @@ outputs:
     description: 'Boolean: true if PR builds need mesh-llm inference artifacts'
     value: ${{ steps.derive.outputs.inference_artifact_required }}
   backend_recipe_changed:
-    description: 'Boolean: true if native build/release Justfile recipes changed'
+    description: 'Boolean: true if native build/release root or imported Just recipe sources changed'
     value: ${{ steps.derive.outputs.backend_recipe_changed }}
   windows_cpu_build_required:
     description: 'Boolean: true if Windows CPU build inputs changed'
@@ -237,6 +237,16 @@ runs:
           ' "$justfile_path"
         }
 
+        justfile_has_recipe() {
+          local justfile_path="$1"
+          awk '
+            /^[[:alnum:]_-]/ &&
+              $0 !~ /^[[:alnum:]_-]+[[:space:]]*:=/ &&
+              $0 ~ /:/ { found = 1 }
+            END { exit found ? 0 : 1 }
+          ' "$justfile_path"
+        }
+
         justfile_changed_line_ranges() {
           awk '
             function emit_range(spec, label, parts, start, count, i) {
@@ -267,44 +277,100 @@ runs:
           ' "$backend_lines_file" "$changed_lines_file"
         }
 
-        # A Justfile edit is not automatically a native build input. Inspect the
+        # Recipe-source edits are not automatically native build inputs. Inspect
         # changed hunk ranges so website recipes can stay light while every line
         # inside native build, ABI, release, and bundle recipes exercises backend
-        # lanes.
+        # lanes. Root import-graph changes and unreadable imported sources fail
+        # open because they can change which recipe definitions are effective.
         BACKEND_RECIPE_CHANGED="false"
+        if [[ "${{ inputs.event_name }}" == "pull_request" ]]; then
+          JUSTFILE_DIFF_RANGE=("${{ inputs.base_sha }}...${{ inputs.head_sha }}")
+        else
+          JUSTFILE_DIFF_RANGE=("${{ inputs.base_sha }}" "${{ inputs.head_sha }}")
+        fi
+
         if echo "$CHANGED_FILES" | grep -qx 'Justfile'; then
-          JUSTFILE_DIFF=""
-          JUSTFILE_BASE="$(mktemp)"
-          JUSTFILE_BASE_AVAILABLE="false"
-          if [[ "${{ inputs.event_name }}" == "pull_request" ]]; then
-            JUSTFILE_DIFF=$(git diff -U0 "${{ inputs.base_sha }}...${{ inputs.head_sha }}" -- Justfile || true)
-            if git show "${{ inputs.base_sha }}:Justfile" > "$JUSTFILE_BASE" 2>/dev/null; then
-              JUSTFILE_BASE_AVAILABLE="true"
-            fi
-          elif [[ "${{ inputs.event_name }}" == "push" ]]; then
-            JUSTFILE_DIFF=$(git diff -U0 "${{ inputs.base_sha }}" "${{ inputs.head_sha }}" -- Justfile || true)
-            if git show "${{ inputs.base_sha }}:Justfile" > "$JUSTFILE_BASE" 2>/dev/null; then
-              JUSTFILE_BASE_AVAILABLE="true"
-            fi
-          fi
-
-          JUSTFILE_CHANGED_LINES="$(mktemp)"
-          JUSTFILE_BACKEND_LINES_HEAD="$(mktemp)"
-          JUSTFILE_BACKEND_LINES_BASE="$(mktemp)"
-          printf '%s\n' "$JUSTFILE_DIFF" | justfile_changed_line_ranges > "$JUSTFILE_CHANGED_LINES"
-          justfile_backend_recipe_lines Justfile > "$JUSTFILE_BACKEND_LINES_HEAD"
-          if [[ "$JUSTFILE_BASE_AVAILABLE" == "true" ]]; then
-            justfile_backend_recipe_lines "$JUSTFILE_BASE" > "$JUSTFILE_BACKEND_LINES_BASE"
-          fi
-
-          if changed_range_touches_backend_recipe "$JUSTFILE_BACKEND_LINES_HEAD" "$JUSTFILE_CHANGED_LINES" new; then
+          if ! ROOT_JUSTFILE_DIFF=$(git diff -U0 "${JUSTFILE_DIFF_RANGE[@]}" -- Justfile); then
             BACKEND_RECIPE_CHANGED="true"
-          elif [[ "$JUSTFILE_BASE_AVAILABLE" == "true" ]] && changed_range_touches_backend_recipe "$JUSTFILE_BACKEND_LINES_BASE" "$JUSTFILE_CHANGED_LINES" old; then
-            BACKEND_RECIPE_CHANGED="true"
-          elif [[ -n "$JUSTFILE_DIFF" ]] && [[ "$JUSTFILE_BASE_AVAILABLE" != "true" ]] && [[ -s "$JUSTFILE_CHANGED_LINES" ]]; then
+          elif printf '%s\n' "$ROOT_JUSTFILE_DIFF" | grep -Eq "^[+-]import 'just/[^']+\.just'$"; then
             BACKEND_RECIPE_CHANGED="true"
           fi
         fi
+
+        JUSTFILE_SOURCES=$(echo "$CHANGED_FILES" | grep -E '^just/[^/]+\.just$' || true)
+        while IFS= read -r JUSTFILE_SOURCE; do
+          [[ -n "$JUSTFILE_SOURCE" ]] || continue
+          [[ "$BACKEND_RECIPE_CHANGED" == "false" ]] || break
+
+          JUSTFILE_SOURCE_BASE="$(mktemp)"
+          JUSTFILE_SOURCE_HEAD="$(mktemp)"
+          JUSTFILE_SOURCE_CHANGED_LINES="$(mktemp)"
+          JUSTFILE_SOURCE_BACKEND_LINES_BASE="$(mktemp)"
+          JUSTFILE_SOURCE_BACKEND_LINES_HEAD="$(mktemp)"
+          JUSTFILE_SOURCE_BASE_AVAILABLE="false"
+          JUSTFILE_SOURCE_HEAD_AVAILABLE="false"
+
+          if ! JUSTFILE_SOURCE_STATUS=$(git diff --name-status --no-renames "${JUSTFILE_DIFF_RANGE[@]}" -- "$JUSTFILE_SOURCE"); then
+            BACKEND_RECIPE_CHANGED="true"
+            break
+          fi
+          case "$JUSTFILE_SOURCE_STATUS" in
+            A$'\t'*) JUSTFILE_SOURCE_EXPECT_BASE="false"; JUSTFILE_SOURCE_EXPECT_HEAD="true" ;;
+            D$'\t'*) JUSTFILE_SOURCE_EXPECT_BASE="true"; JUSTFILE_SOURCE_EXPECT_HEAD="false" ;;
+            M$'\t'*) JUSTFILE_SOURCE_EXPECT_BASE="true"; JUSTFILE_SOURCE_EXPECT_HEAD="true" ;;
+            *) BACKEND_RECIPE_CHANGED="true"; break ;;
+          esac
+
+          if [[ "$JUSTFILE_SOURCE_EXPECT_BASE" == "true" ]]; then
+            if ! git cat-file -e "${{ inputs.base_sha }}:$JUSTFILE_SOURCE" 2>/dev/null ||
+                ! git show "${{ inputs.base_sha }}:$JUSTFILE_SOURCE" > "$JUSTFILE_SOURCE_BASE" 2>/dev/null ||
+                ! justfile_has_recipe "$JUSTFILE_SOURCE_BASE"; then
+              BACKEND_RECIPE_CHANGED="true"
+              break
+            fi
+            JUSTFILE_SOURCE_BASE_AVAILABLE="true"
+            if ! justfile_backend_recipe_lines "$JUSTFILE_SOURCE_BASE" > "$JUSTFILE_SOURCE_BACKEND_LINES_BASE"; then
+              BACKEND_RECIPE_CHANGED="true"
+              break
+            fi
+          fi
+
+          if [[ "$JUSTFILE_SOURCE_EXPECT_HEAD" == "true" ]]; then
+            if ! git cat-file -e "${{ inputs.head_sha }}:$JUSTFILE_SOURCE" 2>/dev/null ||
+                ! git show "${{ inputs.head_sha }}:$JUSTFILE_SOURCE" > "$JUSTFILE_SOURCE_HEAD" 2>/dev/null ||
+                ! justfile_has_recipe "$JUSTFILE_SOURCE_HEAD"; then
+              BACKEND_RECIPE_CHANGED="true"
+              break
+            fi
+            JUSTFILE_SOURCE_HEAD_AVAILABLE="true"
+            if ! justfile_backend_recipe_lines "$JUSTFILE_SOURCE_HEAD" > "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD"; then
+              BACKEND_RECIPE_CHANGED="true"
+              break
+            fi
+          fi
+
+          if [[ "$JUSTFILE_SOURCE_BASE_AVAILABLE" == "false" && "$JUSTFILE_SOURCE_HEAD_AVAILABLE" == "false" ]]; then
+            BACKEND_RECIPE_CHANGED="true"
+            break
+          fi
+          if ! JUSTFILE_SOURCE_DIFF=$(git diff -U0 "${JUSTFILE_DIFF_RANGE[@]}" -- "$JUSTFILE_SOURCE"); then
+            BACKEND_RECIPE_CHANGED="true"
+            break
+          fi
+          printf '%s\n' "$JUSTFILE_SOURCE_DIFF" | justfile_changed_line_ranges > "$JUSTFILE_SOURCE_CHANGED_LINES"
+          if [[ ! -s "$JUSTFILE_SOURCE_CHANGED_LINES" ]]; then
+            BACKEND_RECIPE_CHANGED="true"
+            break
+          fi
+
+          if [[ "$JUSTFILE_SOURCE_HEAD_AVAILABLE" == "true" ]] &&
+              changed_range_touches_backend_recipe "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD" "$JUSTFILE_SOURCE_CHANGED_LINES" new; then
+            BACKEND_RECIPE_CHANGED="true"
+          elif [[ "$JUSTFILE_SOURCE_BASE_AVAILABLE" == "true" ]] &&
+              changed_range_touches_backend_recipe "$JUSTFILE_SOURCE_BACKEND_LINES_BASE" "$JUSTFILE_SOURCE_CHANGED_LINES" old; then
+            BACKEND_RECIPE_CHANGED="true"
+          fi
+        done <<< "$JUSTFILE_SOURCES"
 
         # Backend/platform lanes rebuild only for all-rust escalations or files
         # that can alter the native ABI/backend build products. Keep broad
