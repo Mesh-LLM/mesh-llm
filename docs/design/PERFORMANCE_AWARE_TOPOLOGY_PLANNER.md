@@ -69,7 +69,7 @@ calibratable, and regression-guarded.
 | Candidate search (context ↓, node count ↑, lanes ↓, all subsets), stage-0 binding, 33 ms decode TPOT target, 64K shared-context floor | `skippy-coordinator/src/topology.rs`, `mesh-llm-host-runtime/src/runtime/split_planning.rs` | Yes |
 | Latency estimate `stage_count × max RTT` | `estimate_decode_network_ms_per_token` | Superseded when edge data is present (modeled per-hop estimate); legacy estimate otherwise |
 | GPU benchmarking (mem bw, fp16/fp32 TFLOPS) | `mesh-llm-gpu-bench`, `mesh-llm-system/src/benchmark.rs` | Metrics gossiped; **flow into the planner as of PR #1454** (auto-runs at node startup on non-client nodes) |
-| Directed edge signals (RTT + large-frame bandwidth per edge, prediction-return support) | `skippy-topology/src/edge_order.rs` (exhaustive ordering ≤ 8 stages, greedy beyond) | Planner consumes directed RTT edges as of PR #1454; `large_frame_bytes_per_sec` plumbed but not yet measured per edge (phase 3 probing) |
+| Directed edge signals (RTT + large-frame bandwidth per edge, prediction-return support) | `skippy-topology/src/edge_order.rs` (exhaustive ordering ≤ 8 stages, greedy beyond) | Planner consumes measured directed RTT edges as of PR #1454; edge-bandwidth probing and bandwidth aging are planned (phase 3), not yet implemented |
 | Perf-aware span assignment (DP over layer boundaries minimizing max modeled stage time) | `skippy-coordinator/src/topology.rs` (`perf_balanced_spans`) | Yes, when every node in a subset reports sustained bandwidth; exact legacy greedy otherwise |
 | Modeled decode TPOT (bottleneck stage + network) for candidate selection | `skippy-coordinator/src/topology.rs` (`modeled_decode_tpot_us`) | Yes, when both compared candidates carry complete bandwidth signals; legacy ordering otherwise |
 | Placement simulator + scenario corpus | `skippy-topology-sim` crate | CI surface for planner behavior; corpus in `crates/skippy-topology-sim/scenarios/` |
@@ -192,6 +192,11 @@ Two layers, sharing one scenario format (`toml`) — see the as-built corpus in
 vram_bytes = 68719476736              # 64 GiB
 sustained_mem_bandwidth_mib_per_s = 546000   # measured
 sustained_compute_gflop_per_s = 34000
+
+[nodes.mini]
+vram_bytes = 17179869184              # 16 GiB
+sustained_mem_bandwidth_mib_per_s = 120000
+sustained_compute_gflop_per_s = 2000
 
 [links."m4max -> mini"]               # directed edge, spaces in key
 rtt_ms = 3
