@@ -377,9 +377,6 @@ pub fn prepare_remote_targets_from_keys(
             cache_target,
         };
     }
-    if routing.prefix_hash.is_some() {
-        affinity.record_cache_probe(false);
-    }
     if let Some(session_hash) = routing.session_hash.filter(|_| affinity.sticky_enabled()) {
         affinity.record_session_route();
         rotate_targets_by_hash(&mut ordered, session_hash);
@@ -667,27 +664,5 @@ mod tests {
 
         assert_eq!(prepared.ordered.first(), Some(&cached));
         assert_eq!(prepared.cache_target, Some(cached));
-    }
-
-    #[test]
-    fn shared_remote_preparation_records_missing_and_ineligible_cache_targets() {
-        let hosts = [make_id(1), make_id(2)];
-        let body = parse_body(
-            r#"{"messages":[{"role":"system","content":"agent"},{"role":"user","content":"task"}]}"#,
-        );
-        let keys = routing_keys(
-            Some(&body),
-            &["prompt_cache_key", "user", "session_id"],
-            true,
-        );
-        let affinity = AffinityRouter::with_config(true, true);
-
-        prepare_remote_targets_from_keys(&hosts, &keys, &affinity, None);
-        prepare_remote_targets_from_keys(&hosts, &keys, &affinity, Some(remote(3)));
-
-        let stats = affinity.stats_snapshot();
-        assert_eq!(stats.lookups, 2);
-        assert_eq!(stats.misses, 2);
-        assert_eq!(stats.hits, 0);
     }
 }
