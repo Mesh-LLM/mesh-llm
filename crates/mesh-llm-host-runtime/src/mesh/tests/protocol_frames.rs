@@ -914,6 +914,11 @@ async fn reconnect_gossip_failure_removes_zombie_peer() {
     let node = make_test_node(super::NodeRole::Worker)
         .await
         .expect("test node must start");
+    let capture_dir = tempfile::tempdir().expect("swarm capture tempdir");
+    let recorder = crate::capture::SwarmCaptureRecorder::new(capture_dir.path().join("capture"))
+        .expect("swarm capture recorder");
+    let capture_path = recorder.path().to_path_buf();
+    node.set_swarm_capture_recorder(Some(recorder));
 
     node.insert_test_peer(make_test_peer_info(peer_id)).await;
 
@@ -929,6 +934,25 @@ async fn reconnect_gossip_failure_removes_zombie_peer() {
         !is_peer_admitted(&node.state.lock().await.peers, &peer_id),
         "zombie peer must be removed when reconnect gossip fails (relay-connected but process dead)"
     );
+
+    let capture_line = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(&capture_path)
+                && let Some(line) = contents.lines().find(|line| line.contains("peer_removed"))
+            {
+                break line.to_string();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("peer removal should reach swarm capture");
+    let capture: serde_json::Value =
+        serde_json::from_str(&capture_line).expect("peer removal capture JSON");
+    assert_eq!(capture["fields"]["reason"], "recovered_gossip_failed");
+    assert!(capture["fields"]["last_seen_age_ms"].is_u64());
+    assert!(capture["fields"]["last_mentioned_age_ms"].is_u64());
+    assert_eq!(capture["fields"]["had_connection"], false);
 
     let peer_key2 = SecretKey::from_bytes(&[0xF1; 32]);
     let peer_id2 = EndpointId::from(peer_key2.public());

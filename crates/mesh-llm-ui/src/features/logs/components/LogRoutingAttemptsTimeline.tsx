@@ -9,6 +9,7 @@ import {
   attemptTone,
   formatLogTimestampMs
 } from '@/features/logs/lib/log-timeline'
+import { formatElapsedMs } from '@/lib/format-duration'
 
 export type LogRoutingAttemptsTimelineProps = {
   readonly attempts: readonly LogProxyAttempt[]
@@ -37,7 +38,7 @@ function AttemptCard({ attempt }: { readonly attempt: LogProxyAttempt }) {
           </StatusBadge>
           {!isInProgress && durationMs !== undefined ? (
             <span className="font-mono text-[length:var(--density-type-caption)] tabular-nums text-foreground">
-              {durationMs.toLocaleString()} ms
+              {formatElapsedMs(durationMs)}
             </span>
           ) : null}
         </span>

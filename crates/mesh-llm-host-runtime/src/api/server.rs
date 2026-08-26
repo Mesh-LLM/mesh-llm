@@ -240,6 +240,7 @@ pub(crate) async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> an
             state.register_management_request(
                 request_id,
                 super::management_lifecycle::method_route_label(method, path_only),
+                source_addr,
             )
         }) {
             return super::management_lifecycle::scope(lifecycle, dispatch).await;

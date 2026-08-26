@@ -46,9 +46,21 @@ test('keeps completed evidence and footer actions visible while only the inspect
 
   await expect(inspector).toHaveAttribute('data-request-inspector-shell', 'fixed')
   await expect(overview.getByText('1 attempt / 0 retries', { exact: true })).toBeVisible()
-  await expect(overview.getByRole('list', { name: 'Lifecycle events' })).toContainText(
-    /stream_started[\s\S]*stream_chunk[\s\S]*stream_completed/
-  )
+  const caller = overview.getByRole('region', { name: 'Caller' })
+  await expect(caller).toContainText('9f0c…bb04')
+  await expect(caller).toContainText('203.0.113.24:48712')
+  await expect(caller).toContainText('Remote QUIC HTTP')
+  const callerCopy = caller.getByRole('button', { name: 'Copy caller endpoint ID' })
+  await expect(callerCopy).toBeVisible()
+  await expect
+    .poll(() => callerCopy.evaluate((element) => element.getBoundingClientRect().height))
+    .toBeGreaterThanOrEqual(44)
+  const lifecycle = overview.getByRole('list', { name: 'Lifecycle events' })
+  await expect(lifecycle.locator('li[data-event-kind="stream_started"]')).toHaveCount(1)
+  await expect(lifecycle).toContainText('Stream started')
+  await overview.getByRole('button', { name: 'Later lifecycle events' }).click()
+  await expect(lifecycle.locator('li[data-event-kind="stream_completed"]')).toHaveCount(1)
+  await expect(lifecycle).toContainText('Stream done')
   await expect(overview.getByRole('list', { name: 'Routing attempts' })).toContainText('mesh-primary')
   const retention = overview.getByRole('region', { name: 'Artifact retention' })
   await expect(retention).toContainText('2 available · 1 unavailable · 1 missing · 1 corrupt')

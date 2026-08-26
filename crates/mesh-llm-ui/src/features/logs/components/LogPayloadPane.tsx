@@ -1,10 +1,11 @@
-import { Eye, FileDown, FileInput, FileOutput, type LucideIcon } from 'lucide-react'
+import { FileDown, FileInput, FileOutput, type LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useId, useMemo, useState } from 'react'
+import { useId, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { LogArtifact } from '@/features/logs/api/schemas'
 import { useLogArtifactContentQuery } from '@/features/logs/api/use-log-artifact-content-query'
+import type { JsonFormat } from '@/features/logs/components/JsonPayloadView'
 import { LogPayloadContentView, LogPayloadMessage } from '@/features/logs/components/LogPayloadContent'
 import {
   decodeLogArtifactContent,
@@ -19,7 +20,9 @@ type LogPayloadPaneProps = {
   readonly group: LogArtifactGroup
   readonly loading: boolean
   readonly error: boolean
+  readonly format: JsonFormat
   readonly headerAction?: ReactNode
+  readonly displayToolbar?: ReactNode
 }
 
 const payloadPaneConfig: Record<
@@ -40,61 +43,30 @@ const payloadPaneConfig: Record<
   }
 }
 
-function RevealedPayload({ artifact, label }: { readonly artifact: LogArtifact; readonly label: string }) {
+function DecodedPayload({
+  artifact,
+  label,
+  format
+}: {
+  readonly artifact: LogArtifact
+  readonly label: string
+  readonly format: JsonFormat
+}) {
   const content = useMemo(() => decodeLogArtifactContent(artifact), [artifact])
-  return <LogPayloadContentView content={content} label={label} />
+  return <LogPayloadContentView content={content} format={format} label={label} />
 }
 
-type PayloadRevealPromptProps = {
-  readonly canViewWithoutRead: boolean
-  readonly onReveal: () => void
-}
-
-function PayloadRevealPrompt({ canViewWithoutRead, onReveal }: PayloadRevealPromptProps) {
-  const actionLabel = canViewWithoutRead ? 'View payload' : 'Load payload'
-  const ActionIcon = canViewWithoutRead ? Eye : FileDown
-  return (
-    <LogPayloadMessage
-      detail={
-        canViewWithoutRead
-          ? 'Retained content stays hidden until you choose to view it.'
-          : 'This audited read downloads only the selected retained body.'
-      }
-      title="Payload content is hidden"
-    >
-      <Button className="ui-control gap-1.5" onClick={onReveal} size="sm" type="button" variant="outline">
-        <ActionIcon aria-hidden="true" className="size-3.5" />
-        {actionLabel}
-      </Button>
-    </LogPayloadMessage>
-  )
-}
-
-function InlinePayloadAction({ artifact, label }: { readonly artifact: AvailableLogArtifact; readonly label: string }) {
-  const [revealed, setRevealed] = useState(false)
-  return revealed ? (
-    <RevealedPayload artifact={artifact} label={label} />
-  ) : (
-    <PayloadRevealPrompt canViewWithoutRead onReveal={() => setRevealed(true)} />
-  )
-}
-
-function RemotePayloadAction({ artifact, label }: { readonly artifact: AvailableLogArtifact; readonly label: string }) {
-  const [revealed, setRevealed] = useState(false)
+function RemotePayloadAction({
+  artifact,
+  label,
+  format
+}: {
+  readonly artifact: AvailableLogArtifact
+  readonly label: string
+  readonly format: JsonFormat
+}) {
   const query = useLogArtifactContentQuery(artifact)
   const loadedArtifact = query.data
-
-  if (!revealed) {
-    return (
-      <PayloadRevealPrompt
-        canViewWithoutRead={loadedArtifact !== undefined}
-        onReveal={() => {
-          setRevealed(true)
-          if (loadedArtifact === undefined) void query.refetch()
-        }}
-      />
-    )
-  }
 
   if (query.isFetching) {
     return <LogPayloadMessage detail="Reading retained content from the local log service." title="Loading payload" />
@@ -115,21 +87,37 @@ function RemotePayloadAction({ artifact, label }: { readonly artifact: Available
       </LogPayloadMessage>
     )
   }
-  return <RevealedPayload artifact={loadedArtifact ?? artifact} label={label} />
+  return <DecodedPayload artifact={loadedArtifact ?? artifact} format={format} label={label} />
 }
 
-function ArtifactPayload({ artifact, label }: { readonly artifact: LogArtifact; readonly label: string }) {
+function ArtifactPayload({
+  artifact,
+  label,
+  format
+}: {
+  readonly artifact: LogArtifact
+  readonly label: string
+  readonly format: JsonFormat
+}) {
   if (artifact.contentState !== 'available') {
-    return <LogPayloadContentView content={decodeLogArtifactContent(artifact)} label={label} />
+    return <LogPayloadContentView content={decodeLogArtifactContent(artifact)} format={format} label={label} />
   }
   return artifact.contentBase64 === undefined ? (
-    <RemotePayloadAction artifact={artifact} label={label} />
+    <RemotePayloadAction artifact={artifact} format={format} label={label} />
   ) : (
-    <InlinePayloadAction artifact={artifact} label={label} />
+    <DecodedPayload artifact={artifact} format={format} label={label} />
   )
 }
 
-export function LogPayloadPane({ kind, group, loading, error, headerAction }: LogPayloadPaneProps) {
+export function LogPayloadPane({
+  kind,
+  group,
+  loading,
+  error,
+  format,
+  headerAction,
+  displayToolbar
+}: LogPayloadPaneProps) {
   const titleId = useId()
   const config = payloadPaneConfig[kind]
   const Icon = config.Icon
@@ -139,8 +127,8 @@ export function LogPayloadPane({ kind, group, loading, error, headerAction }: Lo
       aria-labelledby={titleId}
       className="min-w-0 overflow-hidden rounded-[var(--radius-lg)] border border-border bg-panel"
     >
-      <header className="flex min-h-14 items-center justify-between gap-3 px-[var(--panel-x)] py-[var(--panel-y)]">
-        <div className="flex min-w-0 items-center gap-2">
+      <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-[var(--panel-x)] py-[var(--panel-y)]">
+        <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto sm:flex-1">
           <Icon aria-hidden="true" className="size-4 shrink-0 text-accent" />
           <div className="min-w-0">
             <h3 className="type-panel-title text-foreground" id={titleId}>
@@ -153,9 +141,15 @@ export function LogPayloadPane({ kind, group, loading, error, headerAction }: Lo
         </div>
         {headerAction}
       </header>
+      {displayToolbar ? (
+        <div className="border-t border-border-soft bg-panel-strong/55 px-[var(--panel-x)] py-2">{displayToolbar}</div>
+      ) : null}
       <ScrollArea
-        className="h-64 border-t border-border-soft bg-background"
+        className="border-t border-border-soft bg-background [&>[data-orientation=horizontal]]:bg-border-soft [&>[data-orientation=horizontal]>div]:bg-fg-dim"
         horizontal
+        type="always"
+        vertical={false}
+        viewportClassName="overscroll-contain pb-2.5 [container-type:inline-size] [scrollbar-gutter:stable] [&>div]:!block [&>div]:min-w-full"
         viewportLabel={`${config.label} payload content`}
       >
         {loading ? (
@@ -172,7 +166,12 @@ export function LogPayloadPane({ kind, group, loading, error, headerAction }: Lo
           <LogPayloadMessage detail={config.emptyMessage} title={`No retained ${kind} artifact`} />
         ) : null}
         {!loading && !error && primary ? (
-          <ArtifactPayload artifact={primary} key={primary.artifactId.toString()} label={config.label} />
+          <ArtifactPayload
+            artifact={primary}
+            format={format}
+            key={primary.artifactId.toString()}
+            label={config.label}
+          />
         ) : null}
       </ScrollArea>
     </section>

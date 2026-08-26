@@ -4,15 +4,20 @@ use crate::cursor::{decode_ordering_cursor, encode_cursor};
 use crate::error::LogStoreError;
 use crate::store::LogStore;
 use crate::timestamps::{
-    canonical_comparison_timestamp, canonical_optional_persisted_timestamp,
-    canonical_persisted_timestamp, canonical_timestamp_metadata,
+    canonical_optional_persisted_timestamp, canonical_persisted_timestamp,
+    canonical_timestamp_metadata,
 };
-use rusqlite::{OptionalExtension, Row, Transaction, types::Value};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use rusqlite::{OptionalExtension, Row, Transaction};
+use serde::Serialize;
 
+mod audit;
+mod caller_metadata;
 mod cleanup;
 
+pub use audit::{
+    AuditEntryFilters, AuditEntryRow, AuditEntrySeverity, AuditEntrySource,
+    DEFAULT_AUDIT_ENTRY_LIMIT, MAX_AUDIT_ENTRY_LIMIT,
+};
 pub use cleanup::{
     RetentionCleanupResult, RetentionPolicy, RetentionTable, RetentionTablePolicy,
     RetentionTableResult,
@@ -24,8 +29,6 @@ const MAX_WEBHOOK_TIMESTAMP_BYTES: usize = 64;
 const MIN_HTTP_STATUS_CODE: u16 = 100;
 const MAX_HTTP_STATUS_CODE: u16 = 599;
 const CONFIGURED_WEBHOOK_TARGET: &str = "configured_webhook";
-pub const DEFAULT_AUDIT_ENTRY_LIMIT: usize = 50;
-pub const MAX_AUDIT_ENTRY_LIMIT: usize = 100;
 
 // ─── Row types returned by queries ──────────────────────
 
@@ -61,236 +64,6 @@ pub struct LifecycleEventRow {
     pub event_id: String,
     pub request_id: String,
     pub occurred_at: String,
-}
-
-/// Public, privacy-safe projection of a durable operational audit entry.
-///
-/// `detail_json` remains private to durable audit storage. Only the versioned,
-/// bounded fields below are projected from it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditEntryRow {
-    pub sequence: i64,
-    pub entry_id: String,
-    pub request_id: Option<String>,
-    pub occurred_at: String,
-    pub source: String,
-    pub code: String,
-    pub severity: Option<AuditEntrySeverity>,
-    pub context_version: Option<u8>,
-    pub subject_kind: Option<String>,
-    pub subject_id: Option<String>,
-    pub operation_id: Option<String>,
-    pub correlation_request_id: Option<String>,
-    pub reason_code: Option<String>,
-    pub outcome: Option<String>,
-    pub duration_ms: Option<u64>,
-    pub numeric_summaries: BTreeMap<String, u64>,
-}
-
-#[derive(Default, Deserialize)]
-struct StoredAuditDetail {
-    severity: Option<String>,
-    context_version: Option<u8>,
-    subject_kind: Option<String>,
-    subject_id: Option<String>,
-    operation_id: Option<String>,
-    request_id: Option<String>,
-    reason_code: Option<String>,
-    outcome: Option<String>,
-    duration_ms: Option<u64>,
-    #[serde(default)]
-    numeric_summaries: BTreeMap<String, u64>,
-}
-
-impl StoredAuditDetail {
-    fn parse(raw: Option<String>) -> Self {
-        raw.and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
-    }
-
-    fn bounded(mut self) -> Self {
-        if self.context_version != Some(1) {
-            return Self {
-                severity: self.severity,
-                ..Self::default()
-            };
-        }
-        self.subject_kind = self.subject_kind.filter(|value| {
-            matches!(
-                value.as_str(),
-                "runtime" | "model" | "runtime_instance" | "cli_command"
-            )
-        });
-        self.subject_id = bounded_audit_value(self.subject_id);
-        self.operation_id = bounded_audit_value(self.operation_id);
-        self.request_id = bounded_audit_value(self.request_id);
-        self.reason_code = bounded_audit_code(self.reason_code);
-        self.outcome = bounded_audit_code(self.outcome);
-        self.numeric_summaries = self
-            .numeric_summaries
-            .into_iter()
-            .filter(|(key, _)| bounded_code(key))
-            .take(8)
-            .collect();
-        self
-    }
-}
-
-fn bounded_audit_value(value: Option<String>) -> Option<String> {
-    value.filter(|value| !value.is_empty() && value.chars().count() <= 256)
-}
-
-fn bounded_audit_code(value: Option<String>) -> Option<String> {
-    value.filter(|value| bounded_code(value))
-}
-
-fn bounded_code(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-}
-
-/// Finite source vocabulary accepted by durable audit queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuditEntrySource {
-    LoggingService,
-    Runtime,
-    Mesh,
-    Cli,
-    LogsApi,
-}
-
-impl AuditEntrySource {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::LoggingService => "logging_service",
-            Self::Runtime => "runtime",
-            Self::Mesh => "mesh",
-            Self::Cli => "cli",
-            Self::LogsApi => "logs_api",
-        }
-    }
-}
-
-/// Finite severity vocabulary accepted by durable audit queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuditEntrySeverity {
-    Info,
-    Warning,
-    Error,
-}
-
-impl AuditEntrySeverity {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Info => "info",
-            Self::Warning => "warning",
-            Self::Error => "error",
-        }
-    }
-
-    fn parse(value: Option<String>) -> Option<Self> {
-        match value.as_deref() {
-            Some("info") => Some(Self::Info),
-            Some("warning") => Some(Self::Warning),
-            Some("error") => Some(Self::Error),
-            _ => None,
-        }
-    }
-}
-
-/// Typed allowlisted filters for the operational audit read model.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AuditEntryFilters {
-    pub source: Option<AuditEntrySource>,
-    pub severity: Option<AuditEntrySeverity>,
-    pub from: Option<String>,
-    pub to: Option<String>,
-}
-
-fn validate_audit_entry_limit(limit: Option<usize>) -> Result<usize, LogStoreError> {
-    let limit = limit.unwrap_or(DEFAULT_AUDIT_ENTRY_LIMIT);
-    if (1..=MAX_AUDIT_ENTRY_LIMIT).contains(&limit) {
-        Ok(limit)
-    } else {
-        Err(LogStoreError::InvalidQuery(format!(
-            "audit entry limit must be within 1..={MAX_AUDIT_ENTRY_LIMIT}"
-        )))
-    }
-}
-
-fn audit_entry_row(row: &Row<'_>) -> rusqlite::Result<AuditEntryRow> {
-    let detail = StoredAuditDetail::parse(row.get(6)?).bounded();
-    Ok(AuditEntryRow {
-        sequence: row.get(0)?,
-        entry_id: row.get(1)?,
-        request_id: row.get(2)?,
-        occurred_at: row.get(3)?,
-        source: row.get(4)?,
-        code: row.get(5)?,
-        severity: AuditEntrySeverity::parse(detail.severity),
-        context_version: detail.context_version,
-        subject_kind: detail.subject_kind,
-        subject_id: detail.subject_id,
-        operation_id: detail.operation_id,
-        correlation_request_id: detail.request_id,
-        reason_code: detail.reason_code,
-        outcome: detail.outcome,
-        duration_ms: detail.duration_ms,
-        numeric_summaries: detail.numeric_summaries,
-    })
-}
-
-fn audit_entry_query_parts(
-    cursor: Option<&(String, String)>,
-    filters: AuditEntryFilters,
-) -> Result<(String, Vec<Value>), LogStoreError> {
-    let mut clauses = Vec::new();
-    let mut parameters = Vec::new();
-    if let Some((occurred_at, entry_id)) = cursor {
-        clauses.push("(occurred_at, entry_id) < (?, ?)".to_string());
-        parameters.push(Value::Text(occurred_at.clone()));
-        parameters.push(Value::Text(entry_id.clone()));
-    }
-    if let Some(source) = filters.source {
-        clauses.push("actor = ?".to_string());
-        parameters.push(Value::Text(source.as_str().to_string()));
-    }
-    if let Some(severity) = filters.severity {
-        clauses.push("CASE WHEN json_valid(detail_json) THEN json_extract(detail_json, '$.severity') END = ?".to_string());
-        parameters.push(Value::Text(severity.as_str().to_string()));
-    }
-    let from = filters
-        .from
-        .as_deref()
-        .map(canonical_comparison_timestamp)
-        .transpose()?;
-    let to = filters
-        .to
-        .as_deref()
-        .map(canonical_comparison_timestamp)
-        .transpose()?;
-    if from > to && to.is_some() {
-        return Err(LogStoreError::InvalidQuery(
-            "audit from must not be after to".to_string(),
-        ));
-    }
-    if let Some(from) = from {
-        clauses.push("occurred_at >= ?".to_string());
-        parameters.push(Value::Text(from));
-    }
-    if let Some(to) = to {
-        clauses.push("occurred_at <= ?".to_string());
-        parameters.push(Value::Text(to));
-    }
-    let where_clause = if clauses.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", clauses.join(" AND "))
-    };
-    Ok((where_clause, parameters))
 }
 
 /// Closed terminal request classification safe to retain for webhook delivery.
@@ -992,35 +765,6 @@ impl LogStore {
         }
     }
 
-    /// Insert a summary when absent and otherwise fill only metadata fields
-    /// that have not yet been recorded. Lifecycle state, timestamps, and
-    /// identity fields remain untouched.
-    #[allow(clippy::too_many_arguments)]
-    pub fn upsert_summary_metadata(
-        &self,
-        request_id: &str,
-        model: Option<&str>,
-        route: Option<&str>,
-        provider: Option<&str>,
-        engine: Option<&str>,
-        occurred_at: &str,
-    ) -> Result<(), LogStoreError> {
-        let occurred_at = canonical_persisted_timestamp(occurred_at)?;
-        self.conn()
-            .execute(
-                "INSERT INTO summaries (request_id, created_at, model, route, provider, engine) \
-                 VALUES (?, ?, ?, ?, ?, ?) \
-                 ON CONFLICT(request_id) DO UPDATE SET \
-                    model = COALESCE(summaries.model, excluded.model), \
-                    route = COALESCE(summaries.route, excluded.route), \
-                    provider = COALESCE(summaries.provider, excluded.provider), \
-                    engine = COALESCE(summaries.engine, excluded.engine)",
-                rusqlite::params![request_id, occurred_at, model, route, provider, engine],
-            )
-            .map(|_| ())
-            .map_err(|error| LogStoreError::InsertFailed(error.to_string()))
-    }
-
     /// Get a summary by request_id. Returns None if not found (no-op style).
     pub fn get_summary(&self, request_id: &str) -> Result<Option<SummaryRow>, LogStoreError> {
         let conn = self.conn();
@@ -1359,106 +1103,6 @@ impl LogStore {
                 }
             }
         }
-    }
-
-    // ════════════════════════════
-    //  Audit Entries
-    // ════════════════════════════
-
-    pub fn insert_audit_entry(
-        &self,
-        entry_id: &str,
-        request_id: Option<&str>,
-        occurred_at: &str,
-        source: &str,
-        code: &str,
-        detail_json: Option<&str>,
-    ) -> Result<(), LogStoreError> {
-        let occurred_at = canonical_persisted_timestamp(occurred_at)?;
-        let conn = self.conn();
-        match conn.execute(
-            "INSERT INTO audit_entries (entry_id, request_id, occurred_at, actor, action, detail_json) VALUES (?, ?, ?, ?, ?, ?)",
-            rusqlite::params![entry_id, request_id, occurred_at, source, code, detail_json],
-        ) {
-            Ok(_) => Ok(()),
-            Err(ref e) => match map_insert_constraint_error(e, format!("audit_entry {entry_id}")) {
-                Some(error) => Err(error),
-                None => Err(LogStoreError::InsertFailed(e.to_string())),
-            },
-        }
-    }
-
-    /// List privacy-safe operational audit rows with cursor pagination.
-    ///
-    /// The query mirrors lifecycle ordering on `(occurred_at, entry_id)` while
-    /// fetching one extra row to determine the next cursor. `detail_json` is
-    /// only used internally for the bounded severity projection.
-    pub fn list_audit_entries(
-        &self,
-        limit: Option<usize>,
-        after_cursor: Option<&str>,
-        filters: AuditEntryFilters,
-    ) -> Result<Page<AuditEntryRow>, LogStoreError> {
-        let limit = validate_audit_entry_limit(limit)?;
-        let cursor = after_cursor.map(decode_ordering_cursor).transpose()?;
-        let (where_clause, parameters) = audit_entry_query_parts(cursor.as_ref(), filters)?;
-        let sql = format!(
-            "SELECT sequence, entry_id, request_id, occurred_at, actor, action, detail_json \
-             FROM audit_entries {where_clause} \
-             ORDER BY occurred_at DESC, entry_id DESC LIMIT {}",
-            limit + 1
-        );
-        let conn = self.conn();
-        let mut statement = conn.prepare(&sql).map_err(LogStoreError::Sqlite)?;
-        let mut items: Vec<AuditEntryRow> = statement
-            .query_map(rusqlite::params_from_iter(parameters), audit_entry_row)
-            .map_err(LogStoreError::Sqlite)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| LogStoreError::QueryFailed(error.to_string()))?;
-
-        let has_more = items.len() > limit;
-        if has_more {
-            items.pop();
-        }
-        let next_cursor = has_more.then(|| {
-            let last = &items[items.len() - 1];
-            encode_cursor(&last.occurred_at, &last.entry_id)
-        });
-        Ok(Page { items, next_cursor })
-    }
-
-    /// Read newly committed audit rows in database sequence order for the
-    /// trusted-local event stream. Unlike the public keyset listing, this is a
-    /// forward-only reconciliation cursor shared by every process writing the
-    /// durable store.
-    pub fn list_audit_entries_after_sequence(
-        &self,
-        after_sequence: u64,
-        limit: usize,
-        filters: AuditEntryFilters,
-    ) -> Result<Vec<AuditEntryRow>, LogStoreError> {
-        let limit = validate_audit_entry_limit(Some(limit))?;
-        let after_sequence = i64::try_from(after_sequence).map_err(|_| {
-            LogStoreError::InvalidQuery("audit sequence is outside the supported range".to_string())
-        })?;
-        let (where_clause, mut parameters) = audit_entry_query_parts(None, filters)?;
-        let predicate = if where_clause.is_empty() {
-            "WHERE sequence > ?".to_string()
-        } else {
-            format!("{where_clause} AND sequence > ?")
-        };
-        parameters.push(Value::Integer(after_sequence));
-        let sql = format!(
-            "SELECT sequence, entry_id, request_id, occurred_at, actor, action, detail_json \
-             FROM audit_entries {predicate} ORDER BY sequence ASC LIMIT {limit}"
-        );
-        let conn = self.conn();
-        let mut statement = conn.prepare(&sql).map_err(LogStoreError::Sqlite)?;
-        statement
-            .query_map(rusqlite::params_from_iter(parameters), audit_entry_row)
-            .map_err(LogStoreError::Sqlite)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| LogStoreError::QueryFailed(error.to_string()))
     }
 
     // ════════════════════════════

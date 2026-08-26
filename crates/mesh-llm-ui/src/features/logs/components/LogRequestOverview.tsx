@@ -8,9 +8,9 @@ import {
   CircleX,
   Clock3,
   Gauge,
+  type LucideIcon,
   Route,
-  Server,
-  type LucideIcon
+  Server
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { StatusBadgeTone } from '@/components/ui/StatusBadge'
@@ -21,6 +21,7 @@ import type {
   LogProxyAttempt,
   LogRequest
 } from '@/features/logs/api/schemas'
+import { LogNetworkIdentityBand } from '@/features/logs/components/LogNetworkIdentityBand'
 import {
   formatAttemptEvidence,
   formatRequestDuration,
@@ -85,7 +86,7 @@ const outcomePresentation: Record<LogOutcome, OutcomePresentation> = {
 
 function MetricCell({ children, icon: Icon, iconTone = 'muted', label }: MetricCellProps) {
   return (
-    <div className="min-w-0 bg-panel px-4 py-4">
+    <div className="min-w-0 bg-panel px-[var(--panel-x)] py-[var(--panel-y)] sm:px-4 sm:py-4">
       <dt className="flex min-w-0 items-start gap-2.5 text-fg-faint">
         <span
           aria-hidden="true"
@@ -109,7 +110,7 @@ function requestStatusTone(statusCode: number | undefined): StatusBadgeTone {
 
 function MachineValue({ children }: { readonly children: ReactNode }) {
   return (
-    <span className="block min-w-0 break-words font-mono tabular-nums text-[length:var(--density-type-caption-lg)] text-foreground">
+    <span className="block min-w-0 font-mono tabular-nums text-[length:var(--density-type-caption-lg)] text-foreground [overflow-wrap:anywhere]">
       {children}
     </span>
   )
@@ -119,12 +120,13 @@ export function LogRequestOverview({ request, artifacts, attempts, events }: Log
   const presentation = outcomePresentation[request.outcome]
   const OutcomeIcon = presentation.icon
   const httpStatusTone = requestStatusTone(request.statusCode)
+  const hasCallerInfo = Boolean(request.callerEndpointId || request.callerAddr || request.callerPathType)
 
   return (
     <section aria-label="Request overview" className="flex min-w-0 flex-col gap-[var(--shell-normal)]">
       <dl
         aria-label="Request metrics"
-        className="grid min-w-0 grid-cols-2 gap-px overflow-hidden rounded-[var(--radius)] border border-border-soft bg-border-soft lg:grid-cols-3 xl:grid-cols-6"
+        className="grid min-w-0 grid-cols-1 gap-px overflow-hidden rounded-[var(--radius)] border border-border-soft bg-border-soft sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
       >
         <MetricCell icon={OutcomeIcon} iconTone={presentation.tone} label="Status">
           <div data-metric-outcome={request.outcome} data-testid="request-outcome">
@@ -156,7 +158,15 @@ export function LogRequestOverview({ request, artifacts, attempts, events }: Log
           <MachineValue>{formatStreamEvidence(events.items)}</MachineValue>
         </MetricCell>
       </dl>
-      <LogRequestLifecycleOverview events={events} />
+      {hasCallerInfo ? (
+        <LogNetworkIdentityBand
+          address={request.callerAddr}
+          endpointId={request.callerEndpointId}
+          pathType={request.callerPathType}
+          title="Caller"
+        />
+      ) : null}
+      <LogRequestLifecycleOverview events={events} key={request.requestId.toString()} />
       <LogRequestOverviewMetadata artifacts={artifacts} request={request} />
       <LogRequestRoutingOverview attempts={attempts} />
     </section>

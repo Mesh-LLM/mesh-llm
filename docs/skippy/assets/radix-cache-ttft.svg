@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500" viewBox="0 0 1000 500" role="img" aria-labelledby="title desc">
+  <title id="title">Resident KV serial time to first token, cold versus warm</title>
+  <desc id="desc">For Llama GQA on Metal at concurrency one, warm p50 time to first token fell from 1536.3 to 27.7 milliseconds for exact replay, from 1399.9 to 72.7 milliseconds for a divergent tail, and from 1540.9 to 82.1 milliseconds for a growing coding trace.</desc>
+  <metadata>Source: /private/tmp/pr1429-studio54-final/llama-gqa/comparison.json; NEW commit 70d3777693f7a944a007637d8ba2936aac1a7ef5; two rounds; 20 requests per cell.</metadata>
+  <style>
+    text { fill: #24292f; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .title { font-size: 22px; font-weight: 600; }
+    .subtitle, .legend, .tick, .note { font-size: 13px; }
+    .label { font-size: 15px; font-weight: 600; }
+    .value { font-size: 13px; font-weight: 600; }
+    .value-inbar { fill: #ffffff; font-size: 13px; font-weight: 600; }
+    .axis, .grid { stroke: #d0d7de; stroke-width: 1; }
+    .cold { fill: #8c959f; }
+    .warm { fill: #1f883d; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #f0f6fc; }
+      .axis, .grid { stroke: #30363d; }
+      .cold { fill: #8b949e; }
+      .warm { fill: #3fb950; }
+    }
+  </style>
+
+  <text class="title" x="500" y="34" text-anchor="middle">Resident KV warm reuse cuts serial TTFT</text>
+  <text class="subtitle" x="500" y="58" text-anchor="middle">Llama GQA · Metal · concurrency 1 · p50 milliseconds · lower is better</text>
+
+  <rect class="cold" x="390" y="78" width="16" height="12" rx="2"/>
+  <text class="legend" x="414" y="89">Cold</text>
+  <rect class="warm" x="470" y="78" width="16" height="12" rx="2"/>
+  <text class="legend" x="494" y="89">Warm</text>
+
+  <line class="grid" x1="220" y1="110" x2="220" y2="420"/>
+  <line class="grid" x1="370" y1="110" x2="370" y2="420"/>
+  <line class="grid" x1="520" y1="110" x2="520" y2="420"/>
+  <line class="grid" x1="670" y1="110" x2="670" y2="420"/>
+  <line class="grid" x1="820" y1="110" x2="820" y2="420"/>
+
+  <text class="tick" x="220" y="442" text-anchor="middle">0</text>
+  <text class="tick" x="370" y="442" text-anchor="middle">400</text>
+  <text class="tick" x="520" y="442" text-anchor="middle">800</text>
+  <text class="tick" x="670" y="442" text-anchor="middle">1,200</text>
+  <text class="tick" x="820" y="442" text-anchor="middle">1,600 ms</text>
+  <line class="axis" x1="220" y1="420" x2="820" y2="420"/>
+
+  <text class="label" x="200" y="154" text-anchor="end">Exact replay</text>
+  <rect class="cold" x="220" y="128" width="576" height="22" rx="3"/>
+  <text class="value-inbar" x="788" y="144" text-anchor="end">1,536.3</text>
+  <rect class="warm" x="220" y="160" width="10" height="22" rx="3"/>
+  <text class="value" x="238" y="176">27.7 ms · 55.5× faster</text>
+
+  <text class="label" x="200" y="264" text-anchor="end">Divergent tail</text>
+  <rect class="cold" x="220" y="238" width="525" height="22" rx="3"/>
+  <text class="value-inbar" x="737" y="254" text-anchor="end">1,399.9</text>
+  <rect class="warm" x="220" y="270" width="27" height="22" rx="3"/>
+  <text class="value" x="255" y="286">72.7 ms · 19.3× faster</text>
+
+  <text class="label" x="200" y="374" text-anchor="end">Growing coding trace</text>
+  <rect class="cold" x="220" y="348" width="578" height="22" rx="3"/>
+  <text class="value-inbar" x="790" y="364" text-anchor="end">1,540.9</text>
+  <rect class="warm" x="220" y="380" width="31" height="22" rx="3"/>
+  <text class="value" x="259" y="396">82.1 ms · 18.8× faster</text>
+
+  <text class="note" x="500" y="478" text-anchor="middle">Llama GQA Metal · two rounds · 20 requests/cell · NEW cold versus NEW warm</text>
+</svg>

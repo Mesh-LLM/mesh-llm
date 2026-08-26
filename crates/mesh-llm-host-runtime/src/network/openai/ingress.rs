@@ -1,5 +1,5 @@
 use crate::inference::{election, pipeline};
-use crate::logging::{OpenAiLifecycleAttachment, OpenAiRouteObserver};
+use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
 use crate::network::affinity;
 use crate::network::openai::auto_route;
@@ -927,13 +927,20 @@ async fn handle_buffered_api_request(
     tcp_stream: tokio::net::TcpStream,
     mut request: proxy::BufferedHttpRequest,
     ctx: ProxyConnectionContext<'_>,
+    source_addr: Option<std::net::SocketAddr>,
 ) {
     // Claim the parent at host OpenAI ingress. All downstream dispatch sees
     // only a metadata observer; this scope remains the sole terminal owner.
+    let caller_addr = source_addr.map(|addr| addr.to_string());
     let request_metadata =
         crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path)
             .with_source(Some("direct_http"))
-            .with_method(Some(&request.method));
+            .with_method(Some(&request.method))
+            .with_caller_identity(
+                None,
+                caller_addr.as_deref(),
+                caller_addr.as_ref().map(|_| CallerPathType::LocalHttp),
+            );
     let mut lifecycle = crate::logging_runtime_state()
         .map(|state| state.openai_ingress_attachment(request.request_id, request_metadata))
         .unwrap_or_else(OpenAiLifecycleAttachment::unowned);
@@ -1058,6 +1065,7 @@ async fn handle_api_proxy_connection(
     targets: election::ModelTargets,
     affinity: affinity::AffinityRouter,
 ) {
+    let source_addr = tcp_stream.peer_addr().ok();
     let plugin_manager = node.plugin_manager().await;
     match proxy::read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
@@ -1072,8 +1080,13 @@ async fn handle_api_proxy_connection(
                 affinity: &affinity,
                 plugin_manager: plugin_manager.as_ref(),
             };
-            handle_buffered_api_request(tcp_stream, request, ProxyConnectionContext { route })
-                .await;
+            handle_buffered_api_request(
+                tcp_stream,
+                request,
+                ProxyConnectionContext { route },
+                source_addr,
+            )
+            .await;
         }
         Err(error) => {
             let _ = super::parse_failure::send_read_failure(tcp_stream, &error).await;

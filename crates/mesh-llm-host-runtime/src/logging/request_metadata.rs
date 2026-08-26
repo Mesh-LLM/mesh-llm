@@ -9,6 +9,10 @@ use openai_frontend::OpenAiFrontendRoute;
 
 use super::policy::{RedactMode, apply_redaction};
 
+mod caller_identity;
+
+pub(crate) use caller_identity::{CallerPathType, authenticated_endpoint_id};
+
 const MAX_REQUEST_METADATA_CHARS: usize = 64;
 
 /// The small, privacy-safe metadata projection shared by active summaries,
@@ -27,6 +31,12 @@ pub(crate) struct RequestSummaryMetadata {
     source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    caller_endpoint_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    caller_addr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    caller_path_type: Option<CallerPathType>,
 }
 
 impl RequestSummaryMetadata {
@@ -44,6 +54,9 @@ impl RequestSummaryMetadata {
             engine: bounded_metadata(engine),
             source: None,
             method: None,
+            caller_endpoint_id: None,
+            caller_addr: None,
+            caller_path_type: None,
         }
     }
 
@@ -114,18 +127,33 @@ impl RequestSummaryMetadata {
             && self.engine.is_none()
             && self.source.is_none()
             && self.method.is_none()
+            && self.caller_endpoint_id.is_none()
+            && self.caller_addr.is_none()
+            && self.caller_path_type.is_none()
     }
 
     /// Preserve the first truthful value for each field. A later source can
     /// fill a missing classification but cannot overwrite an earlier one.
     pub(crate) fn merge_missing(&mut self, update: Self) -> bool {
+        let Self {
+            route,
+            model,
+            provider,
+            engine,
+            source,
+            method,
+            caller_endpoint_id,
+            caller_addr,
+            caller_path_type,
+        } = update;
         let mut changed = false;
-        changed |= merge_field(&mut self.route, update.route);
-        changed |= merge_field(&mut self.model, update.model);
-        changed |= merge_field(&mut self.provider, update.provider);
-        changed |= merge_field(&mut self.engine, update.engine);
-        changed |= merge_field(&mut self.source, update.source);
-        changed |= merge_field(&mut self.method, update.method);
+        changed |= merge_field(&mut self.route, route);
+        changed |= merge_field(&mut self.model, model);
+        changed |= merge_field(&mut self.provider, provider);
+        changed |= merge_field(&mut self.engine, engine);
+        changed |= merge_field(&mut self.source, source);
+        changed |= merge_field(&mut self.method, method);
+        changed |= self.merge_missing_caller(caller_endpoint_id, caller_addr, caller_path_type);
         changed
     }
 }
@@ -235,14 +263,14 @@ mod tests {
                 .with_source(Some("10.0.0.1"))
                 .is_empty()
         );
-        // Unrecognized or empty methods classify as OTHER rather than being
-        // silently dropped, so the method field is never absent.
         assert_eq!(
             RequestSummaryMetadata::from_parts(None, None, None, None)
                 .with_method(Some("PATCH"))
                 .method(),
-            Some("OTHER")
+            Some("PATCH")
         );
+        // Unrecognized or empty methods classify as OTHER rather than being
+        // silently dropped, so the method field is never absent.
         assert_eq!(
             RequestSummaryMetadata::from_parts(None, None, None, None)
                 .with_method(Some(""))

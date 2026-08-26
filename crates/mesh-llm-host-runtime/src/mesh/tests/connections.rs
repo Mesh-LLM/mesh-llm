@@ -17,6 +17,110 @@ use tokio::sync::{mpsc, watch};
 mod direct_path;
 
 #[tokio::test]
+async fn inbound_http_tunnel_channel_retains_authenticated_remote_endpoint() {
+    async fn start_node() -> (Node, TunnelChannels) {
+        let relay_urls = Vec::new();
+        let relay_auths = HashMap::new();
+        Node::start(
+            super::NodeRole::Client,
+            RelayConfig {
+                urls: &relay_urls,
+                auths: &relay_auths,
+                policy: RelayPolicy::Disabled,
+            },
+            QuicBindSelection {
+                ip: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                port: Some(0),
+            },
+            Some(0.0),
+            false,
+            None,
+            None,
+            crate::MeshRequirements::unrestricted(),
+        )
+        .await
+        .expect("start tunnel identity test node")
+    }
+
+    let (sender, _sender_channels) = start_node().await;
+    let (receiver, mut receiver_channels) = start_node().await;
+    sender.start_accepting();
+    receiver.start_accepting();
+    sender
+        .connect_to_peer(receiver.endpoint_addr_for_advertisement())
+        .await
+        .expect("connect tunnel identity test nodes");
+
+    let _outbound = sender
+        .open_http_tunnel(receiver.id())
+        .await
+        .expect("open authenticated HTTP tunnel");
+    let (remote, _send, _recv) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        receiver_channels.http.recv(),
+    )
+    .await
+    .expect("HTTP tunnel should reach receiver")
+    .expect("HTTP tunnel channel should remain open");
+
+    assert_eq!(remote, sender.id());
+}
+
+#[tokio::test]
+#[serial]
+async fn stage_alpn_emits_authenticated_direct_peer_audit_before_stream_dispatch() {
+    let (mut audits, _capture) = super::capture_mesh_operational_audits();
+    let sender = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("sender node");
+    let expected_sender_id = hex::encode(sender.id().as_bytes());
+    let receiver = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("receiver node");
+    receiver.start_accepting();
+    record_mesh_operational_event_with_context(
+        MeshOperationalEvent::QuicInboundAccepted(MeshQuicInboundOutcome::Accepted),
+        mesh_peer_operational_context(receiver.id(), None),
+    );
+
+    let _connection = sender
+        .endpoint
+        .connect(
+            receiver.endpoint_addr_for_advertisement(),
+            skippy_protocol::STAGE_ALPN_V2,
+        )
+        .await
+        .expect("authenticated stage connection");
+
+    let audit = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let record = audits.recv().await.expect("audit capture remains open");
+            if record.code() == "mesh_quic_inbound_accepted"
+                && record.context().is_some_and(|context| {
+                    let fields = context.fields();
+                    fields["subject_id"].as_str() == Some(expected_sender_id.as_str())
+                })
+            {
+                return record;
+            }
+        }
+    })
+    .await
+    .expect("stage audit should be emitted before waiting for a stream");
+
+    let fields = audit.context().expect("stage audit context").fields();
+    assert_eq!(fields["subject_kind"], "mesh_peer");
+    assert_eq!(fields["subject_id"], expected_sender_id);
+    assert_eq!(fields["path_type"], "direct");
+    assert!(fields["remote_addr"].as_str().is_some());
+    assert_eq!(fields["outcome"], "accepted");
+    assert_eq!(
+        fields["numeric_summaries"]["protocol_gen"],
+        skippy_protocol::STAGE_PROTOCOL_GENERATION
+    );
+}
+
+#[tokio::test]
 async fn owner_control_stream_work_is_bounded_per_connection() {
     let permits = control_stream_semaphore();
     let mut held = Vec::new();

@@ -50,6 +50,10 @@ fn new_store_reports_zero_reclaimed_pages_when_nothing_can_be_reclaimed() {
         .expect("new store auto-vacuum mode");
     assert_eq!(auto_vacuum, 2);
 
+    store
+        .conn()
+        .execute_batch("PRAGMA analysis_limit = 400; PRAGMA optimize;")
+        .expect("prepare optimizer metadata");
     let before = page_count(&store);
     let maintenance = store
         .maintain_space_after_cleanup()

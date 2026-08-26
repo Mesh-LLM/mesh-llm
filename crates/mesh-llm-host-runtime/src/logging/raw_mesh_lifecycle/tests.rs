@@ -1,5 +1,5 @@
 use super::*;
-use crate::logging::{OpenAiLifecycleAttachment, ServiceConfig};
+use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, ServiceConfig};
 
 fn recorded_events(service: &LoggingService) -> Vec<LifecycleEvent> {
     service
@@ -13,6 +13,31 @@ fn recorded_events(service: &LoggingService) -> Vec<LifecycleEvent> {
             serde_json::from_str::<LifecycleEvent>(payload).ok()
         })
         .collect()
+}
+
+#[test]
+fn frontend_release_is_idempotent_and_preserves_raw_ownership() {
+    let service = Arc::new(LoggingService::new_disabled(Default::default()));
+    let owners = Arc::new(RawMeshLifecycleOwners::default());
+    let raw_request_id = RequestId::new();
+    let raw = RawMeshRequestLifecycle::register(
+        Arc::clone(&service),
+        Arc::clone(&owners),
+        raw_request_id,
+    )
+    .expect("raw request should own its lifecycle");
+    let frontend_request_id = RequestId::new();
+    owners.admit_frontend(frontend_request_id, || {
+        FrontendAdmissionDecision::Registered { evicted: None }
+    });
+
+    owners.release_frontend(frontend_request_id);
+    owners.release_frontend(frontend_request_id);
+    owners.release_frontend(raw_request_id);
+
+    assert!(!owners.is_claimed(frontend_request_id));
+    assert!(owners.is_claimed(raw_request_id));
+    raw.terminal(TerminalOutcome::Completed);
 }
 
 #[test]
@@ -366,6 +391,45 @@ fn raw_mesh_owner_reuses_one_guard_and_terminalizes_once() {
 }
 
 #[test]
+fn dropping_unterminalized_raw_mesh_lifecycle_releases_owner_slot() {
+    // Given
+    let service = Arc::new(LoggingService::new_disabled(Default::default()));
+    let owners = Arc::new(RawMeshLifecycleOwners::default());
+    let request_id = RequestId::new();
+    let lifecycle =
+        RawMeshRequestLifecycle::register(service, Arc::clone(&owners), request_id).unwrap();
+
+    // When
+    drop(lifecycle);
+
+    // Then
+    assert!(!owners.is_claimed(request_id));
+}
+
+#[test]
+fn dropping_stale_duplicate_does_not_release_replacement_owner() {
+    // Given
+    let service = Arc::new(LoggingService::new_disabled(Default::default()));
+    let owners = Arc::new(RawMeshLifecycleOwners::default());
+    let request_id = RequestId::new();
+    let first =
+        RawMeshRequestLifecycle::register(Arc::clone(&service), Arc::clone(&owners), request_id)
+            .unwrap();
+    let stale_duplicate =
+        RawMeshRequestLifecycle::register(Arc::clone(&service), Arc::clone(&owners), request_id)
+            .unwrap();
+    first.terminal(TerminalOutcome::Completed);
+    let _replacement =
+        RawMeshRequestLifecycle::register(service, Arc::clone(&owners), request_id).unwrap();
+
+    // When
+    drop(stale_duplicate);
+
+    // Then
+    assert!(owners.is_claimed(request_id));
+}
+
+#[test]
 fn claimed_plan_failure_terminalizes_without_route_selected_event() {
     let service = Arc::new(LoggingService::new_disabled(Default::default()));
     let owners = Arc::new(RawMeshLifecycleOwners::default());
@@ -482,4 +546,141 @@ fn remote_suppression_cap_fails_open_without_registering_parents() {
     assert!(recorded_events(&service).is_empty());
 
     drop(leases);
+}
+
+#[test]
+fn dropping_first_pending_remote_attribution_releases_token_zero() {
+    let service = Arc::new(LoggingService::new_disabled(Default::default()));
+    let owners = Arc::new(RawMeshLifecycleOwners::default());
+    let request_id = RequestId::new();
+    let endpoint_id = "81".repeat(32);
+    let attribution = RawMeshRemoteAttributionLease::acquire(
+        &service,
+        Arc::clone(&owners),
+        request_id,
+        RequestSummaryMetadata::default().with_caller_identity(
+            Some(&endpoint_id),
+            Some("192.0.2.81:11204"),
+            Some(CallerPathType::RemoteQuicHttp),
+        ),
+    )
+    .expect("first pending attribution");
+
+    drop(attribution);
+    let lifecycle = RawMeshRequestLifecycle::register_with_metadata(
+        Arc::clone(&service),
+        owners,
+        request_id,
+        RequestSummaryMetadata::default().with_caller_identity(
+            None,
+            Some("127.0.0.1:40123"),
+            Some(CallerPathType::LocalHttp),
+        ),
+    )
+    .expect("local lifecycle");
+
+    let summary = service
+        .registry_ref()
+        .get_active(&request_id.as_uuid().to_string())
+        .expect("active summary");
+    assert_eq!(summary.metadata.caller_endpoint_id(), None);
+    assert_eq!(summary.metadata.caller_addr(), Some("127.0.0.1:40123"));
+    assert_eq!(summary.metadata.caller_path_type(), Some("local_http"));
+    lifecycle.terminal(TerminalOutcome::Completed);
+}
+
+#[test]
+fn remote_attribution_rejects_incomplete_authenticated_tuple() {
+    let service = Arc::new(LoggingService::new_disabled(Default::default()));
+    let owners = Arc::new(RawMeshLifecycleOwners::default());
+    let request_id = RequestId::new();
+
+    assert!(
+        RawMeshRemoteAttributionLease::acquire(
+            &service,
+            owners,
+            request_id,
+            RequestSummaryMetadata::default().with_caller_identity(
+                None,
+                Some("192.0.2.82:11204"),
+                Some(CallerPathType::RemoteQuicHttp),
+            ),
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn pending_endpoint_only_attribution_survives_provisional_local_registration() {
+    let service = Arc::new(LoggingService::new_disabled(Default::default()));
+    let owners = Arc::new(RawMeshLifecycleOwners::default());
+    let request_id = RequestId::new();
+    let endpoint_id = "83".repeat(32);
+    let attribution = RawMeshRemoteAttributionLease::acquire(
+        &service,
+        Arc::clone(&owners),
+        request_id,
+        RequestSummaryMetadata::default().with_caller_identity(Some(&endpoint_id), None, None),
+    )
+    .expect("pending endpoint-only attribution");
+
+    let lifecycle = RawMeshRequestLifecycle::register_with_metadata(
+        Arc::clone(&service),
+        owners,
+        request_id,
+        RequestSummaryMetadata::default().with_caller_identity(
+            None,
+            Some("127.0.0.1:40123"),
+            Some(CallerPathType::LocalHttp),
+        ),
+    )
+    .expect("local lifecycle");
+
+    let summary = service
+        .registry_ref()
+        .get_active(&request_id.as_uuid().to_string())
+        .expect("active summary");
+    assert_eq!(
+        summary.metadata.caller_endpoint_id(),
+        Some(endpoint_id.as_str())
+    );
+    assert_eq!(summary.metadata.caller_addr(), None);
+    assert_eq!(summary.metadata.caller_path_type(), None);
+    lifecycle.terminal(TerminalOutcome::Completed);
+    drop(attribution);
+}
+
+#[test]
+fn remote_attribution_rejects_invalid_endpoint_only_variants() {
+    let service = Arc::new(LoggingService::new_disabled(Default::default()));
+    let endpoint_id = "84".repeat(32);
+
+    for metadata in [
+        RequestSummaryMetadata::default().with_caller_identity(
+            Some(&endpoint_id),
+            Some("192.0.2.84:11204"),
+            None,
+        ),
+        RequestSummaryMetadata::default().with_caller_identity(
+            Some("not-an-authenticated-endpoint"),
+            None,
+            None,
+        ),
+        RequestSummaryMetadata::default().with_caller_identity(None, None, None),
+        RequestSummaryMetadata::default().with_caller_identity(
+            Some(&endpoint_id),
+            Some("127.0.0.1:40123"),
+            Some(CallerPathType::LocalHttp),
+        ),
+    ] {
+        assert!(
+            RawMeshRemoteAttributionLease::acquire(
+                &service,
+                Arc::new(RawMeshLifecycleOwners::default()),
+                RequestId::new(),
+                metadata,
+            )
+            .is_none()
+        );
+    }
 }

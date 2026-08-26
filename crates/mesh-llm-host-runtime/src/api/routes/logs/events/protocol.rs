@@ -1,15 +1,16 @@
 use mesh_llm_events::logging::envelope::CanonicalEnvelope;
 use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_events::logging::replay::ReplayChannel;
-use mesh_llm_log_store::{AuditEntryRow, AuditEntrySeverity};
 use serde::Serialize;
-use std::collections::BTreeMap;
 
+use super::super::dto::safe_metadata;
 use super::super::event_kind;
 use super::query::{AuditCursor, Cursor};
-use crate::logging::OperationalAuditContext;
+use crate::logging::ReplayRecord;
 use crate::logging::RequestSummaryEventSnapshots;
-use crate::logging::{AuditReplayRecord, ReplayRecord};
+
+mod audit_entry;
+pub(super) use audit_entry::{audit_entry_frame, durable_audit_entry_frame};
 
 pub(in crate::api::routes::logs) const MAX_FRAME_BYTES: usize = 16 * 1024;
 
@@ -56,6 +57,12 @@ struct PublicRequest {
     model: Option<String>,
     provider: Option<String>,
     engine: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_endpoint_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_path_type: Option<String>,
     status_code: Option<u16>,
     source: &'static str,
 }
@@ -146,10 +153,13 @@ fn request_projection(
         outcome: snapshot.state().to_owned(),
         created_at: snapshot.created_at().to_owned(),
         terminal_at: snapshot.terminal_at().map(str::to_owned),
-        route: metadata.route().map(str::to_owned),
-        model: metadata.model().map(str::to_owned),
-        provider: metadata.provider().map(str::to_owned),
-        engine: metadata.engine().map(str::to_owned),
+        route: metadata.route().map(safe_metadata),
+        model: metadata.model().map(safe_metadata),
+        provider: metadata.provider().map(safe_metadata),
+        engine: metadata.engine().map(safe_metadata),
+        caller_endpoint_id: metadata.caller_endpoint_id().map(safe_metadata),
+        caller_addr: metadata.caller_addr().map(safe_metadata),
+        caller_path_type: metadata.caller_path_type().map(safe_metadata),
         status_code: lifecycle_status_code(&envelope.event),
         source: "active",
     })
@@ -222,164 +232,6 @@ fn frame<T: Serialize>(event: &str, id: &str, data: &T) -> Result<String, ()> {
     (frame.len() <= MAX_FRAME_BYTES).then_some(frame).ok_or(())
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AuditEntryData {
-    entry_id: String,
-    occurred_at: String,
-    source: String,
-    code: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    severity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    context_version: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    subject_kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    subject_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    operation_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    outcome: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    duration_ms: Option<u64>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    numeric_summaries: BTreeMap<String, u64>,
-    sequence: u64,
-}
-
-/// Audit entry frame: privacy-safe projection of an audit replay record.
-/// Never contains `canonical_envelope` or arbitrary `detail_json`.
-pub(super) fn audit_entry_frame(record: &AuditReplayRecord) -> Result<String, ()> {
-    let payload: serde_json::Value = serde_json::from_str(&record.entry.payload).map_err(|_| ())?;
-    let entry_id = payload
-        .get("entry_id")
-        .and_then(|v| v.as_str())
-        .ok_or(())?
-        .to_owned();
-    let occurred_at = payload
-        .get("occurred_at")
-        .and_then(|v| v.as_str())
-        .ok_or(())?
-        .to_owned();
-    let source = payload
-        .get("source")
-        .and_then(|v| v.as_str())
-        .ok_or(())?
-        .to_owned();
-    let code = payload
-        .get("code")
-        .and_then(|v| v.as_str())
-        .ok_or(())?
-        .to_owned();
-    let severity = payload
-        .get("severity")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
-    let context_version = payload
-        .get("context_version")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|value| u8::try_from(value).ok())
-        .filter(|value| *value == 1);
-    let context_string = |key: &str| {
-        context_version.and_then(|_| {
-            payload
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.is_empty() && value.chars().count() <= 256)
-                .map(str::to_owned)
-        })
-    };
-    let context_code = |key: &str| {
-        context_version.and_then(|_| {
-            payload
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| OperationalAuditContext::valid_static_code(value))
-                .map(str::to_owned)
-        })
-    };
-    let subject_kind = context_version.and_then(|_| {
-        payload
-            .get("subject_kind")
-            .and_then(serde_json::Value::as_str)
-            .and_then(crate::logging::OperationalAuditSubjectKind::parse)
-            .map(|kind| kind.as_str().to_owned())
-    });
-    let numeric_summaries = context_version.map_or_else(BTreeMap::new, |_| {
-        payload
-            .get("numeric_summaries")
-            .and_then(serde_json::Value::as_object)
-            .into_iter()
-            .flatten()
-            .filter(|(key, _)| OperationalAuditContext::valid_static_code(key))
-            .filter_map(|(key, value)| value.as_u64().map(|value| (key.clone(), value)))
-            .take(8)
-            .collect()
-    });
-
-    let data = AuditEntryData {
-        entry_id,
-        occurred_at,
-        source,
-        code,
-        severity,
-        context_version,
-        subject_kind,
-        subject_id: context_string("subject_id"),
-        operation_id: context_string("operation_id"),
-        request_id: context_string("request_id"),
-        reason_code: context_code("reason_code"),
-        outcome: context_code("outcome"),
-        duration_ms: context_version.and_then(|_| {
-            payload
-                .get("duration_ms")
-                .and_then(serde_json::Value::as_u64)
-        }),
-        numeric_summaries,
-        sequence: record.sequence,
-    };
-    frame(
-        "audit_entry",
-        &AuditCursor(record.sequence).event_id(),
-        &data,
-    )
-}
-
-/// Render a row read back from the durable store. This is the production audit
-/// reconciliation path and deliberately uses the database sequence as the SSE
-/// cursor so entries written by another process share the same ordering.
-pub(super) fn durable_audit_entry_frame(record: AuditEntryRow) -> Result<String, ()> {
-    let sequence = u64::try_from(record.sequence).map_err(|_| ())?;
-    let severity = record.severity.map(|severity| match severity {
-        AuditEntrySeverity::Info => "info".to_string(),
-        AuditEntrySeverity::Warning => "warning".to_string(),
-        AuditEntrySeverity::Error => "error".to_string(),
-    });
-    let data = AuditEntryData {
-        entry_id: record.entry_id,
-        occurred_at: record.occurred_at,
-        source: record.source,
-        code: record.code,
-        severity,
-        context_version: record.context_version,
-        subject_kind: record.subject_kind,
-        subject_id: record.subject_id,
-        operation_id: record.operation_id,
-        request_id: record.correlation_request_id,
-        reason_code: record.reason_code,
-        outcome: record.outcome,
-        duration_ms: record.duration_ms,
-        numeric_summaries: record.numeric_summaries,
-        sequence,
-    };
-    frame("audit_entry", &AuditCursor(sequence).event_id(), &data)
-}
-
 /// Audit gap frame: points to `/api/logs/audit` for recovery.
 pub(super) fn audit_gap_frame(
     from_sequence: u64,
@@ -393,109 +245,6 @@ pub(super) fn audit_gap_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logging::BusEntry;
-
-    fn audit_record(sequence: u64) -> AuditReplayRecord {
-        AuditReplayRecord {
-            entry: BusEntry {
-                payload: serde_json::json!({
-                    "kind": "audit",
-                    "entry_id": "test-entry-id",
-                    "occurred_at": "2026-01-01T00:00:00Z",
-                    "source": "runtime",
-                    "code": "startup_complete",
-                    "severity": "info",
-                })
-                .to_string(),
-                channel_hint: 2,
-            },
-            sequence,
-            cursor: sequence,
-        }
-    }
-
-    #[test]
-    fn audit_entry_frame_shape_and_fields() {
-        let record = audit_record(7);
-        let frame = audit_entry_frame(&record).expect("audit entry frame");
-
-        assert!(frame.contains("event: audit_entry"));
-        assert!(frame.contains("id: a1:7"));
-        assert!(frame.contains("\"entryId\":\"test-entry-id\""));
-        assert!(frame.contains("\"occurredAt\":\"2026-01-01T00:00:00Z\""));
-        assert!(frame.contains("\"source\":\"runtime\""));
-        assert!(frame.contains("\"code\":\"startup_complete\""));
-        assert!(frame.contains("\"severity\":\"info\""));
-        assert!(frame.contains("\"sequence\":7"));
-        assert!(!frame.contains("canonical_envelope"));
-        assert!(!frame.contains("detail_json"));
-        assert!(frame.len() <= MAX_FRAME_BYTES);
-    }
-
-    #[test]
-    fn audit_entry_frame_omits_severity_when_none() {
-        let mut record = audit_record(3);
-        record.entry.payload = serde_json::json!({
-            "kind": "audit",
-            "entry_id": "id-3",
-            "occurred_at": "2026-01-01T00:00:00Z",
-            "source": "cli",
-            "code": "command_executed",
-        })
-        .to_string();
-        let frame = audit_entry_frame(&record).expect("audit entry without severity");
-        assert!(!frame.contains("severity"));
-    }
-
-    #[test]
-    fn audit_entry_frame_filters_invalid_typed_context_fields() {
-        let mut record = audit_record(4);
-        record.entry.payload = serde_json::json!({
-            "kind": "audit",
-            "entry_id": "id-4",
-            "occurred_at": "2026-01-01T00:00:00Z",
-            "source": "runtime",
-            "code": "startup_complete",
-            "context_version": 1,
-            "subject_kind": "not_a_subject",
-            "reason_code": "NOT VALID",
-            "outcome": "completed",
-            "numeric_summaries": {
-                "bad-key": 0,
-                "metric_0": 0,
-                "metric_1": 1,
-                "metric_2": 2,
-                "metric_3": 3,
-                "metric_4": 4,
-                "metric_5": 5,
-                "metric_6": 6,
-                "metric_7": 7,
-                "metric_8": 8
-            }
-        })
-        .to_string();
-        let frame = audit_entry_frame(&record).expect("audit context frame");
-        let data = frame
-            .lines()
-            .find_map(|line| line.strip_prefix("data: "))
-            .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .expect("audit frame data");
-
-        assert!(data.get("subjectKind").is_none());
-        assert!(data.get("reasonCode").is_none());
-        assert_eq!(data["outcome"], "completed");
-        assert_eq!(data["numericSummaries"].as_object().unwrap().len(), 8);
-        assert!(data["numericSummaries"].get("metric_7").is_some());
-        assert!(data["numericSummaries"].get("metric_8").is_none());
-        assert!(data["numericSummaries"].get("bad-key").is_none());
-    }
-
-    #[test]
-    fn audit_entry_frame_rejects_malformed_payload() {
-        let mut record = audit_record(1);
-        record.entry.payload = "not-json".to_string();
-        assert!(audit_entry_frame(&record).is_err());
-    }
 
     #[test]
     fn audit_gap_frame_carries_audit_endpoint() {

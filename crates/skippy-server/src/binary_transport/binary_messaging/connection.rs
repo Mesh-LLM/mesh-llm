@@ -31,6 +31,9 @@ use crate::binary_transport::direct_return::PredictionReturnSinks;
 use crate::binary_transport::forwarded_stage_message_timed;
 use crate::binary_transport::kv_eviction::binary_proactive_eviction_plan;
 use crate::binary_transport::kv_eviction::evict_binary_resident_prefix_for_decode;
+use crate::binary_transport::prefill_execution::{
+    executable_prefill_start, suffix_activation_frame,
+};
 use crate::binary_transport::run_binary_stage_message;
 use crate::binary_transport::stage_execution::binary_message_attrs;
 use crate::binary_transport::stage_execution::binary_message_session_id;
@@ -369,15 +372,17 @@ fn handle_binary_connection_messages(
         message_reply_stats.merge(lookup_result.stats);
         let restored_prefill =
             lookup_result.restored_tokens >= token_ids.len() && !token_ids.is_empty();
-        let executable_token_ids = if message.kind.is_prefill()
-            && lookup_result.restored_tokens > 0
-            && lookup_result.restored_tokens < token_ids.len()
-            && config.layer_start == 0
-        {
-            &token_ids[lookup_result.restored_tokens..]
-        } else {
-            &token_ids
-        };
+        let executable_prefill_start = executable_prefill_start(
+            message.kind,
+            lookup_result.restored_tokens,
+            token_ids.len(),
+            config.layer_start,
+            config.downstream.is_some(),
+        );
+        let executable_token_ids = &token_ids[executable_prefill_start..];
+        if executable_prefill_start > 0 && message.positions.len() == token_ids.len() {
+            message.positions.drain(..executable_prefill_start);
+        }
         let compute_start_unix_nanos: u64;
         let compute_end_unix_nanos: u64;
         let mut input_activation_decode_ms = 0.0;
@@ -407,8 +412,10 @@ fn handle_binary_connection_messages(
                 )
             } else {
                 let input_decode_started = Instant::now();
-                let input =
-                    input_activation_frame(config, topology, &mut message, activation_width)?;
+                let input = suffix_activation_frame(
+                    input_activation_frame(config, topology, &mut message, activation_width)?,
+                    executable_prefill_start,
+                )?;
                 input_activation_decode_ms = if input_activation_bytes == 0 {
                     0.0
                 } else {

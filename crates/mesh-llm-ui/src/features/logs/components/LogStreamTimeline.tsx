@@ -3,6 +3,7 @@ import type { LogLifecycleEvent } from '@/features/logs/api/schemas'
 import { sortByOccurredAt } from '@/features/logs/lib/log-instant'
 import { elapsedMilliseconds, formatLogTimestampMs, isStreamLifecycleEvent } from '@/features/logs/lib/log-timeline'
 import { formatTokenUsage } from '@/features/logs/lib/log-token-usage'
+import { formatElapsedMs } from '@/lib/format-duration'
 
 export type LogStreamTimelineProps = {
   readonly events: readonly LogLifecycleEvent[]
@@ -57,7 +58,7 @@ function StreamTimelineEntry({
       {/* Centered delta chip (empty placeholder keeps the first row aligned) */}
       {deltaMs !== undefined ? (
         <span className="shrink-0 justify-self-center rounded-md bg-accent/[.1] px-2 py-0.5 font-mono text-[length:var(--density-type-caption)] font-medium tabular-nums text-accent">
-          +{deltaMs.toLocaleString()} ms
+          {formatElapsedMs(deltaMs, { prefix: '+' })}
         </span>
       ) : (
         <span aria-hidden="true" />

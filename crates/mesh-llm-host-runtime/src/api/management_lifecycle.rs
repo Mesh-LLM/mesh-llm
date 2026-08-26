@@ -41,36 +41,43 @@ impl ManagementLifecycleContext {
 }
 
 pub(super) fn request_id_from_raw(raw: &[u8]) -> RequestId {
-    let value = crate::api::access::request_header(raw, "x-request-id")
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut request = httparse::Request::new(&mut headers);
+    let Ok(httparse::Status::Complete(_)) = request.parse(raw) else {
+        return RequestId::default();
+    };
+    let mut request_id_headers = request
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("x-request-id"));
+    let Some(header) = request_id_headers.next() else {
+        return RequestId::default();
+    };
+    if request_id_headers.next().is_some() {
+        return RequestId::default();
+    }
+    std::str::from_utf8(header.value)
         .ok()
-        .flatten()
-        .and_then(openai_frontend::parse_request_id);
-    value.unwrap_or_default()
+        .and_then(openai_frontend::parse_request_id)
+        .unwrap_or_default()
 }
 
 pub(super) fn eligible_management_route(method: &str, path: &str) -> bool {
-    !(is_read_only_observation_method(method)
-        || path == "/models"
-        || path.starts_with("/v1/")
-        || path == "/api/chat"
-        || path == "/api/responses"
-        || path == "/api/objects"
-        || path.starts_with("/api/objects/")
-        || path == "/mesh/hook"
-        || path == "/api/logs"
-        || path.starts_with("/api/logs/"))
+    is_mutation_method(method)
+        && path != "/models"
+        && !path.starts_with("/v1/")
+        && path != "/api/chat"
+        && path != "/api/responses"
+        && path != "/api/objects"
+        && !path.starts_with("/api/objects/")
+        && path != "/mesh/hook"
+        && path != "/api/logs"
+        && !path.starts_with("/api/logs/")
         && (path.starts_with("/api/") || path == "/mcp")
 }
 
-/// Read-only console observation must never become workload ledger traffic.
-///
-/// These endpoints are frequently polled or held open by the local console.
-/// Recording them as ordinary management work makes request counts describe
-/// the observer rather than the workload it is observing. This applies to all
-/// safe observation methods, including future console endpoints. Mutations
-/// continue through the management lifecycle and remain auditable.
-fn is_read_only_observation_method(method: &str) -> bool {
-    matches!(method, "GET" | "HEAD" | "OPTIONS")
+fn is_mutation_method(method: &str) -> bool {
+    matches!(method, "POST" | "PUT" | "PATCH" | "DELETE")
 }
 
 pub(super) fn method_route_label(method: &str, path: &str) -> &'static str {
@@ -82,6 +89,7 @@ pub(super) fn method_route_label(method: &str, path: &str) -> &'static str {
         ("GET", _) => "management_get_other",
         ("POST", _) => "management_post",
         ("PUT", _) => "management_put",
+        ("PATCH", _) => "management_patch",
         ("DELETE", _) => "management_delete",
         _ => "management_other",
     }
@@ -190,6 +198,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn duplicate_request_ids_are_replaced_instead_of_selecting_the_first() {
+        let first = "00000000-0000-4000-8000-000000000051";
+        let second = "00000000-0000-4000-8000-000000000052";
+        let raw = format!(
+            "POST /api/runtime/config/validate HTTP/1.1\r\nHost: localhost\r\nx-request-id: {first}\r\nX-Request-Id: {second}\r\nContent-Length: 0\r\n\r\n"
+        );
+
+        let request_id = request_id_from_raw(raw.as_bytes());
+
+        assert_ne!(request_id.as_uuid().to_string(), first);
+        assert_ne!(request_id.as_uuid().to_string(), second);
+    }
+
     #[tokio::test]
     async fn trusted_local_and_server_failures_use_bounded_terminal_states() {
         let (_, rejected) = lifecycle(RequestId::new());
@@ -234,32 +256,53 @@ mod tests {
     }
 
     #[test]
-    fn logs_openai_and_all_read_only_management_routes_are_excluded() {
-        for path in [
-            "/api/logs/requests",
-            "/api/logs/events",
-            "/api/status",
-            "/api/events",
-            "/api/runtime/events",
+    fn management_lifecycle_routes_are_mutation_only() {
+        let mutation_methods = ["POST", "PUT", "PATCH", "DELETE"];
+        let observation_methods = ["GET", "HEAD", "OPTIONS", "TRACE", "CONNECT"];
+        let management_paths = ["/api/runtime/control", "/api/plugins/install", "/mcp"];
+        let excluded_paths = [
             "/v1/chat/completions",
             "/models",
             "/api/chat",
             "/api/responses",
             "/api/objects",
+            "/api/objects/item",
+            "/api/logs",
+            "/api/logs/requests",
             "/mesh/hook",
-        ] {
-            assert!(
-                !eligible_management_route("GET", path),
-                "{path} must stay excluded"
-            );
+        ];
+
+        for method in mutation_methods {
+            for path in management_paths {
+                assert!(
+                    eligible_management_route(method, path),
+                    "{method} {path} must be eligible"
+                );
+            }
         }
-        assert!(!eligible_management_route("GET", "/api/models"));
-        assert!(!eligible_management_route("HEAD", "/api/plugins"));
-        assert!(!eligible_management_route(
-            "OPTIONS",
-            "/api/runtime/control"
-        ));
-        assert!(eligible_management_route("POST", "/api/runtime/control"));
-        assert!(eligible_management_route("POST", "/api/status"));
+        for method in observation_methods {
+            for path in management_paths {
+                assert!(
+                    !eligible_management_route(method, path),
+                    "{method} {path} must be excluded"
+                );
+            }
+        }
+        for method in mutation_methods.into_iter().chain(observation_methods) {
+            for path in excluded_paths {
+                assert!(
+                    !eligible_management_route(method, path),
+                    "{method} {path} must stay excluded"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn patch_management_routes_keep_their_method_label() {
+        assert_eq!(
+            method_route_label("PATCH", "/api/plugins/demo/web-ui/config"),
+            "management_patch"
+        );
     }
 }

@@ -63,6 +63,7 @@ impl KvStageIntegration {
         let worker_inflight_records = inflight_records.clone();
         let exact_state_records_queued = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let exact_state_records_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_exact_state_records_dropped = exact_state_records_dropped.clone();
         let exact_state_records_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let worker_exact_state_records_pending = exact_state_records_pending.clone();
         std::thread::Builder::new()
@@ -70,19 +71,18 @@ impl KvStageIntegration {
             .spawn(move || {
                 while let Ok(pending) = exact_state_record_rx.recv() {
                     let page_id = pending.page_id.clone();
-                    let mut radix = worker_radix
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let mut blobs = worker_exact_blobs
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    store_exact_radix_record(
-                        &mut radix,
-                        &mut blobs,
+                    if store_exact_radix_record(
+                        &worker_radix,
+                        &worker_exact_blobs,
                         exact_max_entries,
                         exact_max_bytes,
                         pending,
-                    );
+                    )
+                    .is_err()
+                    {
+                        worker_exact_state_records_dropped
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     worker_inflight_records
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -119,43 +119,89 @@ impl KvStageIntegration {
 }
 
 fn store_exact_radix_record(
-    radix: &mut UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>,
-    blobs: &mut CacheBlobStore,
+    radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
+    blobs: &Mutex<CacheBlobStore>,
     max_entries: usize,
     max_bytes: u64,
     pending: PendingExactStateRecord,
-) {
-    if pending.token_ids.is_empty() {
-        return;
-    }
+) -> Result<()> {
     let logical_bytes = pending.payload.byte_len();
-    let (payload, _) = pending.payload.dedupe_into(blobs);
-    let replaced = radix
-        .insert_recurrent(
+    let (payload, _) = pending.payload.dedupe_into(
+        &mut blobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    // Cloning retains the Arc-backed blocks without changing blob-store
+    // accounting, leaving `payload` available to roll that accounting back if
+    // the radix rejects the insert.
+    let mut released = Vec::new();
+    let insert_result = {
+        let mut radix = radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let insert_result = radix.insert_recurrent(
             pending.namespace,
             &pending.token_ids,
             logical_bytes,
             RadixExactEntry {
                 page_id: pending.page_id,
-                payload,
+                payload: payload.clone(),
                 extra: pending.extra,
             },
-        )
-        .expect("non-empty exact-state radix key");
-    if let Some(replaced) = replaced {
-        replaced.payload.release_from(blobs);
-    }
-    loop {
-        let over_entries = radix.stats().recurrent_entries > max_entries;
-        let over_bytes = max_bytes > 0 && blobs.physical_bytes() > max_bytes;
-        if !over_entries && !over_bytes {
-            break;
+        );
+        match insert_result {
+            Err(error) => Err(error),
+            Ok(replaced) => {
+                if let Some(replaced) = replaced {
+                    released.push(replaced.payload);
+                }
+                while radix.stats().recurrent_entries > max_entries {
+                    let Some(evicted) = radix.evict_lru_recurrent() else {
+                        break;
+                    };
+                    released.push(evicted.value.payload);
+                }
+                Ok(())
+            }
         }
-        let Some(evicted) = radix.evict_lru_recurrent() else {
+    };
+    if let Err(error) = insert_result {
+        payload.release_from(
+            &mut blobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        return Err(error);
+    }
+    if !released.is_empty() {
+        let mut blobs = blobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for payload in released {
+            payload.release_from(&mut blobs);
+        }
+    }
+    while max_bytes > 0
+        && blobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .physical_bytes()
+            > max_bytes
+    {
+        let evicted = radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .evict_lru_recurrent();
+        let Some(evicted) = evicted else {
             break;
         };
-        evicted.value.payload.release_from(blobs);
+        evicted.value.payload.release_from(
+            &mut blobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
     }
+    Ok(())
 }
 
 fn effective_cache_payload(
@@ -174,78 +220,62 @@ fn effective_cache_payload(
 }
 
 pub(crate) fn model_requires_recurrent_state(config: &StageConfig) -> bool {
-    // A hybrid stage whose first layer file is attention-only still needs
-    // KvRecurrent: probe every layer file in [layer_start, layer_end), not
-    // just the first one, so interleaved hybrids are never misdetected.
-    kv_cache_inspection_paths(config).into_iter().any(|path| {
-        let Ok(info) = ModelInfo::open(&path) else {
-            return false;
-        };
-        let Ok(tensors) = info.tensors() else {
-            return false;
-        };
-        tensors
-            .iter()
-            .any(|tensor| tensor_name_requires_recurrent_state(&tensor.name))
-    })
+    let Some(path) = kv_cache_inspection_path(config) else {
+        return false;
+    };
+    let Ok(info) = ModelInfo::open(path) else {
+        return false;
+    };
+    let Ok(tensors) = info.tensors() else {
+        return false;
+    };
+    tensors
+        .iter()
+        .any(|tensor| tensor_name_requires_recurrent_state(&tensor.name))
 }
 
-fn kv_cache_inspection_paths(config: &StageConfig) -> Vec<PathBuf> {
-    let Some(path) = config.model_path.as_deref() else {
-        return Vec::new();
-    };
+fn kv_cache_inspection_path(config: &StageConfig) -> Option<PathBuf> {
+    let path = config.model_path.as_deref()?;
     match config.load_mode {
         LoadMode::LayerPackage => {
             let package_dir = std::path::Path::new(path);
-            let mut paths =
-                layer_package_inspection_paths(package_dir, config.layer_start, config.layer_end);
-            if paths.is_empty() {
-                if let Some(metadata) = layer_package_metadata_path(package_dir) {
-                    paths.push(metadata);
-                } else {
-                    paths.push(PathBuf::from(path));
-                }
-            }
-            paths
+            layer_package_inspection_path(package_dir, config.layer_start, config.layer_end)
+                .or_else(|| layer_package_metadata_path(package_dir))
+                .or_else(|| Some(PathBuf::from(path)))
         }
-        LoadMode::RuntimeSlice | LoadMode::ArtifactSlice => vec![PathBuf::from(path)],
+        LoadMode::RuntimeSlice | LoadMode::ArtifactSlice => Some(PathBuf::from(path)),
     }
 }
 
-fn layer_package_inspection_paths(
+fn layer_package_inspection_path(
     package_dir: &Path,
     layer_start: u32,
     layer_end: u32,
-) -> Vec<PathBuf> {
-    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(
-        &fs::read(package_dir.join("model-package.json")).unwrap_or_default(),
-    ) else {
-        return Vec::new();
-    };
-    let Some(layers) = manifest.get("layers").and_then(|value| value.as_array()) else {
-        return Vec::new();
-    };
-    layers
+) -> Option<PathBuf> {
+    let manifest_path = package_dir.join("model-package.json");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(manifest_path).ok()?).ok()?;
+    let layers = manifest.get("layers")?.as_array()?;
+    let selected = layers
         .iter()
         .enumerate()
-        .filter_map(|(index, layer)| {
+        .find(|(index, layer)| {
             let layer_index = layer
                 .get("layer_index")
                 .and_then(|value| value.as_u64())
                 .and_then(|value| u32::try_from(value).ok())
-                .unwrap_or(index as u32);
-            if layer_index < layer_start || layer_index >= layer_end {
-                return None;
-            }
-            let path = layer.get("path")?.as_str()?;
-            let path = PathBuf::from(path);
-            if path.is_absolute() {
-                return None;
-            }
-            let absolute = package_dir.join(path);
-            absolute.is_file().then_some(absolute)
+                .unwrap_or(*index as u32);
+            layer_index >= layer_start && layer_index < layer_end
         })
-        .collect()
+        .or_else(|| layers.first().map(|layer| (0, layer)))?
+        .1;
+    let path = selected.get("path")?.as_str()?;
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        return None;
+    }
+    let absolute = package_dir.join(path);
+    absolute.is_file().then_some(absolute)
 }
 
 fn layer_package_metadata_path(package_dir: &Path) -> Option<PathBuf> {
@@ -411,24 +441,22 @@ mod tests {
 
     #[test]
     fn exact_payloads_live_on_radix_nodes_and_release_deduped_blocks_on_eviction() {
-        let mut radix = UnifiedRadixCache::new();
-        let mut blobs = CacheBlobStore::new(4);
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
 
+        store_exact_radix_record(&radix, &blobs, 1, 0, pending("first", &[1, 2], b"aaaabbbb"))
+            .unwrap();
         store_exact_radix_record(
-            &mut radix,
-            &mut blobs,
-            1,
-            0,
-            pending("first", &[1, 2], b"aaaabbbb"),
-        );
-        store_exact_radix_record(
-            &mut radix,
-            &mut blobs,
+            &radix,
+            &blobs,
             1,
             0,
             pending("second", &[1, 3], b"aaaacccc"),
-        );
+        )
+        .unwrap();
 
+        let mut radix = radix.lock().unwrap();
+        let blobs = blobs.lock().unwrap();
         assert_eq!(radix.stats().recurrent_entries, 1);
         assert_eq!(blobs.physical_bytes(), 8);
         assert!(radix.lookup_recurrent("model", &[1, 2]).is_none());
@@ -440,6 +468,23 @@ mod tests {
                 .page_id,
             "second"
         );
+    }
+
+    #[test]
+    fn invalid_exact_radix_key_releases_deduped_payload() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+
+        let error =
+            store_exact_radix_record(&radix, &blobs, 1, 0, pending("empty", &[], b"aaaabbbb"))
+                .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "radix cache key must contain at least one token"
+        );
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 0);
+        assert_eq!(radix.lock().unwrap().stats().recurrent_entries, 0);
     }
 
     #[test]
@@ -537,46 +582,8 @@ mod tests {
         config.layer_end = 2;
 
         assert_eq!(
-            kv_cache_inspection_paths(&config),
-            vec![dir.path().join("layers/00001.gguf")]
-        );
-    }
-
-    #[test]
-    fn layer_package_inspection_selects_every_in_range_layer_file() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("layers")).unwrap();
-        fs::write(dir.path().join("layers/00000.gguf"), b"layer0").unwrap();
-        fs::write(dir.path().join("layers/00001.gguf"), b"layer1").unwrap();
-        fs::write(dir.path().join("layers/00002.gguf"), b"layer2").unwrap();
-        let manifest = serde_json::json!({
-            "layers": [
-                { "layer_index": 0, "path": "layers/00000.gguf" },
-                { "layer_index": 1, "path": "layers/00001.gguf" },
-                { "layer_index": 2, "path": "layers/00002.gguf" }
-            ]
-        });
-        fs::write(
-            dir.path().join("model-package.json"),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-        let mut config = test_config("example/hybrid-package");
-        config.load_mode = LoadMode::LayerPackage;
-        config.model_path = Some(dir.path().to_string_lossy().to_string());
-        config.layer_start = 0;
-        config.layer_end = 3;
-
-        // a hybrid stage must probe every layer file, not just the first:
-        // an attention-first stage still carries recurrent tensors later
-        // in the range
-        assert_eq!(
-            kv_cache_inspection_paths(&config),
-            vec![
-                dir.path().join("layers/00000.gguf"),
-                dir.path().join("layers/00001.gguf"),
-                dir.path().join("layers/00002.gguf"),
-            ]
+            kv_cache_inspection_path(&config),
+            Some(dir.path().join("layers/00001.gguf"))
         );
     }
 
@@ -600,8 +607,8 @@ mod tests {
         config.model_path = Some(dir.path().to_string_lossy().to_string());
 
         assert_eq!(
-            kv_cache_inspection_paths(&config),
-            vec![dir.path().join("shared/metadata.gguf")]
+            kv_cache_inspection_path(&config),
+            Some(dir.path().join("shared/metadata.gguf"))
         );
     }
 

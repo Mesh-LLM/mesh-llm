@@ -51,6 +51,7 @@ url = "2"
 zeroize = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
+clap.workspace = true
 rand = "0.10"
 serial_test = "3"
 tempfile = "3"

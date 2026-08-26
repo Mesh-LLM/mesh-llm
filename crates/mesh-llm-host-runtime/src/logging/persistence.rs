@@ -143,12 +143,15 @@ impl LogStoreSink {
 impl PersistSink for LogStoreSink {
     async fn persist_summary(&self, entry: RequestSummaryEntry) -> Result<(), String> {
         self.run_blocking(move |store| {
-            store.upsert_summary_metadata(
+            store.upsert_summary_metadata_with_caller(
                 &entry.request_id,
                 entry.metadata.model(),
                 entry.metadata.route(),
                 entry.metadata.provider(),
                 entry.metadata.engine(),
+                entry.metadata.caller_endpoint_id(),
+                entry.metadata.caller_addr(),
+                entry.metadata.caller_path_type(),
                 &entry.created_at,
             )
         })

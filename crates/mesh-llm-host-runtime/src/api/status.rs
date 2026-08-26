@@ -1638,8 +1638,8 @@ mod tests {
                 LoggingStatusPayload {
                     metadata_available: false,
                     metadata_state: "schema_incompatible",
-                    schema_version: Some(14),
-                    supported_schema_version: Some(11),
+                    schema_version: Some(2),
+                    supported_schema_version: Some(1),
                     capture_mode: "unavailable",
                     artifact_capture_available: false,
                     artifact_capture_ready: false,

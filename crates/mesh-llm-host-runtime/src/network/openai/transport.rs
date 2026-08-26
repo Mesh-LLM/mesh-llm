@@ -5,7 +5,8 @@
 
 use crate::inference::election;
 use crate::logging::{
-    OpenAiLifecycleAttachment, OpenAiRouteAttempt, OpenAiRouteObserver, ProxyAttemptFinish,
+    CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteAttempt, OpenAiRouteObserver,
+    ProxyAttemptFinish,
 };
 use crate::mesh;
 use crate::network::affinity::{
@@ -234,11 +235,20 @@ fn capture_path_for_request(request: &BufferedHttpRequest) -> &str {
     &request.client_path
 }
 
-fn attach_request_logging(request: &mut BufferedHttpRequest) -> OpenAiLifecycleAttachment {
+fn attach_request_logging(
+    request: &mut BufferedHttpRequest,
+    source_addr: Option<std::net::SocketAddr>,
+) -> OpenAiLifecycleAttachment {
+    let caller_addr = source_addr.map(|addr| addr.to_string());
     let metadata =
         crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path)
             .with_source(Some("mesh_forwarded"))
-            .with_method(Some(&request.method));
+            .with_method(Some(&request.method))
+            .with_caller_identity(
+                None,
+                caller_addr.as_deref(),
+                caller_addr.as_ref().map(|_| CallerPathType::LocalHttp),
+            );
     let lifecycle = crate::logging_runtime_state()
         .map(|state| state.openai_ingress_attachment(request.request_id, metadata))
         .unwrap_or_else(OpenAiLifecycleAttachment::unowned);
@@ -310,7 +320,7 @@ pub async fn handle_mesh_request(
     };
     // The parsed host ingress owns the parent. Downstream route code receives
     // only the attachment's metadata observer and cannot terminalize it.
-    let mut lifecycle = attach_request_logging(&mut request);
+    let mut lifecycle = attach_request_logging(&mut request, source_addr);
     if node.swarm_capture_enabled() {
         node.capture_http_request(crate::mesh::HttpCaptureEvent {
             event: "openai_ingress_http_request",

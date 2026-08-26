@@ -7,6 +7,7 @@ const ARTIFACT_ID = '00000000-0000-4000-8000-000000000003'
 const OPERATION_ID = '00000000-0000-4000-8000-000000000004'
 const AUDIT_ID = '00000000-0000-4000-8000-000000000005'
 const OCCURRED_AT = '2026-08-04T12:00:00Z'
+const LATER_OCCURRED_AT = '2026-08-04T12:30:00Z'
 const TERMINAL_AT = '2026-08-04T12:00:01Z'
 const FILTER_TO = '2026-08-04T13:00:00.000Z'
 const DATA_MODE_STORAGE_KEY = 'mesh-llm-ui-preview:data-mode:v2'
@@ -24,6 +25,7 @@ type LogsBackendOptions = {
   cleanupRunResults?: readonly MaintenanceResult[]
   deleteResults?: readonly MaintenanceResult[]
   auditIdentity?: AuditIdentity
+  auditOccurredAt?: string
   delaySecondRequestsResponse?: boolean
 }
 
@@ -63,10 +65,13 @@ function logsPage(items: readonly object[]) {
   return { items, nextCursor: null }
 }
 
-function auditEntry(identity: AuditIdentity = { entryId: 'audit-0001', code: 'runtime_config_diagnostics_warning' }) {
+function auditEntry(
+  identity: AuditIdentity = { entryId: 'audit-0001', code: 'runtime_config_diagnostics_warning' },
+  occurredAt = OCCURRED_AT
+) {
   return {
     entryId: identity.entryId,
-    occurredAt: OCCURRED_AT,
+    occurredAt,
     source: 'logs_api',
     code: identity.code,
     severity: 'warning',
@@ -198,7 +203,7 @@ async function installLogsBackend(page: Page, options: LogsBackendOptions = {}) 
     }
     if (url.pathname === '/api/logs/audit' && method === 'GET') {
       state.auditListCalls += 1
-      await route.fulfill({ json: logsPage([auditEntry(options.auditIdentity)]) })
+      await route.fulfill({ json: logsPage([auditEntry(options.auditIdentity, options.auditOccurredAt)]) })
       return
     }
     if (url.pathname === '/api/logs/events') {
@@ -212,7 +217,7 @@ async function installLogsBackend(page: Page, options: LogsBackendOptions = {}) 
           body:
             'id: a1:2\n' +
             'event: audit_entry\n' +
-            `data: ${JSON.stringify({ ...auditEntry(options.auditIdentity), sequence: 2 })}\n\n`
+            `data: ${JSON.stringify({ ...auditEntry(options.auditIdentity, options.auditOccurredAt), sequence: 2 })}\n\n`
         })
         return
       }
@@ -374,6 +379,37 @@ test('logs ledger follows a lifecycle event into immediate details and safe arti
   await expect(requestInspector.getByText('Artifact download started.')).toBeVisible()
 })
 
+test('events chart applies the active populated bucket with real keyboard input', async ({ page: browserPage }) => {
+  // Given
+  await browserPage.clock.setFixedTime(new Date(FILTER_TO))
+  await installLogsBackend(browserPage, {
+    auditOccurredAt: LATER_OCCURRED_AT,
+    lifecycle: 'completed',
+    streamMode: 'unavailable'
+  })
+  await browserPage.goto('/logs?timeRange=1h')
+  const listbox = browserPage.getByRole('listbox', { name: /Events over time stacked bar chart/ })
+  const options = listbox.getByRole('option')
+  await expect(options).toHaveCount(2)
+  await listbox.focus()
+
+  // When
+  await browserPage.keyboard.press('ArrowRight')
+  await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true')
+  await browserPage.keyboard.press('Enter')
+
+  // Then
+  await expect(browserPage.getByLabel('Chart time range')).toHaveValue('selected')
+  await expect(browserPage.getByRole('button', { name: 'Clear window' })).toBeVisible()
+  await expect(browserPage).toHaveURL((url) => {
+    return (
+      url.pathname === '/logs' &&
+      url.searchParams.get('from') === '2026-08-04T12:30:00.000Z' &&
+      url.searchParams.get('to') === '2026-08-04T12:30:59.999Z'
+    )
+  })
+})
+
 test('logs recovery uses the dedicated stream gap and bounded polling fallback', async ({ page: browserPage }) => {
   await browserPage.clock.install({ time: new Date(FILTER_TO) })
   const backend = await installLogsBackend(browserPage, { lifecycle: 'failed', streamMode: 'gap' })
@@ -391,7 +427,7 @@ test('logs recovery uses the dedicated stream gap and bounded polling fallback',
   await browserPage.clock.pauseAt(new Date(await browserPage.evaluate(() => Date.now() + 2_000)))
   const pollingToggle = browserPage.getByRole('button', { name: 'Fallback log polling' })
   await expect(pollingToggle).toHaveAttribute('aria-pressed', 'true')
-  await expect(pollingToggle).toContainText('Polling')
+  await expect(pollingToggle).toContainText('Reconnecting')
   backend.streamMode = 'event'
 
   const streamAttemptsBeforePause = backend.streamUrls.length
@@ -408,7 +444,7 @@ test('logs recovery uses the dedicated stream gap and bounded polling fallback',
   await pollingToggle.click()
 
   await expect(pollingToggle).toHaveAttribute('aria-pressed', 'true')
-  await expect(pollingToggle).toContainText('Polling')
+  await expect(pollingToggle).toContainText('Reconnecting')
   expect(backend.listCalls).toBe(listCallsBeforePause)
   expect(backend.streamUrls).toHaveLength(streamAttemptsBeforeResume)
   await browserPage.clock.runFor(5_000)
@@ -431,6 +467,7 @@ test('metadata-only export and previewed cleanup stay separated without dead-let
 }) => {
   const backend = await installLogsBackend(browserPage, { lifecycle: 'completed', streamMode: 'unavailable' })
 
+  await browserPage.setViewportSize({ width: 1280, height: 900 })
   await browserPage.goto('/logs')
   const infoBanner = browserPage.getByRole('region', { name: 'System logs' })
   const ledgerControls = browserPage.getByRole('region', { name: 'Event log controls' })
@@ -458,6 +495,77 @@ test('metadata-only export and previewed cleanup stay separated without dead-let
   await expect(
     cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ })
   ).toHaveAttribute('data-state', 'on')
+  const layerControls = cleanupDialog.getByRole('button', { name: /chart layer/ })
+  const desktopLayerLayout = await layerControls.evaluateAll(([requests, system, quic]) => {
+    if (!(requests instanceof HTMLElement) || !(system instanceof HTMLElement) || !(quic instanceof HTMLElement)) {
+      return { controlsFit: false, twoColumns: false }
+    }
+    const requestsBounds = requests.getBoundingClientRect()
+    const systemBounds = system.getBoundingClientRect()
+    const quicBounds = quic.getBoundingClientRect()
+    return {
+      controlsFit: [system, quic].every((control) => control.scrollWidth <= control.clientWidth),
+      twoColumns: Math.abs(requestsBounds.top - systemBounds.top) <= 1 && quicBounds.top >= requestsBounds.bottom - 1
+    }
+  })
+  expect.soft(desktopLayerLayout).toEqual({ controlsFit: true, twoColumns: true })
+
+  await browserPage.setViewportSize({ width: 375, height: 900 })
+  const mobileLayerLayout = await layerControls.evaluateAll(([requests, system, quic]) => {
+    if (!(requests instanceof HTMLElement) || !(system instanceof HTMLElement) || !(quic instanceof HTMLElement)) {
+      return { controlsFit: false, oneColumn: false }
+    }
+    const requestsBounds = requests.getBoundingClientRect()
+    const systemBounds = system.getBoundingClientRect()
+    const quicBounds = quic.getBoundingClientRect()
+    return {
+      controlsFit: [system, quic].every((control) => control.scrollWidth <= control.clientWidth),
+      oneColumn:
+        systemBounds.top >= requestsBounds.bottom - 1 &&
+        quicBounds.top >= systemBounds.bottom - 1 &&
+        Math.abs(requestsBounds.left - systemBounds.left) <= 1 &&
+        Math.abs(systemBounds.left - quicBounds.left) <= 1
+    }
+  })
+  expect.soft(mobileLayerLayout).toEqual({ controlsFit: true, oneColumn: true })
+
+  const selectorPanelBottom = await cleanupDialog
+    .getByRole('slider', { name: 'Window start' })
+    .evaluate(
+      (element) => element.parentElement?.parentElement?.getBoundingClientRect().bottom ?? Number.POSITIVE_INFINITY
+    )
+  const helperTop = await cleanupDialog
+    .getByText('Drag either edge to narrow the loaded history. The server preview confirms what can be removed.', {
+      exact: true
+    })
+    .evaluate((element) => element.getBoundingClientRect().top)
+  expect.soft(helperTop).toBeGreaterThanOrEqual(selectorPanelBottom)
+
+  const requestSummaryGeometry = await cleanupDialog
+    .locator('p')
+    .filter({
+      hasText: /loaded request events? in this window\. Server review identifies removable terminal request groups\./
+    })
+    .evaluate((explanation) => {
+      const summary = explanation.parentElement
+      const counter = summary?.querySelector(':scope > span')
+      if (!(summary instanceof HTMLElement) || !(counter instanceof HTMLElement)) return null
+      const counterBounds = counter.getBoundingClientRect()
+      const explanationBounds = explanation.getBoundingClientRect()
+      const counterStyle = getComputedStyle(counter)
+      return {
+        counter: counter.textContent?.trim() ?? '',
+        fontFamily: counterStyle.fontFamily,
+        fontVariantNumeric: counterStyle.fontVariantNumeric,
+        gap: explanationBounds.left - counterBounds.right
+      }
+    })
+  expect.soft(requestSummaryGeometry?.counter ?? '').toMatch(/^\d+$/)
+  expect.soft(requestSummaryGeometry?.fontFamily ?? '').toMatch(/JetBrains Mono|ui-monospace|Menlo|monospace/i)
+  expect.soft(requestSummaryGeometry?.fontVariantNumeric ?? '').toContain('tabular-nums')
+  expect.soft(requestSummaryGeometry?.gap ?? 0).toBeGreaterThan(0)
+
+  await browserPage.setViewportSize({ width: 1280, height: 900 })
   await cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ }).click()
   await expect(
     cleanupDialog.getByRole('button', { name: /System chart layer.*retained during cleanup/ })

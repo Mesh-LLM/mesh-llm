@@ -187,55 +187,67 @@ impl KvStageIntegration {
         {
             return Ok(None);
         }
+        let mut evicted_entries = 0usize;
+        let mut evicted_tokens = 0u64;
+        let seq_id = {
+            let mut radix = self.radix.lock().expect("radix cache lock poisoned");
+            let mut sequences = self
+                .resident_sequences
+                .lock()
+                .expect("resident sequence pool lock poisoned");
+            if let Some(existing) =
+                radix.resident_exact(&identity.namespace, &identity.token_ids[..token_count])
+            {
+                let stats = radix.stats();
+                return Ok(Some(ResidentPrefixRecord {
+                    page_id: existing.value.page_id,
+                    token_count,
+                    seq_id: existing.value.seq_id,
+                    stored: false,
+                    evicted_entries: 0,
+                    evicted_tokens: 0,
+                    entries: stats.resident_entries,
+                    resident_tokens: stats.resident_tokens,
+                }));
+            }
+
+            loop {
+                let stats = radix.stats();
+                let over_entries =
+                    stats.resident_entries.saturating_add(1) > self.resident_config.max_entries;
+                let over_bytes = self.resident_config.max_bytes > 0
+                    && stats.resident_logical_bytes.saturating_add(estimated_bytes)
+                        > self.resident_config.max_bytes;
+                let over_tokens = self.resident_config.max_resident_tokens > 0
+                    && stats.resident_tokens.saturating_add(token_count as u64)
+                        > self.resident_config.max_resident_tokens;
+                if !over_entries && !over_bytes && !over_tokens {
+                    break;
+                }
+                let Some(removed) = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
+                    runtime.drop_resident_prefix_sequence(session_id, seq_id)
+                })?
+                else {
+                    return Ok(None);
+                };
+                evicted_entries = evicted_entries.saturating_add(1);
+                evicted_tokens = evicted_tokens.saturating_add(removed.value.token_count);
+            }
+
+            sequences.allocate()?
+        };
+        if let Err(error) = runtime.save_resident_prefix(session_id, seq_id, token_count as u64) {
+            self.resident_sequences
+                .lock()
+                .expect("resident sequence pool lock poisoned")
+                .release(seq_id);
+            return Err(error);
+        }
         let mut radix = self.radix.lock().expect("radix cache lock poisoned");
         let mut sequences = self
             .resident_sequences
             .lock()
             .expect("resident sequence pool lock poisoned");
-        if let Some(existing) =
-            radix.resident_exact(&identity.namespace, &identity.token_ids[..token_count])
-        {
-            let stats = radix.stats();
-            return Ok(Some(ResidentPrefixRecord {
-                page_id: existing.value.page_id,
-                token_count,
-                seq_id: existing.value.seq_id,
-                stored: false,
-                evicted_entries: 0,
-                evicted_tokens: 0,
-                entries: stats.resident_entries,
-                resident_tokens: stats.resident_tokens,
-            }));
-        }
-
-        let mut evicted_entries = 0usize;
-        let mut evicted_tokens = 0u64;
-        loop {
-            let stats = radix.stats();
-            let over_entries =
-                stats.resident_entries.saturating_add(1) > self.resident_config.max_entries;
-            let over_bytes = self.resident_config.max_bytes > 0
-                && stats.resident_logical_bytes.saturating_add(estimated_bytes)
-                    > self.resident_config.max_bytes;
-            let over_tokens = self.resident_config.max_resident_tokens > 0
-                && stats.resident_tokens.saturating_add(token_count as u64)
-                    > self.resident_config.max_resident_tokens;
-            if !over_entries && !over_bytes && !over_tokens {
-                break;
-            }
-            let removed = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
-                runtime.drop_resident_prefix_sequence(session_id, seq_id)
-            })?
-            .ok_or_else(|| anyhow::anyhow!("resident radix cache has no releasable entries"))?;
-            evicted_entries = evicted_entries.saturating_add(1);
-            evicted_tokens = evicted_tokens.saturating_add(removed.value.token_count);
-        }
-
-        let seq_id = sequences.allocate()?;
-        if let Err(error) = runtime.save_resident_prefix(session_id, seq_id, token_count as u64) {
-            sequences.release(seq_id);
-            return Err(error);
-        }
         let inserted = insert_saved_resident(
             &mut radix,
             &mut sequences,
@@ -402,6 +414,37 @@ mod proactive_eviction_tests {
         assert_eq!(error.to_string(), "native drop failed");
         assert!(radix.resident_exact("stage", &[1, 2, 3]).is_some());
         assert_eq!(sequences.allocate().unwrap(), seq_id + 1);
+    }
+
+    #[test]
+    fn active_resident_entry_has_no_releasable_eviction_candidate() {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(1);
+        let seq_id = sequences.allocate().unwrap();
+        radix
+            .insert_resident(
+                "stage",
+                &[1, 2, 3],
+                3,
+                RadixResidentEntry {
+                    page_id: "page".to_string(),
+                    seq_id,
+                    token_count: 3,
+                },
+            )
+            .unwrap();
+        radix.acquire_resident("stage", &[1, 2, 3]).unwrap();
+        let mut dropped = false;
+
+        let removed = evict_one_resident(&mut radix, &mut sequences, |_| {
+            dropped = true;
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(removed.is_none());
+        assert!(!dropped);
+        assert_eq!(radix.stats().resident_entries, 1);
     }
 
     #[test]

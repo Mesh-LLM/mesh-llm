@@ -19,6 +19,7 @@ use openai_frontend::{
     OpenAiUsage,
 };
 
+use super::raw_mesh_lifecycle::FrontendAdmissionDecision;
 use super::{
     ArtifactUnavailableReason, LifecycleGuard, LoggingService, ProxyAttemptFinish,
     RawMeshLifecycleOwners, RawMeshProxyAttempt, RawMeshRequestLifecycle, RequestSummaryMetadata,
@@ -434,28 +435,28 @@ impl OpenAiLifecycleLoggingAdapter {
 
     fn admit(&self, context: &OpenAiLifecycleContext) {
         let request_id = context.request_id;
-        // A raw mesh ingress request owns its lifecycle before it reaches an
-        // embedded frontend. Direct frontend loopback traffic never claims this
-        // registry and remains owned by this adapter.
-        if self.raw_mesh_owners.is_claimed(request_id) {
-            return;
-        }
-        let mut tracked = lock_recover(&self.tracked);
-        if tracked.requests.contains_key(&request_id) || !tracked.make_room() {
-            return;
-        }
+        self.raw_mesh_owners.admit_frontend(request_id, || {
+            let mut tracked = lock_recover(&self.tracked);
+            if tracked.requests.contains_key(&request_id) {
+                return FrontendAdmissionDecision::Rejected;
+            }
+            let Ok(evicted) = tracked.make_room() else {
+                return FrontendAdmissionDecision::Rejected;
+            };
 
-        let (guard, _) = self.service.register_request_with_metadata(
-            request_id,
-            RequestSummaryMetadata::from_openai_frontend_route(context.route)
-                .with_source(Some("direct_http"))
-                .with_method(Some(openai_method_label(context.method))),
-        );
-        tracked.requests.insert(
-            request_id,
-            TrackedRequest::Active(ActiveRequest::new(guard)),
-        );
-        tracked.insertion_order.push_back(request_id);
+            let (guard, _) = self.service.register_request_with_metadata(
+                request_id,
+                RequestSummaryMetadata::from_openai_frontend_route(context.route)
+                    .with_source(Some("direct_http"))
+                    .with_method(Some(openai_method_label(context.method))),
+            );
+            tracked.requests.insert(
+                request_id,
+                TrackedRequest::Active(ActiveRequest::new(guard)),
+            );
+            tracked.insertion_order.push_back(request_id);
+            FrontendAdmissionDecision::Registered { evicted }
+        });
     }
 
     fn backend_dispatched(&self, request_id: RequestId, operation: OpenAiBackendOperation) {
@@ -653,6 +654,7 @@ impl OpenAiLifecycleLoggingAdapter {
         let _ = self
             .service
             .transition_terminal(request_id, &guard, outcome);
+        self.raw_mesh_owners.release_frontend(request_id);
     }
 
     #[cfg(test)]
@@ -670,19 +672,20 @@ const fn openai_method_label(method: OpenAiRequestMethod) -> &'static str {
 }
 
 impl TrackedRequests {
-    fn make_room(&mut self) -> bool {
-        while self.requests.len() >= MAX_TRACKED_REQUESTS {
-            let Some(oldest) = self.insertion_order.pop_front() else {
-                return false;
-            };
-            if matches!(self.requests.get(&oldest), Some(TrackedRequest::Terminal)) {
-                self.requests.remove(&oldest);
-                continue;
-            }
-            self.insertion_order.push_front(oldest);
-            return false;
+    fn make_room(&mut self) -> Result<Option<RequestId>, ()> {
+        if self.requests.len() < MAX_TRACKED_REQUESTS {
+            return Ok(None);
         }
-        true
+        let Some(oldest) = self.insertion_order.pop_front() else {
+            return Err(());
+        };
+        if matches!(self.requests.get(&oldest), Some(TrackedRequest::Terminal)) {
+            self.requests.remove(&oldest);
+            Ok(Some(oldest))
+        } else {
+            self.insertion_order.push_front(oldest);
+            Err(())
+        }
     }
 
     fn is_active(&self, request_id: RequestId) -> bool {
@@ -953,6 +956,41 @@ mod tests {
     }
 
     #[test]
+    fn terminalization_releases_frontend_owner_without_disturbing_raw_owner() {
+        let service = Arc::new(LoggingService::new_disabled(Default::default()));
+        let owners = Arc::new(RawMeshLifecycleOwners::default());
+        let adapter = OpenAiLifecycleLoggingAdapter::new(Arc::clone(&service), Arc::clone(&owners));
+        let frontend_request_id = RequestId::new();
+        let frontend_context = context(frontend_request_id);
+        let raw_request_id = RequestId::new();
+        let raw = RawMeshRequestLifecycle::register(
+            Arc::clone(&service),
+            Arc::clone(&owners),
+            raw_request_id,
+        )
+        .expect("raw request should own its lifecycle");
+        adapter.observe(&OpenAiLifecycleEvent::Admitted {
+            context: frontend_context.clone(),
+        });
+        assert!(owners.is_claimed(frontend_request_id));
+        assert!(owners.is_claimed(raw_request_id));
+
+        adapter.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+            context: frontend_context.clone(),
+            result: OpenAiTerminalResult::Completed { status_code: 200 },
+        });
+        adapter.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+            context: frontend_context,
+            result: OpenAiTerminalResult::Completed { status_code: 200 },
+        });
+
+        assert!(!owners.is_claimed(frontend_request_id));
+        assert!(owners.is_claimed(raw_request_id));
+        assert_eq!(adapter.tracked_len(), 1);
+        raw.terminal(TerminalOutcome::Completed);
+    }
+
+    #[test]
     fn backend_stream_and_usage_events_map_to_canonical_children_once() {
         let (service, adapter) = adapter();
         let request_id = RequestId::new();
@@ -1130,6 +1168,104 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn markerless_authenticated_attribution_and_frontend_admission_choose_one_parent_in_both_orders()
+     {
+        for attribution_first in [true, false] {
+            let service = Arc::new(LoggingService::new_disabled(Default::default()));
+            let owners = Arc::new(RawMeshLifecycleOwners::default());
+            let adapter =
+                OpenAiLifecycleLoggingAdapter::new(Arc::clone(&service), Arc::clone(&owners));
+            let request_id = RequestId::new();
+            let endpoint_id = "83".repeat(32);
+            let authenticated = RequestSummaryMetadata::default().with_caller_identity(
+                Some(&endpoint_id),
+                Some("192.0.2.83:11204"),
+                Some(super::super::CallerPathType::RemoteQuicHttp),
+            );
+            let request_metadata = RequestSummaryMetadata::from_parts(
+                Some("chat_completions"),
+                Some("model-a"),
+                Some("openai_frontend"),
+                Some("chat_completion"),
+            )
+            .with_source(Some("direct_http"))
+            .with_method(Some("POST"));
+
+            let attribution = if attribution_first {
+                super::super::RawMeshRemoteAttributionLease::acquire(
+                    &service,
+                    Arc::clone(&owners),
+                    request_id,
+                    authenticated.clone(),
+                )
+                .expect("authenticated attribution")
+            } else {
+                adapter.admit(&context(request_id));
+                service.merge_request_metadata(request_id, request_metadata.clone());
+                super::super::RawMeshRemoteAttributionLease::acquire(
+                    &service,
+                    Arc::clone(&owners),
+                    request_id,
+                    authenticated,
+                )
+                .expect("authenticated attribution")
+            };
+            if attribution_first {
+                adapter.admit(&context(request_id));
+            }
+
+            let raw = RawMeshRequestLifecycle::register_with_metadata(
+                Arc::clone(&service),
+                owners,
+                request_id,
+                request_metadata,
+            );
+            match raw {
+                Some(raw) => raw.terminal(TerminalOutcome::Completed),
+                None => adapter.terminal(request_id, TerminalOutcome::Completed),
+            }
+            drop(attribution);
+
+            let events = canonical_events(&service);
+            assert_eq!(
+                count_events(&events, |event| matches!(
+                    event,
+                    LifecycleEvent::Admitted { .. }
+                )),
+                1,
+                "admission order: attribution_first={attribution_first}"
+            );
+            assert_eq!(
+                count_events(&events, |event| matches!(
+                    event,
+                    LifecycleEvent::Completed { .. }
+                )),
+                1,
+                "terminal order: attribution_first={attribution_first}"
+            );
+            let summary = service
+                .registry_ref()
+                .get_recent(&request_id.as_uuid().to_string())
+                .expect("terminal summary");
+            assert_eq!(summary.metadata.route(), Some("chat_completions"));
+            assert_eq!(summary.metadata.model(), Some("model-a"));
+            assert_eq!(summary.metadata.provider(), Some("openai_frontend"));
+            assert_eq!(summary.metadata.engine(), Some("chat_completion"));
+            assert_eq!(summary.metadata.source(), Some("direct_http"));
+            assert_eq!(summary.metadata.method(), Some("POST"));
+            assert_eq!(
+                summary.metadata.caller_endpoint_id(),
+                Some(endpoint_id.as_str())
+            );
+            assert_eq!(summary.metadata.caller_addr(), Some("192.0.2.83:11204"));
+            assert_eq!(
+                summary.metadata.caller_path_type(),
+                Some("remote_quic_http")
+            );
+        }
     }
 
     #[test]
