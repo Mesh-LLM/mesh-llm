@@ -15,6 +15,7 @@ import http.client
 import json
 import math
 import os
+import random
 import socket
 import statistics
 import subprocess
@@ -121,6 +122,29 @@ def stable_prompt(blocks: int, request_index: int) -> str:
         + "\n".join(rows)
         + f"\nTask {request_index}: name the owner of invariant {request_index % blocks}."
     )
+
+
+def read_prompt_manifest(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or not isinstance(document.get("prompts"), list):
+        raise ValueError("prompt manifest must be an object with a prompts list")
+    prompts = []
+    for index, item in enumerate(document["prompts"]):
+        if not isinstance(item, dict):
+            raise ValueError(f"prompt manifest item {index} must be an object")
+        prompt = item.get("prompt")
+        family = item.get("family")
+        if not isinstance(prompt, str) or not prompt:
+            raise ValueError(f"prompt manifest item {index} needs a nonempty prompt")
+        if not isinstance(family, str) or not family:
+            raise ValueError(f"prompt manifest item {index} needs a nonempty family")
+        prompts.append(dict(item))
+    if not prompts:
+        raise ValueError("prompt manifest must contain at least one prompt")
+    metadata = document.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("prompt manifest metadata must be an object")
+    return prompts, metadata
 
 
 def stage_config(
@@ -383,7 +407,7 @@ def launch_cell(
             calibration = run_request(
                 openai_port,
                 args.model_id,
-                stable_prompt(args.prompt_blocks, 0),
+                args.prompts[0]["prompt"],
                 args.output_tokens,
                 args.request_timeout_secs,
             )
@@ -391,15 +415,18 @@ def launch_cell(
                 raise RuntimeError(f"calibration request failed: {calibration['error']}")
             measured = []
             started = time.monotonic()
-            for request_index in range(1, args.requests + 1):
+            for request_index, prompt_record in enumerate(args.prompts):
                 request = run_request(
                     openai_port,
                     args.model_id,
-                    stable_prompt(args.prompt_blocks, request_index),
+                    prompt_record["prompt"],
                     args.output_tokens,
                     args.request_timeout_secs,
                 )
                 request["request_index"] = request_index
+                request["prompt_provenance"] = {
+                    key: value for key, value in prompt_record.items() if key != "prompt"
+                }
                 measured.append(request)
             wall_ms = (time.monotonic() - started) * 1000.0
         finally:
@@ -407,7 +434,7 @@ def launch_cell(
             stop(stage1)
     prefill_events = json_events(stage0_log_path, PREFILL_EVENT)
     calibration_events = json_events(stage0_log_path, CALIBRATION_EVENT)
-    measured_prefill = prefill_events[1 : 1 + args.requests]
+    measured_prefill = prefill_events[1 : 1 + len(args.prompts)]
     attributes = [event.get("attributes", {}) for event in measured_prefill]
     summary = summarize(measured, wall_ms)
     summary.update(
@@ -462,6 +489,49 @@ def aggregate(cells: list[dict[str, Any]], version: str) -> dict[str, Any]:
     return {key: statistics.median([float(row[key]) for row in summaries]) for key in keys}
 
 
+METRICS = (
+    "ttft_ms_p50",
+    "ttft_ms_p95",
+    "prefill_elapsed_ms_p95",
+    "makespan_ms",
+    "output_tokens_per_second",
+    "prefill_chunk_count_median",
+    "prefill_max_chunk_size_median",
+)
+
+
+def paired_intervals(cells: list[dict[str, Any]], rounds: int) -> dict[str, Any]:
+    result = {}
+    rng = random.Random(0)
+    for metric in METRICS:
+        deltas = []
+        for round_index in range(1, rounds + 1):
+            old = next(
+                cell
+                for cell in cells
+                if cell["round"] == round_index and cell["version"] == "old"
+            )["summary"].get(metric)
+            new = next(
+                cell
+                for cell in cells
+                if cell["round"] == round_index and cell["version"] == "new"
+            )["summary"].get(metric)
+            if old in (None, 0) or new is None:
+                continue
+            deltas.append(delta_percent(float(old), float(new)))
+        if not deltas:
+            continue
+        bootstrapped = [
+            statistics.median(rng.choice(deltas) for _ in deltas) for _ in range(10_000)
+        ]
+        result[metric] = {
+            "round_deltas": deltas,
+            "median": statistics.median(deltas),
+            "ci95": [percentile(bootstrapped, 0.025), percentile(bootstrapped, 0.975)],
+        }
+    return result
+
+
 def parity(cells: list[dict[str, Any]], rounds: int) -> dict[str, Any]:
     mismatches = []
     comparable = 0
@@ -483,7 +553,12 @@ def parity(cells: list[dict[str, Any]], rounds: int) -> dict[str, Any]:
     }
 
 
-def markdown(before: dict[str, Any], after: dict[str, Any], parity_result: dict[str, Any]) -> str:
+def markdown(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    intervals: dict[str, Any],
+    parity_result: dict[str, Any],
+) -> str:
     rows = [
         ("TTFT p50 ms", "ttft_ms_p50", True),
         ("TTFT p95 ms", "ttft_ms_p95", True),
@@ -503,13 +578,18 @@ def markdown(before: dict[str, Any], after: dict[str, Any], parity_result: dict[
         f'    bar [{before["ttft_ms_p95"]:.1f}, {after["ttft_ms_p95"]:.1f}]',
         "```",
         "",
-        "| Metric | Before | After | Delta |",
-        "| --- | ---: | ---: | ---: |",
+        "| Metric | Before | After | Delta | Paired 95% CI |",
+        "| --- | ---: | ---: | ---: | ---: |",
     ]
     for label, key, _lower_is_better in rows:
         delta = delta_percent(float(before[key]), float(after[key]))
+        interval = intervals.get(key, {}).get("ci95")
+        interval_text = (
+            f"[{interval[0]:+.1f}%, {interval[1]:+.1f}%]" if interval else "n/a"
+        )
         lines.append(
-            f"| {label} | {before[key]:.1f} | {after[key]:.1f} | {delta:+.1f}% |"
+            f"| {label} | {before[key]:.1f} | {after[key]:.1f} | "
+            f"{delta:+.1f}% | {interval_text} |"
         )
     lines.extend(
         [
@@ -534,6 +614,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rounds", type=int, default=4)
     parser.add_argument("--requests", type=int, default=6)
     parser.add_argument("--prompt-blocks", type=int, default=384)
+    parser.add_argument(
+        "--prompt-manifest",
+        type=Path,
+        help="JSON object containing metadata and a deterministic prompts list",
+    )
     parser.add_argument("--output-tokens", type=int, default=8)
     parser.add_argument("--ctx-size", type=int, default=32768)
     parser.add_argument("--layer-end", type=int, default=27)
@@ -567,6 +652,26 @@ def parse_args() -> argparse.Namespace:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     args.model = args.model.resolve()
     args.model_sha256 = sha256(args.model)
+    args.prompt_manifest_metadata = {}
+    if args.prompt_manifest is not None:
+        args.prompt_manifest = args.prompt_manifest.resolve()
+        if not args.prompt_manifest.is_file():
+            parser.error(f"prompt-manifest not found: {args.prompt_manifest}")
+        try:
+            args.prompts, args.prompt_manifest_metadata = read_prompt_manifest(
+                args.prompt_manifest
+            )
+        except (json.JSONDecodeError, OSError, ValueError) as error:
+            parser.error(f"invalid prompt manifest: {error}")
+        args.requests = len(args.prompts)
+    else:
+        args.prompts = [
+            {
+                "family": "synthetic-stable-prefix",
+                "prompt": stable_prompt(args.prompt_blocks, request_index),
+            }
+            for request_index in range(1, args.requests + 1)
+        ]
     return args
 
 
@@ -581,6 +686,7 @@ def main() -> int:
             cells.append(launch_cell(args, version, versions[version], round_index))
     before = aggregate(cells, "old")
     after = aggregate(cells, "new")
+    intervals = paired_intervals(cells, args.rounds)
     parity_result = parity(cells, args.rounds)
     result = {
         "metadata": {
@@ -601,6 +707,15 @@ def main() -> int:
             "measured_requests_per_cell": args.requests,
             "discarded_calibration_requests_per_cell": 1,
             "prompt_blocks": args.prompt_blocks,
+            "prompt_manifest": (
+                {
+                    "path": str(args.prompt_manifest),
+                    "sha256": sha256(args.prompt_manifest),
+                    "metadata": args.prompt_manifest_metadata,
+                }
+                if args.prompt_manifest is not None
+                else None
+            ),
             "ctx_size": args.ctx_size,
             "split": [0, args.split_layer, args.layer_end],
             "cache": "disabled",
@@ -622,12 +737,13 @@ def main() -> int:
                 if key not in {"successful_requests", "errors"}
             },
         },
+        "paired_delta_percent": intervals,
         "output_parity": parity_result,
     }
     comparison_path = args.output_dir / "comparison.json"
     report_path = args.output_dir / "report.md"
     comparison_path.write_text(json.dumps(result, indent=2) + "\n")
-    report_path.write_text(markdown(before, after, parity_result))
+    report_path.write_text(markdown(before, after, intervals, parity_result))
     print(report_path.read_text(), end="")
     expected_successes = args.rounds * args.requests
     old_successes = sum(
